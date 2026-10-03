@@ -119,6 +119,33 @@ func Login(ctx context.Context, client *http.Client, adminURL, username, passwor
 	return nil, errors.New("authflow: too many redirects")
 }
 
+// WaitReady polls the Authentik flow executor of flow at authURL ("https://auth.paddock.localhost:8443") until
+// it answers with the identification stage, every interval until timeout. A healthy Authentik container is not
+// enough: the worker applies the blueprints that create the flow only after start-up. It only waits for
+// readiness; it never submits credentials.
+func WaitReady(ctx context.Context, client *http.Client, authURL, flow string, timeout, interval time.Duration) error {
+	exec, err := url.Parse(strings.TrimRight(authURL, "/") + "/api/v3/flows/executor/" + flow + "/")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		ch, err := executor(ctx, client, http.MethodGet, exec, nil)
+		if err == nil && ch.Component == "ak-stage-identification" {
+			return nil
+		}
+		if err == nil {
+			err = fmt.Errorf("first stage is %q", ch.Component)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("authflow: flow %s not ready after %s: %w", flow, timeout, err)
+		case <-time.After(interval):
+		}
+	}
+}
+
 type challenge struct {
 	Component string `json:"component"`
 	To        string `json:"to"`
