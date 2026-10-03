@@ -1,28 +1,32 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import DataList from '../components/DataList.vue'
 import DeviceGroupForm from '../components/DeviceGroupForm.vue'
+import type { DeviceGroup } from '../api/client'
 import { useDeviceGroupPage } from '../lib/deviceGroupPage'
+import { listDeviceGroups } from '../lib/deviceGroups'
 import { formatDateTime } from '../lib/format'
+import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
 
 const { t, locale } = useI18n()
 const problemText = useProblemText()
 const session = useSessionStore()
+const list = ref<{ reload: () => Promise<void> } | null>(null)
 const {
-  groups, createOpen, createProblem, editTarget, editProblem, deleteTarget, deleteProblem,
-  openCreate, onCreate, openEdit, closeEdit, onEdit, openDelete, closeDelete, onDelete,
-} = useDeviceGroupPage()
+  createOpen, createProblem, editTarget, editProblem, pageProblem,
+  openCreate, onCreate, openEdit, closeEdit, onEdit, onDelete,
+} = useDeviceGroupPage(() => void list.value?.reload())
 
-const headers = computed(() => [
-  { title: t('common.name'), key: 'name', sortable: false },
-  { title: t('common.description'), key: 'description', sortable: false },
-  { title: t('common.updatedAt'), key: 'updated_at', sortable: false },
-  ...(session.canWrite ? [{ title: t('common.actions'), key: 'actions', sortable: false }] : []),
+const columns = computed<ListColumn[]>(() => [
+  { key: 'name', title: 'common.name', sortable: true },
+  { key: 'description', title: 'common.description' },
+  { key: 'created_at', title: 'common.createdAt', sortable: true },
+  { key: 'updated_at', title: 'common.updatedAt', sortable: true },
+  ...(session.canWrite ? [{ key: 'actions', title: 'common.actions' }] : []),
 ])
-
-onMounted(() => groups.load())
 </script>
 
 <template>
@@ -38,38 +42,35 @@ onMounted(() => groups.load())
         {{ t('deviceGroups.create') }}
       </v-btn>
     </div>
-    <p class="summary">
-      {{ t('deviceGroups.count', { count: groups.items.value.length }) }}
-    </p>
     <p
-      v-if="groups.error.value"
+      v-if="pageProblem"
       class="form-error"
       role="alert"
     >
-      {{ problemText(groups.error.value) }}
+      {{ problemText(pageProblem) }}
     </p>
-    <v-data-table
-      :headers="headers"
-      :items="groups.items.value"
+    <DataList
+      ref="list"
+      :columns="columns"
+      :fetch="listDeviceGroups"
+      searchable
+      default-sort="name"
       item-value="id"
-      :items-per-page="-1"
-      :loading="groups.loading.value"
-      hide-default-footer
-      class="table"
+      data-testid="device-group-list"
     >
-      <template #no-data>
-        {{ t('common.empty') }}
+      <template #[`item.created_at`]="{ item }: { item: DeviceGroup }">
+        {{ formatDateTime(item.created_at, locale) }}
       </template>
-      <template #[`item.updated_at`]="{ item }">
+      <template #[`item.updated_at`]="{ item }: { item: DeviceGroup }">
         {{ formatDateTime(item.updated_at, locale) }}
       </template>
-      <template #[`item.actions`]="{ item }">
+      <template #[`item.actions`]="{ item }: { item: DeviceGroup }">
         <div class="row-actions">
           <v-btn
             :aria-label="t('deviceGroups.editLabel', { name: item.name })"
             variant="tonal"
             size="small"
-            @click="openEdit(item.id)"
+            @click="openEdit(item)"
           >
             {{ t('common.edit') }}
           </v-btn>
@@ -78,20 +79,13 @@ onMounted(() => groups.load())
             :aria-label="t('deviceGroups.deleteLabel', { name: item.name })"
             color="error"
             size="small"
-            @click="openDelete(item.id)"
+            @click="onDelete(item)"
           >
             {{ t('common.delete') }}
           </v-btn>
         </div>
       </template>
-    </v-data-table>
-    <v-btn
-      v-if="groups.hasMore.value"
-      variant="tonal"
-      @click="groups.load(true)"
-    >
-      {{ t('common.loadMore') }}
-    </v-btn>
+    </DataList>
 
     <v-dialog
       v-model="createOpen"
@@ -130,40 +124,6 @@ onMounted(() => groups.load())
             @submit="onEdit"
             @cancel="closeEdit"
           />
-        </v-card-text>
-      </v-card>
-    </v-dialog>
-
-    <v-dialog
-      :model-value="deleteTarget !== null"
-      max-width="32rem"
-      :aria-label="t('deviceGroups.deleteTitle')"
-      @update:model-value="closeDelete"
-    >
-      <v-card :title="t('deviceGroups.deleteTitle')">
-        <v-card-text>
-          <p>{{ t('deviceGroups.deleteConfirm', { name: deleteTarget?.name ?? '' }) }}</p>
-          <p
-            v-if="deleteProblem"
-            class="form-error"
-            role="alert"
-          >
-            {{ problemText(deleteProblem) }}
-          </p>
-          <div class="form-actions">
-            <v-btn
-              variant="tonal"
-              @click="closeDelete"
-            >
-              {{ t('common.cancel') }}
-            </v-btn>
-            <v-btn
-              color="error"
-              @click="onDelete"
-            >
-              {{ t('common.delete') }}
-            </v-btn>
-          </div>
         </v-card-text>
       </v-card>
     </v-dialog>

@@ -30,8 +30,6 @@
     "description": "Description",
     "createdAt": "Created",
     "updatedAt": "Updated",
-    "loadMore": "Load more",
-    "apply": "Apply",
     "empty": "Nothing here yet."
   },
   "list": {
@@ -79,11 +77,17 @@
     "from": "From",
     "to": "To",
     "code": "Event",
-    "allCodes": "All events",
     "time": "Time",
     "event": "Event",
     "outcome": "Outcome",
     "actor": "Actor",
+    "actorType": "Actor type",
+    "actorTypes": {
+      "admin": "Administrator",
+      "platform_admin": "Platform administrator",
+      "system": "System",
+      "anonymous": "Anonymous"
+    },
     "outcomes": {
       "success": "Success",
       "failure": "Failure",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore } from './stores/session'
@@ -11,16 +11,27 @@ const route = useRoute()
 const session = useSessionStore()
 const showChrome = computed(() => !route.meta.public && session.me !== null)
 const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : ''))
+
+// While a dialog is open the page behind it is inert, as aria-modal promises: no focus, no screen reader access.
+// Vuetify teleports dialogs to the body, outside the elements made inert here.
+const modalOpen = ref(false)
+const observer = new MutationObserver(() => {
+  modalOpen.value = document.querySelector('.v-dialog.v-overlay--active') !== null
+})
+onMounted(() => observer.observe(document.body, { subtree: true, childList: true, attributeFilter: ['class'] }))
+onBeforeUnmount(() => observer.disconnect())
 </script>
 
 <template>
   <v-app>
     <a
       class="skip-link"
+      :inert="modalOpen"
       href="#main"
     >{{ t('app.skipToContent') }}</a>
     <v-app-bar
       v-if="showChrome"
+      :inert="modalOpen"
       color="primary"
       flat
     >
@@ -67,7 +78,10 @@ const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : '
         </v-btn>
       </div>
     </v-app-bar>
-    <v-main id="main">
+    <v-main
+      id="main"
+      :inert="modalOpen"
+    >
       <RouterView />
     </v-main>
     <ConfirmDialog

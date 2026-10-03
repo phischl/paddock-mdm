@@ -1,23 +1,23 @@
-import { computed, ref } from 'vue'
-import { useDeviceGroups } from './deviceGroups'
+import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import type { DeviceGroup } from '../api/client'
+import { useConfirm } from '../composables/useConfirm'
+import { createDeviceGroup, deleteDeviceGroup, updateDeviceGroup } from './deviceGroups'
 
 export interface DeviceGroupInput {
   name: string
   description: string
 }
 
-/** Dialog state and handlers of the device group page. */
-export function useDeviceGroupPage() {
-  const groups = useDeviceGroups()
+/** Dialog state and handlers of the device group page; reload refreshes the list after a change. */
+export function useDeviceGroupPage(reload: () => void) {
+  const { t } = useI18n()
+  const confirm = useConfirm()
   const createOpen = ref(false)
   const createProblem = ref('')
-  const editing = ref<string | null>(null)
+  const editTarget = ref<DeviceGroup | null>(null)
   const editProblem = ref('')
-  const deleting = ref<string | null>(null)
-  const deleteProblem = ref('')
-
-  const editTarget = computed(() => groups.items.value.find((g) => g.id === editing.value) ?? null)
-  const deleteTarget = computed(() => groups.items.value.find((g) => g.id === deleting.value) ?? null)
+  const pageProblem = ref('')
 
   function openCreate(): void {
     createProblem.value = ''
@@ -25,42 +25,45 @@ export function useDeviceGroupPage() {
   }
 
   async function onCreate(form: DeviceGroupInput): Promise<void> {
-    createProblem.value = (await groups.create(form.name, form.description)) ?? ''
-    if (!createProblem.value) createOpen.value = false
+    createProblem.value = (await createDeviceGroup(form.name, form.description)) ?? ''
+    if (createProblem.value) return
+    createOpen.value = false
+    reload()
   }
 
-  function openEdit(id: string): void {
+  function openEdit(group: DeviceGroup): void {
     editProblem.value = ''
-    editing.value = id
+    editTarget.value = group
   }
 
   function closeEdit(): void {
-    editing.value = null
+    editTarget.value = null
   }
 
   async function onEdit(form: DeviceGroupInput): Promise<void> {
     if (!editTarget.value) return
-    editProblem.value = (await groups.update(editTarget.value.id, form.name, form.description)) ?? ''
-    if (!editProblem.value) editing.value = null
+    editProblem.value = (await updateDeviceGroup(editTarget.value.id, form.name, form.description)) ?? ''
+    if (editProblem.value) return
+    editTarget.value = null
+    reload()
   }
 
-  function openDelete(id: string): void {
-    deleteProblem.value = ''
-    deleting.value = id
-  }
-
-  function closeDelete(): void {
-    deleting.value = null
-  }
-
-  async function onDelete(): Promise<void> {
-    if (!deleteTarget.value) return
-    deleteProblem.value = (await groups.remove(deleteTarget.value.id)) ?? ''
-    if (!deleteProblem.value) deleting.value = null
+  /** Deletes after confirmation in the modal; a failure is shown on the page. */
+  async function onDelete(group: DeviceGroup): Promise<void> {
+    pageProblem.value = ''
+    const confirmed = await confirm({
+      title: t('deviceGroups.deleteTitle'),
+      message: t('deviceGroups.deleteConfirm', { name: group.name }),
+      confirmLabel: t('common.delete'),
+      destructive: true,
+    })
+    if (!confirmed) return
+    pageProblem.value = (await deleteDeviceGroup(group.id)) ?? ''
+    reload()
   }
 
   return {
-    groups, createOpen, createProblem, editTarget, editProblem, deleteTarget, deleteProblem,
-    openCreate, onCreate, openEdit, closeEdit, onEdit, openDelete, closeDelete, onDelete,
+    createOpen, createProblem, editTarget, editProblem, pageProblem,
+    openCreate, onCreate, openEdit, closeEdit, onEdit, onDelete,
   }
 }

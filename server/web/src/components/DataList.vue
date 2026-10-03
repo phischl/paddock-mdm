@@ -1,5 +1,5 @@
 <script setup lang="ts" generic="T">
-import { computed, onBeforeUnmount, ref, shallowRef, useSlots, watch } from 'vue'
+import { computed, getCurrentInstance, onBeforeUnmount, ref, shallowRef, useSlots, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -38,6 +38,8 @@ const route = useRoute()
 const router = useRouter()
 const slots = useSlots()
 const ownRoute = route.name
+// Rows are clickable (pointer cursor) only when the page listens to row-click.
+const rowClickable = !!getCurrentInstance()?.vnode.props?.onRowClick
 
 const keys = computed(() => filterKeys(props.filters))
 const sortKeys = computed(() => props.columns.filter((c) => c.sortable).map((c) => c.key))
@@ -213,7 +215,7 @@ defineExpose({ reload: load })
       hide-default-footer
       class="table"
       @update:sort-by="onSort"
-      @click:row="(_: Event, row: { item: T }) => emit('row-click', row.item)"
+      v-on="rowClickable ? { 'click:row': (_: Event, row: { item: T }) => emit('row-click', row.item) } : {}"
     >
       <template #no-data>
         {{ t(hasCriteria ? 'list.noResults' : 'common.empty') }}
