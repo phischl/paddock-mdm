@@ -1,6 +1,6 @@
 // Command devseed prepares the development stack (`make dev-seed`): it signs in as the platform admin, creates
 // the organizations acme and globex through the platform API and assigns the dev users to their Authentik groups.
-// It is idempotent.
+// It waits until the Authentik login flow is executable and is idempotent.
 package main
 
 import (
@@ -10,7 +10,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/paddock-mdm/paddock/test/acceptance/internal/authflow"
 	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
 )
 
 func main() {
@@ -21,8 +23,17 @@ func main() {
 }
 
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+
+	// A separate client, so the readiness probe leaves no flow state in the login session.
+	probe, err := env.NewHTTPClient()
+	if err != nil {
+		return err
+	}
+	if err := authflow.WaitReady(ctx, probe, stack.AuthURL(), "paddock-admin-login", 180*time.Second, 3*time.Second); err != nil {
+		return err
+	}
 
 	admin, err := env.Login(ctx, env.PlatformAdmin, "")
 	if err != nil {

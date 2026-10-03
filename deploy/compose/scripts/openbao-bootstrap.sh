@@ -57,6 +57,8 @@ if status | grep -q '"initialized": false'; then
   bao operator init -key-shares=5 -key-threshold=3 >"$INIT_FILE.tmp"
   mv "$INIT_FILE.tmp" "$INIT_FILE"
   chmod 600 "$INIT_FILE"
+  # Secret-ids stored for a previous OpenBao instance (e.g. after `make down V=1`) are invalid now.
+  rm -f "$SECRETS_DIR"/approle/*/secret_id
   echo "OpenBao initialized; development shares and root token stored in .secrets/openbao/"
 fi
 unseal
