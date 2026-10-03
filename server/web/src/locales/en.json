@@ -1,0 +1,116 @@
+{
+  "app": {
+    "name": "Paddock",
+    "skipToContent": "Skip to content",
+    "loading": "Loading…",
+    "signedInAs": "Signed in as {name}",
+    "logout": "Sign out",
+    "mainNavigation": "Main navigation",
+    "error": "Something went wrong. Please try again."
+  },
+  "nav": {
+    "deviceGroups": "Device groups",
+    "audit": "Audit log",
+    "organizations": "Organizations"
+  },
+  "roles": {
+    "org_admin": "Organization administrator",
+    "org_operator": "Operator",
+    "org_auditor": "Auditor",
+    "platform_admin": "Platform administrator"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "create": "Create",
+    "edit": "Edit",
+    "delete": "Delete",
+    "actions": "Actions",
+    "name": "Name",
+    "description": "Description",
+    "createdAt": "Created",
+    "updatedAt": "Updated",
+    "loadMore": "Load more",
+    "apply": "Apply",
+    "empty": "Nothing here yet."
+  },
+  "deviceGroups": {
+    "title": "Device groups",
+    "count": "{count, plural, =0 {No device groups} one {# device group} other {# device groups}}",
+    "create": "Create device group",
+    "createTitle": "New device group",
+    "editTitle": "Edit device group",
+    "deleteTitle": "Delete device group",
+    "deleteConfirm": "Delete the device group {name}? This cannot be undone.",
+    "editLabel": "Edit {name}",
+    "deleteLabel": "Delete {name}"
+  },
+  "validation": {
+    "nameRequired": "Enter a name.",
+    "nameTooLong": "The name can have at most 100 characters.",
+    "descriptionTooLong": "The description can have at most 1000 characters.",
+    "slugInvalid": "Use 3 to 32 lowercase letters, digits and hyphens; start and end with a letter or digit.",
+    "orgNameRequired": "Enter a name with at most 200 characters."
+  },
+  "problems": {
+    "name_taken": "A device group with this name already exists.",
+    "slug_taken": "An organization with this slug already exists.",
+    "forbidden": "You are not allowed to do this.",
+    "not_found": "This item no longer exists.",
+    "upstream_unavailable": "The identity provider is not reachable. The organization was saved and can be provisioned again.",
+    "range_too_large": "The time range may span at most 92 days.",
+    "invalid_request": "The request was not valid.",
+    "internal": "Something went wrong. Please try again."
+  },
+  "audit": {
+    "title": "Audit log",
+    "from": "From",
+    "to": "To",
+    "code": "Event",
+    "allCodes": "All events",
+    "time": "Time",
+    "event": "Event",
+    "outcome": "Outcome",
+    "actor": "Actor",
+    "outcomes": {
+      "success": "Success",
+      "failure": "Failure",
+      "denied": "Denied",
+      "unknown": "Unknown"
+    },
+    "admin": {
+      "login": "{actor} signed in"
+    },
+    "organization": {
+      "created": "{actor} created the organization {slug}"
+    },
+    "device_group": {
+      "created": "{actor} created the device group {name}",
+      "updated": "{actor} updated the device group {name}",
+      "deleted": "{actor} deleted the device group {name}"
+    }
+  },
+  "organizations": {
+    "title": "Organizations",
+    "create": "Create organization",
+    "createTitle": "New organization",
+    "slug": "Slug",
+    "status": "Status",
+    "statuses": {
+      "provisioning": "Provisioning",
+      "active": "Active",
+      "provisioning_failed": "Provisioning failed",
+      "suspended": "Suspended"
+    }
+  },
+  "loginDenied": {
+    "title": "Access denied",
+    "not_authorized": "Your account is not authorized for the Paddock portal. Ask your administrator to add you to exactly one Paddock administrator group.",
+    "login_failed": "The sign-in could not be completed.",
+    "retry": "Sign in again"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "back": "Go to the start page"
+  }
+}
