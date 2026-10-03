@@ -15,7 +15,7 @@ names Loki + MinIO; equivalents are allowed. MinIO is no longer maintained; the 
 ## Decision
 First option. Events `paddock.audit.v1` with stable English codes from a closed registry. Privileged use cases write
 an `action` row and the outbox record in the same transaction; failures are recorded by a deferred handler; stuck
-actions are finalized as `outcome=unknown`. Objects `org/<org>/YYYY/MM/DD/HH-<seq>.jsonl.zst`; daily per-organization
+actions are finalized as `outcome=unknown`. Objects `org/<org>/YYYY/MM/DD/HH-<seq>.jsonl.zst`, dated by **recording** day (amended 2026-10-03: late events are covered by the manifest of the day they are recorded); daily per-organization
 manifest chained and signed with `audit-chain`. Audit domain on a separate host with separate credentials and an
 offsite replica. Optional SIEM forwarding.
 

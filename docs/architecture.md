@@ -1,6 +1,6 @@
 # Paddock – Technical Architecture
 
-Status: **Proposed** · Version 1.2 · 2026-10-03 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
+Status: **Proposed** · Version 1.3 · 2026-10-03 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
 
 This document turns the product concept into a technical architecture. It answers the delegated
 decisions A1–A14 (or states why one stays open), fixes the technology stack, and defines the
@@ -1429,6 +1429,13 @@ Generated code tends to emit audit events on success only. The rule in the appli
 - The audit-writer's credential may `PutObject` and `PutObjectRetention` (extend only); no credential
   that any operator account uses has `DeleteObject` or `BypassGovernanceRetention`.
 - Deployment checklist step "create production audit bucket" is a one-shot, verified by the acceptance gate.
+- **Chain by recording day, not by occurrence day.** The date in the object key, `audit_object.day` and the
+  manifest day are the UTC date on which the audit-writer **recorded** the object (database transaction time),
+  not the events' `occurred_at`. Events that arrive late (queue backlog, offline device, audit domain outage)
+  land in the objects and the manifest of the day they are recorded, so every stored event is covered by
+  exactly one sealed manifest. `occurred_at` stays in each event and drives index queries. Writer transactions
+  have a 5-minute timeout, and day *D* is sealed at *D*+1 00:15 UTC, so no object of day *D* can be committed
+  after its seal. Object retention is `recording day + retention days`.
 
 ---
 
@@ -1634,15 +1641,17 @@ remote with a deploy key per organization. Import from Git is **not** automatic;
 
 ## 18. Portal and internationalization
 
-- **Vue 3 + TypeScript + Vite**, Pinia for state, Vue Router, component library **PrimeVue** (MIT) with
-  its unstyled/passthrough mode for accessibility control. Served as static files by the `api` role.
+- **Vue 3 + TypeScript + Vite**, Pinia for state, Vue Router, component library **Vuetify** (MIT; PrimeVue was
+  replaced because PrimeVue 5 requires a commercial license, C8). Vuetify's runtime theme stylesheet is allowed
+  through a per-response CSP nonce that the `api` role injects into `index.html`; no `'unsafe-inline'`. Composition
+  API with `<script setup lang="ts">` only; the Options API is disabled at build time. Served as static files by the `api` role.
 - **i18n:** `vue-i18n` with a custom message compiler backed by **`intl-messageformat`** (FormatJS) so
   that all messages are ICU MessageFormat. Catalogs `web/src/locales/en.json` (source) and later `de.json`.
   User language stored on the admin account; UTC everywhere, formatting with `Intl.DateTimeFormat` in the browser.
 - **Lint rules:** no string literals in templates (`@intlify/vue-i18n/no-raw-text`), CI fails on missing
   `en` keys and on unused keys.
 - **Accessibility:** WCAG 2.1 AA as the target; axe checks in Playwright tests.
-- **Security headers:** strict CSP (`default-src 'self'`), no inline scripts, `frame-ancestors 'none'`.
+- **Security headers:** strict CSP (`default-src 'self'`; `style-src 'self' 'nonce-<per response>'`), no inline scripts, `frame-ancestors 'none'`.
 
 Key screens: Devices (status, last contact, compliance, commands), Device detail (bundle version,
 effective sudo per user, tamper findings, escrow actions), Users & Groups (source badge, lock),
