@@ -69,6 +69,24 @@ func (q *Queries) GetPlatformAdmin(ctx context.Context, id uuid.UUID) (PlatformA
 	return i, err
 }
 
+const getPlatformAdminBySubject = `-- name: GetPlatformAdminBySubject :one
+SELECT id, authentik_sub, username, display_name, locale, last_login_at FROM platform_admin WHERE authentik_sub = $1
+`
+
+func (q *Queries) GetPlatformAdminBySubject(ctx context.Context, authentikSub string) (PlatformAdmin, error) {
+	row := q.db.QueryRow(ctx, getPlatformAdminBySubject, authentikSub)
+	var i PlatformAdmin
+	err := row.Scan(
+		&i.ID,
+		&i.AuthentikSub,
+		&i.Username,
+		&i.DisplayName,
+		&i.Locale,
+		&i.LastLoginAt,
+	)
+	return i, err
+}
+
 const updateAdminAccountLocale = `-- name: UpdateAdminAccountLocale :one
 UPDATE admin_account SET locale = $1 WHERE id = $2 RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at
 `

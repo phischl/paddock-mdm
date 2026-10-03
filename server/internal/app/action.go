@@ -185,7 +185,7 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 		return audit.OutcomeSuccess, ""
 	}
 	p := problem.From(err)
-	if errors.Is(err, problem.Forbidden) || errors.Is(err, problem.NoOrganization) {
+	if errors.Is(err, problem.Forbidden) || errors.Is(err, problem.NoOrganization) || errors.Is(err, problem.CSRFMissing) {
 		return audit.OutcomeDenied, p.Code
 	}
 	return audit.OutcomeFailure, p.Code
@@ -207,6 +207,7 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 		r.recordFinal(ctx, p, scope, rec, err)
 		return err
 	}
+	defer r.recordPanic(ctx, p, scope, rec)
 	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
 		if err := fn(ctx, q, rec); err != nil {
 			return err
@@ -218,6 +219,22 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 		return err
 	}
 	return nil
+}
+
+// RecordRejected records a privileged action that was rejected before its use case ran (malformed request, missing
+// CSRF header): exactly one event, denied when the principal may not perform the action at all, otherwise with the
+// rejection's outcome. It returns the error to send to the client.
+func (r *ActionRunner) RecordRejected(ctx context.Context, scope Scope, spec ActionSpec, rejection error) error {
+	return r.RunTx(ctx, scope, spec, func(context.Context, *pgstore.Queries, Recorder) error { return rejection })
+}
+
+// recordPanic records a panicking use case as failure (error_code internal) and re-panics for the HTTP recovery
+// middleware, so even a crash inside a request leaves exactly one event.
+func (r *ActionRunner) recordPanic(ctx context.Context, p principal.Principal, scope Scope, rec *recorder) {
+	if v := recover(); v != nil {
+		r.recordFinal(ctx, p, scope, rec, fmt.Errorf("panic: %v", v))
+		panic(v)
+	}
 }
 
 // RunExternal runs an action with side effects outside PostgreSQL.
@@ -241,12 +258,15 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 		return err
 	}
 
-	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
-		if err := prepare(ctx, q, rec); err != nil {
-			return err
-		}
-		return r.insertStarted(ctx, q, rec)
-	})
+	err := func() error {
+		defer r.recordPanic(ctx, p, scope, rec)
+		return r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
+			if err := prepare(ctx, q, rec); err != nil {
+				return err
+			}
+			return r.insertStarted(ctx, q, rec)
+		})
+	}()
 	if err != nil {
 		r.recordFinal(ctx, p, scope, rec, err)
 		return err

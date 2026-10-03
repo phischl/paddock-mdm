@@ -1,0 +1,469 @@
+openapi: 3.0.3
+info:
+  title: Paddock Admin API
+  version: 0.1.0
+  description: |
+    Admin API of the Paddock portal (plan M0 §6.6). Source of truth for the generated Go server interfaces and the
+    portal's TypeScript types. Written in the OpenAPI 3.0.3 subset because oapi-codegen does not process 3.1.
+
+    - All errors are RFC 9457 problem details (`application/problem+json`) with `code` and `instance` (request ID).
+    - Mutating requests require the header `X-Paddock-CSRF: 1` (otherwise 403 `csrf_missing`).
+    - The organization is never part of a path: it comes from the session only. Resources of other organizations
+      answer 404 `not_found`, exactly like missing resources.
+    - Operations that are privileged actions carry `x-paddock-audit: <code>`; each attempt produces exactly one
+      audit event with that code.
+servers:
+  - url: https://admin.paddock.localhost:8443
+security:
+  - session: []
+tags:
+  - name: auth
+  - name: me
+  - name: device-groups
+  - name: audit
+  - name: platform
+paths:
+  /api/auth/login:
+    get:
+      operationId: login
+      tags: [auth]
+      security: []
+      summary: Start the OIDC login (authorization code + PKCE)
+      parameters:
+        - name: return_to
+          in: query
+          required: false
+          description: Relative path to return to after login; must start with "/" and not with "//".
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to the Authentik authorization endpoint.
+          headers:
+            Location: { schema: { type: string } }
+        "400": { $ref: "#/components/responses/Problem" }
+  /api/auth/callback:
+    get:
+      operationId: callback
+      tags: [auth]
+      security: []
+      summary: OIDC redirect URI
+      x-paddock-audit: admin.login
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string } }
+        - { name: state, in: query, required: false, schema: { type: string } }
+        - { name: error, in: query, required: false, schema: { type: string } }
+      responses:
+        "302":
+          description: Redirect to return_to (default /) on success, or to /login-denied?reason=<code>.
+          headers:
+            Location: { schema: { type: string } }
+  /api/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Session ended. The client navigates to end_session_url to end the Authentik session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Logout" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/me:
+    get:
+      operationId: getMe
+      tags: [me]
+      responses:
+        "200":
+          description: The signed-in administrator.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateMe
+      tags: [me]
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MeUpdate" }
+      responses:
+        "200":
+          description: Updated administrator.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/device-groups:
+    get:
+      operationId: listDeviceGroups
+      tags: [device-groups]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of device groups, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceGroupPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createDeviceGroup
+      tags: [device-groups]
+      description: "Roles: org_admin, org_operator."
+      x-paddock-audit: device_group.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceGroupCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceGroup" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/device-groups/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDeviceGroup
+      tags: [device-groups]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The device group.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceGroup" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateDeviceGroup
+      tags: [device-groups]
+      description: "Roles: org_admin, org_operator."
+      x-paddock-audit: device_group.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceGroupUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceGroup" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteDeviceGroup
+      tags: [device-groups]
+      description: "Roles: org_admin."
+      x-paddock-audit: device_group.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit-events:
+    get:
+      operationId: listAuditEvents
+      tags: [audit]
+      description: "Roles: org_admin, org_auditor. Ordered by occurred_at, event_id descending."
+      parameters:
+        - name: from
+          in: query
+          description: RFC 3339; default now - 7 days.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: RFC 3339; default now. The range may span at most 92 days.
+          schema: { type: string, format: date-time }
+        - name: code
+          in: query
+          schema: { type: string }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of audit events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEventPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/platform/v1/organizations:
+    get:
+      operationId: listOrganizations
+      tags: [platform]
+      description: "Roles: platform_admin."
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of organizations, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrganizationPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createOrganization
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Creates the organization and its Authentik groups. Repeating the request for an
+        organization in status provisioning_failed with the same slug re-provisions it (200).
+      x-paddock-audit: organization.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizationCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organization" }
+        "200":
+          description: Re-provisioned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/organizations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getOrganization
+      tags: [platform]
+      description: "Roles: platform_admin."
+      responses:
+        "200":
+          description: The organization.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: paddock_session
+  parameters:
+    Csrf:
+      name: X-Paddock-CSRF
+      in: header
+      required: true
+      schema: { type: string, enum: ["1"] }
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from next_cursor of the previous page.
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+  responses:
+    Problem:
+      description: RFC 9457 problem details.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code, instance]
+      properties:
+        type: { type: string, description: "urn:paddock:problem:<code>" }
+        title: { type: string }
+        status: { type: integer }
+        code: { type: string }
+        detail: { type: string }
+        instance: { type: string, description: Request ID }
+    Logout:
+      type: object
+      required: [end_session_url]
+      properties:
+        end_session_url: { type: string }
+    MeOrganization:
+      type: object
+      required: [id, slug, name]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+    Me:
+      type: object
+      required: [id, username, display_name, role, organization, locale]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+        role: { type: string, enum: [org_admin, org_operator, org_auditor, platform_admin] }
+        organization:
+          allOf:
+            - $ref: "#/components/schemas/MeOrganization"
+          nullable: true
+        locale: { type: string, enum: [en] }
+    MeUpdate:
+      type: object
+      required: [locale]
+      additionalProperties: false
+      properties:
+        locale: { type: string, enum: [en] }
+    DeviceGroup:
+      type: object
+      required: [id, name, description, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DeviceGroupCreate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000 }
+    DeviceGroupUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000 }
+    DeviceGroupPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceGroup" }
+        next_cursor: { type: string, nullable: true }
+    Organization:
+      type: object
+      required: [id, slug, name, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [provisioning, active, provisioning_failed, suspended] }
+        created_at: { type: string, format: date-time }
+    OrganizationCreate:
+      type: object
+      required: [slug, name]
+      additionalProperties: false
+      properties:
+        slug: { type: string, pattern: "^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$" }
+        name: { type: string, minLength: 1, maxLength: 200 }
+    OrganizationPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Organization" }
+        next_cursor: { type: string, nullable: true }
+    AuditActor:
+      type: object
+      required: [type, step_up]
+      properties:
+        type: { type: string }
+        id: { type: string }
+        display: { type: string }
+        ip: { type: string }
+        step_up: { type: boolean }
+    AuditTarget:
+      type: object
+      required: [type, id]
+      properties:
+        type: { type: string }
+        id: { type: string }
+        display: { type: string }
+    AuditEvent:
+      type: object
+      required: [event_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id]
+      properties:
+        event_id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        recorded_at: { type: string, format: date-time }
+        code: { type: string }
+        outcome: { type: string, enum: [success, failure, denied, unknown] }
+        source: { type: string }
+        actor: { $ref: "#/components/schemas/AuditActor" }
+        target:
+          allOf:
+            - $ref: "#/components/schemas/AuditTarget"
+          nullable: true
+        params:
+          type: object
+          additionalProperties: true
+        error_code: { type: string }
+        correlation_id: { type: string }
+    AuditEventPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEvent" }
+        next_cursor: { type: string, nullable: true }

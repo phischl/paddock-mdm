@@ -64,3 +64,9 @@ func AuditS3Endpoint() string { return Env("PADDOCK_TEST_AUDIT_S3_ENDPOINT", "ht
 
 // AuditBucket is the WORM audit bucket.
 func AuditBucket() string { return Env("PADDOCK_TEST_AUDIT_S3_BUCKET", "paddock-audit") }
+
+// AdminURL is the portal URL (PADDOCK_TEST_ADMIN_URL overrides).
+func AdminURL() string { return Env("PADDOCK_TEST_ADMIN_URL", "https://admin.paddock.localhost:8443") }
+
+// AuthURL is the Authentik URL (PADDOCK_TEST_AUTH_URL overrides).
+func AuthURL() string { return Env("PADDOCK_TEST_AUTH_URL", "https://auth.paddock.localhost:8443") }

@@ -26,3 +26,6 @@ SELECT * FROM admin_account WHERE authentik_sub = @authentik_sub;
 
 -- name: UpdateAdminAccountLocale :one
 UPDATE admin_account SET locale = @locale WHERE id = @id RETURNING *;
+
+-- name: GetPlatformAdminBySubject :one
+SELECT * FROM platform_admin WHERE authentik_sub = @authentik_sub;

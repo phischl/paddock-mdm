@@ -108,8 +108,7 @@ func runServe(ctx context.Context, l *config.Loader, common config.Common, args 
 	case "audit-writer":
 		return serveAuditWriter(ctx, l, common)
 	case "api":
-		fmt.Fprintf(os.Stderr, "paddock-server serve %s: not implemented\n", args[0])
-		return errors.New("not implemented")
+		return serveAPI(ctx, l, common)
 	default:
 		return errUsage
 	}

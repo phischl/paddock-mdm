@@ -13,7 +13,9 @@ deadline=$((SECONDS + timeout))
 while :; do
   pending=()
   failed=()
+  seen=0
   while IFS='|' read -r service state health exit_code; do
+    seen=$((seen + 1))
     case "$state" in
       exited)
         [[ "$exit_code" == "0" ]] || failed+=("$service (exit $exit_code)") ;;
@@ -22,8 +24,12 @@ while :; do
       *)
         pending+=("$service ($state)") ;;
     esac
-  done < <(compose ps -a "$@" --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}')
+  done < <(compose "$@" ps -a --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}')
 
+  if ((seen == 0)); then
+    echo "no services found" >&2
+    exit 1
+  fi
   if ((${#failed[@]} > 0)); then
     echo "failed: ${failed[*]}" >&2
     exit 1
