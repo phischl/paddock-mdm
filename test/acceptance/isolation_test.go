@@ -11,7 +11,8 @@ import (
 )
 
 // TestOrganizationIsolation is gate A2 (plan M0 §8, AC2): every /api/v1 operation called by an acme admin with
-// globex IDs answers 404, and no response ever contains a globex ID — including the audit log.
+// globex IDs answers 404, and no response ever contains a globex ID — including the audit log and the searches
+// and filters of every list (plan M0.2 AC5).
 func TestOrganizationIsolation(t *testing.T) {
 	doc := loadSpec(t)
 	w := &isolationWorld{alice: login(t, env.Alice), carol: login(t, env.Carol)}
@@ -73,6 +74,38 @@ func TestOrganizationIsolation(t *testing.T) {
 			}
 			if leaked := containsAny(res.Body, w.globexIDs); leaked != "" {
 				t.Fatalf("response contains globex ID %s: %s", leaked, res.Body)
+			}
+		})
+	}
+
+	// Searches and filters of every list find globex data as carol but never as alice.
+	for path := range collectionGETs(doc) {
+		if !strings.HasPrefix(path, "/api/v1/") {
+			continue
+		}
+		t.Run("search and filters "+path, func(t *testing.T) {
+			queries, ok := listIsolationQueries[path]
+			if !ok {
+				t.Fatalf("collection GET %s has no entry in listIsolationQueries", path)
+			}
+			for _, q := range queries {
+				target := path + "?" + q.Encode()
+				var own struct {
+					Total int `json:"total"`
+				}
+				res := call(t, w.carol, http.MethodGet, target, nil)
+				expectStatus(t, res, http.StatusOK, "")
+				if err := res.JSON(&own); err != nil || own.Total == 0 {
+					t.Fatalf("%s finds no globex data as carol, the check would be vacuous: %s", target, res.Body)
+				}
+				res = call(t, w.alice, http.MethodGet, target, nil)
+				expectStatus(t, res, http.StatusOK, "")
+				if leaked := containsAny(res.Body, w.globexIDs); leaked != "" {
+					t.Fatalf("%s as alice contains globex ID %s: %s", target, leaked, res.Body)
+				}
+				if strings.Contains(string(res.Body), "globex") || strings.Contains(string(res.Body), "carol") {
+					t.Fatalf("%s as alice contains globex data: %s", target, res.Body)
+				}
 			}
 		})
 	}
