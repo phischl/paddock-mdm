@@ -233,3 +233,76 @@ func Provision(ctx context.Context, cfg Config, o ProvisionOptions) error {
 		"dlq", QueueAuditDLQ, "max_bytes", o.AuditQueueMaxBytes)
 	return nil
 }
+
+// ConsumeFunc handles one consumer session. It returns when the channel closes or ctx ends.
+type ConsumeFunc func(ctx context.Context, ch *amqp.Channel, deliveries <-chan amqp.Delivery) error
+
+// Consumer consumes one queue with manual acknowledgements and reconnects with back-off.
+type Consumer struct {
+	cfg      Config
+	queue    string
+	prefetch int
+
+	mu        sync.Mutex
+	connected bool
+}
+
+// NewConsumer creates a consumer.
+func NewConsumer(cfg Config, queue string, prefetch int) *Consumer {
+	return &Consumer{cfg: cfg, queue: queue, prefetch: prefetch}
+}
+
+// Connected reports whether a consumer session is active.
+func (c *Consumer) Connected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connected
+}
+
+func (c *Consumer) setConnected(v bool) {
+	c.mu.Lock()
+	c.connected = v
+	c.mu.Unlock()
+}
+
+// Run consumes until ctx ends, reconnecting after failures (1 s → 30 s).
+func (c *Consumer) Run(ctx context.Context, handle ConsumeFunc) error {
+	backoff := time.Second
+	for ctx.Err() == nil {
+		err := c.session(ctx, handle)
+		c.setConnected(false)
+		if ctx.Err() != nil {
+			return nil
+		}
+		slog.WarnContext(ctx, "consumer session ended; reconnecting", "queue", c.queue, "error", err, "backoff", backoff)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 30*time.Second)
+	}
+	return nil
+}
+
+func (c *Consumer) session(ctx context.Context, handle ConsumeFunc) error {
+	conn, err := Dial(c.cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	ch, err := conn.Channel()
+	if err != nil {
+		return err
+	}
+	if err := ch.Qos(c.prefetch, 0, false); err != nil {
+		return err
+	}
+	deliveries, err := ch.ConsumeWithContext(ctx, c.queue, "", false, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+	c.setConnected(true)
+	slog.InfoContext(ctx, "consuming", "queue", c.queue, "prefetch", c.prefetch)
+	return handle(ctx, ch, deliveries)
+}

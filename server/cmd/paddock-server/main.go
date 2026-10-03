@@ -23,6 +23,8 @@ commands:
   serve api|outbox-relay|audit-writer
   migrate paddock|audit
   provision rabbitmq
+  audit seal [--day YYYY-MM-DD]
+  audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD
   healthcheck
 
 Commands separated by a lone "+" run one after another; the first failure stops the chain.
@@ -82,6 +84,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runHealthcheck(ctx, common)
 	case "serve":
 		err = runServe(ctx, l, common, args[1:])
+	case "audit":
+		err = runAudit(ctx, l, common, args[1:])
 	case "provision":
 		if len(args) != 2 || args[1] != "rabbitmq" {
 			err = errUsage
@@ -101,7 +105,9 @@ func runServe(ctx context.Context, l *config.Loader, common config.Common, args 
 	switch args[0] {
 	case "outbox-relay":
 		return serveOutboxRelay(ctx, l, common)
-	case "api", "audit-writer":
+	case "audit-writer":
+		return serveAuditWriter(ctx, l, common)
+	case "api":
 		fmt.Fprintf(os.Stderr, "paddock-server serve %s: not implemented\n", args[0])
 		return errors.New("not implemented")
 	default:
