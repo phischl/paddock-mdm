@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
-import PrimeVue from 'primevue/config'
 import DeviceGroupForm from '../components/DeviceGroupForm.vue'
 import { createPortalI18n } from '../i18n'
+import { vuetify } from '../plugins/vuetify'
 import { validateDeviceGroup } from '../lib/validation'
 
 function mountForm(props: Record<string, unknown> = {}) {
   return mount(DeviceGroupForm, {
     props: { submitLabel: 'Create', ...props },
-    global: { plugins: [createPortalI18n(), [PrimeVue, { unstyled: true }]] },
+    global: { plugins: [createPortalI18n(), vuetify] },
   })
 }
 
@@ -47,6 +47,7 @@ describe('DeviceGroupForm', () => {
   it('prefills values and shows server problems', () => {
     const wrapper = mountForm({ initialName: 'Servers', problem: 'name_taken' })
     expect((wrapper.find('#device-group-name').element as HTMLInputElement).value).toBe('Servers')
-    expect(wrapper.find('[role="alert"]').text()).toBe('A device group with this name already exists.')
+    // Vuetify's field message containers are role="alert" too; the server problem is the form-level paragraph.
+    expect(wrapper.find('p[role="alert"]').text()).toBe('A device group with this name already exists.')
   })
 })

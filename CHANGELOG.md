@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - WORM object keys, `audit_object.day`, daily manifests and object retention are dated by the UTC day on which the audit writer recorded the events instead of their occurrence day; writer transactions are limited to 5 minutes and `paddock-server audit seal` refuses a day before 00:15 UTC of the following day (F7, M0.1 step 2).
+- Portal UI library switched from PrimeVue to Vuetify (MIT); PrimeVue 5 requires a commercial license (C8, M0.1 step 4).
 
 ### Fixed
 
@@ -38,3 +39,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Organization data is isolated by PostgreSQL row-level security that fails closed without an organization context; platform endpoints use a separate database role, and cross-organization access returns 404 (F10, M0 steps 4, 9).
 - The portal uses a backend-for-frontend session: tokens stay on the server, the browser only holds an encrypted, `HttpOnly`, `SameSite=Strict` session cookie (F8, M0 step 7).
 - The portal is served with a strict Content Security Policy without `'unsafe-inline'`, with `frame-ancestors 'none'` and no third-party origins (C7, M0 step 8).
+- Portal CSP now uses a per-response style nonce: `index.html` is served with `Cache-Control: no-store` and a fresh nonce in its `style-src` directive, still without `'unsafe-inline'` (C7, M0.1 step 4).

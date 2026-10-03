@@ -68,6 +68,10 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		return err
 	}
 
+	static, err := admin.NewStaticHandler(web.Dist())
+	if err != nil {
+		return err
+	}
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
@@ -80,7 +84,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Keys:          keys,
 		OIDC:          oidc,
 		PublicURL:     publicURL,
-		Static:        web.Dist(),
+		Static:        static,
 	})
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	slog.InfoContext(ctx, "api starting", "addr", httpAddr, "public_url", publicURL)

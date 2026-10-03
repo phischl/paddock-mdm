@@ -5,9 +5,7 @@ package admin
 import (
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"net/http"
-	"path"
 	"strings"
 	"time"
 
@@ -28,7 +26,7 @@ type Deps struct {
 	Keys          *Keyring
 	OIDC          *OIDC
 	PublicURL     string
-	Static        fs.FS // portal build (index.html at the root); may be empty
+	Static        *StaticHandler // portal build
 	Now           func() time.Time
 }
 
@@ -74,7 +72,7 @@ func NewHandler(d Deps) http.Handler {
 	root.HandleFunc("GET /api/auth/login", s.bff.login)
 	root.HandleFunc("GET /api/auth/callback", s.bff.callback)
 	root.Handle("/api/", noStore(authenticated))
-	root.Handle("/", s.static())
+	root.Handle("/", d.Static)
 
 	return httpx.RequestIDMiddleware(httpx.Recover(httpx.AccessLog(securityHeaders(root))))
 }
@@ -160,45 +158,20 @@ func noStore(next http.Handler) http.Handler {
 	})
 }
 
-// securityHeaders sets the strict CSP and related headers on every response (architecture §18).
+// cspCommon are the CSP directives shared by every response.
+const cspCommon = "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+
+// securityHeaders sets the strict CSP and related headers on every response (architecture §18). The portal's
+// index.html replaces the CSP with one that adds a style nonce (StaticHandler.ServeIndex).
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		h.Set("Content-Security-Policy", "default-src 'self'; "+cspCommon)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Strict-Transport-Security", "max-age=31536000")
 		next.ServeHTTP(w, r)
-	})
-}
-
-// static serves the portal with an SPA fallback to index.html for every non-/api path without a file.
-func (s *server) static() http.Handler {
-	files := http.FileServerFS(s.d.Static)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			httpx.WriteProblem(w, r, problem.NotFound)
-			return
-		}
-		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-		if name != "" {
-			if st, err := fs.Stat(s.d.Static, name); err == nil && !st.IsDir() {
-				if strings.HasPrefix(name, "assets/") {
-					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-				}
-				files.ServeHTTP(w, r)
-				return
-			}
-		}
-		index, err := fs.ReadFile(s.d.Static, "index.html")
-		if err != nil {
-			http.Error(w, "portal not built", http.StatusNotFound)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache")
-		_, _ = w.Write(index)
 	})
 }
 
