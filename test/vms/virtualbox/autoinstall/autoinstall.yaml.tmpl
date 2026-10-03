@@ -1,0 +1,59 @@
+# Ubuntu Desktop autoinstall template (rendered by ../create-vm.sh).
+# Placeholders: @@HOSTNAME@@ @@USERNAME@@ @@PASSWORD_HASH@@ @@LUKS_PASSPHRASE@@
+#               @@SSH_PUBKEY@@
+# Reference: https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html
+autoinstall:
+  version: 1
+  interactive-sections: []
+
+  # US layout on purpose: VBoxManage keyboardputstring sends US scancodes,
+  # so the LUKS passphrase can be typed headless (see README.md).
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: Europe/Berlin
+
+  source:
+    id: ubuntu-desktop-minimal
+
+  identity:
+    hostname: @@HOSTNAME@@
+    realname: Paddock Test
+    username: @@USERNAME@@
+    password: '@@PASSWORD_HASH@@'
+
+  # LVM inside LUKS2, unlocked with a passphrase at boot (not TPM-backed, not ZFS).
+  storage:
+    layout:
+      name: lvm
+      password: '@@LUKS_PASSPHRASE@@'
+
+  ssh:
+    install-server: true
+    allow-pw: true
+    authorized-keys:
+      - '@@SSH_PUBKEY@@'
+
+  updates: all
+  codecs:
+    install: false
+  drivers:
+    install: false
+
+  packages:
+    - openssh-server
+    - tpm2-tools
+    - cryptsetup
+
+  late-commands:
+    - echo '@@USERNAME@@ ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/90-@@USERNAME@@
+    - chmod 0440 /target/etc/sudoers.d/90-@@USERNAME@@
+    - curtin in-target --target=/target -- systemctl enable ssh.service
+    # Time sync: systemd-timesyncd on 24.04, chrony on 26.04 (whichever is installed).
+    - curtin in-target --target=/target -- sh -c 'systemctl enable chrony.service 2>/dev/null || systemctl enable systemd-timesyncd.service'
+    # Skip gnome-initial-setup for the test user.
+    - mkdir -p /target/home/@@USERNAME@@/.config
+    - echo yes > /target/home/@@USERNAME@@/.config/gnome-initial-setup-done
+    - curtin in-target --target=/target -- chown -R @@USERNAME@@:@@USERNAME@@ /home/@@USERNAME@@/.config
+
+  shutdown: poweroff
