@@ -1,0 +1,68 @@
+# Development overrides (plan M0 §6.8, decision 20). Never use this file in production.
+services:
+  openbao:
+    command: ["bao", "server", "-config=/openbao/config/config.hcl", "-config=/openbao/config/dev.hcl"]
+    volumes:
+      - ./openbao/dev.hcl:/openbao/config/dev.hcl:ro
+    ports:
+      - "127.0.0.1:8200:8200"
+
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  audit-postgres:
+    ports:
+      - "127.0.0.1:5433:5432"
+
+  rabbitmq:
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+
+  audit-rustfs:
+    ports:
+      - "127.0.0.1:9001:9000"
+
+  authentik-server: &authentik-dev
+    environment:
+      PADDOCK_ENV: development
+      DEV_PLATFORM_ADMIN_PASSWORD_FROMFILE: /run/secrets/dev_platform_admin_password
+      DEV_ALICE_PASSWORD_FROMFILE: /run/secrets/dev_alice_password
+      DEV_BOB_PASSWORD_FROMFILE: /run/secrets/dev_bob_password
+      DEV_CAROL_PASSWORD_FROMFILE: /run/secrets/dev_carol_password
+    secrets:
+      - dev_platform_admin_password
+      - dev_alice_password
+      - dev_bob_password
+      - dev_carol_password
+    volumes:
+      - ./authentik/dev:/blueprints/paddock-dev:ro
+
+  authentik-worker: *authentik-dev
+
+  paddock-migrate:
+    environment:
+      PADDOCK_ENV: development
+
+  paddock-api:
+    environment:
+      PADDOCK_ENV: development
+
+  paddock-outbox-relay:
+    environment:
+      PADDOCK_ENV: development
+
+  paddock-audit-migrate:
+    environment:
+      PADDOCK_ENV: development
+
+  paddock-audit-writer:
+    environment:
+      PADDOCK_ENV: development
+
+secrets:
+  dev_platform_admin_password: { file: ./.secrets/dev_platform_admin_password }
+  dev_alice_password: { file: ./.secrets/dev_alice_password }
+  dev_bob_password: { file: ./.secrets/dev_bob_password }
+  dev_carol_password: { file: ./.secrets/dev_carol_password }

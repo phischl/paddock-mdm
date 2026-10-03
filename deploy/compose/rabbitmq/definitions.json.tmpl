@@ -1,0 +1,13 @@
+{
+  "vhosts": [{ "name": "paddock" }],
+  "users": [
+    { "name": "provisioner", "password": "@PROVISIONER_PASSWORD@", "tags": [] },
+    { "name": "relay", "password": "@RELAY_PASSWORD@", "tags": [] },
+    { "name": "audit_writer", "password": "@AUDIT_WRITER_PASSWORD@", "tags": [] }
+  ],
+  "permissions": [
+    { "user": "provisioner", "vhost": "paddock", "configure": ".*", "write": ".*", "read": ".*" },
+    { "user": "relay", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.audit$", "read": "^$" },
+    { "user": "audit_writer", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^audit\\.writer$" }
+  ]
+}
