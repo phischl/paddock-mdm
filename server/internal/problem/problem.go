@@ -35,10 +35,11 @@ func (e *Error) WithDetail(detail string) *Error {
 	return &c
 }
 
-// Problem codes of M0.
+// Problem codes of M0 and M0.2.
 var (
 	InvalidRequest      = &Error{Code: "invalid_request", Status: http.StatusBadRequest}
 	RangeTooLarge       = &Error{Code: "range_too_large", Status: http.StatusBadRequest}
+	PageOutOfRange      = &Error{Code: "page_out_of_range", Status: http.StatusBadRequest}
 	Unauthenticated     = &Error{Code: "unauthenticated", Status: http.StatusUnauthorized}
 	Forbidden           = &Error{Code: "forbidden", Status: http.StatusForbidden}
 	NoOrganization      = &Error{Code: "no_organization", Status: http.StatusForbidden}

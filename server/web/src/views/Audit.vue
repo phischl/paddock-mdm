@@ -95,7 +95,7 @@ onMounted(() => log.load())
       </template>
     </v-data-table>
     <v-btn
-      v-if="log.nextCursor.value"
+      v-if="log.hasMore.value"
       variant="tonal"
       @click="log.load(true)"
     >

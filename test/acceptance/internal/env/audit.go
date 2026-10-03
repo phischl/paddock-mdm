@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -32,17 +33,14 @@ type AuditEvent struct {
 	} `json:"target"`
 }
 
-// AuditEvents returns all events of the last 7 days visible to the portal session, newest first.
+// AuditEvents returns all events of the last 7 days visible to the portal session, newest first (at most the
+// 10 000 the list contract can page through).
 func (p *Portal) AuditEvents(ctx context.Context, code string) ([]AuditEvent, error) {
 	var all []AuditEvent
-	cursor := ""
-	for page := 0; page < 100; page++ {
-		q := url.Values{"limit": {"200"}}
+	for page := 1; ; page++ {
+		q := url.Values{"page_size": {"100"}, "page": {strconv.Itoa(page)}}
 		if code != "" {
 			q.Set("code", code)
-		}
-		if cursor != "" {
-			q.Set("cursor", cursor)
 		}
 		res, err := p.Do(ctx, http.MethodGet, "/api/v1/audit-events?"+q.Encode(), nil)
 		if err != nil {
@@ -52,19 +50,18 @@ func (p *Portal) AuditEvents(ctx context.Context, code string) ([]AuditEvent, er
 			return nil, fmt.Errorf("audit-events: HTTP %d: %s", res.Status, res.Body)
 		}
 		var body struct {
-			Items      []AuditEvent `json:"items"`
-			NextCursor *string      `json:"next_cursor"`
+			Items    []AuditEvent `json:"items"`
+			Total    int          `json:"total"`
+			PageSize int          `json:"page_size"`
 		}
 		if err := res.JSON(&body); err != nil {
 			return nil, err
 		}
 		all = append(all, body.Items...)
-		if body.NextCursor == nil {
+		if page*body.PageSize >= body.Total {
 			return all, nil
 		}
-		cursor = *body.NextCursor
 	}
-	return all, nil
 }
 
 // EventsFor filters events by correlation ID.

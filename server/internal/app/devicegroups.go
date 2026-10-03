@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -31,40 +32,27 @@ var (
 	SpecDeviceGroupDelete = ActionSpec{Code: audit.CodeDeviceGroupDeleted, AllowedRoles: RolesAdmin}
 )
 
-// DeviceGroupPage is one page of device groups.
-type DeviceGroupPage struct {
-	Items      []pgstore.DeviceGroup
-	NextCursor *string
-}
-
-// List returns one page, newest first.
-func (d *DeviceGroups) List(ctx context.Context, cursor *string, limit *int) (DeviceGroupPage, error) {
+// List returns one page of device groups and the capped number of matches (ADR 0018).
+func (d *DeviceGroups) List(ctx context.Context, page ListPage) (Listed[pgstore.DeviceGroup], error) {
+	var out Listed[pgstore.DeviceGroup]
 	if _, err := RequireOrg(ctx, RolesRead); err != nil {
-		return DeviceGroupPage{}, err
+		return out, err
 	}
-	before, err := DecodeCursor(cursor)
-	if err != nil {
-		return DeviceGroupPage{}, err
-	}
-	n, err := PageLimit(limit)
-	if err != nil {
-		return DeviceGroupPage{}, err
-	}
-	var page DeviceGroupPage
-	err = d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		rows, err := q.ListDeviceGroups(ctx, pgstore.ListDeviceGroupsParams{Before: before, MaxRows: n + 1})
+	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		n, err := q.CountDeviceGroups(ctx, pgstore.CountDeviceGroupsParams{QPattern: page.QPattern, CountLimit: countLimit})
 		if err != nil {
-			return err
+			return fmt.Errorf("count device groups: %w", err)
 		}
-		if len(rows) > int(n) {
-			rows = rows[:n]
-			c := EncodeCursor(rows[len(rows)-1].ID)
-			page.NextCursor = &c
+		out.Count = int(n)
+		out.Items, err = q.ListDeviceGroups(ctx, pgstore.ListDeviceGroupsParams{
+			QPattern: page.QPattern, Sort: page.Sort, SkipRows: page.Offset, MaxRows: page.Limit,
+		})
+		if err != nil {
+			return fmt.Errorf("list device groups: %w", err)
 		}
-		page.Items = rows
 		return nil
 	})
-	return page, err
+	return out, err
 }
 
 // Get returns one device group; missing and foreign groups are both not_found.

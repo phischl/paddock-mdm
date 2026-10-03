@@ -13,7 +13,8 @@ export const auditCodes = [
 
 export function useAuditLog() {
   const items = ref<AuditEvent[]>([])
-  const nextCursor = ref<string | null>(null)
+  const page = ref(1)
+  const hasMore = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
   const today = new Date()
@@ -29,9 +30,9 @@ export function useAuditLog() {
         query: {
           from: dateInputToRFC3339(from.value, false),
           to: dateInputToRFC3339(to.value, true),
-          code: code.value || undefined,
-          cursor: more && nextCursor.value ? nextCursor.value : undefined,
-          limit: 50,
+          code: code.value ? [code.value] : undefined,
+          page: more ? page.value + 1 : 1,
+          page_size: 100,
         },
       },
     })
@@ -41,8 +42,9 @@ export function useAuditLog() {
       return
     }
     items.value = more ? [...items.value, ...data.items] : data.items
-    nextCursor.value = data.next_cursor
+    page.value = data.page
+    hasMore.value = data.page * data.page_size < data.total
   }
 
-  return { items, nextCursor, loading, error, from, to, code, load }
+  return { items, hasMore, loading, error, from, to, code, load }
 }

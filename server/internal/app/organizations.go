@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -30,40 +31,30 @@ func NewOrganizations(runner *ActionRunner, platform *db.PlatformPool, idp ports
 // SpecOrganizationCreate is the privileged action organization.created.
 var SpecOrganizationCreate = ActionSpec{Code: audit.CodeOrganizationCreated, AllowedRoles: RolesPlatform}
 
-// OrganizationPage is one page of organizations.
-type OrganizationPage struct {
-	Items      []pgstore.Organization
-	NextCursor *string
-}
-
-// List returns one page, newest first.
-func (o *Organizations) List(ctx context.Context, cursor *string, limit *int) (OrganizationPage, error) {
+// List returns one page of organizations, optionally limited to statuses, and the capped number of matches
+// (ADR 0018).
+func (o *Organizations) List(ctx context.Context, page ListPage, statuses []string) (Listed[pgstore.Organization], error) {
+	var out Listed[pgstore.Organization]
 	if _, err := RequirePlatform(ctx); err != nil {
-		return OrganizationPage{}, err
+		return out, err
 	}
-	before, err := DecodeCursor(cursor)
-	if err != nil {
-		return OrganizationPage{}, err
-	}
-	n, err := PageLimit(limit)
-	if err != nil {
-		return OrganizationPage{}, err
-	}
-	var page OrganizationPage
-	err = o.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		rows, err := q.ListOrganizations(ctx, pgstore.ListOrganizationsParams{Before: before, MaxRows: n + 1})
+	err := o.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		n, err := q.CountOrganizations(ctx, pgstore.CountOrganizationsParams{
+			QPattern: page.QPattern, Statuses: statuses, CountLimit: countLimit,
+		})
 		if err != nil {
-			return err
+			return fmt.Errorf("count organizations: %w", err)
 		}
-		if len(rows) > int(n) {
-			rows = rows[:n]
-			c := EncodeCursor(rows[len(rows)-1].ID)
-			page.NextCursor = &c
+		out.Count = int(n)
+		out.Items, err = q.ListOrganizations(ctx, pgstore.ListOrganizationsParams{
+			QPattern: page.QPattern, Statuses: statuses, Sort: page.Sort, SkipRows: page.Offset, MaxRows: page.Limit,
+		})
+		if err != nil {
+			return fmt.Errorf("list organizations: %w", err)
 		}
-		page.Items = rows
 		return nil
 	})
-	return page, err
+	return out, err
 }
 
 // Get returns one organization.

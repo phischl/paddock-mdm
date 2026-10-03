@@ -82,7 +82,7 @@ async function submit(): Promise<void> {
       </template>
     </v-data-table>
     <v-btn
-      v-if="orgs.nextCursor.value"
+      v-if="orgs.hasMore.value"
       variant="tonal"
       @click="orgs.load(true)"
     >

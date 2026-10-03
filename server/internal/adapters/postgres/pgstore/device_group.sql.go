@@ -11,6 +11,28 @@ import (
 	"github.com/google/uuid"
 )
 
+const countDeviceGroups = `-- name: CountDeviceGroups :one
+SELECT count(*) FROM (
+  SELECT 1 FROM device_group
+  WHERE ($1::text IS NULL
+         OR name ILIKE $1::text ESCAPE '\'
+         OR description ILIKE $1::text ESCAPE '\')
+  LIMIT $2
+) matching
+`
+
+type CountDeviceGroupsParams struct {
+	QPattern   *string
+	CountLimit int32
+}
+
+func (q *Queries) CountDeviceGroups(ctx context.Context, arg CountDeviceGroupsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countDeviceGroups, arg.QPattern, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteDeviceGroup = `-- name: DeleteDeviceGroup :execrows
 DELETE FROM device_group WHERE id = $1
 `
@@ -74,19 +96,38 @@ func (q *Queries) InsertDeviceGroup(ctx context.Context, arg InsertDeviceGroupPa
 }
 
 const listDeviceGroups = `-- name: ListDeviceGroups :many
+
 SELECT id, organization_id, name, description, created_at, updated_at FROM device_group
-WHERE ($1::uuid IS NULL OR id < $1::uuid)
-ORDER BY id DESC
-LIMIT $2
+WHERE ($1::text IS NULL
+       OR name ILIKE $1::text ESCAPE '\'
+       OR description ILIKE $1::text ESCAPE '\')
+ORDER BY
+  CASE WHEN $2::text = 'name' THEN name END ASC,
+  CASE WHEN $2::text = '-name' THEN name END DESC,
+  CASE WHEN $2::text = 'created_at' THEN created_at END ASC,
+  CASE WHEN $2::text = '-created_at' THEN created_at END DESC,
+  CASE WHEN $2::text = 'updated_at' THEN updated_at END ASC,
+  CASE WHEN $2::text = '-updated_at' THEN updated_at END DESC,
+  id
+LIMIT $4 OFFSET $3
 `
 
 type ListDeviceGroupsParams struct {
-	Before  uuid.NullUUID
-	MaxRows int32
+	QPattern *string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
 }
 
+// List queries (ADR 0018): one ascending and one descending ORDER BY branch per allowed sort value, id as
+// tie-breaker; the count repeats the filter and stops at @count_limit rows.
 func (q *Queries) ListDeviceGroups(ctx context.Context, arg ListDeviceGroupsParams) ([]DeviceGroup, error) {
-	rows, err := q.db.Query(ctx, listDeviceGroups, arg.Before, arg.MaxRows)
+	rows, err := q.db.Query(ctx, listDeviceGroups,
+		arg.QPattern,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}

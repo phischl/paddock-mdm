@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"testing"
@@ -325,7 +326,7 @@ type orgRow struct {
 
 func organizationBySlug(t *testing.T, root *env.Portal, slug string) orgRow {
 	t.Helper()
-	res := call(t, root, http.MethodGet, "/api/platform/v1/organizations?limit=200", nil)
+	res := call(t, root, http.MethodGet, "/api/platform/v1/organizations?page_size=100&q="+url.QueryEscape(slug), nil)
 	expectStatus(t, res, http.StatusOK, "")
 	var page struct {
 		Items []struct {

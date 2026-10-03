@@ -13,6 +13,46 @@ import (
 	"github.com/google/uuid"
 )
 
+const countAuditEvents = `-- name: CountAuditEvents :one
+SELECT count(*) FROM (
+  SELECT 1 FROM audit_event
+  WHERE occurred_at >= $1 AND occurred_at < $2
+    AND ($3::text[] IS NULL OR code = ANY($3::text[]))
+    AND ($4::text[] IS NULL OR outcome = ANY($4::text[]))
+    AND ($5::text[] IS NULL OR actor->>'type' = ANY($5::text[]))
+    AND ($6::text IS NULL
+         OR code ILIKE $6::text ESCAPE '\'
+         OR actor->>'display' ILIKE $6::text ESCAPE '\'
+         OR target->>'display' ILIKE $6::text ESCAPE '\')
+  LIMIT $7
+) matching
+`
+
+type CountAuditEventsParams struct {
+	FromTime   time.Time
+	ToTime     time.Time
+	Codes      []string
+	Outcomes   []string
+	ActorTypes []string
+	QPattern   *string
+	CountLimit int32
+}
+
+func (q *Queries) CountAuditEvents(ctx context.Context, arg CountAuditEventsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAuditEvents,
+		arg.FromTime,
+		arg.ToTime,
+		arg.Codes,
+		arg.Outcomes,
+		arg.ActorTypes,
+		arg.QPattern,
+		arg.CountLimit,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const ensureAuditPartition = `-- name: EnsureAuditPartition :exec
 SELECT audit_ensure_partition($1::date)
 `
@@ -187,31 +227,51 @@ func (q *Queries) InsertAuditObject(ctx context.Context, arg InsertAuditObjectPa
 }
 
 const listAuditEvents = `-- name: ListAuditEvents :many
+
 SELECT event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, object_key FROM audit_event
 WHERE occurred_at >= $1 AND occurred_at < $2
-  AND ($3::text IS NULL OR code = $3::text)
-  AND ($4::timestamptz IS NULL
-       OR (occurred_at, event_id) < ($4::timestamptz, $5::uuid))
-ORDER BY occurred_at DESC, event_id DESC
-LIMIT $6
+  AND ($3::text[] IS NULL OR code = ANY($3::text[]))
+  AND ($4::text[] IS NULL OR outcome = ANY($4::text[]))
+  AND ($5::text[] IS NULL OR actor->>'type' = ANY($5::text[]))
+  AND ($6::text IS NULL
+       OR code ILIKE $6::text ESCAPE '\'
+       OR actor->>'display' ILIKE $6::text ESCAPE '\'
+       OR target->>'display' ILIKE $6::text ESCAPE '\')
+ORDER BY
+  CASE WHEN $7::text = 'occurred_at' THEN occurred_at END ASC,
+  CASE WHEN $7::text = '-occurred_at' THEN occurred_at END DESC,
+  CASE WHEN $7::text = 'code' THEN code END ASC,
+  CASE WHEN $7::text = '-code' THEN code END DESC,
+  CASE WHEN $7::text = 'outcome' THEN outcome END ASC,
+  CASE WHEN $7::text = '-outcome' THEN outcome END DESC,
+  event_id
+LIMIT $9 OFFSET $8
 `
 
 type ListAuditEventsParams struct {
 	FromTime   time.Time
 	ToTime     time.Time
-	Code       *string
-	CursorTime *time.Time
-	CursorID   uuid.NullUUID
+	Codes      []string
+	Outcomes   []string
+	ActorTypes []string
+	QPattern   *string
+	Sort       string
+	SkipRows   int32
 	MaxRows    int32
 }
 
+// List queries (ADR 0018): one ascending and one descending ORDER BY branch per allowed sort value, event_id as
+// tie-breaker; the count repeats the filter and stops at @count_limit rows.
 func (q *Queries) ListAuditEvents(ctx context.Context, arg ListAuditEventsParams) ([]AuditEvent, error) {
 	rows, err := q.db.Query(ctx, listAuditEvents,
 		arg.FromTime,
 		arg.ToTime,
-		arg.Code,
-		arg.CursorTime,
-		arg.CursorID,
+		arg.Codes,
+		arg.Outcomes,
+		arg.ActorTypes,
+		arg.QPattern,
+		arg.Sort,
+		arg.SkipRows,
 		arg.MaxRows,
 	)
 	if err != nil {

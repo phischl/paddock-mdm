@@ -310,10 +310,10 @@ func TestDeviceGroupLifecycle(t *testing.T) {
 	}
 	e.expectEvent(dup, "device_group.created:failure:name_taken")
 
-	list := e.do(call{method: "GET", path: "/api/v1/device-groups?limit=1", cookie: alice})
+	list := e.do(call{method: "GET", path: "/api/v1/device-groups?page_size=10", cookie: alice})
 	var page adminapi.DeviceGroupPage
 	list.decode(t, &page)
-	if list.status != http.StatusOK || len(page.Items) != 1 {
+	if list.status != http.StatusOK || len(page.Items) != 1 || page.Total != 1 || page.Items[0].Name != "Notebooks" {
 		t.Fatalf("list: %d %s", list.status, list.body)
 	}
 
@@ -419,12 +419,12 @@ func TestRoleBoundaries(t *testing.T) {
 	me := e.do(call{method: "GET", path: "/api/v1/me", cookie: root})
 	var m adminapi.Me
 	me.decode(t, &m)
-	if me.status != http.StatusOK || m.Role != adminapi.PlatformAdmin || m.Organization != nil {
+	if me.status != http.StatusOK || m.Role != adminapi.MeRolePlatformAdmin || m.Organization != nil {
 		t.Fatalf("platform /me: %d %s", me.status, me.body)
 	}
 	me = e.do(call{method: "GET", path: "/api/v1/me", cookie: alice})
 	me.decode(t, &m)
-	if m.Organization == nil || m.Organization.Id != e.acme || m.Role != adminapi.OrgAdmin {
+	if m.Organization == nil || m.Organization.Id != e.acme || m.Role != adminapi.MeRoleOrgAdmin {
 		t.Fatalf("org /me: %s", me.body)
 	}
 	locale := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "en"}})
@@ -496,7 +496,14 @@ func TestAuditEvents(t *testing.T) {
 		if err := q.EnsureAuditPartition(ctx, now); err != nil {
 			return err
 		}
-		for i, org := range []uuid.UUID{e.acme, e.acme, e.acme, e.globex} {
+		if err := q.EnsureAuditPartition(ctx, now.AddDate(0, -1, 0)); err != nil {
+			return err
+		}
+		orgs := []uuid.UUID{e.globex}
+		for range 12 {
+			orgs = append(orgs, e.acme)
+		}
+		for i, org := range orgs {
 			_, err := q.InsertAuditEvent(ctx, auditstore.InsertAuditEventParams{
 				EventID: uuid.Must(uuid.NewV7()), OrganizationID: org, OccurredAt: now.Add(-time.Duration(i) * time.Minute),
 				RecordedAt: now, Code: "device_group.created", Outcome: "failure", Source: "portal",
@@ -512,20 +519,23 @@ func TestAuditEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := e.do(call{method: "GET", path: "/api/v1/audit-events?limit=2", cookie: alice})
+	r := e.do(call{method: "GET", path: "/api/v1/audit-events?page_size=10", cookie: alice})
 	var page adminapi.AuditEventPage
 	r.decode(t, &page)
-	if r.status != http.StatusOK || len(page.Items) != 2 || page.NextCursor == nil {
+	if r.status != http.StatusOK || len(page.Items) != 10 || page.Total != 12 || page.TotalCapped || page.Sort != "-occurred_at" {
 		t.Fatalf("page 1: %d %s", r.status, r.body)
 	}
 	if page.Items[0].ErrorCode == nil || *page.Items[0].ErrorCode != "name_taken" || page.Items[0].Params["error_code"] != nil {
 		t.Fatalf("error_code not presented: %+v", page.Items[0])
 	}
-	r2 := e.do(call{method: "GET", path: "/api/v1/audit-events?limit=2&cursor=" + *page.NextCursor, cookie: alice})
+	r2 := e.do(call{method: "GET", path: "/api/v1/audit-events?page_size=10&page=2", cookie: alice})
 	var page2 adminapi.AuditEventPage
 	r2.decode(t, &page2)
-	if len(page2.Items) != 1 || page2.NextCursor != nil {
+	if len(page2.Items) != 2 || page2.Total != 12 || page2.Page != 2 {
 		t.Fatalf("page 2: %s", r2.body)
+	}
+	if !page2.Items[0].OccurredAt.Before(page.Items[9].OccurredAt) {
+		t.Fatal("page 2 does not continue page 1")
 	}
 	tooLarge := e.do(call{method: "GET", path: "/api/v1/audit-events?from=2026-01-01T00:00:00Z&to=2026-06-01T00:00:00Z", cookie: alice})
 	if tooLarge.status != http.StatusBadRequest || tooLarge.problemCode(t) != "range_too_large" {

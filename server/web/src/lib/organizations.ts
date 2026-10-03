@@ -3,7 +3,8 @@ import { api, problemCode, type Organization } from '../api/client'
 
 export function useOrganizations() {
   const items = ref<Organization[]>([])
-  const nextCursor = ref<string | null>(null)
+  const page = ref(1)
+  const hasMore = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -11,7 +12,7 @@ export function useOrganizations() {
     loading.value = true
     error.value = null
     const { data, error: err } = await api.GET('/api/platform/v1/organizations', {
-      params: { query: { limit: 50, cursor: more && nextCursor.value ? nextCursor.value : undefined } },
+      params: { query: { page: more ? page.value + 1 : 1, page_size: 100 } },
     })
     loading.value = false
     if (err || !data) {
@@ -19,7 +20,8 @@ export function useOrganizations() {
       return
     }
     items.value = more ? [...items.value, ...data.items] : data.items
-    nextCursor.value = data.next_cursor
+    page.value = data.page
+    hasMore.value = data.page * data.page_size < data.total
   }
 
   async function create(slug: string, name: string): Promise<string | null> {
@@ -31,5 +33,5 @@ export function useOrganizations() {
     return err ? problemCode(err) : null
   }
 
-  return { items, nextCursor, loading, error, load, create }
+  return { items, hasMore, loading, error, load, create }
 }
