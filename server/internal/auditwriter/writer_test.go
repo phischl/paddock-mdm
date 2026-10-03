@@ -2,6 +2,7 @@ package auditwriter_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"testing"
 	"time"
@@ -183,14 +184,47 @@ func queueDepth(t *testing.T, b *mqtest.Broker, queue string) int {
 	return q.Messages
 }
 
-// TestSealAndVerify covers the daily chain: three days (one without events), verify OK; a manipulated object and a
-// missing manifest each make verification fail.
+// historicObject stores events as one object recorded at recorded and indexes it in audit_object, as an earlier
+// writer run would have. Writer transactions always record at the database's current time, so objects of earlier
+// recording days can only be set up this way.
+func (s stack) historicObject(t *testing.T, org uuid.UUID, recorded time.Time, events ...audit.Event) string {
+	t.Helper()
+	ctx := context.Background()
+	for i := range events {
+		events[i].RecordedAt = audit.Timestamp(recorded)
+	}
+	body, err := auditwriter.EncodeObject(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := recorded.UTC().Truncate(24 * time.Hour)
+	key := auditwriter.ObjectKey(org, recorded.Truncate(time.Hour), events[0].EventID)
+	if err := s.store.PutLocked(ctx, key, "application/zstd", body, s.writer.RetainUntil(day)); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	if _, err := s.super.Exec(ctx, "INSERT INTO audit_object (object_key, organization_id, day, event_count, sha256) VALUES ($1, $2, $3, $4, $5)",
+		key, org, day, len(events), sum[:]); err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// TestSealAndVerify covers the daily chain: three recording days (one without objects), verify OK; a manipulated
+// object and a missing manifest each make verification fail.
 func TestSealAndVerify(t *testing.T) {
 	s := newStack(t)
 	ctx := context.Background()
 	org := uuid.Must(uuid.NewV7())
 	day1 := time.Now().UTC().AddDate(0, 0, -5).Truncate(24 * time.Hour)
 	day3 := day1.AddDate(0, 0, 2)
+	s.historicObject(t, org, day1.Add(9*time.Hour+2*time.Minute),
+		event(org, day1.Add(9*time.Hour), audit.CodeDeviceGroupCreated),
+		event(org, day1.Add(9*time.Hour+time.Minute), audit.CodeDeviceGroupUpdated))
+	s.historicObject(t, org, day1.Add(15*time.Hour), event(org, day1.Add(15*time.Hour), audit.CodeDeviceGroupDeleted))
+	s.historicObject(t, org, day3.Add(1*time.Hour), event(org, day3.Add(1*time.Hour), audit.CodeDeviceGroupCreated))
+
+	// Events written now are recorded today, outside the sealed range.
 	events := []audit.Event{
 		event(org, day1.Add(9*time.Hour), audit.CodeDeviceGroupCreated),
 		event(org, day1.Add(9*time.Hour+time.Minute), audit.CodeDeviceGroupUpdated),
@@ -279,7 +313,7 @@ func TestSealLockIsExclusive(t *testing.T) {
 	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock(hashtext('audit-seal'))"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.sealer.SealThrough(ctx, time.Now()); err != auditwriter.ErrLocked {
+	if _, err := s.sealer.SealThrough(ctx, auditwriter.LastSealableDay(time.Now())); err != auditwriter.ErrLocked {
 		t.Fatalf("SealThrough with the lock held elsewhere = %v, want ErrLocked", err)
 	}
 }

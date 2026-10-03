@@ -101,10 +101,26 @@ func NewSealer(pool *db.AuditWriterPool, writer *Writer, signer Signer) *Sealer 
 // ErrLocked means another replica is sealing.
 var ErrLocked = errors.New("auditwriter: another replica holds the seal lock")
 
+// ErrDayOpen means a requested day can still receive objects and must not be sealed yet.
+var ErrDayOpen = errors.New("auditwriter: a day is sealable only from 00:15 UTC of the following day")
+
+// SealDelay is how long after midnight UTC the previous day stays open. It exceeds db.WriterTransactionTimeout, so
+// every writer transaction that started on day D has committed or rolled back before D is sealed.
+const SealDelay = 15 * time.Minute
+
+// LastSealableDay is the latest day that may be sealed at now: day D once now ≥ D+1 00:15 UTC.
+func LastSealableDay(now time.Time) time.Time {
+	return dayOf(now.UTC().Add(-SealDelay)).AddDate(0, 0, -1)
+}
+
 // SealThrough seals, for every organization with audit data, every unsealed day up to and including last. Days
-// without objects get a manifest with objects: []. Only one replica seals at a time (advisory lock).
+// without objects get a manifest with objects: []. Only one replica seals at a time (advisory lock). It returns
+// ErrDayOpen without sealing anything if last is after LastSealableDay.
 func (s *Sealer) SealThrough(ctx context.Context, last time.Time) (int, error) {
 	last = dayOf(last)
+	if open := LastSealableDay(s.now()); last.After(open) {
+		return 0, fmt.Errorf("%w: %s (latest sealable day is %s)", ErrDayOpen, last.Format(time.DateOnly), open.Format(time.DateOnly))
+	}
 	sealed := 0
 	err := s.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		locked, err := q.TryAuditSealLock(ctx)
@@ -134,7 +150,8 @@ func (s *Sealer) SealThrough(ctx context.Context, last time.Time) (int, error) {
 }
 
 // SealOrganizationThrough seals the unsealed days of one organization up to and including last (development tool:
-// tests seal the current day of a fresh organization without touching other organizations).
+// tests seal the current day of a fresh organization without touching other organizations). Unlike SealThrough it
+// does not wait for SealDelay; the CLI allows it only with PADDOCK_ENV=development.
 func (s *Sealer) SealOrganizationThrough(ctx context.Context, org uuid.UUID, last time.Time) (int, error) {
 	sealed := 0
 	err := s.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
@@ -223,11 +240,11 @@ func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev
 	return sum[:], nil
 }
 
-// RunDaily seals "yesterday" every day at 00:15 UTC until ctx ends.
+// RunDaily seals "yesterday" every day at 00:15 UTC (SealDelay) until ctx ends.
 func (s *Sealer) RunDaily(ctx context.Context) {
 	for {
 		now := s.now().UTC()
-		next := time.Date(now.Year(), now.Month(), now.Day(), 0, 15, 0, 0, time.UTC)
+		next := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Add(SealDelay)
 		if !next.After(now) {
 			next = next.AddDate(0, 0, 1)
 		}
@@ -236,8 +253,7 @@ func (s *Sealer) RunDaily(ctx context.Context) {
 			return
 		case <-time.After(next.Sub(now)):
 		}
-		yesterday := dayOf(s.now()).AddDate(0, 0, -1)
-		n, err := s.SealThrough(ctx, yesterday)
+		n, err := s.SealThrough(ctx, LastSealableDay(s.now()))
 		switch {
 		case errors.Is(err, ErrLocked):
 			slog.InfoContext(ctx, "seal skipped: another replica is sealing")

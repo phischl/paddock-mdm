@@ -76,7 +76,19 @@ Repeat the gate after every upgrade of the object store.
 
 ## 3. Operation
 
-- The audit writer sets the retention of every object to the day of its events plus
+- Objects, their index rows (`audit_object.day`) and the daily manifests are dated by the **recording day**: the UTC
+  date on which the audit writer stored the object (start of its database transaction), not the events'
+  `occurred_at`. The object key `org/<organization_id>/<YYYY>/<MM>/<DD>/<HH>-<event_id>.jsonl.zst` carries the
+  recording date and hour.
+- **Late events.** An event that reaches the writer after its occurrence day was sealed (for example after a queue
+  outage) is stored under the day it is recorded and listed in that day's manifest. Sealed manifests are never
+  rewritten. To find an event in the evidence, look it up in the audit log (filtered by occurrence time); its
+  `recorded_at` names the manifest day that covers it.
+- Every writer transaction is limited to 5 minutes (`transaction_timeout`); a batch that exceeds it is rolled back
+  and redelivered. Day *D* is sealed at *D*+1 00:15 UTC, after every transaction that started on *D* has ended.
+  `paddock-server audit seal` refuses days that are not sealable yet; only the development-only
+  `audit seal --day <day> --org <id>` seals earlier.
+- The audit writer sets the retention of every object and manifest to 00:00 UTC of its recording day plus
   `PADDOCK_AUDIT_RETENTION_DAYS` (≥ 400). Raising the value extends retention for new objects only.
 - Expired objects are removed by a lifecycle rule that the operator adds once the retention period is known to
   be final; Paddock itself never deletes audit objects.

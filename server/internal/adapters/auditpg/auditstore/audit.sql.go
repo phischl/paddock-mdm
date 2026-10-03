@@ -398,6 +398,18 @@ func (q *Queries) ReleaseAuditSealLock(ctx context.Context) (bool, error) {
 	return unlocked, err
 }
 
+const transactionTime = `-- name: TransactionTime :one
+SELECT transaction_timestamp()::timestamptz AS recorded_at
+`
+
+// The recording time of everything a writer transaction stores (architecture §14.4).
+func (q *Queries) TransactionTime(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRow(ctx, transactionTime)
+	var recorded_at time.Time
+	err := row.Scan(&recorded_at)
+	return recorded_at, err
+}
+
 const tryAuditSealLock = `-- name: TryAuditSealLock :one
 SELECT pg_try_advisory_lock(hashtext('audit-seal')) AS locked
 `

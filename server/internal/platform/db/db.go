@@ -226,9 +226,31 @@ func NewAuditWriterPool(ctx context.Context, dsn string, o Options) (*AuditWrite
 	return &AuditWriterPool{pool{p}}, nil
 }
 
-// InWriter runs fn in a transaction of role paddock_audit_writer.
+// WriterTransactionTimeout bounds every paddock_audit_writer transaction. Objects are dated by the transaction's
+// start, and day D is sealed at D+1 00:15 UTC; the timeout guarantees that no transaction started on D commits after
+// that (architecture §14.4).
+const WriterTransactionTimeout = 5 * time.Minute
+
+// InWriter runs fn in a transaction of role paddock_audit_writer limited to WriterTransactionTimeout.
 func (p *AuditWriterPool) InWriter(ctx context.Context, fn func(ctx context.Context, q *auditstore.Queries) error) error {
-	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
+	return p.InWriterWithTimeout(ctx, WriterTransactionTimeout, fn)
+}
+
+// InWriterWithTimeout runs fn in a transaction of role paddock_audit_writer whose first statement is
+// SET LOCAL transaction_timeout. PostgreSQL terminates the session when the transaction exceeds it, which rolls the
+// transaction back. Timeouts that are not positive or exceed WriterTransactionTimeout are rejected.
+func (p *AuditWriterPool) InWriterWithTimeout(ctx context.Context, timeout time.Duration,
+	fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	if timeout < time.Millisecond || timeout > WriterTransactionTimeout {
+		return fmt.Errorf("db: writer transaction timeout %s outside (0, %s]", timeout, WriterTransactionTimeout)
+	}
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error {
+			// SET takes no parameters; the value is an integer number of milliseconds.
+			_, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL transaction_timeout = %d", timeout.Milliseconds()))
+			return err
+		},
+		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
 }
 
 // WithSession runs fn on one dedicated connection outside a transaction (session-level advisory locks).
