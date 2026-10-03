@@ -34,8 +34,9 @@ Widersprechen sich zwei Quellen, entscheidest du **nicht** selbst: Das ist eine 
 - **Tests werden nie abgeschwächt**, um grün zu werden (kein Löschen, kein `Skip`, keine gelockerten
   Assertions, keine erhöhten Toleranzen ohne Planvorgabe). Ein Test, der nur durch Abschwächung grün wird,
   ist ein Befund.
-- **Sicherheitsabkürzungen** (deaktivierte TLS-Prüfung, Default-Passwörter, offene Ports, `BYPASSRLS`,
-  Secrets im Code oder in Logs) sind verboten. Entwicklungs-Erleichterungen nur, wenn der Plan sie vorsieht,
+- **Sicherheitsabkürzungen** (deaktivierte TLS-Prüfung, Default-Passwörter, offene Ports, `BYPASSRLS` für
+  Anwendungsrollen, Secrets im Code oder in Logs) sind verboten. Ausnahme: die Owner-/Migrationsrolle
+  (`paddock_owner`, `audit_owner`) darf `BYPASSRLS` haben; keine Anwendungsrolle verbindet sich als sie. Entwicklungs-Erleichterungen nur, wenn der Plan sie vorsieht,
   und dann nur wirksam bei `PADDOCK_ENV=development`.
 
 ## 3. Gestaltungsprinzipien
