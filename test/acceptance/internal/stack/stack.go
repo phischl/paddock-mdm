@@ -2,8 +2,12 @@
 package stack
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -70,3 +74,66 @@ func AdminURL() string { return Env("PADDOCK_TEST_ADMIN_URL", "https://admin.pad
 
 // AuthURL is the Authentik URL (PADDOCK_TEST_AUTH_URL overrides).
 func AuthURL() string { return Env("PADDOCK_TEST_AUTH_URL", "https://auth.paddock.localhost:8443") }
+
+// Compose runs `docker compose` for the development stack (all three files) and returns the combined output.
+func Compose(ctx context.Context, env []string, args ...string) (string, error) {
+	root, err := RepoRoot()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, "deploy", "compose")
+	base := []string{"compose", "--project-directory", dir, "-p", "paddock",
+		"--env-file", filepath.Join(dir, "versions.env"), "--env-file", filepath.Join(dir, ".env"),
+		"-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.audit.yaml"),
+		"-f", filepath.Join(dir, "compose.dev.yaml")}
+	cmd := exec.CommandContext(ctx, "docker", append(base, args...)...) //nolint:gosec // test orchestration
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, out)
+	}
+	return string(out), nil
+}
+
+// WaitHealthy runs deploy/compose/scripts/wait-healthy.sh for the paddock profile.
+func WaitHealthy(ctx context.Context) error {
+	root, err := RepoRoot()
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, filepath.Join(root, "deploy", "compose", "scripts", "wait-healthy.sh"), "--profile", "paddock") //nolint:gosec // test orchestration
+	cmd.Env = append(os.Environ(), "WAIT_TIMEOUT=300")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("wait-healthy: %w: %s", err, out)
+	}
+	return nil
+}
+
+// PaddockServer runs a paddock-server subcommand inside the audit-writer container (writer credentials) and
+// returns its exit code and output.
+func PaddockServer(ctx context.Context, args ...string) (int, string, error) {
+	out, err := Compose(ctx, nil, append([]string{"exec", "-T", "paddock-audit-writer", "/paddock-server"}, args...)...)
+	if err == nil {
+		return 0, out, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), out, nil
+	}
+	return -1, out, err
+}
+
+// AuditIndexDSN is the paddock_audit_reader DSN with the host rewritten to the development port mapping.
+func AuditIndexDSN() (string, error) {
+	raw, err := Secret("db_paddock_audit_reader_url")
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	u.Host = Env("PADDOCK_TEST_AUDIT_DB_HOST", "127.0.0.1:5433")
+	return u.String(), nil
+}

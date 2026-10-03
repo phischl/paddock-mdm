@@ -48,10 +48,13 @@ services:
   paddock-api:
     environment:
       PADDOCK_ENV: development
+      # Test hooks of the acceptance gate A3 (honoured only with PADDOCK_ENV=development); empty = off.
+      PADDOCK_TEST_EXTERNAL_DELAY: ${PADDOCK_TEST_EXTERNAL_DELAY:-}
 
   paddock-outbox-relay:
     environment:
       PADDOCK_ENV: development
+      PADDOCK_REAPER_THRESHOLD: ${PADDOCK_REAPER_THRESHOLD:-}
 
   paddock-audit-migrate:
     environment:

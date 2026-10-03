@@ -48,8 +48,7 @@ linters:
         linters: [forbidigo]
         text: (fmt|log)\.Print
       - path: ^test/acceptance/
-        linters: [forbidigo]
-        text: (fmt|log)\.Print
+        linters: [forbidigo, gosec]
       - path: ^server/internal/platform/db/
         linters: [forbidigo]
         text: pgxpool
