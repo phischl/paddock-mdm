@@ -1,0 +1,11 @@
+# oapi-codegen configuration for the admin API (run `make gen`).
+package: adminapi
+output: internal/transport/http/admin/adminapi/adminapi.gen.go
+generate:
+  std-http-server: true
+  strict-server: true
+  models: true
+  embedded-spec: true
+output-options:
+  # The BFF endpoints (/api/auth/*) set cookies and redirect; they are hand-written handlers.
+  exclude-tags: [auth]

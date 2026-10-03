@@ -99,6 +99,7 @@ entries:
       name: paddock-portal
     attrs:
       client_type: confidential
+      grant_types: [authorization_code]
       client_id: paddock-portal
       client_secret: !Env PADDOCK_OIDC_CLIENT_SECRET
       authentication_flow: !KeyOf login-flow

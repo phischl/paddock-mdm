@@ -111,6 +111,19 @@ func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgs
 		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
+// ResolveSlug maps an organization slug to its ID before an organization context exists (login). It runs only the
+// SECURITY DEFINER function paddock_org_id_by_slug, which reveals nothing but the ID of an active organization, and
+// returns uuid.Nil when there is none.
+func (p *OrgPool) ResolveSlug(ctx context.Context, slug string) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := inTx(ctx, p.p, nil, func(tx pgx.Tx) error {
+		var err error
+		id, err = pgstore.New(tx).OrganizationIDBySlug(ctx, slug)
+		return err
+	})
+	return id, err
+}
+
 // PlatformPool is the pool of role paddock_platform (platform endpoints only).
 type PlatformPool struct{ pool }
 

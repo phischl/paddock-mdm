@@ -47,6 +47,7 @@ lint-go:
 		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
 		$(GOLANGCI_LINT_IMAGE) golangci-lint run $(GO_PACKAGES)
 	go vet $(GO_PACKAGES)
+	go test -count=1 -run '^TestOpenAPISpec$$' ./server/internal/transport/http/admin/
 
 .PHONY: lint-web
 lint-web:
@@ -76,9 +77,13 @@ dev-secrets: ## Generate local development secrets (idempotent)
 	$(COMPOSE_DIR)/scripts/gen-dev-secrets.sh
 
 .PHONY: up
-up: ## Start the full stack (control plane, audit domain, dev overrides)
+up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy
 	$(COMPOSE) up -d
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh
+	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
+	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
+	$(COMPOSE) --profile paddock up -d --build
+	$(COMPOSE_DIR)/scripts/wait-healthy.sh --profile paddock
 
 .PHONY: down
 down: ## Stop the stack (pass V=1 to delete volumes)
