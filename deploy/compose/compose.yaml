@@ -184,6 +184,12 @@ services:
   authentik-worker:
     <<: *authentik
     command: ["worker"]
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+      # The first container to mount the new authentik-data volume populates it; starting both at once races.
+      authentik-server:
+        condition: service_started
 
   paddock-migrate:
     <<: *paddock
