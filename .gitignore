@@ -1,0 +1,16 @@
+# Secrets generated for local development
+deploy/compose/.secrets/
+deploy/compose/.env
+
+# Build output
+/paddock-server
+/bin/
+server/web/dist/*
+!server/web/dist/.gitkeep
+node_modules/
+*.out
+coverage.*
+
+# Playwright
+server/web/test-results/
+server/web/playwright-report/

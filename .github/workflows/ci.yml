@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: "**/go.sum"
+      - run: make lint
+      - name: govulncheck
+        run: cd server && go tool govulncheck ./...
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: "**/go.sum"
+      - run: make test
+
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: make web
+
+  acceptance:
+    if: github.ref == 'refs/heads/main'
+    needs: [lint, test, web]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache-dependency-path: "**/go.sum"
+      - run: make dev-secrets
+      - run: make up
+      - run: make bao-bootstrap audit-bootstrap
+      - run: make up
+      - run: make dev-seed
+      - run: make acceptance
+      - name: compose logs
+        if: failure()
+        run: make logs
