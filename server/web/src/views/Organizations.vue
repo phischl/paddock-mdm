@@ -26,7 +26,7 @@ const nameError = computed(() => (touched.value && errors.value.name ? t(errors.
 
 onMounted(() => orgs.load())
 
-function openCreate() {
+function openCreate(): void {
   slug.value = ''
   name.value = ''
   touched.value = false
@@ -34,7 +34,7 @@ function openCreate() {
   open.value = true
 }
 
-async function submit() {
+async function submit(): Promise<void> {
   touched.value = true
   if (hasErrors(errors.value)) return
   problem.value = (await orgs.create(slug.value, name.value)) ?? ''

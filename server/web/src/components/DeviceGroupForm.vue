@@ -6,15 +6,22 @@ import Textarea from 'primevue/textarea'
 import Button from 'primevue/button'
 import { hasErrors, validateDeviceGroup } from '../lib/validation'
 import { useProblemText } from '../lib/problems'
+import type { DeviceGroupInput } from '../lib/deviceGroupPage'
 
-const props = defineProps({
-  initialName: { type: String, default: '' },
-  initialDescription: { type: String, default: '' },
-  submitLabel: { type: String, required: true },
-  problem: { type: String, default: '' },
-  idPrefix: { type: String, default: 'device-group' },
-})
-const emit = defineEmits(['submit', 'cancel'])
+const props = withDefaults(
+  defineProps<{
+    submitLabel: string
+    initialName?: string
+    initialDescription?: string
+    problem?: string
+    idPrefix?: string
+  }>(),
+  { initialName: '', initialDescription: '', problem: '', idPrefix: 'device-group' },
+)
+const emit = defineEmits<{
+  submit: [form: DeviceGroupInput]
+  cancel: []
+}>()
 
 const { t } = useI18n()
 const problemText = useProblemText()
@@ -25,7 +32,7 @@ const errors = computed(() => validateDeviceGroup(name.value, description.value)
 const nameError = computed(() => (touched.value && errors.value.name ? t(errors.value.name) : ''))
 const descriptionError = computed(() => (touched.value && errors.value.description ? t(errors.value.description) : ''))
 
-function submit() {
+function submit(): void {
   touched.value = true
   if (hasErrors(errors.value)) return
   emit('submit', { name: name.value, description: description.value })

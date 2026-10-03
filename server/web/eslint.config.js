@@ -1,20 +1,19 @@
-// ESLint covers the Vue templates and the JavaScript in single-file components: no raw text in templates and no
-// missing message keys (plan M0 step 8). TypeScript modules (*.ts) are checked by vue-tsc, not by ESLint, because
-// the dependency set has no TypeScript parser for ESLint; component scripts therefore use plain JavaScript syntax
-// and keep typed logic in src/lib and src/stores.
+// ESLint covers TypeScript modules and single-file components (<script setup lang="ts">): no raw text in templates
+// and no missing message keys (plan M0 step 8), TypeScript rules through typescript-eslint (plan M0.1 step 3).
+// vue-tsc still does the type checking.
 import pluginVue from 'eslint-plugin-vue'
 import vueI18n from '@intlify/eslint-plugin-vue-i18n'
+import { defineConfigWithVueTs, vueTsConfigs } from '@vue/eslint-config-typescript'
 
-export default [
-  { ignores: ['dist/**', 'node_modules/**', 'test-results/**', 'playwright-report/**', '**/*.ts'] },
-  ...pluginVue.configs['flat/recommended'],
-  ...vueI18n.configs.recommended,
+export default defineConfigWithVueTs(
+  {
+    ignores: ['dist/**', 'node_modules/**', 'test-results/**', 'playwright-report/**', 'src/api/schema.d.ts'],
+  },
+  pluginVue.configs['flat/recommended'],
+  vueTsConfigs.recommended,
+  vueI18n.configs.recommended,
   {
     files: ['**/*.vue'],
-    languageOptions: {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-    },
     rules: {
       '@intlify/vue-i18n/no-raw-text': ['error', { ignorePattern: '^[-–—·:/()|•…]+$' }],
       '@intlify/vue-i18n/no-missing-keys': 'error',
@@ -34,4 +33,4 @@ export default [
       },
     },
   },
-]
+)
