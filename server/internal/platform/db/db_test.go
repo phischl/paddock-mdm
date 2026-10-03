@@ -272,6 +272,24 @@ func TestOrganizationIDBySlug(t *testing.T) {
 	}
 }
 
+func TestAuditWriterTransactionTimeoutBounds(t *testing.T) {
+	writer, err := db.NewAuditWriterPool(context.Background(), sharedAudit(t).Writer, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	for _, timeout := range []time.Duration{0, -time.Second, db.WriterTransactionTimeout + time.Second} {
+		called := false
+		err := writer.InWriterWithTimeout(context.Background(), timeout, func(context.Context, *auditstore.Queries) error {
+			called = true
+			return nil
+		})
+		if err == nil || called {
+			t.Errorf("InWriterWithTimeout(%s) = %v, called %v; want an error before the transaction", timeout, err, called)
+		}
+	}
+}
+
 func TestAuditWriterCannotUpdateOrDelete(t *testing.T) {
 	env := sharedAudit(t)
 	ctx := context.Background()

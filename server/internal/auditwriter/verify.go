@@ -61,7 +61,9 @@ func (v *Verifier) Verify(ctx context.Context, org uuid.UUID, from, to time.Time
 		return nil, err
 	}
 	report := &Report{}
-	err = v.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+	// Verification only reads and may take longer than a writer transaction is allowed to run, so it uses a plain
+	// session. Sealed days receive no new objects, so the reads need no common snapshot.
+	err = v.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
 		manifests, err := q.ListAuditManifests(ctx, auditstore.ListAuditManifestsParams{OrganizationID: org, FromDay: from, ToDay: to})
 		if err != nil {
 			return err

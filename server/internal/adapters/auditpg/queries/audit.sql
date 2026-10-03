@@ -1,6 +1,10 @@
 -- name: EnsureAuditPartition :exec
 SELECT audit_ensure_partition(@month::date);
 
+-- name: TransactionTime :one
+-- The recording time of everything a writer transaction stores (architecture §14.4).
+SELECT transaction_timestamp()::timestamptz AS recorded_at;
+
 -- name: InsertAuditEvent :one
 INSERT INTO audit_event (event_id, organization_id, occurred_at, recorded_at, code, outcome, source, actor, target,
                          params, correlation_id, object_key)

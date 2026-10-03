@@ -45,7 +45,7 @@ type Writer struct {
 	pool          *db.AuditWriterPool
 	store         ObjectStore
 	retentionDays int
-	now           func() time.Time
+	txTimeout     time.Duration // db.WriterTransactionTimeout; lowered only by tests
 }
 
 // NewWriter creates a writer. retentionDays below MinRetentionDays is an error.
@@ -53,10 +53,10 @@ func NewWriter(pool *db.AuditWriterPool, store ObjectStore, retentionDays int) (
 	if retentionDays < MinRetentionDays {
 		return nil, fmt.Errorf("auditwriter: retention %d days is below the bucket default of %d days", retentionDays, MinRetentionDays)
 	}
-	return &Writer{pool: pool, store: store, retentionDays: retentionDays, now: time.Now}, nil
+	return &Writer{pool: pool, store: store, retentionDays: retentionDays, txTimeout: db.WriterTransactionTimeout}, nil
 }
 
-// RetainUntil is the retention date of everything recorded for day.
+// RetainUntil is the retention date of everything recorded on day: 00:00 UTC of day + retention days.
 func (w *Writer) RetainUntil(day time.Time) time.Time {
 	return dayOf(day).AddDate(0, 0, w.retentionDays)
 }
@@ -81,34 +81,25 @@ func Validate(ev audit.Event) error {
 	return nil
 }
 
-type groupKey struct {
-	org  uuid.UUID
-	hour time.Time
-}
-
-// WriteBatch writes events grouped by (organization, UTC hour), one transaction per group: ensure partition →
+// WriteBatch writes events grouped by organization, one transaction per organization: ensure partitions →
 // insert ON CONFLICT DO NOTHING → write only the newly inserted events as one WORM object → insert audit_object →
-// commit. It returns the number of newly written events. Duplicates (redelivery, relay restarts) are skipped.
+// commit. Object key, audit_object.day, recorded_at and retention follow the transaction's start time (the recording
+// day), not occurred_at, so a late event is covered by the manifest of the day it was recorded. It returns the
+// number of newly written events. Duplicates (redelivery, relay restarts) are skipped.
 func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, error) {
-	groups := map[groupKey][]audit.Event{}
+	groups := map[uuid.UUID][]audit.Event{}
 	for _, ev := range events {
 		ev.OccurredAt = audit.Timestamp(ev.OccurredAt)
-		k := groupKey{org: ev.OrganizationID, hour: ev.OccurredAt.Truncate(time.Hour)}
-		groups[k] = append(groups[k], ev)
+		groups[ev.OrganizationID] = append(groups[ev.OrganizationID], ev)
 	}
-	keys := make([]groupKey, 0, len(groups))
-	for k := range groups {
-		keys = append(keys, k)
+	orgs := make([]uuid.UUID, 0, len(groups))
+	for org := range groups {
+		orgs = append(orgs, org)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if !keys[i].hour.Equal(keys[j].hour) {
-			return keys[i].hour.Before(keys[j].hour)
-		}
-		return keys[i].org.String() < keys[j].org.String()
-	})
+	sort.Slice(orgs, func(i, j int) bool { return orgs[i].String() < orgs[j].String() })
 	written := 0
-	for _, k := range keys {
-		n, err := w.writeGroup(ctx, k, groups[k])
+	for _, org := range orgs {
+		n, err := w.writeGroup(ctx, org, groups[org])
 		if err != nil {
 			return written, err
 		}
@@ -117,14 +108,19 @@ func (w *Writer) WriteBatch(ctx context.Context, events []audit.Event) (int, err
 	return written, nil
 }
 
-func (w *Writer) writeGroup(ctx context.Context, k groupKey, events []audit.Event) (int, error) {
+func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.Event) (int, error) {
 	sortEvents(events)
 	events = dedupe(events)
-	recordedAt := audit.Timestamp(w.now())
 	written := 0
-	err := w.pool.InWriter(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+	var recordedAt time.Time
+	err := w.pool.InWriterWithTimeout(ctx, w.txTimeout, func(ctx context.Context, q *auditstore.Queries) error {
 		written = 0
-		if err := q.EnsureAuditPartition(ctx, k.hour); err != nil {
+		var err error
+		if recordedAt, err = q.TransactionTime(ctx); err != nil {
+			return err
+		}
+		recordedAt = audit.Timestamp(recordedAt)
+		if err := ensurePartitions(ctx, q, events); err != nil {
 			return err
 		}
 		fresh, err := w.withoutExisting(ctx, q, events)
@@ -134,7 +130,7 @@ func (w *Writer) writeGroup(ctx context.Context, k groupKey, events []audit.Even
 		if len(fresh) == 0 {
 			return nil
 		}
-		key := ObjectKey(k.org, k.hour, fresh[0].EventID)
+		key := ObjectKey(org, recordedAt.Truncate(time.Hour), fresh[0].EventID)
 		var inserted []audit.Event
 		for _, ev := range fresh {
 			ev.RecordedAt = recordedAt
@@ -158,12 +154,12 @@ func (w *Writer) writeGroup(ctx context.Context, k groupKey, events []audit.Even
 			return err
 		}
 		sum := sha256.Sum256(body)
-		day := dayOf(k.hour)
+		day := dayOf(recordedAt)
 		if err := w.store.PutLocked(ctx, key, "application/zstd", body, w.RetainUntil(day)); err != nil {
 			return fmt.Errorf("auditwriter: put %s: %w", key, err)
 		}
 		if err := q.InsertAuditObject(ctx, auditstore.InsertAuditObjectParams{
-			ObjectKey: key, OrganizationID: k.org, Day: day, EventCount: int32(len(inserted)), Sha256: sum[:], //nolint:gosec // batch size ≤ 500
+			ObjectKey: key, OrganizationID: org, Day: day, EventCount: int32(len(inserted)), Sha256: sum[:], //nolint:gosec // batch size ≤ 500
 		}); err != nil {
 			return err
 		}
@@ -175,9 +171,27 @@ func (w *Writer) writeGroup(ctx context.Context, k groupKey, events []audit.Even
 	}
 	if written > 0 {
 		metricWritten.Add(float64(written))
-		slog.InfoContext(ctx, "audit object written", "organization_id", k.org, "hour", k.hour, "events", written)
+		slog.InfoContext(ctx, "audit object written", "organization_id", org, "recorded_at", recordedAt, "events", written)
 	}
 	return written, nil
+}
+
+// ensurePartitions creates the monthly index partitions of the events' occurred_at (the index stays partitioned by
+// occurrence time).
+func ensurePartitions(ctx context.Context, q *auditstore.Queries, events []audit.Event) error {
+	months := map[time.Time]bool{}
+	for _, ev := range events {
+		t := ev.OccurredAt.UTC()
+		month := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+		if months[month] {
+			continue
+		}
+		months[month] = true
+		if err := q.EnsureAuditPartition(ctx, month); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // withoutExisting drops events already in the index, so the object key is derived from a new event.
@@ -197,7 +211,7 @@ func (w *Writer) withoutExisting(ctx context.Context, q *auditstore.Queries, eve
 	return out, nil
 }
 
-// ObjectKey is org/<organization_id>/<YYYY>/<MM>/<DD>/<HH>-<first event_id>.jsonl.zst.
+// ObjectKey is org/<organization_id>/<YYYY>/<MM>/<DD>/<HH>-<first event_id>.jsonl.zst, dated by the recording hour.
 func ObjectKey(org uuid.UUID, hour time.Time, first uuid.UUID) string {
 	h := hour.UTC()
 	return fmt.Sprintf("org/%s/%04d/%02d/%02d/%02d-%s.jsonl.zst", org, h.Year(), int(h.Month()), h.Day(), h.Hour(), first)
