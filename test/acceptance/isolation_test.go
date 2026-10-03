@@ -90,13 +90,20 @@ func TestOrganizationIsolation(t *testing.T) {
 			}
 			for _, q := range queries {
 				target := path + "?" + q.Encode()
-				var own struct {
-					Total int `json:"total"`
-				}
-				res := call(t, w.carol, http.MethodGet, target, nil)
-				expectStatus(t, res, http.StatusOK, "")
-				if err := res.JSON(&own); err != nil || own.Total == 0 {
-					t.Fatalf("%s finds no globex data as carol, the check would be vacuous: %s", target, res.Body)
+				// The audit pipeline is asynchronous: wait until carol sees this run's globex data.
+				var res env.Response
+				for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+					var own struct {
+						Total int `json:"total"`
+					}
+					res = call(t, w.carol, http.MethodGet, target, nil)
+					expectStatus(t, res, http.StatusOK, "")
+					if err := res.JSON(&own); err == nil && own.Total > 0 {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("%s finds no globex data as carol, the check would be vacuous: %s", target, res.Body)
+					}
 				}
 				res = call(t, w.alice, http.MethodGet, target, nil)
 				expectStatus(t, res, http.StatusOK, "")
