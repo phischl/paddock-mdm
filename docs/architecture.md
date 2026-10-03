@@ -1,6 +1,6 @@
 # Paddock – Technical Architecture
 
-Status: **Proposed** · Version 1.3 · 2026-10-03 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
+Status: **Proposed** · Version 1.4 · 2026-10-04 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
 
 This document turns the product concept into a technical architecture. It answers the delegated
 decisions A1–A14 (or states why one stays open), fixes the technology stack, and defines the
@@ -89,7 +89,7 @@ owner objects.
 | K6 | "Lock propagation" heading appears twice in the concept. | Editorial; no architectural impact. |
 | K7 | "Devices fetch only deltas or changed bundles" (A9). | Bundles are small (target < 256 KiB). Devices fetch **changed bundles only**, never deltas. Delta encoding is a non-goal for v1. |
 | K8 | The managed local administrator password confirmation and the revocation confirmation both look like synchronous writes, which principle 3 forbids. | Both go through the queue; the agent learns the outcome through a **read** endpoint (§12.2, §12.3). |
-| K9 | TPM2+PIN with `systemd-cryptenroll` requires a systemd-capable initramfs. Ubuntu 24.04 uses `initramfs-tools`, which does not support TPM2 unlock through `systemd-cryptenroll`; newer Ubuntu releases ship `dracut`. | Primary target is **Ubuntu 26.04 LTS** (dracut). Ubuntu 24.04 is supported only with dracut installed by the Paddock autoinstall. Verified in the PoC (§25). |
+| K9 | *(Confirmed by PoC M1, C7.)* TPM2+PIN with `systemd-cryptenroll` requires a systemd-capable initramfs. Ubuntu 24.04 uses `initramfs-tools`, which does not support TPM2 unlock through `systemd-cryptenroll`; newer Ubuntu releases ship `dracut`. | Primary target is **Ubuntu 26.04 LTS** (dracut). Ubuntu 24.04 is supported only with dracut installed by the Paddock autoinstall. Verified in the PoC (§25). |
 | K11 | The concept's repository layout lists `ansible/roles/`. | **Confirmed:** the product repository contains no operator configuration; at most examples under `examples/` (§23). |
 | K10 | Shared devices are open, but device-to-person assignment drives login allow lists, audit attribution and revocation. | Every device has a **login assignment** (users and/or groups). Default at enrollment: the enrolling user only. Shared devices get a group assignment. §9.4. |
 
@@ -635,7 +635,7 @@ The envelope is **DSSE** (Dead Simple Signing Envelope, Apache-2.0 specification
     "suspended": false,
     "locked_users": ["bob@example.org"],
     "provider": "himmelblau",
-    "allow_groups": ["paddock:acme:g:engineering"],
+    "allow_groups": ["paddock.acme.g.engineering"],
     "allow_users": [],
     "himmelblau_conf": { "content_sha256": "…", "content": "…" }
   },
@@ -794,16 +794,22 @@ Per Paddock organization, the `authentik` adapter creates and owns (idempotently
 
 | Authentik object | Name | Purpose |
 | --- | --- | --- |
-| Group | `paddock:<org_slug>` | Root group; every user of the organization is a member |
-| Group | `paddock:<org_slug>:locked` | Membership = locked |
-| Group | `paddock:<org_slug>:admins` (+ `:operators`, `:auditors`) | Portal roles |
-| Group | `paddock:<org_slug>:g:<group_slug>` | Local Paddock groups |
-| OIDC provider + application | `paddock-device-<org_slug>` | Himmelblau login; refresh tokens enabled (PoC item 4) |
-| Policy binding (expression) | on the device application | allow iff member of `paddock:<org_slug>` **and not** member of `:locked` |
-| Authentication flow | `paddock-<org_slug>-login` | Identification stage with user enumeration prevention, MFA stage; upstream sources for this org only |
+| Group | `paddock.<org_slug>` | Root group; every user of the organization is a member |
+| Group | `paddock.<org_slug>.locked` | Membership = locked |
+| Group | `paddock.<org_slug>.admins` (+ `.operators`, `.auditors`) | Portal roles |
+| Group | `paddock.<org_slug>.g.<group_slug>` | Local Paddock groups |
+| Group | `paddock.<org_slug>.d.<device_id>` | Created only for devices with directly assigned users (§9.4) |
+| OIDC provider + application | `paddock-device-<org_slug>` | Himmelblau login; grant types authorization code, refresh token, device code; scope `offline_access` (PoC C4) |
+| Scope mapping | on scope `profile` of the device provider | emits claim `groups` = the user's `paddock.<org_slug>.*` group names (Himmelblau requests only `openid profile email offline_access`, PoC C1) |
+| Policy binding (expression) | on the device application | allow iff member of `paddock.<org_slug>` **and not** member of `.locked` |
+| Authentication flow | `paddock-<org_slug>-login`, also set as the brand's device-code flow | Identification stage with user enumeration prevention, **mandatory** MFA stage (`not_configured_action: configure`, never `skip`); upstream sources for this org only |
+
+**Group naming uses `.` as separator** (amended 2026-10-04 after PoC M1): Himmelblau silently drops group
+claim values containing `:`. Organization slugs cannot contain `.`, so the names stay unambiguous. One
+naming scheme for portal and device groups (no translated claim names).
 
 The portal uses one shared OIDC application `paddock-portal`; its policy admits only members of
-any `paddock:*:admins|operators|auditors` group. Paddock derives the organization of an admin from
+any `paddock.*.admins|operators|auditors` group. Paddock derives the organization of an admin from
 exactly one such group; an account in admin groups of two organizations is rejected at login (no
 cross-organization roles, concept scope).
 
@@ -811,9 +817,12 @@ cross-organization roles, concept scope).
 for local users; synced users keep their upstream UPN. Paddock refuses a user whose name collides
 with a user of another organization (409 `username_taken`, without revealing the other organization).
 
-**Lock (F2).** Lock = add to `:locked` + revoke the user's sessions and refresh tokens in Authentik
-via API. Using a group instead of `is_active=false` keeps the lock effective even when an upstream
-source sync rewrites user attributes. Unlock removes the membership.
+**Lock (F2).** Lock = add to `.locked` **and** revoke the user's sessions, access tokens and refresh
+tokens in Authentik via API — both are mandatory. PoC M1 (C2) showed that Authentik's refresh-token
+grant does not evaluate application policies: with the group alone, Hello PIN logins keep working;
+with the revocation they fail within ≈ 2 s. Using a group instead of `is_active=false` keeps the lock
+effective even when an upstream source sync rewrites user attributes. Unlock removes the membership;
+the user then signs in with the device code flow and enrolls a new Hello PIN.
 
 **Synced objects (F13).** Upstream-owned attributes (name, email, password, upstream group
 membership) are read-only; Paddock-owned attributes (lock state, Paddock groups, profile
@@ -824,26 +833,40 @@ are imported read-only and can be targets of profile and login assignments.
 
 ### 9.3 Himmelblau configuration
 
-Paddock renders `himmelblau.conf` from the organization's login settings: OIDC issuer and client
-of `paddock-device-<org_slug>`, allowed groups, Hello PIN on/off, offline emergency access (default
-off, portal warning when enabled). Himmelblau runs in OIDC mode only (concept decision). The exact
-option names are fixed after the PoC (A2) in the schema file `server/internal/compiler/himmelblau/schema.go`.
+**Decided after PoC M1: Himmelblau 4.x in OIDC mode** (ADR [0019](adr/0019-login-component-himmelblau.md)).
+Paddock renders `himmelblau.conf` from the organization's login settings: OIDC issuer and client of
+`paddock-device-<org_slug>`, `pam_allow_groups`, Hello PIN on/off, `allow_console_password_only = false`
+(the password grant would skip MFA), offline emergency access (default off, portal warning when
+enabled), no mapping of directory groups to local groups (A13). The working configuration is recorded
+in `docs/poc/M1-report.md`; option names are fixed in `server/internal/compiler/himmelblau/schema.go`.
 
-**Fallback (PoC fails):** SSSD with the OIDC/IdP provider against Authentik, offline credentials
-cache in days. The bundle field `login` gets a `provider: himmelblau|sssd` discriminator from the start
-so the fallback does not change the bundle schema version.
+Binding consequences of the PoC:
+
+- **Login UX:** the first login, and every login after a lock/unlock or after three wrong PINs, uses the
+  **device authorization grant** (code/QR at the greeter, approved with MFA on a second device).
+  Day-to-day logins use the Hello PIN (online refresh when connected, offline otherwise).
+- **`pam_allow_groups` is read at daemon start:** the agent writes the line **explicitly** (an empty
+  value denies everyone; a *missing* line allows everyone — so the line is never removed) and restarts
+  `himmelblaud` and `himmelblaud-tasks` after every change (≈ 3 s).
+- Himmelblau is installed from the official repository with a pinned version and verified key
+  fingerprint; non-interactive installation needs `--force-confdef --force-confold`.
+
+The bundle keeps the `login.provider` discriminator (`himmelblau` only in v1) so that a future
+alternative does not change the schema version.
 
 ### 9.4 Login assignment and suspension (F15)
 
 Each device has a **login assignment** (users and/or groups). The compiler turns it into the
-login component's allow list: `login.allow_groups` holds the Authentik group identifiers of the
-assigned groups, `login.allow_users` the identifiers of directly assigned users. Whether Himmelblau
-accepts user entries next to groups, or whether Paddock instead maintains one Authentik group
-`paddock:<org_slug>:dev:<device_id>` per device, is fixed by PoC item 3; the bundle schema carries
-both fields from the start.
+login component's allow list `pam_allow_groups` (bundle field `login.allow_groups`): the names of the
+assigned groups. Directly assigned users are made members of a per-device Authentik group
+`paddock.<org_slug>.d.<device_id>`, created on first direct assignment, whose name is then added to the
+allow list. (`login.allow_users` stays in the schema, unused in v1.) Membership changes take effect at
+the user's next token refresh without a bundle change; allow-list changes need a `himmelblaud` restart.
 
-- **Suspend:** `login.suspended = true` → allow list empty; the agent terminates directory-user
-  sessions with `loginctl terminate-user` for every session whose user is not a local system user.
+- **Suspend:** `login.suspended = true` → `pam_allow_groups =` (present, empty) + daemon restart; the
+  agent terminates directory-user sessions with `loginctl terminate-user` for every session whose user
+  is not a local system user. Terminating (not locking) is mandatory here: PoC M1 (C5b) showed that the
+  GNOME lock screen ignores the allow list.
 - The managed local admin authenticates through `pam_unix` and is unaffected.
 - Shared devices: assign a group. Audit attribution uses the logged-in user reported by the agent
   (`session.login` events contain only the username and time — no process or command data).
@@ -887,12 +910,18 @@ user is no longer assigned to.
 **Local enforcement on the device** — configuration only, no custom PAM code (concept rule 1):
 
 1. The user is removed from the login component's allow list (`login.allow_users`/groups rendering).
-2. The user is written to `/etc/paddock/login-deny` (one username per line, protected area).
-   Whether step 2 is needed depends on the PoC (item 5 below): if Himmelblau's allow list is enforced
-   **offline and at screen unlock**, step 1 suffices and step 2 is not rendered. Otherwise Paddock
-   adds the standard Linux-PAM module `pam_listfile` to the `account` phase of `common-account`:
-   `account required pam_listfile.so item=user sense=deny file=/etc/paddock/login-deny onerr=succeed`.
-   `onerr=succeed` keeps logins working if the file is missing (fail safe).
+2. The user is written to `/etc/paddock/login-deny` (one username per line, both name forms the login
+   component uses, e.g. `dave@acme.test` and `dave`; protected area). **Always rendered** (decided after
+   PoC M1: the GNOME/GDM screen unlock ignores account-phase results, so neither Himmelblau's allow list
+   nor an account-phase deny list stops an unlock). The standard Linux-PAM module `pam_listfile` is
+   enabled through a **`pam-auth-update` profile** shipped in the `paddock-agent` package
+   (`/usr/share/pam-configs/paddock-deny`), never by editing generated `common-*` files, in two phases:
+   - `auth requisite pam_listfile.so item=user sense=deny file=/etc/paddock/login-deny onerr=succeed`
+     placed **before** `pam_himmelblau` — blocks login, offline login and screen unlock (PoC C5c diagnostic);
+   - `account required pam_listfile.so item=user sense=deny file=/etc/paddock/login-deny onerr=succeed`
+     — covers paths that skip the auth phase (SSH public-key logins).
+   `onerr=succeed` keeps logins working if the file is missing (fail safe, verified in PoC C5c).
+   SSH and TTY paths are verified in the M3/M4 acceptance tests.
 3. Active sessions: `loginctl lock-session <id>` for every session of the user → the desktop shows
    the lock screen; unlock runs through PAM and is refused by step 1/2. Per organization setting
    `user_lock_session_action: lock_screen | terminate` (default `lock_screen`); `terminate` uses
@@ -914,10 +943,9 @@ are applied as soon as a check-in succeeds.
 | Exposure must end even without contact | Not possible on a device that never connects; dead man's switch (F14) and encryption are the remaining controls |
 | Unlock | Allow list restored at the next check-in; online login works again once Authentik membership is removed |
 
-**PoC gate extension (A2, item 5):** on Ubuntu 26.04 with GNOME/GDM, verify that (a) Himmelblau's
-allow list refuses an offline login with cached credentials, (b) GNOME screen unlock of an existing
-session is refused for a user removed from the allow list, (c) the same with `pam_listfile`
-if (a) or (b) fails. The result decides whether step 2 is rendered.
+**PoC result (M1, `docs/poc/M1-report.md`):** (a) Himmelblau's allow list refuses offline logins —
+PASS; (b) GNOME screen unlock with the allow list — FAIL; (c) `pam_listfile` in the account phase —
+offline PASS, unlock FAIL; in the auth phase — unlock refused, fail safe. Hence step 2 as above.
 
 ### 9.6 Admin authentication and step-up
 
@@ -1792,10 +1820,10 @@ Implementation plans for the coding agent are written per milestone, following `
 
 | # | Question | Default until decided |
 | --- | --- | --- |
-| O1 | **A2 Himmelblau PoC** outcome, including item 5 (offline and screen-unlock enforcement of a local user lock, §9.5) | Design supports both; bundle `login.provider` discriminator; SSSD fallback; `pam_listfile` deny list if item 5 fails |
+| O1 | ~~A2 Himmelblau PoC~~ — **resolved**: Himmelblau 4.x OIDC (ADR 0019, proposed to the product owner); deny list in auth + account phase (§9.5) | – |
 | O2 | **A14 boot PIN vs. login PIN** after UX test | Both technically supported; per-organization setting `pin_model: tpm_pin_only \| tpm_pin_and_hello_pin`; default `tpm_pin_and_hello_pin` |
 | O3 | **Object storage — decided: RustFS (ADR 0017, accepted).** The concept names MinIO. MinIO stopped publishing community images and binaries in October 2025, put the community edition into maintenance mode in December 2025 and archived the repository in 2026; the Docker Hub images no longer resolve. It can therefore not be the bundled component. The Paddock code is unaffected (it uses only the S3 API with Object Lock). Candidates: **Ceph RGW** (LGPL, mature Object Lock, heavy to operate), **RustFS** (Apache-2.0, 1.0 GA in September 2026, had an Object Lock enforcement CVE before 1.0), **SeaweedFS** (Apache-2.0, recent issues with COMPLIANCE enforcement on delete), **external S3** of a provider with Object Lock. **Decision owner:** product owner, on the architect's recommendation (ADR 0017). **Verification:** not the Himmelblau PoC, but the audit acceptance gate ("an event in WORM storage cannot be deleted, even with admin credentials") run against the chosen product in M0. | Proposed: RustFS for bundles + escrow and as default audit store, gated by the WORM acceptance test in M0; Ceph RGW or external S3 documented for operators who need a proven WORM store. If RustFS fails the gate, Ceph RGW becomes the default |
-| O4 | Ubuntu 24.04 TPM2+PIN via dracut | Supported only via Paddock autoinstall; PoC in M1 |
+| O4 | ~~Ubuntu 24.04 TPM2+PIN via dracut~~ — **resolved by PoC M1 (C7)**: works with dracut 060 (`hostonly`, explicit modules, text prompt — no Plymouth). Supported only for devices installed by the Paddock autoinstall, which installs dracut from the start; no in-place switch on existing 24.04 devices (it removes `initramfs-tools` and `brltty`). Recovery: the recovery key is accepted at the PIN prompt only after the TPM PIN attempts are used up — operator docs must say so; re-test lockout on real hardware in M4 | – |
 | O5 | Shared devices: attribution when several users log in | Login assignment by group; audit carries the session user |
 | O6 | Hardware reissue process (re-enrollment, re-encryption, deletion evidence) | Retire → Destroy (two-person) → re-image → new enrollment; evidence = Destroy audit events; runbook in M6 |
 | O7 | Permanently offline devices | `presumed_lost` after critical staleness; admin action list; optional auto-destroy after Lock |
