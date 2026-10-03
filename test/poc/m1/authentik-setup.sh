@@ -4,7 +4,7 @@
 # the access policy, the device code flow of the default brand, group paddock:acme:locked and the test users
 # dave/erin (paddock:acme) and frank (paddock:globex) with TOTP enrolled through the real setup flow.
 #
-# Usage: authentik-setup.sh setup | status | lock <user> | unlock <user> | approve <user> <user_code>
+# Usage: authentik-setup.sh setup | status | lock <user> [group-only] | unlock <user> | approve <user> <user_code>
 #   <user> is the short name (dave, erin, frank) or the full username.
 set -euo pipefail
 
@@ -181,10 +181,10 @@ setup_user() {
 
 revoke_user_tokens() {
     local pk=$1 id
-    for id in $(api GET "/oauth2/refresh_tokens/?user=$pk&page_size=500" | jq -r '.results[].id'); do
+    for id in $(api GET "/oauth2/refresh_tokens/?user=$pk&page_size=500" | jq -r '.results[].pk'); do
         api DELETE "/oauth2/refresh_tokens/$id/" >/dev/null
     done
-    for id in $(api GET "/oauth2/access_tokens/?user=$pk&page_size=500" | jq -r '.results[].id'); do
+    for id in $(api GET "/oauth2/access_tokens/?user=$pk&page_size=500" | jq -r '.results[].pk'); do
         api DELETE "/oauth2/access_tokens/$id/" >/dev/null
     done
     for id in $(api GET "/core/authenticated_sessions/?user__username=$(jq -rn --arg v "$2" '$v|@uri')&page_size=500" | jq -r '.results[].uuid'); do
@@ -226,6 +226,7 @@ cmd_status() {
         grant_types_supported, scopes_supported}'
 }
 
+# cmd_lock <user> [group-only]: "group-only" skips the token/session revocation (diagnostic for C2).
 cmd_lock() {
     local user pk gpk
     user=$(full_user "$1")
@@ -233,7 +234,7 @@ cmd_lock() {
     gpk=$(group_pk "$LOCK_GROUP")
     echo "lock_api_call_start=$(ts)"
     api POST "/core/groups/$gpk/add_user/" "$(jq -n --argjson u "$pk" '{pk: $u}')" >/dev/null
-    revoke_user_tokens "$pk" "$user"
+    [[ "${2:-}" == group-only ]] || revoke_user_tokens "$pk" "$user"
     echo "lock_api_call_done=$(ts)"
 }
 
@@ -249,7 +250,7 @@ cmd_unlock() {
 case "${1:-}" in
     setup) cmd_setup ;;
     status) cmd_status ;;
-    lock) cmd_lock "${2:?user}" ;;
+    lock) cmd_lock "${2:?user}" "${3:-}" ;;
     unlock) cmd_unlock "${2:?user}" ;;
     approve) "$POC_DIR/akflow.py" device "$(full_user "${2:?user}")" "${3:?user_code}" ;;
     *) die "usage: $0 setup|status|lock <user>|unlock <user>|approve <user> <user_code>" ;;
