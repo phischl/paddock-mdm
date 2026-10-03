@@ -2,4 +2,69 @@
 
 Open-source management for Linux workstations that keeps local administrator rights with their users.
 
-Status: milestone M0 (foundations) in progress. See `docs/architecture.md` and `docs/plans/`.
+Status: milestone M0 (foundations): control plane, audit domain, admin portal with organizations, device groups and
+audit log. Architecture: `docs/architecture.md`, decisions: `docs/adr/`, plans: `docs/plans/`, binding rules for
+contributors and AI agents: `CLAUDE.md`.
+
+## Quick start (local development)
+
+Prerequisites: Docker Engine with Compose v2, GNU make, Go 1.25. Node is not needed on the host. Free ports:
+`8443` and the loopback ports listed in `docs/operations/local-dev.md`.
+
+```sh
+make dev-secrets   # random secrets in deploy/compose/.secrets/ and settings in deploy/compose/.env
+make up            # builds the paddock-server image, starts everything, initializes OpenBao and the audit bucket
+make dev-seed      # creates the organizations acme and globex and assigns the test users
+```
+
+`make up` takes a few minutes on the first run (image pulls, Authentik migrations). It is idempotent; after a
+restart of the machine run it again (it also unseals OpenBao). `make bao-bootstrap` and `make audit-bootstrap` exist
+as separate targets but are already part of `make up`.
+
+Open <https://admin.paddock.localhost:8443>. The certificate comes from Caddy's internal CA
+(`deploy/compose/.secrets/caddy-root.crt`); accept the warning or import that certificate.
+
+### Test accounts
+
+Passwords are generated per checkout; read them from `deploy/compose/.secrets/`.
+
+| User | Role | Password file |
+| --- | --- | --- |
+| `platform-admin@paddock.test` | Platform administrator | `dev_platform_admin_password` |
+| `alice@acme.test` | Administrator of `acme` | `dev_alice_password` |
+| `bob@acme.test` | Auditor of `acme` | `dev_bob_password` |
+| `carol@globex.test` | Administrator of `globex` | `dev_carol_password` |
+
+The Authentik admin interface is at <https://auth.paddock.localhost:8443/if/admin/> (user `akadmin`, password in
+`authentik_bootstrap_password`).
+
+## Make targets
+
+| Target | Purpose |
+| --- | --- |
+| `make lint` | golangci-lint, `go vet`, OpenAPI contract lint, ESLint and vue-tsc for the portal |
+| `make test` | Go unit and integration tests (Docker test containers) and portal unit tests |
+| `make gen` | sqlc, oapi-codegen, audit code document (`docs/compliance/audit-codes.md`), TypeScript API types |
+| `make web` | Builds the portal into `server/web/dist` (in the pinned Node container) |
+| `make image` | Builds the `paddock-server:dev` image |
+| `make acceptance` | Acceptance gates against the running stack (`T=<regex>` to select, e.g. `T=TestWORM`) |
+| `make e2e` | Playwright end-to-end tests against the running stack |
+| `make logs` / `make down` | Logs of the stack / stop it (`make down V=1` also deletes all volumes) |
+
+`make ci` runs `lint test web`. The acceptance gates are the definition of done (`CLAUDE.md`); run
+`make up dev-seed acceptance` before declaring a milestone finished.
+
+## Repository layout
+
+```
+api/openapi/admin.yaml   admin API contract (source of truth)
+server/                  paddock-server (Go): cmd, internal packages, migrations, web/ (Vue portal)
+pkg/                     Go module shared with the future agent
+deploy/compose/          Compose stack, pinned image versions, bootstrap scripts
+test/acceptance/         acceptance gates
+docs/                    architecture, ADRs, plans, operations runbooks, compliance
+```
+
+## License
+
+MIT

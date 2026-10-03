@@ -14,10 +14,12 @@ It is driven by `make`; every command below runs from the repository root.
 
 ```sh
 make dev-secrets     # random secrets in deploy/compose/.secrets/ and deploy/compose/.env (idempotent)
-make up              # starts all services and waits until they are healthy
-make bao-bootstrap   # initializes and unseals OpenBao, creates keys, policies and AppRoles (idempotent)
-make audit-bootstrap # creates the WORM audit bucket and the writer credential (idempotent)
+make up              # infrastructure, OpenBao and audit bucket bootstrap, then the Paddock roles; waits until healthy
+make dev-seed        # organizations acme and globex, test users in their groups (idempotent)
 ```
+
+`make up` runs `make bao-bootstrap` (initialize/unseal OpenBao, keys, policies, AppRoles) and `make audit-bootstrap`
+(WORM bucket and writer credential) itself; both are idempotent and can also be run on their own.
 
 ## Files and services
 
@@ -31,6 +33,10 @@ make audit-bootstrap # creates the WORM audit bucket and the writer credential (
 | `.secrets/` | Development secrets, OpenBao unseal shares, AppRole credentials, Caddy root certificate (git-ignored) |
 
 Paddock services carry the Compose profile `paddock`.
+
+Development-only test hooks (empty = off, honoured only with `PADDOCK_ENV=development`): `PADDOCK_TEST_EXTERNAL_DELAY`
+(paddock-api delays external calls) and `PADDOCK_REAPER_THRESHOLD` (outbox relay finalizes stuck actions sooner).
+The acceptance gate A3 sets them while it runs.
 
 ## Hostnames and TLS
 
@@ -67,7 +73,7 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
 ```sh
 make logs                                   # last 300 log lines of all services
 make down                                   # stop (keeps volumes)
-make down V=1                               # stop and delete all volumes (fresh start; also delete .secrets/openbao)
+make down V=1                               # stop and delete all volumes (fresh start: also delete .secrets/)
 docker compose -p paddock exec openbao bao status
 ```
 

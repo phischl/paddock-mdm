@@ -53,10 +53,9 @@ jobs:
           cache-dependency-path: "**/go.sum"
       - run: make dev-secrets
       - run: make up
-      - run: make bao-bootstrap audit-bootstrap
-      - run: make up
       - run: make dev-seed
       - run: make acceptance
+      - run: make e2e
       - name: compose logs
         if: failure()
         run: make logs
