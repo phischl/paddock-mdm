@@ -10,7 +10,7 @@ F8 portal for administrators; C7 localizable from the start with ICU MessageForm
 - **Server-rendered Go templates + htmx.** + Fewer moving parts. − Weaker ICU tooling, less rich UI.
 
 ## Decision
-Vue 3, TypeScript, Vite, Pinia, Vue Router, PrimeVue (MIT). `vue-i18n` with an `intl-messageformat` message compiler.
+Vue 3, TypeScript, Vite, Pinia, Vue Router, **Vuetify (MIT)** — amended 2026-10-03: PrimeVue was replaced because PrimeVue 5 is under a commercial license (C8); Vuetify's runtime theme styles are permitted through a per-response CSP nonce. Composition API only. `vue-i18n` with an `intl-messageformat` message compiler.
 API client generated from `api/openapi/admin.yaml`. Authentication via BFF in the `api` role: OIDC code + PKCE, tokens
 never in the browser, encrypted HttpOnly SameSite=Strict cookie. Tests: Vitest, Playwright with axe.
 
