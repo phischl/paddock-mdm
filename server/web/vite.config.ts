@@ -24,6 +24,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
+    setupFiles: ['src/__tests__/setup.ts'],
     // Vuetify ships CSS imports in its modules; Vite must process them.
     server: { deps: { inline: ['vuetify'] } },
   },

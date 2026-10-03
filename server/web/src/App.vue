@@ -3,6 +3,8 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore } from './stores/session'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import { pendingConfirm, settleConfirm } from './composables/useConfirm'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -68,5 +70,12 @@ const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : '
     <v-main id="main">
       <RouterView />
     </v-main>
+    <ConfirmDialog
+      v-if="pendingConfirm"
+      :model-value="true"
+      v-bind="pendingConfirm.options"
+      @confirm="settleConfirm(true)"
+      @cancel="settleConfirm(false)"
+    />
   </v-app>
 </template>
