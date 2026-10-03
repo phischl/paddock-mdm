@@ -29,6 +29,8 @@ type Result struct {
 	Client *http.Client // carries the session cookie; does not follow redirects
 	// Final is the last URL Paddock redirected to (e.g. "/" or "/login-denied?reason=not_authorized").
 	Final string
+	// CallbackRequestID is the X-Request-Id of /api/auth/callback (the correlation ID of the admin.login event).
+	CallbackRequestID string
 }
 
 // NewClient returns an HTTP client that trusts the Caddy root certificate (caRoot, PEM file), resolves every
@@ -73,6 +75,7 @@ func Login(ctx context.Context, client *http.Client, adminURL, username, passwor
 	if err != nil {
 		return nil, err
 	}
+	callbackID := ""
 	for hop := 0; hop < 30; hop++ {
 		u, err := url.Parse(next)
 		if err != nil {
@@ -80,7 +83,7 @@ func Login(ctx context.Context, client *http.Client, adminURL, username, passwor
 		}
 		// Paddock redirected back into the portal: the login is finished.
 		if u.Host == admin.Host && !strings.HasPrefix(u.Path, "/api/") {
-			res := &Result{Client: client, Final: u.RequestURI()}
+			res := &Result{Client: client, Final: u.RequestURI(), CallbackRequestID: callbackID}
 			if strings.HasPrefix(u.Path, "/login-denied") {
 				return res, fmt.Errorf("%w: %s", ErrDenied, u.RawQuery)
 			}
@@ -101,6 +104,9 @@ func Login(ctx context.Context, client *http.Client, adminURL, username, passwor
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 		_ = resp.Body.Close()
+		if u.Host == admin.Host && u.Path == "/api/auth/callback" {
+			callbackID = resp.Header.Get("X-Request-Id")
+		}
 		if resp.StatusCode < 300 || resp.StatusCode >= 400 {
 			return nil, fmt.Errorf("authflow: GET %s: HTTP %d: %s", next, resp.StatusCode, truncate(body))
 		}

@@ -63,19 +63,18 @@ func Login(ctx context.Context, user, password string) (*Portal, error) {
 		return nil, err
 	}
 	res, err := authflow.Login(ctx, client, stack.AdminURL(), user, password)
-	if err != nil {
-		if res != nil {
-			return &Portal{Client: res.Client, Final: res.Final}, err
-		}
+	if res == nil {
 		return nil, err
 	}
-	return &Portal{Client: res.Client, Final: res.Final}, nil
+	return &Portal{Client: res.Client, Final: res.Final, LoginRequestID: res.CallbackRequestID}, err
 }
 
 // Portal is a signed-in portal session.
 type Portal struct {
 	Client *http.Client
 	Final  string
+	// LoginRequestID is the correlation ID of the admin.login event of this sign-in.
+	LoginRequestID string
 }
 
 // Response is an API answer.

@@ -133,6 +133,25 @@ func (s *Sealer) SealThrough(ctx context.Context, last time.Time) (int, error) {
 	return sealed, err
 }
 
+// SealOrganizationThrough seals the unsealed days of one organization up to and including last (development tool:
+// tests seal the current day of a fresh organization without touching other organizations).
+func (s *Sealer) SealOrganizationThrough(ctx context.Context, org uuid.UUID, last time.Time) (int, error) {
+	sealed := 0
+	err := s.pool.WithSession(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		locked, err := q.TryAuditSealLock(ctx)
+		if err != nil {
+			return err
+		}
+		if !locked {
+			return ErrLocked
+		}
+		defer func() { _, _ = q.ReleaseAuditSealLock(context.WithoutCancel(ctx)) }()
+		sealed, err = s.sealOrganization(ctx, q, org, dayOf(last))
+		return err
+	})
+	return sealed, err
+}
+
 func (s *Sealer) sealOrganization(ctx context.Context, q *auditstore.Queries, org uuid.UUID, last time.Time) (int, error) {
 	var day time.Time
 	var prev []byte

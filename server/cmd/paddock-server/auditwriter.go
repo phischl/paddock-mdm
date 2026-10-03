@@ -96,8 +96,19 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 	case "seal":
 		fs := flag.NewFlagSet("audit seal", flag.ContinueOnError)
 		dayFlag := fs.String("day", "", "seal every unsealed day up to and including this day (development only)")
+		orgFlag := fs.String("org", "", "seal only this organization (development only)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return errUsage
+		}
+		var only uuid.UUID
+		if *orgFlag != "" {
+			if !common.Development() {
+				return errors.New("audit seal --org is only allowed with PADDOCK_ENV=development")
+			}
+			var err error
+			if only, err = uuid.Parse(*orgFlag); err != nil {
+				return errUsage
+			}
 		}
 		last := time.Now().UTC().AddDate(0, 0, -1)
 		if *dayFlag != "" {
@@ -115,7 +126,13 @@ func runAudit(ctx context.Context, l *config.Loader, common config.Common, args 
 			return err
 		}
 		defer deps.pool.Close()
-		n, err := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao).SealThrough(ctx, last)
+		sealer := auditwriter.NewSealer(deps.pool, deps.writer, deps.bao)
+		var n int
+		if only != uuid.Nil {
+			n, err = sealer.SealOrganizationThrough(ctx, only, last)
+		} else {
+			n, err = sealer.SealThrough(ctx, last)
+		}
 		if err != nil {
 			return err
 		}

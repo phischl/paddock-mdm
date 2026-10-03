@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
@@ -136,31 +135,4 @@ func TestWORM(t *testing.T) {
 			t.Fatalf("retention changed: %+v", ret.Retention)
 		}
 	})
-}
-
-func s3Client(t *testing.T, accessKey, secretKey string) *s3.Client {
-	t.Helper()
-	return s3.New(s3.Options{
-		Region:       "us-east-1",
-		BaseEndpoint: aws.String(stack.AuditS3Endpoint()),
-		UsePathStyle: true,
-		Credentials:  credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
-	})
-}
-
-func mustSecret(t *testing.T, name string) string {
-	t.Helper()
-	v, err := stack.Secret(name)
-	if err != nil {
-		t.Fatalf("read secret %s (run `make dev-secrets up audit-bootstrap` first): %v", name, err)
-	}
-	return v
-}
-
-func expectError(t *testing.T, op string, err error) {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("%s succeeded; the WORM guarantee is broken", op)
-	}
-	t.Logf("%s rejected as expected: %v", op, err)
 }
