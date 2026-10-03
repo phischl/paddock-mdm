@@ -1,0 +1,5 @@
+# Remote guest commands are single-quoted on purpose: they expand inside the VM.
+disable=SC2016
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/..
+external-sources=true
