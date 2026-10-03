@@ -19,8 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Admin API (`api/openapi/admin.yaml`) with portal login through Authentik (OIDC with PKCE, encrypted session cookie), device groups, audit log and platform organization management; every privileged action records exactly one audit event (F7, F8, F10, M0 step 7).
 - Creating an organization creates its Authentik groups `paddock:<slug>`, `:admins`, `:operators`, `:auditors`; an organization left in `provisioning_failed` is re-provisioned by repeating the request (F10, M0 step 7).
 - Administration portal at `https://admin.<domain>` for device groups, the audit log and organizations, English only, served with a strict Content Security Policy (F8, C7, M0 step 8).
+- Portal roles come from Authentik group membership: `paddock:<slug>:admins`, `:operators` and `:auditors` map to organization administrator, operator and auditor; `paddock:platform:admins` grants platform administration (F8, M0 step 7).
+- `make dev-seed` creates the development organizations `acme` and `globex` and assigns the test accounts listed in `README.md` (M0 step 9).
 - Acceptance gates for organization isolation, exactly-once auditing, login rules and the audit hash chain (`make acceptance`) (M0 step 9).
 - Runbooks `docs/operations/openbao.md` (production initialization with five custodians, unsealing, credential rotation) and `docs/operations/audit-bucket.md` (one-shot production bucket creation and verification) (M0 step 10).
+
+### Security
+
+- Organization data is isolated by PostgreSQL row-level security that fails closed without an organization context; platform endpoints use a separate database role, and cross-organization access returns 404 (F10, M0 steps 4, 9).
+- The portal uses a backend-for-frontend session: tokens stay on the server, the browser only holds an encrypted, `HttpOnly`, `SameSite=Strict` session cookie (F8, M0 step 7).
+- The portal is served with a strict Content Security Policy without `'unsafe-inline'`, with `frame-ancestors 'none'` and no third-party origins (C7, M0 step 8).
 
 ### Fixed
 
