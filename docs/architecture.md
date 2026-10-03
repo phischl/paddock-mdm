@@ -60,7 +60,8 @@ needs a documented reason to deviate, **MAY** is a genuine degree of freedom.
 | Apply engine on device | Native Go reconcilers for a fixed resource set; optional Ansible `playbook` resource, off by default | [0012](adr/0012-agent-apply-engine.md) |
 | Version compatibility (A7) | Protocol `/v1`, bundle schema versions, support window N-2 minor / 6 months | [0013](adr/0013-version-compatibility.md) |
 | Mass-revocation protection (A4) | Revocation issuer as separate role; approvals carry Authentik step-up ID tokens; hard rate limits | [0014](adr/0014-mass-revocation-protection.md) |
-| Portal | Vue 3 + TypeScript SPA, BFF cookie session, ICU messages via FormatJS | [0015](adr/0015-portal-frontend.md) |
+| Portal | Vue 3 + TypeScript SPA (Vuetify), BFF cookie session, ICU messages via FormatJS | [0015](adr/0015-portal-frontend.md) |
+| Lists and confirmations | One list contract (page, page size, sort, search, filters) for every list; modals instead of browser dialogs | [0018](adr/0018-list-and-dialog-conventions.md) |
 | Backup (A11), Observability (A12), Deployment | pgBackRest + OpenBao snapshots; OpenTelemetry + Prometheus; Docker Compose in v1, Kubernetes-ready | [0016](adr/0016-operations-backup-observability-deployment.md) |
 | User lock on the device (F2) | Two paths: Authentik for online logins, agent blocks locally at the next check-in (event-triggered on network-up and resume) and locks active sessions | – (§9.5) |
 | Object storage product | RustFS (accepted), S3 API with Object Lock only; gated by the WORM acceptance test | [0017](adr/0017-object-storage-product.md) |
@@ -1621,6 +1622,9 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 - REST + JSON, **OpenAPI 3.1** contract in `api/openapi/admin.yaml` (source of truth); server stubs via
   `oapi-codegen`, TypeScript client via `openapi-typescript` + `openapi-fetch`.
 - Base path `/api/v1`; organization from session; errors as RFC 9457 problem details with a stable `code`.
+- **Lists:** every collection `GET` follows one contract — `page`, `page_size` (10/25/50/100), `sort` (allow list,
+  `-` for descending), `q` (search), documented filters; response `{items, page, page_size, total, total_capped, sort}`;
+  depth limited to 10 000 rows. ADR [0018](adr/0018-list-and-dialog-conventions.md).
 - Declarative configuration: `PUT /api/v1/config` accepts the organization's full or partial declarative
   document (`paddock.yml` schema `api/schema/paddock.v1.json`); `POST /api/v1/config:plan` returns the diff
   without applying. Portal forms and `paddockctl apply -f paddock.yml` call the **same** endpoints, which
@@ -1652,6 +1656,11 @@ remote with a deploy key per organization. Import from Git is **not** automatic;
   `en` keys and on unused keys.
 - **Accessibility:** WCAG 2.1 AA as the target; axe checks in Playwright tests.
 - **Security headers:** strict CSP (`default-src 'self'`; `style-src 'self' 'nonce-<per response>'`), no inline scripts, `frame-ancestors 'none'`.
+
+- **Lists and confirmations (ADR 0018):** every list uses the shared `DataList` component (search, filters, sortable
+  columns, pagination, items per page 10/25/50/100, state in the URL). Browser-native `confirm`/`alert`/`prompt` are
+  forbidden; every destructive or security-relevant action is confirmed in a modal (`ConfirmDialog`); high-risk
+  actions require typing the target's name.
 
 Key screens: Devices (status, last contact, compliance, commands), Device detail (bundle version,
 effective sudo per user, tamper findings, escrow actions), Users & Groups (source badge, lock),

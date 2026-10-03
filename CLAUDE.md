@@ -55,6 +55,18 @@ Treat these as protected: changes are tamper events and the agent must re-verify
   `server/internal/domain/audit/codes.go`; the portal localizes the display via message key `audit.<code>`.
 - Never put secrets into audit params.
 
+## Portal and list endpoints (ADR 0018)
+
+- Never use `window.confirm`, `window.alert`, `window.prompt` or `beforeunload` prompts. Every destructive,
+  irreversible or security-relevant action is confirmed in a modal (`ConfirmDialog`); high-risk actions require
+  typing the target's name. Errors and success messages use inline alerts or snackbars.
+- Every list in the portal uses the shared `DataList` component: search, filters, sortable columns, pagination with
+  page numbers and items per page (10/25/50/100); list state lives in the URL query.
+- Every collection `GET` in the admin API implements the list contract: `page`, `page_size` (10/25/50/100), `sort`
+  (documented allow list, `-` = descending, primary key as tie-breaker), `q`, documented filters; response
+  `{items, page, page_size, total, total_capped, sort}`; `page × page_size ≤ 10000`; documented with the OpenAPI
+  extension `x-paddock-list`.
+
 ## Definition of done
 
 - The acceptance gates in `test/acceptance/` are the definition of done. A milestone is finished when its gates are
