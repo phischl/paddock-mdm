@@ -52,3 +52,22 @@ curl_auth() {
 
 # poc_secret <name> prints a PoC secret written by authentik-setup.sh.
 poc_secret() { cat "$POC_SECRETS/$1"; }
+
+# ensure_running <vm> starts the VM headless (typing the LUKS passphrase) unless SSH already answers.
+ensure_running() {
+    local vm=$1
+    ssh_ready "$(vm_port "$vm")" && return 0
+    "$REPO_ROOT/test/vms/virtualbox/start-vm.sh" "$1" >/dev/null
+}
+
+# pam <vm> <service> <user> <ops...> [--pin P] [--password P] [--approve U] runs pamtester in the guest and
+# answers the conversation (checks/pamlogin.py); prints the transcript.
+pam() {
+    local vm=$1; shift
+    "$POC_DIR/checks/pamlogin.py" "$(vm_port "$vm")" "$@"
+}
+
+# set_allow <vm> <value> sets pam_allow_groups in the guest's himmelblau.conf (empty value = line "pam_allow_groups =").
+set_allow() {
+    gssh "$1" "sudo sed -i 's|^pam_allow_groups *=.*|pam_allow_groups = $2|' /etc/himmelblau/himmelblau.conf && grep '^pam_allow_groups' /etc/himmelblau/himmelblau.conf"
+}
