@@ -119,9 +119,10 @@ func (q *Queries) ListOrganizations(ctx context.Context, arg ListOrganizationsPa
 }
 
 const organizationIDBySlug = `-- name: OrganizationIDBySlug :one
-SELECT paddock_org_id_by_slug($1)::uuid AS id
+SELECT coalesce(paddock_org_id_by_slug($1), '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS id
 `
 
+// Returns uuid.Nil when no active organization has this slug.
 func (q *Queries) OrganizationIDBySlug(ctx context.Context, slug string) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, organizationIDBySlug, slug)
 	var id uuid.UUID
