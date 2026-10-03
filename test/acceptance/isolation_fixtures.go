@@ -2,6 +2,7 @@ package acceptance
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -79,3 +80,22 @@ var isolationFixtures = map[string]isolationFixture{
 }
 
 func fixtureKey(method, path string) string { return strings.ToUpper(method) + " " + path }
+
+// listIsolationQueries holds, for every collection GET below /api/v1/, searches and filters that find globex data
+// when carol runs them; alice running them must never see it (plan M0.2 step 2, AC5). The gate fails when the
+// contract has a collection GET without an entry here.
+var listIsolationQueries = map[string][]url.Values{
+	"/api/v1/device-groups": {
+		{"q": {"globex isolation"}},
+		{"q": {"isolation"}, "sort": {"-created_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/audit-events": {
+		{"q": {"globex isolation"}},
+		{"q": {"carol"}},
+		{"code": {"device_group.created"}, "page_size": {"100"}},
+		{"outcome": {"success"}, "actor_type": {"admin"}, "page_size": {"100"}},
+		// Not "device_group": acme's own failed attempts on globex IDs (the item checks above) are acme events that
+		// carry the ID alice sent.
+		{"q": {"created"}, "sort": {"-code"}, "page_size": {"100"}},
+	},
+}
