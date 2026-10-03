@@ -82,6 +82,24 @@ setup_flow() {
     api PATCH "/core/brands/$brand/" "$(jq -n --arg f "$pk" '{flow_device_code: $f}')" >/dev/null
 }
 
+# Himmelblau 4.0.4 requests only "openid profile email offline_access" and reads the allow-list groups from the
+# userinfo "groups" claim, which Authentik only emits for the "groups" scope. A second mapping on the "profile"
+# scope emits the claim anyway (IdP configuration, no change to Himmelblau). Himmelblau drops claim values that
+# contain ':' (oidc_extract_claim_string), so the names are emitted with '.' instead (paddock:acme -> paddock.acme).
+# It lists the effective groups (including parents), so members of paddock:acme:admins also match paddock.acme.
+ensure_profile_groups_mapping() {
+    local name="paddock-device: groups claim in profile scope" pk body
+    body=$(jq -n --arg n "$name" '{name: $n, scope_name: "profile", description: "Group memberships",
+        expression: "return {\"groups\": sorted({g.name.replace(\":\", \".\") for g in request.user.all_groups()})}\n"}')
+    pk=$(first "/propertymappings/provider/scope/?name=$(jq -rn --arg v "$name" '$v|@uri')" '.pk')
+    if [[ -z "$pk" ]]; then
+        pk=$(api POST /propertymappings/provider/scope/ "$body" | jq -r .pk)
+    else
+        api PATCH "/propertymappings/provider/scope/$pk/" "$body" >/dev/null
+    fi
+    echo "$pk"
+}
+
 setup_provider() {
     local pk app policy mappings auth_flow authz_flow inval_flow signing body
     auth_flow=$(flow_pk default-authentication-flow)
@@ -92,7 +110,7 @@ setup_provider() {
         --arg b "$(scope_pk goauthentik.io/providers/oauth2/scope-email)" \
         --arg c "$(scope_pk goauthentik.io/providers/oauth2/scope-profile)" \
         --arg d "$(scope_pk goauthentik.io/providers/oauth2/scope-offline_access)" \
-        --arg e "$(scope_pk io.paddock/scope-groups)" '[$a, $b, $c, $d, $e]')
+        --arg e "$(scope_pk io.paddock/scope-groups)" --arg f "$(ensure_profile_groups_mapping)" '[$a, $b, $c, $d, $e, $f]')
     body=$(jq -n --arg n "$APP" --arg af "$auth_flow" --arg zf "$authz_flow" --arg if "$inval_flow" \
         --arg sk "$signing" --argjson pm "$mappings" '{
         name: $n, client_type: "public", client_id: $n,
