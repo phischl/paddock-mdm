@@ -4,7 +4,8 @@
 # "shot" prints the screenshot path, "approve" takes the code read from it (plan §10: documented
 # manual-equivalent headless method).
 #
-# Usage: checks/gdm.sh <vm> <criterion> user <name>      greeter: "Not listed?" -> type user name -> Enter
+# Usage: checks/gdm.sh <vm> <criterion> user <name> [tabs]  greeter: Tab x tabs (default 1; one per listed user)
+#                                                    to "Not listed?" -> Enter -> type user name -> Enter
 #        checks/gdm.sh <vm> <criterion> approve <user> <code>   approve the device code shown on screen
 #        checks/gdm.sh <vm> <criterion> type <secret-file> [n]  type .secrets/<secret-file> + Enter n times
 #        checks/gdm.sh <vm> <criterion> key <scancodes...>      raw set-1 scancodes (e.g. 1c 9c Enter, 39 b9 Space)
@@ -20,8 +21,10 @@ mkdir -p "$dir"
 
 case "$step" in
     user)
-        VBoxManage controlvm "$vm" keyboardputscancode 0f 8f   # Tab to "Not listed?"
-        sleep 1
+        for _ in $(seq 1 "${2:-1}"); do
+            VBoxManage controlvm "$vm" keyboardputscancode 0f 8f   # Tab towards "Not listed?"
+            sleep 1
+        done
         VBoxManage controlvm "$vm" keyboardputscancode 1c 9c
         sleep 2
         VBoxManage controlvm "$vm" keyboardputstring "${1:?user}"
@@ -36,7 +39,7 @@ case "$step" in
         for _ in $(seq 1 "${2:-1}"); do
             VBoxManage controlvm "$vm" keyboardputstring "$(poc_secret "$1")"
             VBoxManage controlvm "$vm" keyboardputscancode 1c 9c
-            sleep 3
+            sleep 6   # the next field (e.g. "Confirm PIN") needs a moment on GNOME 46
         done
         echo "$(ts) typed $1 x${2:-1}" | tee -a "$dir/steps.log"
         ;;
