@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useOrganizations } from '../lib/organizations'
+import DataList from '../components/DataList.vue'
+import type { Organization } from '../api/client'
+import { createOrganization, listOrganizations, organizationFilters } from '../lib/organizations'
 import { hasErrors, validateOrganization } from '../lib/validation'
 import { formatDateTime } from '../lib/format'
+import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 
 const { t, locale } = useI18n()
 const problemText = useProblemText()
-const orgs = useOrganizations()
+const list = ref<{ reload: () => Promise<void> } | null>(null)
 
 const open = ref(false)
 const slug = ref('')
@@ -19,14 +22,12 @@ const errors = computed(() => validateOrganization(slug.value, name.value))
 const slugError = computed(() => (touched.value && errors.value.slug ? t(errors.value.slug) : ''))
 const nameError = computed(() => (touched.value && errors.value.name ? t(errors.value.name) : ''))
 
-const headers = computed(() => [
-  { title: t('organizations.slug'), key: 'slug', sortable: false },
-  { title: t('common.name'), key: 'name', sortable: false },
-  { title: t('organizations.status'), key: 'status', sortable: false },
-  { title: t('common.createdAt'), key: 'created_at', sortable: false },
-])
-
-onMounted(() => orgs.load())
+const columns: ListColumn[] = [
+  { key: 'slug', title: 'organizations.slug', sortable: true },
+  { key: 'name', title: 'common.name', sortable: true },
+  { key: 'status', title: 'organizations.status', sortable: true },
+  { key: 'created_at', title: 'common.createdAt', sortable: true },
+]
 
 function openCreate(): void {
   slug.value = ''
@@ -39,7 +40,9 @@ function openCreate(): void {
 async function submit(): Promise<void> {
   touched.value = true
   if (hasErrors(errors.value)) return
-  problem.value = (await orgs.create(slug.value, name.value)) ?? ''
+  problem.value = (await createOrganization(slug.value, name.value)) ?? ''
+  // A failed provisioning still stores the organization (status provisioning_failed).
+  void list.value?.reload()
   if (!problem.value) open.value = false
 }
 </script>
@@ -55,39 +58,23 @@ async function submit(): Promise<void> {
         {{ t('organizations.create') }}
       </v-btn>
     </div>
-    <p
-      v-if="orgs.error.value"
-      class="form-error"
-      role="alert"
-    >
-      {{ problemText(orgs.error.value) }}
-    </p>
-    <v-data-table
-      :headers="headers"
-      :items="orgs.items.value"
+    <DataList
+      ref="list"
+      :columns="columns"
+      :fetch="listOrganizations"
+      :filters="organizationFilters"
+      searchable
+      default-sort="slug"
       item-value="id"
-      :items-per-page="-1"
-      :loading="orgs.loading.value"
-      hide-default-footer
-      class="table"
+      data-testid="organization-list"
     >
-      <template #no-data>
-        {{ t('common.empty') }}
-      </template>
-      <template #[`item.status`]="{ item }">
+      <template #[`item.status`]="{ item }: { item: Organization }">
         {{ t('organizations.statuses.' + item.status) }}
       </template>
-      <template #[`item.created_at`]="{ item }">
+      <template #[`item.created_at`]="{ item }: { item: Organization }">
         {{ formatDateTime(item.created_at, locale) }}
       </template>
-    </v-data-table>
-    <v-btn
-      v-if="orgs.hasMore.value"
-      variant="tonal"
-      @click="orgs.load(true)"
-    >
-      {{ t('common.loadMore') }}
-    </v-btn>
+    </DataList>
 
     <v-dialog
       v-model="open"

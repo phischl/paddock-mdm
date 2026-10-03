@@ -51,8 +51,13 @@ afterEach(() => {
   wrapper = null
 })
 
-async function mountList(url: string, fetch: (p: ListParams) => Promise<Page<Row>>): Promise<{ router: Router; w: VueWrapper }> {
-  const Page = () => h(DataList<Row>, { columns, filters, fetch, searchable: true, defaultSort: 'name', itemValue: 'id' })
+async function mountList(
+  url: string,
+  fetch: (p: ListParams) => Promise<Page<Row>>,
+  onRowClick?: (item: Row) => void,
+): Promise<{ router: Router; w: VueWrapper }> {
+  const Page = () =>
+    h(DataList<Row>, { columns, filters, fetch, searchable: true, defaultSort: 'name', itemValue: 'id', onRowClick })
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/list', name: 'list', component: Page }] })
   await router.push(url)
   await router.isReady()
@@ -144,6 +149,18 @@ describe('DataList', () => {
     const { w } = await mountList('/list', fetch)
     expect(w.find('[data-testid="list-range"]').text()).toBe('1–25 of 10,000+ results')
     expect(w.find('[role="status"]').text()).toContain('More than 10,000 results match')
+  })
+
+  it('emits row-click only when the page listens', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 3)))
+    const clicked = vi.fn()
+    const { w } = await mountList('/list', fetch, clicked)
+    expect(w.find('tbody tr').classes()).toContain('v-data-table__tr--clickable')
+    await w.findAll('tbody tr')[1].trigger('click')
+    expect(clicked).toHaveBeenCalledWith({ id: '1', name: 'Group 1', status: 'active' })
+    w.unmount()
+    const { w: plain } = await mountList('/list', fetch)
+    expect(plain.find('tbody tr').classes()).not.toContain('v-data-table__tr--clickable')
   })
 
   it('shows the problem of a failed request', async () => {

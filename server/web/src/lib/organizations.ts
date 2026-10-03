@@ -1,37 +1,37 @@
-import { ref } from 'vue'
-import { api, problemCode, type Organization } from '../api/client'
+import {
+  api, listPage, problemCode, type Organization, type OrganizationSort, type OrganizationStatus,
+} from '../api/client'
+import type { ListFilter, ListParams, Page } from './listQuery'
 
-export function useOrganizations() {
-  const items = ref<Organization[]>([])
-  const page = ref(1)
-  const hasMore = ref(false)
-  const loading = ref(false)
-  const error = ref<string | null>(null)
+const statuses: OrganizationStatus[] = ['provisioning', 'active', 'provisioning_failed', 'suspended']
 
-  async function load(more = false): Promise<void> {
-    loading.value = true
-    error.value = null
-    const { data, error: err } = await api.GET('/api/platform/v1/organizations', {
-      params: { query: { page: more ? page.value + 1 : 1, page_size: 100 } },
-    })
-    loading.value = false
-    if (err || !data) {
-      error.value = problemCode(err)
-      return
-    }
-    items.value = more ? [...items.value, ...data.items] : data.items
-    page.value = data.page
-    hasMore.value = data.page * data.page_size < data.total
-  }
+/** Filters of the organization list. */
+export const organizationFilters: ListFilter[] = [
+  {
+    kind: 'enum', key: 'status', label: 'organizations.status',
+    options: statuses.map((value) => ({ value, title: 'organizations.statuses.' + value })),
+  },
+]
 
-  async function create(slug: string, name: string): Promise<string | null> {
-    const { error: err } = await api.POST('/api/platform/v1/organizations', {
-      params: { header: { 'X-Paddock-CSRF': '1' } },
-      body: { slug: slug.trim(), name: name.trim() },
-    })
-    await load()
-    return err ? problemCode(err) : null
-  }
+/** One page of organizations for DataList. */
+export async function listOrganizations(p: ListParams): Promise<Page<Organization>> {
+  return listPage(
+    await api.GET('/api/platform/v1/organizations', {
+      params: {
+        query: {
+          page: p.page, page_size: p.page_size, sort: p.sort as OrganizationSort, q: p.q,
+          status: p.status as OrganizationStatus[],
+        },
+      },
+    }),
+  )
+}
 
-  return { items, hasMore, loading, error, load, create }
+/** Creates an organization; returns null on success, otherwise the problem code. */
+export async function createOrganization(slug: string, name: string): Promise<string | null> {
+  const { error } = await api.POST('/api/platform/v1/organizations', {
+    params: { header: { 'X-Paddock-CSRF': '1' } },
+    body: { slug: slug.trim(), name: name.trim() },
+  })
+  return error ? problemCode(error) : null
 }

@@ -1,59 +1,37 @@
-import { ref } from 'vue'
-import { api, problemCode, type DeviceGroup } from '../api/client'
+import { api, listPage, problemCode, type DeviceGroup, type DeviceGroupSort } from '../api/client'
+import type { ListParams, Page } from './listQuery'
 
-/** State and actions of the device group page. */
-export function useDeviceGroups() {
-  const items = ref<DeviceGroup[]>([])
-  const page = ref(1)
-  const hasMore = ref(false)
-  const loading = ref(false)
-  const error = ref<string | null>(null)
+/** One page of device groups for DataList. */
+export async function listDeviceGroups(p: ListParams): Promise<Page<DeviceGroup>> {
+  return listPage(
+    await api.GET('/api/v1/device-groups', {
+      params: { query: { page: p.page, page_size: p.page_size, sort: p.sort as DeviceGroupSort, q: p.q } },
+    }),
+  )
+}
 
-  async function load(more = false): Promise<void> {
-    loading.value = true
-    error.value = null
-    const { data, error: err } = await api.GET('/api/v1/device-groups', {
-      params: { query: { page: more ? page.value + 1 : 1, page_size: 100 } },
-    })
-    loading.value = false
-    if (err || !data) {
-      error.value = problemCode(err)
-      return
-    }
-    items.value = more ? [...items.value, ...data.items] : data.items
-    page.value = data.page
-    hasMore.value = data.page * data.page_size < data.total
-  }
+/** Creates a device group; returns null on success, otherwise the problem code. */
+export async function createDeviceGroup(name: string, description: string): Promise<string | null> {
+  const { error } = await api.POST('/api/v1/device-groups', {
+    params: { header: { 'X-Paddock-CSRF': '1' } },
+    body: { name: name.trim(), description: description.trim() },
+  })
+  return error ? problemCode(error) : null
+}
 
-  /** Returns null on success, otherwise the problem code. */
-  async function create(name: string, description: string): Promise<string | null> {
-    const { error: err } = await api.POST('/api/v1/device-groups', {
-      params: { header: { 'X-Paddock-CSRF': '1' } },
-      body: { name: name.trim(), description: description.trim() },
-    })
-    if (err) return problemCode(err)
-    await load()
-    return null
-  }
+/** Updates a device group; returns null on success, otherwise the problem code. */
+export async function updateDeviceGroup(id: string, name: string, description: string): Promise<string | null> {
+  const { error } = await api.PATCH('/api/v1/device-groups/{id}', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
+    body: { name: name.trim(), description: description.trim() },
+  })
+  return error ? problemCode(error) : null
+}
 
-  async function update(id: string, name: string, description: string): Promise<string | null> {
-    const { error: err } = await api.PATCH('/api/v1/device-groups/{id}', {
-      params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
-      body: { name: name.trim(), description: description.trim() },
-    })
-    if (err) return problemCode(err)
-    await load()
-    return null
-  }
-
-  async function remove(id: string): Promise<string | null> {
-    const { error: err } = await api.DELETE('/api/v1/device-groups/{id}', {
-      params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
-    })
-    if (err) return problemCode(err)
-    await load()
-    return null
-  }
-
-  return { items, hasMore, loading, error, load, create, update, remove }
+/** Deletes a device group; returns null on success, otherwise the problem code. */
+export async function deleteDeviceGroup(id: string): Promise<string | null> {
+  const { error } = await api.DELETE('/api/v1/device-groups/{id}', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
+  })
+  return error ? problemCode(error) : null
 }

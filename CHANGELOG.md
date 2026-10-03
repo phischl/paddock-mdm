@@ -25,12 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Runbooks `docs/operations/openbao.md` (production initialization with five custodians, unsealing, credential rotation) and `docs/operations/audit-bucket.md` (one-shot production bucket creation and verification) (M0 step 10).
 - Admin API lists support sorting (`sort`, `-` prefix for descending), case-insensitive search (`q`) and filters (audit log: `code`, `outcome`, `actor_type`; organizations: `status`), documented per endpoint by the OpenAPI extension `x-paddock-list` (ADR 0018, M0.2 step 1).
 - Database migrations add indexes for sorting and searching lists; the audit database migration installs the PostgreSQL extension `pg_trgm` as `audit_owner`, no operator action needed (ADR 0018, M0.2 step 1).
+- Every portal list (device groups, audit log, organizations) offers search, filters, sortable columns, page numbers and 10, 25, 50 or 100 items per page; the list state is kept in the URL, so reload, back navigation and shared links restore it (ADR 0018, M0.2 step 4).
+- The audit log in the portal can be filtered by outcome and actor type in addition to time range and event; without a time range it shows the last 7 days (ADR 0018, M0.2 step 4).
 
 ### Changed
 
 - **BREAKING:** `GET /api/v1/device-groups`, `GET /api/v1/audit-events` and `GET /api/platform/v1/organizations` page with `page` and `page_size` (10, 25, 50, 100) instead of `cursor` and `limit`, and return `{items, page, page_size, total, total_capped, sort}` instead of `next_cursor`; `page × page_size` above 10 000 answers 400 `page_out_of_range`. API clients must switch to the new parameters (ADR 0018, M0.2 step 1).
 - WORM object keys, `audit_object.day`, daily manifests and object retention are dated by the UTC day on which the audit writer recorded the events instead of their occurrence day; writer transactions are limited to 5 minutes and `paddock-server audit seal` refuses a day before 00:15 UTC of the following day (F7, M0.1 step 2).
 - Portal UI library switched from PrimeVue to Vuetify (MIT); PrimeVue 5 requires a commercial license (C8, M0.1 step 4).
+- Deleting a device group is confirmed in a modal dialog with the focus on *Cancel*; the portal never uses browser-native confirmation dialogs, and while a dialog is open the page behind it is inert for keyboard and screen reader users (ADR 0018, M0.2 step 4).
 
 ### Fixed
 

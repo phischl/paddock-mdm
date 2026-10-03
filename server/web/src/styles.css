@@ -30,6 +30,9 @@ h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.75rem; }
 .filters .v-input { flex: 0 1 14rem; }
 
 .table { margin-bottom: 1rem; }
+.list-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
+.list-footer .page-size { flex: 0 0 10rem; }
+.list-footer .v-pagination { margin-left: auto; }
 .row-actions { display: flex; gap: 0.5rem; }
 .outcome-success { color: #1d5d2f; }
 .outcome-failure, .outcome-denied { color: var(--danger); font-weight: 600; }
