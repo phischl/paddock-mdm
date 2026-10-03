@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Creates the Paddock database roles (plan M0 §6.1). Runs once on cluster initialization.
 # Passwords come from <NAME>_PASSWORD_FILE (Compose secrets) or <NAME>_PASSWORD (tests).
+# paddock_owner is the only role with BYPASSRLS: it owns the tables (FORCE ROW LEVEL SECURITY applies to it) and the
+# SECURITY DEFINER function paddock_org_id_by_slug runs as paddock_owner.
 set -euo pipefail
 
 password() {
@@ -14,7 +16,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   -v platform_pw="$(password PADDOCK_PLATFORM_PASSWORD)" \
   -v relay_pw="$(password PADDOCK_RELAY_PASSWORD)" \
   -v db="$POSTGRES_DB" <<'SQL'
-CREATE ROLE paddock_owner    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'owner_pw';
+CREATE ROLE paddock_owner    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS PASSWORD :'owner_pw';
 CREATE ROLE paddock_api      LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'api_pw';
 CREATE ROLE paddock_platform LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'platform_pw';
 CREATE ROLE paddock_relay    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'relay_pw';

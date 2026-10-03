@@ -1,0 +1,10 @@
+.git
+.idea
+.claude
+deploy/compose/.secrets
+deploy/compose/.env
+test/vms
+**/node_modules
+server/web/test-results
+server/web/playwright-report
+/paddock-server
