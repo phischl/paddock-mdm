@@ -1,0 +1,43 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: migrations/paddock
+    queries: internal/adapters/postgres/queries
+    gen:
+      go:
+        package: pgstore
+        out: internal/adapters/postgres/pgstore
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides: &overrides
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: uuid
+            nullable: true
+            go_type: github.com/google/uuid.NullUUID
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+          - db_type: date
+            go_type: time.Time
+          - db_type: jsonb
+            go_type: encoding/json.RawMessage
+          - db_type: jsonb
+            nullable: true
+            go_type: encoding/json.RawMessage
+  - engine: postgresql
+    schema: migrations/audit
+    queries: internal/adapters/auditpg/queries
+    gen:
+      go:
+        package: auditstore
+        out: internal/adapters/auditpg/auditstore
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides: *overrides

@@ -1,0 +1,247 @@
+// Package db is the only place that opens database connections. Organization data is reachable only through
+// OrgPool.InOrg, which sets paddock.org_id from the authenticated principal (architecture §5, plan M0 §6.3).
+package db
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/paddock-mdm/paddock/server/internal/adapters/auditpg/auditstore"
+	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
+	"github.com/paddock-mdm/paddock/server/internal/principal"
+)
+
+var (
+	// ErrNoOrganization is returned by InOrg when ctx carries no principal with an organization.
+	ErrNoOrganization = errors.New("db: no organization in context")
+	// ErrForbiddenScope is returned by InPlatform for principals other than platform admins and system.
+	ErrForbiddenScope = errors.New("db: principal may not use the platform scope")
+)
+
+// Options tunes a pool.
+type Options struct {
+	MaxConns        int32
+	ApplicationName string
+}
+
+func newPool(ctx context.Context, dsn string, o Options) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("db: parse dsn: %w", err)
+	}
+	if o.MaxConns > 0 {
+		cfg.MaxConns = o.MaxConns
+	}
+	if o.ApplicationName != "" {
+		cfg.ConnConfig.RuntimeParams["application_name"] = o.ApplicationName
+	}
+	cfg.MaxConnIdleTime = 5 * time.Minute
+	return pgxpool.NewWithConfig(ctx, cfg)
+}
+
+// pool is the common part of all pools.
+type pool struct{ p *pgxpool.Pool }
+
+// Ping checks connectivity (readiness).
+func (p pool) Ping(ctx context.Context) error { return p.p.Ping(ctx) }
+
+// Close closes all connections.
+func (p pool) Close() { p.p.Close() }
+
+// inTx runs setup and fn in one transaction. fn's error is returned unchanged; the transaction is rolled back.
+func inTx(ctx context.Context, p *pgxpool.Pool, setup func(pgx.Tx) error, fn func(pgx.Tx) error) error {
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if setup != nil {
+		if err := setup(tx); err != nil {
+			return err
+		}
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func setOrg(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
+	_, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", org.String())
+	return err
+}
+
+func orgFromContext(ctx context.Context) (uuid.UUID, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.OrganizationID == uuid.Nil {
+		return uuid.Nil, ErrNoOrganization
+	}
+	return p.OrganizationID, nil
+}
+
+// OrgPool is the pool of role paddock_api (organization data, RLS enforced).
+type OrgPool struct{ pool }
+
+// NewOrgPool opens the paddock_api pool.
+func NewOrgPool(ctx context.Context, dsn string, o Options) (*OrgPool, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &OrgPool{pool{p}}, nil
+}
+
+// InOrg opens a transaction, executes SELECT set_config('paddock.org_id', <principal.OrganizationID>, true) and
+// calls fn. It returns ErrNoOrganization if the principal is missing or has no organization. It commits if fn
+// returns nil, otherwise it rolls back and returns fn's error unchanged.
+func (p *OrgPool) InOrg(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, p.p,
+		func(tx pgx.Tx) error { return setOrg(ctx, tx, org) },
+		func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// PlatformPool is the pool of role paddock_platform (platform endpoints only).
+type PlatformPool struct{ pool }
+
+// NewPlatformPool opens the paddock_platform pool.
+func NewPlatformPool(ctx context.Context, dsn string, o Options) (*PlatformPool, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &PlatformPool{pool{p}}, nil
+}
+
+// InPlatform requires principal.Kind == KindPlatformAdmin or KindSystem; otherwise it returns ErrForbiddenScope.
+func (p *PlatformPool) InPlatform(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	pr, ok := principal.From(ctx)
+	if !ok || (pr.Kind != principal.KindPlatformAdmin && pr.Kind != principal.KindSystem) {
+		return ErrForbiddenScope
+	}
+	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// RelayPool is the pool of role paddock_relay (outbox relay and reaper).
+type RelayPool struct{ pool }
+
+// NewRelayPool opens the paddock_relay pool.
+func NewRelayPool(ctx context.Context, dsn string, o Options) (*RelayPool, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &RelayPool{pool{p}}, nil
+}
+
+// InRelay runs fn in a transaction of role paddock_relay.
+func (p *RelayPool) InRelay(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
+// Listen holds a dedicated connection with LISTEN channel and sends to notify on every notification (non-blocking).
+// It returns when ctx ends or the connection fails.
+func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- struct{}) error {
+	conn, err := p.p.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize()); err != nil {
+		return err
+	}
+	for {
+		if _, err := conn.Conn().WaitForNotification(ctx); err != nil {
+			// The connection state is unknown after an interrupted wait; do not return it to the pool.
+			_ = conn.Conn().Close(context.WithoutCancel(ctx))
+			return err
+		}
+		select {
+		case notify <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// AuditReader is the read-only pool of role paddock_audit_reader, with the same InOrg semantics as OrgPool.
+type AuditReader struct{ pool }
+
+// NewAuditReader opens the paddock_audit_reader pool.
+func NewAuditReader(ctx context.Context, dsn string, o Options) (*AuditReader, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &AuditReader{pool{p}}, nil
+}
+
+// InOrg runs fn in a read-only transaction scoped to the principal's organization.
+func (r *AuditReader) InOrg(ctx context.Context, fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	org, err := orgFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return inTx(ctx, r.p,
+		func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SET TRANSACTION READ ONLY"); err != nil {
+				return err
+			}
+			return setOrg(ctx, tx, org)
+		},
+		func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
+}
+
+// AuditWriterPool is the pool of role paddock_audit_writer (cross-organization writer).
+type AuditWriterPool struct{ pool }
+
+// NewAuditWriterPool opens the paddock_audit_writer pool.
+func NewAuditWriterPool(ctx context.Context, dsn string, o Options) (*AuditWriterPool, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &AuditWriterPool{pool{p}}, nil
+}
+
+// InWriter runs fn in a transaction of role paddock_audit_writer.
+func (p *AuditWriterPool) InWriter(ctx context.Context, fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, auditstore.New(tx)) })
+}
+
+// WithSession runs fn on one dedicated connection outside a transaction (session-level advisory locks).
+func (p *AuditWriterPool) WithSession(ctx context.Context, fn func(ctx context.Context, q *auditstore.Queries) error) error {
+	conn, err := p.p.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	return fn(ctx, auditstore.New(conn))
+}
+
+// IsNoRows reports whether err means "no row" (missing or hidden by RLS).
+func IsNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// IsUniqueViolation reports whether err is a unique violation, optionally of the named constraint.
+func IsUniqueViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return false
+	}
+	return constraint == "" || pgErr.ConstraintName == constraint
+}
+
+// IsCheckViolation reports whether err is a check constraint violation.
+func IsCheckViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23514"
+}
