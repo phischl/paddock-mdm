@@ -1,0 +1,134 @@
+# Audit domain (plan M0 §6.8, architecture §4.1). In production this file runs on a separate host with its own
+# credentials; the control plane only reaches audit-postgres (read-only role) and RabbitMQ.
+services:
+  audit-postgres:
+    image: ${POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: paddock_audit
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/audit_postgres_superuser_password
+      AUDIT_OWNER_PASSWORD_FILE: /run/secrets/db_audit_owner_password
+      AUDIT_WRITER_PASSWORD_FILE: /run/secrets/db_paddock_audit_writer_password
+      AUDIT_READER_PASSWORD_FILE: /run/secrets/db_paddock_audit_reader_password
+    secrets:
+      - audit_postgres_superuser_password
+      - db_audit_owner_password
+      - db_paddock_audit_writer_password
+      - db_paddock_audit_reader_password
+    volumes:
+      - ./audit-postgres/init:/docker-entrypoint-initdb.d:ro
+      - audit-postgres-data:/var/lib/postgresql/data
+    networks: [audit-index]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paddock_audit"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  audit-rustfs:
+    image: ${RUSTFS_IMAGE}
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_audit_root_user
+      RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_audit_root_password
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_OBS_LOG_DIRECTORY: ""
+    secrets: [rustfs_audit_root_user, rustfs_audit_root_password]
+    volumes:
+      - audit-rustfs-data:/data
+    networks: [audit-store]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9000/health >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  paddock-audit-migrate:
+    <<: &paddock-audit
+      image: ${PADDOCK_IMAGE:-paddock-server:dev}
+      build:
+        context: ../..
+        dockerfile: deploy/compose/Dockerfile
+        args:
+          GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
+          NODE_IMAGE: ${NODE_IMAGE}
+          RUNTIME_IMAGE: ${RUNTIME_IMAGE}
+      profiles: [paddock]
+      read_only: true
+      tmpfs: [/tmp]
+    restart: "no"
+    command: ["migrate", "audit"]
+    environment:
+      PADDOCK_ENV: ${PADDOCK_ENV:-production}
+      PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
+      PADDOCK_AUDIT_DB_OWNER_URL_FILE: /run/secrets/db_audit_owner_url
+    secrets: [db_audit_owner_url]
+    networks: [audit-index]
+    depends_on:
+      audit-postgres:
+        condition: service_healthy
+
+  paddock-audit-writer:
+    <<: *paddock-audit
+    restart: unless-stopped
+    command: ["serve", "audit-writer"]
+    environment:
+      PADDOCK_ENV: ${PADDOCK_ENV:-production}
+      PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
+      PADDOCK_OPS_ADDR: ":9090"
+      PADDOCK_AUDIT_DB_WRITER_URL_FILE: /run/secrets/db_paddock_audit_writer_url
+      PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
+      PADDOCK_AMQP_USER: audit_writer
+      PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_audit_writer_password
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_audit_writer_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_audit_writer_secret_id
+      PADDOCK_AUDIT_S3_ENDPOINT: http://audit-rustfs:9000
+      PADDOCK_AUDIT_S3_BUCKET: paddock-audit
+      PADDOCK_AUDIT_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_audit_writer_access_key
+      PADDOCK_AUDIT_S3_SECRET_KEY_FILE: /run/secrets/rustfs_audit_writer_secret_key
+      PADDOCK_AUDIT_RETENTION_DAYS: ${PADDOCK_AUDIT_RETENTION_DAYS:-400}
+    secrets:
+      - db_paddock_audit_writer_url
+      - rabbitmq_audit_writer_password
+      - approle_audit_writer_role_id
+      - approle_audit_writer_secret_id
+      - rustfs_audit_writer_access_key
+      - rustfs_audit_writer_secret_key
+    networks: [audit-index, audit-store, cp]
+    healthcheck:
+      test: ["CMD", "/paddock-server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      paddock-audit-migrate:
+        condition: service_completed_successfully
+      audit-rustfs:
+        condition: service_healthy
+
+networks:
+  audit-index: {}
+  audit-store: {}
+
+volumes:
+  audit-postgres-data: {}
+  audit-rustfs-data: {}
+
+secrets:
+  audit_postgres_superuser_password: { file: ./.secrets/audit_postgres_superuser_password }
+  db_audit_owner_password: { file: ./.secrets/db_audit_owner_password }
+  db_paddock_audit_writer_password: { file: ./.secrets/db_paddock_audit_writer_password }
+  db_paddock_audit_reader_password: { file: ./.secrets/db_paddock_audit_reader_password }
+  db_audit_owner_url: { file: ./.secrets/db_audit_owner_url }
+  db_paddock_audit_writer_url: { file: ./.secrets/db_paddock_audit_writer_url }
+  rabbitmq_audit_writer_password: { file: ./.secrets/rabbitmq_audit_writer_password }
+  approle_audit_writer_role_id: { file: ./.secrets/approle/paddock-audit-writer/role_id }
+  approle_audit_writer_secret_id: { file: ./.secrets/approle/paddock-audit-writer/secret_id }
+  rustfs_audit_root_user: { file: ./.secrets/rustfs_audit_root_user }
+  rustfs_audit_root_password: { file: ./.secrets/rustfs_audit_root_password }
+  rustfs_audit_writer_access_key: { file: ./.secrets/rustfs_audit_writer_access_key }
+  rustfs_audit_writer_secret_key: { file: ./.secrets/rustfs_audit_writer_secret_key }

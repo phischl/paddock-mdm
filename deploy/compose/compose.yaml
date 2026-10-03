@@ -1,0 +1,295 @@
+# Paddock control plane (plan M0 §6.8). Always used together with compose.audit.yaml; compose.dev.yaml adds the
+# development overrides. Image references come from versions.env (tag + digest).
+name: paddock
+
+x-paddock: &paddock
+  image: ${PADDOCK_IMAGE:-paddock-server:dev}
+  build:
+    context: ../..
+    dockerfile: deploy/compose/Dockerfile
+    args:
+      GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
+      NODE_IMAGE: ${NODE_IMAGE}
+      RUNTIME_IMAGE: ${RUNTIME_IMAGE}
+  profiles: [paddock]
+  read_only: true
+  tmpfs: [/tmp]
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "/paddock-server", "healthcheck"]
+    interval: 10s
+    timeout: 5s
+    retries: 6
+    start_period: 20s
+
+x-paddock-env: &paddock-env
+  PADDOCK_ENV: ${PADDOCK_ENV:-production}
+  PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
+  PADDOCK_OPS_ADDR: ":9090"
+
+services:
+  caddy:
+    image: ${CADDY_IMAGE}
+    restart: unless-stopped
+    ports:
+      - "${PADDOCK_HTTPS_PORT:-8443}:${PADDOCK_HTTPS_PORT:-8443}"
+    environment:
+      PADDOCK_DOMAIN: ${PADDOCK_DOMAIN:-paddock.localhost}
+      PADDOCK_HTTPS_PORT: ${PADDOCK_HTTPS_PORT:-8443}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      cp:
+        aliases:
+          - admin.${PADDOCK_DOMAIN:-paddock.localhost}
+          - auth.${PADDOCK_DOMAIN:-paddock.localhost}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ >/dev/null && test -s /data/caddy/pki/authorities/local/root.crt"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Exports the root certificate of Caddy's internal CA so that containers trust the public URLs.
+  caddy-ca-export:
+    image: ${CADDY_IMAGE}
+    restart: "no"
+    command: ["sh", "-c", "cat /data/caddy/pki/authorities/local/root.crt > /export/caddy-root.crt"]
+    volumes:
+      - caddy-data:/data:ro
+      - ./.secrets/caddy-root.crt:/export/caddy-root.crt
+    network_mode: none
+    depends_on:
+      caddy:
+        condition: service_healthy
+
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: paddock
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_superuser_password
+      PADDOCK_OWNER_PASSWORD_FILE: /run/secrets/db_paddock_owner_password
+      PADDOCK_API_PASSWORD_FILE: /run/secrets/db_paddock_api_password
+      PADDOCK_PLATFORM_PASSWORD_FILE: /run/secrets/db_paddock_platform_password
+      PADDOCK_RELAY_PASSWORD_FILE: /run/secrets/db_paddock_relay_password
+    secrets:
+      - postgres_superuser_password
+      - db_paddock_owner_password
+      - db_paddock_api_password
+      - db_paddock_platform_password
+      - db_paddock_relay_password
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - postgres-data:/var/lib/postgresql/data
+    networks: [cp]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paddock"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: ${RABBITMQ_IMAGE}
+    restart: unless-stopped
+    hostname: rabbitmq
+    volumes:
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - rabbitmq-data:/var/lib/rabbitmq
+    secrets:
+      - source: rabbitmq_definitions
+        target: /etc/rabbitmq/definitions.json
+    networks: [cp]
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_local_alarms"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+
+  openbao:
+    image: ${OPENBAO_IMAGE}
+    restart: unless-stopped
+    command: ["bao", "server", "-config=/openbao/config/config.hcl"]
+    cap_add: [IPC_LOCK]
+    volumes:
+      - ./openbao/config.hcl:/openbao/config/config.hcl:ro
+      - openbao-data:/openbao/file
+    networks: [cp]
+    healthcheck:
+      # Healthy = the server answers. Sealed or uninitialized states are handled by `make bao-bootstrap` /
+      # `make bao-unseal`; Paddock roles report not ready while OpenBao is sealed.
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:8200/v1/sys/health?uninitcode=200&sealedcode=200&standbyok=true' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  authentik-postgres:
+    image: ${POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD_FILE: /run/secrets/authentik_postgres_password
+    secrets: [authentik_postgres_password]
+    volumes:
+      - authentik-postgres-data:/var/lib/postgresql/data
+    networks: [cp]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  authentik-server: &authentik
+    image: ${AUTHENTIK_IMAGE}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
+    command: ["server"]
+    environment: &authentik-env
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: file:///run/secrets/authentik_postgres_password
+      AUTHENTIK_SECRET_KEY: file:///run/secrets/authentik_secret_key
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+      AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
+      AUTHENTIK_BOOTSTRAP_EMAIL: akadmin@paddock.test
+      PADDOCK_PUBLIC_ADMIN_URL: ${PADDOCK_PUBLIC_ADMIN_URL:-https://admin.paddock.localhost:8443}
+      # Exported from files by /paddock/entrypoint.sh so that no secret is visible in `docker inspect`.
+      AUTHENTIK_BOOTSTRAP_PASSWORD_FROMFILE: /run/secrets/authentik_bootstrap_password
+      AUTHENTIK_BOOTSTRAP_TOKEN_FROMFILE: /run/secrets/authentik_bootstrap_token
+      PADDOCK_OIDC_CLIENT_SECRET_FROMFILE: /run/secrets/oidc_client_secret
+      PADDOCK_AUTHENTIK_TOKEN_FROMFILE: /run/secrets/authentik_service_token
+    secrets:
+      - authentik_postgres_password
+      - authentik_secret_key
+      - authentik_bootstrap_password
+      - authentik_bootstrap_token
+      - oidc_client_secret
+      - authentik_service_token
+    volumes:
+      - ./authentik/entrypoint.sh:/paddock/entrypoint.sh:ro
+      - ./authentik/blueprints:/blueprints/paddock:ro
+      - authentik-data:/data
+    networks: [cp]
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+
+  authentik-worker:
+    <<: *authentik
+    command: ["worker"]
+
+  paddock-migrate:
+    <<: *paddock
+    restart: "no"
+    command: ["migrate", "paddock", "+", "provision", "rabbitmq"]
+    healthcheck:
+      disable: true
+    environment:
+      <<: *paddock-env
+      PADDOCK_DB_OWNER_URL_FILE: /run/secrets/db_paddock_owner_url
+      PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
+      PADDOCK_AMQP_USER: provisioner
+      PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_provisioner_password
+    secrets: [db_paddock_owner_url, rabbitmq_provisioner_password]
+    networks: [cp]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  paddock-api:
+    <<: *paddock
+    command: ["serve", "api"]
+    environment:
+      <<: *paddock-env
+      PADDOCK_HTTP_ADDR: ":8080"
+      PADDOCK_PUBLIC_ADMIN_URL: ${PADDOCK_PUBLIC_ADMIN_URL:-https://admin.paddock.localhost:8443}
+      PADDOCK_DB_URL_FILE: /run/secrets/db_paddock_api_url
+      PADDOCK_DB_PLATFORM_URL_FILE: /run/secrets/db_paddock_platform_url
+      PADDOCK_AUDIT_DB_READER_URL_FILE: /run/secrets/db_paddock_audit_reader_url
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_api_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_api_secret_id
+      PADDOCK_OIDC_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal/
+      PADDOCK_OIDC_CLIENT_ID: paddock-portal
+      PADDOCK_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
+      PADDOCK_AUTHENTIK_TOKEN_FILE: /run/secrets/authentik_service_token
+      SSL_CERT_FILE: /run/secrets/caddy_root_crt
+    secrets:
+      - db_paddock_api_url
+      - db_paddock_platform_url
+      - db_paddock_audit_reader_url
+      - approle_api_role_id
+      - approle_api_secret_id
+      - oidc_client_secret
+      - authentik_service_token
+      - caddy_root_crt
+    networks: [cp, audit-index]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+      caddy-ca-export:
+        condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
+
+  paddock-outbox-relay:
+    <<: *paddock
+    command: ["serve", "outbox-relay"]
+    environment:
+      <<: *paddock-env
+      PADDOCK_DB_RELAY_URL_FILE: /run/secrets/db_paddock_relay_url
+      PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
+      PADDOCK_AMQP_USER: relay
+      PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_relay_password
+    secrets: [db_paddock_relay_url, rabbitmq_relay_password]
+    networks: [cp]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+
+networks:
+  cp: {}
+  audit-index: {}
+
+volumes:
+  caddy-data: {}
+  caddy-config: {}
+  postgres-data: {}
+  rabbitmq-data: {}
+  openbao-data: {}
+  authentik-postgres-data: {}
+  authentik-data: {}
+
+secrets:
+  postgres_superuser_password: { file: ./.secrets/postgres_superuser_password }
+  db_paddock_owner_password: { file: ./.secrets/db_paddock_owner_password }
+  db_paddock_api_password: { file: ./.secrets/db_paddock_api_password }
+  db_paddock_platform_password: { file: ./.secrets/db_paddock_platform_password }
+  db_paddock_relay_password: { file: ./.secrets/db_paddock_relay_password }
+  db_paddock_owner_url: { file: ./.secrets/db_paddock_owner_url }
+  db_paddock_api_url: { file: ./.secrets/db_paddock_api_url }
+  db_paddock_platform_url: { file: ./.secrets/db_paddock_platform_url }
+  db_paddock_relay_url: { file: ./.secrets/db_paddock_relay_url }
+  db_paddock_audit_reader_url: { file: ./.secrets/db_paddock_audit_reader_url }
+  rabbitmq_definitions: { file: ./.secrets/rabbitmq/definitions.json }
+  rabbitmq_provisioner_password: { file: ./.secrets/rabbitmq_provisioner_password }
+  rabbitmq_relay_password: { file: ./.secrets/rabbitmq_relay_password }
+  authentik_postgres_password: { file: ./.secrets/authentik_postgres_password }
+  authentik_secret_key: { file: ./.secrets/authentik_secret_key }
+  authentik_bootstrap_password: { file: ./.secrets/authentik_bootstrap_password }
+  authentik_bootstrap_token: { file: ./.secrets/authentik_bootstrap_token }
+  authentik_service_token: { file: ./.secrets/authentik_service_token }
+  oidc_client_secret: { file: ./.secrets/oidc_client_secret }
+  approle_api_role_id: { file: ./.secrets/approle/paddock-api/role_id }
+  approle_api_secret_id: { file: ./.secrets/approle/paddock-api/secret_id }
+  caddy_root_crt: { file: ./.secrets/caddy-root.crt }

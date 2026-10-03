@@ -77,7 +77,8 @@ dev-secrets: ## Generate local development secrets (idempotent)
 
 .PHONY: up
 up: ## Start the full stack (control plane, audit domain, dev overrides)
-	$(COMPOSE) --profile paddock up -d --build --wait
+	$(COMPOSE) up -d
+	$(COMPOSE_DIR)/scripts/wait-healthy.sh
 
 .PHONY: down
 down: ## Stop the stack (pass V=1 to delete volumes)

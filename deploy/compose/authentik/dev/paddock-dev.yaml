@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+# DEVELOPMENT ONLY (mounted by compose.dev.yaml): test users and an admin login without the authenticator
+# validation stage. Organization groups are assigned by `make dev-seed` after the organizations exist.
+version: 1
+metadata:
+  name: Paddock - Development
+  labels:
+    blueprints.goauthentik.io/description: Development users and MFA-less admin login (PADDOCK_ENV=development only)
+entries:
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        path: paddock/paddock-portal.yaml
+      required: true
+
+  # Skip the authenticator validation stage of paddock-admin-login. A policy that always fails is bound to the
+  # stage binding, so re-applying the portal blueprint does not bring the stage back.
+  - model: authentik_policies_expression.expressionpolicy
+    id: skip-mfa
+    identifiers:
+      name: paddock-dev-skip-mfa
+    attrs:
+      expression: |
+        # This blueprint is only mounted by compose.dev.yaml (PADDOCK_ENV=development).
+        return False
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 30]]
+      policy: !KeyOf skip-mfa
+      order: 0
+
+  - model: authentik_core.user
+    identifiers:
+      username: platform-admin@paddock.test
+    attrs:
+      name: Platform Admin
+      email: platform-admin@paddock.test
+      type: internal
+      password: !Env DEV_PLATFORM_ADMIN_PASSWORD
+      groups:
+        - !Find [authentik_core.group, [name, "paddock:platform:admins"]]
+
+  - model: authentik_core.user
+    identifiers:
+      username: alice@acme.test
+    attrs:
+      name: Alice (acme admin)
+      email: alice@acme.test
+      type: internal
+      password: !Env DEV_ALICE_PASSWORD
+
+  - model: authentik_core.user
+    identifiers:
+      username: bob@acme.test
+    attrs:
+      name: Bob (acme auditor)
+      email: bob@acme.test
+      type: internal
+      password: !Env DEV_BOB_PASSWORD
+
+  - model: authentik_core.user
+    identifiers:
+      username: carol@globex.test
+    attrs:
+      name: Carol (globex admin)
+      email: carol@globex.test
+      type: internal
+      password: !Env DEV_CAROL_PASSWORD
