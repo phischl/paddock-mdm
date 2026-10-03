@@ -59,7 +59,7 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/me", map[string]string{"locale": "en"}
 	}},
 	"GET /api/v1/device-groups": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
-		return "/api/v1/device-groups?limit=200", nil
+		return "/api/v1/device-groups?page_size=100", nil
 	}},
 	"POST /api/v1/device-groups": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/device-groups", map[string]string{"name": uniqueName("acme isolation")}
@@ -74,7 +74,7 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/device-groups/" + globexGroup(t, w), nil
 	}},
 	"GET /api/v1/audit-events": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
-		return "/api/v1/audit-events?limit=200", nil
+		return "/api/v1/audit-events?page_size=100", nil
 	}},
 }
 

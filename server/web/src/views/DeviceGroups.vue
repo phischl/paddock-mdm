@@ -86,7 +86,7 @@ onMounted(() => groups.load())
       </template>
     </v-data-table>
     <v-btn
-      v-if="groups.nextCursor.value"
+      v-if="groups.hasMore.value"
       variant="tonal"
       @click="groups.load(true)"
     >

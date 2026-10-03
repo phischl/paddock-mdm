@@ -11,6 +11,30 @@ import (
 	"github.com/google/uuid"
 )
 
+const countOrganizations = `-- name: CountOrganizations :one
+SELECT count(*) FROM (
+  SELECT 1 FROM organization
+  WHERE ($1::text IS NULL
+         OR slug ILIKE $1::text ESCAPE '\'
+         OR name ILIKE $1::text ESCAPE '\')
+    AND ($2::text[] IS NULL OR status = ANY($2::text[]))
+  LIMIT $3
+) matching
+`
+
+type CountOrganizationsParams struct {
+	QPattern   *string
+	Statuses   []string
+	CountLimit int32
+}
+
+func (q *Queries) CountOrganizations(ctx context.Context, arg CountOrganizationsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOrganizations, arg.QPattern, arg.Statuses, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getOrganization = `-- name: GetOrganization :one
 SELECT id, slug, name, status, created_at, updated_at FROM organization WHERE id = $1
 `
@@ -80,19 +104,42 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 }
 
 const listOrganizations = `-- name: ListOrganizations :many
+
 SELECT id, slug, name, status, created_at, updated_at FROM organization
-WHERE ($1::uuid IS NULL OR id < $1::uuid)
-ORDER BY id DESC
-LIMIT $2
+WHERE ($1::text IS NULL
+       OR slug ILIKE $1::text ESCAPE '\'
+       OR name ILIKE $1::text ESCAPE '\')
+  AND ($2::text[] IS NULL OR status = ANY($2::text[]))
+ORDER BY
+  CASE WHEN $3::text = 'slug' THEN slug END ASC,
+  CASE WHEN $3::text = '-slug' THEN slug END DESC,
+  CASE WHEN $3::text = 'name' THEN name END ASC,
+  CASE WHEN $3::text = '-name' THEN name END DESC,
+  CASE WHEN $3::text = 'created_at' THEN created_at END ASC,
+  CASE WHEN $3::text = '-created_at' THEN created_at END DESC,
+  CASE WHEN $3::text = 'status' THEN status END ASC,
+  CASE WHEN $3::text = '-status' THEN status END DESC,
+  id
+LIMIT $5 OFFSET $4
 `
 
 type ListOrganizationsParams struct {
-	Before  uuid.NullUUID
-	MaxRows int32
+	QPattern *string
+	Statuses []string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
 }
 
+// List queries (ADR 0018): see device_group.sql.
 func (q *Queries) ListOrganizations(ctx context.Context, arg ListOrganizationsParams) ([]Organization, error) {
-	rows, err := q.db.Query(ctx, listOrganizations, arg.Before, arg.MaxRows)
+	rows, err := q.db.Query(ctx, listOrganizations,
+		arg.QPattern,
+		arg.Statuses,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}

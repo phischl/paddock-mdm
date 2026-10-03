@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/auditpg/auditstore"
@@ -24,24 +25,20 @@ const (
 	MaxAuditRange     = 92 * 24 * time.Hour
 )
 
-// AuditQuery filters the audit log.
+// AuditQuery filters the audit log. Nil filter slices match everything.
 type AuditQuery struct {
-	From, To *time.Time
-	Code     *string
-	Cursor   *string
-	Limit    *int
+	From, To   *time.Time
+	Codes      []string
+	Outcomes   []string
+	ActorTypes []string
+	Page       ListPage
 }
 
-// AuditPage is one page of events.
-type AuditPage struct {
-	Items      []auditstore.AuditEvent
-	NextCursor *string
-}
-
-// List returns events ordered by occurred_at, event_id descending.
-func (l *AuditLog) List(ctx context.Context, f AuditQuery) (AuditPage, error) {
+// List returns one page of events and the capped number of matches (ADR 0018).
+func (l *AuditLog) List(ctx context.Context, f AuditQuery) (Listed[auditstore.AuditEvent], error) {
+	var out Listed[auditstore.AuditEvent]
 	if _, err := RequireOrg(ctx, RolesAudit); err != nil {
-		return AuditPage{}, err
+		return out, err
 	}
 	to := l.now()
 	if f.To != nil {
@@ -52,43 +49,28 @@ func (l *AuditLog) List(ctx context.Context, f AuditQuery) (AuditPage, error) {
 		from = *f.From
 	}
 	if !from.Before(to) {
-		return AuditPage{}, problem.InvalidRequest.WithDetail("from must be before to")
+		return out, problem.InvalidRequest.WithDetail("from must be before to")
 	}
 	if to.Sub(from) > MaxAuditRange {
-		return AuditPage{}, problem.RangeTooLarge.WithDetail("the range may span at most 92 days")
+		return out, problem.RangeTooLarge.WithDetail("the range may span at most 92 days")
 	}
-	cursor, err := DecodeCursor(f.Cursor)
-	if err != nil {
-		return AuditPage{}, err
-	}
-	n, err := PageLimit(f.Limit)
-	if err != nil {
-		return AuditPage{}, err
-	}
-	var page AuditPage
-	err = l.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
-		params := auditstore.ListAuditEventsParams{FromTime: from, ToTime: to, Code: f.Code, MaxRows: n + 1}
-		if cursor.Valid {
-			at, err := q.GetAuditEventTime(ctx, cursor.UUID)
-			if db.IsNoRows(err) {
-				return problem.InvalidRequest.WithDetail("invalid cursor")
-			}
-			if err != nil {
-				return err
-			}
-			params.CursorTime, params.CursorID = &at, cursor
-		}
-		rows, err := q.ListAuditEvents(ctx, params)
+	err := l.reader.InOrg(ctx, func(ctx context.Context, q *auditstore.Queries) error {
+		n, err := q.CountAuditEvents(ctx, auditstore.CountAuditEventsParams{
+			FromTime: from, ToTime: to, Codes: f.Codes, Outcomes: f.Outcomes, ActorTypes: f.ActorTypes,
+			QPattern: f.Page.QPattern, CountLimit: countLimit,
+		})
 		if err != nil {
-			return err
+			return fmt.Errorf("count audit events: %w", err)
 		}
-		if len(rows) > int(n) {
-			rows = rows[:n]
-			c := EncodeCursor(rows[len(rows)-1].EventID)
-			page.NextCursor = &c
+		out.Count = int(n)
+		out.Items, err = q.ListAuditEvents(ctx, auditstore.ListAuditEventsParams{
+			FromTime: from, ToTime: to, Codes: f.Codes, Outcomes: f.Outcomes, ActorTypes: f.ActorTypes,
+			QPattern: f.Page.QPattern, Sort: f.Page.Sort, SkipRows: f.Page.Offset, MaxRows: f.Page.Limit,
+		})
+		if err != nil {
+			return fmt.Errorf("list audit events: %w", err)
 		}
-		page.Items = rows
 		return nil
 	})
-	return page, err
+	return out, err
 }

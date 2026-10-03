@@ -61,11 +61,39 @@ SELECT pg_advisory_unlock(hashtext('audit-seal')) AS unlocked;
 -- name: GetAuditEventTime :one
 SELECT occurred_at FROM audit_event WHERE event_id = @event_id LIMIT 1;
 
+-- List queries (ADR 0018): one ascending and one descending ORDER BY branch per allowed sort value, event_id as
+-- tie-breaker; the count repeats the filter and stops at @count_limit rows.
+
 -- name: ListAuditEvents :many
 SELECT * FROM audit_event
 WHERE occurred_at >= @from_time AND occurred_at < @to_time
-  AND (sqlc.narg(code)::text IS NULL OR code = sqlc.narg(code)::text)
-  AND (sqlc.narg(cursor_time)::timestamptz IS NULL
-       OR (occurred_at, event_id) < (sqlc.narg(cursor_time)::timestamptz, sqlc.narg(cursor_id)::uuid))
-ORDER BY occurred_at DESC, event_id DESC
-LIMIT @max_rows;
+  AND (sqlc.narg(codes)::text[] IS NULL OR code = ANY(sqlc.narg(codes)::text[]))
+  AND (sqlc.narg(outcomes)::text[] IS NULL OR outcome = ANY(sqlc.narg(outcomes)::text[]))
+  AND (sqlc.narg(actor_types)::text[] IS NULL OR actor->>'type' = ANY(sqlc.narg(actor_types)::text[]))
+  AND (sqlc.narg(q_pattern)::text IS NULL
+       OR code ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR actor->>'display' ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR target->>'display' ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+ORDER BY
+  CASE WHEN @sort::text = 'occurred_at' THEN occurred_at END ASC,
+  CASE WHEN @sort::text = '-occurred_at' THEN occurred_at END DESC,
+  CASE WHEN @sort::text = 'code' THEN code END ASC,
+  CASE WHEN @sort::text = '-code' THEN code END DESC,
+  CASE WHEN @sort::text = 'outcome' THEN outcome END ASC,
+  CASE WHEN @sort::text = '-outcome' THEN outcome END DESC,
+  event_id
+LIMIT @max_rows OFFSET @skip_rows;
+
+-- name: CountAuditEvents :one
+SELECT count(*) FROM (
+  SELECT 1 FROM audit_event
+  WHERE occurred_at >= @from_time AND occurred_at < @to_time
+    AND (sqlc.narg(codes)::text[] IS NULL OR code = ANY(sqlc.narg(codes)::text[]))
+    AND (sqlc.narg(outcomes)::text[] IS NULL OR outcome = ANY(sqlc.narg(outcomes)::text[]))
+    AND (sqlc.narg(actor_types)::text[] IS NULL OR actor->>'type' = ANY(sqlc.narg(actor_types)::text[]))
+    AND (sqlc.narg(q_pattern)::text IS NULL
+         OR code ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR actor->>'display' ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR target->>'display' ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+  LIMIT @count_limit
+) matching;

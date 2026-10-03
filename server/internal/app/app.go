@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/base64"
 	"slices"
 
 	"github.com/google/uuid"
@@ -46,38 +45,23 @@ func RequirePlatform(ctx context.Context) (principal.Principal, error) {
 	return p, nil
 }
 
-// Page bounds (plan M0 §6.6).
-const (
-	DefaultLimit = 50
-	MaxLimit     = 200
-)
+// ListMaxRows bounds every list (ADR 0018): page × page_size may not exceed it and totals are counted up to it.
+const ListMaxRows = 10000
 
-// PageLimit validates limit (nil = default).
-func PageLimit(limit *int) (int32, error) {
-	if limit == nil {
-		return DefaultLimit, nil
-	}
-	if *limit < 1 || *limit > MaxLimit {
-		return 0, problem.InvalidRequest.WithDetail("limit must be between 1 and 200")
-	}
-	return int32(*limit), nil //nolint:gosec // bounded above
+// countLimit makes the capped count see one row more than ListMaxRows, so "more than 10 000" is detectable.
+const countLimit = ListMaxRows + 1
+
+// ListPage selects one page of a collection. The transport validates it against the endpoint's allow list
+// (package listing); the use cases pass it to the static list queries unchanged.
+type ListPage struct {
+	Sort     string  // allow-listed sort value; "-" prefix = descending
+	QPattern *string // escaped ILIKE pattern "%…%"; nil without search
+	Offset   int32
+	Limit    int32
 }
 
-// EncodeCursor turns the last ID of a page into an opaque cursor (base64url of the UUIDv7).
-func EncodeCursor(id uuid.UUID) string { return base64.RawURLEncoding.EncodeToString(id[:]) }
-
-// DecodeCursor parses a cursor; nil means "first page".
-func DecodeCursor(cursor *string) (uuid.NullUUID, error) {
-	if cursor == nil || *cursor == "" {
-		return uuid.NullUUID{}, nil
-	}
-	b, err := base64.RawURLEncoding.DecodeString(*cursor)
-	if err != nil || len(b) != 16 {
-		return uuid.NullUUID{}, problem.InvalidRequest.WithDetail("invalid cursor")
-	}
-	id, err := uuid.FromBytes(b)
-	if err != nil {
-		return uuid.NullUUID{}, problem.InvalidRequest.WithDetail("invalid cursor")
-	}
-	return uuid.NullUUID{UUID: id, Valid: true}, nil
+// Listed is one page of rows and the number of matching rows, counted up to ListMaxRows+1.
+type Listed[T any] struct {
+	Items []T
+	Count int
 }

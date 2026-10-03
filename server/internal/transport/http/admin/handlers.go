@@ -10,6 +10,7 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
+	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/listing"
 )
 
 // handlers implements the generated strict server. Errors are returned as *problem.Error and rendered by the
@@ -50,16 +51,29 @@ func toMe(me app.Me) adminapi.Me {
 	return out
 }
 
+// List definitions of the collection endpoints; TestListSpecsMatchContract keeps them equal to x-paddock-list.
+var (
+	deviceGroupList  = listing.Spec{Sort: []string{"name", "created_at", "updated_at"}, DefaultSort: "name"}
+	auditEventList   = listing.Spec{Sort: []string{"occurred_at", "code", "outcome"}, DefaultSort: "-occurred_at"}
+	organizationList = listing.Spec{Sort: []string{"slug", "name", "created_at", "status"}, DefaultSort: "slug"}
+)
+
 func (h *handlers) ListDeviceGroups(ctx context.Context, req adminapi.ListDeviceGroupsRequestObject) (adminapi.ListDeviceGroupsResponseObject, error) {
-	page, err := h.groups.List(ctx, req.Params.Cursor, req.Params.Limit)
+	params, err := listing.Parse(deviceGroupList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := adminapi.DeviceGroupPage{Items: make([]adminapi.DeviceGroup, len(page.Items)), NextCursor: page.NextCursor}
-	for i, g := range page.Items {
-		out.Items[i] = toDeviceGroup(g)
+	res, err := h.groups.List(ctx, params.ListPage())
+	if err != nil {
+		return nil, err
 	}
-	return adminapi.ListDeviceGroups200JSONResponse(out), nil
+	items := make([]adminapi.DeviceGroup, len(res.Items))
+	for i, g := range res.Items {
+		items[i] = toDeviceGroup(g)
+	}
+	return adminapi.ListDeviceGroups200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }
 
 func (h *handlers) CreateDeviceGroup(ctx context.Context, req adminapi.CreateDeviceGroupRequestObject) (adminapi.CreateDeviceGroupResponseObject, error) {
@@ -101,21 +115,34 @@ func toDeviceGroup(g pgstore.DeviceGroup) adminapi.DeviceGroup {
 }
 
 func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEventsRequestObject) (adminapi.ListAuditEventsResponseObject, error) {
-	page, err := h.audit.List(ctx, app.AuditQuery{
-		From: req.Params.From, To: req.Params.To, Code: req.Params.Code, Cursor: req.Params.Cursor, Limit: req.Params.Limit,
+	params, err := listing.Parse(auditEventList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
 	})
 	if err != nil {
 		return nil, err
 	}
-	out := adminapi.AuditEventPage{Items: make([]adminapi.AuditEvent, 0, len(page.Items)), NextCursor: page.NextCursor}
-	for _, e := range page.Items {
-		ev, err := toAuditEvent(e)
-		if err != nil {
+	outcomes, err := listing.Enum("outcome", req.Params.Outcome)
+	if err != nil {
+		return nil, err
+	}
+	actorTypes, err := listing.Enum("actor_type", req.Params.ActorType)
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.audit.List(ctx, app.AuditQuery{
+		From: req.Params.From, To: req.Params.To, Codes: listing.Strings(req.Params.Code), Outcomes: outcomes,
+		ActorTypes: actorTypes, Page: params.ListPage(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.AuditEvent, len(res.Items))
+	for i, e := range res.Items {
+		if items[i], err = toAuditEvent(e); err != nil {
 			return nil, err
 		}
-		out.Items = append(out.Items, ev)
 	}
-	return adminapi.ListAuditEvents200JSONResponse(out), nil
+	return adminapi.ListAuditEvents200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }
 
 // toAuditEvent maps an index row to the API. The writer keeps error_code inside params in the index (there is no
@@ -123,7 +150,7 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 func toAuditEvent(e auditstore.AuditEvent) (adminapi.AuditEvent, error) {
 	out := adminapi.AuditEvent{
 		EventId: e.EventID, OccurredAt: e.OccurredAt.UTC(), RecordedAt: e.RecordedAt.UTC(), Code: e.Code,
-		Outcome: adminapi.AuditEventOutcome(e.Outcome), Source: e.Source, CorrelationId: e.CorrelationID,
+		Outcome: adminapi.AuditOutcome(e.Outcome), Source: e.Source, CorrelationId: e.CorrelationID,
 		Params: map[string]any{},
 	}
 	if err := json.Unmarshal(e.Actor, &out.Actor); err != nil {
@@ -146,15 +173,25 @@ func toAuditEvent(e auditstore.AuditEvent) (adminapi.AuditEvent, error) {
 }
 
 func (h *handlers) ListOrganizations(ctx context.Context, req adminapi.ListOrganizationsRequestObject) (adminapi.ListOrganizationsResponseObject, error) {
-	page, err := h.orgs.List(ctx, req.Params.Cursor, req.Params.Limit)
+	params, err := listing.Parse(organizationList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := adminapi.OrganizationPage{Items: make([]adminapi.Organization, len(page.Items)), NextCursor: page.NextCursor}
-	for i, o := range page.Items {
-		out.Items[i] = toOrganization(o)
+	statuses, err := listing.Enum("status", req.Params.Status)
+	if err != nil {
+		return nil, err
 	}
-	return adminapi.ListOrganizations200JSONResponse(out), nil
+	res, err := h.orgs.List(ctx, params.ListPage(), statuses)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.Organization, len(res.Items))
+	for i, o := range res.Items {
+		items[i] = toOrganization(o)
+	}
+	return adminapi.ListOrganizations200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }
 
 func (h *handlers) CreateOrganization(ctx context.Context, req adminapi.CreateOrganizationRequestObject) (adminapi.CreateOrganizationResponseObject, error) {

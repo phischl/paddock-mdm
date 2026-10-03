@@ -4,7 +4,8 @@ import { api, problemCode, type DeviceGroup } from '../api/client'
 /** State and actions of the device group page. */
 export function useDeviceGroups() {
   const items = ref<DeviceGroup[]>([])
-  const nextCursor = ref<string | null>(null)
+  const page = ref(1)
+  const hasMore = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -12,7 +13,7 @@ export function useDeviceGroups() {
     loading.value = true
     error.value = null
     const { data, error: err } = await api.GET('/api/v1/device-groups', {
-      params: { query: { limit: 50, cursor: more && nextCursor.value ? nextCursor.value : undefined } },
+      params: { query: { page: more ? page.value + 1 : 1, page_size: 100 } },
     })
     loading.value = false
     if (err || !data) {
@@ -20,7 +21,8 @@ export function useDeviceGroups() {
       return
     }
     items.value = more ? [...items.value, ...data.items] : data.items
-    nextCursor.value = data.next_cursor
+    page.value = data.page
+    hasMore.value = data.page * data.page_size < data.total
   }
 
   /** Returns null on success, otherwise the problem code. */
@@ -53,5 +55,5 @@ export function useDeviceGroups() {
     return null
   }
 
-  return { items, nextCursor, loading, error, load, create, update, remove }
+  return { items, hasMore, loading, error, load, create, update, remove }
 }

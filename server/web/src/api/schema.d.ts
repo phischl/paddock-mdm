@@ -116,7 +116,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Roles: org_admin, org_auditor. Ordered by occurred_at, event_id descending. */
+        /** @description Roles: org_admin, org_auditor. */
         get: operations["listAuditEvents"];
         put?: never;
         post?: never;
@@ -224,26 +224,45 @@ export interface components {
         };
         DeviceGroupPage: {
             items: components["schemas"]["DeviceGroup"][];
-            next_cursor: string | null;
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
         };
         Organization: {
             /** Format: uuid */
             id: string;
             slug: string;
             name: string;
-            /** @enum {string} */
-            status: "provisioning" | "active" | "provisioning_failed" | "suspended";
+            status: components["schemas"]["OrganizationStatus"];
             /** Format: date-time */
             created_at: string;
         };
+        /** @enum {string} */
+        OrganizationStatus: "provisioning" | "active" | "provisioning_failed" | "suspended";
         OrganizationCreate: {
             slug: string;
             name: string;
         };
         OrganizationPage: {
             items: components["schemas"]["Organization"][];
-            next_cursor: string | null;
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
         };
+        /** @enum {string} */
+        AuditOutcome: "success" | "failure" | "denied" | "unknown";
+        /** @enum {string} */
+        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous";
         AuditActor: {
             type: string;
             id?: string;
@@ -264,8 +283,7 @@ export interface components {
             /** Format: date-time */
             recorded_at: string;
             code: string;
-            /** @enum {string} */
-            outcome: "success" | "failure" | "denied" | "unknown";
+            outcome: components["schemas"]["AuditOutcome"];
             source: string;
             actor: components["schemas"]["AuditActor"];
             target: components["schemas"]["AuditTarget"] | null;
@@ -277,7 +295,14 @@ export interface components {
         };
         AuditEventPage: {
             items: components["schemas"]["AuditEvent"][];
-            next_cursor: string | null;
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
         };
     };
     responses: {
@@ -294,9 +319,17 @@ export interface components {
     parameters: {
         Csrf: "1";
         Id: string;
-        /** @description Opaque cursor from next_cursor of the previous page. */
-        Cursor: string;
-        Limit: number;
+        /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+        Page: number;
+        PageSize: 10 | 25 | 50 | 100;
+        /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+        Search: string;
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        DeviceGroupSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
+        AuditEventSort: "occurred_at" | "-occurred_at" | "code" | "-code" | "outcome" | "-outcome";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        OrganizationSort: "slug" | "-slug" | "name" | "-name" | "created_at" | "-created_at" | "status" | "-status";
     };
     requestBodies: never;
     headers: never;
@@ -427,9 +460,13 @@ export interface operations {
     listDeviceGroups: {
         parameters: {
             query?: {
-                /** @description Opaque cursor from next_cursor of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-                limit?: components["parameters"]["Limit"];
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["DeviceGroupSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
             };
             header?: never;
             path?: never;
@@ -437,7 +474,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of device groups, newest first. */
+            /** @description One page of device groups. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -570,14 +607,23 @@ export interface operations {
     listAuditEvents: {
         parameters: {
             query?: {
-                /** @description RFC 3339; default now - 7 days. */
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
+                sort?: components["parameters"]["AuditEventSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description RFC 3339; default to - 7 days. */
                 from?: string;
-                /** @description RFC 3339; default now. The range may span at most 92 days. */
+                /** @description RFC 3339; default now. The range may span at most 92 days (400 range_too_large). */
                 to?: string;
-                code?: string;
-                /** @description Opaque cursor from next_cursor of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-                limit?: components["parameters"]["Limit"];
+                /** @description Exact event code; repeatable. */
+                code?: string[];
+                /** @description Repeatable. */
+                outcome?: components["schemas"]["AuditOutcome"][];
+                /** @description Repeatable. */
+                actor_type?: components["schemas"]["AuditActorType"][];
             };
             header?: never;
             path?: never;
@@ -602,9 +648,15 @@ export interface operations {
     listOrganizations: {
         parameters: {
             query?: {
-                /** @description Opaque cursor from next_cursor of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-                limit?: components["parameters"]["Limit"];
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["OrganizationSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["OrganizationStatus"][];
             };
             header?: never;
             path?: never;
@@ -612,7 +664,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One page of organizations, newest first. */
+            /** @description One page of organizations. */
             200: {
                 headers: {
                     [name: string]: unknown;

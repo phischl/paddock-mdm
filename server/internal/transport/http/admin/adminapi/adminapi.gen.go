@@ -24,16 +24,40 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
-// Defines values for AuditEventOutcome.
+// Defines values for AuditActorType.
 const (
-	Denied  AuditEventOutcome = "denied"
-	Failure AuditEventOutcome = "failure"
-	Success AuditEventOutcome = "success"
-	Unknown AuditEventOutcome = "unknown"
+	AuditActorTypeAdmin         AuditActorType = "admin"
+	AuditActorTypeAnonymous     AuditActorType = "anonymous"
+	AuditActorTypePlatformAdmin AuditActorType = "platform_admin"
+	AuditActorTypeSystem        AuditActorType = "system"
 )
 
-// Valid indicates whether the value is a known member of the AuditEventOutcome enum.
-func (e AuditEventOutcome) Valid() bool {
+// Valid indicates whether the value is a known member of the AuditActorType enum.
+func (e AuditActorType) Valid() bool {
+	switch e {
+	case AuditActorTypeAdmin:
+		return true
+	case AuditActorTypeAnonymous:
+		return true
+	case AuditActorTypePlatformAdmin:
+		return true
+	case AuditActorTypeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AuditOutcome.
+const (
+	Denied  AuditOutcome = "denied"
+	Failure AuditOutcome = "failure"
+	Success AuditOutcome = "success"
+	Unknown AuditOutcome = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the AuditOutcome enum.
+func (e AuditOutcome) Valid() bool {
 	switch e {
 	case Denied:
 		return true
@@ -65,22 +89,22 @@ func (e MeLocale) Valid() bool {
 
 // Defines values for MeRole.
 const (
-	OrgAdmin      MeRole = "org_admin"
-	OrgAuditor    MeRole = "org_auditor"
-	OrgOperator   MeRole = "org_operator"
-	PlatformAdmin MeRole = "platform_admin"
+	MeRoleOrgAdmin      MeRole = "org_admin"
+	MeRoleOrgAuditor    MeRole = "org_auditor"
+	MeRoleOrgOperator   MeRole = "org_operator"
+	MeRolePlatformAdmin MeRole = "platform_admin"
 )
 
 // Valid indicates whether the value is a known member of the MeRole enum.
 func (e MeRole) Valid() bool {
 	switch e {
-	case OrgAdmin:
+	case MeRoleOrgAdmin:
 		return true
-	case OrgAuditor:
+	case MeRoleOrgAuditor:
 		return true
-	case OrgOperator:
+	case MeRoleOrgOperator:
 		return true
-	case PlatformAdmin:
+	case MeRolePlatformAdmin:
 		return true
 	default:
 		return false
@@ -126,6 +150,36 @@ func (e OrganizationStatus) Valid() bool {
 	}
 }
 
+// Defines values for AuditEventSort.
+const (
+	AuditEventSortCode            AuditEventSort = "code"
+	AuditEventSortMinusCode       AuditEventSort = "-code"
+	AuditEventSortMinusOccurredAt AuditEventSort = "-occurred_at"
+	AuditEventSortMinusOutcome    AuditEventSort = "-outcome"
+	AuditEventSortOccurredAt      AuditEventSort = "occurred_at"
+	AuditEventSortOutcome         AuditEventSort = "outcome"
+)
+
+// Valid indicates whether the value is a known member of the AuditEventSort enum.
+func (e AuditEventSort) Valid() bool {
+	switch e {
+	case AuditEventSortCode:
+		return true
+	case AuditEventSortMinusCode:
+		return true
+	case AuditEventSortMinusOccurredAt:
+		return true
+	case AuditEventSortMinusOutcome:
+		return true
+	case AuditEventSortOccurredAt:
+		return true
+	case AuditEventSortOutcome:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Csrf.
 const (
 	CsrfN1 Csrf = "1"
@@ -141,6 +195,156 @@ func (e Csrf) Valid() bool {
 	}
 }
 
+// Defines values for DeviceGroupSort.
+const (
+	DeviceGroupSortCreatedAt      DeviceGroupSort = "created_at"
+	DeviceGroupSortMinusCreatedAt DeviceGroupSort = "-created_at"
+	DeviceGroupSortMinusName      DeviceGroupSort = "-name"
+	DeviceGroupSortMinusUpdatedAt DeviceGroupSort = "-updated_at"
+	DeviceGroupSortName           DeviceGroupSort = "name"
+	DeviceGroupSortUpdatedAt      DeviceGroupSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the DeviceGroupSort enum.
+func (e DeviceGroupSort) Valid() bool {
+	switch e {
+	case DeviceGroupSortCreatedAt:
+		return true
+	case DeviceGroupSortMinusCreatedAt:
+		return true
+	case DeviceGroupSortMinusName:
+		return true
+	case DeviceGroupSortMinusUpdatedAt:
+		return true
+	case DeviceGroupSortName:
+		return true
+	case DeviceGroupSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OrganizationSort.
+const (
+	OrganizationSortCreatedAt      OrganizationSort = "created_at"
+	OrganizationSortMinusCreatedAt OrganizationSort = "-created_at"
+	OrganizationSortMinusName      OrganizationSort = "-name"
+	OrganizationSortMinusSlug      OrganizationSort = "-slug"
+	OrganizationSortMinusStatus    OrganizationSort = "-status"
+	OrganizationSortName           OrganizationSort = "name"
+	OrganizationSortSlug           OrganizationSort = "slug"
+	OrganizationSortStatus         OrganizationSort = "status"
+)
+
+// Valid indicates whether the value is a known member of the OrganizationSort enum.
+func (e OrganizationSort) Valid() bool {
+	switch e {
+	case OrganizationSortCreatedAt:
+		return true
+	case OrganizationSortMinusCreatedAt:
+		return true
+	case OrganizationSortMinusName:
+		return true
+	case OrganizationSortMinusSlug:
+		return true
+	case OrganizationSortMinusStatus:
+		return true
+	case OrganizationSortName:
+		return true
+	case OrganizationSortSlug:
+		return true
+	case OrganizationSortStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PageSize.
+const (
+	PageSizeN10  PageSize = 10
+	PageSizeN100 PageSize = 100
+	PageSizeN25  PageSize = 25
+	PageSizeN50  PageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the PageSize enum.
+func (e PageSize) Valid() bool {
+	switch e {
+	case PageSizeN10:
+		return true
+	case PageSizeN100:
+		return true
+	case PageSizeN25:
+		return true
+	case PageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListOrganizationsParamsPageSize.
+const (
+	ListOrganizationsParamsPageSizeN10  ListOrganizationsParamsPageSize = 10
+	ListOrganizationsParamsPageSizeN100 ListOrganizationsParamsPageSize = 100
+	ListOrganizationsParamsPageSizeN25  ListOrganizationsParamsPageSize = 25
+	ListOrganizationsParamsPageSizeN50  ListOrganizationsParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListOrganizationsParamsPageSize enum.
+func (e ListOrganizationsParamsPageSize) Valid() bool {
+	switch e {
+	case ListOrganizationsParamsPageSizeN10:
+		return true
+	case ListOrganizationsParamsPageSizeN100:
+		return true
+	case ListOrganizationsParamsPageSizeN25:
+		return true
+	case ListOrganizationsParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListOrganizationsParamsSort.
+const (
+	ListOrganizationsParamsSortCreatedAt      ListOrganizationsParamsSort = "created_at"
+	ListOrganizationsParamsSortMinusCreatedAt ListOrganizationsParamsSort = "-created_at"
+	ListOrganizationsParamsSortMinusName      ListOrganizationsParamsSort = "-name"
+	ListOrganizationsParamsSortMinusSlug      ListOrganizationsParamsSort = "-slug"
+	ListOrganizationsParamsSortMinusStatus    ListOrganizationsParamsSort = "-status"
+	ListOrganizationsParamsSortName           ListOrganizationsParamsSort = "name"
+	ListOrganizationsParamsSortSlug           ListOrganizationsParamsSort = "slug"
+	ListOrganizationsParamsSortStatus         ListOrganizationsParamsSort = "status"
+)
+
+// Valid indicates whether the value is a known member of the ListOrganizationsParamsSort enum.
+func (e ListOrganizationsParamsSort) Valid() bool {
+	switch e {
+	case ListOrganizationsParamsSortCreatedAt:
+		return true
+	case ListOrganizationsParamsSortMinusCreatedAt:
+		return true
+	case ListOrganizationsParamsSortMinusName:
+		return true
+	case ListOrganizationsParamsSortMinusSlug:
+		return true
+	case ListOrganizationsParamsSortMinusStatus:
+		return true
+	case ListOrganizationsParamsSortName:
+		return true
+	case ListOrganizationsParamsSortSlug:
+		return true
+	case ListOrganizationsParamsSortStatus:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateOrganizationParamsXPaddockCSRF.
 const (
 	CreateOrganizationParamsXPaddockCSRFN1 CreateOrganizationParamsXPaddockCSRF = "1"
@@ -150,6 +354,114 @@ const (
 func (e CreateOrganizationParamsXPaddockCSRF) Valid() bool {
 	switch e {
 	case CreateOrganizationParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAuditEventsParamsPageSize.
+const (
+	ListAuditEventsParamsPageSizeN10  ListAuditEventsParamsPageSize = 10
+	ListAuditEventsParamsPageSizeN100 ListAuditEventsParamsPageSize = 100
+	ListAuditEventsParamsPageSizeN25  ListAuditEventsParamsPageSize = 25
+	ListAuditEventsParamsPageSizeN50  ListAuditEventsParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListAuditEventsParamsPageSize enum.
+func (e ListAuditEventsParamsPageSize) Valid() bool {
+	switch e {
+	case ListAuditEventsParamsPageSizeN10:
+		return true
+	case ListAuditEventsParamsPageSizeN100:
+		return true
+	case ListAuditEventsParamsPageSizeN25:
+		return true
+	case ListAuditEventsParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAuditEventsParamsSort.
+const (
+	ListAuditEventsParamsSortCode            ListAuditEventsParamsSort = "code"
+	ListAuditEventsParamsSortMinusCode       ListAuditEventsParamsSort = "-code"
+	ListAuditEventsParamsSortMinusOccurredAt ListAuditEventsParamsSort = "-occurred_at"
+	ListAuditEventsParamsSortMinusOutcome    ListAuditEventsParamsSort = "-outcome"
+	ListAuditEventsParamsSortOccurredAt      ListAuditEventsParamsSort = "occurred_at"
+	ListAuditEventsParamsSortOutcome         ListAuditEventsParamsSort = "outcome"
+)
+
+// Valid indicates whether the value is a known member of the ListAuditEventsParamsSort enum.
+func (e ListAuditEventsParamsSort) Valid() bool {
+	switch e {
+	case ListAuditEventsParamsSortCode:
+		return true
+	case ListAuditEventsParamsSortMinusCode:
+		return true
+	case ListAuditEventsParamsSortMinusOccurredAt:
+		return true
+	case ListAuditEventsParamsSortMinusOutcome:
+		return true
+	case ListAuditEventsParamsSortOccurredAt:
+		return true
+	case ListAuditEventsParamsSortOutcome:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDeviceGroupsParamsPageSize.
+const (
+	ListDeviceGroupsParamsPageSizeN10  ListDeviceGroupsParamsPageSize = 10
+	ListDeviceGroupsParamsPageSizeN100 ListDeviceGroupsParamsPageSize = 100
+	ListDeviceGroupsParamsPageSizeN25  ListDeviceGroupsParamsPageSize = 25
+	ListDeviceGroupsParamsPageSizeN50  ListDeviceGroupsParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceGroupsParamsPageSize enum.
+func (e ListDeviceGroupsParamsPageSize) Valid() bool {
+	switch e {
+	case ListDeviceGroupsParamsPageSizeN10:
+		return true
+	case ListDeviceGroupsParamsPageSizeN100:
+		return true
+	case ListDeviceGroupsParamsPageSizeN25:
+		return true
+	case ListDeviceGroupsParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDeviceGroupsParamsSort.
+const (
+	ListDeviceGroupsParamsSortCreatedAt      ListDeviceGroupsParamsSort = "created_at"
+	ListDeviceGroupsParamsSortMinusCreatedAt ListDeviceGroupsParamsSort = "-created_at"
+	ListDeviceGroupsParamsSortMinusName      ListDeviceGroupsParamsSort = "-name"
+	ListDeviceGroupsParamsSortMinusUpdatedAt ListDeviceGroupsParamsSort = "-updated_at"
+	ListDeviceGroupsParamsSortName           ListDeviceGroupsParamsSort = "name"
+	ListDeviceGroupsParamsSortUpdatedAt      ListDeviceGroupsParamsSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceGroupsParamsSort enum.
+func (e ListDeviceGroupsParamsSort) Valid() bool {
+	switch e {
+	case ListDeviceGroupsParamsSortCreatedAt:
+		return true
+	case ListDeviceGroupsParamsSortMinusCreatedAt:
+		return true
+	case ListDeviceGroupsParamsSortMinusName:
+		return true
+	case ListDeviceGroupsParamsSortMinusUpdatedAt:
+		return true
+	case ListDeviceGroupsParamsSortName:
+		return true
+	case ListDeviceGroupsParamsSortUpdatedAt:
 		return true
 	default:
 		return false
@@ -225,6 +537,9 @@ type AuditActor struct {
 	Type    string  `json:"type"`
 }
 
+// AuditActorType defines model for AuditActorType.
+type AuditActorType string
+
 // AuditEvent defines model for AuditEvent.
 type AuditEvent struct {
 	Actor         AuditActor             `json:"actor"`
@@ -233,21 +548,31 @@ type AuditEvent struct {
 	ErrorCode     *string                `json:"error_code,omitempty"`
 	EventId       openapi_types.UUID     `json:"event_id"`
 	OccurredAt    time.Time              `json:"occurred_at"`
-	Outcome       AuditEventOutcome      `json:"outcome"`
+	Outcome       AuditOutcome           `json:"outcome"`
 	Params        map[string]interface{} `json:"params"`
 	RecordedAt    time.Time              `json:"recorded_at"`
 	Source        string                 `json:"source"`
 	Target        *AuditTarget           `json:"target"`
 }
 
-// AuditEventOutcome defines model for AuditEvent.Outcome.
-type AuditEventOutcome string
-
 // AuditEventPage defines model for AuditEventPage.
 type AuditEventPage struct {
-	Items      []AuditEvent `json:"items"`
-	NextCursor *string      `json:"next_cursor"`
+	Items    []AuditEvent `json:"items"`
+	Page     int          `json:"page"`
+	PageSize int          `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
 }
+
+// AuditOutcome defines model for AuditOutcome.
+type AuditOutcome string
 
 // AuditTarget defines model for AuditTarget.
 type AuditTarget struct {
@@ -273,8 +598,18 @@ type DeviceGroupCreate struct {
 
 // DeviceGroupPage defines model for DeviceGroupPage.
 type DeviceGroupPage struct {
-	Items      []DeviceGroup `json:"items"`
-	NextCursor *string       `json:"next_cursor"`
+	Items    []DeviceGroup `json:"items"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
 }
 
 // DeviceGroupUpdate defines model for DeviceGroupUpdate.
@@ -323,9 +658,6 @@ type Organization struct {
 	Status    OrganizationStatus `json:"status"`
 }
 
-// OrganizationStatus defines model for Organization.Status.
-type OrganizationStatus string
-
 // OrganizationCreate defines model for OrganizationCreate.
 type OrganizationCreate struct {
 	Name string `json:"name"`
@@ -334,9 +666,22 @@ type OrganizationCreate struct {
 
 // OrganizationPage defines model for OrganizationPage.
 type OrganizationPage struct {
-	Items      []Organization `json:"items"`
-	NextCursor *string        `json:"next_cursor"`
+	Items    []Organization `json:"items"`
+	Page     int            `json:"page"`
+	PageSize int            `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
 }
+
+// OrganizationStatus defines model for OrganizationStatus.
+type OrganizationStatus string
 
 // Problem defines model for Problem.
 type Problem struct {
@@ -352,24 +697,51 @@ type Problem struct {
 	Type string `json:"type"`
 }
 
+// AuditEventSort defines model for AuditEventSort.
+type AuditEventSort string
+
 // Csrf defines model for Csrf.
 type Csrf string
 
-// Cursor defines model for Cursor.
-type Cursor = string
+// DeviceGroupSort defines model for DeviceGroupSort.
+type DeviceGroupSort string
 
 // Id defines model for Id.
 type Id = openapi_types.UUID
 
-// Limit defines model for Limit.
-type Limit = int
+// OrganizationSort defines model for OrganizationSort.
+type OrganizationSort string
+
+// Page defines model for Page.
+type Page = int
+
+// PageSize defines model for PageSize.
+type PageSize int
+
+// Search defines model for Search.
+type Search = string
 
 // ListOrganizationsParams defines parameters for ListOrganizations.
 type ListOrganizationsParams struct {
-	// Cursor Opaque cursor from next_cursor of the previous page.
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                            `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListOrganizationsParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListOrganizationsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// Status Repeatable.
+	Status *[]OrganizationStatus `form:"status,omitempty" json:"status,omitempty"`
 }
+
+// ListOrganizationsParamsPageSize defines parameters for ListOrganizations.
+type ListOrganizationsParamsPageSize int
+
+// ListOrganizationsParamsSort defines parameters for ListOrganizations.
+type ListOrganizationsParamsSort string
 
 // CreateOrganizationParams defines parameters for CreateOrganization.
 type CreateOrganizationParams struct {
@@ -381,24 +753,56 @@ type CreateOrganizationParamsXPaddockCSRF string
 
 // ListAuditEventsParams defines parameters for ListAuditEvents.
 type ListAuditEventsParams struct {
-	// From RFC 3339; default now - 7 days.
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                          `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListAuditEventsParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The event_id is the tie-breaker.
+	Sort *ListAuditEventsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// From RFC 3339; default to - 7 days.
 	From *time.Time `form:"from,omitempty" json:"from,omitempty"`
 
-	// To RFC 3339; default now. The range may span at most 92 days.
-	To   *time.Time `form:"to,omitempty" json:"to,omitempty"`
-	Code *string    `form:"code,omitempty" json:"code,omitempty"`
+	// To RFC 3339; default now. The range may span at most 92 days (400 range_too_large).
+	To *time.Time `form:"to,omitempty" json:"to,omitempty"`
 
-	// Cursor Opaque cursor from next_cursor of the previous page.
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+	// Code Exact event code; repeatable.
+	Code *[]string `form:"code,omitempty" json:"code,omitempty"`
+
+	// Outcome Repeatable.
+	Outcome *[]AuditOutcome `form:"outcome,omitempty" json:"outcome,omitempty"`
+
+	// ActorType Repeatable.
+	ActorType *[]AuditActorType `form:"actor_type,omitempty" json:"actor_type,omitempty"`
 }
+
+// ListAuditEventsParamsPageSize defines parameters for ListAuditEvents.
+type ListAuditEventsParamsPageSize int
+
+// ListAuditEventsParamsSort defines parameters for ListAuditEvents.
+type ListAuditEventsParamsSort string
 
 // ListDeviceGroupsParams defines parameters for ListDeviceGroups.
 type ListDeviceGroupsParams struct {
-	// Cursor Opaque cursor from next_cursor of the previous page.
-	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                           `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListDeviceGroupsParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListDeviceGroupsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
 }
+
+// ListDeviceGroupsParamsPageSize defines parameters for ListDeviceGroups.
+type ListDeviceGroupsParamsPageSize int
+
+// ListDeviceGroupsParamsSort defines parameters for ListDeviceGroups.
+type ListDeviceGroupsParamsSort string
 
 // CreateDeviceGroupParams defines parameters for CreateDeviceGroup.
 type CreateDeviceGroupParams struct {
@@ -499,28 +903,67 @@ func (siw *ServerInterfaceWrapper) ListOrganizations(w http.ResponseWriter, r *h
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ListOrganizationsParams
 
-	// ------------- Optional query parameter "cursor" -------------
+	// ------------- Optional query parameter "page" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
 	if err != nil {
 		var requiredError *runtime.RequiredParameterError
 		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
 		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
 		}
 		return
 	}
 
-	// ------------- Optional query parameter "limit" -------------
+	// ------------- Optional query parameter "page_size" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
 	if err != nil {
 		var requiredError *runtime.RequiredParameterError
 		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
 		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
 		}
 		return
 	}
@@ -616,6 +1059,58 @@ func (siw *ServerInterfaceWrapper) ListAuditEvents(w http.ResponseWriter, r *htt
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ListAuditEventsParams
 
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
 	// ------------- Optional query parameter "from" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", r.URL.Query(), &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
@@ -644,7 +1139,7 @@ func (siw *ServerInterfaceWrapper) ListAuditEvents(w http.ResponseWriter, r *htt
 
 	// ------------- Optional query parameter "code" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "code", r.URL.Query(), &params.Code, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "code", r.URL.Query(), &params.Code, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
 	if err != nil {
 		var requiredError *runtime.RequiredParameterError
 		if errors.As(err, &requiredError) {
@@ -655,28 +1150,28 @@ func (siw *ServerInterfaceWrapper) ListAuditEvents(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// ------------- Optional query parameter "cursor" -------------
+	// ------------- Optional query parameter "outcome" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "outcome", r.URL.Query(), &params.Outcome, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
 	if err != nil {
 		var requiredError *runtime.RequiredParameterError
 		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "outcome"})
 		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "outcome", Err: err})
 		}
 		return
 	}
 
-	// ------------- Optional query parameter "limit" -------------
+	// ------------- Optional query parameter "actor_type" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "actor_type", r.URL.Query(), &params.ActorType, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
 	if err != nil {
 		var requiredError *runtime.RequiredParameterError
 		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "actor_type"})
 		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "actor_type", Err: err})
 		}
 		return
 	}
@@ -701,28 +1196,54 @@ func (siw *ServerInterfaceWrapper) ListDeviceGroups(w http.ResponseWriter, r *ht
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ListDeviceGroupsParams
 
-	// ------------- Optional query parameter "cursor" -------------
+	// ------------- Optional query parameter "page" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
 	if err != nil {
 		var requiredError *runtime.RequiredParameterError
 		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
 		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
 		}
 		return
 	}
 
-	// ------------- Optional query parameter "limit" -------------
+	// ------------- Optional query parameter "page_size" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
 	if err != nil {
 		var requiredError *runtime.RequiredParameterError
 		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
 		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
 		}
 		return
 	}
@@ -2351,46 +2872,60 @@ func (sh *strictHandler) UpdateMe(w http.ResponseWriter, r *http.Request, params
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"7FvvbtvIEX+VAXtAbZSSKdu5uyi4D2mSC4Ke4SBJ0QKxK67JkbRnapfZXSpRDAF9h37oI/Q92jfpkxSz",
+	"S1JLirKkxMm5h/tkcbncnZ2d+c1f3wSJnOVSoDA6GN4EOVNshgaVfXpcpNw8m6Mwr6UyNJKiThTPDZci",
+	"GAY0CmOOWfoILoLeRQC5wjH/AFoqo4Emo0i5mPThzRQBaaURT4FrMFMEw7F3pZBdo+oHYcBpyXcFqkUQ",
+	"BoLNMBgGtFAQBjqZ4ow5AsasyEwwDHoySQqlMB0xmoKimAXDt0FztDUpkSnSaPlXFiaRMztS/bwMA7PI",
+	"7dZGcTEJlssweKLVmDa3FE6RpahWJP6195KlqUyue09ev/oxCAOF7wquMA2GRhXoE1/ROOje5inOeYLP",
+	"lSzyO+H3XXHazlhxuHzslX8ThczU/G48FXnqvfKeOo//Iq15nDMzXZHG01u5OpZqxojOorAz11c+VxMm",
+	"+EdGbLxXnNVZMfE4Wz72yr+7M1obZgptP3W/Ohn8kk1w/eg0CqKYXaHqQ04P//mn/TvS/CPCjC1ASAP4",
+	"IUFMYRBFUQQHp1Hk5sjCjOR4pJiY4OEmDtDMbg4MwmDGBZ/R+Qc1zVwYnKCqiX7NP2ItGx1rW0q7Nzh+",
+	"ULN3EIXHD8IHUTiIosvOvV4jU8l0nUVPmMYeFxqF5obPEXRx5fgK2n4Cco7KyoOVIQ0Z1wZT4AI+9PIS",
+	"Hmis7+ZvYtS7xiFm7MNPKCZmGgwHUWQ5VT0fr9/vknRE51JotOD9UsmrDGf0M5HCoLBiz/I844nVhKPc",
+	"zfjDz5pOeePt/I3CcTAMfne0sg5H7q0+qta1Ozb59OrHJ/Dw9MF3UK4MKRrGM9233C0XqA3L48RIZY2O",
+	"kjkqwx3dKdd5xhb0s3XEkJCgczjvHNYG81Hhv7uSMkMm6KUbuelQkxXSvHVvVyutxEZe/YyJoYVWZ3lT",
+	"LlmpM0tnXARhkGfMEEiNqgG90AZnQRgwIcViJjsVNvTM7zqXWMW8267KY/OyNH5dfEqkUphZmRht4DAq",
+	"JdVo4wqVZd8BjsOGhfbnk3XoGW6xbv2j0j7vcuLzcu4ydP6MY1iacjohy156jHS2ZO1OFSZSpXuSqGWh",
+	"km7+GKYm6PQvy87HwfDtDsd44z5aXoaBKLKMXWXoCG4Lac39sOX9+MeonZ+V01MSHJbCVJNZs21NNDbK",
+	"v5XSyr40JZUbnDV/bD25k/laSQOmFFu465z4DK6xO/TMQOdr3Wn1HxMYYmqNfL/rSo00LFv/7oyZZEro",
+	"b48UQiILQXBf5GCkM5Hech4Zdr1RwvIc045lpUIwUyZKK2tXhxlt9gjsp+R1tJevMa0lFY7dYWV8fTvp",
+	"jtUip2TSxis+X2lg7a8USYKaNhkznhWK1k5RcLtaIa6FfC82I9ubWik+2wDsBeYb5Njzvtdp8rytnfGg",
+	"cbkbz7IVLp1r0PG950/vSFNbQtKVk+kT23I1O/32Tr49sZ9tRtsxyzSG7etusqnp9ES3MOQW92iw7eh2",
+	"jS2nuQs484XqNzy7L3jm3cqfrXDfV5Fdo/wMN+LlaCNQ7Ag0mUxY1sB37EZv6YXTu/s0Z+iH4V1uTRgo",
+	"2SRAqkntNNNvOjZzvop9RWbEPrVc7C6qC41qA4u6cLGeHjYZXBLZ4kLNvcvOSztvcawFKZ9pCGy6YLdT",
+	"+ZmFblI/SSF2FJ0WRbew7HaGfYo1/kJMrnMvWwxBIwXlvth6QV5exzvxNnZ9khHuAKjjrQC1YkrOjEFF",
+	"mP+3t6z3Meo9vCz/9i5vBuFJtKyGv9nqlWwTUf+sd2Gim6j0m42+Jza6Q2E8eMmVnHPNpSCm2QCWz+2O",
+	"3viIghK3SaFzFCmmnYbBS5S1YGZTusOltbptrdCGiaQjz/oK3xWoDbx42pk8qI/YcYPcZHhr3NPcqVBi",
+	"WCYdh2UmbnhRRNFJQieyv7YHB2Ww5Pb2kchlEepzrt8dnQaTQnGzeE065pipUesSzG3mM5HymqOfx7UE",
+	"j6p5K0XM+Z9w4dKNXIxlh0qRzYfHL1+AHNskbFmQgVwqEuCDPGMCziL497++7X972IfXNvFhZ6vCTGEs",
+	"XfJ2goL8C0zhuQSNao4K6B7UmCWogYmUpl0It+7vNbxZ5PjaUgJEre7DXxQ3BgVwYVc8z1EQYSf9qH9i",
+	"08Zo4AoTVmgEyXJuS1ETFJBK1DbRnitJQTWc9Af9C3EhevA4y8Am4DQwhbApywoH8absbnwI77mZQky7",
+	"xfYgcXWDMRyoWjQP+7ThWWGYIawpX2goJcOeyRXAIG4WvoYwiOFAmimq91wjnEYnECdajUczrjUXk9it",
+	"/WaK4LtOBC8CidM5U4buhEHOzHQI3EAiZ6hhrOTM7lzKBkiRLfrwCl0CS9NHduPGwvpCADCh36OC0+gU",
+	"YiHNaCwLkcYh4AeWmGwBGb9GKAkEVS1oCT23viYtRPhoLOtzxec8wwmmQJBD7xKm1ALiVZrfOqVDaCtc",
+	"/AiQJVMgSznL7TWnBRFfkSIFWorpc1cqdXdmN6d1LFXP5qgWkMgsQ0sAxM+fvYmBz/IMZ2TXLKMyrukb",
+	"YRRLDBw8fvoKomjw/eEQYsLkOHR/LTbHcDCIQjh+EMKDKCSoPwyJkJigOYYDlmXyvV0xhLgXV4WxH7yi",
+	"WGg3zRWfMbWAa1zQpRLCE+YC036V7DCE+F1MGxwk28oqIRz/9+//GEQRJFNGR0GlDys1hFQmBR0ZUxjz",
+	"jN49ArIP1RPdGO2jMEdmKM5wxbuqSkJExjelOSV2hKuyV+hsX/mnNFehNdrLuO+416iTxVWhjHZcr5XF",
+	"a8Wy+PARxHb1mAjpMOchsCs5RycAbir84F5ZFbaX5NMHPxCeYVxW2z8YYiyJSLMGFdec0/ZAZc0qhLJo",
+	"ZgfDqrJVFrTK/SrWyrGTZlvTuhC1oRgGFfbWoByEwRyVw/4g6g/6kY0hcxQs58EwsNBonQUztZbiiOX8",
+	"iBVmepSwLLtiyXUwvFmG3ngmJ2RD1gZlYbzRKiY8mg+OGsBAm5SZx5aJlhnqITSDSXJ7ZIUFL9JgGPzE",
+	"tTlvLBg2Gic2BMKrKUfWb12GO82zxc8d5q4VuXf4pix40sy2s1LrTBAG+CHPrC/kyiWdRe7KP1gVEff2",
+	"vqu4aN0H12ZhhYtuxWYOGpXO4yi6pcq5X3VzLbroKHOeC3SFcrI7vhz0idZTR03XJjXVqyIqzR/sOf9k",
+	"j/m2+DTR1mcuxZpctiYieBXzkYtaqiis1Hcbl9WdBbosk6/Fau7bt60gtqtT4ZIIy6XeWQnBhbXOvDX8",
+	"BzIH3Gh4XJgpCsOvYaJkkWtyEEiIyZwYC/vOySFnj4kL0XRCBDjKoCOCqOwwgmYzBDodKOzVMzW5KgfH",
+	"UXTooLCJFo7w82a2aD+4sP1HTuztGf4o08UXkfgyd7BsBgNVcu5r6FxnW4HHa0ytkh07pfkq2zumpASE",
+	"zvW1DPhJJnV2arXPWlPGvQMEmv9wr/kPouO7BBzr4FK46LG9X2KE/fx24310w9Pl51rw52haCvmLCXc7",
+	"HrqHNoTmn36uCCz3Bb0XabC8rMRhPjiyctOzgdFWD66uG4Tg1Qm6PblVx8H98ONaTbef5cX9+AROTk4e",
+	"PqpdeyOhB99ByhZ6Uw8aRdtBZ3/lrZXl7XsL+b4MwCj+sfGSzpkAZmAmtYGHx5YuFzDZOSMj5Shj6pbW",
+	"QiPvgNZnFIKXMTdF2o/8mHE3/7dMi3V4vxuSdpuc2893xb0Gn/188Xbz1Jcm1LYdjaoWu0+gddV194vG",
+	"DK0OqC0Rg5fguecBg7PUu0QLrTZ7L2oo0cSq6VoDmicAjbCinGhf96t2oKo9rR7wAo7OLv+6pX+59MxI",
+	"amv/PRcj7GlHqvLzDlbFazG4H2al/c8Fe9iVL6k77X6bLcrjbq+K8O619jQFbRctKuPllfY0lKKjUcvT",
+	"gK5Y22/c2hpvbxD1/oZ41m9sulfh7Ho72k7R7OBLEPBbNPlp+lGFiG7KyE5ZDxHbYF5HhilmaHC7pK/L",
+	"9lP75R3JdkO+TtfJcZulv66Ab99bdXeV0p53b4ifo2ne5dcwY5uCfN90/arv/NMifVsA6vrnq33tk2tg",
+	"+3+wT2Wr3VfOtm4RVUfUrwGVvqJtKj2thm1yDXUlqK3h0hl+STg6w00opPlEYNrjAqwycW1KNdr7+jx2",
+	"2SDLU+AuhTzD+6WHdafrV1a/7qspta7zUu5pfFNH1lWzl73Sus3r7eXShi9qXt12obJgGEyNyfXw6Mh5",
+	"YKVW9W0r8FRqM/z+9PTEXnq5z02dLSqMy3GWzzP0n5oa671w+uoN1Cnp5eXyfwEAAP//",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
