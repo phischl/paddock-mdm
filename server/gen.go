@@ -2,3 +2,4 @@
 package server
 
 //go:generate go tool sqlc generate
+//go:generate go run ./internal/domain/audit/gendoc ../docs/compliance/audit-codes.md

@@ -80,13 +80,33 @@ func runOne(ctx context.Context, args []string) int {
 		err = runMigrate(ctx, l, args[1:])
 	case "healthcheck":
 		err = runHealthcheck(ctx, common)
-	case "serve", "provision":
-		fmt.Fprintf(os.Stderr, "paddock-server %s: not implemented\n", strings.Join(args, " "))
-		return 1
+	case "serve":
+		err = runServe(ctx, l, common, args[1:])
+	case "provision":
+		if len(args) != 2 || args[1] != "rabbitmq" {
+			err = errUsage
+			break
+		}
+		err = provisionRabbitMQ(ctx, l)
 	default:
 		err = errUsage
 	}
 	return exitCode(err)
+}
+
+func runServe(ctx context.Context, l *config.Loader, common config.Common, args []string) error {
+	if len(args) != 1 {
+		return errUsage
+	}
+	switch args[0] {
+	case "outbox-relay":
+		return serveOutboxRelay(ctx, l, common)
+	case "api", "audit-writer":
+		fmt.Fprintf(os.Stderr, "paddock-server serve %s: not implemented\n", args[0])
+		return errors.New("not implemented")
+	default:
+		return errUsage
+	}
 }
 
 func exitCode(err error) int {
