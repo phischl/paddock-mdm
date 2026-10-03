@@ -4,6 +4,13 @@ import { login } from './auth'
 
 /** Fails on serious or critical axe violations. */
 async function expectAccessible(page: Page): Promise<void> {
+  // Check the settled page: transitions (dialogs fading in) start a frame after the triggering click, so wait for
+  // two frames, then for every finite animation; endless ones (loaders) never finish.
+  await page.evaluate(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const finite = document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+    await Promise.all(finite.map((a) => a.finished.catch(() => undefined)))
+  })
   const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()
   const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
   expect(blocking.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([])
@@ -95,7 +102,12 @@ test('platform admin sees the organizations page', async ({ page }) => {
 })
 
 test('login denied page is accessible', async ({ page }) => {
-  await page.goto('/login-denied?reason=not_authorized')
+  const csp = watchCSP(page)
+  const res = await page.goto('/login-denied?reason=not_authorized')
+  const policy = res?.headers()['content-security-policy'] ?? ''
+  expect(policy).toMatch(/style-src 'self' 'nonce-[A-Za-z0-9+/]+={0,2}'/)
+  expect(policy).not.toContain('unsafe-inline')
   await expect(page.getByTestId('login-denied-message')).toContainText('not authorized')
   await expectAccessible(page)
+  expect(csp).toEqual([])
 })

@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import Button from 'primevue/button'
 import { useSessionStore } from './stores/session'
 
 const { t } = useI18n()
@@ -13,52 +12,61 @@ const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : '
 </script>
 
 <template>
-  <a
-    class="skip-link"
-    href="#main"
-  >{{ t('app.skipToContent') }}</a>
-  <header
-    v-if="showChrome"
-    class="app-header"
-  >
-    <span class="brand">{{ t('app.name') }}</span>
-    <nav
-      class="main-nav"
-      :aria-label="t('app.mainNavigation')"
+  <v-app>
+    <a
+      class="skip-link"
+      href="#main"
+    >{{ t('app.skipToContent') }}</a>
+    <v-app-bar
+      v-if="showChrome"
+      color="primary"
+      flat
     >
-      <RouterLink
-        v-if="session.canReadGroups"
-        to="/device-groups"
+      <v-app-bar-title class="brand">
+        {{ t('app.name') }}
+      </v-app-bar-title>
+      <nav
+        class="main-nav"
+        :aria-label="t('app.mainNavigation')"
       >
-        {{ t('nav.deviceGroups') }}
-      </RouterLink>
-      <RouterLink
-        v-if="session.canReadAudit"
-        to="/audit"
-      >
-        {{ t('nav.audit') }}
-      </RouterLink>
-      <RouterLink
-        v-if="session.isPlatform"
-        to="/platform/organizations"
-      >
-        {{ t('nav.organizations') }}
-      </RouterLink>
-    </nav>
-    <div class="user">
-      <span data-testid="user-name">{{ t('app.signedInAs', { name: session.me?.display_name ?? '' }) }}</span>
-      <span
-        class="role"
-        data-testid="user-role"
-      >{{ roleLabel }}</span>
-      <Button
-        :label="t('app.logout')"
-        severity="secondary"
-        @click="session.logout()"
-      />
-    </div>
-  </header>
-  <main id="main">
-    <RouterView />
-  </main>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/device-groups"
+          variant="text"
+        >
+          {{ t('nav.deviceGroups') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadAudit"
+          to="/audit"
+          variant="text"
+        >
+          {{ t('nav.audit') }}
+        </v-btn>
+        <v-btn
+          v-if="session.isPlatform"
+          to="/platform/organizations"
+          variant="text"
+        >
+          {{ t('nav.organizations') }}
+        </v-btn>
+      </nav>
+      <div class="user">
+        <span data-testid="user-name">{{ t('app.signedInAs', { name: session.me?.display_name ?? '' }) }}</span>
+        <span
+          class="role"
+          data-testid="user-role"
+        >{{ roleLabel }}</span>
+        <v-btn
+          color="surface"
+          @click="session.logout()"
+        >
+          {{ t('app.logout') }}
+        </v-btn>
+      </div>
+    </v-app-bar>
+    <v-main id="main">
+      <RouterView />
+    </v-main>
+  </v-app>
 </template>

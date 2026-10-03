@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import Button from 'primevue/button'
-import InputText from 'primevue/inputtext'
-import Select from 'primevue/select'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
 import { auditCodes, useAuditLog } from '../lib/audit'
 import { auditText, formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
@@ -15,8 +10,14 @@ const problemText = useProblemText()
 const log = useAuditLog()
 
 const codeOptions = computed(() => [
-  { label: t('audit.allCodes'), value: '' },
-  ...auditCodes.map((c) => ({ label: c, value: c })),
+  { title: t('audit.allCodes'), value: '' },
+  ...auditCodes.map((c) => ({ title: c, value: c })),
+])
+const headers = computed(() => [
+  { title: t('audit.time'), key: 'occurred_at', sortable: false },
+  { title: t('audit.event'), key: 'code', sortable: false },
+  { title: t('audit.outcome'), key: 'outcome', sortable: false },
+  { title: t('audit.actor'), key: 'actor', sortable: false },
 ])
 
 onMounted(() => log.load())
@@ -29,40 +30,33 @@ onMounted(() => log.load())
       class="filters"
       @submit.prevent="log.load()"
     >
-      <div class="field">
-        <label for="audit-from">{{ t('audit.from') }}</label>
-        <InputText
-          id="audit-from"
-          v-model="log.from.value"
-          type="date"
-        />
-      </div>
-      <div class="field">
-        <label for="audit-to">{{ t('audit.to') }}</label>
-        <InputText
-          id="audit-to"
-          v-model="log.to.value"
-          type="date"
-        />
-      </div>
-      <div class="field">
-        <label
-          id="audit-code-label"
-          for="audit-code"
-        >{{ t('audit.code') }}</label>
-        <Select
-          v-model="log.code.value"
-          input-id="audit-code"
-          aria-labelledby="audit-code-label"
-          :options="codeOptions"
-          option-label="label"
-          option-value="value"
-        />
-      </div>
-      <Button
-        type="submit"
-        :label="t('common.apply')"
+      <v-text-field
+        id="audit-from"
+        v-model="log.from.value"
+        :label="t('audit.from')"
+        type="date"
+        hide-details
       />
+      <v-text-field
+        id="audit-to"
+        v-model="log.to.value"
+        :label="t('audit.to')"
+        type="date"
+        hide-details
+      />
+      <v-select
+        id="audit-code"
+        v-model="log.code.value"
+        :label="t('audit.code')"
+        :items="codeOptions"
+        hide-details
+      />
+      <v-btn
+        type="submit"
+        color="primary"
+      >
+        {{ t('common.apply') }}
+      </v-btn>
     </form>
     <p
       v-if="log.error.value"
@@ -71,45 +65,41 @@ onMounted(() => log.load())
     >
       {{ problemText(log.error.value) }}
     </p>
-    <DataTable
-      :value="log.items.value"
-      data-key="event_id"
+    <v-data-table
+      :headers="headers"
+      :items="log.items.value"
+      item-value="event_id"
+      :items-per-page="-1"
       :loading="log.loading.value"
+      hide-default-footer
       class="table"
       data-testid="audit-table"
     >
-      <template #empty>
+      <template #no-data>
         {{ t('common.empty') }}
       </template>
-      <Column :header="t('audit.time')">
-        <template #body="{ data }">
-          {{ formatDateTime(data.occurred_at, locale) }}
-        </template>
-      </Column>
-      <Column :header="t('audit.event')">
-        <template #body="{ data }">
-          <span
-            class="audit-text"
-            :data-code="data.code"
-          >{{ auditText(t, te, data) }}</span>
-        </template>
-      </Column>
-      <Column :header="t('audit.outcome')">
-        <template #body="{ data }">
-          <span :class="'outcome outcome-' + data.outcome">{{ t('audit.outcomes.' + data.outcome) }}</span>
-        </template>
-      </Column>
-      <Column :header="t('audit.actor')">
-        <template #body="{ data }">
-          {{ data.actor.display ?? data.actor.type }}
-        </template>
-      </Column>
-    </DataTable>
-    <Button
+      <template #[`item.occurred_at`]="{ item }">
+        {{ formatDateTime(item.occurred_at, locale) }}
+      </template>
+      <template #[`item.code`]="{ item }">
+        <span
+          class="audit-text"
+          :data-code="item.code"
+        >{{ auditText(t, te, item) }}</span>
+      </template>
+      <template #[`item.outcome`]="{ item }">
+        <span :class="'outcome outcome-' + item.outcome">{{ t('audit.outcomes.' + item.outcome) }}</span>
+      </template>
+      <template #[`item.actor`]="{ item }">
+        {{ item.actor.display ?? item.actor.type }}
+      </template>
+    </v-data-table>
+    <v-btn
       v-if="log.nextCursor.value"
-      :label="t('common.loadMore')"
-      severity="secondary"
+      variant="tonal"
       @click="log.load(true)"
-    />
+    >
+      {{ t('common.loadMore') }}
+    </v-btn>
   </section>
 </template>

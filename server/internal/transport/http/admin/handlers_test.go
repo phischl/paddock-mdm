@@ -100,6 +100,10 @@ func newEnv(t *testing.T) *env {
 	}
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID)
 	idp := &fakeIdP{}
+	static, err := admin.NewStaticHandler(fstest.MapFS{"index.html": {Data: []byte(testIndex)}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, idp),
@@ -109,7 +113,7 @@ func newEnv(t *testing.T) *env {
 		Keys:          keys,
 		OIDC:          admin.NewOIDC(admin.OIDCConfig{}),
 		PublicURL:     "https://admin.test",
-		Static:        fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Paddock</title>")}},
+		Static:        static,
 	})
 
 	spec, err := adminapi.GetSpec()
@@ -538,7 +542,7 @@ func TestStaticPortalAndHeaders(t *testing.T) {
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title>Paddock</title>") {
 			t.Fatalf("%s: %d", path, rec.Code)
 		}
-		if csp := rec.Header().Get("Content-Security-Policy"); csp != "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" {
+		if csp := rec.Header().Get("Content-Security-Policy"); !cspWithNonce.MatchString(csp) {
 			t.Fatalf("CSP %q", csp)
 		}
 	}
@@ -548,6 +552,9 @@ func TestStaticPortalAndHeaders(t *testing.T) {
 	e.handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound || rec.Header().Get("Content-Type") != "application/problem+json" {
 		t.Fatalf("unknown API path: %d %s", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); csp != defaultCSP {
+		t.Fatalf("API CSP %q", csp)
 	}
 	login := httptest.NewRequest("GET", "https://admin.test/api/auth/login?return_to=//evil", nil)
 	rec = httptest.NewRecorder()

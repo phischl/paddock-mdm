@@ -1,9 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import InputText from 'primevue/inputtext'
-import Textarea from 'primevue/textarea'
-import Button from 'primevue/button'
 import { hasErrors, validateDeviceGroup } from '../lib/validation'
 import { useProblemText } from '../lib/problems'
 import type { DeviceGroupInput } from '../lib/deviceGroupPage'
@@ -45,40 +42,24 @@ function submit(): void {
     novalidate
     @submit.prevent="submit"
   >
-    <div class="field">
-      <label :for="idPrefix + '-name'">{{ t('common.name') }}</label>
-      <InputText
-        :id="idPrefix + '-name'"
-        v-model="name"
-        name="name"
-        autocomplete="off"
-        :invalid="!!nameError"
-        :aria-invalid="!!nameError"
-        :aria-describedby="nameError ? idPrefix + '-name-error' : undefined"
-      />
-      <small
-        v-if="nameError"
-        :id="idPrefix + '-name-error'"
-        class="field-error"
-      >{{ nameError }}</small>
-    </div>
-    <div class="field">
-      <label :for="idPrefix + '-description'">{{ t('common.description') }}</label>
-      <Textarea
-        :id="idPrefix + '-description'"
-        v-model="description"
-        name="description"
-        rows="3"
-        :invalid="!!descriptionError"
-        :aria-invalid="!!descriptionError"
-        :aria-describedby="descriptionError ? idPrefix + '-description-error' : undefined"
-      />
-      <small
-        v-if="descriptionError"
-        :id="idPrefix + '-description-error'"
-        class="field-error"
-      >{{ descriptionError }}</small>
-    </div>
+    <v-text-field
+      :id="idPrefix + '-name'"
+      v-model="name"
+      :label="t('common.name')"
+      name="name"
+      autocomplete="off"
+      :error-messages="nameError ? [nameError] : []"
+      :aria-invalid="!!nameError"
+    />
+    <v-textarea
+      :id="idPrefix + '-description'"
+      v-model="description"
+      :label="t('common.description')"
+      name="description"
+      rows="3"
+      :error-messages="descriptionError ? [descriptionError] : []"
+      :aria-invalid="!!descriptionError"
+    />
     <p
       v-if="problem"
       class="form-error"
@@ -87,16 +68,19 @@ function submit(): void {
       {{ problemText(problem) }}
     </p>
     <div class="form-actions">
-      <Button
+      <v-btn
         type="button"
-        severity="secondary"
-        :label="t('common.cancel')"
+        variant="tonal"
         @click="emit('cancel')"
-      />
-      <Button
+      >
+        {{ t('common.cancel') }}
+      </v-btn>
+      <v-btn
         type="submit"
-        :label="submitLabel"
-      />
+        color="primary"
+      >
+        {{ submitLabel }}
+      </v-btn>
     </div>
   </form>
 </template>

@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import Button from 'primevue/button'
-import Dialog from 'primevue/dialog'
-import InputText from 'primevue/inputtext'
-import DataTable from 'primevue/datatable'
-import Column from 'primevue/column'
 import { useOrganizations } from '../lib/organizations'
 import { hasErrors, validateOrganization } from '../lib/validation'
 import { formatDateTime } from '../lib/format'
@@ -23,6 +18,13 @@ const problem = ref('')
 const errors = computed(() => validateOrganization(slug.value, name.value))
 const slugError = computed(() => (touched.value && errors.value.slug ? t(errors.value.slug) : ''))
 const nameError = computed(() => (touched.value && errors.value.name ? t(errors.value.name) : ''))
+
+const headers = computed(() => [
+  { title: t('organizations.slug'), key: 'slug', sortable: false },
+  { title: t('common.name'), key: 'name', sortable: false },
+  { title: t('organizations.status'), key: 'status', sortable: false },
+  { title: t('common.createdAt'), key: 'created_at', sortable: false },
+])
 
 onMounted(() => orgs.load())
 
@@ -46,10 +48,12 @@ async function submit(): Promise<void> {
   <section class="page">
     <div class="page-header">
       <h1>{{ t('organizations.title') }}</h1>
-      <Button
-        :label="t('organizations.create')"
+      <v-btn
+        color="primary"
         @click="openCreate"
-      />
+      >
+        {{ t('organizations.create') }}
+      </v-btn>
     </div>
     <p
       v-if="orgs.error.value"
@@ -58,101 +62,86 @@ async function submit(): Promise<void> {
     >
       {{ problemText(orgs.error.value) }}
     </p>
-    <DataTable
-      :value="orgs.items.value"
-      data-key="id"
+    <v-data-table
+      :headers="headers"
+      :items="orgs.items.value"
+      item-value="id"
+      :items-per-page="-1"
       :loading="orgs.loading.value"
+      hide-default-footer
       class="table"
     >
-      <template #empty>
+      <template #no-data>
         {{ t('common.empty') }}
       </template>
-      <Column
-        field="slug"
-        :header="t('organizations.slug')"
-      />
-      <Column
-        field="name"
-        :header="t('common.name')"
-      />
-      <Column :header="t('organizations.status')">
-        <template #body="{ data }">
-          {{ t('organizations.statuses.' + data.status) }}
-        </template>
-      </Column>
-      <Column :header="t('common.createdAt')">
-        <template #body="{ data }">
-          {{ formatDateTime(data.created_at, locale) }}
-        </template>
-      </Column>
-    </DataTable>
-    <Button
+      <template #[`item.status`]="{ item }">
+        {{ t('organizations.statuses.' + item.status) }}
+      </template>
+      <template #[`item.created_at`]="{ item }">
+        {{ formatDateTime(item.created_at, locale) }}
+      </template>
+    </v-data-table>
+    <v-btn
       v-if="orgs.nextCursor.value"
-      :label="t('common.loadMore')"
-      severity="secondary"
+      variant="tonal"
       @click="orgs.load(true)"
-    />
-
-    <Dialog
-      v-model:visible="open"
-      modal
-      :header="t('organizations.createTitle')"
     >
-      <form
-        class="form"
-        novalidate
-        @submit.prevent="submit"
-      >
-        <div class="field">
-          <label for="org-slug">{{ t('organizations.slug') }}</label>
-          <InputText
-            id="org-slug"
-            v-model="slug"
-            autocomplete="off"
-            :invalid="!!slugError"
-            :aria-describedby="slugError ? 'org-slug-error' : undefined"
-          />
-          <small
-            v-if="slugError"
-            id="org-slug-error"
-            class="field-error"
-          >{{ slugError }}</small>
-        </div>
-        <div class="field">
-          <label for="org-name">{{ t('common.name') }}</label>
-          <InputText
-            id="org-name"
-            v-model="name"
-            autocomplete="off"
-            :invalid="!!nameError"
-            :aria-describedby="nameError ? 'org-name-error' : undefined"
-          />
-          <small
-            v-if="nameError"
-            id="org-name-error"
-            class="field-error"
-          >{{ nameError }}</small>
-        </div>
-        <p
-          v-if="problem"
-          class="form-error"
-          role="alert"
-        >
-          {{ problemText(problem) }}
-        </p>
-        <div class="form-actions">
-          <Button
-            type="button"
-            severity="secondary"
-            :label="t('common.cancel')"
-            @click="open = false"
-          />
-          <Button
-            type="submit"
-            :label="t('common.create')"
-          />
-        </div>
-      </form>
-    </Dialog>
+      {{ t('common.loadMore') }}
+    </v-btn>
+
+    <v-dialog
+      v-model="open"
+      max-width="32rem"
+      :aria-label="t('organizations.createTitle')"
+    >
+      <v-card :title="t('organizations.createTitle')">
+        <v-card-text>
+          <form
+            class="form"
+            novalidate
+            @submit.prevent="submit"
+          >
+            <v-text-field
+              id="org-slug"
+              v-model="slug"
+              :label="t('organizations.slug')"
+              autocomplete="off"
+              :error-messages="slugError ? [slugError] : []"
+              :aria-invalid="!!slugError"
+            />
+            <v-text-field
+              id="org-name"
+              v-model="name"
+              :label="t('common.name')"
+              autocomplete="off"
+              :error-messages="nameError ? [nameError] : []"
+              :aria-invalid="!!nameError"
+            />
+            <p
+              v-if="problem"
+              class="form-error"
+              role="alert"
+            >
+              {{ problemText(problem) }}
+            </p>
+            <div class="form-actions">
+              <v-btn
+                type="button"
+                variant="tonal"
+                @click="open = false"
+              >
+                {{ t('common.cancel') }}
+              </v-btn>
+              <v-btn
+                type="submit"
+                color="primary"
+              >
+                {{ t('common.create') }}
+              </v-btn>
+            </div>
+          </form>
+        </v-card-text>
+      </v-card>
+    </v-dialog>
   </section>
 </template>
