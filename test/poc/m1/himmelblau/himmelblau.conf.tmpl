@@ -1,0 +1,17 @@
+# Himmelblau configuration of the M1 PoC (rendered by vm-prepare.sh; @VARS@ are replaced).
+# OIDC mode against Authentik (architecture §9.3): the issuer of the per-organization application.
+[global]
+oidc_issuer_url = @ISSUER@
+app_id = @CLIENT_ID@
+domain = @DOMAIN@
+# Device allow list (architecture §9.5): the organization group as emitted in the userinfo "groups" claim
+# (Himmelblau ignores claim values containing ':', so Authentik emits paddock:acme as paddock.acme).
+pam_allow_groups = @ALLOW@
+# Authentik advertises the password grant; console password-only (ROPC) login would skip TOTP. MFA for every login.
+allow_console_password_only = false
+# Hello PIN (C4); OIDC needs refresh tokens and offline_access on the client.
+enable_hello = true
+hello_pin_min_length = 6
+# Paddock alone owns sudo (A13): no sudo_groups, no admin groups in local_groups.
+local_groups = users
+debug = true
