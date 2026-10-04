@@ -53,13 +53,19 @@ func provisionRabbitMQ(ctx context.Context, l *config.Loader) error {
 	if maxBytes < 1 {
 		l.Invalid("PADDOCK_AUDIT_QUEUE_MAX_BYTES", "must be positive")
 	}
+	ingestMaxBytes := l.Int("PADDOCK_INGEST_QUEUE_MAX_BYTES", mq.DefaultIngestQueueMaxBytes)
+	if ingestMaxBytes < 1 {
+		l.Invalid("PADDOCK_INGEST_QUEUE_MAX_BYTES", "must be positive")
+	}
 	if err := l.Err(); err != nil {
 		return err
 	}
 	cfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
 	var err error
 	for attempt := 0; attempt < 30; attempt++ {
-		if err = mq.Provision(ctx, cfg, mq.ProvisionOptions{AuditQueueMaxBytes: int64(maxBytes)}); err == nil {
+		if err = mq.Provision(ctx, cfg, mq.ProvisionOptions{
+			AuditQueueMaxBytes: int64(maxBytes), IngestQueueMaxBytes: int64(ingestMaxBytes),
+		}); err == nil {
 			return nil
 		}
 		slog.WarnContext(ctx, "provision rabbitmq failed; retrying", "error", err)

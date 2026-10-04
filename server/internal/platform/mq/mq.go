@@ -7,22 +7,70 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/url"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// Topology names (plan M0 §6.8, step 5).
+// Topology names (plan M0 §6.8, plan M2a step 2, architecture §8.1).
 const (
 	ExchangeAudit   = "paddock.audit"
+	ExchangeIngest  = "paddock.ingest"
+	ExchangeState   = "paddock.state"
 	ExchangeDLX     = "paddock.dlx"
 	QueueAudit      = "audit.writer"
 	QueueAuditDLQ   = "dlq.audit.writer"
 	AuditBindingKey = "audit.#"
 )
+
+// Ingest kinds of M2a; each has the queue ingest.<kind> and routing keys ingest.<kind>.<organization_id>.
+const (
+	IngestEnroll    = "enroll"
+	IngestHeartbeat = "heartbeat"
+	IngestEvent     = "event"
+)
+
+// IngestKinds are the provisioned ingest kinds.
+var IngestKinds = []string{IngestEnroll, IngestHeartbeat, IngestEvent}
+
+// IngestQueue is the queue of an ingest kind.
+func IngestQueue(kind string) string { return "ingest." + kind }
+
+// IngestRoutingKey is the routing key of an ingest message of org.
+func IngestRoutingKey(kind string, org uuid.UUID) string {
+	return "ingest." + kind + "." + org.String()
+}
+
+// StatePartitions is the number of state partition queues.
+const StatePartitions = 16
+
+// StatePriority is the routing key of the priority state queue.
+const StatePriority = "priority"
+
+// StatePartition is the routing key of org's state events: p00…p15 = fnv32a(organization_id) mod 16, computed over
+// the canonical string form of the ID.
+func StatePartition(org uuid.UUID) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(org.String()))
+	return fmt.Sprintf("p%02d", h.Sum32()%StatePartitions)
+}
+
+// StateRoutingKeys are p00…p15 and priority.
+func StateRoutingKeys() []string {
+	keys := make([]string, 0, StatePartitions+1)
+	for i := range StatePartitions {
+		keys = append(keys, fmt.Sprintf("p%02d", i))
+	}
+	return append(keys, StatePriority)
+}
+
+// StateQueue is the queue of a state routing key.
+func StateQueue(key string) string { return "state." + key }
 
 // Config locates the broker.
 type Config struct {
@@ -185,14 +233,30 @@ func (p *Publisher) PublishBatch(ctx context.Context, exchange string, msgs []Me
 	return results, nil
 }
 
-// ProvisionOptions are the tunables of the audit topology.
+// ProvisionOptions are the tunables of the topology.
 type ProvisionOptions struct {
-	AuditQueueMaxBytes int64
+	AuditQueueMaxBytes  int64
+	IngestQueueMaxBytes int64 // per ingest queue; 0 = DefaultIngestQueueMaxBytes
 }
 
-// Provision declares the audit topology idempotently (vhost from the URL). Redeclaring with different arguments
-// fails with PRECONDITION_FAILED, which is reported, never silently changed.
+// DefaultIngestQueueMaxBytes is the byte limit of each ingest queue when none is configured.
+const DefaultIngestQueueMaxBytes = 256 << 20
+
+// queueSpec is one quorum queue with its dead-letter queue.
+type queueSpec struct {
+	name     string
+	exchange string
+	keys     []string // binding keys on exchange; dead-lettered messages keep them
+	args     amqp.Table
+}
+
+// Provision declares the topology idempotently (vhost from the URL): exchanges paddock.audit, paddock.ingest,
+// paddock.state and paddock.dlx, every queue with its dlq.<queue> (architecture §8.1). Redeclaring with different
+// arguments fails with PRECONDITION_FAILED, which is reported, never silently changed.
 func Provision(ctx context.Context, cfg Config, o ProvisionOptions) error {
+	if o.IngestQueueMaxBytes == 0 {
+		o.IngestQueueMaxBytes = DefaultIngestQueueMaxBytes
+	}
 	conn, err := Dial(cfg)
 	if err != nil {
 		return err
@@ -204,33 +268,75 @@ func Provision(ctx context.Context, cfg Config, o ProvisionOptions) error {
 	}
 	defer func() { _ = ch.Close() }()
 
-	for _, ex := range []string{ExchangeAudit, ExchangeDLX} {
-		if err := ch.ExchangeDeclare(ex, amqp.ExchangeTopic, true, false, false, false, nil); err != nil {
-			return fmt.Errorf("declare exchange %s: %w", ex, err)
+	exchanges := []struct{ name, kind string }{
+		{ExchangeAudit, amqp.ExchangeTopic}, {ExchangeIngest, amqp.ExchangeTopic},
+		{ExchangeState, amqp.ExchangeDirect}, {ExchangeDLX, amqp.ExchangeTopic},
+	}
+	for _, ex := range exchanges {
+		if err := ch.ExchangeDeclare(ex.name, ex.kind, true, false, false, false, nil); err != nil {
+			return fmt.Errorf("declare exchange %s: %w", ex.name, err)
 		}
 	}
-	if _, err := ch.QueueDeclare(QueueAudit, true, false, false, false, amqp.Table{
+	for _, q := range topology(o) {
+		if err := declare(ch, q); err != nil {
+			return err
+		}
+	}
+	slog.InfoContext(ctx, "rabbitmq topology provisioned", "audit_max_bytes", o.AuditQueueMaxBytes,
+		"ingest_max_bytes", o.IngestQueueMaxBytes)
+	return nil
+}
+
+func topology(o ProvisionOptions) []queueSpec {
+	qs := []queueSpec{{
+		name: QueueAudit, exchange: ExchangeAudit, keys: []string{AuditBindingKey},
+		args: amqp.Table{
+			amqp.QueueOverflowArg:    amqp.QueueOverflowRejectPublish,
+			amqp.QueueMaxLenBytesArg: o.AuditQueueMaxBytes,
+		},
+	}}
+	for _, kind := range IngestKinds {
+		qs = append(qs, queueSpec{
+			name: IngestQueue(kind), exchange: ExchangeIngest, keys: []string{"ingest." + kind + ".*"},
+			args: amqp.Table{
+				amqp.QueueOverflowArg:    amqp.QueueOverflowRejectPublish,
+				amqp.QueueMaxLenBytesArg: o.IngestQueueMaxBytes,
+			},
+		})
+	}
+	for _, key := range StateRoutingKeys() {
+		qs = append(qs, queueSpec{
+			name: StateQueue(key), exchange: ExchangeState, keys: []string{key},
+			args: amqp.Table{"x-single-active-consumer": true},
+		})
+	}
+	return qs
+}
+
+func declare(ch *amqp.Channel, q queueSpec) error {
+	args := amqp.Table{
 		amqp.QueueTypeArg:        amqp.QueueTypeQuorum,
-		amqp.QueueOverflowArg:    amqp.QueueOverflowRejectPublish,
-		amqp.QueueMaxLenBytesArg: o.AuditQueueMaxBytes,
 		"x-delivery-limit":       int64(20),
 		"x-dead-letter-exchange": ExchangeDLX,
-	}); err != nil {
-		return fmt.Errorf("declare queue %s: %w", QueueAudit, err)
 	}
-	if err := ch.QueueBind(QueueAudit, AuditBindingKey, ExchangeAudit, false, nil); err != nil {
-		return fmt.Errorf("bind %s: %w", QueueAudit, err)
+	for k, v := range q.args {
+		args[k] = v
 	}
-	if _, err := ch.QueueDeclare(QueueAuditDLQ, true, false, false, false, amqp.Table{
-		amqp.QueueTypeArg: amqp.QueueTypeQuorum,
-	}); err != nil {
-		return fmt.Errorf("declare queue %s: %w", QueueAuditDLQ, err)
+	if _, err := ch.QueueDeclare(q.name, true, false, false, false, args); err != nil {
+		return fmt.Errorf("declare queue %s: %w", q.name, err)
 	}
-	if err := ch.QueueBind(QueueAuditDLQ, AuditBindingKey, ExchangeDLX, false, nil); err != nil {
-		return fmt.Errorf("bind %s: %w", QueueAuditDLQ, err)
+	dlq := "dlq." + q.name
+	if _, err := ch.QueueDeclare(dlq, true, false, false, false, amqp.Table{amqp.QueueTypeArg: amqp.QueueTypeQuorum}); err != nil {
+		return fmt.Errorf("declare queue %s: %w", dlq, err)
 	}
-	slog.InfoContext(ctx, "rabbitmq topology provisioned", "exchange", ExchangeAudit, "queue", QueueAudit,
-		"dlq", QueueAuditDLQ, "max_bytes", o.AuditQueueMaxBytes)
+	for _, key := range q.keys {
+		if err := ch.QueueBind(q.name, key, q.exchange, false, nil); err != nil {
+			return fmt.Errorf("bind %s: %w", q.name, err)
+		}
+		if err := ch.QueueBind(dlq, key, ExchangeDLX, false, nil); err != nil {
+			return fmt.Errorf("bind %s: %w", dlq, err)
+		}
+	}
 	return nil
 }
 

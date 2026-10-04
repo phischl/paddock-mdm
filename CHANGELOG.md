@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Database migrations add indexes for sorting and searching lists; the audit database migration installs the PostgreSQL extension `pg_trgm` as `audit_owner`, no operator action needed (ADR 0018, M0.2 step 1).
 - Every portal list (device groups, audit log, organizations) offers search, filters, sortable columns, page numbers and 10, 25, 50 or 100 items per page; the list state is kept in the URL, so reload, back navigation and shared links restore it (ADR 0018, M0.2 step 4).
 - The audit log in the portal can be filtered by outcome and actor type in addition to time range and event; without a time range it shows the last 7 days (ADR 0018, M0.2 step 4).
+- Valkey (`valkey` service, AOF `everysec`, password from `.secrets/valkey_password`) and a control-plane RustFS (`rustfs` service) with the bucket `paddock-bundles` join the stack; `make bundles-bootstrap` (run by `make up`) creates the bucket and the compiler (read/write) and gateway (read-only) credentials (M2a step 2).
+- Public hostname `bundles.<domain>` serves bundles through presigned `GET` URLs only; other methods and paths are refused with 403 (M2a step 2).
+- `paddock-server provision rabbitmq` also declares the exchanges `paddock.ingest` (queues `ingest.enroll`, `ingest.heartbeat`, `ingest.event`, byte limit `PADDOCK_INGEST_QUEUE_MAX_BYTES`, default 256 MiB) and `paddock.state` (queues `state.p00`…`state.p15`, `state.priority` with single active consumer), each queue with a dead-letter queue `dlq.<queue>` (M2a step 2).
+- OpenBao Transit key `bundle-signing` (Ed25519, not exportable) and AppRole `paddock-compiler`; the `paddock-api` policy may read the public keys of `bundle-signing` (M2a step 2).
 
 ### Changed
 

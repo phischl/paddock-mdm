@@ -45,6 +45,7 @@ services:
         aliases:
           - admin.${PADDOCK_DOMAIN:-paddock.localhost}
           - auth.${PADDOCK_DOMAIN:-paddock.localhost}
+          - bundles.${PADDOCK_DOMAIN:-paddock.localhost}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ >/dev/null && test -s /data/caddy/pki/authorities/local/root.crt"]
       interval: 5s
@@ -109,6 +110,42 @@ services:
       timeout: 10s
       retries: 20
       start_period: 20s
+
+  # Cache and coordination store of the device control plane; never a source of truth (architecture §8.3).
+  valkey:
+    image: ${VALKEY_IMAGE}
+    restart: unless-stopped
+    command: ["valkey-server", "/etc/valkey/valkey.conf"]
+    volumes:
+      - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
+      - valkey-data:/data
+    secrets: [valkey_auth_conf, valkey_password]
+    networks: [cp]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/valkey_password)\" valkey-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Control-plane object store: bucket paddock-bundles (plan M2a decision 3). Separate from the audit store.
+  rustfs:
+    image: ${RUSTFS_IMAGE}
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_root_user
+      RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_root_password
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_OBS_LOG_DIRECTORY: ""
+    secrets: [rustfs_root_user, rustfs_root_password]
+    volumes:
+      - rustfs-data:/data
+    networks: [cp]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9000/health >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   openbao:
     image: ${OPENBAO_IMAGE}
@@ -272,6 +309,8 @@ volumes:
   caddy-config: {}
   postgres-data: {}
   rabbitmq-data: {}
+  valkey-data: {}
+  rustfs-data: {}
   openbao-data: {}
   authentik-postgres-data: {}
   authentik-data: {}
@@ -296,6 +335,10 @@ secrets:
   authentik_bootstrap_token: { file: ./.secrets/authentik_bootstrap_token }
   authentik_service_token: { file: ./.secrets/authentik_service_token }
   oidc_client_secret: { file: ./.secrets/oidc_client_secret }
+  valkey_auth_conf: { file: ./.secrets/valkey/auth.conf }
+  valkey_password: { file: ./.secrets/valkey_password }
+  rustfs_root_user: { file: ./.secrets/rustfs_root_user }
+  rustfs_root_password: { file: ./.secrets/rustfs_root_password }
   approle_api_role_id: { file: ./.secrets/approle/paddock-api/role_id }
   approle_api_secret_id: { file: ./.secrets/approle/paddock-api/secret_id }
   caddy_root_crt: { file: ./.secrets/caddy-root.crt }
