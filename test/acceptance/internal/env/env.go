@@ -247,6 +247,30 @@ func (a *Authentik) EnsureGroup(ctx context.Context, name string) (string, error
 	return g.PK, err
 }
 
+// Blueprint is an Authentik blueprint instance.
+type Blueprint struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Status string `json:"status"`
+}
+
+// Blueprint returns the blueprint instance of a file relative to /blueprints (ok is false if Authentik has not
+// discovered it yet).
+func (a *Authentik) Blueprint(ctx context.Context, path string) (Blueprint, bool, error) {
+	var page struct {
+		Results []Blueprint `json:"results"`
+	}
+	if err := a.do(ctx, http.MethodGet, "/managed/blueprints/?"+url.Values{"path": {path}}.Encode(), nil, &page); err != nil {
+		return Blueprint{}, false, err
+	}
+	for _, b := range page.Results {
+		if b.Path == path {
+			return b, true, nil
+		}
+	}
+	return Blueprint{}, false, nil
+}
+
 // AddToGroup adds a user to a group (idempotent).
 func (a *Authentik) AddToGroup(ctx context.Context, username, group string) error {
 	user, err := a.UserPK(ctx, username)

@@ -24,11 +24,14 @@ entries:
         # This blueprint is only mounted by compose.dev.yaml (PADDOCK_ENV=development).
         return False
 
+  # The policy identifies the binding, not the target: !Find returns the flow stage binding's own pk, but the stored
+  # target is its policy binding model pk, so a target identifier never matched and every re-apply failed.
   - model: authentik_policies.policybinding
     identifiers:
-      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 30]]
       policy: !KeyOf skip-mfa
       order: 0
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 30]]
 
   - model: authentik_core.user
     identifiers:
