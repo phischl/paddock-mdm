@@ -47,7 +47,7 @@ linters:
       - path: (^|/)cmd/
         linters: [forbidigo]
         text: (fmt|log)\.Print
-      - path: ^test/acceptance/
+      - path: ^test/(acceptance|system)/
         linters: [forbidigo, gosec]
       - path: ^server/internal/platform/db/
         linters: [forbidigo]

@@ -50,7 +50,10 @@ The Authentik admin interface is at <https://auth.paddock.localhost:8443/if/admi
 | `make web` | Builds the portal into `server/web/dist` (in the pinned Node container) |
 | `make image` | Builds the `paddock-server:dev` image |
 | `make acceptance` | Acceptance gates against the running stack (`T=<regex>` to select, e.g. `T=TestWORM`) |
-| `make e2e` | Playwright end-to-end tests against the running stack (builds `bin/devicesim` first) |
+| `make e2e` | Playwright end-to-end tests against the running stack (builds `bin/devicesim` and `bin/agentrelease` first) |
+| `make agent` / `make deb` | Builds `paddockd` and `paddock-supervisor` (amd64, arm64) / the Debian packages for amd64 (`VERSION=`, `TAGS=`) |
+| `make agent-release VERSION=x.y.z` | Builds, signs (development release key) and uploads an agent release (`TAGS=` for test builds) |
+| `make system-test VM=<vm\|all>` | Agent system tests on the VirtualBox VMs of `test/vms/virtualbox` against the running stack (`T=<regex>`) |
 | `make fuzz` | Fuzz tests of `pkg` (`FUZZTIME=30s` per target by default) |
 | `make logs` / `make down` | Logs of the stack / stop it (`make down V=1` also deletes all volumes) |
 
@@ -63,9 +66,12 @@ The Authentik admin interface is at <https://auth.paddock.localhost:8443/if/admi
 api/openapi/admin.yaml   admin API contract (source of truth)
 api/openapi/device.yaml  device API contract
 server/                  paddock-server (Go): cmd, internal packages, migrations, web/ (Vue portal)
-pkg/                     Go module shared with the agent: device protocol, DSSE, canonical JSON, bundle schema
+pkg/                     Go module shared with the agent: device protocol, DSSE, canonical JSON, bundle schema, path policy
+agent/                   paddockd (agent) and paddock-supervisor (Go, static binaries)
+packaging/               nfpm configurations, systemd unit and maintainer scripts of the agent packages
 deploy/compose/          Compose stack, pinned image versions, bootstrap scripts
-test/acceptance/         acceptance gates and the reference device client devicesim
+test/acceptance/         acceptance gates, the reference device client devicesim and the release uploader
+test/system/             system tests of the agent packages on the test VMs
 docs/                    architecture, ADRs, plans, operations runbooks, compliance
 ```
 
