@@ -1,0 +1,9 @@
+Name: Paddock deny list of locked users (/etc/paddock/login-deny)
+Default: yes
+Priority: 4096
+Auth-Type: Primary
+Auth:
+	requisite	pam_listfile.so item=user sense=deny file=/etc/paddock/login-deny onerr=succeed
+Account-Type: Primary
+Account:
+	required	pam_listfile.so item=user sense=deny file=/etc/paddock/login-deny onerr=succeed
