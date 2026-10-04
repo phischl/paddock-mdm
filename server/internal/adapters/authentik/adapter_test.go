@@ -74,17 +74,20 @@ func TestDeviceLoginSettings(t *testing.T) {
 	for _, p := range f.objects["providers"] {
 		provider = p
 	}
-	authFlow := ""
+	authFlow, authzFlow := "", ""
 	for _, fl := range f.objects["flows"] {
-		if fl["slug"] == "paddock-device-authentication" {
+		switch fl["slug"] {
+		case "paddock-device-authentication":
 			authFlow = fl["pk"].(string)
+		case "paddock-device-authorization":
+			authzFlow = fl["pk"].(string)
 		}
 	}
 	grants := provider["grant_types"].([]any)
 	if provider["name"] != "paddock-device-acme" || provider["client_id"] != "paddock-device-acme" || provider["client_type"] != "public" ||
-		provider["authentication_flow"] != authFlow || provider["issuer_mode"] != "per_provider" ||
+		provider["authentication_flow"] != authFlow || provider["authorization_flow"] != authzFlow || provider["issuer_mode"] != "per_provider" ||
 		provider["sub_mode"] != "hashed_user_id" || provider["access_token_validity"] != "minutes=10" ||
-		provider["refresh_token_validity"] != "days=30" || len(grants) != 3 || len(provider["property_mappings"].([]any)) != 5 {
+		provider["refresh_token_validity"] != "days=30" || len(grants) != 3 || len(provider["property_mappings"].([]any)) != 4 {
 		t.Fatalf("provider %v", provider)
 	}
 	if uris := provider["redirect_uris"].([]any); uris[0].(map[string]any)["url"] != authentik.DeviceRedirectURI {
@@ -124,7 +127,7 @@ func TestEnsureOrganizationCorrectsDrift(t *testing.T) {
 
 func TestGroupsExpressionOnlyEmitsTheOrganization(t *testing.T) {
 	e := authentik.GroupsExpression("acme")
-	for _, want := range []string{`root = "paddock.acme"`, `n.startswith(root + ".")`, `[root] if root in names`} {
+	for _, want := range []string{`root = "paddock.acme"`, `n.startswith(root + ".")`, `[root] if root in names`, `"preferred_username"`} {
 		if !strings.Contains(e, want) {
 			t.Errorf("expression lacks %q:\n%s", want, e)
 		}
@@ -235,6 +238,9 @@ func TestLockRevokesTokensAndSessions(t *testing.T) {
 	}
 	if f.sessions[n] != 0 || f.sessions[77] != 1 {
 		t.Fatalf("sessions after the lock: %v", f.sessions)
+	}
+	if f.deactivations != 1 || f.users[n].inactive {
+		t.Fatalf("the user must be deactivated once and active again (%d, inactive %v)", f.deactivations, f.users[n].inactive)
 	}
 	if err := c.UnlockUser(ctx, "acme", pk); err != nil {
 		t.Fatal(err)

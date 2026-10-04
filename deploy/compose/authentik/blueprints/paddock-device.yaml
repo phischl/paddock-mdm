@@ -1,7 +1,12 @@
 # yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
-# Paddock device login, platform-wide (plan M3a decision 6): the authentication flow of the per-organization device
-# login providers (identification with user enumeration prevention, password, mandatory MFA) and the device-code flow
-# of the default brand. The providers and applications themselves are created per organization by paddock-server.
+# Paddock device login, platform-wide (plan M3a decision 6): the authentication and authorization flows of the
+# per-organization device login providers (identification with user enumeration prevention, password, mandatory MFA)
+# and the device-code flow of the default brand. The providers and applications themselves are created per
+# organization by paddock-server.
+#
+# The authorization flow carries the MFA stage too: a device code opened with ?code= (the QR code at the greeter)
+# signs the user in with the brand's authentication flow, which is not Paddock's and may skip MFA, and then runs only
+# the provider's authorization flow (verified against Authentik 2026.8.3).
 version: 1
 metadata:
   name: Paddock - Device login
@@ -94,6 +99,23 @@ entries:
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf device-code-flow
+      stage: !KeyOf mfa
+      order: 10
+
+  # Authorization of every device approval, whatever the entry path: MFA again unless passed within 5 minutes.
+  - model: authentik_flows.flow
+    id: authorization-flow
+    identifiers:
+      slug: paddock-device-authorization
+    attrs:
+      name: Paddock device authorization
+      title: Approve the sign-in on your device
+      designation: authorization
+      authentication: require_authenticated
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf authorization-flow
       stage: !KeyOf mfa
       order: 10
 

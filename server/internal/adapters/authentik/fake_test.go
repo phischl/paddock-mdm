@@ -29,6 +29,8 @@ type fakeAuthentik struct {
 	tokens   map[string][]int                     // "refresh_tokens"/"access_tokens" → owning user pks
 	sessions map[int]int                          // user pk → number of sessions
 	nextPK   int
+	// deactivations counts PATCHes with is_active false.
+	deactivations int
 
 	requests []string // "METHOD path" of every request
 	// failNext makes the next n requests answer with failStatus.
@@ -46,6 +48,7 @@ type fakeUser struct {
 	username, name, email string
 	attributes            map[string]any
 	groups                []string
+	inactive              bool
 }
 
 func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
@@ -54,7 +57,7 @@ func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
 		objects: map[string]map[string]map[string]any{}, tokens: map[string][]int{}, sessions: map[int]int{},
 	}
 	// Objects of Authentik's defaults and of the Paddock blueprints.
-	for _, slug := range []string{"paddock-device-authentication", "default-provider-authorization-implicit-consent", "default-provider-invalidation-flow"} {
+	for _, slug := range []string{"paddock-device-authentication", "paddock-device-authorization", "default-provider-invalidation-flow"} {
 		f.put("flows", map[string]any{"pk": uuid.NewString(), "slug": slug, "name": slug})
 	}
 	f.put("certificatekeypairs", map[string]any{"pk": uuid.NewString(), "name": "authentik Self-signed Certificate"})
@@ -121,7 +124,6 @@ func (f *fakeAuthentik) userJSON(u *fakeUser) map[string]any {
 var (
 	reGroup       = regexp.MustCompile(`^/api/v3/core/groups/([^/]+)/(add_user/|remove_user/)?$`)
 	reUser        = regexp.MustCompile(`^/api/v3/core/users/([0-9]+)/(recovery/)?$`)
-	reToken       = regexp.MustCompile(`^/api/v3/oauth2/(refresh_tokens|access_tokens)/([0-9]+)/$`)
 	reApplication = regexp.MustCompile(`^/api/v3/core/applications/([^/]+)/$`)
 	reObject      = regexp.MustCompile(`^/api/v3/(providers/oauth2|propertymappings/provider/scope|policies/expression)/([^/]+)/$`)
 )
@@ -246,6 +248,21 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			link["link"] = "https://auth.example.org/if/flow/paddock-recovery/?flow_token=t" + m[1] + "&d=" + key(body["token_duration"])
 			return http.StatusOK, link
 		case r.Method == http.MethodPatch:
+			if active, ok := body["is_active"].(bool); ok {
+				u.inactive = !active
+				if !active { // Authentik's deactivation cleanup: every token and session of the user
+					f.deactivations++
+					for kind, owners := range f.tokens {
+						for i, owner := range owners {
+							if owner == u.pk {
+								f.tokens[kind][i] = 0
+							}
+						}
+					}
+					delete(f.sessions, u.pk)
+				}
+				return http.StatusOK, f.userJSON(u)
+			}
 			u.name, _ = body["name"].(string)
 			u.email, _ = body["email"].(string)
 			return http.StatusOK, f.userJSON(u)
@@ -253,29 +270,6 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			delete(f.users, pk)
 			return http.StatusNoContent, nil
 		}
-	case p == "/api/v3/oauth2/refresh_tokens/" || p == "/api/v3/oauth2/access_tokens/":
-		kind := strings.Split(p, "/")[4]
-		var items []map[string]any
-		for i, owner := range f.tokens[kind] {
-			if strconv.Itoa(owner) == q.Get("user") {
-				items = append(items, map[string]any{"pk": i + 1})
-			}
-		}
-		return http.StatusOK, f.page(items)
-	case reToken.MatchString(p) && r.Method == http.MethodDelete:
-		m := reToken.FindStringSubmatch(p)
-		i, _ := strconv.Atoi(m[2])
-		if i < 1 || i > len(f.tokens[m[1]]) || f.tokens[m[1]][i-1] == 0 {
-			return http.StatusNotFound, f.fixture("delete_core_users_id_404.json")
-		}
-		f.tokens[m[1]][i-1] = 0 // keep the indexes of the other tokens
-		return http.StatusNoContent, nil
-	case p == "/api/v3/core/authenticated_sessions/bulk_delete/" && r.Method == http.MethodDelete:
-		pk, _ := strconv.Atoi(q.Get("user_pks"))
-		res := f.fixture("delete_core_authenticated_sessions_bulk_delete.json")
-		res["deleted"] = f.sessions[pk]
-		delete(f.sessions, pk)
-		return http.StatusOK, res
 	case reApplication.MatchString(p):
 		app, ok := f.objects["applications"][reApplication.FindStringSubmatch(p)[1]]
 		if !ok {
