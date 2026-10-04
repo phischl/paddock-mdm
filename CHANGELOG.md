@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Audit events recorded after their occurrence day was sealed are now covered by the manifest of their recording day (F7, M0.1 step 2).
 - `make up` on a fresh stack no longer fails because both Authentik containers populate the shared data volume at the same time (M0 step 10).
 - `make dev-seed` right after `make up` no longer fails intermittently: it waits up to 180 s until the Authentik login flow `paddock-admin-login` is executable (M1 step 1).
+- `make dev-seed` right after `make up` waits up to 300 s until Authentik reports every Paddock blueprint as applied successfully before it checks the login flow, and names the pending blueprints and their status on timeout (M0.3 step 3).
+- The development blueprint `paddock-dev.yaml` no longer ends in status `error` when Authentik re-applies it after the first start (M0.3 step 3).
 - `make up` after `make down V=1` no longer leaves `paddock-api` and `paddock-audit-writer` unhealthy: re-initializing OpenBao now also replaces the stored AppRole secret-ids (M1 step 1).
 
 ### Security
