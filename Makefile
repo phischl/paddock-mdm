@@ -192,8 +192,9 @@ dev-seed: ## Create organizations acme and globex and assign the dev users
 	go run ./test/acceptance/cmd/devseed
 
 .PHONY: acceptance
+# The exactly-once gate alone checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check).
 acceptance: ## Run acceptance gates against the running stack (optional T=<regex>)
-	go test -count=1 -timeout 30m ./test/acceptance/... $(if $(T),-run '$(T)',) -v
+	go test -count=1 -timeout 90m ./test/acceptance/... $(if $(T),-run '$(T)',) -v
 
 .PHONY: system-test
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)

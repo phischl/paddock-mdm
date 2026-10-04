@@ -195,6 +195,54 @@ func (a *Authentik) do(ctx context.Context, method, path string, body, out any) 
 	return nil
 }
 
+// Get reads path of the Authentik API (below /api/v3) into out.
+func (a *Authentik) Get(ctx context.Context, path string, out any) error {
+	return a.do(ctx, http.MethodGet, path, nil, out)
+}
+
+// Delete deletes path of the Authentik API; a missing object is fine.
+func (a *Authentik) Delete(ctx context.Context, path string) error {
+	err := a.do(ctx, http.MethodDelete, path, nil, nil)
+	if IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// GroupMembers returns the usernames of the direct members of a group.
+func (a *Authentik) GroupMembers(ctx context.Context, group string) ([]string, error) {
+	pk, err := a.GroupPK(ctx, group)
+	if err != nil || pk == "" {
+		return nil, err
+	}
+	var page struct {
+		Results []struct {
+			Username string `json:"username"`
+		} `json:"results"`
+	}
+	if err := a.do(ctx, http.MethodGet, "/core/users/?"+url.Values{"groups_by_pk": {pk}, "page_size": {"500"}}.Encode(), nil, &page); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, u := range page.Results {
+		out = append(out, u.Username)
+	}
+	return out, nil
+}
+
+// RemoveFromGroup removes a user from a group (idempotent).
+func (a *Authentik) RemoveFromGroup(ctx context.Context, username, group string) error {
+	user, err := a.UserPK(ctx, username)
+	if err != nil {
+		return err
+	}
+	g, err := a.GroupPK(ctx, group)
+	if err != nil || g == "" || user == 0 {
+		return err
+	}
+	return a.do(ctx, http.MethodPost, "/core/groups/"+g+"/remove_user/", map[string]any{"pk": user}, nil)
+}
+
 // UserPK returns the numeric pk of a user (0 if missing).
 func (a *Authentik) UserPK(ctx context.Context, username string) (int, error) {
 	var page struct {
@@ -309,6 +357,11 @@ func (a *Authentik) CreateUser(ctx context.Context, username, password string, g
 		}
 	}
 	return u.PK, nil
+}
+
+// SetPassword sets the password of a user.
+func (a *Authentik) SetPassword(ctx context.Context, pk int, password string) error {
+	return a.do(ctx, http.MethodPost, fmt.Sprintf("/core/users/%d/set_password/", pk), map[string]any{"password": password}, nil)
 }
 
 // DeleteUser deletes a user.

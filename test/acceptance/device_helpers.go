@@ -87,8 +87,20 @@ func createdID(t *testing.T, p *env.Portal, collection string, res env.Response)
 // removeCreated removes the resource that a POST to collection created when the test ends.
 func removeCreated(t *testing.T, p *env.Portal, collection string, res env.Response) {
 	t.Helper()
-	if collection == "/api/v1/enrollment-tokens" {
+	switch collection {
+	case "/api/v1/enrollment-tokens":
 		createdTokenOf(t, p, res)
+		return
+	case "/api/v1/users": // {user, recovery_link}
+		var out struct {
+			User struct {
+				ID string `json:"id"`
+			} `json:"user"`
+		}
+		if err := res.JSON(&out); err != nil {
+			t.Fatal(err)
+		}
+		deleteOnCleanup(t, p, collection+"/"+out.User.ID)
 		return
 	}
 	createdID(t, p, collection, res)

@@ -84,7 +84,8 @@ func TestListContract(t *testing.T) {
 	// Collections below an item are listed for an acme parent with at least one member.
 	parentGroup := namedGroup(t, sessions[false], "list contract members")
 	activeDevice(t, sessions[false], parentGroup, "list-contract-"+uniqueSuffix())
-	parents := map[string]string{"/api/v1/device-groups/{id}/devices": parentGroup}
+	userGroup := listContractUserGroup(t, sessions[false])
+	parents := map[string]string{"/api/v1/device-groups/{id}/devices": parentGroup, "/api/v1/user-groups/{id}/members": userGroup}
 	order := newCollation(t)
 	paths := make([]string, 0, len(lists))
 	for p := range lists {
@@ -253,4 +254,18 @@ func sorted(s []string) []string {
 	s = slices.Clone(s)
 	slices.Sort(s)
 	return s
+}
+
+// listContractUserGroup creates a user group with two members (deleted when the gate ends) for the member list.
+func listContractUserGroup(t *testing.T, alice *env.Portal) string {
+	t.Helper()
+	res := call(t, alice, http.MethodPost, "/api/v1/user-groups", map[string]string{"slug": "list-" + uniqueSuffix(), "name": uniqueName("list contract")})
+	expectStatus(t, res, http.StatusCreated, "")
+	group := createdID(t, alice, "/api/v1/user-groups", res)
+	for _, prefix := range []string{"list-b", "List-a"} {
+		u := createLocalUser(t, alice, strings.ToLower(prefix))
+		res := call(t, alice, http.MethodPost, "/api/v1/user-groups/"+group+"/members", map[string]string{"user_id": u.ID})
+		expectStatus(t, res, http.StatusNoContent, "")
+	}
+	return group
 }

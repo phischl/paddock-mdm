@@ -27,6 +27,7 @@ func TestOrganizationIsolation(t *testing.T) {
 	// Globex activity that must stay invisible to acme, including its audit events.
 	globexGroup(t, w)
 	seedGlobexDevices(t, w)
+	seedGlobexIdentity(t, w)
 	ctx := testContext(t, time.Minute)
 	var globexEvents []env.AuditEvent
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
