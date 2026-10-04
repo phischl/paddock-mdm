@@ -8,7 +8,7 @@ COMPOSE_DIR   := deploy/compose
 SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
 GO_MODULES    := $(shell go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
-UNIT_PACKAGES := $(filter-out ./test/acceptance/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/...
+UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/...
 WEB_DIR       := server/web
 IMAGE         ?= paddock-server:dev
 UID           := $(shell id -u)
@@ -171,6 +171,13 @@ dev-seed: ## Create organizations acme and globex and assign the dev users
 .PHONY: acceptance
 acceptance: ## Run acceptance gates against the running stack (optional T=<regex>)
 	go test -count=1 -timeout 30m ./test/acceptance/... $(if $(T),-run '$(T)',) -v
+
+.PHONY: system-test
+system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
+	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex>]"; exit 1; }
+	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev
+	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
+	PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... $(if $(T),-run '$(T)',) -v
 
 .PHONY: e2e
 e2e: ## Run Playwright end-to-end tests against the running stack
