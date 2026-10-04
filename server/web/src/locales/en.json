@@ -15,7 +15,8 @@
     "devices": "Devices",
     "enrollmentTokens": "Enrollment tokens",
     "managedFiles": "Managed files",
-    "managedUnits": "Managed units"
+    "managedUnits": "Managed units",
+    "agentReleases": "Agent releases"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -83,7 +84,7 @@
     "page_out_of_range": "This page is too far back. Narrow the search or filters.",
     "invalid_request": "The request was not valid.",
     "internal": "Something went wrong. Please try again.",
-    "invalid_state": "The device is not in a state that allows this action.",
+    "invalid_state": "This action is not possible in the current state.",
     "already_exists": "This is already managed for the same devices.",
     "in_use": "An enrollment token still adds devices to this group. Revoke the token first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the protected areas.",
@@ -143,6 +144,18 @@
       "agent_rolled_back": "The device {target} rolled agent {version} back to {from_version}",
       "agent_events_dropped": "The device {target} dropped {count, number} events while the server was unreachable"
     },
+    "agent_release": {
+      "created": "{actor} created the agent release {version}",
+      "artifact_uploaded": "{actor} uploaded the {arch} binary of agent release {version}",
+      "published": "{actor} published the agent release {version}"
+    },
+    "agent_rollout": {
+      "started": "{actor} started the rollout of agent {version}",
+      "advanced": "The rollout of agent {version} moved to {percent, number} % of the devices",
+      "halted": "The rollout of agent {version} was halted",
+      "resumed": "{actor} resumed the rollout of agent {version}",
+      "completed": "The rollout of agent {version} was completed"
+    },
     "managed_file": {
       "created": "{actor} defined the managed file {path}",
       "updated": "{actor} changed the managed file {path}",
@@ -165,6 +178,60 @@
       "active": "Active",
       "provisioning_failed": "Provisioning failed",
       "suspended": "Suspended"
+    }
+  },
+  "agentReleases": {
+    "title": "Agent releases",
+    "uploadHint": "Releases are built, signed and uploaded with make agent-release; start, halt and resume their rollouts here.",
+    "back": "Back to agent releases",
+    "heading": "Agent {version}",
+    "version": "Version",
+    "status": "Status",
+    "statuses": {
+      "draft": "Draft",
+      "published": "Published"
+    },
+    "rollout": "Rollout",
+    "rolloutStatus": "Rollout status",
+    "rolloutStatuses": {
+      "running": "Running",
+      "halted": "Halted",
+      "completed": "Completed"
+    },
+    "noRollout": "Not rolled out",
+    "artifacts": "Artifacts",
+    "createdBy": "Created",
+    "createdFacts": "{at} by {by}",
+    "publishedAt": "Published",
+    "arch": "Architecture",
+    "sha256": "SHA-256",
+    "size": "Size",
+    "bytes": "{size, number} bytes",
+    "uploadedAt": "Uploaded",
+    "haltedReason": "Halted because",
+    "wave": "Current wave",
+    "waveFacts": "Wave {wave, number} of {waves, number} ({percent} % of the devices) since {since}",
+    "waves": "Waves",
+    "thresholds": "Rules",
+    "thresholdFacts": "Each wave lasts at least {minutes, number} minutes; the rollout halts when {min, number} devices or {percent, number} % of the devices in the waves so far fail, whichever is more.",
+    "devices": "Devices",
+    "countFacts": "{eligible, number} in the waves so far, {updated, number} updated, {failed, number} failed",
+    "actions": {
+      "start": {
+        "label": "Start rollout",
+        "title": "Start the rollout?",
+        "confirm": "Agent {version} will be offered to 1 %, 10 %, 50 % and finally all devices, one wave per day, and halts automatically when too many devices fail."
+      },
+      "halt": {
+        "label": "Halt rollout",
+        "title": "Halt the rollout?",
+        "confirm": "No more devices will be offered agent {version}. Devices that already updated keep it."
+      },
+      "resume": {
+        "label": "Resume rollout",
+        "title": "Resume the rollout?",
+        "confirm": "Agent {version} will be offered again to the devices of the current wave."
+      }
     }
   },
   "loginDenied": {

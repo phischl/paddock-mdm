@@ -31,6 +31,8 @@ var lists = map[string]struct {
 	"listDeviceGroupDevices": {deviceList, "postgres/queries/device.sql", "ListDevices", "id"},
 	"listManagedFiles":       {managedFileList, "postgres/queries/managed_config.sql", "ListManagedFiles", "id"},
 	"listManagedUnits":       {managedUnitList, "postgres/queries/managed_config.sql", "ListManagedUnits", "id"},
+
+	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
 }
 
 // TestListSpecsMatchContract keeps the handlers' list definitions equal to x-paddock-list and the sort enum of the

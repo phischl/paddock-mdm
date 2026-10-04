@@ -91,6 +91,13 @@ onBeforeUnmount(() => observer.disconnect())
         >
           {{ t('nav.organizations') }}
         </v-btn>
+        <v-btn
+          v-if="session.isPlatform"
+          to="/platform/agent-releases"
+          variant="text"
+        >
+          {{ t('nav.agentReleases') }}
+        </v-btn>
       </nav>
       <div class="user">
         <span data-testid="user-name">{{ t('app.signedInAs', { name: session.me?.display_name ?? '' }) }}</span>

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
 )
 
@@ -144,5 +146,32 @@ func TestOrganizationIsolation(t *testing.T) {
 		if leaked := containsAny([]byte(e.EventID+" "+e.CorrelationID), w.globexIDs); leaked != "" {
 			t.Fatalf("acme audit log contains globex event %s", leaked)
 		}
+	}
+}
+
+// TestPlatformEndpointsForbiddenForOrganizations extends the isolation gate to the platform API (plan M2b decision
+// 20): an organization administrator gets 403 on every /api/platform/ operation.
+func TestPlatformEndpointsForbiddenForOrganizations(t *testing.T) {
+	doc := loadSpec(t)
+	alice := login(t, env.Alice)
+	replacer := strings.NewReplacer("{id}", uuid.NewString(), "{version}", "9.9.9", "{arch}", "amd64")
+	n := 0
+	for path, item := range doc.Paths.Map() {
+		if !strings.HasPrefix(path, "/api/platform/") {
+			continue
+		}
+		for method := range item.Operations() {
+			n++
+			t.Run(method+" "+path, func(t *testing.T) {
+				var body any
+				if method != http.MethodGet {
+					body = map[string]any{}
+				}
+				expectStatus(t, call(t, alice, method, replacer.Replace(path), body), http.StatusForbidden, "forbidden")
+			})
+		}
+	}
+	if n < 8 {
+		t.Fatalf("only %d platform operations in the contract", n)
 	}
 }

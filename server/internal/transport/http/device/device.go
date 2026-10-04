@@ -48,6 +48,9 @@ const (
 // BundleURLTTL is the validity of presigned bundle URLs (architecture §7.3).
 const BundleURLTTL = 120 * time.Second
 
+// ArtifactURLTTL is the validity of presigned agent artifact URLs; a download only has to start within it.
+const ArtifactURLTTL = 5 * time.Minute
+
 // Publisher publishes with publisher confirms (mq.Publisher).
 type Publisher interface {
 	PublishBatch(ctx context.Context, exchange string, msgs []mq.Message) ([]error, error)
@@ -60,9 +63,11 @@ type Presigner interface {
 
 // Deps are the dependencies of the device API.
 type Deps struct {
-	Cache        *devicecache.Cache
-	Publisher    Publisher
-	Presigner    Presigner
+	Cache     *devicecache.Cache
+	Publisher Publisher
+	Presigner Presigner
+	// Artifacts presigns agent artifacts in paddock-agent-artifacts; nil disables agent updates.
+	Artifacts    Presigner
 	PerKeyLimit  int
 	PerIPLimit   int
 	Now          func() time.Time

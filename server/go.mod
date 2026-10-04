@@ -23,6 +23,8 @@ require (
 	golang.org/x/oauth2 v0.36.0
 )
 
+require aead.dev/minisign v0.3.0 // indirect
+
 require (
 	cel.dev/expr v0.25.1 // indirect
 	dario.cat/mergo v1.0.2 // indirect

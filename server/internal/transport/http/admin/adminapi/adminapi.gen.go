@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -23,6 +24,63 @@ import (
 	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
+
+// Defines values for AgentArtifactArch.
+const (
+	Amd64 AgentArtifactArch = "amd64"
+	Arm64 AgentArtifactArch = "arm64"
+)
+
+// Valid indicates whether the value is a known member of the AgentArtifactArch enum.
+func (e AgentArtifactArch) Valid() bool {
+	switch e {
+	case Amd64:
+		return true
+	case Arm64:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentReleaseStatus.
+const (
+	Draft     AgentReleaseStatus = "draft"
+	Published AgentReleaseStatus = "published"
+)
+
+// Valid indicates whether the value is a known member of the AgentReleaseStatus enum.
+func (e AgentReleaseStatus) Valid() bool {
+	switch e {
+	case Draft:
+		return true
+	case Published:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentRolloutStatus.
+const (
+	Completed AgentRolloutStatus = "completed"
+	Halted    AgentRolloutStatus = "halted"
+	Running   AgentRolloutStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the AgentRolloutStatus enum.
+func (e AgentRolloutStatus) Valid() bool {
+	switch e {
+	case Completed:
+		return true
+	case Halted:
+		return true
+	case Running:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for AuditActorType.
 const (
@@ -255,6 +313,36 @@ func (e OrganizationStatus) Valid() bool {
 	case OrganizationStatusProvisioningFailed:
 		return true
 	case OrganizationStatusSuspended:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentReleaseSort.
+const (
+	AgentReleaseSortCreatedAt      AgentReleaseSort = "created_at"
+	AgentReleaseSortMinusCreatedAt AgentReleaseSort = "-created_at"
+	AgentReleaseSortMinusStatus    AgentReleaseSort = "-status"
+	AgentReleaseSortMinusVersion   AgentReleaseSort = "-version"
+	AgentReleaseSortStatus         AgentReleaseSort = "status"
+	AgentReleaseSortVersion        AgentReleaseSort = "version"
+)
+
+// Valid indicates whether the value is a known member of the AgentReleaseSort enum.
+func (e AgentReleaseSort) Valid() bool {
+	switch e {
+	case AgentReleaseSortCreatedAt:
+		return true
+	case AgentReleaseSortMinusCreatedAt:
+		return true
+	case AgentReleaseSortMinusStatus:
+		return true
+	case AgentReleaseSortMinusVersion:
+		return true
+	case AgentReleaseSortStatus:
+		return true
+	case AgentReleaseSortVersion:
 		return true
 	default:
 		return false
@@ -516,6 +604,150 @@ func (e PageSize) Valid() bool {
 	case PageSizeN25:
 		return true
 	case PageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAgentReleasesParamsPageSize.
+const (
+	ListAgentReleasesParamsPageSizeN10  ListAgentReleasesParamsPageSize = 10
+	ListAgentReleasesParamsPageSizeN100 ListAgentReleasesParamsPageSize = 100
+	ListAgentReleasesParamsPageSizeN25  ListAgentReleasesParamsPageSize = 25
+	ListAgentReleasesParamsPageSizeN50  ListAgentReleasesParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListAgentReleasesParamsPageSize enum.
+func (e ListAgentReleasesParamsPageSize) Valid() bool {
+	switch e {
+	case ListAgentReleasesParamsPageSizeN10:
+		return true
+	case ListAgentReleasesParamsPageSizeN100:
+		return true
+	case ListAgentReleasesParamsPageSizeN25:
+		return true
+	case ListAgentReleasesParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListAgentReleasesParamsSort.
+const (
+	ListAgentReleasesParamsSortCreatedAt      ListAgentReleasesParamsSort = "created_at"
+	ListAgentReleasesParamsSortMinusCreatedAt ListAgentReleasesParamsSort = "-created_at"
+	ListAgentReleasesParamsSortMinusStatus    ListAgentReleasesParamsSort = "-status"
+	ListAgentReleasesParamsSortMinusVersion   ListAgentReleasesParamsSort = "-version"
+	ListAgentReleasesParamsSortStatus         ListAgentReleasesParamsSort = "status"
+	ListAgentReleasesParamsSortVersion        ListAgentReleasesParamsSort = "version"
+)
+
+// Valid indicates whether the value is a known member of the ListAgentReleasesParamsSort enum.
+func (e ListAgentReleasesParamsSort) Valid() bool {
+	switch e {
+	case ListAgentReleasesParamsSortCreatedAt:
+		return true
+	case ListAgentReleasesParamsSortMinusCreatedAt:
+		return true
+	case ListAgentReleasesParamsSortMinusStatus:
+		return true
+	case ListAgentReleasesParamsSortMinusVersion:
+		return true
+	case ListAgentReleasesParamsSortStatus:
+		return true
+	case ListAgentReleasesParamsSortVersion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateAgentReleaseParamsXPaddockCSRF.
+const (
+	CreateAgentReleaseParamsXPaddockCSRFN1 CreateAgentReleaseParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the CreateAgentReleaseParamsXPaddockCSRF enum.
+func (e CreateAgentReleaseParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case CreateAgentReleaseParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UploadAgentArtifactParamsXPaddockCSRF.
+const (
+	UploadAgentArtifactParamsXPaddockCSRFN1 UploadAgentArtifactParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the UploadAgentArtifactParamsXPaddockCSRF enum.
+func (e UploadAgentArtifactParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case UploadAgentArtifactParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublishAgentReleaseParamsXPaddockCSRF.
+const (
+	PublishAgentReleaseParamsXPaddockCSRFN1 PublishAgentReleaseParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the PublishAgentReleaseParamsXPaddockCSRF enum.
+func (e PublishAgentReleaseParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case PublishAgentReleaseParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StartAgentRolloutParamsXPaddockCSRF.
+const (
+	StartAgentRolloutParamsXPaddockCSRFN1 StartAgentRolloutParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the StartAgentRolloutParamsXPaddockCSRF enum.
+func (e StartAgentRolloutParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case StartAgentRolloutParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HaltAgentRolloutParamsXPaddockCSRF.
+const (
+	HaltAgentRolloutParamsXPaddockCSRFN1 HaltAgentRolloutParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the HaltAgentRolloutParamsXPaddockCSRF enum.
+func (e HaltAgentRolloutParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case HaltAgentRolloutParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResumeAgentRolloutParamsXPaddockCSRF.
+const (
+	ResumeAgentRolloutParamsXPaddockCSRFN1 ResumeAgentRolloutParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the ResumeAgentRolloutParamsXPaddockCSRF enum.
+func (e ResumeAgentRolloutParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case ResumeAgentRolloutParamsXPaddockCSRFN1:
 		return true
 	default:
 		return false
@@ -1242,6 +1474,107 @@ func (e UpdateMeParamsXPaddockCSRF) Valid() bool {
 	}
 }
 
+// AgentArtifact defines model for AgentArtifact.
+type AgentArtifact struct {
+	Arch      AgentArtifactArch `json:"arch"`
+	CreatedAt time.Time         `json:"created_at"`
+
+	// Sha256 Hex SHA-256 of the binary.
+	Sha256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+// AgentArtifactArch defines model for AgentArtifact.Arch.
+type AgentArtifactArch string
+
+// AgentRelease defines model for AgentRelease.
+type AgentRelease struct {
+	ArtifactCount int                 `json:"artifact_count"`
+	CreatedAt     time.Time           `json:"created_at"`
+	CreatedBy     string              `json:"created_by"`
+	PublishedAt   *time.Time          `json:"published_at,omitempty"`
+	RolloutStatus *AgentRolloutStatus `json:"rollout_status,omitempty"`
+	Status        AgentReleaseStatus  `json:"status"`
+	Version       string              `json:"version"`
+}
+
+// AgentReleaseCreate defines model for AgentReleaseCreate.
+type AgentReleaseCreate struct {
+	Version string `json:"version"`
+}
+
+// AgentReleaseDetail defines model for AgentReleaseDetail.
+type AgentReleaseDetail struct {
+	Artifacts []AgentArtifact     `json:"artifacts"`
+	Counts    *AgentRolloutCounts `json:"counts,omitempty"`
+	Release   AgentRelease        `json:"release"`
+	Rollout   *AgentRollout       `json:"rollout,omitempty"`
+}
+
+// AgentReleasePage defines model for AgentReleasePage.
+type AgentReleasePage struct {
+	Items    []AgentRelease `json:"items"`
+	Page     int            `json:"page"`
+	PageSize int            `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// AgentReleaseStatus defines model for AgentReleaseStatus.
+type AgentReleaseStatus string
+
+// AgentRollout defines model for AgentRollout.
+type AgentRollout struct {
+	CurrentWaveIndex        int                `json:"current_wave_index"`
+	FailureThresholdMin     int                `json:"failure_threshold_min"`
+	FailureThresholdPercent int                `json:"failure_threshold_percent"`
+	HaltedReason            *string            `json:"halted_reason,omitempty"`
+	MinWaveMinutes          int                `json:"min_wave_minutes"`
+	StartedAt               time.Time          `json:"started_at"`
+	StartedBy               string             `json:"started_by"`
+	Status                  AgentRolloutStatus `json:"status"`
+	Version                 string             `json:"version"`
+	WaveStartedAt           time.Time          `json:"wave_started_at"`
+	Waves                   []int              `json:"waves"`
+}
+
+// AgentRolloutCounts defines model for AgentRolloutCounts.
+type AgentRolloutCounts struct {
+	// Eligible Active devices inside the current wave.
+	Eligible int64 `json:"eligible"`
+
+	// Failed Devices that reported agent.update_failed or agent.rolled_back for this version.
+	Failed int64 `json:"failed"`
+
+	// Updated Devices that reported agent.updated for this version.
+	Updated int64 `json:"updated"`
+}
+
+// AgentRolloutStart defines model for AgentRolloutStart.
+type AgentRolloutStart struct {
+	// FailureThresholdMin Default 3.
+	FailureThresholdMin *int `json:"failure_threshold_min,omitempty"`
+
+	// FailureThresholdPercent Default 2.
+	FailureThresholdPercent *int `json:"failure_threshold_percent,omitempty"`
+
+	// MinWaveMinutes Default 1440; at least 60 outside development.
+	MinWaveMinutes *int `json:"min_wave_minutes,omitempty"`
+
+	// Waves Percentages of devices per wave, strictly increasing, ending with 100. Default [1, 10, 50, 100].
+	Waves *[]int `json:"waves,omitempty"`
+}
+
+// AgentRolloutStatus defines model for AgentRolloutStatus.
+type AgentRolloutStatus string
+
 // AuditActor defines model for AuditActor.
 type AuditActor struct {
 	Display *string `json:"display,omitempty"`
@@ -1704,6 +2037,9 @@ type Problem struct {
 	Type string `json:"type"`
 }
 
+// AgentReleaseSort defines model for AgentReleaseSort.
+type AgentReleaseSort string
+
 // AuditEventSort defines model for AuditEventSort.
 type AuditEventSort string
 
@@ -1745,6 +2081,82 @@ type PageSize int
 
 // Search defines model for Search.
 type Search = string
+
+// Version defines model for Version.
+type Version = string
+
+// ListAgentReleasesParams defines parameters for ListAgentReleases.
+type ListAgentReleasesParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                            `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListAgentReleasesParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The version is the tie-breaker.
+	Sort *ListAgentReleasesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// Status Repeatable.
+	Status *[]AgentReleaseStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ListAgentReleasesParamsPageSize defines parameters for ListAgentReleases.
+type ListAgentReleasesParamsPageSize int
+
+// ListAgentReleasesParamsSort defines parameters for ListAgentReleases.
+type ListAgentReleasesParamsSort string
+
+// CreateAgentReleaseParams defines parameters for CreateAgentRelease.
+type CreateAgentReleaseParams struct {
+	XPaddockCSRF CreateAgentReleaseParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// CreateAgentReleaseParamsXPaddockCSRF defines parameters for CreateAgentRelease.
+type CreateAgentReleaseParamsXPaddockCSRF string
+
+// UploadAgentArtifactParams defines parameters for UploadAgentArtifact.
+type UploadAgentArtifactParams struct {
+	XPaddockCSRF UploadAgentArtifactParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+
+	// XPaddockMinisig Standard base64 of the .minisig signature file of the binary.
+	XPaddockMinisig string `json:"X-Paddock-Minisig"`
+}
+
+// UploadAgentArtifactParamsXPaddockCSRF defines parameters for UploadAgentArtifact.
+type UploadAgentArtifactParamsXPaddockCSRF string
+
+// PublishAgentReleaseParams defines parameters for PublishAgentRelease.
+type PublishAgentReleaseParams struct {
+	XPaddockCSRF PublishAgentReleaseParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// PublishAgentReleaseParamsXPaddockCSRF defines parameters for PublishAgentRelease.
+type PublishAgentReleaseParamsXPaddockCSRF string
+
+// StartAgentRolloutParams defines parameters for StartAgentRollout.
+type StartAgentRolloutParams struct {
+	XPaddockCSRF StartAgentRolloutParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// StartAgentRolloutParamsXPaddockCSRF defines parameters for StartAgentRollout.
+type StartAgentRolloutParamsXPaddockCSRF string
+
+// HaltAgentRolloutParams defines parameters for HaltAgentRollout.
+type HaltAgentRolloutParams struct {
+	XPaddockCSRF HaltAgentRolloutParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// HaltAgentRolloutParamsXPaddockCSRF defines parameters for HaltAgentRollout.
+type HaltAgentRolloutParamsXPaddockCSRF string
+
+// ResumeAgentRolloutParams defines parameters for ResumeAgentRollout.
+type ResumeAgentRolloutParams struct {
+	XPaddockCSRF ResumeAgentRolloutParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// ResumeAgentRolloutParamsXPaddockCSRF defines parameters for ResumeAgentRollout.
+type ResumeAgentRolloutParamsXPaddockCSRF string
 
 // ListOrganizationsParams defines parameters for ListOrganizations.
 type ListOrganizationsParams struct {
@@ -2075,6 +2487,12 @@ type UpdateMeParams struct {
 // UpdateMeParamsXPaddockCSRF defines parameters for UpdateMe.
 type UpdateMeParamsXPaddockCSRF string
 
+// CreateAgentReleaseJSONRequestBody defines body for CreateAgentRelease for application/json ContentType.
+type CreateAgentReleaseJSONRequestBody = AgentReleaseCreate
+
+// StartAgentRolloutJSONRequestBody defines body for StartAgentRollout for application/json ContentType.
+type StartAgentRolloutJSONRequestBody = AgentRolloutStart
+
 // CreateOrganizationJSONRequestBody defines body for CreateOrganization for application/json ContentType.
 type CreateOrganizationJSONRequestBody = OrganizationCreate
 
@@ -2107,6 +2525,30 @@ type UpdateMeJSONRequestBody = MeUpdate
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+
+	// (GET /api/platform/v1/agent-releases)
+	ListAgentReleases(w http.ResponseWriter, r *http.Request, params ListAgentReleasesParams)
+
+	// (POST /api/platform/v1/agent-releases)
+	CreateAgentRelease(w http.ResponseWriter, r *http.Request, params CreateAgentReleaseParams)
+
+	// (GET /api/platform/v1/agent-releases/{version})
+	GetAgentRelease(w http.ResponseWriter, r *http.Request, version Version)
+
+	// (PUT /api/platform/v1/agent-releases/{version}/artifacts/{arch})
+	UploadAgentArtifact(w http.ResponseWriter, r *http.Request, version Version, arch string, params UploadAgentArtifactParams)
+
+	// (POST /api/platform/v1/agent-releases/{version}/publish)
+	PublishAgentRelease(w http.ResponseWriter, r *http.Request, version Version, params PublishAgentReleaseParams)
+
+	// (POST /api/platform/v1/agent-releases/{version}/rollout)
+	StartAgentRollout(w http.ResponseWriter, r *http.Request, version Version, params StartAgentRolloutParams)
+
+	// (POST /api/platform/v1/agent-releases/{version}/rollout/halt)
+	HaltAgentRollout(w http.ResponseWriter, r *http.Request, version Version, params HaltAgentRolloutParams)
+
+	// (POST /api/platform/v1/agent-releases/{version}/rollout/resume)
+	ResumeAgentRollout(w http.ResponseWriter, r *http.Request, version Version, params ResumeAgentRolloutParams)
 
 	// (GET /api/platform/v1/organizations)
 	ListOrganizations(w http.ResponseWriter, r *http.Request, params ListOrganizationsParams)
@@ -2219,6 +2661,464 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListAgentReleases operation middleware
+func (siw *ServerInterfaceWrapper) ListAgentReleases(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAgentReleasesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAgentReleases(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateAgentRelease operation middleware
+func (siw *ServerInterfaceWrapper) CreateAgentRelease(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateAgentReleaseParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF CreateAgentReleaseParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateAgentRelease(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAgentRelease operation middleware
+func (siw *ServerInterfaceWrapper) GetAgentRelease(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "version" -------------
+	var version Version
+
+	err = runtime.BindStyledParameterWithOptions("simple", "version", r.PathValue("version"), &version, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "version", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAgentRelease(w, r, version)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UploadAgentArtifact operation middleware
+func (siw *ServerInterfaceWrapper) UploadAgentArtifact(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "version" -------------
+	var version Version
+
+	err = runtime.BindStyledParameterWithOptions("simple", "version", r.PathValue("version"), &version, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "version", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "arch" -------------
+	var arch string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "arch", r.PathValue("arch"), &arch, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "arch", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UploadAgentArtifactParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF UploadAgentArtifactParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	// ------------- Required header parameter "X-Paddock-Minisig" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-Minisig")]; found {
+		var XPaddockMinisig string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-Minisig", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-Minisig", valueList[0], &XPaddockMinisig, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-Minisig", Err: err})
+			return
+		}
+
+		params.XPaddockMinisig = XPaddockMinisig
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-Minisig is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-Minisig", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UploadAgentArtifact(w, r, version, arch, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PublishAgentRelease operation middleware
+func (siw *ServerInterfaceWrapper) PublishAgentRelease(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "version" -------------
+	var version Version
+
+	err = runtime.BindStyledParameterWithOptions("simple", "version", r.PathValue("version"), &version, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "version", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PublishAgentReleaseParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF PublishAgentReleaseParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PublishAgentRelease(w, r, version, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartAgentRollout operation middleware
+func (siw *ServerInterfaceWrapper) StartAgentRollout(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "version" -------------
+	var version Version
+
+	err = runtime.BindStyledParameterWithOptions("simple", "version", r.PathValue("version"), &version, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "version", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StartAgentRolloutParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF StartAgentRolloutParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartAgentRollout(w, r, version, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// HaltAgentRollout operation middleware
+func (siw *ServerInterfaceWrapper) HaltAgentRollout(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "version" -------------
+	var version Version
+
+	err = runtime.BindStyledParameterWithOptions("simple", "version", r.PathValue("version"), &version, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "version", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params HaltAgentRolloutParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF HaltAgentRolloutParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.HaltAgentRollout(w, r, version, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResumeAgentRollout operation middleware
+func (siw *ServerInterfaceWrapper) ResumeAgentRollout(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "version" -------------
+	var version Version
+
+	err = runtime.BindStyledParameterWithOptions("simple", "version", r.PathValue("version"), &version, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "version", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ResumeAgentRolloutParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF ResumeAgentRolloutParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResumeAgentRollout(w, r, version, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // ListOrganizations operation middleware
 func (siw *ServerInterfaceWrapper) ListOrganizations(w http.ResponseWriter, r *http.Request) {
@@ -4216,6 +5116,14 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/platform/v1/organizations", wrapper.ListOrganizations)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/platform/v1/organizations", wrapper.CreateOrganization)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/platform/v1/organizations/{id}", wrapper.GetOrganization)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/platform/v1/agent-releases", wrapper.ListAgentReleases)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/platform/v1/agent-releases", wrapper.CreateAgentRelease)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/platform/v1/agent-releases/{version}", wrapper.GetAgentRelease)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/platform/v1/agent-releases/{version}/artifacts/{arch}", wrapper.UploadAgentArtifact)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/platform/v1/agent-releases/{version}/publish", wrapper.PublishAgentRelease)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/platform/v1/agent-releases/{version}/rollout", wrapper.StartAgentRollout)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/platform/v1/agent-releases/{version}/rollout/halt", wrapper.HaltAgentRollout)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/platform/v1/agent-releases/{version}/rollout/resume", wrapper.ResumeAgentRollout)
 
 	return m
 }
@@ -4223,6 +5131,735 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 type DeviceJSONResponse Device
 
 type ProblemApplicationProblemPlusJSONResponse Problem
+
+type ListAgentReleasesRequestObject struct {
+	Params ListAgentReleasesParams
+}
+
+type ListAgentReleasesResponseObject interface {
+	VisitListAgentReleasesResponse(w http.ResponseWriter) error
+}
+
+type ListAgentReleases200JSONResponse AgentReleasePage
+
+func (response ListAgentReleases200JSONResponse) VisitListAgentReleasesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAgentReleases400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListAgentReleases400ApplicationProblemPlusJSONResponse) VisitListAgentReleasesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAgentReleases401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListAgentReleases401ApplicationProblemPlusJSONResponse) VisitListAgentReleasesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAgentReleases403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListAgentReleases403ApplicationProblemPlusJSONResponse) VisitListAgentReleasesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateAgentReleaseRequestObject struct {
+	Params CreateAgentReleaseParams
+	Body   *CreateAgentReleaseJSONRequestBody
+}
+
+type CreateAgentReleaseResponseObject interface {
+	VisitCreateAgentReleaseResponse(w http.ResponseWriter) error
+}
+
+type CreateAgentRelease201ResponseHeaders struct {
+	Location *string
+}
+
+type CreateAgentRelease201JSONResponse struct {
+	Body    AgentRelease
+	Headers CreateAgentRelease201ResponseHeaders
+}
+
+func (response CreateAgentRelease201JSONResponse) VisitCreateAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateAgentRelease400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateAgentRelease400ApplicationProblemPlusJSONResponse) VisitCreateAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateAgentRelease401ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateAgentRelease401ApplicationProblemPlusJSONResponse) VisitCreateAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateAgentRelease403ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateAgentRelease403ApplicationProblemPlusJSONResponse) VisitCreateAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateAgentRelease409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateAgentRelease409ApplicationProblemPlusJSONResponse) VisitCreateAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAgentReleaseRequestObject struct {
+	Version Version `json:"version"`
+}
+
+type GetAgentReleaseResponseObject interface {
+	VisitGetAgentReleaseResponse(w http.ResponseWriter) error
+}
+
+type GetAgentRelease200JSONResponse AgentReleaseDetail
+
+func (response GetAgentRelease200JSONResponse) VisitGetAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAgentRelease400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetAgentRelease400ApplicationProblemPlusJSONResponse) VisitGetAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAgentRelease401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetAgentRelease401ApplicationProblemPlusJSONResponse) VisitGetAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAgentRelease403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetAgentRelease403ApplicationProblemPlusJSONResponse) VisitGetAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAgentRelease404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetAgentRelease404ApplicationProblemPlusJSONResponse) VisitGetAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAgentArtifactRequestObject struct {
+	Version Version `json:"version"`
+	Arch    string  `json:"arch"`
+	Params  UploadAgentArtifactParams
+	Body    io.Reader
+}
+
+type UploadAgentArtifactResponseObject interface {
+	VisitUploadAgentArtifactResponse(w http.ResponseWriter) error
+}
+
+type UploadAgentArtifact200JSONResponse AgentArtifact
+
+func (response UploadAgentArtifact200JSONResponse) VisitUploadAgentArtifactResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAgentArtifact400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response UploadAgentArtifact400ApplicationProblemPlusJSONResponse) VisitUploadAgentArtifactResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAgentArtifact401ApplicationProblemPlusJSONResponse Problem
+
+func (response UploadAgentArtifact401ApplicationProblemPlusJSONResponse) VisitUploadAgentArtifactResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAgentArtifact403ApplicationProblemPlusJSONResponse Problem
+
+func (response UploadAgentArtifact403ApplicationProblemPlusJSONResponse) VisitUploadAgentArtifactResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAgentArtifact404ApplicationProblemPlusJSONResponse Problem
+
+func (response UploadAgentArtifact404ApplicationProblemPlusJSONResponse) VisitUploadAgentArtifactResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAgentArtifact409ApplicationProblemPlusJSONResponse Problem
+
+func (response UploadAgentArtifact409ApplicationProblemPlusJSONResponse) VisitUploadAgentArtifactResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UploadAgentArtifact502ApplicationProblemPlusJSONResponse Problem
+
+func (response UploadAgentArtifact502ApplicationProblemPlusJSONResponse) VisitUploadAgentArtifactResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(502)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishAgentReleaseRequestObject struct {
+	Version Version `json:"version"`
+	Params  PublishAgentReleaseParams
+}
+
+type PublishAgentReleaseResponseObject interface {
+	VisitPublishAgentReleaseResponse(w http.ResponseWriter) error
+}
+
+type PublishAgentRelease200JSONResponse AgentRelease
+
+func (response PublishAgentRelease200JSONResponse) VisitPublishAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishAgentRelease400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response PublishAgentRelease400ApplicationProblemPlusJSONResponse) VisitPublishAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishAgentRelease401ApplicationProblemPlusJSONResponse Problem
+
+func (response PublishAgentRelease401ApplicationProblemPlusJSONResponse) VisitPublishAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishAgentRelease403ApplicationProblemPlusJSONResponse Problem
+
+func (response PublishAgentRelease403ApplicationProblemPlusJSONResponse) VisitPublishAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishAgentRelease404ApplicationProblemPlusJSONResponse Problem
+
+func (response PublishAgentRelease404ApplicationProblemPlusJSONResponse) VisitPublishAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PublishAgentRelease409ApplicationProblemPlusJSONResponse Problem
+
+func (response PublishAgentRelease409ApplicationProblemPlusJSONResponse) VisitPublishAgentReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartAgentRolloutRequestObject struct {
+	Version Version `json:"version"`
+	Params  StartAgentRolloutParams
+	Body    *StartAgentRolloutJSONRequestBody
+}
+
+type StartAgentRolloutResponseObject interface {
+	VisitStartAgentRolloutResponse(w http.ResponseWriter) error
+}
+
+type StartAgentRollout201JSONResponse AgentRollout
+
+func (response StartAgentRollout201JSONResponse) VisitStartAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartAgentRollout400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response StartAgentRollout400ApplicationProblemPlusJSONResponse) VisitStartAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartAgentRollout401ApplicationProblemPlusJSONResponse Problem
+
+func (response StartAgentRollout401ApplicationProblemPlusJSONResponse) VisitStartAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartAgentRollout403ApplicationProblemPlusJSONResponse Problem
+
+func (response StartAgentRollout403ApplicationProblemPlusJSONResponse) VisitStartAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartAgentRollout404ApplicationProblemPlusJSONResponse Problem
+
+func (response StartAgentRollout404ApplicationProblemPlusJSONResponse) VisitStartAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartAgentRollout409ApplicationProblemPlusJSONResponse Problem
+
+func (response StartAgentRollout409ApplicationProblemPlusJSONResponse) VisitStartAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltAgentRolloutRequestObject struct {
+	Version Version `json:"version"`
+	Params  HaltAgentRolloutParams
+}
+
+type HaltAgentRolloutResponseObject interface {
+	VisitHaltAgentRolloutResponse(w http.ResponseWriter) error
+}
+
+type HaltAgentRollout200JSONResponse AgentRollout
+
+func (response HaltAgentRollout200JSONResponse) VisitHaltAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltAgentRollout400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response HaltAgentRollout400ApplicationProblemPlusJSONResponse) VisitHaltAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltAgentRollout401ApplicationProblemPlusJSONResponse Problem
+
+func (response HaltAgentRollout401ApplicationProblemPlusJSONResponse) VisitHaltAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltAgentRollout403ApplicationProblemPlusJSONResponse Problem
+
+func (response HaltAgentRollout403ApplicationProblemPlusJSONResponse) VisitHaltAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltAgentRollout404ApplicationProblemPlusJSONResponse Problem
+
+func (response HaltAgentRollout404ApplicationProblemPlusJSONResponse) VisitHaltAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type HaltAgentRollout409ApplicationProblemPlusJSONResponse Problem
+
+func (response HaltAgentRollout409ApplicationProblemPlusJSONResponse) VisitHaltAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeAgentRolloutRequestObject struct {
+	Version Version `json:"version"`
+	Params  ResumeAgentRolloutParams
+}
+
+type ResumeAgentRolloutResponseObject interface {
+	VisitResumeAgentRolloutResponse(w http.ResponseWriter) error
+}
+
+type ResumeAgentRollout200JSONResponse AgentRollout
+
+func (response ResumeAgentRollout200JSONResponse) VisitResumeAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeAgentRollout400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ResumeAgentRollout400ApplicationProblemPlusJSONResponse) VisitResumeAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeAgentRollout401ApplicationProblemPlusJSONResponse Problem
+
+func (response ResumeAgentRollout401ApplicationProblemPlusJSONResponse) VisitResumeAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeAgentRollout403ApplicationProblemPlusJSONResponse Problem
+
+func (response ResumeAgentRollout403ApplicationProblemPlusJSONResponse) VisitResumeAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeAgentRollout404ApplicationProblemPlusJSONResponse Problem
+
+func (response ResumeAgentRollout404ApplicationProblemPlusJSONResponse) VisitResumeAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeAgentRollout409ApplicationProblemPlusJSONResponse Problem
+
+func (response ResumeAgentRollout409ApplicationProblemPlusJSONResponse) VisitResumeAgentRolloutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type ListOrganizationsRequestObject struct {
 	Params ListOrganizationsParams
@@ -7029,6 +8666,30 @@ func (response UpdateMe403ApplicationProblemPlusJSONResponse) VisitUpdateMeRespo
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
+	// (GET /api/platform/v1/agent-releases)
+	ListAgentReleases(ctx context.Context, request ListAgentReleasesRequestObject) (ListAgentReleasesResponseObject, error)
+
+	// (POST /api/platform/v1/agent-releases)
+	CreateAgentRelease(ctx context.Context, request CreateAgentReleaseRequestObject) (CreateAgentReleaseResponseObject, error)
+
+	// (GET /api/platform/v1/agent-releases/{version})
+	GetAgentRelease(ctx context.Context, request GetAgentReleaseRequestObject) (GetAgentReleaseResponseObject, error)
+
+	// (PUT /api/platform/v1/agent-releases/{version}/artifacts/{arch})
+	UploadAgentArtifact(ctx context.Context, request UploadAgentArtifactRequestObject) (UploadAgentArtifactResponseObject, error)
+
+	// (POST /api/platform/v1/agent-releases/{version}/publish)
+	PublishAgentRelease(ctx context.Context, request PublishAgentReleaseRequestObject) (PublishAgentReleaseResponseObject, error)
+
+	// (POST /api/platform/v1/agent-releases/{version}/rollout)
+	StartAgentRollout(ctx context.Context, request StartAgentRolloutRequestObject) (StartAgentRolloutResponseObject, error)
+
+	// (POST /api/platform/v1/agent-releases/{version}/rollout/halt)
+	HaltAgentRollout(ctx context.Context, request HaltAgentRolloutRequestObject) (HaltAgentRolloutResponseObject, error)
+
+	// (POST /api/platform/v1/agent-releases/{version}/rollout/resume)
+	ResumeAgentRollout(ctx context.Context, request ResumeAgentRolloutRequestObject) (ResumeAgentRolloutResponseObject, error)
+
 	// (GET /api/platform/v1/organizations)
 	ListOrganizations(ctx context.Context, request ListOrganizationsRequestObject) (ListOrganizationsResponseObject, error)
 
@@ -7169,6 +8830,239 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// ListAgentReleases operation middleware
+func (sh *strictHandler) ListAgentReleases(w http.ResponseWriter, r *http.Request, params ListAgentReleasesParams) {
+	var request ListAgentReleasesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListAgentReleases(ctx, request.(ListAgentReleasesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListAgentReleases")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListAgentReleasesResponseObject); ok {
+		if err := validResponse.VisitListAgentReleasesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateAgentRelease operation middleware
+func (sh *strictHandler) CreateAgentRelease(w http.ResponseWriter, r *http.Request, params CreateAgentReleaseParams) {
+	var request CreateAgentReleaseRequestObject
+
+	request.Params = params
+
+	var body CreateAgentReleaseJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateAgentRelease(ctx, request.(CreateAgentReleaseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateAgentRelease")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateAgentReleaseResponseObject); ok {
+		if err := validResponse.VisitCreateAgentReleaseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetAgentRelease operation middleware
+func (sh *strictHandler) GetAgentRelease(w http.ResponseWriter, r *http.Request, version Version) {
+	var request GetAgentReleaseRequestObject
+
+	request.Version = version
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAgentRelease(ctx, request.(GetAgentReleaseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAgentRelease")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetAgentReleaseResponseObject); ok {
+		if err := validResponse.VisitGetAgentReleaseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UploadAgentArtifact operation middleware
+func (sh *strictHandler) UploadAgentArtifact(w http.ResponseWriter, r *http.Request, version Version, arch string, params UploadAgentArtifactParams) {
+	var request UploadAgentArtifactRequestObject
+
+	request.Version = version
+	request.Arch = arch
+	request.Params = params
+
+	request.Body = r.Body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UploadAgentArtifact(ctx, request.(UploadAgentArtifactRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UploadAgentArtifact")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UploadAgentArtifactResponseObject); ok {
+		if err := validResponse.VisitUploadAgentArtifactResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PublishAgentRelease operation middleware
+func (sh *strictHandler) PublishAgentRelease(w http.ResponseWriter, r *http.Request, version Version, params PublishAgentReleaseParams) {
+	var request PublishAgentReleaseRequestObject
+
+	request.Version = version
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PublishAgentRelease(ctx, request.(PublishAgentReleaseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PublishAgentRelease")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PublishAgentReleaseResponseObject); ok {
+		if err := validResponse.VisitPublishAgentReleaseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartAgentRollout operation middleware
+func (sh *strictHandler) StartAgentRollout(w http.ResponseWriter, r *http.Request, version Version, params StartAgentRolloutParams) {
+	var request StartAgentRolloutRequestObject
+
+	request.Version = version
+	request.Params = params
+
+	var body StartAgentRolloutJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartAgentRollout(ctx, request.(StartAgentRolloutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartAgentRollout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartAgentRolloutResponseObject); ok {
+		if err := validResponse.VisitStartAgentRolloutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// HaltAgentRollout operation middleware
+func (sh *strictHandler) HaltAgentRollout(w http.ResponseWriter, r *http.Request, version Version, params HaltAgentRolloutParams) {
+	var request HaltAgentRolloutRequestObject
+
+	request.Version = version
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.HaltAgentRollout(ctx, request.(HaltAgentRolloutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "HaltAgentRollout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(HaltAgentRolloutResponseObject); ok {
+		if err := validResponse.VisitHaltAgentRolloutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResumeAgentRollout operation middleware
+func (sh *strictHandler) ResumeAgentRollout(w http.ResponseWriter, r *http.Request, version Version, params ResumeAgentRolloutParams) {
+	var request ResumeAgentRolloutRequestObject
+
+	request.Version = version
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResumeAgentRollout(ctx, request.(ResumeAgentRolloutRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResumeAgentRollout")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResumeAgentRolloutResponseObject); ok {
+		if err := validResponse.VisitResumeAgentRolloutResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // ListOrganizations operation middleware
@@ -8141,106 +10035,133 @@ func (sh *strictHandler) UpdateMe(w http.ResponseWriter, r *http.Request, params
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"978BAAD//w==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

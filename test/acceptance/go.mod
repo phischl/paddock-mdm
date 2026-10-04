@@ -3,6 +3,7 @@ module github.com/paddock-mdm/paddock/test/acceptance
 go 1.25.0
 
 require (
+	aead.dev/minisign v0.3.0
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.0
@@ -18,7 +19,9 @@ require (
 	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
+	golang.org/x/crypto v0.13.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sys v0.26.0 // indirect
 )
 
 require (

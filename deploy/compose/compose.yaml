@@ -272,8 +272,16 @@ services:
       PADDOCK_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_AUTHENTIK_TOKEN_FILE: /run/secrets/authentik_service_token
+      PADDOCK_RELEASE_PUBLIC_KEY_FILE: /run/secrets/release_public_key
+      PADDOCK_ARTIFACTS_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_ARTIFACTS_S3_BUCKET: paddock-agent-artifacts
+      PADDOCK_ARTIFACTS_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_artifacts_api_access_key
+      PADDOCK_ARTIFACTS_S3_SECRET_KEY_FILE: /run/secrets/rustfs_artifacts_api_secret_key
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
+      - release_public_key
+      - rustfs_artifacts_api_access_key
+      - rustfs_artifacts_api_secret_key
       - db_paddock_api_url
       - db_paddock_platform_url
       - db_paddock_audit_reader_url
@@ -320,6 +328,7 @@ services:
       PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
       PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
+      PADDOCK_ARTIFACTS_S3_BUCKET: paddock-agent-artifacts
       PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_gateway_access_key
       PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_gateway_secret_key
     secrets:
@@ -377,12 +386,13 @@ services:
     environment:
       <<: *paddock-env
       PADDOCK_DB_WORKER_URL_FILE: /run/secrets/db_paddock_worker_url
+      PADDOCK_DB_PLATFORM_URL_FILE: /run/secrets/db_paddock_platform_url
       PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
       PADDOCK_AMQP_USER: worker
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_worker_password
       PADDOCK_VALKEY_ADDR: valkey:6379
       PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
-    secrets: [db_paddock_worker_url, rabbitmq_worker_password, valkey_password]
+    secrets: [db_paddock_worker_url, db_paddock_platform_url, rabbitmq_worker_password, valkey_password]
     networks: [cp]
     depends_on:
       paddock-migrate:
@@ -432,6 +442,9 @@ secrets:
   approle_compiler_secret_id: { file: ./.secrets/approle/paddock-compiler/secret_id }
   rustfs_bundles_gateway_access_key: { file: ./.secrets/rustfs_bundles_gateway_access_key }
   rustfs_bundles_gateway_secret_key: { file: ./.secrets/rustfs_bundles_gateway_secret_key }
+  rustfs_artifacts_api_access_key: { file: ./.secrets/rustfs_artifacts_api_access_key }
+  rustfs_artifacts_api_secret_key: { file: ./.secrets/rustfs_artifacts_api_secret_key }
+  release_public_key: { file: ./.secrets/release/minisign.pub }
   authentik_postgres_password: { file: ./.secrets/authentik_postgres_password }
   authentik_secret_key: { file: ./.secrets/authentik_secret_key }
   authentik_bootstrap_password: { file: ./.secrets/authentik_bootstrap_password }

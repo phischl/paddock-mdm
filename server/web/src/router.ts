@@ -15,6 +15,8 @@ export const router = createRouter({
     { path: '/managed-units', name: 'managed-units', component: () => import('./views/ManagedUnits.vue') },
     { path: '/audit', name: 'audit', component: () => import('./views/Audit.vue') },
     { path: '/platform/organizations', name: 'organizations', component: () => import('./views/Organizations.vue') },
+    { path: '/platform/agent-releases', name: 'agent-releases', component: () => import('./views/AgentReleases.vue') },
+    { path: '/platform/agent-releases/:version', name: 'agent-release', component: () => import('./views/AgentReleaseDetail.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFound.vue') },
   ],
 })

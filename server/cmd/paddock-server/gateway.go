@@ -24,6 +24,7 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 	vkCfg := config.LoadValkey(l)
 	bundlesURL := strings.TrimRight(l.Required("PADDOCK_BUNDLES_PUBLIC_URL"), "/")
 	bucket := l.String("PADDOCK_BUNDLES_S3_BUCKET", "paddock-bundles")
+	artifactsBucket := l.String("PADDOCK_ARTIFACTS_S3_BUCKET", "paddock-agent-artifacts")
 	accessKey := l.SecretFile("PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE")
 	secretKey := l.SecretFile("PADDOCK_BUNDLES_S3_SECRET_KEY_FILE")
 	if err := l.Err(); err != nil {
@@ -40,6 +41,8 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 		Cache:     devicecache.New(vk),
 		Publisher: pub,
 		Presigner: objectstore.NewPresigner(bundlesURL, accessKey, secretKey, bucket),
+		// Agent artifacts are served through the same public host with the gateway's read-only credential.
+		Artifacts: objectstore.NewPresigner(bundlesURL, accessKey, secretKey, artifactsBucket),
 	})
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	slog.InfoContext(ctx, "gateway starting", "addr", httpAddr, "bundles_url", bundlesURL)

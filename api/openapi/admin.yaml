@@ -843,6 +843,213 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/platform/v1/agent-releases:
+    get:
+      operationId: listAgentReleases
+      tags: [platform]
+      description: "Roles: platform_admin. Agent releases with their rollout status (plan M2b decision 20)."
+      x-paddock-list:
+        sort: [version, created_at, status]
+        default_sort: -created_at
+        search: [version]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AgentReleaseSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AgentReleaseStatus" }
+      responses:
+        "200":
+          description: One page of agent releases.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentReleasePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createAgentRelease
+      tags: [platform]
+      description: "Roles: platform_admin. Creates a draft release."
+      x-paddock-audit: agent_release.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentReleaseCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRelease" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-releases/{version}:
+    parameters:
+      - $ref: "#/components/parameters/Version"
+    get:
+      operationId: getAgentRelease
+      tags: [platform]
+      description: "Roles: platform_admin. The release with its artifacts and rollout, including device counts."
+      responses:
+        "200":
+          description: The release.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentReleaseDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-releases/{version}/artifacts/{arch}:
+    parameters:
+      - $ref: "#/components/parameters/Version"
+      - name: arch
+        in: path
+        required: true
+        schema: { type: string, enum: [amd64, arm64] }
+    put:
+      operationId: uploadAgentArtifact
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Uploads the paddockd binary of a draft release for one architecture (at most 128 MiB).
+        The server verifies the minisign signature with the configured release public key before it accepts the
+        binary (400 otherwise). Uploading again replaces the artifact while the release is a draft.
+      x-paddock-audit: agent_release.artifact_uploaded
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - name: X-Paddock-Minisig
+          in: header
+          required: true
+          description: Standard base64 of the .minisig signature file of the binary.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: The stored artifact.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentArtifact" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-releases/{version}/publish:
+    parameters:
+      - $ref: "#/components/parameters/Version"
+    post:
+      operationId: publishAgentRelease
+      tags: [platform]
+      description: "Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable."
+      x-paddock-audit: agent_release.published
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Published.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRelease" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-releases/{version}/rollout:
+    parameters:
+      - $ref: "#/components/parameters/Version"
+    post:
+      operationId: startAgentRollout
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Starts the staged rollout of a published release; only one rollout runs at a time
+        (409). Devices whose rollout bucket is inside the current wave are offered the release at their next
+        check-in; the worker advances waves after min_wave_minutes and halts the rollout when the failed devices
+        reach max(failure_threshold_min, ceil(eligible × failure_threshold_percent / 100)). min_wave_minutes below
+        60 is accepted only in development.
+      x-paddock-audit: agent_rollout.started
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentRolloutStart" }
+      responses:
+        "201":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRollout" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-releases/{version}/rollout/halt:
+    parameters:
+      - $ref: "#/components/parameters/Version"
+    post:
+      operationId: haltAgentRollout
+      tags: [platform]
+      description: "Roles: platform_admin. running → halted; devices are no longer offered the release."
+      x-paddock-audit: agent_rollout.halted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Halted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRollout" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-releases/{version}/rollout/resume:
+    parameters:
+      - $ref: "#/components/parameters/Version"
+    post:
+      operationId: resumeAgentRollout
+      tags: [platform]
+      description: "Roles: platform_admin. halted → running in the wave where it stopped."
+      x-paddock-audit: agent_rollout.resumed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Resumed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRollout" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     session:
@@ -890,6 +1097,20 @@ components:
         type: string
         enum: [occurred_at, -occurred_at, code, -code, outcome, -outcome]
         default: -occurred_at
+    AgentReleaseSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The version is the tie-breaker.
+      schema:
+        type: string
+        enum: [version, -version, created_at, -created_at, status, -status]
+        default: -created_at
+    Version:
+      name: version
+      in: path
+      required: true
+      description: Semantic version of an agent release.
+      schema: { type: string, pattern: '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$', maxLength: 64 }
     OrganizationSort:
       name: sort
       in: query
@@ -1031,6 +1252,95 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    AgentReleaseStatus:
+      type: string
+      enum: [draft, published]
+    AgentRolloutStatus:
+      type: string
+      enum: [running, halted, completed]
+    AgentReleaseCreate:
+      type: object
+      required: [version]
+      additionalProperties: false
+      properties:
+        version: { type: string, maxLength: 64 }
+    AgentRelease:
+      type: object
+      required: [version, status, created_by, created_at, artifact_count]
+      properties:
+        version: { type: string }
+        status: { $ref: "#/components/schemas/AgentReleaseStatus" }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        published_at: { type: string, format: date-time }
+        artifact_count: { type: integer }
+        rollout_status: { $ref: "#/components/schemas/AgentRolloutStatus" }
+    AgentReleasePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AgentRelease" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    AgentArtifact:
+      type: object
+      required: [arch, sha256, size, created_at]
+      properties:
+        arch: { type: string, enum: [amd64, arm64] }
+        sha256: { type: string, description: Hex SHA-256 of the binary. }
+        size: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+    AgentRolloutStart:
+      type: object
+      additionalProperties: false
+      properties:
+        waves:
+          type: array
+          description: Percentages of devices per wave, strictly increasing, ending with 100. Default [1, 10, 50, 100].
+          minItems: 1
+          maxItems: 10
+          items: { type: integer, minimum: 1, maximum: 100 }
+        min_wave_minutes: { type: integer, minimum: 1, description: "Default 1440; at least 60 outside development." }
+        failure_threshold_percent: { type: integer, minimum: 0, maximum: 100, description: Default 2. }
+        failure_threshold_min: { type: integer, minimum: 0, description: Default 3. }
+    AgentRollout:
+      type: object
+      required: [version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent,
+                 failure_threshold_min, status, started_by, started_at]
+      properties:
+        version: { type: string }
+        waves: { type: array, items: { type: integer } }
+        current_wave_index: { type: integer }
+        wave_started_at: { type: string, format: date-time }
+        min_wave_minutes: { type: integer }
+        failure_threshold_percent: { type: integer }
+        failure_threshold_min: { type: integer }
+        status: { $ref: "#/components/schemas/AgentRolloutStatus" }
+        halted_reason: { type: string }
+        started_by: { type: string }
+        started_at: { type: string, format: date-time }
+    AgentRolloutCounts:
+      type: object
+      required: [eligible, updated, failed]
+      properties:
+        eligible: { type: integer, format: int64, description: Active devices inside the current wave. }
+        updated: { type: integer, format: int64, description: Devices that reported agent.updated for this version. }
+        failed: { type: integer, format: int64, description: "Devices that reported agent.update_failed or agent.rolled_back for this version." }
+    AgentReleaseDetail:
+      type: object
+      required: [release, artifacts]
+      properties:
+        release: { $ref: "#/components/schemas/AgentRelease" }
+        artifacts:
+          type: array
+          items: { $ref: "#/components/schemas/AgentArtifact" }
+        rollout: { $ref: "#/components/schemas/AgentRollout" }
+        counts: { $ref: "#/components/schemas/AgentRolloutCounts" }
     Organization:
       type: object
       required: [id, slug, name, status, created_at]

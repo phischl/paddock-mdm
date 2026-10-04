@@ -98,8 +98,25 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 		n, err := q.InsertDeviceEventSeen(ctx, pgstore.InsertDeviceEventSeenParams{
 			DeviceID: deviceID, EventSeq: ev.EventSeq, OrganizationID: org,
 		})
-		return n == 1, err
+		if err != nil || n != 1 {
+			return false, err
+		}
+		if outcome, ok := updateOutcomes[ev.Type]; ok {
+			if version, ok := spec.Params["version"].(string); ok {
+				err = q.InsertAgentUpdateReport(ctx, pgstore.InsertAgentUpdateReportParams{
+					DeviceID: deviceID, OrganizationID: org, Version: version, Outcome: outcome,
+				})
+			}
+		}
+		return true, err
 	})
+}
+
+// updateOutcomes are the agent update events the rollout evaluation counts (agent_update_report.outcome).
+var updateOutcomes = map[string]string{
+	protocol.EventAgentUpdated:      "updated",
+	protocol.EventAgentUpdateFailed: "update_failed",
+	protocol.EventAgentRolledBack:   "rolled_back",
 }
 
 // Bounds of the device-reported values copied into audit params.

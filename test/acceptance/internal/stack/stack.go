@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"aead.dev/minisign"
 )
 
 // RepoRoot returns the repository root (the directory containing go.work).
@@ -136,4 +138,25 @@ func AuditIndexDSN() (string, error) {
 	}
 	u.Host = Env("PADDOCK_TEST_AUDIT_DB_HOST", "127.0.0.1:5433")
 	return u.String(), nil
+}
+
+// ReleaseKey loads a minisign secret key; empty path is the development release key (make dev-release-key), which
+// is stored without a password.
+func ReleaseKey(path string) (minisign.PrivateKey, error) {
+	if path == "" {
+		dir, err := SecretsDir()
+		if err != nil {
+			return minisign.PrivateKey{}, err
+		}
+		path = filepath.Join(dir, "release", "minisign.key")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return minisign.PrivateKey{}, fmt.Errorf("release key (run `make dev-release-key`): %w", err)
+	}
+	if minisign.IsEncrypted(data) {
+		return minisign.DecryptKey("", data)
+	}
+	var k minisign.PrivateKey
+	return k, k.UnmarshalText(data)
 }

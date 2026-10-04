@@ -67,6 +67,9 @@ for role in compiler gateway; do
   secret "rustfs_bundles_${role}_access_key"
   secret "rustfs_bundles_${role}_secret_key"
 done
+# Agent artifacts (plan M2b decision 19): the api uploads; the gateway presigns with its bundles credential.
+secret rustfs_artifacts_api_access_key
+secret rustfs_artifacts_api_secret_key
 
 # Valkey: one password; the server reads it through an included config file.
 secret valkey_password

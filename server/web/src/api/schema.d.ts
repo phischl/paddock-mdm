@@ -475,6 +475,155 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/agent-releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: platform_admin. Agent releases with their rollout status (plan M2b decision 20). */
+        get: operations["listAgentReleases"];
+        put?: never;
+        /** @description Roles: platform_admin. Creates a draft release. */
+        post: operations["createAgentRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/agent-releases/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: platform_admin. The release with its artifacts and rollout, including device counts. */
+        get: operations["getAgentRelease"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/agent-releases/{version}/artifacts/{arch}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+                arch: "amd64" | "arm64";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * @description Roles: platform_admin. Uploads the paddockd binary of a draft release for one architecture (at most 128 MiB).
+         *     The server verifies the minisign signature with the configured release public key before it accepts the
+         *     binary (400 otherwise). Uploading again replaces the artifact while the release is a draft.
+         */
+        put: operations["uploadAgentArtifact"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/agent-releases/{version}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: platform_admin. draft → published; requires at least one artifact. Published releases are immutable. */
+        post: operations["publishAgentRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/agent-releases/{version}/rollout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin. Starts the staged rollout of a published release; only one rollout runs at a time
+         *     (409). Devices whose rollout bucket is inside the current wave are offered the release at their next
+         *     check-in; the worker advances waves after min_wave_minutes and halts the rollout when the failed devices
+         *     reach max(failure_threshold_min, ceil(eligible × failure_threshold_percent / 100)). min_wave_minutes below
+         *     60 is accepted only in development.
+         */
+        post: operations["startAgentRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/agent-releases/{version}/rollout/halt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: platform_admin. running → halted; devices are no longer offered the release. */
+        post: operations["haltAgentRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/agent-releases/{version}/rollout/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: platform_admin. halted → running in the wave where it stopped. */
+        post: operations["resumeAgentRollout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -541,6 +690,93 @@ export interface components {
             total_capped: boolean;
             /** @description Applied sort. */
             sort: string;
+        };
+        /** @enum {string} */
+        AgentReleaseStatus: "draft" | "published";
+        /** @enum {string} */
+        AgentRolloutStatus: "running" | "halted" | "completed";
+        AgentReleaseCreate: {
+            version: string;
+        };
+        AgentRelease: {
+            version: string;
+            status: components["schemas"]["AgentReleaseStatus"];
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            published_at?: string;
+            artifact_count: number;
+            rollout_status?: components["schemas"]["AgentRolloutStatus"];
+        };
+        AgentReleasePage: {
+            items: components["schemas"]["AgentRelease"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        AgentArtifact: {
+            /** @enum {string} */
+            arch: "amd64" | "arm64";
+            /** @description Hex SHA-256 of the binary. */
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AgentRolloutStart: {
+            /** @description Percentages of devices per wave, strictly increasing, ending with 100. Default [1, 10, 50, 100]. */
+            waves?: number[];
+            /** @description Default 1440; at least 60 outside development. */
+            min_wave_minutes?: number;
+            /** @description Default 2. */
+            failure_threshold_percent?: number;
+            /** @description Default 3. */
+            failure_threshold_min?: number;
+        };
+        AgentRollout: {
+            version: string;
+            waves: number[];
+            current_wave_index: number;
+            /** Format: date-time */
+            wave_started_at: string;
+            min_wave_minutes: number;
+            failure_threshold_percent: number;
+            failure_threshold_min: number;
+            status: components["schemas"]["AgentRolloutStatus"];
+            halted_reason?: string;
+            started_by: string;
+            /** Format: date-time */
+            started_at: string;
+        };
+        AgentRolloutCounts: {
+            /**
+             * Format: int64
+             * @description Active devices inside the current wave.
+             */
+            eligible: number;
+            /**
+             * Format: int64
+             * @description Devices that reported agent.updated for this version.
+             */
+            updated: number;
+            /**
+             * Format: int64
+             * @description Devices that reported agent.update_failed or agent.rolled_back for this version.
+             */
+            failed: number;
+        };
+        AgentReleaseDetail: {
+            release: components["schemas"]["AgentRelease"];
+            artifacts: components["schemas"]["AgentArtifact"][];
+            rollout?: components["schemas"]["AgentRollout"];
+            counts?: components["schemas"]["AgentRolloutCounts"];
         };
         Organization: {
             /** Format: uuid */
@@ -897,6 +1133,10 @@ export interface components {
         DeviceGroupSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
         AuditEventSort: "occurred_at" | "-occurred_at" | "code" | "-code" | "outcome" | "-outcome";
+        /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+        AgentReleaseSort: "version" | "-version" | "created_at" | "-created_at" | "status" | "-status";
+        /** @description Semantic version of an agent release. */
+        Version: string;
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         OrganizationSort: "slug" | "-slug" | "name" | "-name" | "created_at" | "-created_at" | "status" | "-status";
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
@@ -1981,6 +2221,259 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listAgentReleases: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+                sort?: components["parameters"]["AgentReleaseSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["AgentReleaseStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of agent releases. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentReleasePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createAgentRelease: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentReleaseCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRelease"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getAgentRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The release. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentReleaseDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    uploadAgentArtifact: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+                /** @description Standard base64 of the .minisig signature file of the binary. */
+                "X-Paddock-Minisig": string;
+            };
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+                arch: "amd64" | "arm64";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The stored artifact. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentArtifact"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    publishAgentRelease: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRelease"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    startAgentRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AgentRolloutStart"];
+            };
+        };
+        responses: {
+            /** @description Started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    haltAgentRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Halted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    resumeAgentRollout: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resumed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRollout"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
 }

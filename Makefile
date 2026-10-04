@@ -83,6 +83,18 @@ image: ## Build the paddock-server container image
 .PHONY: dev-secrets
 dev-secrets: ## Generate local development secrets (idempotent)
 	$(COMPOSE_DIR)/scripts/gen-dev-secrets.sh
+	@$(MAKE) --no-print-directory dev-release-key
+
+RELEASE_KEY_DIR := $(SECRETS_DIR)/release
+MINISIGN        := cd agent && go run aead.dev/minisign/cmd/minisign
+
+.PHONY: dev-release-key
+dev-release-key: ## Generate the password-less development agent release key pair (idempotent; never for production)
+	@if [ -f $(RELEASE_KEY_DIR)/minisign.pub ]; then echo "release key exists: $(RELEASE_KEY_DIR)"; else \
+		mkdir -p $(RELEASE_KEY_DIR) && chmod 700 $(RELEASE_KEY_DIR) && \
+		($(MINISIGN) -G -W -p $(CURDIR)/$(RELEASE_KEY_DIR)/minisign.pub -s $(CURDIR)/$(RELEASE_KEY_DIR)/minisign.key </dev/null >/dev/null) && \
+		chmod 644 $(RELEASE_KEY_DIR)/minisign.pub && chmod 600 $(RELEASE_KEY_DIR)/minisign.key && \
+		echo "created development release key $(RELEASE_KEY_DIR)/minisign.pub"; fi
 
 .PHONY: up
 up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy
@@ -125,8 +137,10 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 .PHONY: e2e
 e2e: ## Run Playwright end-to-end tests against the running stack
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
+	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
+		-e PADDOCK_E2E_AGENTRELEASE=/src/bin/agentrelease \
 		-v $(CURDIR):/src -w /src/$(WEB_DIR) \
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test'
 

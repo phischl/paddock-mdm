@@ -37,6 +37,47 @@ type AdminAccount struct {
 	LastLoginAt    *time.Time
 }
 
+type AgentArtifact struct {
+	Version   string
+	Arch      string
+	Sha256    string
+	Size      int64
+	Minisig   string
+	ObjectKey string
+	CreatedAt time.Time
+}
+
+type AgentRelease struct {
+	Version     string
+	Status      string
+	CreatedBy   string
+	CreatedAt   time.Time
+	PublishedAt *time.Time
+}
+
+type AgentRollout struct {
+	Version                 string
+	Waves                   []int32
+	CurrentWaveIndex        int32
+	WaveStartedAt           time.Time
+	MinWaveMinutes          int32
+	FailureThresholdPercent int32
+	FailureThresholdMin     int32
+	Status                  string
+	HaltedReason            *string
+	StartedBy               string
+	StartedAt               time.Time
+	UpdatedAt               time.Time
+}
+
+type AgentUpdateReport struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	Version        string
+	Outcome        string
+	ReportedAt     time.Time
+}
+
 type Bundle struct {
 	DeviceID       uuid.UUID
 	Version        int64

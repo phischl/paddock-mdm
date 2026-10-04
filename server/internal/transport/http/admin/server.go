@@ -25,6 +25,7 @@ type Deps struct {
 	Tokens        *app.EnrollmentTokens
 	Devices       *app.Devices
 	Managed       *app.ManagedConfig
+	Releases      *app.AgentReleases
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -39,23 +40,29 @@ var privileged = map[string]struct {
 	scope app.Scope
 	spec  app.ActionSpec
 }{
-	"POST /api/v1/device-groups":                   {app.ScopeOrg, app.SpecDeviceGroupCreate},
-	"PATCH /api/v1/device-groups/{id}":             {app.ScopeOrg, app.SpecDeviceGroupUpdate},
-	"DELETE /api/v1/device-groups/{id}":            {app.ScopeOrg, app.SpecDeviceGroupDelete},
-	"POST /api/platform/v1/organizations":          {app.ScopePlatform, app.SpecOrganizationCreate},
-	"POST /api/v1/enrollment-tokens":               {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
-	"PUT /api/v1/devices/{id}/groups":              {app.ScopeOrg, app.SpecDeviceSetGroups},
-	"POST /api/v1/devices/{id}/approve":            {app.ScopeOrg, app.SpecDeviceApprove},
-	"POST /api/v1/devices/{id}/reject":             {app.ScopeOrg, app.SpecDeviceReject},
-	"POST /api/v1/devices/{id}/release-quarantine": {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},
-	"POST /api/v1/devices/{id}/retire":             {app.ScopeOrg, app.SpecDeviceRetire},
-	"POST /api/v1/enrollment-tokens/{id}/revoke":   {app.ScopeOrg, app.SpecEnrollmentTokenRevoke},
-	"POST /api/v1/managed-files":                   {app.ScopeOrg, app.SpecManagedFileCreate},
-	"PATCH /api/v1/managed-files/{id}":             {app.ScopeOrg, app.SpecManagedFileUpdate},
-	"DELETE /api/v1/managed-files/{id}":            {app.ScopeOrg, app.SpecManagedFileDelete},
-	"POST /api/v1/managed-units":                   {app.ScopeOrg, app.SpecManagedUnitCreate},
-	"PATCH /api/v1/managed-units/{id}":             {app.ScopeOrg, app.SpecManagedUnitUpdate},
-	"DELETE /api/v1/managed-units/{id}":            {app.ScopeOrg, app.SpecManagedUnitDelete},
+	"POST /api/v1/device-groups":                                     {app.ScopeOrg, app.SpecDeviceGroupCreate},
+	"PATCH /api/v1/device-groups/{id}":                               {app.ScopeOrg, app.SpecDeviceGroupUpdate},
+	"DELETE /api/v1/device-groups/{id}":                              {app.ScopeOrg, app.SpecDeviceGroupDelete},
+	"POST /api/platform/v1/organizations":                            {app.ScopePlatform, app.SpecOrganizationCreate},
+	"POST /api/v1/enrollment-tokens":                                 {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
+	"PUT /api/v1/devices/{id}/groups":                                {app.ScopeOrg, app.SpecDeviceSetGroups},
+	"POST /api/v1/devices/{id}/approve":                              {app.ScopeOrg, app.SpecDeviceApprove},
+	"POST /api/v1/devices/{id}/reject":                               {app.ScopeOrg, app.SpecDeviceReject},
+	"POST /api/v1/devices/{id}/release-quarantine":                   {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},
+	"POST /api/v1/devices/{id}/retire":                               {app.ScopeOrg, app.SpecDeviceRetire},
+	"POST /api/v1/enrollment-tokens/{id}/revoke":                     {app.ScopeOrg, app.SpecEnrollmentTokenRevoke},
+	"POST /api/platform/v1/agent-releases":                           {app.ScopePlatform, app.SpecAgentReleaseCreate},
+	"PUT /api/platform/v1/agent-releases/{version}/artifacts/{arch}": {app.ScopePlatform, app.SpecAgentReleaseUpload},
+	"POST /api/platform/v1/agent-releases/{version}/publish":         {app.ScopePlatform, app.SpecAgentReleasePublish},
+	"POST /api/platform/v1/agent-releases/{version}/rollout":         {app.ScopePlatform, app.SpecAgentRolloutStart},
+	"POST /api/platform/v1/agent-releases/{version}/rollout/halt":    {app.ScopePlatform, app.SpecAgentRolloutHalt},
+	"POST /api/platform/v1/agent-releases/{version}/rollout/resume":  {app.ScopePlatform, app.SpecAgentRolloutResume},
+	"POST /api/v1/managed-files":                                     {app.ScopeOrg, app.SpecManagedFileCreate},
+	"PATCH /api/v1/managed-files/{id}":                               {app.ScopeOrg, app.SpecManagedFileUpdate},
+	"DELETE /api/v1/managed-files/{id}":                              {app.ScopeOrg, app.SpecManagedFileDelete},
+	"POST /api/v1/managed-units":                                     {app.ScopeOrg, app.SpecManagedUnitCreate},
+	"PATCH /api/v1/managed-units/{id}":                               {app.ScopeOrg, app.SpecManagedUnitUpdate},
+	"DELETE /api/v1/managed-units/{id}":                              {app.ScopeOrg, app.SpecManagedUnitDelete},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -68,7 +75,7 @@ func NewHandler(d Deps) http.Handler {
 	api := http.NewServeMux()
 	h := &handlers{
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
-		devices: d.Devices, managed: d.Managed, now: d.Now,
+		devices: d.Devices, managed: d.Managed, releases: d.Releases, now: d.Now,
 	}
 	strict := adminapi.NewStrictHandlerWithOptions(h, nil,
 		adminapi.StrictHTTPServerOptions{

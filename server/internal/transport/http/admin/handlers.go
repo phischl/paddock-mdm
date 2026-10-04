@@ -24,6 +24,7 @@ type handlers struct {
 	tokens   *app.EnrollmentTokens
 	devices  *app.Devices
 	managed  *app.ManagedConfig
+	releases *app.AgentReleases
 	now      func() time.Time
 }
 
