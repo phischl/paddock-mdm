@@ -102,3 +102,30 @@ export async function allGroups(): Promise<{ id: string; name: string }[]> {
   }
   return out
 }
+
+/** Replaces the login assignment of a device; null on success, otherwise the problem code. */
+export async function setLoginAssignment(id: string, users: string[], groups: string[]): Promise<string | null> {
+  const { error } = await api.PUT('/api/v1/devices/{id}/login-assignment', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
+    body: { users, groups },
+  })
+  return error ? problemCode(error) : null
+}
+
+/** Suspends or resumes directory logins on a device; null on success, otherwise the problem code. */
+export async function setLoginsSuspended(id: string, suspended: boolean): Promise<string | null> {
+  const path = suspended ? '/api/v1/devices/{id}/suspend-logins' : '/api/v1/devices/{id}/resume-logins'
+  const { error } = await api.POST(path, { params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } } })
+  return error ? problemCode(error) : null
+}
+
+/** All devices by hostname (selection lists), paged through the list contract (at most its depth limit). */
+export async function allDevices(): Promise<{ id: string; hostname: string }[]> {
+  const out: { id: string; hostname: string }[] = []
+  for (let page = 1; page * 100 <= maxListDepth; page++) {
+    const { data } = await api.GET('/api/v1/devices', { params: { query: { page, page_size: 100, sort: 'hostname' } } })
+    out.push(...(data?.items ?? []).map((d) => ({ id: d.id, hostname: d.hostname })))
+    if (!data || page * data.page_size >= data.total) break
+  }
+  return out
+}

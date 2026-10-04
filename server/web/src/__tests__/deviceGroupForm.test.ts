@@ -48,6 +48,6 @@ describe('DeviceGroupForm', () => {
     const wrapper = mountForm({ initialName: 'Servers', problem: 'name_taken' })
     expect((wrapper.find('#device-group-name').element as HTMLInputElement).value).toBe('Servers')
     // Vuetify's field message containers are role="alert" too; the server problem is the form-level paragraph.
-    expect(wrapper.find('p[role="alert"]').text()).toBe('A device group with this name already exists.')
+    expect(wrapper.find('p[role="alert"]').text()).toBe('An item with this name already exists.')
   })
 })

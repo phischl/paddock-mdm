@@ -11,9 +11,14 @@ const { t, locale } = useI18n()
 const route = useRoute()
 const problemText = useProblemText()
 const session = useSessionStore()
-const { device, config, groups, selectedGroups, problem, saved, actions, load, run, saveGroups } =
-  useDeviceDetailPage(() => String(route.params.id))
-onMounted(load)
+const {
+  device, config, groups, selectedGroups, problem, saved, actions, load, run, saveGroups,
+  users, userGroups, loginUsers, loginGroups, loginSaved, sudo, loadSubjects, saveLogin, toggleSuspension,
+} = useDeviceDetailPage(() => String(route.params.id))
+onMounted(async () => {
+  await load()
+  await loadSubjects()
+})
 
 function groupName(id: string | null | undefined): string {
   if (!id) return t('managed.allDevices')
@@ -153,6 +158,129 @@ function groupName(id: string | null | undefined): string {
           </v-btn>
         </div>
       </form>
+
+      <h2>{{ t('devices.login.title') }}</h2>
+      <v-alert
+        v-if="!device.login_management"
+        type="info"
+        variant="tonal"
+        class="conflict"
+        data-testid="agent-too-old"
+      >
+        {{ t('devices.login.agentTooOld') }}
+      </v-alert>
+      <v-alert
+        v-if="device.logins_suspended"
+        type="warning"
+        variant="tonal"
+        class="conflict"
+        data-testid="logins-suspended"
+      >
+        {{ t('devices.login.suspendedHint') }}
+      </v-alert>
+      <form
+        class="form groups-form"
+        novalidate
+        @submit.prevent="saveLogin"
+      >
+        <p class="summary">
+          {{ t('devices.login.assignmentHint') }}
+        </p>
+        <v-autocomplete
+          v-model="loginUsers"
+          :items="session.canWrite ? users.map((u) => ({ value: u.id, title: u.username })) : device.login_assignment.users.map((u) => ({ value: u.id, title: u.username }))"
+          :label="t('devices.login.users')"
+          :disabled="!session.canWrite"
+          multiple
+          chips
+          data-testid="login-users"
+        />
+        <v-autocomplete
+          v-model="loginGroups"
+          :items="session.canWrite ? userGroups.map((g) => ({ value: g.id, title: g.name })) : device.login_assignment.groups.map((g) => ({ value: g.id, title: g.name }))"
+          :label="t('devices.login.groups')"
+          :disabled="!session.canWrite"
+          multiple
+          chips
+          data-testid="login-groups"
+        />
+        <div
+          v-if="session.canWrite"
+          class="form-actions"
+        >
+          <span
+            v-if="loginSaved"
+            role="status"
+          >{{ t('devices.login.saved') }}</span>
+          <v-btn
+            :color="device.logins_suspended ? 'primary' : 'error'"
+            variant="outlined"
+            data-testid="toggle-suspension"
+            @click="toggleSuspension"
+          >
+            {{ t(device.logins_suspended ? 'devices.login.resume.label' : 'devices.login.suspend.label') }}
+          </v-btn>
+          <v-btn
+            type="submit"
+            color="primary"
+            data-testid="save-login-assignment"
+          >
+            {{ t('common.save') }}
+          </v-btn>
+        </div>
+      </form>
+
+      <h2>{{ t('devices.sudo.title') }}</h2>
+      <template v-if="sudo">
+        <v-alert
+          v-for="e in sudo.entries.filter((x) => x.root_equivalent)"
+          :key="'root-' + e.user.id"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="sudo-root-equivalent"
+        >
+          {{ t('devices.sudo.rootEquivalent', { username: e.user.username, commands: e.root_equivalent_commands.join(', ') }) }}
+        </v-alert>
+        <v-table
+          class="table"
+          data-testid="effective-sudo"
+        >
+          <caption>{{ t('devices.sudo.caption') }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">
+                {{ t('users.username') }}
+              </th>
+              <th scope="col">
+                {{ t('profiles.class') }}
+              </th>
+              <th scope="col">
+                {{ t('profiles.commands') }}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="sudo.entries.length === 0">
+              <td colspan="3">
+                {{ t('devices.sudo.none') }}
+              </td>
+            </tr>
+            <tr
+              v-for="e in sudo.entries"
+              :key="e.user.id"
+            >
+              <td>
+                <RouterLink :to="{ name: 'user', params: { id: e.user.id } }">
+                  {{ e.user.username }}
+                </RouterLink>
+              </td>
+              <td>{{ t('profiles.classes.' + e.reported_class) }}</td>
+              <td>{{ e.class === 'full' ? t('profiles.allCommands') : e.commands.join(', ') }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </template>
 
       <h2>{{ t('devices.effectiveConfig') }}</h2>
       <template v-if="config">

@@ -16,7 +16,11 @@
     "enrollmentTokens": "Enrollment tokens",
     "managedFiles": "Managed files",
     "managedUnits": "Managed units",
-    "agentReleases": "Agent releases"
+    "agentReleases": "Agent releases",
+    "users": "Users",
+    "userGroups": "Groups",
+    "permissionProfiles": "Permission profiles",
+    "loginSettings": "Login & privileges"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -75,8 +79,8 @@
     "unitInvalid": "Enter a unit name ending in .service, .timer, .socket or .path."
   },
   "problems": {
-    "name_taken": "A device group with this name already exists.",
-    "slug_taken": "An organization with this slug already exists.",
+    "name_taken": "An item with this name already exists.",
+    "slug_taken": "This slug is already taken.",
     "forbidden": "You are not allowed to do this.",
     "not_found": "This item no longer exists.",
     "upstream_unavailable": "The identity provider is not reachable. The organization was saved and can be provisioned again.",
@@ -86,9 +90,13 @@
     "internal": "Something went wrong. Please try again.",
     "invalid_state": "This action is not possible in the current state.",
     "already_exists": "This is already managed for the same devices.",
-    "in_use": "An enrollment token still adds devices to this group. Revoke the token first.",
+    "in_use": "This item is still in use. Remove what uses it first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the protected areas.",
-    "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected."
+    "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected.",
+    "username_taken": "This username is already taken.",
+    "domain_taken": "One of these domains belongs to another organization.",
+    "attribute_owned_upstream": "This is managed by the upstream directory and cannot be changed in Paddock.",
+    "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\."
   },
   "audit": {
     "title": "Audit log",
@@ -117,7 +125,8 @@
       "login": "{actor} signed in"
     },
     "organization": {
-      "created": "{actor} created the organization {slug}"
+      "created": "{actor} created the organization {slug}",
+      "domains_changed": "{actor} set the domains of {slug}"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -142,7 +151,11 @@
       "agent_updated": "The device {target} updated its agent to {version}",
       "agent_update_failed": "The device {target} refused agent {version} ({outcome})",
       "agent_rolled_back": "The device {target} rolled agent {version} back to {from_version}",
-      "agent_events_dropped": "The device {target} dropped {count, number} events while the server was unreachable"
+      "agent_events_dropped": "The device {target} dropped {count, number} events while the server was unreachable",
+      "login_assignment_changed": "{actor} changed who may log in on {hostname}",
+      "logins_suspended": "{actor} suspended logins on {hostname}",
+      "logins_resumed": "{actor} resumed logins on {hostname}",
+      "bundle_render_failed": "A new bundle of {target} was blocked: the sudo rights of {username} failed the check"
     },
     "agent_release": {
       "created": "{actor} created the agent release {version}",
@@ -165,6 +178,35 @@
       "created": "{actor} defined the managed unit {unit}",
       "updated": "{actor} changed the managed unit {unit}",
       "deleted": "{actor} deleted the managed unit {unit}"
+    },
+    "user": {
+      "created": "{actor} created the user {username}",
+      "updated": "{actor} changed the user {username}",
+      "deleted": "{actor} deleted the user {username}",
+      "locked": "{actor} locked the user {username}",
+      "unlocked": "{actor} unlocked the user {username}",
+      "synced_added": "The synced user {username} was added",
+      "synced_removed": "The synced user {username} was removed"
+    },
+    "user_group": {
+      "created": "{actor} created the group {name}",
+      "updated": "{actor} renamed the group {old_name} to {name}",
+      "deleted": "{actor} deleted the group {name}",
+      "member_added": "{actor} added {user} to the group {group} (highest rights {effective_class_before} → {effective_class_after})",
+      "member_removed": "{actor} removed {user} from the group {group} (highest rights {effective_class_before} → {effective_class_after})"
+    },
+    "settings": {
+      "login_changed": "{actor} changed the login settings"
+    },
+    "permission_profile": {
+      "created": "{actor} created the permission profile {name}",
+      "updated": "{actor} changed the permission profile {name}",
+      "deleted": "{actor} deleted the permission profile {name}"
+    },
+    "profile_assignment": {
+      "created": "{actor} assigned the permission profile {profile}",
+      "updated": "{actor} changed the devices of an assignment of {profile}",
+      "deleted": "{actor} removed an assignment of {profile}"
     }
   },
   "organizations": {
@@ -294,6 +336,31 @@
         "title": "Retire device",
         "confirm": "Retire {hostname}? Its identity is revoked permanently and it stops receiving configuration. This cannot be undone."
       }
+    },
+    "login": {
+      "title": "Login",
+      "agentTooOld": "The agent on this device is too old for login management: logins and sudo rights are not managed until it is updated.",
+      "suspendedHint": "Directory logins are suspended on this device. Break-glass accounts still work.",
+      "assignmentHint": "Who may log in. Leave both empty to allow every user of the organization.",
+      "users": "Users",
+      "groups": "Groups",
+      "saved": "Login assignment saved.",
+      "suspend": {
+        "label": "Suspend logins",
+        "title": "Suspend logins",
+        "confirm": "Suspend directory logins on {hostname}? Open sessions of directory users are ended at the device's next check-in."
+      },
+      "resume": {
+        "label": "Resume logins",
+        "title": "Resume logins",
+        "confirm": "Allow directory logins on {hostname} again?"
+      }
+    },
+    "sudo": {
+      "title": "Effective sudo rights",
+      "caption": "Users allowed on this device with sudo rights",
+      "none": "Nobody has sudo rights on this device.",
+      "rootEquivalent": "{username} effectively has root on this device: {commands}"
     }
   },
   "tokens": {
@@ -358,5 +425,161 @@
       "wanted": "Desired state",
       "wantedState": "{enabled, select, true {enabled} other {disabled}}, {active, select, true {running} other {stopped}}"
     }
+  },
+  "users": {
+    "title": "Users",
+    "create": "Create local user",
+    "createTitle": "New local user",
+    "editTitle": "Edit user",
+    "back": "Back to users",
+    "username": "Username",
+    "usernameHint": "Name and one of the organization's domains, for example dave@example.org.",
+    "usernameInvalid": "Enter a username such as dave@example.org.",
+    "displayName": "Display name",
+    "email": "Email",
+    "source": "Source",
+    "sources": {
+      "local": "Local",
+      "synced": "Synced"
+    },
+    "lockState": "Lock",
+    "locked": "Locked",
+    "notLocked": "Not locked",
+    "lockedSince": "Locked since {at}",
+    "groups": "Groups",
+    "recoveryLink": "Password link",
+    "linkShownOnce": "Give this one-time link to {username}: it sets the password and is valid for 24 hours. It is shown only now.",
+    "syncedHint": "This user is synced from an upstream directory: name, email and password are managed there. Lock, groups and permissions are managed here.",
+    "lock": "Lock",
+    "lockTitle": "Lock user",
+    "lockConfirm": "Lock {username}? Online sign-ins fail at once, and the user's devices lock the sessions and refuse logins at their next check-in.",
+    "unlock": "Unlock",
+    "unlockTitle": "Unlock user",
+    "unlockConfirm": "Unlock {username}? The user signs in with the device code again and sets up a new PIN.",
+    "deleteTitle": "Delete user",
+    "deleteConfirm": "Delete {username} with all group memberships and permissions? This cannot be undone."
+  },
+  "userGroups": {
+    "title": "Groups",
+    "create": "Create group",
+    "import": "Import upstream group",
+    "createTitle": "New group",
+    "importTitle": "Import an upstream group",
+    "importAction": "Import",
+    "back": "Back to groups",
+    "slug": "Slug",
+    "slugHint": "Part of the group name devices see; cannot be changed later.",
+    "slugInvalid": "Use 2 to 42 lowercase letters, digits and hyphens; start and end with a letter or digit.",
+    "authentikName": "Name on devices",
+    "sources": {
+      "local": "Local",
+      "synced": "Imported"
+    },
+    "upstreamGroup": "Upstream group",
+    "importHint": "Its members of this organization are copied every few minutes.",
+    "upstreamRequired": "Choose the group to import.",
+    "rename": "Rename",
+    "deleteTitle": "Delete group",
+    "deleteConfirm": "Delete the group {name} with its login and permission assignments? This cannot be undone.",
+    "mirrorHint": "The members of this group are copied from the upstream directory and cannot be changed here.",
+    "members": "Members",
+    "addMember": "Add a member",
+    "add": "Add",
+    "remove": "Remove",
+    "removeTitle": "Remove member",
+    "removeConfirm": "Remove {username} from {group}? The user loses the group's logins and permissions.",
+    "removeLabel": "Remove {username}"
+  },
+  "profiles": {
+    "title": "Permission profiles",
+    "create": "Create profile",
+    "createTitle": "New permission profile",
+    "editTitle": "Edit permission profile",
+    "back": "Back to permission profiles",
+    "class": "Class",
+    "classes": {
+      "none": "None",
+      "restricted": "Restricted",
+      "full": "Full"
+    },
+    "classHints": {
+      "none": "No sudo rights.",
+      "restricted": "sudo for the listed commands only.",
+      "full": "sudo for every command (root)."
+    },
+    "commands": "Commands",
+    "commandsHint": "One absolute command per line, with optional arguments.",
+    "commandsRequired": "Enter at least one command.",
+    "requirePassword": "Ask for the password",
+    "timeout": "Password remembered for (minutes)",
+    "timeoutInvalid": "Enter 0 to 60 minutes.",
+    "lecture": "Lecture",
+    "lectures": {
+      "always": "Every time",
+      "once": "First time",
+      "never": "Never"
+    },
+    "rootEquivalentBadge": "root-equivalent",
+    "commandCount": "{count, plural, =0 {–} one {# command} other {# commands}}",
+    "rootEquivalentProfile": "These commands hand out root, on their own or together: {commands}. Devices treat this profile like full rights.",
+    "rootEquivalentEffective": "The combined commands hand out root: {commands}. This is reported as full rights.",
+    "fullTitle": "Grant full rights",
+    "fullConfirm": "Create {name} with full sudo rights? Everyone it is assigned to becomes root on their devices.",
+    "toFullConfirm": "Give {name} full sudo rights? Everyone it is assigned to becomes root on their devices.",
+    "assignFullConfirm": "Assign {name}, which grants full sudo rights? The subject becomes root on the devices in scope.",
+    "deleteTitle": "Delete permission profile",
+    "deleteConfirm": "Delete {name}? Profiles that are still assigned cannot be deleted.",
+    "scalars": "Settings",
+    "scalarFacts": "Password asked: {password, select, true {yes} other {no}}; remembered for {timeout, number} min; lecture: {lecture}",
+    "assignments": "Assignments",
+    "subjectType": "Assigned to",
+    "subjectTypes": {
+      "global": "Everyone",
+      "group": "Group",
+      "user": "User"
+    },
+    "assignedTo": "Subject",
+    "scope": "Devices",
+    "assign": "Assign",
+    "unassign": "Remove",
+    "unassignTitle": "Remove assignment",
+    "unassignConfirm": "Remove {name} from {subject}? The rights it granted are removed at the next bundle.",
+    "unassignLabel": "Remove the assignment to {subject}",
+    "everyone": "Everyone",
+    "effectiveTitle": "Effective sudo profile",
+    "onDevice": "On device",
+    "noDevice": "Any device (no device group)",
+    "classReported": "{class} (reported as {reported})",
+    "derivation": "Where each right comes from",
+    "granted": "Right",
+    "profile": "Profile",
+    "noAssignment": "No profile applies.",
+    "derived": {
+      "class": "Class {value}",
+      "command": "Command {item}",
+      "scalar": "{item}: {value}"
+    },
+    "allCommands": "All commands"
+  },
+  "loginSettings": {
+    "title": "Login & privileges",
+    "updatedAt": "Last changed {at}",
+    "login": "Device login",
+    "helloEnabled": "Allow the Hello PIN",
+    "pinLength": "Minimum PIN length",
+    "sessionAction": "When a user is locked",
+    "sessionActions": {
+      "lock_screen": "Lock the user's sessions",
+      "terminate": "End the user's sessions (unsaved work is lost)"
+    },
+    "sessionActionHint": "What devices do with the open sessions of a locked user.",
+    "breakGlass": "Break-glass accounts",
+    "breakGlassHint": "Local accounts, one per line, that Paddock never restricts.",
+    "privileges": "Privileges",
+    "allowlist": "Files kept in /etc/sudoers.d",
+    "allowlistHint": "One file name per line; any other file there is moved away by the agent.",
+    "lecture": "sudo lecture",
+    "lectureHint": "Shown by sudo according to each profile's lecture setting.",
+    "saved": "Login settings saved."
   }
 }
