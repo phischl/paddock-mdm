@@ -293,8 +293,8 @@ func (u *Users) localUser(ctx context.Context, q *pgstore.Queries, rec Recorder,
 
 // Lock locks a user (plan M3a decision 7, audited: user.locked). The user is marked locked and the affected devices
 // are recompiled on the priority lane before Authentik is called, so the device path never waits for Authentik;
-// then the user joins paddock.<slug>.locked and loses its tokens and sessions. Locking a locked user repeats the
-// Authentik part.
+// then the user joins paddock.<slug>.locked and loses its tokens and sessions. The lock stays incomplete until
+// Authentik succeeded; locking a locked user repeats the Authentik part (ADR 0007 amendment).
 func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error) {
 	spec := SpecUserLock
 	spec.Target = &audit.Target{Type: "user", ID: id.String()}
@@ -315,7 +315,14 @@ func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error)
 			return nil
 		},
 		func(ctx context.Context) error { return u.dir.LockUser(ctx, slug, out.AuthentikPk) },
-		func(context.Context, *pgstore.Queries, Recorder, error) error { return nil })
+		func(ctx context.Context, q *pgstore.Queries, _ Recorder, externalErr error) error {
+			if externalErr != nil {
+				return nil
+			}
+			var err error
+			out, err = q.CompleteAppUserLock(ctx, id)
+			return err
+		})
 	return out, err
 }
 

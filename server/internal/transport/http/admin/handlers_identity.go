@@ -66,7 +66,7 @@ func (h *handlers) users2page(ctx context.Context, group *uuid.UUID, q listing.Q
 func toUser(u pgstore.AppUser) adminapi.User {
 	return adminapi.User{
 		Id: u.ID, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Source: adminapi.IdentitySource(u.Source),
-		Locked: u.Locked, LockedAt: utcPtr(u.LockedAt), CreatedAt: u.CreatedAt.UTC(), UpdatedAt: u.UpdatedAt.UTC(),
+		Locked: u.Locked, LockIncomplete: u.LockIncomplete, LockedAt: utcPtr(u.LockedAt), CreatedAt: u.CreatedAt.UTC(), UpdatedAt: u.UpdatedAt.UTC(),
 	}
 }
 
@@ -102,7 +102,8 @@ func (h *handlers) GetUser(ctx context.Context, req adminapi.GetUserRequestObjec
 	u := toUser(d.User)
 	out := adminapi.UserDetail{
 		Id: u.Id, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Source: u.Source, Locked: u.Locked,
-		LockedAt: u.LockedAt, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt, Groups: make([]adminapi.UserGroupRef, len(d.Groups)),
+		LockIncomplete: u.LockIncomplete, LockedAt: u.LockedAt, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+		Groups: make([]adminapi.UserGroupRef, len(d.Groups)),
 	}
 	for i, g := range d.Groups {
 		out.Groups[i] = toUserGroupRef(g)

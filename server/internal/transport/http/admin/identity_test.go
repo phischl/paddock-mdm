@@ -149,7 +149,7 @@ func TestUserLifecycleAndLock(t *testing.T) {
 	var u adminapi.User
 	locked.decode(t, &u)
 	pk := e.authentikPK(c.User.Id)
-	if !u.Locked || u.LockedAt == nil || !e.idp.locked[pk] {
+	if !u.Locked || u.LockIncomplete || u.LockedAt == nil || !e.idp.locked[pk] {
 		t.Fatalf("after lock %+v, idp %v", u, e.idp.locked)
 	}
 	if subjects := e.outboxSubjects(e.acme); !slices.Contains(subjects, "state.priority."+e.acme.String()+"|user") {
@@ -172,8 +172,18 @@ func TestUserLifecycleAndLock(t *testing.T) {
 	got := e.do(call{method: "GET", path: "/api/v1/users/" + c.User.Id.String(), cookie: alice})
 	var d adminapi.UserDetail
 	got.decode(t, &d)
-	if !d.Locked {
-		t.Fatal("a failed Authentik call unlocked the device path")
+	if !d.Locked || !d.LockIncomplete {
+		t.Fatalf("a failed Authentik call must leave the user locked and the lock incomplete: %+v", d)
+	}
+	// Locking again retries the Authentik part and completes the lock.
+	retried := e.do(call{method: "POST", path: "/api/v1/users/" + c.User.Id.String() + "/lock", cookie: alice})
+	if retried.status != http.StatusOK {
+		t.Fatalf("retry lock: %d %s", retried.status, retried.body)
+	}
+	e.expectEvent(retried, "user.locked:success:")
+	retried.decode(t, &u)
+	if !u.Locked || u.LockIncomplete || !e.idp.locked[pk] {
+		t.Fatalf("after the retry %+v, idp %v", u, e.idp.locked)
 	}
 
 	del := e.do(call{method: "DELETE", path: "/api/v1/users/" + c.User.Id.String(), cookie: alice})
@@ -237,13 +247,19 @@ func TestGroupsProfilesAndEffectiveProfile(t *testing.T) {
 	if copyHelper.RootEquivalent || runHelper.RootEquivalent {
 		t.Fatal("a harmless profile is flagged")
 	}
-	bad := e.do(call{method: "POST", path: "/api/v1/permission-profiles", cookie: alice, body: map[string]any{
-		"name": "bad", "class": "restricted", "commands": []string{"/usr/bin/a, /usr/bin/b"},
-	}})
-	if bad.status != http.StatusUnprocessableEntity || bad.problemCode(t) != "invalid_command" {
-		t.Fatalf("invalid command: %d %s", bad.status, bad.body)
+	for _, command := range []string{
+		"/usr/bin/a, /usr/bin/b",
+		// '#' after whitespace starts a sudoers comment: this would grant /usr/bin/x with any arguments.
+		"/usr/bin/x #y, /usr/bin/z",
+	} {
+		bad := e.do(call{method: "POST", path: "/api/v1/permission-profiles", cookie: alice, body: map[string]any{
+			"name": "bad", "class": "restricted", "commands": []string{command},
+		}})
+		if bad.status != http.StatusUnprocessableEntity || bad.problemCode(t) != "invalid_command" {
+			t.Fatalf("invalid command %q: %d %s", command, bad.status, bad.body)
+		}
+		e.expectEvent(bad, "permission_profile.created:failure:invalid_command")
 	}
-	e.expectEvent(bad, "permission_profile.created:failure:invalid_command")
 	root := e.profile(alice, map[string]any{"name": "editor", "class": "restricted", "commands": []string{"/usr/bin/vim /etc/hosts"}})
 	if !root.RootEquivalent || len(root.RootEquivalentCommands) != 1 {
 		t.Fatalf("vim profile %+v", root)

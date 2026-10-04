@@ -77,6 +77,13 @@ async function toggleLock(): Promise<void> {
   await load()
 }
 
+// A retry repeats the confirmed lock; the user is locked for the devices already, so no second confirmation.
+async function retryLock(): Promise<void> {
+  if (!user.value) return
+  problem.value = (await setLocked(user.value.id, true)) ?? ''
+  await load()
+}
+
 async function onDelete(): Promise<void> {
   if (!user.value) return
   const u = user.value
@@ -151,6 +158,27 @@ async function saveEdit(): Promise<void> {
           </v-btn>
         </div>
       </div>
+      <v-alert
+        v-if="user.locked && user.lock_incomplete"
+        type="warning"
+        variant="tonal"
+        class="conflict"
+        data-testid="lock-incomplete"
+      >
+        {{ t('users.lockIncomplete') }}
+        <template
+          v-if="session.canDelete"
+          #append
+        >
+          <v-btn
+            variant="tonal"
+            data-testid="retry-lock"
+            @click="retryLock"
+          >
+            {{ t('users.retryLock') }}
+          </v-btn>
+        </template>
+      </v-alert>
       <v-alert
         v-if="user.source === 'synced'"
         type="info"
