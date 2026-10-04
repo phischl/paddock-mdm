@@ -1,0 +1,285 @@
+openapi: 3.0.3
+info:
+  title: Paddock Device API
+  version: 1.0.0
+  description: |
+    Device API of the gateway role (plan M2a §6.2, architecture §6). Served at https://device.<domain>. The request
+    and response types are defined in pkg/protocol, which server and agent share; the gateway tests validate every
+    request and response against this document.
+
+    Every request is signed (architecture §6.3): headers Paddock-Device, Paddock-Key-Id, Paddock-Timestamp,
+    Paddock-Nonce, Paddock-Content-SHA256, Paddock-Seq and Paddock-Signature over the canonical string
+
+        paddock-v1\n<METHOD>\n<path incl. query>\n<device>\n<key id>\n<timestamp>\n<nonce>\n<content sha256>\n<seq>
+
+    with ECDSA P-256 (ASN.1 DER signature, unpadded base64url). Enrollment requests are signed with the new key and
+    carry Paddock-Device: enroll and Paddock-Key-Id: hex SHA-256 of the public key. The timestamp may differ from
+    server time by at most 300 s; a nonce is accepted once within 600 s.
+
+    Errors are RFC 9457 problem details with a code; 401 responses carry server_time so that a device can report
+    clock drift. Rate limits: 30 requests per minute per key and 300 per minute per source address (429 with
+    Retry-After).
+servers:
+  - url: https://device.paddock.localhost:8443
+security:
+  - signature: []
+paths:
+  /v1/enroll:
+    post:
+      operationId: enroll
+      summary: Enrollment request, signed with the new device key
+      parameters:
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnrollRequest" }
+      responses:
+        "202":
+          description: Accepted; poll GET /v1/enroll/{enrollment_id}.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollAccepted" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /v1/enroll/{enrollment_id}:
+    get:
+      operationId: getEnrollment
+      summary: Enrollment status, signed with the same key as the request
+      parameters:
+        - name: enrollment_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      responses:
+        "200":
+          description: Status of the enrollment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollStatus" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /v1/checkin:
+    post:
+      operationId: checkin
+      summary: Heartbeat and bundle pointer
+      parameters:
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckinRequest" }
+      responses:
+        "200":
+          description: |
+            seq is the new sequence number the device sends back as Paddock-Seq. bundle is set only when a newer
+            bundle than applied_bundle_version exists and the device is active (not quarantined).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckinResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /v1/events:
+    post:
+      operationId: postEvents
+      summary: Batch of device events (at most 500)
+      parameters:
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventsRequest" }
+      responses:
+        "202":
+          description: Accepted for processing; duplicates (same event_seq) are ignored.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
+components:
+  securitySchemes:
+    signature:
+      type: apiKey
+      in: header
+      name: Paddock-Signature
+      description: ECDSA P-256 request signature (see the description of this document).
+  parameters:
+    Device:
+      name: Paddock-Device
+      in: header
+      required: true
+      description: Device ID, or "enroll" for enrollment requests.
+      schema: { type: string }
+    KeyId:
+      name: Paddock-Key-Id
+      in: header
+      required: true
+      description: Hex SHA-256 of the SubjectPublicKeyInfo of the signing key.
+      schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+    Timestamp:
+      name: Paddock-Timestamp
+      in: header
+      required: true
+      schema: { type: string, pattern: "^[0-9]+$" }
+    Nonce:
+      name: Paddock-Nonce
+      in: header
+      required: true
+      description: 16 random bytes, unpadded base64url.
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{22}$" }
+    ContentSHA256:
+      name: Paddock-Content-SHA256
+      in: header
+      required: true
+      description: Unpadded base64url SHA-256 of the body (of the empty string without body).
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{43}$" }
+    Seq:
+      name: Paddock-Seq
+      in: header
+      required: true
+      description: Last sequence number received from the server (0 before the first check-in).
+      schema: { type: string, pattern: "^[0-9]+$" }
+    Signature:
+      name: Paddock-Signature
+      in: header
+      required: true
+      schema: { type: string }
+  responses:
+    Problem:
+      description: RFC 9457 problem details.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    RateLimited:
+      description: Too many requests.
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          enum: [invalid_request, invalid_signature, clock_skew, replay, invalid_token, identity_revoked,
+                 unknown_event_type, not_found, rate_limited, backpressure, payload_too_large, internal]
+        detail: { type: string }
+        instance: { type: string }
+        server_time: { type: string, format: date-time, description: Set on 401 responses. }
+    EnrollRequest:
+      type: object
+      required: [token, public_key, key_protection, hostname, agent_version]
+      properties:
+        token: { type: string, description: Enrollment token secret from the enrollment configuration. }
+        public_key: { type: string, description: Standard base64 SubjectPublicKeyInfo DER of the ECDSA P-256 key. }
+        key_protection: { type: string, enum: [tpm, file] }
+        hostname: { type: string, minLength: 1, maxLength: 253 }
+        hardware_uuid: { type: string, maxLength: 128 }
+        machine_id: { type: string, maxLength: 128 }
+        os_release:
+          type: object
+          additionalProperties: { type: string }
+        agent_version: { type: string, maxLength: 128 }
+    EnrollAccepted:
+      type: object
+      required: [enrollment_id]
+      properties:
+        enrollment_id: { type: string, format: uuid }
+    EnrollStatus:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [processing, pending, active, rejected] }
+        device_id: { type: string, format: uuid }
+        reason: { type: string, description: "Rejection reason, e.g. token_exhausted." }
+    CheckinRequest:
+      type: object
+      required: [applied_bundle_version, agent_version, schema_versions, event_seq_high]
+      properties:
+        applied_bundle_version: { type: integer, format: int64, minimum: 0 }
+        agent_version: { type: string, maxLength: 128 }
+        schema_versions:
+          type: array
+          items: { type: integer }
+        health:
+          type: object
+          additionalProperties: true
+        event_seq_high: { type: integer, format: int64, minimum: 0 }
+    BundleRef:
+      type: object
+      required: [version, sha256, url]
+      properties:
+        version: { type: integer, format: int64 }
+        sha256: { type: string, description: Hex SHA-256 of the DSSE envelope object. }
+        url: { type: string, description: "Presigned GET URL on bundles.<domain>, valid for 120 s." }
+    CheckinResponse:
+      type: object
+      required: [seq, server_time, bundle, next_checkin_s]
+      properties:
+        seq: { type: integer, format: int64 }
+        server_time: { type: string, format: date-time }
+        bundle:
+          allOf:
+            - $ref: "#/components/schemas/BundleRef"
+          nullable: true
+        next_checkin_s: { type: integer, description: "300 × random(0.8, 1.2)" }
+    Event:
+      type: object
+      required: [event_seq, type, occurred_at]
+      properties:
+        event_seq: { type: integer, format: int64, minimum: 0 }
+        type: { type: string, enum: [bundle.applied, bundle.rejected, config.drift_corrected] }
+        occurred_at: { type: string, format: date-time }
+        data:
+          type: object
+          additionalProperties: true
+    EventsRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/Event" }

@@ -46,6 +46,7 @@ services:
           - admin.${PADDOCK_DOMAIN:-paddock.localhost}
           - auth.${PADDOCK_DOMAIN:-paddock.localhost}
           - bundles.${PADDOCK_DOMAIN:-paddock.localhost}
+          - device.${PADDOCK_DOMAIN:-paddock.localhost}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ >/dev/null && test -s /data/caddy/pki/authorities/local/root.crt"]
       interval: 5s
@@ -305,6 +306,34 @@ services:
       paddock-migrate:
         condition: service_completed_successfully
 
+  # Device API. No database credentials: the gateway reads Valkey and writes RabbitMQ only (plan M2a decision 1).
+  paddock-gateway:
+    <<: *paddock
+    command: ["serve", "gateway"]
+    environment:
+      <<: *paddock-env
+      PADDOCK_HTTP_ADDR: ":8081"
+      PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
+      PADDOCK_AMQP_USER: gateway
+      PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_gateway_password
+      PADDOCK_VALKEY_ADDR: valkey:6379
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
+      PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
+      PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_gateway_access_key
+      PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_gateway_secret_key
+    secrets:
+      - rabbitmq_gateway_password
+      - valkey_password
+      - rustfs_bundles_gateway_access_key
+      - rustfs_bundles_gateway_secret_key
+    networks: [cp]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+
   paddock-worker:
     <<: *paddock
     command: ["serve", "worker"]
@@ -358,6 +387,9 @@ secrets:
   rabbitmq_provisioner_password: { file: ./.secrets/rabbitmq_provisioner_password }
   rabbitmq_relay_password: { file: ./.secrets/rabbitmq_relay_password }
   rabbitmq_worker_password: { file: ./.secrets/rabbitmq_worker_password }
+  rabbitmq_gateway_password: { file: ./.secrets/rabbitmq_gateway_password }
+  rustfs_bundles_gateway_access_key: { file: ./.secrets/rustfs_bundles_gateway_access_key }
+  rustfs_bundles_gateway_secret_key: { file: ./.secrets/rustfs_bundles_gateway_secret_key }
   authentik_postgres_password: { file: ./.secrets/authentik_postgres_password }
   authentik_secret_key: { file: ./.secrets/authentik_secret_key }
   authentik_bootstrap_password: { file: ./.secrets/authentik_bootstrap_password }

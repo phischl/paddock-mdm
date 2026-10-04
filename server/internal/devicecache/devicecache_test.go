@@ -81,3 +81,57 @@ func TestKeyStatus(t *testing.T) {
 		t.Fatal("key status mapping")
 	}
 }
+
+func TestGatewayKeys(t *testing.T) {
+	srv := valkeytest.Start(t)
+	cache := devicecache.New(srv.Client(t))
+	ctx := context.Background()
+	dev := uuid.New()
+
+	if fresh, err := cache.UseNonce(ctx, dev.String(), "n1"); err != nil || !fresh {
+		t.Fatalf("first nonce: %v %v", fresh, err)
+	}
+	if fresh, err := cache.UseNonce(ctx, dev.String(), "n1"); err != nil || fresh {
+		t.Fatalf("replayed nonce accepted: %v %v", fresh, err)
+	}
+
+	if err := cache.RestoreSeq(ctx, dev, 41); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.RestoreSeq(ctx, dev, 3); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := cache.NextSeq(ctx, dev); err != nil || n != 42 {
+		t.Fatalf("seq %d %v", n, err)
+	}
+
+	if _, ok, _ := cache.BundlePointer(ctx, dev); ok {
+		t.Fatal("pointer before any bundle")
+	}
+	for _, v := range []int64{2, 1} {
+		if err := cache.PutBundlePointer(ctx, dev, devicecache.BundlePointer{Version: v, SHA256: "s", ObjectKey: "k"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p, _, _ := cache.BundlePointer(ctx, dev); p.Version != 2 {
+		t.Fatalf("pointer moved back to %d", p.Version)
+	}
+
+	now := time.Date(2026, 10, 4, 12, 0, 30, 0, time.UTC)
+	for i := range 3 {
+		if ok, _, err := cache.Allow(ctx, "key:x", 3, now); err != nil || !ok {
+			t.Fatalf("request %d limited: %v", i, err)
+		}
+	}
+	ok, wait, err := cache.Allow(ctx, "key:x", 3, now)
+	if err != nil || ok || wait != 30*time.Second {
+		t.Fatalf("fourth request: %v %s %v", ok, wait, err)
+	}
+	if ok, _, _ := cache.Allow(ctx, "key:other", 3, now); !ok {
+		t.Fatal("limits are not per scope")
+	}
+	// 45 s into the next minute only a quarter of the previous minute still counts.
+	if ok, _, _ := cache.Allow(ctx, "key:x", 3, now.Add(75*time.Second)); !ok {
+		t.Fatal("window does not slide")
+	}
+}

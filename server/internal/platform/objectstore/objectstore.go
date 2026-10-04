@@ -100,3 +100,32 @@ func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 	}
 	return keys, nil
 }
+
+// Presigner computes presigned GET URLs locally (no network call) for a public endpoint, e.g.
+// https://bundles.<domain>, through which the object store is reachable (architecture §7.3).
+type Presigner struct {
+	client *s3.PresignClient
+	bucket string
+}
+
+// NewPresigner creates a presigner for the public endpoint; the credential only needs read access.
+func NewPresigner(publicEndpoint, accessKey, secretKey, bucket string) *Presigner {
+	return &Presigner{client: s3.NewPresignClient(New(publicEndpoint, accessKey, secretKey, bucket).client), bucket: bucket}
+}
+
+// PresignGet returns a GET URL for key that is valid for ttl.
+func (p *Presigner) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	req, err := p.client.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &p.bucket, Key: &key}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
+}
+
+// Put writes an object without retention (bundles bucket).
+func (s *Store) Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error {
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: &s.bucket, Key: &key, Body: bytes.NewReader(body), ContentType: &contentType, CacheControl: &cacheControl,
+	})
+	return err
+}
