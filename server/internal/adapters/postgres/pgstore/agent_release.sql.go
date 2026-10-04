@@ -15,7 +15,7 @@ import (
 const advanceAgentRollout = `-- name: AdvanceAgentRollout :one
 UPDATE agent_rollout SET current_wave_index = current_wave_index + 1, wave_started_at = now(), updated_at = now()
 WHERE version = $1
-RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at
+RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since
 `
 
 func (q *Queries) AdvanceAgentRollout(ctx context.Context, version string) (AgentRollout, error) {
@@ -35,6 +35,7 @@ func (q *Queries) AdvanceAgentRollout(ctx context.Context, version string) (Agen
 		&i.StartedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.EvaluationSince,
 	)
 	return i, err
 }
@@ -64,7 +65,7 @@ func (q *Queries) AgentRolloutStats(ctx context.Context, arg AgentRolloutStatsPa
 const completeAgentRollout = `-- name: CompleteAgentRollout :one
 UPDATE agent_rollout SET status = 'completed', completed_at = now(), updated_at = now()
 WHERE version = $1
-RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at
+RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since
 `
 
 func (q *Queries) CompleteAgentRollout(ctx context.Context, version string) (AgentRollout, error) {
@@ -84,6 +85,7 @@ func (q *Queries) CompleteAgentRollout(ctx context.Context, version string) (Age
 		&i.StartedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.EvaluationSince,
 	)
 	return i, err
 }
@@ -111,7 +113,7 @@ func (q *Queries) CountAgentReleases(ctx context.Context, arg CountAgentReleases
 }
 
 const currentAgentRollout = `-- name: CurrentAgentRollout :one
-SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at FROM agent_rollout
+SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since FROM agent_rollout
 ORDER BY (status = 'running') DESC, started_at DESC
 LIMIT 1
 `
@@ -135,6 +137,7 @@ func (q *Queries) CurrentAgentRollout(ctx context.Context) (AgentRollout, error)
 		&i.StartedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.EvaluationSince,
 	)
 	return i, err
 }
@@ -179,7 +182,7 @@ func (q *Queries) GetAgentRelease(ctx context.Context, version string) (AgentRel
 }
 
 const getAgentRollout = `-- name: GetAgentRollout :one
-SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at FROM agent_rollout WHERE version = $1
+SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since FROM agent_rollout WHERE version = $1
 `
 
 func (q *Queries) GetAgentRollout(ctx context.Context, version string) (AgentRollout, error) {
@@ -199,6 +202,7 @@ func (q *Queries) GetAgentRollout(ctx context.Context, version string) (AgentRol
 		&i.StartedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.EvaluationSince,
 	)
 	return i, err
 }
@@ -234,7 +238,7 @@ INSERT INTO agent_rollout (version, waves, min_wave_minutes, failure_threshold_p
                            started_by)
 VALUES ($1, $2::int[], $3, $4, $5, 'running',
         $6)
-RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at
+RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since
 `
 
 type InsertAgentRolloutParams struct {
@@ -270,6 +274,7 @@ func (q *Queries) InsertAgentRollout(ctx context.Context, arg InsertAgentRollout
 		&i.StartedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.EvaluationSince,
 	)
 	return i, err
 }
@@ -402,7 +407,7 @@ func (q *Queries) ListAgentReleases(ctx context.Context, arg ListAgentReleasesPa
 }
 
 const listRunningAgentRollouts = `-- name: ListRunningAgentRollouts :many
-SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at FROM agent_rollout WHERE status = 'running' ORDER BY version
+SELECT version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since FROM agent_rollout WHERE status = 'running' ORDER BY version
 `
 
 func (q *Queries) ListRunningAgentRollouts(ctx context.Context) ([]AgentRollout, error) {
@@ -428,6 +433,7 @@ func (q *Queries) ListRunningAgentRollouts(ctx context.Context) ([]AgentRollout,
 			&i.StartedAt,
 			&i.UpdatedAt,
 			&i.CompletedAt,
+			&i.EvaluationSince,
 		); err != nil {
 			return nil, err
 		}
@@ -458,10 +464,67 @@ func (q *Queries) PublishAgentRelease(ctx context.Context, version string) (Agen
 	return i, err
 }
 
+const resumeAgentRollout = `-- name: ResumeAgentRollout :one
+UPDATE agent_rollout SET status = $1, halted_reason = NULL, evaluation_since = now(), updated_at = now()
+WHERE version = $2
+RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since
+`
+
+type ResumeAgentRolloutParams struct {
+	Status  string
+	Version string
+}
+
+// Resume restarts the failure count (plan M2.1 decision 1).
+func (q *Queries) ResumeAgentRollout(ctx context.Context, arg ResumeAgentRolloutParams) (AgentRollout, error) {
+	row := q.db.QueryRow(ctx, resumeAgentRollout, arg.Status, arg.Version)
+	var i AgentRollout
+	err := row.Scan(
+		&i.Version,
+		&i.Waves,
+		&i.CurrentWaveIndex,
+		&i.WaveStartedAt,
+		&i.MinWaveMinutes,
+		&i.FailureThresholdPercent,
+		&i.FailureThresholdMin,
+		&i.Status,
+		&i.HaltedReason,
+		&i.StartedBy,
+		&i.StartedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+		&i.EvaluationSince,
+	)
+	return i, err
+}
+
+const rolloutEvaluationStats = `-- name: RolloutEvaluationStats :one
+SELECT eligible::bigint, failed::bigint FROM paddock_agent_rollout_evaluation_stats($1, $2::int, $3::timestamptz)
+`
+
+type RolloutEvaluationStatsParams struct {
+	Version string
+	Percent int32
+	Since   time.Time
+}
+
+type RolloutEvaluationStatsRow struct {
+	Eligible int64
+	Failed   int64
+}
+
+// Counts of a running rollout with the failures since since (plan M2.1 decision 1).
+func (q *Queries) RolloutEvaluationStats(ctx context.Context, arg RolloutEvaluationStatsParams) (RolloutEvaluationStatsRow, error) {
+	row := q.db.QueryRow(ctx, rolloutEvaluationStats, arg.Version, arg.Percent, arg.Since)
+	var i RolloutEvaluationStatsRow
+	err := row.Scan(&i.Eligible, &i.Failed)
+	return i, err
+}
+
 const setAgentRolloutStatus = `-- name: SetAgentRolloutStatus :one
 UPDATE agent_rollout SET status = $1, halted_reason = $2, updated_at = now()
 WHERE version = $3
-RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at
+RETURNING version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent, failure_threshold_min, status, halted_reason, started_by, started_at, updated_at, completed_at, evaluation_since
 `
 
 type SetAgentRolloutStatusParams struct {
@@ -487,6 +550,7 @@ func (q *Queries) SetAgentRolloutStatus(ctx context.Context, arg SetAgentRollout
 		&i.StartedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.EvaluationSince,
 	)
 	return i, err
 }

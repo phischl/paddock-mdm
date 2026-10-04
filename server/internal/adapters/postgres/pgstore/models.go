@@ -69,6 +69,7 @@ type AgentRollout struct {
 	StartedAt               time.Time
 	UpdatedAt               time.Time
 	CompletedAt             *time.Time
+	EvaluationSince         time.Time
 }
 
 type AgentUpdateReport struct {
