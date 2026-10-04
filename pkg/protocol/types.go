@@ -76,6 +76,22 @@ type CheckinRequest struct {
 	SchemaVersions       []int           `json:"schema_versions"`
 	Health               json.RawMessage `json:"health,omitempty"`
 	EventSeqHigh         int64           `json:"event_seq_high"`
+	Arch                 string          `json:"arch,omitempty"` // runtime.GOARCH: ArchAMD64 or ArchARM64
+}
+
+// Agent architectures of CheckinRequest.Arch.
+const (
+	ArchAMD64 = "amd64"
+	ArchARM64 = "arm64"
+)
+
+// AgentUpdate offers an agent release to an eligible device (plan M2b decision 21).
+type AgentUpdate struct {
+	Version string `json:"version"`
+	URL     string `json:"url"`     // presigned GET of the paddockd binary
+	SHA256  string `json:"sha256"`  // hex SHA-256 of the binary
+	Size    int64  `json:"size"`    // bytes
+	Minisig string `json:"minisig"` // standard base64 of the .minisig file
 }
 
 // BundleRef points to a bundle newer than the applied one.
@@ -87,10 +103,11 @@ type BundleRef struct {
 
 // CheckinResponse is the 200 body of POST /v1/checkin.
 type CheckinResponse struct {
-	Seq          int64      `json:"seq"`
-	ServerTime   time.Time  `json:"server_time"`
-	Bundle       *BundleRef `json:"bundle"`
-	NextCheckinS int        `json:"next_checkin_s"`
+	Seq          int64        `json:"seq"`
+	ServerTime   time.Time    `json:"server_time"`
+	Bundle       *BundleRef   `json:"bundle"`
+	NextCheckinS int          `json:"next_checkin_s"`
+	AgentUpdate  *AgentUpdate `json:"agent_update"`
 }
 
 // Device event types accepted by POST /v1/events (closed set).
