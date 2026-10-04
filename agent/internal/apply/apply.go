@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -75,6 +76,20 @@ func sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource
 }
 
 func all(bundle.Resource) bool { return true }
+
+// ErrUnknownResourceType rejects a bundle with a resource type this agent has no reconciler for (plan M3b decision
+// 4): such a bundle is not applied at all, not partially.
+var ErrUnknownResourceType = errors.New("unknown_resource_type")
+
+// CheckTypes returns ErrUnknownResourceType if b has a resource of a type without reconciler.
+func (a *Applier) CheckTypes(b *bundle.Bundle) error {
+	for _, r := range b.Resources {
+		if _, ok := a.recs[r.Type]; !ok {
+			return fmt.Errorf("%w: %s", ErrUnknownResourceType, r.Type)
+		}
+	}
+	return nil
+}
 
 // Apply applies every resource of b and removes managed files that are no longer part of it.
 func (a *Applier) Apply(ctx context.Context, b *bundle.Bundle) Report {
@@ -172,6 +187,8 @@ func RejectReason(err error) string {
 		return "downgrade"
 	case errors.Is(err, bundle.ErrSchema):
 		return "schema"
+	case errors.Is(err, ErrUnknownResourceType):
+		return "unknown_resource_type"
 	default:
 		return strings.ReplaceAll(err.Error(), " ", "_")
 	}

@@ -60,7 +60,7 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 			Himmelblau: bundle.HimmelblauSpec{
 				OIDCIssuerURL: c.cfg.AuthentikURL + "/application/o/" + client + "/", AppID: client, Domain: domain,
 				PamAllowGroups: id.AllowList(t.id, t.suspended), EnableHello: s.HelloEnabled,
-				HelloPinMinLength: int(s.HelloPinMinLength),
+				HelloPinMinLength: int(s.HelloPinMinLength), PackageVersion: c.cfg.HimmelblauVersion,
 			},
 			Suspended: t.suspended, LockedUsers: id.LockedUsernames(t.id), SessionAction: s.UserLockSessionAction,
 			BreakGlassAccounts: breakGlass,

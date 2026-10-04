@@ -290,7 +290,10 @@ components:
         type:
           type: string
           enum: [bundle.applied, bundle.rejected, config.drift_corrected, agent.updated, agent.update_failed,
-                 agent.rolled_back, agent.events_dropped, session.login]
+                 agent.rolled_back, agent.events_dropped, session.login, login.applied, login.apply_failed,
+                 user.lock_applied, logins.suspension_applied, sudo.apply_failed, sudo.user_unresolved,
+                 tamper.sudo_group_member, tamper.sudoers_d_file, tamper.sudoers_changed,
+                 tamper.protected_file_changed]
         occurred_at: { type: string, format: date-time }
         data:
           type: object

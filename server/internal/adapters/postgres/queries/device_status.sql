@@ -18,3 +18,13 @@ SELECT device_id, last_seq FROM device_status WHERE last_seq > 0 ORDER BY device
 INSERT INTO device_event_seen (device_id, event_seq, organization_id)
 VALUES (@device_id, @event_seq, @organization_id)
 ON CONFLICT DO NOTHING;
+
+-- The latest login.* or sudo.* event of a device per area (plan M3b decision 17); an older event never overwrites a
+-- newer one. A device whose heartbeat was not materialized yet gets its status row here.
+-- name: SetDeviceLoginState :exec
+INSERT INTO device_status (device_id, organization_id, login_state)
+VALUES (@device_id, @organization_id, jsonb_build_object(@area::text, @state::jsonb))
+ON CONFLICT (device_id) DO UPDATE
+SET login_state = device_status.login_state || jsonb_build_object(@area::text, @state::jsonb)
+WHERE (device_status.login_state -> @area::text) IS NULL
+   OR (device_status.login_state -> @area::text ->> 'occurred_at')::timestamptz <= (@state::jsonb ->> 'occurred_at')::timestamptz;

@@ -104,7 +104,7 @@ func (q *Queries) GetDeviceIdentityKey(ctx context.Context, keyID string) (Devic
 }
 
 const getDeviceStatus = `-- name: GetDeviceStatus :one
-SELECT device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health, schema_versions FROM device_status WHERE device_id = $1
+SELECT device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health, schema_versions, login_state FROM device_status WHERE device_id = $1
 `
 
 func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (DeviceStatus, error) {
@@ -119,6 +119,7 @@ func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (Devi
 		&i.LastSeq,
 		&i.Health,
 		&i.SchemaVersions,
+		&i.LoginState,
 	)
 	return i, err
 }

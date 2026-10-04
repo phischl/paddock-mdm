@@ -168,6 +168,7 @@ type DeviceStatus struct {
 	LastSeq              int64
 	Health               json.RawMessage
 	SchemaVersions       []int32
+	LoginState           json.RawMessage
 }
 
 type DeviceUserSeen struct {

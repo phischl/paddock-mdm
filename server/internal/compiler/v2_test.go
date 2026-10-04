@@ -75,7 +75,7 @@ func TestSchemaNegotiation(t *testing.T) {
 	if login.Provider != "himmelblau" || login.Himmelblau.AppID != "paddock-device-"+slug || login.Himmelblau.Domain != "c.test" ||
 		login.Himmelblau.OIDCIssuerURL != "https://auth.test/application/o/paddock-device-"+slug+"/" ||
 		!slices.Equal(login.Himmelblau.PamAllowGroups, []string{"paddock." + slug}) || !login.Himmelblau.EnableHello ||
-		login.Himmelblau.HelloPinMinLength != 6 || login.Suspended || login.SessionAction != "lock_screen" {
+		login.Himmelblau.HelloPinMinLength != 6 || login.Himmelblau.PackageVersion != "4.0.4" || login.Suspended || login.SessionAction != "lock_screen" {
 		t.Fatalf("login %+v", login)
 	}
 	sudo := spec[bundle.SudoSpec](t, b, "sudo")

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"time"
@@ -113,7 +114,16 @@ type HimmelblauSpec struct {
 	PamAllowGroups    []string `json:"pam_allow_groups"`
 	EnableHello       bool     `json:"enable_hello"`
 	HelloPinMinLength int      `json:"hello_pin_min_length"`
+	// PackageVersion is the Himmelblau release the device installs from the official repository (plan M3b
+	// decision 6), e.g. "4.0.4"; see ValidHimmelblauVersion.
+	PackageVersion string `json:"package_version"`
 }
+
+// himmelblauVersion is a Himmelblau release number; it becomes part of the repository URL on the device.
+var himmelblauVersion = regexp.MustCompile(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$`)
+
+// ValidHimmelblauVersion reports whether v is a release number such as 4.0.4.
+func ValidHimmelblauVersion(v string) bool { return himmelblauVersion.MatchString(v) }
 
 // SudoSpec is the spec of the TypeSudo resource (id "sudo", plan M3a decision 16). The device renders each entry
 // with pkg/sudoers.

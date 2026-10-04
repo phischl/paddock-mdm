@@ -4,7 +4,7 @@ import ManagedFileForm from '../components/ManagedFileForm.vue'
 import EnrollmentTokenForm from '../components/EnrollmentTokenForm.vue'
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
-import { actionsFor } from '../lib/devices'
+import { actionsFor, reportText } from '../lib/devices'
 import { configText } from '../lib/enrollmentTokens'
 import { validateFile, validateUnit, type FileInput } from '../lib/managedConfig'
 import { auditText } from '../lib/format'
@@ -22,6 +22,25 @@ describe('device lifecycle actions', () => {
     expect(actionsFor('quarantined')).toEqual(['release-quarantine', 'retire'])
     expect(actionsFor('retired')).toEqual([])
     expect(actionsFor('rejected')).toEqual([])
+  })
+})
+
+describe('device reports', () => {
+  const { t } = createPortalI18n().global
+  const at = '2026-10-04T08:00:00Z'
+
+  it('renders the latest login and sudo report', () => {
+    expect(reportText(t, { type: 'login.applied', occurred_at: at, params: { changed: ['package', 'config'] } }))
+      .toBe('Login configuration applied: package, config')
+    expect(reportText(t, { type: 'login.apply_failed', occurred_at: at, params: { stage: 'apt', message: 'dpkg lock' } }))
+      .toBe('Login configuration failed at stage apt: dpkg lock')
+    expect(reportText(t, { type: 'sudo.apply_failed', occurred_at: at, params: { username: 'dave@acme.test', message: 'visudo' } }))
+      .toBe('The sudo rights of dave@acme.test could not be applied: visudo')
+    expect(reportText(t, { type: 'sudo.apply_failed', occurred_at: at, params: { message: 'no includedir' } }))
+      .toBe('The sudo configuration failed its check: no includedir')
+    expect(reportText(t, { type: 'sudo.user_unresolved', occurred_at: at, params: { username: 'erin@acme.test' } }))
+      .toBe('erin@acme.test has sudo rights but is not known on the device yet')
+    expect(reportText(t, { type: 'login.future', occurred_at: at, params: {} })).toBe('login.future')
   })
 })
 

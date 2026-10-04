@@ -81,6 +81,17 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventAgentUpdateFailed:    audit.CodeDeviceAgentUpdateFailed,
 	protocol.EventAgentRolledBack:      audit.CodeDeviceAgentRolledBack,
 	protocol.EventAgentEventsDropped:   audit.CodeDeviceAgentEventsDropped,
+
+	protocol.EventLoginApplied:               audit.CodeDeviceLoginApplied,
+	protocol.EventLoginApplyFailed:           audit.CodeDeviceLoginApplyFailed,
+	protocol.EventUserLockApplied:            audit.CodeDeviceUserLockApplied,
+	protocol.EventLoginsSuspensionApplied:    audit.CodeDeviceLoginsSuspensionApplied,
+	protocol.EventSudoApplyFailed:            audit.CodeDeviceSudoApplyFailed,
+	protocol.EventSudoUserUnresolved:         audit.CodeDeviceSudoUserUnresolved,
+	protocol.EventTamperSudoGroupMember:      audit.CodeDeviceTamperSudoGroupMember,
+	protocol.EventTamperSudoersDFile:         audit.CodeDeviceTamperSudoersDFile,
+	protocol.EventTamperSudoersChanged:       audit.CodeDeviceTamperSudoersChanged,
+	protocol.EventTamperProtectedFileChanged: audit.CodeDeviceTamperProtectedFileChanged,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -117,6 +128,9 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 				})
 			}
 		}
+		if area := loginStateArea(ev.Type); area != "" && err == nil {
+			err = setLoginState(ctx, q, deviceID, org, area, ev, spec.Params)
+		}
 		return true, err
 	})
 }
@@ -143,6 +157,25 @@ func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UU
 	})
 }
 
+// loginStateArea is the area of device_status.login_state an event updates: "login" for login.*, "sudo" for
+// sudo.* (plan M3b decision 17), "" for every other event.
+func loginStateArea(typ string) string {
+	area, _, _ := strings.Cut(typ, ".")
+	if area == "login" || area == "sudo" {
+		return area
+	}
+	return ""
+}
+
+// setLoginState records ev as the latest event of its area unless a newer one is recorded already.
+func setLoginState(ctx context.Context, q *pgstore.Queries, deviceID, org uuid.UUID, area string, ev protocol.Event, params map[string]any) error {
+	state, err := json.Marshal(map[string]any{"type": ev.Type, "occurred_at": params["occurred_at"], "params": params})
+	if err != nil {
+		return err
+	}
+	return q.SetDeviceLoginState(ctx, pgstore.SetDeviceLoginStateParams{DeviceID: deviceID, OrganizationID: org, Area: area, State: state})
+}
+
 // updateOutcomes are the agent update events the rollout evaluation counts (agent_update_report.outcome).
 var updateOutcomes = map[string]string{
 	protocol.EventAgentUpdated:      "updated",
@@ -164,15 +197,22 @@ func eventParams(ev protocol.Event) map[string]any {
 	if json.Unmarshal(ev.Data, &data) != nil {
 		return params
 	}
-	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq"} {
+	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq", "sessions_locked", "sessions_terminated"} {
 		if v, ok := data[key].(float64); ok {
 			params[key] = int64(v)
 		}
 	}
-	for _, key := range []string{"reason", "resource", "from_version", "outcome"} {
+	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
+		"file", "quarantined_as", "sha256_before", "sha256_after"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}
+	}
+	if v, ok := data["removed"].(bool); ok {
+		params["removed"] = v
+	}
+	if changed, ok := data["changed"].([]any); ok { // login.applied: what changed
+		params["changed"] = boundedStrings(changed)
 	}
 	switch v := data["version"].(type) { // a bundle version (number) or an agent version (string)
 	case float64:
@@ -183,13 +223,7 @@ func eventParams(ev protocol.Event) map[string]any {
 		}
 	}
 	if ids, ok := data["resource_ids"].([]any); ok {
-		out := []string{}
-		for _, id := range ids[:min(len(ids), maxParamList)] {
-			if s, ok := boundedString(id); ok {
-				out = append(out, s)
-			}
-		}
-		params["resource_ids"] = out
+		params["resource_ids"] = boundedStrings(ids)
 	}
 	if errs, ok := data["errors"].([]any); ok {
 		out := []map[string]string{}
@@ -204,6 +238,17 @@ func eventParams(ev protocol.Event) map[string]any {
 		params["errors"] = out
 	}
 	return params
+}
+
+// boundedStrings copies at most maxParamList bounded strings of a list.
+func boundedStrings(list []any) []string {
+	out := []string{}
+	for _, v := range list[:min(len(list), maxParamList)] {
+		if s, ok := boundedString(v); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func boundedString(v any) (string, bool) {

@@ -69,6 +69,18 @@ const (
 	CodeProfileAssignmentUpdated    Code = "profile_assignment.updated"
 	CodeProfileAssignmentDeleted    Code = "profile_assignment.deleted"
 	CodeDeviceBundleRenderFailed    Code = "device.bundle_render_failed"
+
+	// Identity and privileges reported by devices (plan M3b decision 5).
+	CodeDeviceLoginApplied               Code = "device.login_applied"
+	CodeDeviceLoginApplyFailed           Code = "device.login_apply_failed"
+	CodeDeviceUserLockApplied            Code = "device.user_lock_applied"
+	CodeDeviceLoginsSuspensionApplied    Code = "device.logins_suspension_applied"
+	CodeDeviceSudoApplyFailed            Code = "device.sudo_apply_failed"
+	CodeDeviceSudoUserUnresolved         Code = "device.sudo_user_unresolved"
+	CodeDeviceTamperSudoGroupMember      Code = "device.tamper_sudo_group_member"
+	CodeDeviceTamperSudoersDFile         Code = "device.tamper_sudoers_d_file"
+	CodeDeviceTamperSudoersChanged       Code = "device.tamper_sudoers_changed"
+	CodeDeviceTamperProtectedFileChanged Code = "device.tamper_protected_file_changed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -85,10 +97,11 @@ type Definition struct {
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
 
 // deviceEventParams are the parameters of audit events reported by devices (plan M2a decision 14, M2b decisions 9,
-// 11, 12 and 16); each event carries the subset its type defines.
+// 11, 12 and 16, M3b decision 5); each event carries the subset its type defines.
 var deviceEventParams = []string{
 	"event_seq", "occurred_at", "bundle_version", "reason", "resource", "version", "changed", "errors", "resource_ids",
-	"from_version", "outcome", "count", "from_seq", "to_seq",
+	"from_version", "outcome", "count", "from_seq", "to_seq", "stage", "message", "username", "sessions_locked",
+	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
 }
 
 var registry = map[Code]Definition{
@@ -218,6 +231,69 @@ var registry = map[Code]Definition{
 	CodeDeviceAgentEventsDropped: {
 		Code: CodeDeviceAgentEventsDropped, Emitted: true,
 		Description: "A device's event spool overflowed while the server was unreachable; the events from_seq..to_seq were dropped (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceLoginApplied: {
+		Code: CodeDeviceLoginApplied, Emitted: true,
+		Description: "A device installed or reconfigured its login component (Himmelblau) or changed its local deny list (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "changed lists what changed: package, config, deny_list.",
+	},
+	CodeDeviceLoginApplyFailed: {
+		Code: CodeDeviceLoginApplyFailed, Emitted: true,
+		Description: "A device could not apply its login configuration; the previous state stays in effect (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "stage is apt, config, restart, deny_list, pam or sessions; pam means the deny-list PAM profile is not in place (`dpkg-reconfigure paddock-agent` restores it).",
+	},
+	CodeDeviceUserLockApplied: {
+		Code: CodeDeviceUserLockApplied, Emitted: true,
+		Description: "A device blocked a newly locked user locally (login, offline login, screen unlock) and locked or terminated the user's sessions (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceLoginsSuspensionApplied: {
+		Code: CodeDeviceLoginsSuspensionApplied, Emitted: true,
+		Description: "A device applied a login suspension: directory logins are refused and directory users' sessions were terminated (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceSudoApplyFailed: {
+		Code: CodeDeviceSudoApplyFailed, Emitted: true,
+		Description: "A device could not apply a user's sudo rights, or its sudo configuration failed the check; the previous state was kept or restored (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "username is empty when the sudo configuration as a whole is affected, e.g. /etc/sudoers lost its includedir.",
+	},
+	CodeDeviceSudoUserUnresolved: {
+		Code: CodeDeviceSudoUserUnresolved, Emitted: true,
+		Description: "A user with sudo rights is not known on a device yet (never logged in there); the rights take effect after the first login (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceTamperSudoGroupMember: {
+		Code: CodeDeviceTamperSudoGroupMember, Emitted: true,
+		Description: "A device found a member of a privileged local group (sudo, admin, wheel) that is not a break-glass account and removed it (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceTamperSudoersDFile: {
+		Code: CodeDeviceTamperSudoersDFile, Emitted: true,
+		Description: "A device moved an unexpected file in /etc/sudoers.d to its quarantine directory (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceTamperSudoersChanged: {
+		Code: CodeDeviceTamperSudoersChanged, Emitted: true,
+		Description: "A device found /etc/sudoers changed since it last recorded it; the agent reports but does not rewrite it (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceTamperProtectedFileChanged: {
+		Code: CodeDeviceTamperProtectedFileChanged, Emitted: true,
+		Description: "A device found a protected file changed that the agent does not restore itself, e.g. its PAM configuration (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 	},

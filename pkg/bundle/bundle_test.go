@@ -175,12 +175,20 @@ func TestTrustFromKeys(t *testing.T) {
 	}
 }
 
+func TestValidHimmelblauVersion(t *testing.T) {
+	for v, want := range map[string]bool{"4.0.4": true, "10.12.0": true, "4.0": false, "4.0.4-1": false, "../4.0.4": false, "": false} {
+		if got := ValidHimmelblauVersion(v); got != want {
+			t.Errorf("ValidHimmelblauVersion(%q) = %v", v, got)
+		}
+	}
+}
+
 func TestV2ResourcesGolden(t *testing.T) {
 	login, err := LoginResource(LoginSpec{
 		Provider: ProviderHimmelblau,
 		Himmelblau: HimmelblauSpec{
 			OIDCIssuerURL: "https://auth.example.org/application/o/paddock-device-acme/", AppID: "paddock-device-acme",
-			Domain: "acme.test", EnableHello: true, HelloPinMinLength: 6,
+			Domain: "acme.test", EnableHello: true, HelloPinMinLength: 6, PackageVersion: "4.0.4",
 		},
 		Suspended: true, SessionAction: SessionActionLockScreen,
 	})
@@ -208,7 +216,7 @@ func TestV2ResourcesGolden(t *testing.T) {
 	for _, want := range []string{
 		`{"id":"login","spec":{"break_glass_accounts":[],"himmelblau":{"app_id":"paddock-device-acme","domain":"acme.test",` +
 			`"enable_hello":true,"hello_pin_min_length":6,"oidc_issuer_url":"https://auth.example.org/application/o/paddock-device-acme/",` +
-			`"pam_allow_groups":[]},"locked_users":[],"provider":"himmelblau","session_action":"lock_screen","suspended":true},"type":"login"}`,
+			`"package_version":"4.0.4","pam_allow_groups":[]},"locked_users":[],"provider":"himmelblau","session_action":"lock_screen","suspended":true},"type":"login"}`,
 		`{"id":"sudo","spec":{"break_glass_accounts":[],"entries":[{"class":"full","commands":[],"lecture":"once",` +
 			`"profile_digest":"d","require_password":true,"root_equivalent":false,"timestamp_timeout_min":0,"username":"erin@acme.test"}],` +
 			`"lecture_text":"Be careful.","privileged_groups":["sudo","admin","wheel"],"sudoers_d_allowlist":["README"]},"type":"sudo"}`,

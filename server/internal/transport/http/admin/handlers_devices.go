@@ -167,6 +167,7 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		for _, v := range d.Status.SchemaVersions {
 			out.SchemaVersions = append(out.SchemaVersions, int(v))
 		}
+		out.LoginStatus = toDeviceLoginStatus(d.Status.LoginState)
 	}
 	for i, u := range d.Login.Users {
 		out.LoginAssignment.Users[i] = toUserRef(u)
@@ -184,6 +185,15 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		}
 	}
 	return out
+}
+
+// toDeviceLoginStatus decodes device_status.login_state; an unreadable area counts as not reported.
+func toDeviceLoginStatus(raw json.RawMessage) adminapi.DeviceLoginStatus {
+	var state map[string]*adminapi.DeviceReport
+	if json.Unmarshal(raw, &state) != nil {
+		return adminapi.DeviceLoginStatus{}
+	}
+	return adminapi.DeviceLoginStatus{Login: state["login"], Sudo: state["sudo"]}
 }
 
 func (h *handlers) GetDevice(ctx context.Context, req adminapi.GetDeviceRequestObject) (adminapi.GetDeviceResponseObject, error) {
