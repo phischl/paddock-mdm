@@ -78,7 +78,7 @@ func TestDeviceProtocol(t *testing.T) {
 	if _, res, _ := pending.Checkin(testContext(t, time.Minute)); res.Status != http.StatusUnauthorized {
 		t.Fatalf("pending device checked in: HTTP %d", res.Status)
 	}
-	expectStatus(t, call(t, alice, http.MethodPost, "/api/v1/devices/"+s.DeviceID+":approve", nil), http.StatusOK, "")
+	expectStatus(t, call(t, alice, http.MethodPost, "/api/v1/devices/"+s.DeviceID+"/approve", nil), http.StatusOK, "")
 	if s, err := pending.WaitEnrollment(testContext(t, 30*time.Second), func(s protocol.EnrollStatus) bool { return s.Status == protocol.EnrollActive }); err != nil {
 		t.Fatalf("approved enrollment %+v: %v", s, err)
 	}

@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** device and enrollment token actions are sub-resources: `POST /api/v1/devices/{id}/approve`, `/reject`, `/release-quarantine`, `/retire` and `POST /api/v1/enrollment-tokens/{id}/revoke` replace the `{id}:<action>` paths; API clients must switch to the new paths (M2b step 0).
 - **BREAKING:** the control-plane database has the new roles `paddock_worker` and `paddock_compiler`, created when the PostgreSQL volume is initialized, and `paddock-api` requires `PADDOCK_PUBLIC_DEVICE_URL`. Development stacks: `make down V=1`, `make dev-secrets`, `make up`. Existing installations: none (pre-release) (M2a step 3).
 - Deleting a device group that an enrollment token still assigns devices to answers 409 `in_use` (M2a step 3).
 - **BREAKING:** Authentik group names use `.` instead of `:` (`paddock.<slug>`, `paddock.<slug>.admins`, `.operators`, `.auditors`, `paddock.platform.admins`), so the same names work for portal and device logins; groups with the old names are ignored. Development stacks: `make down V=1`. Existing installations: none (pre-release) (ADR 0007, M0.3 step 1).
@@ -56,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `make up` (audit bucket bootstrap) no longer fails when the generated audit writer access key starts with `-` (M2b step 0).
 - Audit events recorded after their occurrence day was sealed are now covered by the manifest of their recording day (F7, M0.1 step 2).
 - `make up` on a fresh stack no longer fails because both Authentik containers populate the shared data volume at the same time (M0 step 10).
 - `make dev-seed` right after `make up` no longer fails intermittently: it waits up to 180 s until the Authentik login flow `paddock-admin-login` is executable (M1 step 1).

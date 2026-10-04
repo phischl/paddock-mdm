@@ -85,7 +85,7 @@ func TestDeviceSecurity(t *testing.T) {
 	t.Run("presigned urls", func(t *testing.T) { presignedURLs(t, alice, dev) })
 
 	t.Run("retired device", func(t *testing.T) {
-		expectStatus(t, call(t, alice, http.MethodPost, "/api/v1/devices/"+dev.DeviceID+":retire", nil), http.StatusOK, "")
+		expectStatus(t, call(t, alice, http.MethodPost, "/api/v1/devices/"+dev.DeviceID+"/retire", nil), http.StatusOK, "")
 		deadline := time.Now().Add(15 * time.Second)
 		for {
 			res, err := dev.Do(ctx, checkin)
@@ -117,7 +117,7 @@ func expectDeviceProblem(t *testing.T, res devicesim.Response, err error, status
 // unusableTokens: revoked and expired tokens answer 401 invalid_token; an exhausted token rejects the enrollment.
 func unusableTokens(t *testing.T, alice *env.Portal) {
 	revoked := createToken(t, alice, tokenOptions{autoApprove: true})
-	expectStatus(t, call(t, alice, http.MethodPost, "/api/v1/enrollment-tokens/"+revoked.Token.ID+":revoke", nil), http.StatusOK, "")
+	expectStatus(t, call(t, alice, http.MethodPost, "/api/v1/enrollment-tokens/"+revoked.Token.ID+"/revoke", nil), http.StatusOK, "")
 	expired := createToken(t, alice, tokenOptions{autoApprove: true, validFor: 3 * time.Second})
 	time.Sleep(4 * time.Second)
 	for name, tok := range map[string]createdToken{"revoked": revoked, "expired": expired} {

@@ -39,18 +39,23 @@ var privileged = map[string]struct {
 	scope app.Scope
 	spec  app.ActionSpec
 }{
-	"POST /api/v1/device-groups":          {app.ScopeOrg, app.SpecDeviceGroupCreate},
-	"PATCH /api/v1/device-groups/{id}":    {app.ScopeOrg, app.SpecDeviceGroupUpdate},
-	"DELETE /api/v1/device-groups/{id}":   {app.ScopeOrg, app.SpecDeviceGroupDelete},
-	"POST /api/platform/v1/organizations": {app.ScopePlatform, app.SpecOrganizationCreate},
-	"POST /api/v1/enrollment-tokens":      {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
-	"PUT /api/v1/devices/{id}/groups":     {app.ScopeOrg, app.SpecDeviceSetGroups},
-	"POST /api/v1/managed-files":          {app.ScopeOrg, app.SpecManagedFileCreate},
-	"PATCH /api/v1/managed-files/{id}":    {app.ScopeOrg, app.SpecManagedFileUpdate},
-	"DELETE /api/v1/managed-files/{id}":   {app.ScopeOrg, app.SpecManagedFileDelete},
-	"POST /api/v1/managed-units":          {app.ScopeOrg, app.SpecManagedUnitCreate},
-	"PATCH /api/v1/managed-units/{id}":    {app.ScopeOrg, app.SpecManagedUnitUpdate},
-	"DELETE /api/v1/managed-units/{id}":   {app.ScopeOrg, app.SpecManagedUnitDelete},
+	"POST /api/v1/device-groups":                   {app.ScopeOrg, app.SpecDeviceGroupCreate},
+	"PATCH /api/v1/device-groups/{id}":             {app.ScopeOrg, app.SpecDeviceGroupUpdate},
+	"DELETE /api/v1/device-groups/{id}":            {app.ScopeOrg, app.SpecDeviceGroupDelete},
+	"POST /api/platform/v1/organizations":          {app.ScopePlatform, app.SpecOrganizationCreate},
+	"POST /api/v1/enrollment-tokens":               {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
+	"PUT /api/v1/devices/{id}/groups":              {app.ScopeOrg, app.SpecDeviceSetGroups},
+	"POST /api/v1/devices/{id}/approve":            {app.ScopeOrg, app.SpecDeviceApprove},
+	"POST /api/v1/devices/{id}/reject":             {app.ScopeOrg, app.SpecDeviceReject},
+	"POST /api/v1/devices/{id}/release-quarantine": {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},
+	"POST /api/v1/devices/{id}/retire":             {app.ScopeOrg, app.SpecDeviceRetire},
+	"POST /api/v1/enrollment-tokens/{id}/revoke":   {app.ScopeOrg, app.SpecEnrollmentTokenRevoke},
+	"POST /api/v1/managed-files":                   {app.ScopeOrg, app.SpecManagedFileCreate},
+	"PATCH /api/v1/managed-files/{id}":             {app.ScopeOrg, app.SpecManagedFileUpdate},
+	"DELETE /api/v1/managed-files/{id}":            {app.ScopeOrg, app.SpecManagedFileDelete},
+	"POST /api/v1/managed-units":                   {app.ScopeOrg, app.SpecManagedUnitCreate},
+	"PATCH /api/v1/managed-units/{id}":             {app.ScopeOrg, app.SpecManagedUnitUpdate},
+	"DELETE /api/v1/managed-units/{id}":            {app.ScopeOrg, app.SpecManagedUnitDelete},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -75,8 +80,6 @@ func NewHandler(d Deps) http.Handler {
 		Middlewares:      []adminapi.MiddlewareFunc{s.csrf},
 		ErrorHandlerFunc: s.rejected,
 	})
-	api.Handle("POST /api/v1/devices/{"+actionPathValue+"}", s.actionHandler(s.deviceActions(h)))
-	api.Handle("POST /api/v1/enrollment-tokens/{"+actionPathValue+"}", s.actionHandler(s.tokenActions(h)))
 	api.Handle("POST /api/auth/logout", s.csrf(s.bff.logout(d.PublicURL)))
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { httpx.WriteProblem(w, r, problem.NotFound) })
 	authenticated := s.session(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

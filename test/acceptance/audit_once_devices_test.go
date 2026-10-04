@@ -37,10 +37,10 @@ func quarantinedDevice(t *testing.T, w *auditWorld) string {
 	return d.DeviceID
 }
 
-// deviceAction returns the cases of POST /api/v1/devices/{id}:<action>: success on a device in a state that allows
+// deviceAction returns the cases of POST /api/v1/devices/{id}/<action>: success on a device in a state that allows
 // it, denial for the auditor, a missing device, and a conflict on a device in a state that does not.
 func deviceAction(action, code string, allowed, refused func(t *testing.T, w *auditWorld) string) []auditCase {
-	path := func(id string) string { return "/api/v1/devices/" + id + ":" + action }
+	path := func(id string) string { return "/api/v1/devices/" + id + "/" + action }
 	return []auditCase{
 		{"success", func(t *testing.T, w *auditWorld) {
 			res := call(t, w.alice, http.MethodPost, path(allowed(t, w)), nil)
@@ -173,32 +173,32 @@ var deviceAuditCases = func() map[string][]auditCase {
 				expectOneEvent(t, w.alice, res.RequestID, "enrollment_token.created", "denied")
 			}},
 		},
-		"POST /api/v1/enrollment-tokens/{id}:revoke": {
+		"POST /api/v1/enrollment-tokens/{id}/revoke": {
 			{"success", func(t *testing.T, w *auditWorld) {
-				res := call(t, w.alice, http.MethodPost, "/api/v1/enrollment-tokens/"+createToken(t, w.alice, tokenOptions{}).Token.ID+":revoke", nil)
+				res := call(t, w.alice, http.MethodPost, "/api/v1/enrollment-tokens/"+createToken(t, w.alice, tokenOptions{}).Token.ID+"/revoke", nil)
 				expectStatus(t, res, http.StatusOK, "")
 				expectOneEvent(t, w.alice, res.RequestID, "enrollment_token.revoked", "success")
 			}},
 			{"validation failure", func(t *testing.T, w *auditWorld) {
-				res := call(t, w.alice, http.MethodPost, "/api/v1/enrollment-tokens/not-a-uuid:revoke", nil)
+				res := call(t, w.alice, http.MethodPost, "/api/v1/enrollment-tokens/not-a-uuid/revoke", nil)
 				expectStatus(t, res, http.StatusBadRequest, "invalid_request")
 				expectOneEvent(t, w.alice, res.RequestID, "enrollment_token.revoked", "failure")
 			}},
 			{"wrong role", func(t *testing.T, w *auditWorld) {
-				res := call(t, w.bob, http.MethodPost, "/api/v1/enrollment-tokens/"+createToken(t, w.alice, tokenOptions{}).Token.ID+":revoke", nil)
+				res := call(t, w.bob, http.MethodPost, "/api/v1/enrollment-tokens/"+createToken(t, w.alice, tokenOptions{}).Token.ID+"/revoke", nil)
 				expectStatus(t, res, http.StatusForbidden, "forbidden")
 				expectOneEvent(t, w.alice, res.RequestID, "enrollment_token.revoked", "denied")
 			}},
 			{"not found", func(t *testing.T, w *auditWorld) {
-				res := call(t, w.alice, http.MethodPost, "/api/v1/enrollment-tokens/"+uuid.NewString()+":revoke", nil)
+				res := call(t, w.alice, http.MethodPost, "/api/v1/enrollment-tokens/"+uuid.NewString()+"/revoke", nil)
 				expectStatus(t, res, http.StatusNotFound, "not_found")
 				expectOneEvent(t, w.alice, res.RequestID, "enrollment_token.revoked", "failure")
 			}},
 		},
-		"POST /api/v1/devices/{id}:approve":            deviceAction("approve", "device.approved", pendingDevice, activeID),
-		"POST /api/v1/devices/{id}:reject":             deviceAction("reject", "device.rejected", pendingDevice, activeID),
-		"POST /api/v1/devices/{id}:release-quarantine": deviceAction("release-quarantine", "device.quarantine_released", quarantinedDevice, activeID),
-		"POST /api/v1/devices/{id}:retire":             deviceAction("retire", "device.retired", activeID, pendingDevice),
+		"POST /api/v1/devices/{id}/approve":            deviceAction("approve", "device.approved", pendingDevice, activeID),
+		"POST /api/v1/devices/{id}/reject":             deviceAction("reject", "device.rejected", pendingDevice, activeID),
+		"POST /api/v1/devices/{id}/release-quarantine": deviceAction("release-quarantine", "device.quarantine_released", quarantinedDevice, activeID),
+		"POST /api/v1/devices/{id}/retire":             deviceAction("retire", "device.retired", activeID, pendingDevice),
 		"PUT /api/v1/devices/{id}/groups": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/groups",

@@ -185,7 +185,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/enrollment-tokens/{id}:revoke": {
+    "/api/v1/enrollment-tokens/{id}/revoke": {
         parameters: {
             query?: never;
             header?: never;
@@ -240,7 +240,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/devices/{id}:approve": {
+    "/api/v1/devices/{id}/approve": {
         parameters: {
             query?: never;
             header?: never;
@@ -259,7 +259,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/devices/{id}:reject": {
+    "/api/v1/devices/{id}/reject": {
         parameters: {
             query?: never;
             header?: never;
@@ -278,7 +278,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/devices/{id}:release-quarantine": {
+    "/api/v1/devices/{id}/release-quarantine": {
         parameters: {
             query?: never;
             header?: never;
@@ -297,7 +297,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/devices/{id}:retire": {
+    "/api/v1/devices/{id}/retire": {
         parameters: {
             query?: never;
             header?: never;

@@ -66,6 +66,7 @@ Treat these as protected: changes are tamper events and the agent must re-verify
   (documented allow list, `-` = descending, primary key as tie-breaker), `q`, documented filters; response
   `{items, page, page_size, total, total_capped, sort}`; `page × page_size ≤ 10000`; documented with the OpenAPI
   extension `x-paddock-list`.
+- State-changing actions on a resource are `POST /<collection>/{id}/<verb>`; never `:verb` suffixes.
 
 ## Definition of done
 

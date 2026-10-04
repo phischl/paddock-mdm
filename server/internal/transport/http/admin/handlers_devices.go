@@ -74,6 +74,14 @@ func (h *handlers) GetEnrollmentToken(ctx context.Context, req adminapi.GetEnrol
 	return adminapi.GetEnrollmentToken200JSONResponse(toEnrollmentToken(t, h.now())), nil
 }
 
+func (h *handlers) RevokeEnrollmentToken(ctx context.Context, req adminapi.RevokeEnrollmentTokenRequestObject) (adminapi.RevokeEnrollmentTokenResponseObject, error) {
+	t, err := h.tokens.Revoke(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.RevokeEnrollmentToken200JSONResponse(toEnrollmentToken(t, h.now())), nil
+}
+
 func toEnrollmentToken(t pgstore.EnrollmentToken, now time.Time) adminapi.EnrollmentToken {
 	return adminapi.EnrollmentToken{
 		Id: t.ID, Name: t.Name, DeviceGroupId: idPtr(t.DeviceGroupID), AutoApprove: t.AutoApprove,
@@ -169,6 +177,50 @@ func (h *handlers) GetDevice(ctx context.Context, req adminapi.GetDeviceRequestO
 		return nil, err
 	}
 	return adminapi.GetDevice200JSONResponse(toDeviceDetail(d)), nil
+}
+
+func (h *handlers) ApproveDevice(ctx context.Context, req adminapi.ApproveDeviceRequestObject) (adminapi.ApproveDeviceResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, h.devices.Approve)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ApproveDevice200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) RejectDevice(ctx context.Context, req adminapi.RejectDeviceRequestObject) (adminapi.RejectDeviceResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, h.devices.Reject)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.RejectDevice200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) ReleaseDeviceQuarantine(ctx context.Context, req adminapi.ReleaseDeviceQuarantineRequestObject) (adminapi.ReleaseDeviceQuarantineResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, h.devices.ReleaseQuarantine)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ReleaseDeviceQuarantine200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) RetireDevice(ctx context.Context, req adminapi.RetireDeviceRequestObject) (adminapi.RetireDeviceResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, h.devices.Retire)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.RetireDevice200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+// transition runs a lifecycle use case and returns the device as it is afterwards.
+func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context.Context, uuid.UUID) (pgstore.Device, error)) (adminapi.Device, error) {
+	if _, err := fn(ctx, id); err != nil {
+		return adminapi.Device{}, err
+	}
+	d, err := h.devices.Get(ctx, id)
+	if err != nil {
+		return adminapi.Device{}, err
+	}
+	return toDevice(d.Device, d.Status), nil
 }
 
 func (h *handlers) SetDeviceGroups(ctx context.Context, req adminapi.SetDeviceGroupsRequestObject) (adminapi.SetDeviceGroupsResponseObject, error) {
