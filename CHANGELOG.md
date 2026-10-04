@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `compiler` role (`paddock-server serve compiler`, Compose service `paddock-compiler`): after every change of a device's inputs it renders the device's bundle (schema v1: NTP, managed files, managed units), signs it as a DSSE envelope with the OpenBao key `bundle-signing` and stores it as `org/<organization>/devices/<device>/bundles/<version>.dsse` in `paddock-bundles`; content-equal renders keep the version, changes within 2 s are coalesced, and bundle pointers in Valkey are rebuilt from PostgreSQL every 60 s (F1, A9, M2a step 5).
 - The worker records check-ins in the device status at most once per minute per device, quarantines a device whose sequence numbers diverge (cloned identity, audit event `device.clone_suspected`) and records device events as audit events `device.bundle_applied`, `device.bundle_rejected` and `device.config_drift_corrected`, each once per event sequence number (A6, M2a step 5).
 - Metrics `paddock_compiler_bundles_total{result}` and `paddock_compiler_latency_seconds` (M2a step 5).
+- Acceptance gates D1–D4 for the device protocol, its security, clone detection and the absence of a synchronous device-to-database path, run with the reference device client `test/acceptance/devicesim` (`go run ./test/acceptance/cmd/devicesim enroll` enrolls a simulated device) (M2a step 6).
 
 ### Changed
 

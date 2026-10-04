@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
 )
@@ -14,6 +15,37 @@ type isolationWorld struct {
 	alice, carol *env.Portal
 	globexIDs    []string // every ID of globex the acme session must never see
 	globexGroups []string
+	// Globex device control plane resources (seedGlobexDevices).
+	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
+}
+
+// seedGlobexDevices creates, as carol, a device group with an enrolled device (through the device API), an
+// enrollment token, a managed file and a managed unit — all named "globex-iso…" so the list searches find them.
+func seedGlobexDevices(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	w.globexDeviceGroup = namedGroup(t, w.carol, "globex isolation devices")
+	tok := createToken(t, w.carol, tokenOptions{name: uniqueName("globex isolation token"), autoApprove: true, groupID: w.globexDeviceGroup})
+	w.globexToken = tok.Token.ID
+	dev, s := enroll(t, tok.EnrollmentConfig, "globex-iso-"+uniqueSuffix())
+	if s.Status != "active" {
+		t.Fatalf("globex device enrollment %+v", s)
+	}
+	w.globexDevice = dev.DeviceID
+	res := call(t, w.carol, http.MethodPost, "/api/v1/managed-files", map[string]any{
+		"path": "/etc/globex-iso-" + uniqueSuffix() + ".conf", "content": "globex", "device_group_id": w.globexDeviceGroup,
+	})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexFile = responseID(t, res).String()
+	res = call(t, w.carol, http.MethodPost, "/api/v1/managed-units", map[string]any{"unit": "globex-iso-" + uniqueSuffix() + ".service"})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexUnit = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexDeviceGroup, w.globexToken, w.globexDevice, w.globexFile, w.globexUnit)
+	w.globexGroups = append(w.globexGroups, w.globexDeviceGroup)
+}
+
+// itemFixture is an item operation on one globex resource.
+func itemFixture(path func(w *isolationWorld) string, body any) isolationFixture {
+	return isolationFixture{kind: isoItem, request: func(_ *testing.T, w *isolationWorld) (string, any) { return path(w), body }}
 }
 
 // isolationKind is what the gate expects from an operation called by an acme admin.
@@ -77,6 +109,55 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/audit-events": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/audit-events?page_size=100", nil
 	}},
+
+	"GET /api/v1/enrollment-tokens": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/enrollment-tokens?page_size=100", nil
+	}},
+	"POST /api/v1/enrollment-tokens": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/enrollment-tokens", map[string]any{"name": uniqueName("acme isolation"), "max_uses": 1,
+			"auto_approve": false, "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}
+	}},
+	"GET /api/v1/enrollment-tokens/{id}":         itemFixture(func(w *isolationWorld) string { return "/api/v1/enrollment-tokens/" + w.globexToken }, nil),
+	"POST /api/v1/enrollment-tokens/{id}:revoke": itemFixture(func(w *isolationWorld) string { return "/api/v1/enrollment-tokens/" + w.globexToken + ":revoke" }, nil),
+
+	"GET /api/v1/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/devices?page_size=100", nil
+	}},
+	"GET /api/v1/devices/{id}":                     itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice }, nil),
+	"POST /api/v1/devices/{id}:approve":            itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + ":approve" }, nil),
+	"POST /api/v1/devices/{id}:reject":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + ":reject" }, nil),
+	"POST /api/v1/devices/{id}:release-quarantine": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + ":release-quarantine" }, nil),
+	"POST /api/v1/devices/{id}:retire":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + ":retire" }, nil),
+	"PUT /api/v1/devices/{id}/groups": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/groups" },
+		map[string]any{"device_group_ids": []string{}}),
+	"GET /api/v1/devices/{id}/effective-config": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/effective-config" }, nil),
+	"GET /api/v1/device-groups/{id}/devices":    itemFixture(func(w *isolationWorld) string { return "/api/v1/device-groups/" + w.globexDeviceGroup + "/devices" }, nil),
+
+	"GET /api/v1/managed-files": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/managed-files?page_size=100", nil
+	}},
+	"POST /api/v1/managed-files": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/managed-files", map[string]any{"path": "/etc/acme-iso-" + uniqueSuffix() + ".conf", "content": "acme"}
+	}},
+	"GET /api/v1/managed-files/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, nil),
+	"PATCH /api/v1/managed-files/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, map[string]any{"content": "taken over by acme"}),
+	"DELETE /api/v1/managed-files/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, nil),
+
+	"GET /api/v1/managed-units": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/managed-units?page_size=100", nil
+	}},
+	"POST /api/v1/managed-units": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/managed-units", map[string]any{"unit": "acme-iso-" + uniqueSuffix() + ".service"}
+	}},
+	"GET /api/v1/managed-units/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-units/" + w.globexUnit }, nil),
+	"PATCH /api/v1/managed-units/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-units/" + w.globexUnit }, map[string]any{"enabled": false}),
+	"DELETE /api/v1/managed-units/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-units/" + w.globexUnit }, nil),
+}
+
+// listParents resolves the parent ID of collection GETs below an item (path with {id}): the globex parent whose
+// data carol finds and alice must get 404 for.
+var listParents = map[string]func(w *isolationWorld) string{
+	"/api/v1/device-groups/{id}/devices": func(w *isolationWorld) string { return w.globexDeviceGroup },
 }
 
 func fixtureKey(method, path string) string { return strings.ToUpper(method) + " " + path }
@@ -98,4 +179,15 @@ var listIsolationQueries = map[string][]url.Values{
 		// carry the ID alice sent.
 		{"q": {"created"}, "sort": {"-code"}, "page_size": {"100"}},
 	},
+	"/api/v1/enrollment-tokens": {
+		{"q": {"globex isolation"}},
+		{"sort": {"-expires_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/devices": {
+		{"q": {"globex-iso"}},
+		{"state": {"active"}, "sort": {"-last_contact_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/managed-files":              {{"q": {"globex-iso"}}},
+	"/api/v1/managed-units":              {{"q": {"globex-iso"}}},
+	"/api/v1/device-groups/{id}/devices": {{"q": {"globex-iso"}}, {"state": {"active"}}},
 }

@@ -81,6 +81,10 @@ func TestListContract(t *testing.T) {
 	}
 	sessions := map[bool]*env.Portal{false: login(t, env.Alice), true: login(t, env.PlatformAdmin)}
 	seedListData(t, sessions[false])
+	// Collections below an item are listed for an acme parent with at least one member.
+	parentGroup := namedGroup(t, sessions[false], "list contract members")
+	activeDevice(t, sessions[false], parentGroup, "list-contract-"+uniqueSuffix())
+	parents := map[string]string{"/api/v1/device-groups/{id}/devices": parentGroup}
 	order := newCollation(t)
 	paths := make([]string, 0, len(lists))
 	for p := range lists {
@@ -90,6 +94,14 @@ func TestListContract(t *testing.T) {
 	for _, path := range paths {
 		op := lists[path]
 		t.Run(path, func(t *testing.T) {
+			target := path
+			if strings.Contains(path, "{") {
+				parent, ok := parents[path]
+				if !ok {
+					t.Fatalf("collection %s below an item has no parent in this gate", path)
+				}
+				target = strings.Replace(path, "{id}", parent, 1)
+			}
 			for _, name := range listParams {
 				if op.Parameters.GetByInAndName("query", name) == nil {
 					t.Errorf("parameter %s missing", name)
@@ -122,7 +134,7 @@ func TestListContract(t *testing.T) {
 			session := sessions[strings.HasPrefix(path, "/api/platform/")]
 			for _, s := range want {
 				q := url.Values{"sort": {s}, "page_size": {"100"}}
-				res := call(t, session, http.MethodGet, path+"?"+q.Encode(), nil)
+				res := call(t, session, http.MethodGet, target+"?"+q.Encode(), nil)
 				expectStatus(t, res, http.StatusOK, "")
 				var page struct {
 					Items []map[string]any `json:"items"`
@@ -152,9 +164,9 @@ func TestListContract(t *testing.T) {
 				}
 				t.Logf("sort=%s: %d of %d items in order", s, len(page.Items), page.Total)
 			}
-			expectStatus(t, call(t, session, http.MethodGet, path+"?sort=no_such_field", nil), http.StatusBadRequest, "invalid_request")
-			expectStatus(t, call(t, session, http.MethodGet, path+"?page_size=7", nil), http.StatusBadRequest, "invalid_request")
-			expectStatus(t, call(t, session, http.MethodGet, path+"?page=401&page_size=25", nil), http.StatusBadRequest, "page_out_of_range")
+			expectStatus(t, call(t, session, http.MethodGet, target+"?sort=no_such_field", nil), http.StatusBadRequest, "invalid_request")
+			expectStatus(t, call(t, session, http.MethodGet, target+"?page_size=7", nil), http.StatusBadRequest, "invalid_request")
+			expectStatus(t, call(t, session, http.MethodGet, target+"?page=401&page_size=25", nil), http.StatusBadRequest, "page_out_of_range")
 		})
 	}
 }
@@ -206,20 +218,26 @@ func newCollation(t *testing.T) *collation {
 	return &collation{conn: conn, ctx: ctx}
 }
 
-// ascending reports the first adjacent pair out of ascending order.
+// ascending reports the first adjacent pair out of ascending order. Missing values (null) sort after every value,
+// as PostgreSQL orders NULL in ascending order (and first in descending order, which the caller reverses).
 func (c *collation) ascending(keys []string, timestamps bool) error {
 	for i := 1; i < len(keys); i++ {
 		a, b := keys[i-1], keys[i]
 		var ok bool
-		if timestamps {
+		switch {
+		case a == nullKey || b == nullKey:
+			ok = b == nullKey
+		case timestamps:
 			ta, errA := time.Parse(time.RFC3339Nano, a)
 			tb, errB := time.Parse(time.RFC3339Nano, b)
 			if errA != nil || errB != nil {
 				return fmt.Errorf("not RFC 3339: %q, %q", a, b)
 			}
 			ok = !ta.After(tb)
-		} else if err := c.conn.QueryRow(c.ctx, "SELECT $1::text <= $2::text", a, b).Scan(&ok); err != nil {
-			return err
+		default:
+			if err := c.conn.QueryRow(c.ctx, "SELECT $1::text <= $2::text", a, b).Scan(&ok); err != nil {
+				return err
+			}
 		}
 		if !ok {
 			return fmt.Errorf("items %d and %d out of order: %q, %q", i-1, i, a, b)
@@ -227,6 +245,9 @@ func (c *collation) ascending(keys []string, timestamps bool) error {
 	}
 	return nil
 }
+
+// nullKey is fmt.Sprint of a JSON null.
+const nullKey = "<nil>"
 
 func sorted(s []string) []string {
 	s = slices.Clone(s)
