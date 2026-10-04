@@ -32,6 +32,13 @@ var passwordFiles = map[string]string{
 	Carol:         "dev_carol_password",
 }
 
+// RootGroup returns the Authentik root group of an organization (architecture §9.2). The gates spell the names
+// out themselves instead of importing the server's naming code, which they test as a black box.
+func RootGroup(slug string) string { return "paddock." + slug }
+
+// RoleGroup returns an organization's Authentik role group; role is admins, operators or auditors.
+func RoleGroup(slug, role string) string { return RootGroup(slug) + "." + role }
+
 // NewHTTPClient returns a client that trusts the stack's Caddy CA.
 func NewHTTPClient() (*http.Client, error) {
 	dir, err := stack.SecretsDir()

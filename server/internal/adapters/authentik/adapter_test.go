@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/authentik"
+	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
 	"github.com/paddock-mdm/paddock/server/internal/problem"
 )
 
@@ -124,7 +125,12 @@ func TestEnsureOrganizationIsIdempotent(t *testing.T) {
 	if f.posts != 4 {
 		t.Fatalf("first call created %d groups, want 4", f.posts)
 	}
-	for _, name := range []string{"paddock:acme", "paddock:acme:admins", "paddock:acme:operators", "paddock:acme:auditors"} {
+	for _, name := range []string{
+		organization.RootGroup("acme"),
+		organization.RoleGroup("acme", organization.GroupAdmins),
+		organization.RoleGroup("acme", organization.GroupOperators),
+		organization.RoleGroup("acme", organization.GroupAuditors),
+	} {
 		if _, ok := f.groups[name]; !ok {
 			t.Errorf("group %s missing", name)
 		}
@@ -136,7 +142,7 @@ func TestEnsureOrganizationIsIdempotent(t *testing.T) {
 	if f.posts != 4 {
 		t.Fatalf("second call created groups (%d POSTs in total)", f.posts)
 	}
-	if first != second || first.AdminsGroupPK != f.groups["paddock:acme:admins"] {
+	if first != second || first.AdminsGroupPK != f.groups[organization.RoleGroup("acme", organization.GroupAdmins)] {
 		t.Fatalf("refs differ: %+v vs %+v", first, second)
 	}
 }

@@ -59,9 +59,9 @@ func run() error {
 		return err
 	}
 	for _, m := range []struct{ user, group string }{
-		{env.Alice, "paddock:acme:admins"},
-		{env.Bob, "paddock:acme:auditors"},
-		{env.Carol, "paddock:globex:admins"},
+		{env.Alice, env.RoleGroup("acme", "admins")},
+		{env.Bob, env.RoleGroup("acme", "auditors")},
+		{env.Carol, env.RoleGroup("globex", "admins")},
 	} {
 		if err := ak.AddToGroup(ctx, m.user, m.group); err != nil {
 			return err

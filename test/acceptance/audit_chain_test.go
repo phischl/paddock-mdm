@@ -32,7 +32,7 @@ func TestAuditChain(t *testing.T) {
 	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", body)
 	expectStatus(t, res, http.StatusCreated, "")
 	chain := responseID(t, res)
-	user, pw := tempUser(t, "chain", "paddock:"+body["slug"]+":admins")
+	user, pw := tempUser(t, "chain", env.RoleGroup(body["slug"], "admins"))
 	admin, err := loginAs(t, user, pw)
 	if err != nil {
 		t.Fatalf("login as the new organization's admin: %v", err)

@@ -39,7 +39,7 @@ entries:
       type: internal
       password: !Env DEV_PLATFORM_ADMIN_PASSWORD
       groups:
-        - !Find [authentik_core.group, [name, "paddock:platform:admins"]]
+        - !Find [authentik_core.group, [name, "paddock.platform.admins"]]
 
   - model: authentik_core.user
     identifiers:
