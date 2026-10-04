@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+# Paddock device login, platform-wide (plan M3a decision 6): the authentication flow of the per-organization device
+# login providers (identification with user enumeration prevention, password, mandatory MFA) and the device-code flow
+# of the default brand. The providers and applications themselves are created per organization by paddock-server.
+version: 1
+metadata:
+  name: Paddock - Device login
+  labels:
+    blueprints.goauthentik.io/description: Authentication and device-code flows with mandatory MFA for device logins
+entries:
+  - model: authentik_flows.flow
+    id: authentication-flow
+    identifiers:
+      slug: paddock-device-authentication
+    attrs:
+      name: Paddock device sign-in
+      title: Sign in to your device
+      designation: authentication
+      authentication: none
+
+  - model: authentik_stages_identification.identificationstage
+    id: identification
+    identifiers:
+      name: paddock-device-identification
+    attrs:
+      user_fields: [username, email]
+      case_insensitive_matching: true
+      pretend_user_exists: true
+      show_matched_user: false
+
+  - model: authentik_stages_password.passwordstage
+    id: password
+    identifiers:
+      name: paddock-device-password
+    attrs:
+      backends:
+        - authentik.core.auth.InbuiltBackend
+      failed_attempts_before_cancel: 5
+
+  # Mandatory MFA: a user without an authenticator must enroll one; never skip (PoC M1 finding A2.5).
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa
+    identifiers:
+      name: paddock-device-mfa
+    attrs:
+      device_classes: [webauthn, totp]
+      not_configured_action: configure
+      last_auth_threshold: minutes=5
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+        - !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
+
+  - model: authentik_stages_user_login.userloginstage
+    id: login
+    identifiers:
+      name: paddock-device-session
+    attrs:
+      session_duration: hours=1
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf authentication-flow
+      stage: !KeyOf identification
+      order: 10
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf authentication-flow
+      stage: !KeyOf password
+      order: 20
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf authentication-flow
+      stage: !KeyOf mfa
+      order: 30
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf authentication-flow
+      stage: !KeyOf login
+      order: 100
+
+  # Device-code verification. The brand's /device entry signs unauthenticated users in with the brand's
+  # authentication flow, which is not Paddock's; the MFA stage here therefore enforces MFA for every device approval
+  # (skipped only when the user passed MFA within the last 5 minutes).
+  - model: authentik_flows.flow
+    id: device-code-flow
+    identifiers:
+      slug: paddock-device-code
+    attrs:
+      name: Paddock device code
+      title: Approve the sign-in on your device
+      designation: stage_configuration
+      authentication: require_authenticated
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf device-code-flow
+      stage: !KeyOf mfa
+      order: 10
+
+  - model: authentik_brands.brand
+    identifiers:
+      default: true
+    conditions:
+      - !Find [authentik_brands.brand, [default, true]]
+    attrs:
+      flow_device_code: !KeyOf device-code-flow

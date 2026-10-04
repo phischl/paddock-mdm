@@ -1,0 +1,50 @@
+{
+  "pk": 8,
+  "name": "paddock-device-fixture-org",
+  "authentication_flow": "745eae72-2307-4559-84f5-c05f53a34e64",
+  "authorization_flow": "4870873f-7a5c-4705-85ca-2cfaf423efcc",
+  "invalidation_flow": "ac5a1f4b-61b4-471b-ae4e-c8926315a734",
+  "property_mappings": [
+    "73176c9a-779d-41e4-b170-de041602a5d1",
+    "a855ac9f-974c-4e08-96b8-6c5b9d115b05",
+    "3206e3e8-bbcc-4429-9fdc-d84507a5954a",
+    "93b43c62-a227-4508-b012-465dd29a64ea",
+    "6a23dee6-b199-47d4-8dd1-90d5d31b22bf"
+  ],
+  "component": "ak-provider-oauth2-form",
+  "assigned_application_slug": "paddock-device-fixture-org",
+  "assigned_application_name": "paddock-device-fixture-org",
+  "assigned_backchannel_application_slug": null,
+  "assigned_backchannel_application_name": null,
+  "verbose_name": "OAuth2/OpenID Provider",
+  "verbose_name_plural": "OAuth2/OpenID Providers",
+  "meta_model_name": "authentik_providers_oauth2.oauth2provider",
+  "client_type": "public",
+  "grant_types": [
+    "urn:ietf:params:oauth:grant-type:device_code",
+    "refresh_token",
+    "authorization_code"
+  ],
+  "client_id": "paddock-device-fixture-org",
+  "client_secret": "redacted",
+  "access_code_validity": "minutes=1",
+  "access_token_validity": "minutes=10",
+  "refresh_token_validity": "days=30",
+  "refresh_token_threshold": "seconds=0",
+  "include_claims_in_id_token": true,
+  "signing_key": "b3846d45-58ff-413f-ad63-30cb876db175",
+  "encryption_key": null,
+  "redirect_uris": [
+    {
+      "matching_mode": "strict",
+      "url": "http://127.0.0.1:8765/callback",
+      "redirect_uri_type": "authorization"
+    }
+  ],
+  "logout_uri": "",
+  "logout_method": "backchannel",
+  "sub_mode": "hashed_user_id",
+  "issuer_mode": "per_provider",
+  "jwt_federation_sources": [],
+  "jwt_federation_providers": []
+}

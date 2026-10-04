@@ -1,0 +1,11 @@
+{
+  "pk": "97e0ab8a-6488-47bb-a1cf-6ec772e865bc",
+  "name": "paddock-device-fixture-org-access",
+  "execution_logging": false,
+  "component": "ak-policy-expression-form",
+  "verbose_name": "Expression Policy",
+  "verbose_name_plural": "Expression Policies",
+  "meta_model_name": "authentik_policies_expression.expressionpolicy",
+  "bound_to": 1,
+  "expression": "names = {g.name for g in request.user.all_groups()}\nreturn \"paddock.fixture-org\" in names and \"paddock.fixture-org.locked\" not in names"
+}

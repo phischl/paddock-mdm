@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+# Paddock account recovery (plan M3a decision 18): the one-time links paddock-server creates for new local users
+# (POST /api/v3/core/users/<pk>/recovery/, valid 24 h) open this flow with the user already identified by the link
+# token; the user sets a password of at least 12 characters.
+version: 1
+metadata:
+  name: Paddock - Recovery
+  labels:
+    blueprints.goauthentik.io/description: Recovery flow of the one-time links for local Paddock users
+entries:
+  - model: authentik_flows.flow
+    id: flow
+    identifiers:
+      slug: paddock-recovery
+    attrs:
+      name: Paddock account recovery
+      title: Set your password
+      designation: recovery
+      authentication: require_unauthenticated
+
+  - model: authentik_policies_password.passwordpolicy
+    id: password-policy
+    identifiers:
+      name: paddock-recovery-password-policy
+    attrs:
+      password_field: password
+      check_static_rules: true
+      length_min: 12
+      amount_digits: 0
+      amount_lowercase: 0
+      amount_uppercase: 0
+      amount_symbols: 0
+      error_message: The password must be at least 12 characters long.
+
+  # The link token restores a plan with the user; without it the flow has no user and must not run.
+  - model: authentik_policies_expression.expressionpolicy
+    id: link-token
+    identifiers:
+      name: paddock-recovery-link-token
+    attrs:
+      expression: |
+        return bool(request.context.get("is_restored"))
+
+  - model: authentik_stages_prompt.prompt
+    id: field-password
+    identifiers:
+      name: paddock-recovery-field-password
+    attrs:
+      field_key: password
+      label: Password
+      type: password
+      required: true
+      placeholder: Password
+      order: 0
+      placeholder_expression: false
+
+  - model: authentik_stages_prompt.prompt
+    id: field-password-repeat
+    identifiers:
+      name: paddock-recovery-field-password-repeat
+    attrs:
+      field_key: password_repeat
+      label: Password (repeat)
+      type: password
+      required: true
+      placeholder: Password (repeat)
+      order: 1
+      placeholder_expression: false
+
+  - model: authentik_stages_prompt.promptstage
+    id: prompt
+    identifiers:
+      name: paddock-recovery-password
+    attrs:
+      fields:
+        - !KeyOf field-password
+        - !KeyOf field-password-repeat
+      validation_policies:
+        - !KeyOf password-policy
+
+  - model: authentik_stages_user_write.userwritestage
+    id: user-write
+    identifiers:
+      name: paddock-recovery-user-write
+    attrs:
+      user_creation_mode: never_create
+
+  - model: authentik_flows.flowstagebinding
+    id: prompt-binding
+    identifiers:
+      target: !KeyOf flow
+      stage: !KeyOf prompt
+      order: 10
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+  - model: authentik_flows.flowstagebinding
+    id: user-write-binding
+    identifiers:
+      target: !KeyOf flow
+      stage: !KeyOf user-write
+      order: 20
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf link-token
+      target: !KeyOf prompt-binding
+      order: 0
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf link-token
+      target: !KeyOf user-write-binding
+      order: 0
+
+  - model: authentik_brands.brand
+    identifiers:
+      default: true
+    conditions:
+      - !Find [authentik_brands.brand, [default, true]]
+    attrs:
+      flow_recovery: !KeyOf flow

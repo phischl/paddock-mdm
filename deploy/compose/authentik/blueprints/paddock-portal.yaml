@@ -152,7 +152,7 @@ entries:
     identifiers:
       name: "paddock.platform.admins"
 
-  # --- Service account used by paddock-server (group management) ---
+  # --- Service account used by paddock-server (organization groups, users, device login providers; plan M3a) ---
   - model: authentik_rbac.role
     id: service-role
     identifiers:
@@ -161,6 +161,38 @@ entries:
       permissions:
         - authentik_core.view_group
         - authentik_core.add_group
+        - authentik_core.change_group
+        - authentik_core.delete_group
+        - authentik_core.add_user_to_group
+        - authentik_core.remove_user_from_group
+        - authentik_core.view_user
+        - authentik_core.add_user
+        - authentik_core.change_user
+        - authentik_core.delete_user
+        - authentik_core.reset_user_password
+        - authentik_core.view_application
+        - authentik_core.add_application
+        - authentik_core.change_application
+        - authentik_core.view_authenticatedsession
+        - authentik_core.delete_authenticatedsession
+        - authentik_providers_oauth2.view_oauth2provider
+        - authentik_providers_oauth2.add_oauth2provider
+        - authentik_providers_oauth2.change_oauth2provider
+        - authentik_providers_oauth2.view_scopemapping
+        - authentik_providers_oauth2.add_scopemapping
+        - authentik_providers_oauth2.change_scopemapping
+        - authentik_providers_oauth2.view_refreshtoken
+        - authentik_providers_oauth2.delete_refreshtoken
+        - authentik_providers_oauth2.view_accesstoken
+        - authentik_providers_oauth2.delete_accesstoken
+        - authentik_policies_expression.view_expressionpolicy
+        - authentik_policies_expression.add_expressionpolicy
+        - authentik_policies_expression.change_expressionpolicy
+        - authentik_policies.view_policybinding
+        - authentik_policies.add_policybinding
+        - authentik_policies.change_policybinding
+        - authentik_flows.view_flow
+        - authentik_crypto.view_certificatekeypair
 
   - model: authentik_core.user
     id: service-user

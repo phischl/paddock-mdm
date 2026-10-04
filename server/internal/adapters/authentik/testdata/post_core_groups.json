@@ -1,0 +1,16 @@
+{
+  "pk": "0ee8be75-a553-4d19-8b1b-ee0e005f1ce1",
+  "num_pk": 19817,
+  "name": "paddock.fixture-org",
+  "is_superuser": false,
+  "parents": [],
+  "parents_obj": null,
+  "users": [],
+  "users_obj": [],
+  "attributes": {},
+  "roles": [],
+  "roles_obj": [],
+  "inherited_roles_obj": null,
+  "children": [],
+  "children_obj": null
+}
