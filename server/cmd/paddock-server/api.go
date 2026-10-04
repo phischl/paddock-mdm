@@ -123,17 +123,6 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 			return nil
 		},
 		func(ctx context.Context) error { oidc.Discover(ctx); <-ctx.Done(); return nil },
-		func(ctx context.Context) error {
-			errCh := make(chan error, 1)
-			go func() { errCh <- srv.ListenAndServe() }()
-			select {
-			case <-ctx.Done():
-				shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-				defer cancel()
-				return srv.Shutdown(shutdown)
-			case err := <-errCh:
-				return err
-			}
-		},
+		func(ctx context.Context) error { return listenAndServe(ctx, srv) },
 	)
 }

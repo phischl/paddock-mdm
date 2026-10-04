@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Managed files are restricted to paths below `/etc/`, `/usr/local/etc/` and `/opt/` outside protected areas (sudoers, PAM, NSS, Himmelblau, Paddock, crypttab, fstab, account databases, `/etc/apt/`), at most 64 KiB of UTF-8 text; reserved units (`paddock*`, `himmelblau*`, `fleet*`, `ssh*`, `gdm*`, `systemd-*`) are refused with 422 (M2a decision 8).
 - `worker` role (`paddock-server serve worker`, Compose service `paddock-worker`): turns enrollment requests from `ingest.enroll` into devices and keeps the enrollment token and device key caches in Valkey in step with PostgreSQL (every change immediately, everything every 60 s) (A6, M2a step 3).
 - Audit codes `enrollment_token.created`, `enrollment_token.revoked`, `device.enrolled`, `device.approved`, `device.rejected`, `device.quarantine_released`, `device.retired`, `device.groups_changed`, `managed_file.*`, `managed_unit.*`; devices appear as audit actor type `device` (M2a step 3).
+- Device API at `https://device.<domain>` served by the new `gateway` role (`paddock-server serve gateway`, Compose service `paddock-gateway`): enrollment, enrollment status, check-in with presigned bundle URLs (valid 120 s) and device event batches, contract `api/openapi/device.yaml`. Every request is signed with the device's ECDSA P-256 key (timestamp within ±300 s, single-use nonce); the gateway has no database credentials and keeps answering check-ins while PostgreSQL is down (A5, C2, M2a step 4).
+- The gateway limits device requests to 30 per minute per key and 300 per minute per source address (429 with `Retry-After`) and answers 503 `backpressure` when an ingest queue refuses a message (M2a step 4).
+- Metrics `paddock_gateway_requests_total{route,code}` and `paddock_gateway_auth_failures_total{reason}` (M2a step 4).
 
 ### Changed
 
