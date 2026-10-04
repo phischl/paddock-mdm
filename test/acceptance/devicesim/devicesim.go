@@ -40,6 +40,16 @@ type Device struct {
 	ClockOffset time.Duration
 	// Arch is reported in check-ins; empty (the default) keeps the device out of agent rollouts.
 	Arch string
+	// SchemaVersions are the bundle schemas the device reports and accepts; nil means [bundle.SchemaVersion], the
+	// schema of today's agent.
+	SchemaVersions []int
+}
+
+func (d *Device) schemaVersions() []int {
+	if d.SchemaVersions == nil {
+		return []int{bundle.SchemaVersion}
+	}
+	return d.SchemaVersions
 }
 
 // New creates a device with a new ECDSA P-256 key for an enrollment configuration.
@@ -180,7 +190,7 @@ func (d *Device) WaitEnrollment(ctx context.Context, until func(protocol.EnrollS
 // Checkin sends a check-in and adopts the returned sequence number.
 func (d *Device) Checkin(ctx context.Context) (protocol.CheckinResponse, Response, error) {
 	res, err := d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/checkin", Body: protocol.CheckinRequest{
-		AppliedBundleVersion: d.Applied, AgentVersion: "0.0.0-devicesim", SchemaVersions: []int{bundle.SchemaVersion},
+		AppliedBundleVersion: d.Applied, AgentVersion: "0.0.0-devicesim", SchemaVersions: d.schemaVersions(),
 		Health: json.RawMessage(`{"reconcile":"ok"}`), Arch: d.Arch,
 	}})
 	if err != nil || res.Status != http.StatusOK {
@@ -204,7 +214,7 @@ func (d *Device) Fetch(ctx context.Context, ref *protocol.BundleRef) (*bundle.Bu
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("bundle download: HTTP %d", status)
 	}
-	b, err := bundle.Verify(env, d.Trust, d.DeviceID, d.Config.OrganizationID, d.Applied)
+	b, err := bundle.VerifyVersions(env, d.Trust, d.DeviceID, d.Config.OrganizationID, d.Applied, d.schemaVersions())
 	if err != nil {
 		return nil, err
 	}

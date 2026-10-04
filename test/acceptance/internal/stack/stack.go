@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -79,6 +80,15 @@ func AuthURL() string { return Env("PADDOCK_TEST_AUTH_URL", "https://auth.paddoc
 
 // Compose runs `docker compose` for the development stack (all three files) and returns the combined output.
 func Compose(ctx context.Context, env []string, args ...string) (string, error) {
+	return compose(ctx, env, nil, args)
+}
+
+// ComposeInput is Compose with stdin, e.g. for `exec -T` into a read-only container.
+func ComposeInput(ctx context.Context, stdin io.Reader, args ...string) (string, error) {
+	return compose(ctx, nil, stdin, args)
+}
+
+func compose(ctx context.Context, env []string, stdin io.Reader, args []string) (string, error) {
 	root, err := RepoRoot()
 	if err != nil {
 		return "", err
@@ -90,6 +100,7 @@ func Compose(ctx context.Context, env []string, args ...string) (string, error) 
 		"-f", filepath.Join(dir, "compose.dev.yaml")}
 	cmd := exec.CommandContext(ctx, "docker", append(base, args...)...) //nolint:gosec // test orchestration
 	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdin = stdin
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, out)

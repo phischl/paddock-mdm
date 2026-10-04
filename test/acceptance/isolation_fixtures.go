@@ -19,6 +19,44 @@ type isolationWorld struct {
 	globexGroups []string
 	// Globex device control plane resources (seedGlobexDevices).
 	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
+	// Globex identity resources (seedGlobexIdentity).
+	globexUser, globexUserGroup, globexProfile, globexAssignment string
+}
+
+// seedGlobexIdentity creates, as carol, a local user in a user group, a permission profile and its assignment to the
+// group — all named "globex-iso…" so the list searches find them. They are deleted when the gate ends.
+func seedGlobexIdentity(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	res := call(t, w.carol, http.MethodPost, "/api/v1/users", map[string]string{
+		"username": "globex-iso-" + uniqueSuffix() + "@globex.test", "display_name": "globex-iso user",
+	})
+	expectStatus(t, res, http.StatusCreated, "")
+	var created struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := res.JSON(&created); err != nil {
+		t.Fatal(err)
+	}
+	w.globexUser = created.User.ID
+	deleteOnCleanup(w.top, w.carol, "/api/v1/users/"+w.globexUser)
+	res = call(t, w.carol, http.MethodPost, "/api/v1/user-groups", map[string]string{"slug": "globex-iso-" + uniqueSuffix(), "name": "globex-iso group"})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexUserGroup = createdID(w.top, w.carol, "/api/v1/user-groups", res)
+	res = call(t, w.carol, http.MethodPost, "/api/v1/user-groups/"+w.globexUserGroup+"/members", map[string]string{"user_id": w.globexUser})
+	expectStatus(t, res, http.StatusNoContent, "")
+	res = call(t, w.carol, http.MethodPost, "/api/v1/permission-profiles", map[string]any{
+		"name": "globex-iso profile " + uniqueSuffix(), "class": "restricted", "commands": []string{"/usr/bin/systemctl restart globex.service"},
+	})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexProfile = createdID(w.top, w.carol, "/api/v1/permission-profiles", res)
+	res = call(t, w.carol, http.MethodPost, "/api/v1/profile-assignments", map[string]any{
+		"profile_id": w.globexProfile, "subject_type": "group", "subject_id": w.globexUserGroup,
+	})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexAssignment = createdID(w.top, w.carol, "/api/v1/profile-assignments", res)
+	w.globexIDs = append(w.globexIDs, w.globexUser, w.globexUserGroup, w.globexProfile, w.globexAssignment)
 }
 
 // seedGlobexDevices creates, as carol, a device group with an enrolled device (through the device API), an
@@ -156,12 +194,79 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/managed-units/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-units/" + w.globexUnit }, nil),
 	"PATCH /api/v1/managed-units/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-units/" + w.globexUnit }, map[string]any{"enabled": false}),
 	"DELETE /api/v1/managed-units/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-units/" + w.globexUnit }, nil),
+
+	"GET /api/v1/users": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/users?page_size=100", nil
+	}},
+	"POST /api/v1/users": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/users", map[string]string{"username": "acme-iso-" + uniqueSuffix() + "@acme.test", "display_name": "acme-iso"}
+	}},
+	"GET /api/v1/users/{id}":                   itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser }, nil),
+	"PATCH /api/v1/users/{id}":                 itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser }, map[string]string{"display_name": "taken over by acme"}),
+	"DELETE /api/v1/users/{id}":                itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser }, nil),
+	"POST /api/v1/users/{id}/lock":             itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/lock" }, nil),
+	"POST /api/v1/users/{id}/unlock":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/unlock" }, nil),
+	"GET /api/v1/users/{id}/effective-profile": itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/effective-profile" }, nil),
+
+	"GET /api/v1/user-groups": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/user-groups?page_size=100", nil
+	}},
+	"POST /api/v1/user-groups": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/user-groups", map[string]string{"slug": "acme-iso-" + uniqueSuffix(), "name": "acme-iso"}
+	}},
+	"GET /api/v1/user-groups/{id}":          itemFixture(func(w *isolationWorld) string { return "/api/v1/user-groups/" + w.globexUserGroup }, nil),
+	"PATCH /api/v1/user-groups/{id}":        itemFixture(func(w *isolationWorld) string { return "/api/v1/user-groups/" + w.globexUserGroup }, map[string]string{"name": "taken over by acme"}),
+	"DELETE /api/v1/user-groups/{id}":       itemFixture(func(w *isolationWorld) string { return "/api/v1/user-groups/" + w.globexUserGroup }, nil),
+	"GET /api/v1/user-groups/{id}/members":  itemFixture(func(w *isolationWorld) string { return "/api/v1/user-groups/" + w.globexUserGroup + "/members" }, nil),
+	"POST /api/v1/user-groups/{id}/members": itemFixture(func(w *isolationWorld) string { return "/api/v1/user-groups/" + w.globexUserGroup + "/members" }, map[string]string{"user_id": "00000000-0000-4000-8000-000000000000"}),
+	"DELETE /api/v1/user-groups/{id}/members/{user_id}": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/user-groups/" + w.globexUserGroup + "/members/" + w.globexUser
+	}, nil),
+	"GET /api/v1/upstream-groups": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/upstream-groups?page_size=100", nil
+	}},
+
+	"GET /api/v1/settings/login": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/login", nil
+	}},
+	"PUT /api/v1/settings/login": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/login", currentLoginSettings(t, w.alice)
+	}},
+
+	"PUT /api/v1/devices/{id}/login-assignment": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/login-assignment" },
+		map[string]any{"users": []string{}, "groups": []string{}}),
+	"POST /api/v1/devices/{id}/suspend-logins": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/suspend-logins" }, nil),
+	"POST /api/v1/devices/{id}/resume-logins":  itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/resume-logins" }, nil),
+	"GET /api/v1/devices/{id}/effective-sudo":  itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/effective-sudo" }, nil),
+
+	"GET /api/v1/permission-profiles": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/permission-profiles?page_size=100", nil
+	}},
+	"POST /api/v1/permission-profiles": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/permission-profiles", map[string]any{"name": "acme-iso " + uniqueSuffix(), "class": "none"}
+	}},
+	"GET /api/v1/permission-profiles/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/permission-profiles/" + w.globexProfile }, nil),
+	"PATCH /api/v1/permission-profiles/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/permission-profiles/" + w.globexProfile }, map[string]any{"class": "full"}),
+	"DELETE /api/v1/permission-profiles/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/permission-profiles/" + w.globexProfile }, nil),
+
+	"GET /api/v1/profile-assignments": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/profile-assignments?page_size=100", nil
+	}},
+	"POST /api/v1/profile-assignments": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		res := call(t, w.alice, http.MethodPost, "/api/v1/permission-profiles", map[string]any{"name": "acme-iso " + uniqueSuffix(), "class": "none"})
+		expectStatus(t, res, http.StatusCreated, "")
+		return "/api/v1/profile-assignments", map[string]any{"profile_id": createdID(t, w.alice, "/api/v1/permission-profiles", res), "subject_type": "global"}
+	}},
+	"GET /api/v1/profile-assignments/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/profile-assignments/" + w.globexAssignment }, nil),
+	"PATCH /api/v1/profile-assignments/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/profile-assignments/" + w.globexAssignment }, map[string]any{"device_group_id": nil}),
+	"DELETE /api/v1/profile-assignments/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/profile-assignments/" + w.globexAssignment }, nil),
 }
 
 // listParents resolves the parent ID of collection GETs below an item (path with {id}): the globex parent whose
 // data carol finds and alice must get 404 for.
 var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/device-groups/{id}/devices": func(w *isolationWorld) string { return w.globexDeviceGroup },
+	"/api/v1/user-groups/{id}/members":   func(w *isolationWorld) string { return w.globexUserGroup },
 }
 
 func fixtureKey(method, path string) string { return strings.ToUpper(method) + " " + path }
@@ -194,4 +299,25 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/managed-files":              {{"q": {"globex-iso"}}},
 	"/api/v1/managed-units":              {{"q": {"globex-iso"}}},
 	"/api/v1/device-groups/{id}/devices": {{"q": {"globex-iso"}}, {"state": {"active"}}},
+	"/api/v1/users":                      {{"q": {"globex-iso"}}, {"source": {"local"}, "sort": {"-created_at"}, "page_size": {"100"}}},
+	"/api/v1/user-groups":                {{"q": {"globex-iso"}}},
+	"/api/v1/user-groups/{id}/members":   {{"q": {"globex-iso"}}, {"source": {"local"}}},
+	"/api/v1/permission-profiles":        {{"q": {"globex-iso"}}, {"class": {"restricted"}, "page_size": {"100"}}},
+	"/api/v1/profile-assignments":        {{"q": {"globex-iso"}}, {"subject_type": {"group"}, "page_size": {"100"}}},
+	// Upstream groups are the Authentik groups outside Paddock's namespace, the same list for every organization
+	// (plan M3a decision 3); the check still requires that no globex ID or name appears in it.
+	"/api/v1/upstream-groups": {{"q": {"authentik"}}},
+}
+
+// currentLoginSettings returns acme's login settings as an update body (unchanged values).
+func currentLoginSettings(t *testing.T, p *env.Portal) map[string]any {
+	t.Helper()
+	res := call(t, p, http.MethodGet, "/api/v1/settings/login", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var s map[string]any
+	if err := res.JSON(&s); err != nil {
+		t.Fatal(err)
+	}
+	delete(s, "updated_at")
+	return s
 }

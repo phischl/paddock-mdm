@@ -204,6 +204,8 @@ func executor(ctx context.Context, client *http.Client, method string, u *url.UR
 		return challenge{}, err
 	}
 	req.Header.Set("Accept", "application/json")
+	// Django's CSRF check on requests of an authenticated session wants a same-origin Referer, as a browser sends it.
+	req.Header.Set("Referer", u.Scheme+"://"+u.Host+"/")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

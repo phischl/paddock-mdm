@@ -200,7 +200,10 @@ func TestAuditExactlyOnce(t *testing.T) {
 			cases, ok = releaseAuditCases[op]
 		}
 		if !ok {
-			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go or audit_once_releases_test.go", op)
+			cases, ok = identityAuditCases[op]
+		}
+		if !ok {
+			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go, audit_once_releases_test.go or audit_once_identity_test.go", op)
 			continue
 		}
 		for _, c := range cases {
@@ -218,6 +221,7 @@ func TestAuditExternalFailures(t *testing.T) {
 
 	t.Run("authentik unreachable", func(t *testing.T) {
 		ctx := testContext(t, 10*time.Minute)
+		user := createLocalUser(t, w.alice, "a3-lock")
 		if _, err := stack.Compose(ctx, nil, "stop", "authentik-server"); err != nil {
 			t.Fatal(err)
 		}
@@ -261,7 +265,25 @@ func TestAuditExternalFailures(t *testing.T) {
 			t.Fatalf("event %s appears %d times in %s", ev.EventID, n, ev.ObjectKey)
 		}
 
+		// A lock without Authentik locks the user for the devices but stays incomplete (ADR 0007 amendment).
+		lock := call(t, w.alice, http.MethodPost, "/api/v1/users/"+user.ID+"/lock", nil)
+		expectStatus(t, lock, http.StatusBadGateway, "upstream_unavailable")
+		expectOneEvent(t, w.alice, lock.RequestID, "user.locked", "failure")
+		expectLockState(t, w.alice, user.ID, true)
+
 		restart()
+		// Locking again completes the lock.
+		var relock env.Response
+		for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(5 * time.Second) {
+			relock = call(t, w.alice, http.MethodPost, "/api/v1/users/"+user.ID+"/lock", nil)
+			if relock.Status != http.StatusBadGateway || time.Now().After(deadline) {
+				break
+			}
+		}
+		expectStatus(t, relock, http.StatusOK, "")
+		expectOneEvent(t, w.alice, relock.RequestID, "user.locked", "success")
+		expectLockState(t, w.alice, user.ID, false)
+
 		// Re-provisioning the failed organization with the same slug succeeds (AC8).
 		var retry env.Response
 		for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(5 * time.Second) {
@@ -341,4 +363,18 @@ func organizationBySlug(t *testing.T, root *env.Portal, slug string) orgRow {
 	}
 	t.Fatalf("organization %s not found", slug)
 	return orgRow{}
+}
+
+// expectLockState checks that a user is locked and whether its lock is incomplete.
+func expectLockState(t *testing.T, p *env.Portal, id string, incomplete bool) {
+	t.Helper()
+	res := call(t, p, http.MethodGet, "/api/v1/users/"+id, nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var u struct {
+		Locked         bool `json:"locked"`
+		LockIncomplete bool `json:"lock_incomplete"`
+	}
+	if err := res.JSON(&u); err != nil || !u.Locked || u.LockIncomplete != incomplete {
+		t.Fatalf("user %s: locked %v, lock_incomplete %v, want true, %v (%v)", id, u.Locked, u.LockIncomplete, incomplete, err)
+	}
 }
