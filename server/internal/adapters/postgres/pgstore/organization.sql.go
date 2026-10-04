@@ -36,7 +36,7 @@ func (q *Queries) CountOrganizations(ctx context.Context, arg CountOrganizations
 }
 
 const getOrganization = `-- name: GetOrganization :one
-SELECT id, slug, name, status, created_at, updated_at FROM organization WHERE id = $1
+SELECT id, slug, name, status, created_at, updated_at, domains FROM organization WHERE id = $1
 `
 
 func (q *Queries) GetOrganization(ctx context.Context, id uuid.UUID) (Organization, error) {
@@ -49,12 +49,13 @@ func (q *Queries) GetOrganization(ctx context.Context, id uuid.UUID) (Organizati
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Domains,
 	)
 	return i, err
 }
 
 const getOrganizationBySlug = `-- name: GetOrganizationBySlug :one
-SELECT id, slug, name, status, created_at, updated_at FROM organization WHERE slug = $1
+SELECT id, slug, name, status, created_at, updated_at, domains FROM organization WHERE slug = $1
 `
 
 func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (Organization, error) {
@@ -67,6 +68,7 @@ func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (Organ
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Domains,
 	)
 	return i, err
 }
@@ -74,7 +76,7 @@ func (q *Queries) GetOrganizationBySlug(ctx context.Context, slug string) (Organ
 const insertOrganization = `-- name: InsertOrganization :one
 INSERT INTO organization (id, slug, name, status)
 VALUES ($1, $2, $3, $4)
-RETURNING id, slug, name, status, created_at, updated_at
+RETURNING id, slug, name, status, created_at, updated_at, domains
 `
 
 type InsertOrganizationParams struct {
@@ -99,6 +101,7 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Domains,
 	)
 	return i, err
 }
@@ -130,7 +133,7 @@ func (q *Queries) ListOrganizationIDs(ctx context.Context) ([]uuid.UUID, error) 
 
 const listOrganizations = `-- name: ListOrganizations :many
 
-SELECT id, slug, name, status, created_at, updated_at FROM organization
+SELECT id, slug, name, status, created_at, updated_at, domains FROM organization
 WHERE ($1::text IS NULL
        OR slug ILIKE $1::text ESCAPE '\'
        OR name ILIKE $1::text ESCAPE '\')
@@ -179,6 +182,7 @@ func (q *Queries) ListOrganizations(ctx context.Context, arg ListOrganizationsPa
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Domains,
 		); err != nil {
 			return nil, err
 		}
@@ -205,7 +209,7 @@ func (q *Queries) OrganizationIDBySlug(ctx context.Context, slug string) (uuid.U
 const updateOrganizationStatus = `-- name: UpdateOrganizationStatus :one
 UPDATE organization SET status = $1, name = $2, updated_at = now()
 WHERE id = $3
-RETURNING id, slug, name, status, created_at, updated_at
+RETURNING id, slug, name, status, created_at, updated_at, domains
 `
 
 type UpdateOrganizationStatusParams struct {
@@ -224,6 +228,7 @@ func (q *Queries) UpdateOrganizationStatus(ctx context.Context, arg UpdateOrgani
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Domains,
 	)
 	return i, err
 }

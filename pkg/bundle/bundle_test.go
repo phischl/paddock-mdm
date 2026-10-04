@@ -10,6 +10,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/pkg/dsse"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/paddock-mdm/paddock/pkg/sudoers"
 )
 
 const (
@@ -171,5 +172,63 @@ func TestTrustFromKeys(t *testing.T) {
 	}
 	if _, err := TrustFromKeys([]protocol.BundleKey{{KeyID: "k", PublicKey: "AAAA"}}); err == nil {
 		t.Error("short key accepted")
+	}
+}
+
+func TestV2ResourcesGolden(t *testing.T) {
+	login, err := LoginResource(LoginSpec{
+		Provider: ProviderHimmelblau,
+		Himmelblau: HimmelblauSpec{
+			OIDCIssuerURL: "https://auth.example.org/application/o/paddock-device-acme/", AppID: "paddock-device-acme",
+			Domain: "acme.test", EnableHello: true, HelloPinMinLength: 6,
+		},
+		Suspended: true, SessionAction: SessionActionLockScreen,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sudo, err := SudoResource(SudoSpec{
+		LectureText: "Be careful.",
+		Entries: []sudoers.Entry{{Username: "erin@acme.test", Class: sudoers.ClassFull, RequirePassword: true,
+			Lecture: sudoers.LectureOnce, ProfileDigest: "d"}},
+		PrivilegedGroups: []string{"sudo", "admin", "wheel"}, SudoersDAllowlist: []string{"README"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := sample(t)
+	b.SchemaVersion = SchemaVersion2
+	b.Resources = []Resource{sudo, login}
+	SortResources(b.Resources)
+	got, err := Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Suspension empties pam_allow_groups, which is encoded as an explicit empty list, never omitted (PoC M1 C3).
+	for _, want := range []string{
+		`{"id":"login","spec":{"break_glass_accounts":[],"himmelblau":{"app_id":"paddock-device-acme","domain":"acme.test",` +
+			`"enable_hello":true,"hello_pin_min_length":6,"oidc_issuer_url":"https://auth.example.org/application/o/paddock-device-acme/",` +
+			`"pam_allow_groups":[]},"locked_users":[],"provider":"himmelblau","session_action":"lock_screen","suspended":true},"type":"login"}`,
+		`{"id":"sudo","spec":{"break_glass_accounts":[],"entries":[{"class":"full","commands":[],"lecture":"once",` +
+			`"profile_digest":"d","require_password":true,"root_equivalent":false,"timestamp_timeout_min":0,"username":"erin@acme.test"}],` +
+			`"lecture_text":"Be careful.","privileged_groups":["sudo","admin","wheel"],"sudoers_d_allowlist":["README"]},"type":"sudo"}`,
+		`"schema_version":2}`,
+	} {
+		if !bytes.Contains(got, []byte(want)) {
+			t.Errorf("payload lacks\n%s\ngot\n%s", want, got)
+		}
+	}
+}
+
+func TestVerifyVersions(t *testing.T) {
+	v2 := sample(t)
+	v2.SchemaVersion = SchemaVersion2
+	env := seal(t, v2, signingKey, PayloadType)
+	if _, err := Verify(env, trust(), device, org, 0); !errors.Is(err, ErrSchema) {
+		t.Fatalf("Verify accepted schema 2: %v", err)
+	}
+	b, err := VerifyVersions(env, trust(), device, org, 0, []int{SchemaVersion, SchemaVersion2})
+	if err != nil || b.SchemaVersion != SchemaVersion2 {
+		t.Fatalf("VerifyVersions: %v, %v", b, err)
 	}
 }

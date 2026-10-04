@@ -397,3 +397,25 @@ func expectPermissionDenied(t *testing.T, what string, err error) {
 		t.Errorf("%s: got %v, want permission denied (42501)", what, err)
 	}
 }
+
+// TestLoginSettingsPerOrganization: every new organization gets its login settings row with the defaults (trigger of
+// migration 00007), and each organization sees only its own row.
+func TestLoginSettingsPerOrganization(t *testing.T) {
+	f := newFixture(t)
+	for _, org := range []uuid.UUID{f.orgA, f.orgB} {
+		err := f.org.InOrg(orgCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
+			s, err := q.GetLoginSettings(ctx)
+			if err != nil {
+				return err
+			}
+			if s.OrganizationID != org || !s.HelloEnabled || s.HelloPinMinLength != 6 || s.UserLockSessionAction != "lock_screen" ||
+				len(s.BreakGlassAccounts) != 0 || len(s.SudoersDAllowlist) != 1 || s.SudoersDAllowlist[0] != "README" || s.SudoLectureText == "" {
+				t.Errorf("settings of %s: %+v", org, s)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}

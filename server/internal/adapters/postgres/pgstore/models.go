@@ -80,6 +80,20 @@ type AgentUpdateReport struct {
 	ReportedAt     time.Time
 }
 
+type AppUser struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	AuthentikPk    string
+	Username       string
+	DisplayName    string
+	Email          string
+	Source         string
+	Locked         bool
+	LockedAt       *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type Bundle struct {
 	DeviceID       uuid.UUID
 	Version        int64
@@ -102,6 +116,7 @@ type Device struct {
 	EnrollmentTokenID uuid.NullUUID
 	EnrolledAt        time.Time
 	StateChangedAt    time.Time
+	LoginsSuspended   bool
 }
 
 type DeviceEventSeen struct {
@@ -135,6 +150,13 @@ type DeviceIdentityKey struct {
 	CreatedAt      time.Time
 }
 
+type DeviceLoginAssignment struct {
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	SubjectType    string
+	SubjectID      uuid.UUID
+}
+
 type DeviceStatus struct {
 	DeviceID             uuid.UUID
 	OrganizationID       uuid.UUID
@@ -143,6 +165,14 @@ type DeviceStatus struct {
 	AgentVersion         *string
 	LastSeq              int64
 	Health               json.RawMessage
+	SchemaVersions       []int32
+}
+
+type DeviceUserSeen struct {
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Username       string
+	LastSeenAt     time.Time
 }
 
 type EnrollmentToken struct {
@@ -191,6 +221,18 @@ type Organization struct {
 	Status    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Domains   []string
+}
+
+type OrganizationLoginSetting struct {
+	OrganizationID        uuid.UUID
+	HelloEnabled          bool
+	HelloPinMinLength     int32
+	UserLockSessionAction string
+	BreakGlassAccounts    []string
+	SudoersDAllowlist     []string
+	SudoLectureText       string
+	UpdatedAt             time.Time
 }
 
 type Outbox struct {
@@ -203,6 +245,19 @@ type Outbox struct {
 	PublishedAt    *time.Time
 }
 
+type PermissionProfile struct {
+	ID                  uuid.UUID
+	OrganizationID      uuid.UUID
+	Name                string
+	Class               string
+	Commands            []string
+	RequirePassword     bool
+	TimestampTimeoutMin int32
+	Lecture             string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
 type PlatformAdmin struct {
 	ID           uuid.UUID
 	AuthentikSub string
@@ -210,4 +265,32 @@ type PlatformAdmin struct {
 	DisplayName  string
 	Locale       string
 	LastLoginAt  *time.Time
+}
+
+type ProfileAssignment struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	ProfileID      uuid.UUID
+	SubjectType    string
+	SubjectID      uuid.NullUUID
+	DeviceGroupID  uuid.NullUUID
+	CreatedAt      time.Time
+}
+
+type UserGroup struct {
+	ID                  uuid.UUID
+	OrganizationID      uuid.UUID
+	Slug                string
+	Name                string
+	Source              string
+	UpstreamAuthentikPk *string
+	AuthentikPk         string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type UserGroupMember struct {
+	OrganizationID uuid.UUID
+	GroupID        uuid.UUID
+	UserID         uuid.UUID
 }
