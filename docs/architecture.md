@@ -1106,7 +1106,7 @@ stateDiagram-v2
   the switch is then deferred until a check-in succeeds (fail safe: an offline laptop never rolls forward blind).
 - **Staged rollout:** waves are percentages of the organization's devices by `hash(device_id) mod 100`:
   1 % → 10 % → 50 % → 100 %, minimum 24 h per wave. The worker stops a release automatically when
-  `rolled_back + update_failed > 2 %` of the wave or > 3 devices, whichever is larger, and alerts.
+  `rolled_back + update_failed` **reaches** max(3 devices, 2 % of the eligible devices), and alerts (thresholds configurable per rollout; amended 2026-10-04, M2b).
 - The supervisor's own update happens only through the distribution package (`apt`), never through the agent channel.
 
 ### 11.3 Reconcilers (apply engine)
