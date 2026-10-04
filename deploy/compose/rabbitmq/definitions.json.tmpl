@@ -3,11 +3,17 @@
   "users": [
     { "name": "provisioner", "password": "@PROVISIONER_PASSWORD@", "tags": [] },
     { "name": "relay", "password": "@RELAY_PASSWORD@", "tags": [] },
-    { "name": "audit_writer", "password": "@AUDIT_WRITER_PASSWORD@", "tags": [] }
+    { "name": "audit_writer", "password": "@AUDIT_WRITER_PASSWORD@", "tags": [] },
+    { "name": "gateway", "password": "@GATEWAY_PASSWORD@", "tags": [] },
+    { "name": "worker", "password": "@WORKER_PASSWORD@", "tags": [] },
+    { "name": "compiler", "password": "@COMPILER_PASSWORD@", "tags": [] }
   ],
   "permissions": [
     { "user": "provisioner", "vhost": "paddock", "configure": ".*", "write": ".*", "read": ".*" },
-    { "user": "relay", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.audit$", "read": "^$" },
-    { "user": "audit_writer", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^audit\\.writer$" }
+    { "user": "relay", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.(audit|state)$", "read": "^$" },
+    { "user": "audit_writer", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^audit\\.writer$" },
+    { "user": "gateway", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.ingest$", "read": "^$" },
+    { "user": "worker", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^ingest\\.(enroll|heartbeat|event)$" },
+    { "user": "compiler", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^state\\.(p[0-9]{2}|priority)$" }
   ]
 }

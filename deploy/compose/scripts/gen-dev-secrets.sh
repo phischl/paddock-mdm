@@ -60,18 +60,36 @@ secret rustfs_audit_root_password
 secret rustfs_audit_writer_access_key
 secret rustfs_audit_writer_secret_key
 
-# RabbitMQ
-for user in provisioner relay audit_writer; do
+# Control-plane object store (bundles)
+secret rustfs_root_user
+secret rustfs_root_password
+for role in compiler gateway; do
+  secret "rustfs_bundles_${role}_access_key"
+  secret "rustfs_bundles_${role}_secret_key"
+done
+
+# Valkey: one password; the server reads it through an included config file.
+secret valkey_password
+mkdir -p "$SECRETS_DIR/valkey"
+secret valkey/auth.conf "requirepass $(read_secret valkey_password)"
+
+# RabbitMQ. The definitions file is derived from the passwords and the template, so it is rewritten whenever the
+# template gains users; RabbitMQ imports it again on the next start (definitions.skip_if_unchanged).
+for user in provisioner relay audit_writer gateway worker compiler; do
   secret "rabbitmq_${user}_password"
 done
 mkdir -p "$SECRETS_DIR/rabbitmq"
-if [[ ! -s "$SECRETS_DIR/rabbitmq/definitions.json" ]]; then
-  sed -e "s|@PROVISIONER_PASSWORD@|$(read_secret rabbitmq_provisioner_password)|" \
-      -e "s|@RELAY_PASSWORD@|$(read_secret rabbitmq_relay_password)|" \
-      -e "s|@AUDIT_WRITER_PASSWORD@|$(read_secret rabbitmq_audit_writer_password)|" \
-      "$COMPOSE_DIR/rabbitmq/definitions.json.tmpl" >"$SECRETS_DIR/rabbitmq/definitions.json"
+definitions="$(sed -e "s|@PROVISIONER_PASSWORD@|$(read_secret rabbitmq_provisioner_password)|" \
+    -e "s|@RELAY_PASSWORD@|$(read_secret rabbitmq_relay_password)|" \
+    -e "s|@AUDIT_WRITER_PASSWORD@|$(read_secret rabbitmq_audit_writer_password)|" \
+    -e "s|@GATEWAY_PASSWORD@|$(read_secret rabbitmq_gateway_password)|" \
+    -e "s|@WORKER_PASSWORD@|$(read_secret rabbitmq_worker_password)|" \
+    -e "s|@COMPILER_PASSWORD@|$(read_secret rabbitmq_compiler_password)|" \
+    "$COMPOSE_DIR/rabbitmq/definitions.json.tmpl")"
+if [[ "$definitions" != "$(cat "$SECRETS_DIR/rabbitmq/definitions.json" 2>/dev/null)" ]]; then
+  printf '%s\n' "$definitions" >"$SECRETS_DIR/rabbitmq/definitions.json"
   chmod 644 "$SECRETS_DIR/rabbitmq/definitions.json"
-  echo "created .secrets/rabbitmq/definitions.json"
+  echo "wrote .secrets/rabbitmq/definitions.json"
 fi
 
 # Development test users (Authentik)
@@ -83,7 +101,7 @@ done
 [[ -e "$SECRETS_DIR/caddy-root.crt" ]] || { : >"$SECRETS_DIR/caddy-root.crt"; chmod 666 "$SECRETS_DIR/caddy-root.crt"; }
 
 # AppRole credential directories are filled by openbao-bootstrap.sh; they must exist for the bind mounts.
-for role in paddock-api paddock-audit-writer; do
+for role in paddock-api paddock-audit-writer paddock-compiler; do
   mkdir -p "$SECRETS_DIR/approle/$role"
   for f in role_id secret_id; do
     [[ -e "$SECRETS_DIR/approle/$role/$f" ]] || { : >"$SECRETS_DIR/approle/$role/$f"; chmod 644 "$SECRETS_DIR/approle/$role/$f"; }

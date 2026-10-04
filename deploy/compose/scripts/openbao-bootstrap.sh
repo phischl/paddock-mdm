@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Development bootstrap of OpenBao (plan M0 §6.8): init (5 shares, threshold 3), unseal, transit key audit-chain,
-# KV secret/paddock/session, policies and AppRoles. Idempotent. `openbao-bootstrap.sh unseal` only unseals.
+# Development bootstrap of OpenBao (plan M0 §6.8, M2a decision 15): init (5 shares, threshold 3), unseal, transit
+# keys audit-chain and bundle-signing, KV secret/paddock/session, policies and AppRoles. Idempotent. `openbao-bootstrap.sh unseal` only unseals.
 # Production: refuses to run; follow docs/operations/openbao.md.
 set -euo pipefail
 
@@ -81,6 +81,11 @@ if ! bao read transit/keys/audit-chain >/dev/null 2>&1; then
   echo "created transit key audit-chain"
 fi
 
+if ! bao read transit/keys/bundle-signing >/dev/null 2>&1; then
+  bao write transit/keys/bundle-signing type=ed25519 exportable=false allow_plaintext_backup=false >/dev/null
+  echo "created transit key bundle-signing"
+fi
+
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
   bao kv put secret/paddock/session \
     current="$(head -c 32 /dev/urandom | base64 -w0)" \
@@ -90,6 +95,18 @@ fi
 
 bao policy write paddock-api - >/dev/null <<'EOF'
 path "secret/data/paddock/session" {
+  capabilities = ["read"]
+}
+path "transit/keys/bundle-signing" {
+  capabilities = ["read"]
+}
+EOF
+
+bao policy write paddock-compiler - >/dev/null <<'EOF'
+path "transit/sign/bundle-signing" {
+  capabilities = ["update"]
+}
+path "transit/keys/bundle-signing" {
   capabilities = ["read"]
 }
 EOF
@@ -103,7 +120,7 @@ path "transit/keys/audit-chain" {
 }
 EOF
 
-for role in paddock-api paddock-audit-writer; do
+for role in paddock-api paddock-audit-writer paddock-compiler; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h \
     secret_id_ttl=0 token_no_default_policy=false >/dev/null
   dir="$SECRETS_DIR/approle/$role"

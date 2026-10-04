@@ -90,6 +90,7 @@ up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock r
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
+	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 	$(COMPOSE) --profile paddock up -d --build
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh --profile paddock
 
@@ -108,6 +109,10 @@ bao-unseal: ## Unseal OpenBao with the stored development shares
 .PHONY: audit-bootstrap
 audit-bootstrap: ## Create the WORM audit bucket and the writer credential
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
+
+.PHONY: bundles-bootstrap
+bundles-bootstrap: ## Create the bundles bucket and the compiler and gateway credentials
+	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 
 .PHONY: dev-seed
 dev-seed: ## Create organizations acme and globex and assign the dev users

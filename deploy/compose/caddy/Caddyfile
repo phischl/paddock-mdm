@@ -15,3 +15,18 @@ auth.{$PADDOCK_DOMAIN} {
 	tls internal
 	reverse_proxy authentik-server:9000
 }
+
+# Bundles are served only through presigned GET URLs (architecture §7.3); everything else is refused at the edge.
+bundles.{$PADDOCK_DOMAIN} {
+	tls internal
+	@read {
+		method GET HEAD
+		path /paddock-bundles/*
+	}
+	handle @read {
+		reverse_proxy rustfs:9000
+	}
+	handle {
+		respond 403
+	}
+}
