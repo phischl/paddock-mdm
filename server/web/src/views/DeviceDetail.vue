@@ -3,6 +3,7 @@ import { onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDeviceDetailPage } from '../lib/deviceDetailPage'
+import { reportText } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
@@ -281,6 +282,40 @@ function groupName(id: string | null | undefined): string {
           </tbody>
         </v-table>
       </template>
+
+      <h2>{{ t('devices.report.title') }}</h2>
+      <v-table
+        class="table"
+        data-testid="device-reports"
+      >
+        <caption>{{ t('devices.report.caption') }}</caption>
+        <thead>
+          <tr>
+            <th scope="col">
+              {{ t('devices.report.area') }}
+            </th>
+            <th scope="col">
+              {{ t('devices.report.report') }}
+            </th>
+            <th scope="col">
+              {{ t('devices.report.at') }}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="area in (['login', 'sudo'] as const)"
+            :key="area"
+            :data-testid="'device-report-' + area"
+          >
+            <th scope="row">
+              {{ t('devices.report.areas.' + area) }}
+            </th>
+            <td>{{ device.login_status[area] ? reportText(t, device.login_status[area]) : t('devices.report.none') }}</td>
+            <td>{{ device.login_status[area] ? formatDateTime(device.login_status[area].occurred_at, locale) : '–' }}</td>
+          </tr>
+        </tbody>
+      </v-table>
 
       <h2>{{ t('devices.effectiveConfig') }}</h2>
       <template v-if="config">

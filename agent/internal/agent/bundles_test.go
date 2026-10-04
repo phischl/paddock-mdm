@@ -119,6 +119,27 @@ func TestBundleRejected(t *testing.T) {
 	}
 }
 
+// TestBundleWithUnknownResourceType: a bundle with a resource type the agent has no reconciler for is rejected as a
+// whole; none of its known resources is applied (plan M3b decision 4).
+func TestBundleWithUnknownResourceType(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	b := testBundle(t, 2, testgw.DeviceID, "x")
+	b.SchemaVersion = bundle.SchemaVersion2
+	b.Resources = append(b.Resources, bundle.Resource{ID: "firewall", Type: "firewall", Spec: json.RawMessage(`{}`)})
+	g.OfferBundle(testgw.SignedBundleOffer(t, b))
+	a.Cycle(ctx)
+	rejected := eventsOf(g, protocol.EventBundleRejected)
+	if len(rejected) != 1 || string(rejected[0].Data) != `{"reason":"unknown_resource_type","version":2}` {
+		t.Fatalf("bundle.rejected events %+v", rejected)
+	}
+	if a.st.AppliedBundleVersion != 0 || len(sys.TakeCalls()) != 0 {
+		t.Fatal("a bundle with an unknown resource type was applied partially")
+	}
+}
+
 func TestEventsStaySpooledUntilAccepted(t *testing.T) {
 	ctx := context.Background()
 	g := testgw.New(t)

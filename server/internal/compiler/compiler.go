@@ -63,6 +63,8 @@ type Store interface {
 type Config struct {
 	// AuthentikURL is the public base URL of Authentik (issuer of the device login providers).
 	AuthentikURL string
+	// HimmelblauVersion is the Himmelblau release devices install (login.himmelblau.package_version).
+	HimmelblauVersion string
 	// Sudoers checks every rendered sudo entry before signing.
 	Sudoers SudoersValidator
 	// Runner records device.bundle_render_failed.

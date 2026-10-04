@@ -1374,6 +1374,24 @@ export interface components {
             schema_versions: number[];
             /** @description The agent supports bundle schema 2 (login and sudo); false means "agent too old for login management". */
             login_management: boolean;
+            login_status: components["schemas"]["DeviceLoginStatus"];
+        };
+        /** @description The latest login.* and sudo.* report of the device's agent (plan M3b decision 17). */
+        DeviceLoginStatus: {
+            /** @description Latest login.applied or login.apply_failed; null until the agent reported one. */
+            login: components["schemas"]["DeviceReport"] | null;
+            /** @description Latest sudo.apply_failed or sudo.user_unresolved; null until the agent reported one. */
+            sudo: components["schemas"]["DeviceReport"] | null;
+        };
+        DeviceReport: {
+            /** @description Device event type, e.g. login.apply_failed. */
+            type: string;
+            /** Format: date-time */
+            occurred_at: string;
+            /** @description The parameters of the event as recorded in the audit log (device.<type>). */
+            params: {
+                [key: string]: unknown;
+            };
         };
         DevicePage: {
             items: components["schemas"]["Device"][];

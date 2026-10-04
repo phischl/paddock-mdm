@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/paddock-mdm/paddock/pkg/bundle"
 	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/compiler"
 	"github.com/paddock-mdm/paddock/server/internal/config"
@@ -31,8 +32,12 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	secretKey := l.SecretFile("PADDOCK_BUNDLES_S3_SECRET_KEY_FILE")
 	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
 	visudo := l.String("PADDOCK_VISUDO", "/usr/sbin/visudo")
+	himmelblau := l.String("PADDOCK_HIMMELBLAU_VERSION", "4.0.4")
 	if err := l.Err(); err != nil {
 		return err
+	}
+	if !bundle.ValidHimmelblauVersion(himmelblau) {
+		return fmt.Errorf("PADDOCK_HIMMELBLAU_VERSION %q is not a release number such as 4.0.4", himmelblau)
 	}
 	// Every sudo entry is checked with visudo before signing (plan M3a decision 16); without it the compiler must
 	// not run.
@@ -55,7 +60,7 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	}
 	store := objectstore.New(endpoint, accessKey, secretKey, bucket)
 	comp := compiler.New(pool, signer, store, devicecache.New(vk), compiler.Config{
-		AuthentikURL: authentikURL, Sudoers: compiler.Visudo{Path: visudo},
+		AuthentikURL: authentikURL, HimmelblauVersion: himmelblau, Sudoers: compiler.Visudo{Path: visudo},
 		// The compiler records only organization events (device.bundle_render_failed): no platform pool.
 		Runner: app.NewActionRunner(pool, nil, httpx.RequestID),
 	})

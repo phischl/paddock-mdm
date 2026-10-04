@@ -111,7 +111,7 @@ type CheckinResponse struct {
 }
 
 // Device event types accepted by POST /v1/events (closed set, plan M2a decision 14, M2b decision 23, M3a decision
-// 10).
+// 10, M3b decision 5).
 const (
 	EventBundleApplied        = "bundle.applied"
 	EventBundleRejected       = "bundle.rejected"
@@ -121,12 +121,26 @@ const (
 	EventAgentRolledBack      = "agent.rolled_back"
 	EventAgentEventsDropped   = "agent.events_dropped"
 	EventSessionLogin         = "session.login"
+	// Identity and privileges on the device (plan M3b decision 5).
+	EventLoginApplied               = "login.applied"
+	EventLoginApplyFailed           = "login.apply_failed"
+	EventUserLockApplied            = "user.lock_applied"
+	EventLoginsSuspensionApplied    = "logins.suspension_applied"
+	EventSudoApplyFailed            = "sudo.apply_failed"
+	EventSudoUserUnresolved         = "sudo.user_unresolved"
+	EventTamperSudoGroupMember      = "tamper.sudo_group_member"
+	EventTamperSudoersDFile         = "tamper.sudoers_d_file"
+	EventTamperSudoersChanged       = "tamper.sudoers_changed"
+	EventTamperProtectedFileChanged = "tamper.protected_file_changed"
 )
 
 // EventTypes is the closed set of event types.
 var EventTypes = []string{
 	EventBundleApplied, EventBundleRejected, EventConfigDriftCorrected, EventAgentUpdated, EventAgentUpdateFailed,
 	EventAgentRolledBack, EventAgentEventsDropped, EventSessionLogin,
+	EventLoginApplied, EventLoginApplyFailed, EventUserLockApplied, EventLoginsSuspensionApplied, EventSudoApplyFailed,
+	EventSudoUserUnresolved, EventTamperSudoGroupMember, EventTamperSudoersDFile, EventTamperSudoersChanged,
+	EventTamperProtectedFileChanged,
 }
 
 // SessionLogin is the data of a session.login event: a user logged in on the device. It carries only the username
@@ -135,6 +149,71 @@ type SessionLogin struct {
 	Username string    `json:"username"`
 	At       time.Time `json:"at"`
 }
+
+// The data of the identity and privilege events (plan M3b decision 5). They carry usernames and file names only,
+// never process, command or session content.
+type (
+	// LoginApplied: the login reconciler changed the device; Changed lists what ("package", "config",
+	// "deny_list").
+	LoginApplied struct {
+		Changed []string `json:"changed"`
+	}
+	// LoginApplyFailed: a stage of the login reconciler failed (Stage is one of the LoginStage constants).
+	LoginApplyFailed struct {
+		Stage   string `json:"stage"`
+		Message string `json:"message"`
+	}
+	// UserLockApplied: a newly locked user is blocked on the device and its sessions were locked or terminated.
+	UserLockApplied struct {
+		Username           string `json:"username"`
+		SessionsLocked     int    `json:"sessions_locked"`
+		SessionsTerminated int    `json:"sessions_terminated"`
+	}
+	// LoginsSuspensionApplied: logins were suspended and the directory users' sessions terminated.
+	LoginsSuspensionApplied struct {
+		SessionsTerminated int `json:"sessions_terminated"`
+	}
+	// SudoApplyFailed: the sudoers file of a user (or the sudoers configuration as a whole, Username empty) could
+	// not be applied; the previous state was kept or restored.
+	SudoApplyFailed struct {
+		Username string `json:"username,omitempty"`
+		Message  string `json:"message"`
+	}
+	// SudoUserUnresolved: a user with a sudo entry has no UID on the device yet (never logged in).
+	SudoUserUnresolved struct {
+		Username string `json:"username"`
+	}
+	// TamperSudoGroupMember: a member of a privileged local group that is no break-glass account.
+	TamperSudoGroupMember struct {
+		Group    string `json:"group"`
+		Username string `json:"username"`
+		Removed  bool   `json:"removed"`
+	}
+	// TamperSudoersDFile: an unexpected file in /etc/sudoers.d was moved to quarantine.
+	TamperSudoersDFile struct {
+		File          string `json:"file"`
+		QuarantinedAs string `json:"quarantined_as"`
+	}
+	// TamperSudoersChanged: /etc/sudoers changed since the agent last recorded it (hex SHA-256).
+	TamperSudoersChanged struct {
+		SHA256Before string `json:"sha256_before"`
+		SHA256After  string `json:"sha256_after"`
+	}
+	// TamperProtectedFileChanged: a protected file the agent cannot restore itself was changed (e.g. a PAM file).
+	TamperProtectedFileChanged struct {
+		File string `json:"file"`
+	}
+)
+
+// Stages of LoginApplyFailed.
+const (
+	LoginStageApt      = "apt"
+	LoginStageConfig   = "config"
+	LoginStageRestart  = "restart"
+	LoginStageDenyList = "deny_list"
+	LoginStagePAM      = "pam"
+	LoginStageSessions = "sessions"
+)
 
 // MaxEventsPerBatch bounds POST /v1/events.
 const MaxEventsPerBatch = 500

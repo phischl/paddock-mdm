@@ -155,7 +155,17 @@
       "login_assignment_changed": "{actor} changed who may log in on {hostname}",
       "logins_suspended": "{actor} suspended logins on {hostname}",
       "logins_resumed": "{actor} resumed logins on {hostname}",
-      "bundle_render_failed": "A new bundle of {target} was blocked: the sudo rights of {username} failed the check"
+      "bundle_render_failed": "A new bundle of {target} was blocked: the sudo rights of {username} failed the check",
+      "login_applied": "The device {target} applied its login configuration",
+      "login_apply_failed": "The device {target} could not apply its login configuration (stage {stage})",
+      "user_lock_applied": "The device {target} blocked the locked user {username}",
+      "logins_suspension_applied": "The device {target} suspended directory logins and ended {sessions_terminated, number} sessions",
+      "sudo_apply_failed": "The device {target} could not apply sudo rights",
+      "sudo_user_unresolved": "The device {target} does not know {username} yet; their sudo rights apply after the first login",
+      "tamper_sudo_group_member": "The device {target} removed {username} from the privileged group {group}",
+      "tamper_sudoers_d_file": "The device {target} quarantined the unexpected sudoers file {file}",
+      "tamper_sudoers_changed": "The device {target} found /etc/sudoers changed",
+      "tamper_protected_file_changed": "The device {target} found the protected file {file} changed"
     },
     "agent_release": {
       "created": "{actor} created the agent release {version}",
@@ -361,6 +371,25 @@
       "caption": "Users allowed on this device with sudo rights",
       "none": "Nobody has sudo rights on this device.",
       "rootEquivalent": "{username} effectively has root on this device: {commands}"
+    },
+    "report": {
+      "title": "Latest reports of the agent",
+      "caption": "The last login and sudo report the device sent",
+      "area": "Area",
+      "report": "Report",
+      "at": "Reported at",
+      "areas": {
+        "login": "Login",
+        "sudo": "Sudo"
+      },
+      "none": "No report yet",
+      "events": {
+        "login_applied": "Login configuration applied: {changed}",
+        "login_apply_failed": "Login configuration failed at stage {stage}: {message}",
+        "sudo_apply_failed": "The sudo rights of {username} could not be applied: {message}",
+        "sudo_apply_failed_config": "The sudo configuration failed its check: {message}",
+        "sudo_user_unresolved": "{username} has sudo rights but is not known on the device yet"
+      }
     }
   },
   "tokens": {

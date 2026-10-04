@@ -63,6 +63,34 @@ func (q *Queries) ListDeviceSeqs(ctx context.Context) ([]ListDeviceSeqsRow, erro
 	return items, nil
 }
 
+const setDeviceLoginState = `-- name: SetDeviceLoginState :exec
+INSERT INTO device_status (device_id, organization_id, login_state)
+VALUES ($1, $2, jsonb_build_object($3::text, $4::jsonb))
+ON CONFLICT (device_id) DO UPDATE
+SET login_state = device_status.login_state || jsonb_build_object($3::text, $4::jsonb)
+WHERE (device_status.login_state -> $3::text) IS NULL
+   OR (device_status.login_state -> $3::text ->> 'occurred_at')::timestamptz <= ($4::jsonb ->> 'occurred_at')::timestamptz
+`
+
+type SetDeviceLoginStateParams struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	Area           string
+	State          json.RawMessage
+}
+
+// The latest login.* or sudo.* event of a device per area (plan M3b decision 17); an older event never overwrites a
+// newer one. A device whose heartbeat was not materialized yet gets its status row here.
+func (q *Queries) SetDeviceLoginState(ctx context.Context, arg SetDeviceLoginStateParams) error {
+	_, err := q.db.Exec(ctx, setDeviceLoginState,
+		arg.DeviceID,
+		arg.OrganizationID,
+		arg.Area,
+		arg.State,
+	)
+	return err
+}
+
 const upsertDeviceStatus = `-- name: UpsertDeviceStatus :exec
 INSERT INTO device_status (device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health,
                            schema_versions)

@@ -2370,7 +2370,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Device"
         - type: object
-          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management]
+          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status]
           properties:
             groups:
               type: array
@@ -2387,6 +2387,32 @@ components:
             login_management:
               type: boolean
               description: The agent supports bundle schema 2 (login and sudo); false means "agent too old for login management".
+            login_status: { $ref: "#/components/schemas/DeviceLoginStatus" }
+    DeviceLoginStatus:
+      type: object
+      description: The latest login.* and sudo.* report of the device's agent (plan M3b decision 17).
+      required: [login, sudo]
+      properties:
+        login:
+          description: Latest login.applied or login.apply_failed; null until the agent reported one.
+          allOf:
+            - $ref: "#/components/schemas/DeviceReport"
+          nullable: true
+        sudo:
+          description: Latest sudo.apply_failed or sudo.user_unresolved; null until the agent reported one.
+          allOf:
+            - $ref: "#/components/schemas/DeviceReport"
+          nullable: true
+    DeviceReport:
+      type: object
+      required: [type, occurred_at, params]
+      properties:
+        type: { type: string, description: "Device event type, e.g. login.apply_failed." }
+        occurred_at: { type: string, format: date-time }
+        params:
+          type: object
+          additionalProperties: true
+          description: The parameters of the event as recorded in the audit log (device.<type>).
     DevicePage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

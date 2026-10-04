@@ -1,4 +1,6 @@
-import { api, listPage, problemCode, type Device, type DeviceDetail, type DeviceSort, type DeviceState, type EffectiveConfig } from '../api/client'
+import {
+  api, listPage, problemCode, type Device, type DeviceDetail, type DeviceReport, type DeviceSort, type DeviceState, type EffectiveConfig,
+} from '../api/client'
 import { maxListDepth, type ListFilter, type ListParams, type Page } from './listQuery'
 
 export const deviceStates: DeviceState[] = ['pending', 'active', 'quarantined', 'rejected', 'retired']
@@ -128,4 +130,25 @@ export async function allDevices(): Promise<{ id: string; hostname: string }[]> 
     if (!data || page * data.page_size >= data.total) break
   }
   return out
+}
+
+type Translate = (key: string, values?: Record<string, unknown>) => string
+
+/** Renders the latest login or sudo report of a device (plan M3b decision 17); unknown event types show the type. */
+export function reportText(t: Translate, report: DeviceReport): string {
+  const p = report.params
+  switch (report.type) {
+    case 'login.applied':
+      return t('devices.report.events.login_applied', { changed: ((p.changed as string[] | undefined) ?? []).join(', ') })
+    case 'login.apply_failed':
+      return t('devices.report.events.login_apply_failed', { stage: p.stage ?? '', message: p.message ?? '' })
+    case 'sudo.apply_failed':
+      return p.username
+        ? t('devices.report.events.sudo_apply_failed', { username: p.username, message: p.message ?? '' })
+        : t('devices.report.events.sudo_apply_failed_config', { message: p.message ?? '' })
+    case 'sudo.user_unresolved':
+      return t('devices.report.events.sudo_user_unresolved', { username: p.username ?? '' })
+    default:
+      return report.type
+  }
 }
