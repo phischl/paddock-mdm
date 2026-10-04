@@ -13,6 +13,18 @@ export type OrganizationSort = components['parameters']['OrganizationSort']
 export type AuditOutcome = components['schemas']['AuditOutcome']
 export type AuditActorType = components['schemas']['AuditActorType']
 export type OrganizationStatus = components['schemas']['OrganizationStatus']
+export type Device = components['schemas']['Device']
+export type DeviceDetail = components['schemas']['DeviceDetail']
+export type DeviceState = components['schemas']['DeviceState']
+export type DeviceSort = components['parameters']['DeviceSort']
+export type EffectiveConfig = components['schemas']['EffectiveConfig']
+export type EnrollmentToken = components['schemas']['EnrollmentToken']
+export type EnrollmentTokenCreated = components['schemas']['EnrollmentTokenCreated']
+export type EnrollmentTokenSort = components['parameters']['EnrollmentTokenSort']
+export type ManagedFile = components['schemas']['ManagedFile']
+export type ManagedFileSort = components['parameters']['ManagedFileSort']
+export type ManagedUnit = components['schemas']['ManagedUnit']
+export type ManagedUnitSort = components['parameters']['ManagedUnitSort']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

@@ -11,7 +11,11 @@
   "nav": {
     "deviceGroups": "Device groups",
     "audit": "Audit log",
-    "organizations": "Organizations"
+    "organizations": "Organizations",
+    "devices": "Devices",
+    "enrollmentTokens": "Enrollment tokens",
+    "managedFiles": "Managed files",
+    "managedUnits": "Managed units"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -52,14 +56,22 @@
     "deleteTitle": "Delete device group",
     "deleteConfirm": "Delete the device group {name}? This cannot be undone.",
     "editLabel": "Edit {name}",
-    "deleteLabel": "Delete {name}"
+    "deleteLabel": "Delete {name}",
+    "back": "Back to device groups",
+    "members": "Devices in this group"
   },
   "validation": {
     "nameRequired": "Enter a name.",
     "nameTooLong": "The name can have at most 100 characters.",
     "descriptionTooLong": "The description can have at most 1000 characters.",
     "slugInvalid": "Use 3 to 32 lowercase letters, digits and hyphens; start and end with a letter or digit.",
-    "orgNameRequired": "Enter a name with at most 200 characters."
+    "orgNameRequired": "Enter a name with at most 200 characters.",
+    "maxUsesInvalid": "Enter a number from 1 to 1000.",
+    "pathInvalid": "Enter an absolute path below /etc/, /usr/local/etc/ or /opt/.",
+    "modeInvalid": "Enter four octal digits without special bits, for example 0644.",
+    "ownerInvalid": "Owner and group are lowercase user and group names.",
+    "contentTooLarge": "The content can have at most 64 KiB.",
+    "unitInvalid": "Enter a unit name ending in .service, .timer, .socket or .path."
   },
   "problems": {
     "name_taken": "A device group with this name already exists.",
@@ -70,7 +82,12 @@
     "range_too_large": "The time range may span at most 92 days.",
     "page_out_of_range": "This page is too far back. Narrow the search or filters.",
     "invalid_request": "The request was not valid.",
-    "internal": "Something went wrong. Please try again."
+    "internal": "Something went wrong. Please try again.",
+    "invalid_state": "The device is not in a state that allows this action.",
+    "already_exists": "This is already managed for the same devices.",
+    "in_use": "An enrollment token still adds devices to this group. Revoke the token first.",
+    "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the protected areas.",
+    "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected."
   },
   "audit": {
     "title": "Audit log",
@@ -86,7 +103,8 @@
       "admin": "Administrator",
       "platform_admin": "Platform administrator",
       "system": "System",
-      "anonymous": "Anonymous"
+      "anonymous": "Anonymous",
+      "device": "Device"
     },
     "outcomes": {
       "success": "Success",
@@ -104,6 +122,32 @@
       "created": "{actor} created the device group {name}",
       "updated": "{actor} updated the device group {name}",
       "deleted": "{actor} deleted the device group {name}"
+    },
+    "enrollment_token": {
+      "created": "{actor} created the enrollment token {name}",
+      "revoked": "{actor} revoked the enrollment token {name}"
+    },
+    "device": {
+      "enrolled": "The device {hostname} enrolled",
+      "approved": "{actor} approved the device {hostname}",
+      "rejected": "{actor} rejected the device {hostname}",
+      "quarantine_released": "{actor} released the device {hostname} from quarantine",
+      "retired": "{actor} retired the device {hostname}",
+      "groups_changed": "{actor} changed the device groups of {hostname}",
+      "clone_suspected": "The device {hostname} was quarantined because its identity seems to be cloned",
+      "bundle_applied": "The device {target} applied bundle {bundle_version, number}",
+      "bundle_rejected": "The device {target} rejected a bundle",
+      "config_drift_corrected": "The device {target} corrected a local change"
+    },
+    "managed_file": {
+      "created": "{actor} defined the managed file {path}",
+      "updated": "{actor} changed the managed file {path}",
+      "deleted": "{actor} deleted the managed file {path}"
+    },
+    "managed_unit": {
+      "created": "{actor} defined the managed unit {unit}",
+      "updated": "{actor} changed the managed unit {unit}",
+      "deleted": "{actor} deleted the managed unit {unit}"
     }
   },
   "organizations": {
@@ -128,5 +172,120 @@
   "notFound": {
     "title": "Page not found",
     "back": "Go to the start page"
+  },
+  "devices": {
+    "title": "Devices",
+    "back": "Back to devices",
+    "hostname": "Hostname",
+    "state": "State",
+    "states": {
+      "pending": "Pending approval",
+      "active": "Active",
+      "quarantined": "Quarantined",
+      "rejected": "Rejected",
+      "retired": "Retired"
+    },
+    "group": "Device group",
+    "lastContact": "Last contact",
+    "never": "Never",
+    "bundleVersion": "Bundle version",
+    "versions": "{applied, number} applied, {latest, number} latest",
+    "agentVersion": "Agent version",
+    "enrolledAt": "Enrolled",
+    "identity": "Identity",
+    "id": "Device ID",
+    "hardwareUuid": "Hardware UUID",
+    "osRelease": "Operating system",
+    "identityKey": "Identity key",
+    "keyFacts": "{id}… ({protection}, {status})",
+    "groups": "Device groups",
+    "groupsSaved": "Device groups saved.",
+    "effectiveConfig": "Effective configuration",
+    "conflict": "{resource} is defined by {count, plural, one {one more device group} other {# more device groups}}; the definition with the smallest ID applies.",
+    "actions": {
+      "approve": {
+        "label": "Approve",
+        "title": "Approve device",
+        "confirm": "Approve {hostname}? The device becomes active and receives its configuration."
+      },
+      "reject": {
+        "label": "Reject",
+        "title": "Reject device",
+        "confirm": "Reject {hostname}? Its identity is revoked; the device has to enroll again."
+      },
+      "release-quarantine": {
+        "label": "Release quarantine",
+        "title": "Release quarantine",
+        "confirm": "Release {hostname} from quarantine? Only do this when you are sure the identity was not cloned."
+      },
+      "retire": {
+        "label": "Retire",
+        "title": "Retire device",
+        "confirm": "Retire {hostname}? Its identity is revoked permanently and it stops receiving configuration. This cannot be undone."
+      }
+    }
+  },
+  "tokens": {
+    "title": "Enrollment tokens",
+    "create": "Create enrollment token",
+    "createTitle": "New enrollment token",
+    "validity": "Valid for",
+    "days": "{count, plural, one {# day} other {# days}}",
+    "maxUses": "Maximum number of devices",
+    "group": "Add enrolled devices to",
+    "noGroup": "No device group",
+    "autoApprove": "Approve enrolled devices automatically",
+    "status": "Status",
+    "statuses": {
+      "active": "Active",
+      "revoked": "Revoked",
+      "expired": "Expired",
+      "exhausted": "Used up"
+    },
+    "uses": "Uses",
+    "usesOf": "{uses, number} of {max, number}",
+    "expiresAt": "Expires",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke enrollment token",
+    "revokeConfirm": "Revoke the enrollment token {name}? Devices can no longer enroll with it.",
+    "revokeLabel": "Revoke {name}",
+    "shownOnce": "This enrollment configuration contains the token. It is shown only now: copy it and distribute it like a password.",
+    "config": "Enrollment configuration",
+    "copy": "Copy",
+    "copied": "Copied to the clipboard.",
+    "done": "Done"
+  },
+  "managed": {
+    "scope": "Applies to",
+    "allDevices": "All devices",
+    "editLabel": "Edit {name}",
+    "deleteLabel": "Delete {name}",
+    "files": {
+      "title": "Managed files",
+      "create": "Create managed file",
+      "createTitle": "New managed file",
+      "editTitle": "Edit managed file",
+      "deleteTitle": "Delete managed file",
+      "deleteConfirm": "Stop managing {name}? Devices keep the file as it is.",
+      "path": "Path",
+      "pathHint": "Below /etc/, /usr/local/etc/ or /opt/; protected system paths are not allowed.",
+      "mode": "Mode",
+      "owner": "Owner",
+      "group": "Group",
+      "content": "Content"
+    },
+    "units": {
+      "title": "Managed units",
+      "create": "Create managed unit",
+      "createTitle": "New managed unit",
+      "editTitle": "Edit managed unit",
+      "deleteTitle": "Delete managed unit",
+      "deleteConfirm": "Stop managing {name}? Devices keep the unit as it is.",
+      "unit": "Unit",
+      "enabled": "Enabled at boot",
+      "active": "Running",
+      "wanted": "Desired state",
+      "wantedState": "{enabled, select, true {enabled} other {disabled}}, {active, select, true {running} other {stopped}}"
+    }
   }
 }

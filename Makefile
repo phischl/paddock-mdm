@@ -124,8 +124,10 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 
 .PHONY: e2e
 e2e: ## Run Playwright end-to-end tests against the running stack
+	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
-		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -v $(CURDIR):/src -w /src/$(WEB_DIR) \
+		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
+		-v $(CURDIR):/src -w /src/$(WEB_DIR) \
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test'
 
 .PHONY: ci

@@ -7,14 +7,32 @@ import type { ListFilter, ListParams, Page } from './listQuery'
 /** Codes offered in the filter (the closed registry, server/internal/domain/audit/codes.go). */
 export const auditCodes = [
   'admin.login',
+  'device.approved',
+  'device.bundle_applied',
+  'device.bundle_rejected',
+  'device.clone_suspected',
+  'device.config_drift_corrected',
+  'device.enrolled',
+  'device.groups_changed',
+  'device.quarantine_released',
+  'device.rejected',
+  'device.retired',
   'device_group.created',
   'device_group.updated',
   'device_group.deleted',
+  'enrollment_token.created',
+  'enrollment_token.revoked',
+  'managed_file.created',
+  'managed_file.updated',
+  'managed_file.deleted',
+  'managed_unit.created',
+  'managed_unit.updated',
+  'managed_unit.deleted',
   'organization.created',
 ] as const
 
 const outcomes: AuditOutcome[] = ['success', 'failure', 'denied', 'unknown']
-const actorTypes: AuditActorType[] = ['admin', 'platform_admin', 'system', 'anonymous']
+const actorTypes: AuditActorType[] = ['admin', 'platform_admin', 'system', 'anonymous', 'device']
 
 /** Filters of the audit log; without dates the server shows the last 7 days. */
 export const auditFilters: ListFilter[] = [
