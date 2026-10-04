@@ -446,6 +446,8 @@
     "locked": "Locked",
     "notLocked": "Not locked",
     "lockedSince": "Locked since {at}",
+    "lockIncomplete": "The lock is incomplete: Authentik has not confirmed it, so the user's sign-out may be missing. The user's devices refuse the user already.",
+    "retryLock": "Retry lock",
     "groups": "Groups",
     "recoveryLink": "Password link",
     "linkShownOnce": "Give this one-time link to {username}: it sets the password and is valid for 24 hours. It is shown only now.",

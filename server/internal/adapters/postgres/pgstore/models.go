@@ -92,6 +92,7 @@ type AppUser struct {
 	LockedAt       *time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	LockIncomplete bool
 }
 
 type Bundle struct {

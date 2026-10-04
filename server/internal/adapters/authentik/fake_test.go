@@ -36,6 +36,8 @@ type fakeAuthentik struct {
 	// failNext makes the next n requests answer with failStatus.
 	failNext   int
 	failStatus int
+	// failReactivation makes every PATCH with is_active true answer 503 (a lock interrupted after the deactivation).
+	failReactivation bool
 }
 
 type fakeGroup struct {
@@ -249,6 +251,9 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			return http.StatusOK, link
 		case r.Method == http.MethodPatch:
 			if active, ok := body["is_active"].(bool); ok {
+				if active && f.failReactivation {
+					return http.StatusServiceUnavailable, map[string]any{"detail": "injected"}
+				}
 				u.inactive = !active
 				if !active { // Authentik's deactivation cleanup: every token and session of the user
 					f.deactivations++

@@ -491,7 +491,9 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin. Locks the user: the affected devices get the lock in their next bundle (priority lane), and in
-         *     Authentik the user joins paddock.<slug>.locked and loses its refresh tokens, access tokens and sessions.
+         *     Authentik the user joins paddock.<slug>.locked and loses its refresh tokens, access tokens and sessions. When
+         *     Authentik fails, the user stays locked for the devices with lock_incomplete true; locking again retries the
+         *     Authentik part.
          */
         post: operations["lockUser"];
         delete?: never;
@@ -1524,6 +1526,8 @@ export interface components {
             email: string;
             source: components["schemas"]["IdentitySource"];
             locked: boolean;
+            /** @description The user is locked for the devices, but Authentik has not confirmed the group membership and the token revocation; locking again retries. */
+            lock_incomplete: boolean;
             /** Format: date-time */
             locked_at: string | null;
             /** Format: date-time */

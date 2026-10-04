@@ -250,6 +250,38 @@ func TestLockRevokesTokensAndSessions(t *testing.T) {
 	}
 }
 
+// A lock interrupted after the deactivation fails; the membership in .locked is in place (online logins stay blocked)
+// and locking again completes it (ADR 0007 amendment).
+func TestLockInterruptedAfterDeactivation(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	pk, err := c.CreateUser(ctx, "acme", ports.NewIdentityUser{Username: "bob@acme.test", Name: "Bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := mustAtoi(t, pk)
+	f.tokens["refresh_tokens"] = []int{n}
+	f.failReactivation = true
+	if err := c.LockUser(ctx, "acme", pk); err == nil {
+		t.Fatal("a lock interrupted after the deactivation succeeded")
+	}
+	locked := f.groupByName("paddock.acme.locked").pk
+	if !slices.Contains(f.users[n].groups, locked) || f.deactivations != 1 || !slices.Equal(f.tokens["refresh_tokens"], []int{0}) {
+		t.Fatalf("interrupted lock: groups %v, deactivations %d, tokens %v", f.users[n].groups, f.deactivations, f.tokens)
+	}
+	f.failReactivation = false
+	if err := c.LockUser(ctx, "acme", pk); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if !slices.Contains(f.users[n].groups, locked) || f.users[n].inactive || f.deactivations != 2 {
+		t.Fatalf("after the retry: groups %v, inactive %v, deactivations %d", f.users[n].groups, f.users[n].inactive, f.deactivations)
+	}
+}
+
 func TestGroupsAndMembers(t *testing.T) {
 	f, srv := newFake(t)
 	c := client(srv)

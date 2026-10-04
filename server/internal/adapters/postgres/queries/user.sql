@@ -64,10 +64,14 @@ UPDATE app_user SET username = @username, display_name = @display_name, email = 
 WHERE id = @id AND source = 'synced';
 
 -- name: SetAppUserLocked :one
+-- A lock is incomplete until Authentik confirmed it (CompleteAppUserLock); an unlock clears both.
 UPDATE app_user SET locked = @locked, locked_at = CASE WHEN @locked::boolean THEN coalesce(locked_at, now()) END,
-  updated_at = now()
+  lock_incomplete = @locked, updated_at = now()
 WHERE id = @id
 RETURNING *;
+
+-- name: CompleteAppUserLock :one
+UPDATE app_user SET lock_incomplete = false, updated_at = now() WHERE id = @id RETURNING *;
 
 -- name: DeleteAppUser :execrows
 DELETE FROM app_user WHERE id = @id;
