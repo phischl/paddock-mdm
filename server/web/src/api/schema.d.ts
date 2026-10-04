@@ -126,6 +126,315 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/device-groups/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The members of a device group. */
+        get: operations["listDeviceGroupDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/enrollment-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator. */
+        get: operations["listEnrollmentTokens"];
+        put?: never;
+        /**
+         * @description Roles: org_admin. The response carries the token secret and the enrollment configuration exactly once; only
+         *     a hash of the secret is stored.
+         */
+        post: operations["createEnrollmentToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/enrollment-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator. */
+        get: operations["getEnrollmentToken"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/enrollment-tokens/{id}:revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: org_admin. Idempotent: revoking a revoked token keeps the first revocation time. */
+        post: operations["revokeEnrollmentToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getDevice"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}:approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: org_admin, org_operator. pending → active. */
+        post: operations["approveDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}:reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: org_admin. pending → rejected; the identity keys are revoked. */
+        post: operations["rejectDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}:release-quarantine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: org_admin, org_operator. quarantined → active. */
+        post: operations["releaseDeviceQuarantine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}:retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: org_admin. active or quarantined → retired; the identity keys are revoked. */
+        post: operations["retireDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Roles: org_admin, org_operator. Replaces the device group memberships. */
+        put: operations["setDeviceGroups"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/effective-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The resources the compiler renders for this device and the
+         *     definitions they come from; conflicts between device groups are listed, never merged.
+         */
+        get: operations["getDeviceEffectiveConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/managed-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listManagedFiles"];
+        put?: never;
+        /** @description Roles: org_admin, org_operator. */
+        post: operations["createManagedFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/managed-files/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getManagedFile"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin, org_operator. */
+        delete: operations["deleteManagedFile"];
+        options?: never;
+        head?: never;
+        /** @description Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed. */
+        patch: operations["updateManagedFile"];
+        trace?: never;
+    };
+    "/api/v1/managed-units": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listManagedUnits"];
+        put?: never;
+        /** @description Roles: org_admin, org_operator. */
+        post: operations["createManagedUnit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/managed-units/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getManagedUnit"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin, org_operator. */
+        delete: operations["deleteManagedUnit"];
+        options?: never;
+        head?: never;
+        /** @description Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed. */
+        patch: operations["updateManagedUnit"];
+        trace?: never;
+    };
     "/api/platform/v1/organizations": {
         parameters: {
             query?: never;
@@ -262,7 +571,7 @@ export interface components {
         /** @enum {string} */
         AuditOutcome: "success" | "failure" | "denied" | "unknown";
         /** @enum {string} */
-        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous";
+        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous" | "device";
         AuditActor: {
             type: string;
             id?: string;
@@ -304,8 +613,268 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /** @enum {string} */
+        EnrollmentTokenStatus: "active" | "revoked" | "expired" | "exhausted";
+        EnrollmentToken: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: uuid */
+            device_group_id: string | null;
+            auto_approve: boolean;
+            max_uses: number;
+            uses: number;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            revoked_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+            status: components["schemas"]["EnrollmentTokenStatus"];
+        };
+        EnrollmentTokenCreate: {
+            name: string;
+            /**
+             * Format: date-time
+             * @description At most 30 days ahead.
+             */
+            expires_at: string;
+            max_uses: number;
+            /**
+             * Format: uuid
+             * @description Enrolled devices join this group.
+             */
+            device_group_id?: string;
+            /** @description Enrolled devices become active without approval. */
+            auto_approve: boolean;
+        };
+        EnrollmentTokenCreated: {
+            token: components["schemas"]["EnrollmentToken"];
+            /** @description Shown once; distribute it like a password. */
+            secret: string;
+            enrollment_config: components["schemas"]["EnrollmentConfig"];
+        };
+        /** @description The document a device needs to enroll; it pins the bundle-signing keys as trust anchor. */
+        EnrollmentConfig: {
+            server_url: string;
+            /** Format: uuid */
+            organization_id: string;
+            token: string;
+            bundle_keys: components["schemas"]["BundleKey"][];
+        };
+        BundleKey: {
+            /** @description e.g. "bundle-signing:v1" */
+            key_id: string;
+            /** @description Base64 Ed25519 public key. */
+            public_key: string;
+        };
+        EnrollmentTokenPage: {
+            items: components["schemas"]["EnrollmentToken"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @enum {string} */
+        DeviceState: "pending" | "active" | "rejected" | "quarantined" | "retired";
+        Device: {
+            /** Format: uuid */
+            id: string;
+            hostname: string;
+            state: components["schemas"]["DeviceState"];
+            hardware_uuid: string | null;
+            machine_id: string | null;
+            os_release: {
+                [key: string]: string;
+            };
+            /** Format: uuid */
+            enrollment_token_id: string | null;
+            /** Format: date-time */
+            enrolled_at: string;
+            /** Format: date-time */
+            state_changed_at: string;
+            /**
+             * Format: int64
+             * @description Latest compiled bundle version (0 = none).
+             */
+            bundle_version: number;
+            /** Format: date-time */
+            last_contact_at: string | null;
+            /** Format: int64 */
+            applied_bundle_version: number | null;
+            agent_version: string | null;
+        };
+        DeviceGroupRef: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        DeviceIdentityKey: {
+            /** @description Hex SHA-256 of the public key. */
+            key_id: string;
+            /** @enum {string} */
+            key_protection: "tpm" | "file";
+            /** @enum {string} */
+            status: "active" | "revoked";
+            /** Format: date-time */
+            created_at: string;
+        };
+        DeviceDetail: components["schemas"]["Device"] & {
+            groups: components["schemas"]["DeviceGroupRef"][];
+            identity_keys: components["schemas"]["DeviceIdentityKey"][];
+        };
+        DevicePage: {
+            items: components["schemas"]["Device"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        DeviceGroupsUpdate: {
+            device_group_ids: string[];
+        };
+        BundleResource: {
+            /** @description "time", "file:<path>" or "unit:<name>" */
+            id: string;
+            /** @enum {string} */
+            type: "time" | "file" | "systemd_unit";
+            spec: {
+                [key: string]: unknown;
+            };
+        };
+        ConfigConflict: {
+            resource: string;
+            /**
+             * Format: uuid
+             * @description The definition that applies (smallest ID).
+             */
+            winner_id: string;
+            loser_ids: string[];
+        };
+        EffectiveConfig: {
+            /** @description Bundle resources, sorted by id, exactly as the compiler renders them. */
+            resources: components["schemas"]["BundleResource"][];
+            files: components["schemas"]["ManagedFile"][];
+            units: components["schemas"]["ManagedUnit"][];
+            conflicts: components["schemas"]["ConfigConflict"][];
+        };
+        ManagedFile: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description null = every device.
+             */
+            device_group_id: string | null;
+            path: string;
+            mode: string;
+            owner: string;
+            group: string;
+            content: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ManagedFileCreate: {
+            /**
+             * Format: uuid
+             * @description Omit for every device of the organization.
+             */
+            device_group_id?: string;
+            /** @description Below /etc/, /usr/local/etc/ or /opt/, outside protected paths (422 path_not_allowed). */
+            path: string;
+            /** @default 0644 */
+            mode: string;
+            /** @default root */
+            owner: string;
+            /** @default root */
+            group: string;
+            /** @description UTF-8 text, at most 64 KiB. */
+            content: string;
+        };
+        ManagedFileUpdate: {
+            path?: string;
+            mode?: string;
+            owner?: string;
+            group?: string;
+            content?: string;
+        };
+        ManagedFilePage: {
+            items: components["schemas"]["ManagedFile"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        ManagedUnit: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description null = every device.
+             */
+            device_group_id: string | null;
+            unit: string;
+            enabled: boolean;
+            active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ManagedUnitCreate: {
+            /**
+             * Format: uuid
+             * @description Omit for every device of the organization.
+             */
+            device_group_id?: string;
+            /** @description *.service, *.timer, *.socket or *.path; reserved units answer 422 unit_not_allowed. */
+            unit: string;
+            /** @default true */
+            enabled: boolean;
+            /** @default true */
+            active: boolean;
+        };
+        ManagedUnitUpdate: {
+            unit?: string;
+            enabled?: boolean;
+            active?: boolean;
+        };
+        ManagedUnitPage: {
+            items: components["schemas"]["ManagedUnit"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
     };
     responses: {
+        /** @description The device after the transition. */
+        Device: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Device"];
+            };
+        };
         /** @description RFC 9457 problem details. */
         Problem: {
             headers: {
@@ -330,6 +899,18 @@ export interface components {
         AuditEventSort: "occurred_at" | "-occurred_at" | "code" | "-code" | "outcome" | "-outcome";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         OrganizationSort: "slug" | "-slug" | "name" | "-name" | "created_at" | "-created_at" | "status" | "-status";
+        /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
+        DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        ManagedFileSort: "path" | "-path" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        ManagedUnitSort: "unit" | "-unit" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Repeatable. */
+        DeviceStateFilter: components["schemas"]["DeviceState"][];
+        /** @description Only definitions scoped to this device group. */
+        DeviceGroupFilter: string;
     };
     requestBodies: never;
     headers: never;
@@ -643,6 +1224,663 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    listDeviceGroupDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
+                sort?: components["parameters"]["DeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                state?: components["parameters"]["DeviceStateFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of member devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listEnrollmentTokens: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["EnrollmentTokenSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of enrollment tokens. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentTokenPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createEnrollmentToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollmentTokenCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentTokenCreated"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    getEnrollmentToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The enrollment token (without secret). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    revokeEnrollmentToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollmentToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
+                sort?: components["parameters"]["DeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                state?: components["parameters"]["DeviceStateFilter"];
+                /** @description Only members of this device group. */
+                device_group_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device with groups and identity keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    approveDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    rejectDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    releaseDeviceQuarantine: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    retireDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    setDeviceGroups: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The device with its new memberships. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    getDeviceEffectiveConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Effective configuration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EffectiveConfig"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listManagedFiles: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["ManagedFileSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only definitions scoped to this device group. */
+                device_group_id?: components["parameters"]["DeviceGroupFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of managed files. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFilePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createManagedFile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedFileCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFile"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getManagedFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The managed file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFile"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteManagedFile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateManagedFile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedFileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFile"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listManagedUnits: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["ManagedUnitSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only definitions scoped to this device group. */
+                device_group_id?: components["parameters"]["DeviceGroupFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of managed units. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedUnitPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createManagedUnit: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedUnitCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedUnit"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getManagedUnit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The managed unit. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedUnit"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteManagedUnit: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateManagedUnit: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedUnitUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedUnit"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
         };
     };
     listOrganizations: {

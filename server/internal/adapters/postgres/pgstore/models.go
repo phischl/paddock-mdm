@@ -37,11 +37,106 @@ type AdminAccount struct {
 	LastLoginAt    *time.Time
 }
 
+type Bundle struct {
+	DeviceID       uuid.UUID
+	Version        int64
+	OrganizationID uuid.UUID
+	ContentSha256  []byte
+	EnvelopeSha256 []byte
+	ObjectKey      string
+	CreatedAt      time.Time
+}
+
+type Device struct {
+	ID                uuid.UUID
+	OrganizationID    uuid.UUID
+	Hostname          string
+	State             string
+	BundleSeq         int64
+	HardwareUuid      *string
+	MachineID         *string
+	OsRelease         json.RawMessage
+	EnrollmentTokenID uuid.NullUUID
+	EnrolledAt        time.Time
+	StateChangedAt    time.Time
+}
+
+type DeviceEventSeen struct {
+	DeviceID       uuid.UUID
+	EventSeq       int64
+	OrganizationID uuid.UUID
+}
+
 type DeviceGroup struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
 	Name           string
 	Description    string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type DeviceGroupMember struct {
+	OrganizationID uuid.UUID
+	DeviceGroupID  uuid.UUID
+	DeviceID       uuid.UUID
+}
+
+type DeviceIdentityKey struct {
+	KeyID          string
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	PublicKey      []byte
+	KeyProtection  string
+	Status         string
+	CreatedAt      time.Time
+}
+
+type DeviceStatus struct {
+	DeviceID             uuid.UUID
+	OrganizationID       uuid.UUID
+	LastContactAt        *time.Time
+	AppliedBundleVersion *int64
+	AgentVersion         *string
+	LastSeq              int64
+	Health               json.RawMessage
+}
+
+type EnrollmentToken struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	SecretSha256   []byte
+	DeviceGroupID  uuid.NullUUID
+	AutoApprove    bool
+	MaxUses        int32
+	Uses           int32
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
+	CreatedBy      uuid.UUID
+	CreatedAt      time.Time
+}
+
+type ManagedFile struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Path           string
+	Mode           string
+	Owner          string
+	Grp            string
+	Content        string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type ManagedUnit struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Unit           string
+	Enabled        bool
+	Active         bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }

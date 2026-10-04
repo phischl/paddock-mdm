@@ -60,6 +60,10 @@ services:
       PADDOCK_ENV: development
       PADDOCK_REAPER_THRESHOLD: ${PADDOCK_REAPER_THRESHOLD:-}
 
+  paddock-worker:
+    environment:
+      PADDOCK_ENV: development
+
   paddock-audit-migrate:
     environment:
       PADDOCK_ENV: development

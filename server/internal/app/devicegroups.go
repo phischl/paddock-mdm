@@ -10,6 +10,7 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
 	"github.com/paddock-mdm/paddock/server/internal/domain/devicegroup"
+	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/problem"
 )
@@ -150,12 +151,17 @@ func (d *DeviceGroups) Delete(ctx context.Context, id uuid.UUID) error {
 		rec.SetTarget(audit.Target{Type: "device_group", ID: id.String(), Display: old.Name})
 		rec.SetParam("name", old.Name)
 		n, err := q.DeleteDeviceGroup(ctx, id)
+		if db.IsForeignKeyViolation(err) {
+			return problem.InUse.WithDetail("an enrollment token still assigns devices to this group")
+		}
 		if err != nil {
 			return err
 		}
 		if n == 0 {
 			return problem.NotFound
 		}
+		// Memberships and group-scoped definitions are gone with the group; recompile the organization.
+		rec.StateChanged(statechange.ScopeOrg, old.OrganizationID)
 		return nil
 	})
 }

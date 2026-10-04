@@ -15,7 +15,7 @@ FROM ${GO_BUILD_IMAGE} AS build
 WORKDIR /src
 ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-trimpath
 COPY go.work go.work.sum ./
-COPY pkg/go.mod pkg/
+COPY pkg/go.mod pkg/go.sum pkg/
 COPY server/go.mod server/go.sum server/
 COPY test/acceptance/go.mod test/acceptance/go.sum test/acceptance/
 RUN --mount=type=cache,target=/go/pkg/mod cd server && go mod download

@@ -173,3 +173,17 @@ func LoadOpenBao(l *Loader) OpenBao {
 		SecretID: l.SecretFile("PADDOCK_OPENBAO_SECRET_ID_FILE"),
 	}
 }
+
+// Valkey is the Valkey connection of gateway, worker and compiler.
+type Valkey struct {
+	Addr     string
+	Password string
+}
+
+// LoadValkey reads PADDOCK_VALKEY_*.
+func LoadValkey(l *Loader) Valkey {
+	return Valkey{
+		Addr:     l.Required("PADDOCK_VALKEY_ADDR"),
+		Password: l.SecretFile("PADDOCK_VALKEY_PASSWORD_FILE"),
+	}
+}

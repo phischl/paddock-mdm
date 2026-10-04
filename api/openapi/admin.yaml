@@ -27,6 +27,9 @@ tags:
   - name: auth
   - name: me
   - name: device-groups
+  - name: enrollment-tokens
+  - name: devices
+  - name: managed-config
   - name: audit
   - name: platform
 paths:
@@ -270,6 +273,494 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/device-groups/{id}/devices:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceGroupDevices
+      tags: [device-groups]
+      description: "Roles: org_admin, org_operator, org_auditor. The members of a device group."
+      x-paddock-list:
+        sort: [hostname, last_contact_at, enrolled_at, state]
+        default_sort: hostname
+        search: [hostname, hardware_uuid]
+        filters: [state]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DeviceStateFilter"
+      responses:
+        "200":
+          description: One page of member devices.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DevicePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/enrollment-tokens:
+    get:
+      operationId: listEnrollmentTokens
+      tags: [enrollment-tokens]
+      description: "Roles: org_admin, org_operator."
+      x-paddock-list:
+        sort: [name, created_at, expires_at]
+        default_sort: -created_at
+        search: [name]
+        filters: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/EnrollmentTokenSort"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: One page of enrollment tokens.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentTokenPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createEnrollmentToken
+      tags: [enrollment-tokens]
+      description: |
+        Roles: org_admin. The response carries the token secret and the enrollment configuration exactly once; only
+        a hash of the secret is stored.
+      x-paddock-audit: enrollment_token.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnrollmentTokenCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentTokenCreated" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/enrollment-tokens/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getEnrollmentToken
+      tags: [enrollment-tokens]
+      description: "Roles: org_admin, org_operator."
+      responses:
+        "200":
+          description: The enrollment token (without secret).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentToken" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/enrollment-tokens/{id}:revoke:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: revokeEnrollmentToken
+      tags: [enrollment-tokens]
+      description: "Roles: org_admin. Idempotent: revoking a revoked token keeps the first revocation time."
+      x-paddock-audit: enrollment_token.revoked
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentToken" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/devices:
+    get:
+      operationId: listDevices
+      tags: [devices]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      x-paddock-list:
+        sort: [hostname, last_contact_at, enrolled_at, state]
+        default_sort: hostname
+        search: [hostname, hardware_uuid]
+        filters: [state, device_group_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DeviceStateFilter"
+        - name: device_group_id
+          in: query
+          description: Only members of this device group.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of devices.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DevicePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDevice
+      tags: [devices]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The device with groups and identity keys.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}:approve:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: approveDevice
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. pending → active."
+      x-paddock-audit: device.approved
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200": { $ref: "#/components/responses/Device" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}:reject:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: rejectDevice
+      tags: [devices]
+      description: "Roles: org_admin. pending → rejected; the identity keys are revoked."
+      x-paddock-audit: device.rejected
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200": { $ref: "#/components/responses/Device" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}:release-quarantine:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: releaseDeviceQuarantine
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. quarantined → active."
+      x-paddock-audit: device.quarantine_released
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200": { $ref: "#/components/responses/Device" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}:retire:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: retireDevice
+      tags: [devices]
+      description: "Roles: org_admin. active or quarantined → retired; the identity keys are revoked."
+      x-paddock-audit: device.retired
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200": { $ref: "#/components/responses/Device" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/groups:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: setDeviceGroups
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. Replaces the device group memberships."
+      x-paddock-audit: device.groups_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceGroupsUpdate" }
+      responses:
+        "200":
+          description: The device with its new memberships.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/effective-config:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDeviceEffectiveConfig
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The resources the compiler renders for this device and the
+        definitions they come from; conflicts between device groups are listed, never merged.
+      responses:
+        "200":
+          description: Effective configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EffectiveConfig" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/managed-files:
+    get:
+      operationId: listManagedFiles
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      x-paddock-list:
+        sort: [path, created_at, updated_at]
+        default_sort: path
+        search: [path]
+        filters: [device_group_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ManagedFileSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DeviceGroupFilter"
+      responses:
+        "200":
+          description: One page of managed files.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedFilePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createManagedFile
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator."
+      x-paddock-audit: managed_file.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManagedFileCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedFile" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/managed-files/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getManagedFile
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The managed file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedFile" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateManagedFile
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed."
+      x-paddock-audit: managed_file.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManagedFileUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedFile" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteManagedFile
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator."
+      x-paddock-audit: managed_file.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/managed-units:
+    get:
+      operationId: listManagedUnits
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      x-paddock-list:
+        sort: [unit, created_at, updated_at]
+        default_sort: unit
+        search: [unit]
+        filters: [device_group_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ManagedUnitSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DeviceGroupFilter"
+      responses:
+        "200":
+          description: One page of managed units.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedUnitPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createManagedUnit
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator."
+      x-paddock-audit: managed_unit.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManagedUnitCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedUnit" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/managed-units/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getManagedUnit
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The managed unit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedUnit" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateManagedUnit
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed."
+      x-paddock-audit: managed_unit.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManagedUnitUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedUnit" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteManagedUnit
+      tags: [managed-config]
+      description: "Roles: org_admin, org_operator."
+      x-paddock-audit: managed_unit.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api/platform/v1/organizations:
     get:
       operationId: listOrganizations
@@ -407,7 +898,58 @@ components:
         type: string
         enum: [slug, -slug, name, -name, created_at, -created_at, status, -status]
         default: slug
+    DeviceSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [hostname, -hostname, last_contact_at, -last_contact_at, enrolled_at, -enrolled_at, state, -state]
+        default: hostname
+    EnrollmentTokenSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, created_at, -created_at, expires_at, -expires_at]
+        default: -created_at
+    ManagedFileSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [path, -path, created_at, -created_at, updated_at, -updated_at]
+        default: path
+    ManagedUnitSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [unit, -unit, created_at, -created_at, updated_at, -updated_at]
+        default: unit
+    DeviceStateFilter:
+      name: state
+      in: query
+      description: Repeatable.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/DeviceState" }
+    DeviceGroupFilter:
+      name: device_group_id
+      in: query
+      description: Only definitions scoped to this device group.
+      schema: { type: string, format: uuid }
   responses:
+    Device:
+      description: The device after the transition.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Device" }
     Problem:
       description: RFC 9457 problem details.
       content:
@@ -525,7 +1067,7 @@ components:
       enum: [success, failure, denied, unknown]
     AuditActorType:
       type: string
-      enum: [admin, platform_admin, system, anonymous]
+      enum: [admin, platform_admin, system, anonymous, device]
     AuditActor:
       type: object
       required: [type, step_up]
@@ -569,6 +1111,258 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/AuditEvent" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    EnrollmentTokenStatus:
+      type: string
+      enum: [active, revoked, expired, exhausted]
+    EnrollmentToken:
+      type: object
+      required: [id, name, device_group_id, auto_approve, max_uses, uses, expires_at, revoked_at, created_at, status]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        device_group_id: { type: string, format: uuid, nullable: true }
+        auto_approve: { type: boolean }
+        max_uses: { type: integer }
+        uses: { type: integer }
+        expires_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/EnrollmentTokenStatus" }
+    EnrollmentTokenCreate:
+      type: object
+      required: [name, expires_at, max_uses, auto_approve]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        expires_at: { type: string, format: date-time, description: At most 30 days ahead. }
+        max_uses: { type: integer, minimum: 1, maximum: 1000 }
+        device_group_id: { type: string, format: uuid, description: Enrolled devices join this group. }
+        auto_approve: { type: boolean, description: Enrolled devices become active without approval. }
+    EnrollmentTokenCreated:
+      type: object
+      required: [token, secret, enrollment_config]
+      properties:
+        token: { $ref: "#/components/schemas/EnrollmentToken" }
+        secret: { type: string, description: "Shown once; distribute it like a password." }
+        enrollment_config: { $ref: "#/components/schemas/EnrollmentConfig" }
+    EnrollmentConfig:
+      type: object
+      description: The document a device needs to enroll; it pins the bundle-signing keys as trust anchor.
+      required: [server_url, organization_id, token, bundle_keys]
+      properties:
+        server_url: { type: string }
+        organization_id: { type: string, format: uuid }
+        token: { type: string }
+        bundle_keys:
+          type: array
+          items: { $ref: "#/components/schemas/BundleKey" }
+    BundleKey:
+      type: object
+      required: [key_id, public_key]
+      properties:
+        key_id: { type: string, description: 'e.g. "bundle-signing:v1"' }
+        public_key: { type: string, description: Base64 Ed25519 public key. }
+    EnrollmentTokenPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/EnrollmentToken" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DeviceState:
+      type: string
+      enum: [pending, active, rejected, quarantined, retired]
+    Device:
+      type: object
+      required: [id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at,
+                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version]
+      properties:
+        id: { type: string, format: uuid }
+        hostname: { type: string }
+        state: { $ref: "#/components/schemas/DeviceState" }
+        hardware_uuid: { type: string, nullable: true }
+        machine_id: { type: string, nullable: true }
+        os_release:
+          type: object
+          additionalProperties: { type: string }
+        enrollment_token_id: { type: string, format: uuid, nullable: true }
+        enrolled_at: { type: string, format: date-time }
+        state_changed_at: { type: string, format: date-time }
+        bundle_version: { type: integer, format: int64, description: Latest compiled bundle version (0 = none). }
+        last_contact_at: { type: string, format: date-time, nullable: true }
+        applied_bundle_version: { type: integer, format: int64, nullable: true }
+        agent_version: { type: string, nullable: true }
+    DeviceGroupRef:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    DeviceIdentityKey:
+      type: object
+      required: [key_id, key_protection, status, created_at]
+      properties:
+        key_id: { type: string, description: Hex SHA-256 of the public key. }
+        key_protection: { type: string, enum: [tpm, file] }
+        status: { type: string, enum: [active, revoked] }
+        created_at: { type: string, format: date-time }
+    DeviceDetail:
+      allOf:
+        - $ref: "#/components/schemas/Device"
+        - type: object
+          required: [groups, identity_keys]
+          properties:
+            groups:
+              type: array
+              items: { $ref: "#/components/schemas/DeviceGroupRef" }
+            identity_keys:
+              type: array
+              items: { $ref: "#/components/schemas/DeviceIdentityKey" }
+    DevicePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Device" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DeviceGroupsUpdate:
+      type: object
+      required: [device_group_ids]
+      additionalProperties: false
+      properties:
+        device_group_ids:
+          type: array
+          maxItems: 100
+          items: { type: string, format: uuid }
+    BundleResource:
+      type: object
+      required: [id, type, spec]
+      properties:
+        id: { type: string, description: '"time", "file:<path>" or "unit:<name>"' }
+        type: { type: string, enum: [time, file, systemd_unit] }
+        spec:
+          type: object
+          additionalProperties: true
+    ConfigConflict:
+      type: object
+      required: [resource, winner_id, loser_ids]
+      properties:
+        resource: { type: string }
+        winner_id: { type: string, format: uuid, description: The definition that applies (smallest ID). }
+        loser_ids:
+          type: array
+          items: { type: string, format: uuid }
+    EffectiveConfig:
+      type: object
+      required: [resources, files, units, conflicts]
+      properties:
+        resources:
+          type: array
+          description: Bundle resources, sorted by id, exactly as the compiler renders them.
+          items: { $ref: "#/components/schemas/BundleResource" }
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/ManagedFile" }
+        units:
+          type: array
+          items: { $ref: "#/components/schemas/ManagedUnit" }
+        conflicts:
+          type: array
+          items: { $ref: "#/components/schemas/ConfigConflict" }
+    ManagedFile:
+      type: object
+      required: [id, device_group_id, path, mode, owner, group, content, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        device_group_id: { type: string, format: uuid, nullable: true, description: null = every device. }
+        path: { type: string }
+        mode: { type: string }
+        owner: { type: string }
+        group: { type: string }
+        content: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ManagedFileCreate:
+      type: object
+      required: [path, content]
+      additionalProperties: false
+      properties:
+        device_group_id: { type: string, format: uuid, description: Omit for every device of the organization. }
+        path: { type: string, maxLength: 1024, description: "Below /etc/, /usr/local/etc/ or /opt/, outside protected paths (422 path_not_allowed)." }
+        mode: { type: string, pattern: "^0[0-7]{3}$", default: "0644" }
+        owner: { type: string, default: root }
+        group: { type: string, default: root }
+        content: { type: string, description: "UTF-8 text, at most 64 KiB." }
+    ManagedFileUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        path: { type: string, maxLength: 1024 }
+        mode: { type: string, pattern: "^0[0-7]{3}$" }
+        owner: { type: string }
+        group: { type: string }
+        content: { type: string }
+    ManagedFilePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ManagedFile" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ManagedUnit:
+      type: object
+      required: [id, device_group_id, unit, enabled, active, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        device_group_id: { type: string, format: uuid, nullable: true, description: null = every device. }
+        unit: { type: string }
+        enabled: { type: boolean }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ManagedUnitCreate:
+      type: object
+      required: [unit]
+      additionalProperties: false
+      properties:
+        device_group_id: { type: string, format: uuid, description: Omit for every device of the organization. }
+        unit: { type: string, maxLength: 255, description: "*.service, *.timer, *.socket or *.path; reserved units answer 422 unit_not_allowed." }
+        enabled: { type: boolean, default: true }
+        active: { type: boolean, default: true }
+    ManagedUnitUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        unit: { type: string, maxLength: 255 }
+        enabled: { type: boolean }
+        active: { type: boolean }
+    ManagedUnitPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ManagedUnit" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

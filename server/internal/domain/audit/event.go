@@ -30,6 +30,7 @@ const (
 	ActorPlatformAdmin = "platform_admin"
 	ActorSystem        = "system"
 	ActorAnonymous     = "anonymous"
+	ActorDevice        = "device"
 )
 
 // Sources.
@@ -37,11 +38,12 @@ const (
 	SourcePortal   = "portal"
 	SourcePlatform = "platform"
 	SourceSystem   = "system"
+	SourceDevice   = "device"
 )
 
 // Actor is who performed the action.
 type Actor struct {
-	Type    string `json:"type"` // "admin" | "platform_admin" | "system" | "anonymous"
+	Type    string `json:"type"` // "admin" | "platform_admin" | "system" | "anonymous" | "device"
 	ID      string `json:"id,omitempty"`
 	Display string `json:"display,omitempty"`
 	IP      string `json:"ip,omitempty"`
@@ -50,7 +52,7 @@ type Actor struct {
 
 // Target is what the action was performed on.
 type Target struct {
-	Type    string `json:"type"` // "organization" | "device_group" | "admin_account"
+	Type    string `json:"type"` // "organization" | "device_group" | "admin_account" | "device" | "enrollment_token" | "managed_file" | "managed_unit"
 	ID      string `json:"id"`
 	Display string `json:"display,omitempty"`
 }
@@ -79,6 +81,8 @@ func SourceForActor(actorType string) string {
 		return SourcePortal
 	case ActorPlatformAdmin:
 		return SourcePlatform
+	case ActorDevice:
+		return SourceDevice
 	default:
 		return SourceSystem
 	}

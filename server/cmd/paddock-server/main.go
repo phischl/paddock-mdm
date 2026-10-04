@@ -20,7 +20,7 @@ import (
 const usage = `usage: paddock-server <command> [arguments] [+ <command> [arguments] ...]
 
 commands:
-  serve api|outbox-relay|audit-writer
+  serve api|outbox-relay|audit-writer|worker
   migrate paddock|audit
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
@@ -109,6 +109,8 @@ func runServe(ctx context.Context, l *config.Loader, common config.Common, args 
 		return serveAuditWriter(ctx, l, common)
 	case "api":
 		return serveAPI(ctx, l, common)
+	case "worker":
+		return serveWorker(ctx, l, common)
 	default:
 		return errUsage
 	}

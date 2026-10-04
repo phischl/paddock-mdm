@@ -19,6 +19,7 @@ require (
 	github.com/rabbitmq/amqp091-go v1.15.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+	github.com/valkey-io/valkey-go v1.0.78
 	golang.org/x/oauth2 v0.36.0
 )
 

@@ -9,3 +9,5 @@ generate:
 output-options:
   # The BFF endpoints (/api/auth/*) set cookies and redirect; they are hand-written handlers.
   exclude-tags: [auth]
+  # Go's ServeMux cannot route "{id}:action" segments; these operations are dispatched by actions.go.
+  exclude-operation-ids: [revokeEnrollmentToken, approveDevice, rejectDevice, releaseDeviceQuarantine, retireDevice]

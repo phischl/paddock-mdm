@@ -103,6 +103,31 @@ func (q *Queries) InsertOrganization(ctx context.Context, arg InsertOrganization
 	return i, err
 }
 
+const listOrganizationIDs = `-- name: ListOrganizationIDs :many
+SELECT id::uuid FROM paddock_organization_ids() AS id
+`
+
+// Worker and compiler loops: organization IDs without an organization context (SECURITY DEFINER function).
+func (q *Queries) ListOrganizationIDs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listOrganizationIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrganizations = `-- name: ListOrganizations :many
 
 SELECT id, slug, name, status, created_at, updated_at FROM organization

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -8,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/listing"
 )
@@ -22,6 +25,12 @@ var lists = map[string]struct {
 	"listDeviceGroups":  {deviceGroupList, "postgres/queries/device_group.sql", "ListDeviceGroups", "id"},
 	"listAuditEvents":   {auditEventList, "auditpg/queries/audit.sql", "ListAuditEvents", "event_id"},
 	"listOrganizations": {organizationList, "postgres/queries/organization.sql", "ListOrganizations", "id"},
+
+	"listEnrollmentTokens":   {enrollmentTokenList, "postgres/queries/enrollment_token.sql", "ListEnrollmentTokens", "id"},
+	"listDevices":            {deviceList, "postgres/queries/device.sql", "ListDevices", "id"},
+	"listDeviceGroupDevices": {deviceList, "postgres/queries/device.sql", "ListDevices", "id"},
+	"listManagedFiles":       {managedFileList, "postgres/queries/managed_config.sql", "ListManagedFiles", "id"},
+	"listManagedUnits":       {managedUnitList, "postgres/queries/managed_config.sql", "ListManagedUnits", "id"},
 }
 
 // TestListSpecsMatchContract keeps the handlers' list definitions equal to x-paddock-list and the sort enum of the
@@ -31,7 +40,7 @@ func TestListSpecsMatchContract(t *testing.T) {
 	seen := map[string]bool{}
 	for path, item := range doc.Paths.Map() {
 		op := item.Get
-		if op == nil || strings.Contains(path, "{") || strings.HasPrefix(path, "/api/auth/") || path == "/api/v1/me" {
+		if !isCollection(op) {
 			continue
 		}
 		seen[op.OperationID] = true
@@ -78,6 +87,19 @@ func TestListSpecsMatchContract(t *testing.T) {
 			t.Errorf("list definition %s has no collection GET in the contract", id)
 		}
 	}
+}
+
+// isCollection reports whether op is a collection GET: its 200 response is an object with an items array.
+func isCollection(op *openapi3.Operation) bool {
+	if op == nil {
+		return false
+	}
+	ok := op.Responses.Status(http.StatusOK)
+	if ok == nil || ok.Value == nil || ok.Value.Content.Get("application/json") == nil {
+		return false
+	}
+	items := ok.Value.Content.Get("application/json").Schema.Value.Properties["items"]
+	return items != nil && items.Value.Type.Is("array")
 }
 
 // TestListQueriesSortBranches checks decision 2 of plan M0.2: every allowed sort value has an ascending and a

@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
+	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
 )
@@ -97,17 +98,9 @@ func (r *Relay) PublishOnce(ctx context.Context) (int, error) {
 		if len(rows) == 0 {
 			return nil
 		}
-		msgs := make([]mq.Message, len(rows))
-		for i, row := range rows {
-			rk, err := routingKey(row.Subject)
-			if err != nil {
-				return err
-			}
-			msgs[i] = mq.Message{RoutingKey: rk, MessageID: row.MsgID, Body: row.Payload}
-		}
-		results, err := r.pub.PublishBatch(ctx, mq.ExchangeAudit, msgs)
+		results, err := r.publish(ctx, rows)
 		if err != nil {
-			metricPublished.WithLabelValues("error").Add(float64(len(msgs)))
+			metricPublished.WithLabelValues("error").Add(float64(len(rows)))
 			return err
 		}
 		if r.afterConfirm != nil {
@@ -145,6 +138,41 @@ func (r *Relay) PublishOnce(ctx context.Context) (int, error) {
 		return claimed, fmt.Errorf("%w: %d of %d", errPartial, failed, claimed)
 	}
 	return claimed, nil
+}
+
+// publish sends every row to the exchange of its subject; each exchange's messages keep the outbox order. The
+// result has one entry per row (see mq.Publisher.PublishBatch).
+func (r *Relay) publish(ctx context.Context, rows []pgstore.Outbox) ([]error, error) {
+	byExchange := map[string][]int{}
+	var exchanges []string
+	msgs := make([]mq.Message, len(rows))
+	for i, row := range rows {
+		exchange, rk, err := route(row.Subject)
+		if err != nil {
+			return nil, err
+		}
+		if byExchange[exchange] == nil {
+			exchanges = append(exchanges, exchange)
+		}
+		byExchange[exchange] = append(byExchange[exchange], i)
+		msgs[i] = mq.Message{RoutingKey: rk, MessageID: row.MsgID, Body: row.Payload}
+	}
+	results := make([]error, len(rows))
+	for _, exchange := range exchanges {
+		idx := byExchange[exchange]
+		batch := make([]mq.Message, len(idx))
+		for j, i := range idx {
+			batch[j] = msgs[i]
+		}
+		res, err := r.pub.PublishBatch(ctx, exchange, batch)
+		if err != nil {
+			return nil, err
+		}
+		for j, i := range idx {
+			results[i] = res[j]
+		}
+	}
+	return results, nil
 }
 
 // Cleanup deletes rows published more than retention ago.
@@ -197,13 +225,18 @@ func (r *Relay) gauge(ctx context.Context) {
 	}
 }
 
-// routingKey turns the subject audit.<organization_id>.<source> into the routing key audit.<source>.<organization_id>.
-func routingKey(subject string) (string, error) {
+// route maps an outbox subject to exchange and routing key: audit.<organization_id>.<source> goes to paddock.audit
+// as audit.<source>.<organization_id>; state.<organization_id> goes to paddock.state on the organization's
+// partition (architecture §7.1).
+func route(subject string) (string, string, error) {
+	if org, ok := statechange.ParseSubject(subject); ok {
+		return mq.ExchangeState, mq.StatePartition(org), nil
+	}
 	parts := strings.Split(subject, ".")
 	if len(parts) != 3 || parts[0] != "audit" {
-		return "", fmt.Errorf("outbox: unexpected subject %q", subject)
+		return "", "", fmt.Errorf("outbox: unexpected subject %q", subject)
 	}
-	return "audit." + parts[2] + "." + parts[1], nil
+	return mq.ExchangeAudit, "audit." + parts[2] + "." + parts[1], nil
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {
