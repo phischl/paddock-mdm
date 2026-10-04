@@ -32,13 +32,17 @@ import (
 
 // Deps are the dependencies of the run loop.
 type Deps struct {
-	Layout   paths.Layout
-	Config   config.Agent
-	Trust    bundle.Trust
-	Key      identity.Key
-	Client   *client.Client
-	Health   *health.State
-	Applier  *apply.Applier
+	Layout  paths.Layout
+	Config  config.Agent
+	Trust   bundle.Trust
+	Key     identity.Key
+	Client  *client.Client
+	Health  *health.State
+	Applier *apply.Applier
+	// Events receives the device events of the reconcilers; New connects it to the spool.
+	Events *reconcile.Events
+	// Sys is the device for the session tracking (plan M3b decision 11); nil disables it.
+	Sys      reconcile.System
 	Spool    *spool.Spool    // nil: the agent's own spool below Layout
 	Triggers <-chan struct{} // immediate check-in requests (network up, resume, SIGHUP)
 	// Supervisor returns the PID of paddock-supervisor and Signal sends it SIGUSR1 (tests replace both).
@@ -80,7 +84,11 @@ func Load(l paths.Layout) (Deps, error) {
 		return Deps{}, err
 	}
 	sys := reconcile.OS{Root: l.Root}
-	return Deps{Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Applier: apply.New(sys, managed)}, nil
+	events := &reconcile.Events{}
+	return Deps{
+		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Applier: apply.New(sys, managed, events), Events: events,
+		Sys: sys,
+	}, nil
 }
 
 // New creates the run loop.
@@ -101,6 +109,9 @@ func New(d Deps) (*Agent, error) {
 	a := &Agent{d: d, st: st}
 	if a.d.Spool == nil {
 		a.d.Spool = a.newSpool()
+	}
+	if a.d.Events != nil {
+		a.d.Events.Emit = a.event
 	}
 	if a.d.Supervisor == nil {
 		a.d.Supervisor = func() (int, error) { return update.SupervisorPID(a.d.Layout) }
@@ -137,6 +148,8 @@ func (a *Agent) loop(ctx context.Context) error {
 	defer next.Stop()
 	drift := time.NewTicker(a.d.Config.DriftInterval)
 	defer drift.Stop()
+	sessionPoll := time.NewTicker(SessionPoll)
+	defer sessionPoll.Stop()
 	nextAt := a.d.Now()
 	for {
 		select {
@@ -144,6 +157,8 @@ func (a *Agent) loop(ctx context.Context) error {
 			return nil
 		case <-drift.C:
 			a.drift(ctx)
+		case <-sessionPoll.C:
+			a.trackSessions(ctx)
 		case <-a.d.Triggers:
 			if at := triggered(a.d.Now(), a.lastAttempt, a.d.Rand()); at.Before(nextAt) {
 				nextAt = at

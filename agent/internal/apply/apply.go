@@ -1,6 +1,6 @@
-// Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10): resources in the order
-// time → file → systemd_unit, each independently (an error does not stop the others), then the removal of files
-// that left the bundle.
+// Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10, M3b decision 6): resources in
+// the order time → file → systemd_unit → login → sudo, each independently (an error does not stop the others), then
+// the removal of files that left the bundle.
 package apply
 
 import (
@@ -15,8 +15,9 @@ import (
 	"github.com/paddock-mdm/paddock/pkg/bundle"
 )
 
-// order is the apply order of resource types: units may depend on files.
-var order = []string{bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit}
+// order is the apply order of resource types: units may depend on files; sudo rights follow the login component
+// that resolves their users.
+var order = []string{bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit, bundle.TypeLogin, bundle.TypeSudo}
 
 // ResourceError is one entry of Report.Errors.
 type ResourceError struct {
@@ -46,13 +47,15 @@ type Applier struct {
 	file *reconcile.File
 }
 
-// New creates an applier for sys; managed is the record of files Paddock wrote.
-func New(sys reconcile.System, managed *reconcile.Managed) *Applier {
+// New creates an applier for sys; managed is the record of files Paddock wrote, events receives the device events
+// of the reconcilers.
+func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Events) *Applier {
 	file := &reconcile.File{Sys: sys, Managed: managed}
 	return &Applier{
 		file: file,
 		recs: map[string]reconcile.Reconciler{
 			bundle.TypeFile: file, bundle.TypeSystemdUnit: &reconcile.Unit{Sys: sys}, bundle.TypeTime: &reconcile.Time{Sys: sys},
+			bundle.TypeLogin: &reconcile.Login{Sys: sys, Events: events},
 		},
 	}
 }

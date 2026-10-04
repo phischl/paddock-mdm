@@ -37,6 +37,8 @@ type State struct {
 	FailedUpdateVersion string `json:"failed_update_version,omitempty"`
 	// ReportedUpdateAt is the "at" of the update result already turned into an event.
 	ReportedUpdateAt *time.Time `json:"reported_update_at,omitempty"`
+	// SessionsReported is the last session.login per directory user (at most one per 24 h, plan M3b decision 11).
+	SessionsReported map[string]time.Time `json:"sessions_reported,omitempty"`
 }
 
 // Load reads state.json; a missing file is the empty state.

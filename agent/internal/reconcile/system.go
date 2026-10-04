@@ -17,7 +17,7 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
 )
 
-// commandTimeout bounds every systemctl, timedatectl and dpkg-query call.
+// commandTimeout bounds every systemctl, timedatectl, loginctl and dpkg-query call.
 const commandTimeout = 2 * time.Minute
 
 // OS is the System of a real device. Root prefixes every file path (tests use a temporary directory).
@@ -129,11 +129,50 @@ func (o OS) PackageInstalled(name string) bool {
 	return err == nil && exit == 0 && strings.TrimSpace(out) == "installed"
 }
 
+// PackageVersion implements System.
+func (o OS) PackageVersion(name string) string {
+	if !o.PackageInstalled(name) {
+		return ""
+	}
+	out, exit, err := command(context.Background(), "dpkg-query", "--show", "--showformat=${Version}", name)
+	if err != nil || exit != 0 {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// aptTimeout bounds one apt-get run; apt itself waits up to 10 minutes for the dpkg lock (plan M3b risk R1).
+const aptTimeout = 30 * time.Minute
+
+// AptGet implements System.
+func (o OS) AptGet(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return commandEnv(ctx, aptTimeout, []string{"DEBIAN_FRONTEND=noninteractive"}, "apt-get", args...)
+}
+
+// Loginctl implements System.
+func (o OS) Loginctl(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "loginctl", args...)
+}
+
 // command runs a tool and returns its stdout and exit code; err is set only if it could not run.
 func command(ctx context.Context, name string, args ...string) (string, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	return commandEnv(ctx, commandTimeout, nil, name, args...)
+}
+
+// commandEnv is command with a timeout and extra environment variables.
+func commandEnv(ctx context.Context, timeout time.Duration, env []string, name string, args ...string) (string, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed tools; arguments are policy-checked unit names
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
