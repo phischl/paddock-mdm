@@ -15,6 +15,7 @@ import (
 	"github.com/valkey-io/valkey-go"
 
 	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/compiler"
 	"github.com/paddock-mdm/paddock/server/internal/devicecache"
 	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
@@ -51,6 +52,23 @@ type world struct {
 	trust  bundle.Trust
 	org    uuid.UUID
 	g1, g2 uuid.UUID
+
+	validator *fakeValidator
+}
+
+// fakeValidator refuses rendered sudoers files that contain reject (no visudo needed in unit tests; the real visudo
+// is tested in TestVisudo).
+type fakeValidator struct {
+	reject  string
+	checked atomic.Int64
+}
+
+func (f *fakeValidator) Validate(_ context.Context, content []byte) error {
+	f.checked.Add(1)
+	if f.reject != "" && strings.Contains(string(content), f.reject) {
+		return errors.New("visudo: syntax error")
+	}
+	return nil
 }
 
 func newWorld(t *testing.T) *world {
@@ -85,7 +103,11 @@ func newWorld(t *testing.T) *world {
 		trust: bundle.Trust{Keys: map[string]ed25519.PublicKey{"bundle-signing:v1": keys[1]}},
 		org:   uuid.Must(uuid.NewV7()), g1: uuid.Must(uuid.NewV7()), g2: uuid.Must(uuid.NewV7()),
 	}
-	w.comp = compiler.New(pool, signer, w.store, w.cache)
+	w.validator = &fakeValidator{}
+	w.comp = compiler.New(pool, signer, w.store, w.cache, compiler.Config{
+		AuthentikURL: "https://auth.test/", Sudoers: w.validator,
+		Runner: app.NewActionRunner(pool, nil, func(context.Context) string { return "compiler-test" }),
+	})
 	w.exec("INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'C', 'active')", w.org, "c"+w.org.String()[24:])
 	w.exec("INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'g1'), ($3, $2, 'g2')", w.g1, w.org, w.g2)
 	return w
@@ -142,7 +164,7 @@ func (w *world) fetch(dev uuid.UUID) *bundle.Bundle {
 	}
 	defer func() { _ = out.Body.Close() }()
 	env, _ := io.ReadAll(out.Body)
-	b, err := bundle.Verify(env, w.trust, dev.String(), w.org.String(), p.Version-1)
+	b, err := bundle.VerifyVersions(env, w.trust, dev.String(), w.org.String(), p.Version-1, []int{bundle.SchemaVersion, bundle.SchemaVersion2})
 	if err != nil {
 		w.t.Fatalf("bundle of %s does not verify: %v", dev, err)
 	}

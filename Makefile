@@ -61,12 +61,15 @@ lint-vuln:
 			for m in $(GO_MODULES); do echo "govulncheck $$m"; go tool govulncheck -test -C /src/$$m ./...; done'
 
 # The build stage of the server image compiles the Go workspace, so a commit that breaks the image fails lint (plan
-# M2.1 decision 5).
+# M2.1 decision 5); the compiler image (with visudo) is built as well (plan M3a decision 17).
 .PHONY: lint-image
 lint-image:
-	docker build --target build -f $(COMPOSE_DIR)/Dockerfile \
-		--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
-		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) .
+	@for target in build compiler; do \
+		docker build --target $$target -f $(COMPOSE_DIR)/Dockerfile \
+			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
+			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
+			--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) . || exit 1; \
+	done
 
 .PHONY: lint-web
 lint-web:
@@ -97,7 +100,8 @@ web: ## Build the portal into server/web/dist (containerized)
 image: ## Build the paddock-server container image
 	docker build -f $(COMPOSE_DIR)/Dockerfile \
 		--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
-		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) -t $(IMAGE) .
+		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
+		--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) -t $(IMAGE) .
 
 .PHONY: dev-secrets
 dev-secrets: ## Generate local development secrets (idempotent)

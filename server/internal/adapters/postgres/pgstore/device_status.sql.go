@@ -64,12 +64,14 @@ func (q *Queries) ListDeviceSeqs(ctx context.Context) ([]ListDeviceSeqsRow, erro
 }
 
 const upsertDeviceStatus = `-- name: UpsertDeviceStatus :exec
-INSERT INTO device_status (device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO device_status (device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health,
+                           schema_versions)
+VALUES ($1, $2, $3, $4, $5, $6, $7,
+        $8)
 ON CONFLICT (device_id) DO UPDATE
 SET last_contact_at = EXCLUDED.last_contact_at, applied_bundle_version = EXCLUDED.applied_bundle_version,
     agent_version = EXCLUDED.agent_version, last_seq = greatest(device_status.last_seq, EXCLUDED.last_seq),
-    health = EXCLUDED.health
+    health = EXCLUDED.health, schema_versions = EXCLUDED.schema_versions
 WHERE device_status.last_contact_at IS NULL OR device_status.last_contact_at <= EXCLUDED.last_contact_at
 `
 
@@ -81,6 +83,7 @@ type UpsertDeviceStatusParams struct {
 	AgentVersion         *string
 	LastSeq              int64
 	Health               json.RawMessage
+	SchemaVersions       []int32
 }
 
 // Worker heartbeat materialization (plan M2a decision 12); an older heartbeat never overwrites a newer one.
@@ -93,6 +96,7 @@ func (q *Queries) UpsertDeviceStatus(ctx context.Context, arg UpsertDeviceStatus
 		arg.AgentVersion,
 		arg.LastSeq,
 		arg.Health,
+		arg.SchemaVersions,
 	)
 	return err
 }

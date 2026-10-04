@@ -1,11 +1,13 @@
 -- Worker heartbeat materialization (plan M2a decision 12); an older heartbeat never overwrites a newer one.
 -- name: UpsertDeviceStatus :exec
-INSERT INTO device_status (device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health)
-VALUES (@device_id, @organization_id, @last_contact_at, @applied_bundle_version, @agent_version, @last_seq, @health)
+INSERT INTO device_status (device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health,
+                           schema_versions)
+VALUES (@device_id, @organization_id, @last_contact_at, @applied_bundle_version, @agent_version, @last_seq, @health,
+        @schema_versions)
 ON CONFLICT (device_id) DO UPDATE
 SET last_contact_at = EXCLUDED.last_contact_at, applied_bundle_version = EXCLUDED.applied_bundle_version,
     agent_version = EXCLUDED.agent_version, last_seq = greatest(device_status.last_seq, EXCLUDED.last_seq),
-    health = EXCLUDED.health
+    health = EXCLUDED.health, schema_versions = EXCLUDED.schema_versions
 WHERE device_status.last_contact_at IS NULL OR device_status.last_contact_at <= EXCLUDED.last_contact_at;
 
 -- name: ListDeviceSeqs :many

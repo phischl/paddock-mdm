@@ -68,6 +68,7 @@ const (
 	CodeProfileAssignmentCreated    Code = "profile_assignment.created"
 	CodeProfileAssignmentUpdated    Code = "profile_assignment.updated"
 	CodeProfileAssignmentDeleted    Code = "profile_assignment.deleted"
+	CodeDeviceBundleRenderFailed    Code = "device.bundle_render_failed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -444,6 +445,13 @@ var registry = map[Code]Definition{
 		Description: "A profile assignment was removed.",
 		Params:      []string{"profile", "class", "subject_type", "subject_id", "device_group_id"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceBundleRenderFailed: {
+		Code: CodeDeviceBundleRenderFailed, Emitted: true,
+		Description: "The compiler blocked a device's new bundle because a rendered sudo entry failed the visudo check; the device keeps its previous bundle (actor: system).",
+		Params:      []string{"username", "reason"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_code is render_failed; reason is visudo's message (at most 500 characters).",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

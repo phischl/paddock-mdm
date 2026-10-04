@@ -37,6 +37,7 @@ type Heartbeat struct {
 	ReceivedAt           time.Time       `json:"received_at"`
 	AppliedBundleVersion int64           `json:"applied_bundle_version"`
 	AgentVersion         string          `json:"agent_version"`
+	SchemaVersions       []int           `json:"schema_versions,omitempty"`
 	Health               json.RawMessage `json:"health,omitempty"`
 	EventSeqHigh         int64           `json:"event_seq_high"`
 	Seq                  int64           `json:"seq"`

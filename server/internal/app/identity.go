@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -30,7 +31,11 @@ type Identity struct {
 	deviceGroups map[uuid.UUID][]uuid.UUID // active device → device groups
 	logins       map[uuid.UUID][]pgstore.DeviceLoginAssignment
 	byUsername   map[string]uuid.UUID
+	seen         map[uuid.UUID][]uuid.UUID // device → users that logged in within SeenWindow
 }
+
+// SeenWindow is how long a login on a device makes the user affected by locks there (plan M3a decision 10).
+const SeenWindow = 365 * 24 * time.Hour
 
 // LoadIdentity reads the identity data of the organization of the transaction.
 func LoadIdentity(ctx context.Context, q *pgstore.Queries) (*Identity, error) {
@@ -42,7 +47,7 @@ func LoadIdentity(ctx context.Context, q *pgstore.Queries) (*Identity, error) {
 		Users: map[uuid.UUID]pgstore.AppUser{}, Groups: map[uuid.UUID]pgstore.UserGroup{},
 		userGroups: map[uuid.UUID][]uuid.UUID{}, groupUsers: map[uuid.UUID][]uuid.UUID{},
 		deviceGroups: map[uuid.UUID][]uuid.UUID{}, logins: map[uuid.UUID][]pgstore.DeviceLoginAssignment{},
-		byUsername: map[string]uuid.UUID{},
+		byUsername: map[string]uuid.UUID{}, seen: map[uuid.UUID][]uuid.UUID{},
 	}
 	if id.Org, err = q.GetOrganization(ctx, org); err != nil {
 		return nil, fmt.Errorf("load organization: %w", err)
@@ -101,6 +106,15 @@ func LoadIdentity(ctx context.Context, q *pgstore.Queries) (*Identity, error) {
 	}
 	for _, a := range las {
 		id.logins[a.DeviceID] = append(id.logins[a.DeviceID], a)
+	}
+	seen, err := q.ListDeviceUsersSeenSince(ctx, time.Now().Add(-SeenWindow))
+	if err != nil {
+		return nil, fmt.Errorf("load device users: %w", err)
+	}
+	for _, s := range seen {
+		if u, ok := id.byUsername[s.Username]; ok {
+			id.seen[s.DeviceID] = append(id.seen[s.DeviceID], u)
+		}
 	}
 	return id, nil
 }
@@ -270,4 +284,40 @@ func (id *Identity) ActiveDevices() []uuid.UUID {
 			}
 		}
 	}, compareIDs)
+}
+
+// AffectedUsers are the users a lock concerns on a device (plan M3a decision 10): the allowed users and the users
+// that logged in there within SeenWindow (cached credentials), sorted by username.
+func (id *Identity) AffectedUsers(device uuid.UUID) []uuid.UUID {
+	set := map[uuid.UUID]bool{}
+	for _, u := range id.AllowedUsers(device) {
+		set[u] = true
+	}
+	for _, u := range id.seen[device] {
+		set[u] = true
+	}
+	return id.sortedByUsername(set)
+}
+
+// AffectedDevices are the active devices on which user is affected (the scope "user" of a state change).
+func (id *Identity) AffectedDevices(user uuid.UUID) []uuid.UUID {
+	var out []uuid.UUID
+	for _, d := range id.ActiveDevices() {
+		if slices.Contains(id.AffectedUsers(d), user) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// LockedUsernames are the usernames of the locked users among the affected users of a device, sorted.
+func (id *Identity) LockedUsernames(device uuid.UUID) []string {
+	out := []string{}
+	for _, u := range id.AffectedUsers(device) {
+		if id.Users[u].Locked {
+			out = append(out, id.Users[u].Username)
+		}
+	}
+	slices.Sort(out)
+	return out
 }

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -459,31 +460,42 @@ func TestCheckinSeqBundleAndClone(t *testing.T) {
 	msg := e.pub.last(t)
 	_ = json.Unmarshal(msg.Body, &hb)
 	if msg.RoutingKey != "ingest.heartbeat."+e.org.String() || hb.DeviceID != id || hb.Seq != 1 || hb.CloneSuspected ||
-		string(hb.Health) != `{"reconcile":"ok"}` {
+		string(hb.Health) != `{"reconcile":"ok"}` || !slices.Equal(hb.SchemaVersions, []int{1}) {
 		t.Fatalf("heartbeat %s %+v", msg.RoutingKey, hb)
+	}
+	// Schema versions are passed on bounded: plausible, distinct, at most 16 (plan M3a decision 14a).
+	noisy := checkinBody(0)
+	noisy.SchemaVersions = []int{2, 1, 2, 0, -5, 1001}
+	if r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: noisy, seq: 1}); r.status != http.StatusOK {
+		t.Fatalf("checkin: %d", r.status)
+	}
+	hb = ingest.Heartbeat{}
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if !slices.Equal(hb.SchemaVersions, []int{2, 1}) {
+		t.Fatalf("schema versions %v", hb.SchemaVersions)
 	}
 
 	if err := e.cache.PutBundlePointer(context.Background(), id, devicecache.BundlePointer{Version: 3, SHA256: "abc", ObjectKey: "org/o/devices/d/bundles/3.dsse"}); err != nil {
 		t.Fatal(err)
 	}
-	if out := checkin(0, 1); out.Bundle == nil || out.Bundle.Version != 3 || out.Bundle.SHA256 != "abc" ||
+	if out := checkin(0, 2); out.Bundle == nil || out.Bundle.Version != 3 || out.Bundle.SHA256 != "abc" ||
 		!strings.Contains(out.Bundle.URL, "bundles/3.dsse") || !strings.Contains(out.Bundle.URL, "X-Amz-Expires=120") {
 		t.Fatalf("bundle %+v", out.Bundle)
 	}
-	if out := checkin(3, 2); out.Bundle != nil {
+	if out := checkin(3, 3); out.Bundle != nil {
 		t.Fatalf("current device got a bundle %+v", out.Bundle)
 	}
 
 	// A lost response is tolerated; a clone that is two behind is reported.
-	_ = checkin(3, 2)
+	_ = checkin(3, 3)
 	hb = ingest.Heartbeat{}
 	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
 	if hb.CloneSuspected {
 		t.Fatal("tolerance of one lost response violated")
 	}
-	_ = checkin(3, 1)
+	_ = checkin(3, 2)
 	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
-	if !hb.CloneSuspected || hb.ReportedSeq != 1 || hb.Seq != 5 {
+	if !hb.CloneSuspected || hb.ReportedSeq != 2 || hb.Seq != 6 {
 		t.Fatalf("clone not suspected: %+v", hb)
 	}
 

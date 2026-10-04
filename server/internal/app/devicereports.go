@@ -36,9 +36,14 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 	}
 	at := hb.ReceivedAt
 	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		versions := make([]int32, 0, len(hb.SchemaVersions))
+		for _, v := range hb.SchemaVersions {
+			versions = append(versions, int32(v)) //nolint:gosec // the gateway bounds versions to 1–1000
+		}
 		return q.UpsertDeviceStatus(ctx, pgstore.UpsertDeviceStatusParams{
 			DeviceID: hb.DeviceID, OrganizationID: hb.OrganizationID, LastContactAt: &at,
 			AppliedBundleVersion: &hb.AppliedBundleVersion, AgentVersion: &hb.AgentVersion, LastSeq: hb.Seq, Health: health,
+			SchemaVersions: versions,
 		})
 	})
 }
