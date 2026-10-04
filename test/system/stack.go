@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +60,35 @@ func (s *Stack) Call(method, path string, body any, status int) portal.Response 
 		s.t.Fatalf("%s %s: HTTP %d (want %d) %v %s", method, path, res.Status, status, err, res.Body)
 	}
 	return res
+}
+
+// DeleteOnCleanup deletes the device group, managed file or unit at path when the test ends; a resource the test
+// deleted itself is fine (plan M2.2 decision 7).
+func (s *Stack) DeleteOnCleanup(path string) {
+	s.t.Cleanup(func() { s.cleanupCall(http.MethodDelete, path, http.StatusNoContent, http.StatusNotFound) })
+}
+
+// RevokeOnCleanup revokes an enrollment token when the test ends (tokens cannot be deleted; revoking is
+// idempotent).
+func (s *Stack) RevokeOnCleanup(tokenID string) {
+	s.t.Cleanup(func() {
+		s.cleanupCall(http.MethodPost, "/api/v1/enrollment-tokens/"+tokenID+"/revoke", http.StatusOK)
+	})
+}
+
+// cleanupCall sends a cleanup request as alice and reports, without stopping, a status other than ok. It signs in
+// again once if the session ended, e.g. after a gate restarted the stack.
+func (s *Stack) cleanupCall(method, path string, ok ...int) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	res, err := s.alice.Do(ctx, method, path, nil)
+	if err == nil && res.Status == http.StatusUnauthorized {
+		s.Login()
+		res, err = s.alice.Do(ctx, method, path, nil)
+	}
+	if err != nil || !slices.Contains(ok, res.Status) {
+		s.t.Errorf("cleanup: %s %s: HTTP %d %v %s", method, path, res.Status, err, res.Body)
+	}
 }
 
 // ID decodes the id of a created resource.
