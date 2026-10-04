@@ -116,10 +116,19 @@ func (f *fakeAuthentik) groupJSON(g *fakeGroup) map[string]any {
 	return j
 }
 
-func (f *fakeAuthentik) userJSON(u *fakeUser) map[string]any {
+func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any {
 	j := f.fixture("post_core_users.json")
 	j["pk"], j["username"], j["name"], j["email"], j["attributes"], j["groups"] = u.pk, u.username, u.name, u.email, u.attributes, u.groups
 	j["groups_obj"] = nil
+	if includeGroups {
+		objs := []map[string]any{}
+		for _, pk := range u.groups {
+			if g := f.groups[pk]; g != nil {
+				objs = append(objs, map[string]any{"pk": g.pk, "name": g.name})
+			}
+		}
+		j["groups_obj"] = objs
+	}
 	return j
 }
 
@@ -236,7 +245,7 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			}
 		}
 		f.users[u.pk] = u
-		return http.StatusCreated, f.userJSON(u)
+		return http.StatusCreated, f.userJSON(u, false)
 	case reUser.MatchString(p):
 		m := reUser.FindStringSubmatch(p)
 		pk, _ := strconv.Atoi(m[1])
@@ -266,11 +275,11 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 					}
 					delete(f.sessions, u.pk)
 				}
-				return http.StatusOK, f.userJSON(u)
+				return http.StatusOK, f.userJSON(u, false)
 			}
 			u.name, _ = body["name"].(string)
 			u.email, _ = body["email"].(string)
-			return http.StatusOK, f.userJSON(u)
+			return http.StatusOK, f.userJSON(u, false)
 		case r.Method == http.MethodDelete:
 			delete(f.users, pk)
 			return http.StatusNoContent, nil
@@ -376,7 +385,7 @@ func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
 	to := min(from+size, len(match))
 	var items []map[string]any
 	for _, u := range match[from:to] {
-		items = append(items, f.userJSON(u))
+		items = append(items, f.userJSON(u, first(q["include_groups"]) == "true"))
 	}
 	out := f.page(items)
 	if to < len(match) {

@@ -64,8 +64,9 @@ type GroupDirectory interface {
 	RemoveMember(ctx context.Context, groupPK, userPK string) error
 	// GroupMembers returns the pks of the direct members of a group.
 	GroupMembers(ctx context.Context, groupPK string) ([]string, error)
-	// UpstreamGroups lists the groups outside Paddock's namespace (candidates for an import).
-	UpstreamGroups(ctx context.Context) ([]IdentityGroup, error)
+	// UpstreamGroups lists the groups outside Paddock's namespace that have at least one direct member of the
+	// organization's root group (candidates for an import of that organization).
+	UpstreamGroups(ctx context.Context, slug string) ([]IdentityGroup, error)
 	// FindGroup returns the pk of the group name, or "" if there is none.
 	FindGroup(ctx context.Context, name string) (string, error)
 }

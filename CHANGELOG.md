@@ -116,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `GET /api/v1/upstream-groups` lists only Authentik groups that have at least one member of the organization, and importing any other upstream group answers 404 `not_found`: before, every organization saw the names of all upstream groups (M3b decision 1).
 - Device logins through the QR code URL (`/device?code=`) require MFA as well: the device providers use the Paddock authorization flow `paddock-device-authorization` with a mandatory MFA stage, because Authentik otherwise authenticates this path through the brand's default flow (M3a decision 6, ADR 0007 amendment).
 - Device tokens carry only the organization's own `paddock.<slug>…` groups in the `groups` claim: the device providers use a Paddock profile mapping instead of Authentik's managed `profile` mapping, which emits all groups of a user, including non-Paddock groups and groups of other organizations (M3a decision 5, ADR 0007 amendment).
 - Commands of restricted permission profiles are refused (422 `invalid_command`) when they contain `ALL`, `!`, `#` or the sudoers separators `,`, `:`, `=`, `\`: a `#` after a space starts a sudoers comment, so `/usr/bin/x #y, /usr/bin/z` would grant `/usr/bin/x` with any arguments (M3a decision 12).

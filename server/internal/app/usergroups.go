@@ -76,14 +76,23 @@ func (g *UserGroups) Get(ctx context.Context, id uuid.UUID) (pgstore.UserGroup, 
 	return out, err
 }
 
-// UpstreamGroups returns one page of the Authentik groups outside Paddock's namespace (the import picker), sorted
-// by name and searched by name in memory.
+// UpstreamGroups returns one page of the Authentik groups outside Paddock's namespace with at least one member of
+// the organization (the import picker, plan M3b decision 1), sorted by name and searched by name in memory.
 func (g *UserGroups) UpstreamGroups(ctx context.Context, page ListPage, q *string) (Listed[ports.IdentityGroup], error) {
 	var out Listed[ports.IdentityGroup]
 	if _, err := RequireOrg(ctx, RolesWrite); err != nil {
 		return out, err
 	}
-	all, err := g.dir.UpstreamGroups(ctx)
+	var slug string
+	err := g.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		o, err := q.GetOrganization(ctx, mustOrg(ctx))
+		slug = o.Slug
+		return err
+	})
+	if err != nil {
+		return out, err
+	}
+	all, err := g.dir.UpstreamGroups(ctx, slug)
 	if err != nil {
 		return out, err
 	}
@@ -163,7 +172,7 @@ func (g *UserGroups) Create(ctx context.Context, in NewUserGroup) (pgstore.UserG
 		func(ctx context.Context) error {
 			if in.UpstreamPK != nil {
 				var err error
-				if mirrored, err = g.importMembers(ctx, *in.UpstreamPK, users); err != nil {
+				if mirrored, err = g.importMembers(ctx, slug, *in.UpstreamPK, users); err != nil {
 					return err
 				}
 			}
@@ -203,15 +212,15 @@ func (g *UserGroups) Create(ctx context.Context, in NewUserGroup) (pgstore.UserG
 	return out, err
 }
 
-// importMembers checks that upstreamPK is an upstream group and returns its members that are users of the
-// organization.
-func (g *UserGroups) importMembers(ctx context.Context, upstreamPK string, users map[string]uuid.UUID) ([]uuid.UUID, error) {
-	upstream, err := g.dir.UpstreamGroups(ctx)
+// importMembers checks that upstreamPK is an upstream group the organization may see (plan M3b decision 1; any
+// other group is not found) and returns its members that are users of the organization.
+func (g *UserGroups) importMembers(ctx context.Context, slug, upstreamPK string, users map[string]uuid.UUID) ([]uuid.UUID, error) {
+	upstream, err := g.dir.UpstreamGroups(ctx, slug)
 	if err != nil {
 		return nil, err
 	}
 	if !slices.ContainsFunc(upstream, func(x ports.IdentityGroup) bool { return x.PK == upstreamPK }) {
-		return nil, problem.InvalidRequest.WithDetail("upstream_group_id is not a group outside Paddock's namespace")
+		return nil, problem.NotFound.WithDetail("upstream group not found")
 	}
 	pks, err := g.dir.GroupMembers(ctx, upstreamPK)
 	if err != nil {

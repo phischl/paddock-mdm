@@ -144,12 +144,18 @@ func (c *Client) GroupMembers(ctx context.Context, groupPK string) ([]string, er
 	return pks, err
 }
 
-// UpstreamGroups lists the groups that do not belong to Paddock's namespace, sorted by name.
-func (c *Client) UpstreamGroups(ctx context.Context) ([]ports.IdentityGroup, error) {
+// UpstreamGroups lists the groups outside Paddock's namespace that have at least one direct member of
+// paddock.<slug> (plan M3b decision 1): an organization never sees groups that only other organizations' users are in.
+func (c *Client) UpstreamGroups(ctx context.Context, slug string) ([]ports.IdentityGroup, error) {
+	q := url.Values{"groups_by_name": {organization.RootGroup(slug)}, "include_groups": {"true"}}
+	seen := map[string]bool{}
 	var out []ports.IdentityGroup
-	err := pages(ctx, c, "/api/v3/core/groups/", url.Values{"include_users": {"false"}, "ordering": {"name"}}, func(g group) {
-		if !organization.IsPaddockGroup(g.Name) {
-			out = append(out, ports.IdentityGroup{PK: g.PK, Name: g.Name})
+	err := pages(ctx, c, "/api/v3/core/users/", q, func(u user) {
+		for _, g := range u.GroupsObj {
+			if !organization.IsPaddockGroup(g.Name) && !seen[g.PK] {
+				seen[g.PK] = true
+				out = append(out, ports.IdentityGroup{PK: g.PK, Name: g.Name})
+			}
 		}
 	})
 	return out, err

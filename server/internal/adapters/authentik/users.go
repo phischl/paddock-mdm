@@ -28,6 +28,8 @@ type user struct {
 	Name       string         `json:"name"`
 	Email      string         `json:"email"`
 	Attributes map[string]any `json:"attributes"`
+	// GroupsObj are the direct groups of the user (only with include_groups=true).
+	GroupsObj []group `json:"groups_obj"`
 }
 
 func (u user) identity() ports.IdentityUser {

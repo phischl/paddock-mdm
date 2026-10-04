@@ -100,7 +100,9 @@ func (d *directory) GroupMembers(_ context.Context, g string) ([]string, error) 
 	defer d.mu.Unlock()
 	return slices.Clone(d.members[g]), nil
 }
-func (d *directory) UpstreamGroups(context.Context) ([]ports.IdentityGroup, error) { return nil, nil }
+func (d *directory) UpstreamGroups(context.Context, string) ([]ports.IdentityGroup, error) {
+	return nil, nil
+}
 
 // syncHarness runs the identity sync with the worker's database role, as the worker does.
 type syncHarness struct {
