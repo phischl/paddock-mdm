@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,20 @@ const (
 	auditPollTimeout = 10 * time.Second
 	auditSettleDelay = 5 * time.Second
 )
+
+// parallelCases returns a semaphore that bounds the parallel cases of a gate: PADDOCK_ACCEPTANCE_PARALLEL, default 8
+// (plan M3b decision 2).
+func parallelCases(t *testing.T) chan struct{} {
+	t.Helper()
+	n := 8
+	if v := os.Getenv("PADDOCK_ACCEPTANCE_PARALLEL"); v != "" {
+		var err error
+		if n, err = strconv.Atoi(v); err != nil || n < 1 {
+			t.Fatalf("PADDOCK_ACCEPTANCE_PARALLEL=%q: want a positive integer", v)
+		}
+	}
+	return make(chan struct{}, n)
+}
 
 func testContext(t *testing.T, d time.Duration) context.Context {
 	t.Helper()
