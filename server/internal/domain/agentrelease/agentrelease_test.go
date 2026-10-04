@@ -110,6 +110,18 @@ func TestDecide(t *testing.T) {
 	}
 }
 
+func TestCurrentReleaseSince(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	week := now.Add(-CurrentReleaseWindow)
+	if got := CurrentReleaseSince(now.Add(-30*24*time.Hour), now); !got.Equal(week) {
+		t.Errorf("old rollout: %s, want the 7-day window %s", got, week)
+	}
+	resumed := now.Add(-time.Hour)
+	if got := CurrentReleaseSince(resumed, now); !got.Equal(resumed) {
+		t.Errorf("resumed an hour ago: %s, want the resume %s", got, resumed)
+	}
+}
+
 func TestPercent(t *testing.T) {
 	if Percent(RolloutRunning, []int{1, 10, 100}, 1) != 10 || Percent(RolloutCompleted, []int{1}, 0) != 100 ||
 		Percent(RolloutHalted, []int{100}, 0) != 0 {

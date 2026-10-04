@@ -102,6 +102,15 @@ func Threshold(eligible int64, percent, minimum int) int64 {
 	return max(int64(minimum), (eligible*int64(percent)+99)/100)
 }
 
+// CurrentReleaseSince is the start of the failure count of the current release at now: CurrentReleaseWindow before
+// now, but not before evaluationSince (the rollout's start or last resume).
+func CurrentReleaseSince(evaluationSince, now time.Time) time.Time {
+	if since := now.Add(-CurrentReleaseWindow); since.After(evaluationSince) {
+		return since
+	}
+	return evaluationSince
+}
+
 // Rollout is the state the worker evaluates. For a completed rollout, Eligible and Failed are counted over
 // CurrentReleaseWindow.
 type Rollout struct {

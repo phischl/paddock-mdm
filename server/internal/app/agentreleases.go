@@ -306,7 +306,7 @@ func (a *AgentReleases) Halt(ctx context.Context, version string) (pgstore.Agent
 }
 
 // Resume continues a halted rollout in the wave where it stopped; a rollout that had completed becomes the current
-// release again (plan M2.1 decision 1).
+// release again. Failures reported before the resume no longer count (plan M2.1 decision 1).
 func (a *AgentReleases) Resume(ctx context.Context, version string) (pgstore.AgentRollout, error) {
 	return a.transition(ctx, SpecAgentRolloutResume, version, agentrelease.RolloutHalted, "", nil)
 }
@@ -330,14 +330,15 @@ func (a *AgentReleases) transition(ctx context.Context, spec ActionSpec, version
 			return problem.InvalidState.WithDetail("the rollout is " + r.Status)
 		}
 		rec.SetParam("wave", r.CurrentWaveIndex)
-		status := to
-		if status == "" {
-			status = agentrelease.RolloutRunning
+		if to != "" {
+			out, err = q.SetAgentRolloutStatus(ctx, pgstore.SetAgentRolloutStatusParams{Version: version, Status: to, HaltedReason: reason})
+		} else {
+			status := agentrelease.RolloutRunning
 			if r.CompletedAt != nil {
 				status = agentrelease.RolloutCompleted
 			}
+			out, err = q.ResumeAgentRollout(ctx, pgstore.ResumeAgentRolloutParams{Version: version, Status: status})
 		}
-		out, err = q.SetAgentRolloutStatus(ctx, pgstore.SetAgentRolloutStatusParams{Version: version, Status: status, HaltedReason: reason})
 		if db.IsUniqueViolation(err, "agent_rollout_one_running_idx") {
 			return problem.InvalidState.WithDetail("another rollout is running; halt it first")
 		}
@@ -400,8 +401,8 @@ func (a *AgentReleases) evaluate(ctx context.Context, r pgstore.AgentRollout, no
 		threshold := agentrelease.Threshold(stats.Eligible, in.FailurePercent, in.FailureMin)
 		reason := fmt.Sprintf("%d failed devices reached the threshold of %d", stats.Failed, threshold)
 		if r.Status == agentrelease.RolloutCompleted {
-			reason = fmt.Sprintf("%d failed devices in the last %d days reached the threshold of %d for the current release",
-				stats.Failed, int(agentrelease.CurrentReleaseWindow.Hours()/24), threshold)
+			reason = fmt.Sprintf("%d failed devices since %s reached the threshold of %d for the current release",
+				stats.Failed, agentrelease.CurrentReleaseSince(r.EvaluationSince, now).UTC().Format(time.RFC3339), threshold)
 		}
 		params["reason"], params["wave"], params["threshold"] = reason, r.CurrentWaveIndex, threshold
 		spec = ActionSpec{Code: audit.CodeAgentRolloutHalted}
@@ -430,18 +431,21 @@ func (a *AgentReleases) evaluate(ctx context.Context, r pgstore.AgentRollout, no
 	return a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error { return fn(ctx, q) })
 }
 
-// evaluationStats counts the eligible and failed devices of a rollout: in the waves up to the current one while it
-// runs, and within agentrelease.CurrentReleaseWindow before now once it is the current release.
+// evaluationStats counts the eligible and failed devices of a rollout: in the waves up to the current one with the
+// failures since its start or last resume while it runs, and from agentrelease.CurrentReleaseSince once it is the
+// current release.
 func (a *AgentReleases) evaluationStats(ctx context.Context, r pgstore.AgentRollout, now time.Time) (pgstore.AgentRolloutStatsRow, error) {
 	var stats pgstore.AgentRolloutStatsRow
 	err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		if r.Status == agentrelease.RolloutCompleted {
-			c, err := q.CurrentReleaseStats(ctx, pgstore.CurrentReleaseStatsParams{Version: r.Version, Since: now.Add(-agentrelease.CurrentReleaseWindow)})
+			c, err := q.CurrentReleaseStats(ctx, pgstore.CurrentReleaseStatsParams{Version: r.Version, Since: agentrelease.CurrentReleaseSince(r.EvaluationSince, now)})
 			stats.Eligible, stats.Failed = c.Offered, c.Failed
 			return err
 		}
-		var err error
-		stats, err = q.AgentRolloutStats(ctx, pgstore.AgentRolloutStatsParams{Version: r.Version, Percent: r.Waves[r.CurrentWaveIndex]})
+		e, err := q.RolloutEvaluationStats(ctx, pgstore.RolloutEvaluationStatsParams{
+			Version: r.Version, Percent: r.Waves[r.CurrentWaveIndex], Since: r.EvaluationSince,
+		})
+		stats.Eligible, stats.Failed = e.Eligible, e.Failed
 		return err
 	})
 	return stats, err

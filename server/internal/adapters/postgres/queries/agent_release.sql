@@ -66,6 +66,12 @@ UPDATE agent_rollout SET status = @status, halted_reason = sqlc.narg(halted_reas
 WHERE version = @version
 RETURNING *;
 
+-- Resume restarts the failure count (plan M2.1 decision 1).
+-- name: ResumeAgentRollout :one
+UPDATE agent_rollout SET status = @status, halted_reason = NULL, evaluation_since = now(), updated_at = now()
+WHERE version = @version
+RETURNING *;
+
 -- name: CompleteAgentRollout :one
 UPDATE agent_rollout SET status = 'completed', completed_at = now(), updated_at = now()
 WHERE version = @version
@@ -88,6 +94,10 @@ LIMIT 1;
 
 -- name: AgentRolloutStats :one
 SELECT eligible::bigint, updated::bigint, failed::bigint FROM paddock_agent_rollout_stats(@version, @percent::int);
+
+-- Counts of a running rollout with the failures since since (plan M2.1 decision 1).
+-- name: RolloutEvaluationStats :one
+SELECT eligible::bigint, failed::bigint FROM paddock_agent_rollout_evaluation_stats(@version, @percent::int, @since::timestamptz);
 
 -- Counts of the current release over the sliding window starting at since (plan M2.1 decision 1).
 -- name: CurrentReleaseStats :one

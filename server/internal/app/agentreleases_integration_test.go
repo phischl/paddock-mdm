@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -334,15 +335,62 @@ func TestCurrentReleaseAutoStop(t *testing.T) {
 		t.Fatalf("halt reason %q", reason)
 	}
 
-	// Resume restores the current-release offer; once the failure has left the window it stays.
+	// Resume restores the current-release offer; the failures before the resume no longer count.
 	r, err := h.releases.Resume(platformAdmin(), v)
 	if err != nil || r.Status != agentrelease.RolloutCompleted || r.HaltedReason != nil {
 		t.Fatalf("resume: %+v, %v", r, err)
 	}
-	later := now.Add(agentrelease.CurrentReleaseWindow + time.Hour)
-	if o, err := h.releases.EvaluateRollouts(sys, later); err != nil || o == nil || o.Version != v ||
+	if o, err := h.releases.EvaluateRollouts(sys, now); err != nil || o == nil || o.Version != v ||
 		agentrelease.Percent(o.Status, o.Waves, o.CurrentWave) != 100 {
 		t.Fatalf("resumed offer: %+v, %v", o, err)
+	}
+	// A new failure at the threshold halts it again.
+	h.reportFailure(t, v)
+	if o, err := h.releases.EvaluateRollouts(sys, now); err != nil || o != nil {
+		t.Fatalf("after a failure since the resume: offer %+v, %v; want halted", o, err)
+	}
+}
+
+// Plan M2.1 decision 1: a resumed running rollout runs again, counts only failures since the resume, and cannot
+// run next to another running rollout.
+func TestResumeRunningRollout(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	sys, admin := systemCtx(uuid.Nil), platformAdmin()
+	v := h.published(t)
+	one, hour := 1, 60
+	if _, err := h.releases.StartRollout(admin, v, app.RolloutOptions{Waves: []int{100}, FailureThresholdMin: &one, MinWaveMinutes: &hour}); err != nil {
+		t.Fatal(err)
+	}
+	h.reportFailure(t, v)
+	if o, err := h.releases.EvaluateRollouts(sys, time.Now()); err != nil || o != nil {
+		t.Fatalf("after the first failure: offer %+v, %v; want halted", o, err)
+	}
+
+	// Another rollout runs: resuming would run two at once.
+	other := h.published(t)
+	if _, err := h.releases.StartRollout(admin, other, app.RolloutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := h.releases.Resume(admin, v)
+	expectProblem(t, err, problem.InvalidState)
+	if problem.From(err).Status != http.StatusConflict {
+		t.Fatalf("resume next to a running rollout: %v, want 409", err)
+	}
+	if _, err := h.releases.Halt(admin, other); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := h.releases.Resume(admin, v)
+	if err != nil || r.Status != agentrelease.RolloutRunning || r.CompletedAt != nil {
+		t.Fatalf("resume: %+v, %v", r, err)
+	}
+	if o, err := h.releases.EvaluateRollouts(sys, time.Now()); err != nil || o == nil || o.Version != v || o.Status != agentrelease.RolloutRunning {
+		t.Fatalf("the failure before the resume halted the rollout again: %+v, %v", o, err)
+	}
+	h.reportFailure(t, v)
+	if o, err := h.releases.EvaluateRollouts(sys, time.Now()); err != nil || o != nil {
+		t.Fatalf("after a failure since the resume: offer %+v, %v; want halted", o, err)
 	}
 }
 
