@@ -27,3 +27,15 @@ cached credentials once the device has had contact.
 + Lock survives upstream attribute sync; no per-organization infrastructure.
 − Authentik admin accounts are platform-level and must be restricted to platform operators and audited.
 Depends on A2 PoC (refresh tokens for Hello PIN).
+
+## Amendment 2026-10-04 (M3a, live findings against Authentik 2026.8.3)
+- **Token revocation on lock:** Authentik exposes other users' tokens only to superusers. Instead of a superuser service
+  account (least privilege), the lock adds the user to `paddock.<slug>.locked` and then toggles `is_active` false → true;
+  Authentik's deactivation signals delete all of the user's access, refresh and device tokens and sessions. The lock
+  itself remains the group membership. This relies on Authentik behaviour: Authentik upgrades require the lock gate
+  (I2) to pass. An interrupted lock is reported as incomplete and can be retried idempotently.
+- **MFA on every device-login path:** the device providers use a Paddock authorization flow with a mandatory MFA stage,
+  because the QR/`?code=` path otherwise authenticates through the brand's default flow.
+- **Claim hygiene:** device providers do not use Authentik's managed `profile` mapping (it emits all groups); a Paddock
+  mapping emits the profile claims and only the organization's `paddock.<slug>…` groups.
+
