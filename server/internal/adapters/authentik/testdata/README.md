@@ -1,13 +1,16 @@
 Responses recorded from Authentik 2026.8.3 (`ghcr.io/goauthentik/server:2026.8.3`, the version pinned in
-`deploy/compose/versions.env`) with the `paddock-service` token on 2026-10-03:
+`deploy/compose/versions.env`) with the `paddock-service` token on 2026-10-04 by `TestLiveAuthentik`
+(`live_test.go`). The file name is `<method>_<path>[_<status>].json` of the first response per endpoint; the
+recorded organization slug is replaced by `fixture-org`, client secrets and link tokens are redacted.
 
-- `groups_list_empty.json` – `GET /api/v3/core/groups/?name=paddock.fixture-org&include_users=false`, no match
-- `groups_list_found.json` – the same request after the group was created
-- `groups_create.json` – `POST /api/v3/core/groups/ {"name":"paddock.fixture-org"}` (201)
-- `groups_create_child.json` – `POST` of `paddock.fixture-org.admins` with `parents` (201)
-- `groups_create_duplicate.json` – `POST` of an existing name (400)
+The in-memory fake of the unit tests (`fake_test.go`) answers with these bodies, filled with its own state.
 
-The group names were switched to the dot-separated scheme on 2026-10-04 (plan M0.3); the response shapes are
-unchanged.
+Re-record them when the pinned Authentik version changes (development stack running, `make dev-seed` done):
 
-Re-record them when the pinned Authentik version changes.
+    cd server && R=$(cd .. && pwd)/deploy/compose/.secrets && PADDOCK_AUTHENTIK_RECORD=1 \
+      PADDOCK_AUTHENTIK_LIVE_URL=https://auth.paddock.localhost:8443 \
+      PADDOCK_AUTHENTIK_LIVE_TOKEN_FILE=$R/authentik_service_token \
+      PADDOCK_AUTHENTIK_LIVE_ADMIN_TOKEN_FILE=$R/authentik_bootstrap_token \
+      SSL_CERT_FILE=$R/caddy-root.crt go test -count=1 -run TestLiveAuthentik ./internal/adapters/authentik/
+
+Without `PADDOCK_AUTHENTIK_RECORD` the same command only runs the adapter against the real instance.

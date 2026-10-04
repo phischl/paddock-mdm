@@ -1,4 +1,6 @@
-// Package authentik is the Authentik REST adapter (/api/v3). It only creates and looks up groups in M0.
+// Package authentik is the Authentik REST adapter (/api/v3): organization groups, the per-organization device login
+// provider (plan M3a decision 5), users, lock and user groups. Every object is found by name and created or corrected
+// if needed, so all operations are idempotent.
 package authentik
 
 import (
@@ -11,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +31,11 @@ type Client struct {
 	backoff time.Duration
 }
 
-var _ ports.IdentityProvider = (*Client)(nil)
+var (
+	_ ports.IdentityProvider = (*Client)(nil)
+	_ ports.UserDirectory    = (*Client)(nil)
+	_ ports.GroupDirectory   = (*Client)(nil)
+)
 
 // New creates a client for baseURL (e.g. https://auth.example.org). Requests time out after 10 s; 5xx and
 // network errors are retried 3 times with exponential back-off, 4xx never.
@@ -60,7 +67,8 @@ type group struct {
 	Parents []string `json:"parents"`
 }
 
-// EnsureOrganization creates paddock.<slug> and its .admins, .operators and .auditors children if missing.
+// EnsureOrganization creates paddock.<slug> with its .admins, .operators, .auditors and .locked children and the
+// device login application if missing, and corrects the device login objects (architecture §9.2).
 func (c *Client) EnsureOrganization(ctx context.Context, slug string) (ports.OrgIdentityRefs, error) {
 	rootPK, err := c.ensureGroup(ctx, organization.RootGroup(slug), "")
 	if err != nil {
@@ -68,20 +76,126 @@ func (c *Client) EnsureOrganization(ctx context.Context, slug string) (ports.Org
 	}
 	refs := ports.OrgIdentityRefs{RootGroupPK: rootPK}
 	for _, g := range []struct {
-		role organization.GroupRole
+		name string
 		pk   *string
 	}{
-		{organization.GroupAdmins, &refs.AdminsGroupPK},
-		{organization.GroupOperators, &refs.OperatorsGroupPK},
-		{organization.GroupAuditors, &refs.AuditorsGroupPK},
+		{organization.RoleGroup(slug, organization.GroupAdmins), &refs.AdminsGroupPK},
+		{organization.RoleGroup(slug, organization.GroupOperators), &refs.OperatorsGroupPK},
+		{organization.RoleGroup(slug, organization.GroupAuditors), &refs.AuditorsGroupPK},
+		{organization.LockedGroup(slug), &refs.LockedGroupPK},
 	} {
-		pk, err := c.ensureGroup(ctx, organization.RoleGroup(slug, g.role), rootPK)
+		pk, err := c.ensureGroup(ctx, g.name, rootPK)
 		if err != nil {
 			return ports.OrgIdentityRefs{}, err
 		}
 		*g.pk = pk
 	}
+	if err := c.ensureDeviceLogin(ctx, slug); err != nil {
+		return ports.OrgIdentityRefs{}, err
+	}
 	return refs, nil
+}
+
+// EnsureGroup creates name as child of the organization's root group if missing.
+func (c *Client) EnsureGroup(ctx context.Context, slug, name string) (string, error) {
+	rootPK, err := c.ensureGroup(ctx, organization.RootGroup(slug), "")
+	if err != nil {
+		return "", err
+	}
+	return c.ensureGroup(ctx, name, rootPK)
+}
+
+// FindGroup returns the pk of the group name, or "".
+func (c *Client) FindGroup(ctx context.Context, name string) (string, error) {
+	return c.findGroup(ctx, name)
+}
+
+// DeleteGroup deletes a group; a missing group is not an error.
+func (c *Client) DeleteGroup(ctx context.Context, pk string) error {
+	return c.deleteIgnoringMissing(ctx, "/api/v3/core/groups/"+url.PathEscape(pk)+"/")
+}
+
+// AddMember adds a user to a group (idempotent in Authentik).
+func (c *Client) AddMember(ctx context.Context, groupPK, userPK string) error {
+	return c.membership(ctx, "add_user", groupPK, userPK)
+}
+
+// RemoveMember removes a user from a group (idempotent in Authentik).
+func (c *Client) RemoveMember(ctx context.Context, groupPK, userPK string) error {
+	return c.membership(ctx, "remove_user", groupPK, userPK)
+}
+
+func (c *Client) membership(ctx context.Context, action, groupPK, userPK string) error {
+	pk, err := strconv.Atoi(userPK)
+	if err != nil {
+		return fmt.Errorf("authentik: user pk %q: %w", userPK, err)
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/v3/core/groups/"+url.PathEscape(groupPK)+"/"+action+"/", map[string]int{"pk": pk}, nil); err != nil {
+		return upstream(err)
+	}
+	return nil
+}
+
+// GroupMembers returns the pks of the direct members of a group.
+func (c *Client) GroupMembers(ctx context.Context, groupPK string) ([]string, error) {
+	q := url.Values{"groups_by_pk": {groupPK}, "include_groups": {"false"}}
+	var pks []string
+	err := pages(ctx, c, "/api/v3/core/users/", q, func(u user) { pks = append(pks, strconv.Itoa(u.PK)) })
+	return pks, err
+}
+
+// UpstreamGroups lists the groups that do not belong to Paddock's namespace, sorted by name.
+func (c *Client) UpstreamGroups(ctx context.Context) ([]ports.IdentityGroup, error) {
+	var out []ports.IdentityGroup
+	err := pages(ctx, c, "/api/v3/core/groups/", url.Values{"include_users": {"false"}, "ordering": {"name"}}, func(g group) {
+		if !organization.IsPaddockGroup(g.Name) {
+			out = append(out, ports.IdentityGroup{PK: g.PK, Name: g.Name})
+		}
+	})
+	return out, err
+}
+
+// pageSize is the page size of list requests; maxPages bounds a listing (100 000 objects).
+const (
+	pageSize = 500
+	maxPages = 200
+)
+
+// pages calls fn for every result of a paginated list endpoint.
+func pages[T any](ctx context.Context, c *Client, path string, q url.Values, fn func(T)) error {
+	q.Set("page_size", strconv.Itoa(pageSize))
+	for page := 1; page <= maxPages; page++ {
+		q.Set("page", strconv.Itoa(page))
+		var res struct {
+			Pagination struct {
+				Next int `json:"next"`
+			} `json:"pagination"`
+			Results []T `json:"results"`
+		}
+		if err := c.do(ctx, http.MethodGet, path+"?"+q.Encode(), nil, &res); err != nil {
+			return upstream(err)
+		}
+		for _, r := range res.Results {
+			fn(r)
+		}
+		if res.Pagination.Next == 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("authentik: %s has more than %d pages", path, maxPages)
+}
+
+// deleteIgnoringMissing deletes an object; 404 counts as deleted.
+func (c *Client) deleteIgnoringMissing(ctx context.Context, path string) error {
+	err := c.do(ctx, http.MethodDelete, path, nil, nil)
+	var st *errStatus
+	if errors.As(err, &st) && st.code == http.StatusNotFound {
+		return nil
+	}
+	if err != nil {
+		return upstream(err)
+	}
+	return nil
 }
 
 func (c *Client) ensureGroup(ctx context.Context, name, parent string) (string, error) {

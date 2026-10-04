@@ -1,0 +1,39 @@
+{
+  "pagination": {
+    "next": 0,
+    "previous": 0,
+    "count": 1,
+    "current": 1,
+    "total_pages": 1,
+    "start_index": 1,
+    "end_index": 1
+  },
+  "results": [
+    {
+      "pk": "745eae72-2307-4559-84f5-c05f53a34e64",
+      "policybindingmodel_ptr_id": "70e62891-b043-4105-87e8-43616ad1f87d",
+      "name": "Paddock device sign-in",
+      "slug": "paddock-device-authentication",
+      "title": "Sign in to your device",
+      "designation": "authentication",
+      "background": "",
+      "background_url": "/static/dist/assets/images/flow_background.jpg",
+      "background_themed_urls": null,
+      "stages": [
+        "738e2e57-2575-467f-99ad-e39720774317",
+        "cf95e0b7-c94f-4bad-a4a3-ec488d189217",
+        "72f6d105-0131-42cb-8652-33a29acd1176",
+        "5517d545-99b8-4f1a-a122-bdc343ec3d53"
+      ],
+      "policies": [],
+      "cache_count": 0,
+      "policy_engine_mode": "any",
+      "compatibility_mode": false,
+      "export_url": "/api/v3/flows/instances/paddock-device-authentication/export/",
+      "layout": "stacked",
+      "denied_action": "message_continue",
+      "authentication": "none"
+    }
+  ],
+  "autocomplete": {}
+}

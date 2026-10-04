@@ -1,0 +1,12 @@
+{
+  "pk": "6a23dee6-b199-47d4-8dd1-90d5d31b22bf",
+  "managed": null,
+  "name": "paddock-device-groups-fixture-org",
+  "expression": "root = \"paddock.fixture-org\"\nnames = {g.name for g in request.user.all_groups()}\nreturn {\"groups\": sorted(n for n in names if n.startswith(root + \".\")) + ([root] if root in names else [])}",
+  "component": "ak-property-mapping-provider-scope-form",
+  "verbose_name": "Scope Mapping",
+  "verbose_name_plural": "Scope Mappings",
+  "meta_model_name": "authentik_providers_oauth2.scopemapping",
+  "scope_name": "profile",
+  "description": "Paddock device groups"
+}

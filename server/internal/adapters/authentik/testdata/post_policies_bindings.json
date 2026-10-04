@@ -1,0 +1,27 @@
+{
+  "pk": "62a21be4-36b9-4a0f-9afd-4cb3d82c415e",
+  "policy": "97e0ab8a-6488-47bb-a1cf-6ec772e865bc",
+  "group": null,
+  "user": null,
+  "policy_obj": {
+    "pk": "97e0ab8a-6488-47bb-a1cf-6ec772e865bc",
+    "name": "paddock-device-fixture-org-access",
+    "execution_logging": false,
+    "component": "ak-policy-expression-form",
+    "verbose_name": "Expression Policy",
+    "verbose_name_plural": "Expression Policies",
+    "meta_model_name": "authentik_policies_expression.expressionpolicy",
+    "bound_to": 1,
+    "expression": "names = {g.name for g in request.user.all_groups()}\nreturn \"paddock.fixture-org\" in names and \"paddock.fixture-org.locked\" not in names"
+  },
+  "group_obj": null,
+  "user_obj": null,
+  "target": "74b005fd-4382-4c6f-9139-a0a2c177329a",
+  "negate": false,
+  "enabled": true,
+  "order": 0,
+  "timeout": 30,
+  "failure_result": false,
+  "expires": null,
+  "expiring": false
+}
