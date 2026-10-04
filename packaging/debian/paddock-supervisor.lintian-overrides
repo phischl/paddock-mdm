@@ -1,0 +1,7 @@
+# The A/B slots of the agent live in /opt/paddock/agent by design (plan M2b decision 25, design contract 2).
+paddock-supervisor: dir-or-file-in-opt
+# Static binary without runtime dependencies (design contract 9).
+paddock-supervisor: statically-linked-binary
+# The unit is enabled and restarted explicitly so that an upgrade never leaves the device without a supervisor.
+paddock-supervisor: maintainer-script-calls-systemctl
+paddock-supervisor: no-manual-page

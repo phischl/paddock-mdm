@@ -1,0 +1,5 @@
+# Static binary without runtime dependencies (design contract 9).
+paddock-agent: statically-linked-binary
+# The supervisor is started once the first agent is installed into its slot.
+paddock-agent: maintainer-script-calls-systemctl
+paddock-agent: no-manual-page

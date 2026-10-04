@@ -1,0 +1,45 @@
+# nfpm configuration of the paddock-supervisor package (plan M2b decision 25); built by `make deb`.
+name: paddock-supervisor
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Paddock <paddock@paddock-mdm.invalid>
+description: |-
+  Paddock device supervisor
+  Starts, monitors and updates the Paddock agent: verifies signed agent
+  releases, installs them into the inactive A/B slot, self-tests, switches
+  with one symlink flip and rolls back automatically.
+vendor: Paddock
+homepage: https://github.com/paddock-mdm/paddock
+license: MIT
+contents:
+  - src: bin/deb/stage/paddock-supervisor
+    dst: /usr/sbin/paddock-supervisor
+    file_info: { mode: 0755 }
+  - src: packaging/systemd/paddock-supervisor.service
+    dst: /usr/lib/systemd/system/paddock-supervisor.service
+    file_info: { mode: 0644 }
+  - dst: /opt/paddock/agent/A
+    type: dir
+    file_info: { mode: 0755 }
+  - dst: /opt/paddock/agent/B
+    type: dir
+    file_info: { mode: 0755 }
+  - dst: /etc/paddock
+    type: dir
+    file_info: { mode: 0755 }
+  - src: packaging/debian/copyright
+    dst: /usr/share/doc/paddock-supervisor/copyright
+    file_info: { mode: 0644 }
+  - src: bin/deb/stage/paddock-supervisor.changelog.gz
+    dst: /usr/share/doc/paddock-supervisor/changelog.gz
+    file_info: { mode: 0644 }
+  - src: packaging/debian/paddock-supervisor.lintian-overrides
+    dst: /usr/share/lintian/overrides/paddock-supervisor
+    file_info: { mode: 0644 }
+scripts:
+  postinstall: packaging/scripts/supervisor-postinst.sh
+  preremove: packaging/scripts/supervisor-prerm.sh
+  postremove: packaging/scripts/supervisor-postrm.sh
