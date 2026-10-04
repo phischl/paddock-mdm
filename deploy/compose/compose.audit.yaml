@@ -55,6 +55,7 @@ services:
           GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
           NODE_IMAGE: ${NODE_IMAGE}
           RUNTIME_IMAGE: ${RUNTIME_IMAGE}
+          COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
       profiles: [paddock]
       read_only: true
       tmpfs: [/tmp]

@@ -24,8 +24,18 @@ const (
 // Handle is the mq.ConsumeFunc of one state partition queue. A batch is acknowledged after all of its devices are
 // published; a failure requeues the whole batch (content-equal devices are skipped on retry).
 func (c *Compiler) Handle(ctx context.Context, _ *amqp.Channel, deliveries <-chan amqp.Delivery) error {
+	return c.handle(ctx, deliveries, Debounce)
+}
+
+// HandlePriority is the mq.ConsumeFunc of the priority queue (user lock and unlock, login suspension): the same as
+// Handle without the debounce, so the bundle is available within seconds (architecture §9.5).
+func (c *Compiler) HandlePriority(ctx context.Context, _ *amqp.Channel, deliveries <-chan amqp.Delivery) error {
+	return c.handle(ctx, deliveries, 0)
+}
+
+func (c *Compiler) handle(ctx context.Context, deliveries <-chan amqp.Delivery, debounce time.Duration) error {
 	for {
-		batch, open := collect(ctx, deliveries, Debounce, MaxWait, Prefetch)
+		batch, open := collect(ctx, deliveries, debounce, MaxWait, Prefetch)
 		if len(batch) > 0 {
 			if err := c.process(ctx, batch); err != nil {
 				return err

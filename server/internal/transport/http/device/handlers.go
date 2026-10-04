@@ -153,7 +153,8 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	issued := seq - 1 // the value the device should have sent
 	hb := ingest.Heartbeat{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: g.d.Now().UTC(),
-		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion, Health: req.Health,
+		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion,
+		SchemaVersions: boundedSchemaVersions(req.SchemaVersions), Health: req.Health,
 		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq,
 		CloneSuspected: dev.headers.Seq < issued-1,
 	}
@@ -258,4 +259,16 @@ func (g *gateway) events(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// boundedSchemaVersions keeps at most 16 plausible schema versions (1–1000) of a check-in; anything else a device
+// sends is dropped.
+func boundedSchemaVersions(in []int) []int {
+	out := []int{}
+	for _, v := range in {
+		if v >= 1 && v <= 1000 && len(out) < 16 && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
 }

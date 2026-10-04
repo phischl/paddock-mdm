@@ -102,6 +102,7 @@ type Bundle struct {
 	EnvelopeSha256 []byte
 	ObjectKey      string
 	CreatedAt      time.Time
+	SchemaVersion  int32
 }
 
 type Device struct {

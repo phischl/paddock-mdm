@@ -11,6 +11,7 @@ x-paddock: &paddock
       GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
       NODE_IMAGE: ${NODE_IMAGE}
       RUNTIME_IMAGE: ${RUNTIME_IMAGE}
+      COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
   profiles: [paddock]
   read_only: true
   tmpfs: [/tmp]
@@ -345,9 +346,22 @@ services:
 
   paddock-compiler:
     <<: *paddock
+    # A separate image with visudo (plan M3a decision 17).
+    image: ${PADDOCK_COMPILER_IMAGE:-paddock-compiler:dev}
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+      target: compiler
+      args:
+        GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
+        NODE_IMAGE: ${NODE_IMAGE}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE}
+        COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
     command: ["serve", "compiler"]
     environment:
       <<: *paddock-env
+      # Authority of the login resource (plan M3a decision 15); the compiler does not call Authentik.
+      PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_DB_COMPILER_URL_FILE: /run/secrets/db_paddock_compiler_url
       PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
       PADDOCK_AMQP_USER: compiler

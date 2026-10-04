@@ -3,13 +3,17 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
 
+	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/compiler"
 	"github.com/paddock-mdm/paddock/server/internal/config"
 	"github.com/paddock-mdm/paddock/server/internal/devicecache"
 	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
+	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
 	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
 	"github.com/paddock-mdm/paddock/server/internal/platform/objectstore"
 	"github.com/paddock-mdm/paddock/server/internal/platform/ops"
@@ -25,8 +29,15 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	bucket := l.String("PADDOCK_BUNDLES_S3_BUCKET", "paddock-bundles")
 	accessKey := l.SecretFile("PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE")
 	secretKey := l.SecretFile("PADDOCK_BUNDLES_S3_SECRET_KEY_FILE")
+	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
+	visudo := l.String("PADDOCK_VISUDO", "/usr/sbin/visudo")
 	if err := l.Err(); err != nil {
 		return err
+	}
+	// Every sudo entry is checked with visudo before signing (plan M3a decision 16); without it the compiler must
+	// not run.
+	if _, err := os.Stat(visudo); err != nil {
+		return fmt.Errorf("PADDOCK_VISUDO: %w", err)
 	}
 	pool, err := db.NewOrgPool(ctx, dsn, db.Options{ApplicationName: "paddock-compiler", MaxConns: 8})
 	if err != nil {
@@ -43,7 +54,11 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 		return err
 	}
 	store := objectstore.New(endpoint, accessKey, secretKey, bucket)
-	comp := compiler.New(pool, signer, store, devicecache.New(vk))
+	comp := compiler.New(pool, signer, store, devicecache.New(vk), compiler.Config{
+		AuthentikURL: authentikURL, Sudoers: compiler.Visudo{Path: visudo},
+		// The compiler records only organization events (device.bundle_render_failed): no platform pool.
+		Runner: app.NewActionRunner(pool, nil, httpx.RequestID),
+	})
 
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
 	var consumers []*mq.Consumer
@@ -53,7 +68,11 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	for _, key := range mq.StateRoutingKeys() {
 		consumer := mq.NewConsumer(mqCfg, mq.StateQueue(key), compiler.Prefetch)
 		consumers = append(consumers, consumer)
-		fns = append(fns, func(ctx context.Context) error { return consumer.Run(ctx, comp.Handle) })
+		handle := comp.Handle
+		if key == mq.StatePriority {
+			handle = comp.HandlePriority
+		}
+		fns = append(fns, func(ctx context.Context) error { return consumer.Run(ctx, handle) })
 	}
 	fns = append(fns, func(ctx context.Context) error {
 		return ops.Serve(ctx, common.OpsAddr, func(ctx context.Context) error {

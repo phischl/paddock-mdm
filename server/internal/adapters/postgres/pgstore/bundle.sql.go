@@ -12,8 +12,8 @@ import (
 )
 
 const insertBundle = `-- name: InsertBundle :exec
-INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key, schema_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type InsertBundleParams struct {
@@ -23,6 +23,7 @@ type InsertBundleParams struct {
 	ContentSha256  []byte
 	EnvelopeSha256 []byte
 	ObjectKey      string
+	SchemaVersion  int32
 }
 
 func (q *Queries) InsertBundle(ctx context.Context, arg InsertBundleParams) error {
@@ -33,6 +34,7 @@ func (q *Queries) InsertBundle(ctx context.Context, arg InsertBundleParams) erro
 		arg.ContentSha256,
 		arg.EnvelopeSha256,
 		arg.ObjectKey,
+		arg.SchemaVersion,
 	)
 	return err
 }
@@ -90,13 +92,17 @@ func (q *Queries) ListActiveGroupMemberIDs(ctx context.Context, deviceGroupID uu
 }
 
 const listCompileTargets = `-- name: ListCompileTargets :many
-SELECT id, state, bundle_seq FROM device WHERE id = ANY($1::uuid[]) ORDER BY id
+SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions
+FROM device d LEFT JOIN device_status s ON s.device_id = d.id
+WHERE d.id = ANY($1::uuid[]) ORDER BY d.id
 `
 
 type ListCompileTargetsRow struct {
-	ID        uuid.UUID
-	State     string
-	BundleSeq int64
+	ID              uuid.UUID
+	State           string
+	BundleSeq       int64
+	LoginsSuspended bool
+	SchemaVersions  []int32
 }
 
 func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]ListCompileTargetsRow, error) {
@@ -108,7 +114,13 @@ func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]Li
 	items := []ListCompileTargetsRow{}
 	for rows.Next() {
 		var i ListCompileTargetsRow
-		if err := rows.Scan(&i.ID, &i.State, &i.BundleSeq); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.State,
+			&i.BundleSeq,
+			&i.LoginsSuspended,
+			&i.SchemaVersions,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -119,8 +131,39 @@ func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]Li
 	return items, nil
 }
 
+const listDevicesWithOutdatedSchema = `-- name: ListDevicesWithOutdatedSchema :many
+SELECT d.id FROM device d
+LEFT JOIN device_status s ON s.device_id = d.id
+JOIN LATERAL (SELECT b.schema_version FROM bundle b WHERE b.device_id = d.id ORDER BY b.version DESC LIMIT 1) lb ON true
+WHERE d.state = 'active'
+  AND lb.schema_version <> CASE WHEN 2 = ANY(coalesce(s.schema_versions, '{}')) THEN 2 ELSE 1 END
+ORDER BY d.id
+`
+
+// Active devices whose latest bundle has another schema than their agent's newest supported one (v2 when the agent
+// reports 2, else v1); devices without a bundle are compiled at enrollment.
+func (q *Queries) ListDevicesWithOutdatedSchema(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listDevicesWithOutdatedSchema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLatestBundles = `-- name: ListLatestBundles :many
-SELECT DISTINCT ON (device_id) device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at FROM bundle ORDER BY device_id, version DESC
+SELECT DISTINCT ON (device_id) device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at, schema_version FROM bundle ORDER BY device_id, version DESC
 `
 
 func (q *Queries) ListLatestBundles(ctx context.Context) ([]Bundle, error) {
@@ -140,6 +183,7 @@ func (q *Queries) ListLatestBundles(ctx context.Context) ([]Bundle, error) {
 			&i.EnvelopeSha256,
 			&i.ObjectKey,
 			&i.CreatedAt,
+			&i.SchemaVersion,
 		); err != nil {
 			return nil, err
 		}

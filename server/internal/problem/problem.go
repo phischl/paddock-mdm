@@ -58,6 +58,8 @@ var (
 	DomainTaken            = &Error{Code: "domain_taken", Status: http.StatusConflict}
 	AttributeOwnedUpstream = &Error{Code: "attribute_owned_upstream", Status: http.StatusConflict}
 	InvalidCommand         = &Error{Code: "invalid_command", Status: http.StatusUnprocessableEntity}
+	// RenderFailed is the error code of device.bundle_render_failed (compiler); never sent over HTTP.
+	RenderFailed = &Error{Code: "render_failed", Status: http.StatusInternalServerError}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}

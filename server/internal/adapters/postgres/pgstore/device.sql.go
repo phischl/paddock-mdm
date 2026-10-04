@@ -124,7 +124,7 @@ func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (Devi
 }
 
 const getLatestBundle = `-- name: GetLatestBundle :one
-SELECT device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at FROM bundle WHERE device_id = $1 ORDER BY version DESC LIMIT 1
+SELECT device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at, schema_version FROM bundle WHERE device_id = $1 ORDER BY version DESC LIMIT 1
 `
 
 func (q *Queries) GetLatestBundle(ctx context.Context, deviceID uuid.UUID) (Bundle, error) {
@@ -138,6 +138,7 @@ func (q *Queries) GetLatestBundle(ctx context.Context, deviceID uuid.UUID) (Bund
 		&i.EnvelopeSha256,
 		&i.ObjectKey,
 		&i.CreatedAt,
+		&i.SchemaVersion,
 	)
 	return i, err
 }

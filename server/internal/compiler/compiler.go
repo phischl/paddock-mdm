@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,12 +26,14 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/bundlesign"
 	"github.com/paddock-mdm/paddock/server/internal/devicecache"
+	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
 	"github.com/paddock-mdm/paddock/server/internal/domain/device"
 	"github.com/paddock-mdm/paddock/server/internal/domain/managedconfig"
 	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/principal"
+	"github.com/paddock-mdm/paddock/server/internal/problem"
 )
 
 var (
@@ -55,18 +59,30 @@ type Store interface {
 	Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error
 }
 
+// Config is the configuration of the schema v2 content (plan M3a decisions 15 and 16).
+type Config struct {
+	// AuthentikURL is the public base URL of Authentik (issuer of the device login providers).
+	AuthentikURL string
+	// Sudoers checks every rendered sudo entry before signing.
+	Sudoers SudoersValidator
+	// Runner records device.bundle_render_failed.
+	Runner *app.ActionRunner
+}
+
 // Compiler renders, signs and uploads bundles.
 type Compiler struct {
 	pool   *db.OrgPool
 	signer Signer
 	store  Store
 	cache  *devicecache.Cache
+	cfg    Config
 	now    func() time.Time
 }
 
 // New creates a compiler.
-func New(pool *db.OrgPool, signer Signer, store Store, cache *devicecache.Cache) *Compiler {
-	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, now: time.Now}
+func New(pool *db.OrgPool, signer Signer, store Store, cache *devicecache.Cache, cfg Config) *Compiler {
+	cfg.AuthentikURL = strings.TrimRight(cfg.AuthentikURL, "/")
+	return &Compiler{pool: pool, signer: signer, store: store, cache: cache, cfg: cfg, now: time.Now}
 }
 
 // ObjectKey is the object of a bundle version (architecture §7.1).
@@ -100,18 +116,45 @@ func systemContext(ctx context.Context, org uuid.UUID) context.Context {
 type rendered struct {
 	device  uuid.UUID
 	oldSeq  int64
+	schema  int
 	content [32]byte
 	payload []byte
 }
 
+// compileTarget is a device to compile with what decides its schema.
+type compileTarget struct {
+	id        uuid.UUID
+	state     string
+	seq       int64
+	suspended bool
+	v2        bool // the agent reports bundle schema 2
+}
+
+// identityLoader loads the organization's identity data at most once per transaction.
+type identityLoader struct {
+	q  *pgstore.Queries
+	id *app.Identity
+}
+
+func (l *identityLoader) get(ctx context.Context) (*app.Identity, error) {
+	if l.id != nil {
+		return l.id, nil
+	}
+	var err error
+	l.id, err = app.LoadIdentity(ctx, l.q)
+	return l.id, err
+}
+
 func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []statechange.Event) error {
 	var todo []rendered
+	var failures []renderFailure
 	err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		ids, err := expand(ctx, q, events)
+		identity := &identityLoader{q: q}
+		ids, err := expand(ctx, q, events, identity)
 		if err != nil || len(ids) == 0 {
 			return err
 		}
-		targets, err := q.ListCompileTargets(ctx, ids)
+		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err
 		}
@@ -119,10 +162,15 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if err != nil {
 			return err
 		}
-		for _, t := range targets {
-			r, changed, err := c.render(ctx, q, org, t, defs)
+		for _, row := range rows {
+			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
+				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2))}
+			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity)
 			if err != nil {
-				return fmt.Errorf("render %s: %w", t.ID, err)
+				return fmt.Errorf("render %s: %w", t.id, err)
+			}
+			if failure != nil {
+				failures = append(failures, *failure)
 			}
 			if changed {
 				todo = append(todo, r)
@@ -130,14 +178,45 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		}
 		return nil
 	})
-	if err != nil || len(todo) == 0 {
+	if err != nil {
 		return err
+	}
+	c.recordFailures(ctx, failures)
+	if len(todo) == 0 {
+		return nil
 	}
 	return c.publish(ctx, org, todo)
 }
 
+// specRenderFailed is the privileged action device.bundle_render_failed (actor: system).
+var specRenderFailed = app.ActionSpec{Code: audit.CodeDeviceBundleRenderFailed}
+
+// recordFailures records every blocked bundle; the device keeps its previous version (plan M3a decision 16).
+func (c *Compiler) recordFailures(ctx context.Context, failures []renderFailure) {
+	for _, f := range failures {
+		metricBundles.WithLabelValues("render_failed").Inc()
+		slog.ErrorContext(ctx, "bundle blocked: a sudo entry failed the sudoers check", "device_id", f.device, "reason", f.reason)
+		spec := specRenderFailed
+		spec.Target = &audit.Target{Type: "device", ID: f.device.String()}
+		spec.Params = map[string]any{"username": f.username, "reason": truncateReason(f.reason)}
+		err := c.cfg.Runner.RunTx(ctx, app.ScopeOrg, spec, func(context.Context, *pgstore.Queries, app.Recorder) error {
+			return problem.RenderFailed.WithDetail(f.reason)
+		})
+		if err != nil && !errors.Is(err, problem.RenderFailed) {
+			slog.WarnContext(ctx, "recording the blocked bundle failed", "device_id", f.device, "error", err)
+		}
+	}
+}
+
+func truncateReason(s string) string {
+	if len(s) > 500 {
+		return s[:500]
+	}
+	return s
+}
+
 // expand turns the scopes of events into the IDs of the affected devices; only active devices are compiled.
-func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event) ([]uuid.UUID, error) {
+func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event, identity *identityLoader) ([]uuid.UUID, error) {
 	seen := map[uuid.UUID]bool{}
 	var ids []uuid.UUID
 	add := func(more []uuid.UUID) {
@@ -164,47 +243,69 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event)
 			add(members)
 		case statechange.ScopeDevice:
 			add([]uuid.UUID{ev.ID})
+		case statechange.ScopeUser:
+			id, err := identity.get(ctx)
+			if err != nil {
+				return nil, err
+			}
+			add(id.AffectedDevices(ev.ID))
 		}
 	}
 	return ids, nil
 }
 
 // render builds the next bundle of an active device and reports whether its content differs from the last one.
-func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID, t pgstore.ListCompileTargetsRow,
-	defs app.ManagedDefinitions) (rendered, bool, error) {
-	if !device.Compiled(t.State) {
-		return rendered{}, false, nil
+// Agents that report schema 2 get v2 with the login and sudo resources; all others get v1 exactly as before (plan
+// M3a decision 14a). A sudo entry that fails the server-side check blocks the device's bundle (failure).
+func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID, t compileTarget,
+	defs app.ManagedDefinitions, identity *identityLoader) (rendered, bool, *renderFailure, error) {
+	if !device.Compiled(t.state) {
+		return rendered{}, false, nil, nil
 	}
-	groups, err := q.ListDeviceGroupIDsOfDevice(ctx, t.ID)
+	groups, err := q.ListDeviceGroupIDsOfDevice(ctx, t.id)
 	if err != nil {
-		return rendered{}, false, err
+		return rendered{}, false, nil, err
 	}
 	resources, err := managedconfig.Resources(defs.Resolve(groups))
 	if err != nil {
-		return rendered{}, false, err
+		return rendered{}, false, nil, err
+	}
+	schema := bundle.SchemaVersion
+	if t.v2 {
+		id, err := identity.get(ctx)
+		if err != nil {
+			return rendered{}, false, nil, err
+		}
+		extra, failure, err := c.renderV2(ctx, id, t)
+		if err != nil || failure != nil {
+			return rendered{}, false, failure, err
+		}
+		schema = bundle.SchemaVersion2
+		resources = append(resources, extra...)
+		bundle.SortResources(resources)
 	}
 	b := bundle.Bundle{
-		SchemaVersion: bundle.SchemaVersion, BundleVersion: t.BundleSeq + 1, DeviceID: t.ID.String(),
+		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
 		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources,
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
-		return rendered{}, false, err
+		return rendered{}, false, nil, err
 	}
-	latest, err := q.GetLatestBundle(ctx, t.ID)
+	latest, err := q.GetLatestBundle(ctx, t.id)
 	switch {
 	case err == nil && bytes.Equal(latest.ContentSha256, content[:]):
 		metricBundles.WithLabelValues("unchanged").Inc()
-		return rendered{}, false, nil
+		return rendered{}, false, nil, nil
 	case err != nil && !db.IsNoRows(err):
-		return rendered{}, false, err
+		return rendered{}, false, nil, err
 	}
 	payload, err := bundle.Encode(b)
 	if err != nil {
-		return rendered{}, false, err
+		return rendered{}, false, nil, err
 	}
-	return rendered{device: t.ID, oldSeq: t.BundleSeq, content: content, payload: payload}, true, nil
+	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload}, true, nil, nil
 }
 
 // publish signs all bundles in one batch, then per device increments bundle_seq, records the bundle row and uploads
@@ -252,7 +353,7 @@ func (c *Compiler) commit(ctx context.Context, org uuid.UUID, r rendered, envelo
 		}
 		if err := q.InsertBundle(ctx, pgstore.InsertBundleParams{
 			DeviceID: r.device, Version: version, OrganizationID: org, ContentSha256: r.content[:],
-			EnvelopeSha256: sum[:], ObjectKey: key,
+			EnvelopeSha256: sum[:], ObjectKey: key, SchemaVersion: int32(r.schema), //nolint:gosec // 1 or 2
 		}); err != nil {
 			return err
 		}
