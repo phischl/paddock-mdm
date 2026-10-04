@@ -42,6 +42,7 @@ type Config struct {
 	Tick         time.Duration // watchdog and probation check interval
 	MaxBackoff   time.Duration
 	Notify       func(state string) // sd_notify
+	Now          func() time.Time   // clock of the probation; nil is time.Now (tests inject one)
 }
 
 // probation is a switch under observation; it is persisted so that a restarted supervisor resumes it.
@@ -75,6 +76,9 @@ type Supervisor struct {
 
 // New creates a supervisor.
 func New(cfg Config) *Supervisor {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
 	return &Supervisor{cfg: cfg, exited: make(chan error, 1), tested: make(chan selfTest, 1), backoff: time.Second}
 }
 
@@ -220,7 +224,7 @@ func (s *Supervisor) onSelfTest(r selfTest) {
 		s.finish(r.version, from, outcomeSelfTestFailed)
 		return
 	}
-	p := &probation{Version: r.version, FromVersion: from, FromSlot: s.activeSlot(), ToSlot: r.slot, SwitchedAt: time.Now()}
+	p := &probation{Version: r.version, FromVersion: from, FromSlot: s.activeSlot(), ToSlot: r.slot, SwitchedAt: s.cfg.Now()}
 	err := writeJSON(s.cfg.ProbationLog, p)
 	if err == nil {
 		err = flip(s.cfg.Slots, r.slot)
@@ -240,7 +244,7 @@ func (s *Supervisor) onSelfTest(r selfTest) {
 // checkProbation ends a probation at its deadline: healthy is a running child that checked in after the switch.
 func (s *Supervisor) checkProbation() {
 	p := s.probation
-	if p == nil || time.Now().Before(p.deadline) {
+	if p == nil || s.cfg.Now().Before(p.deadline) {
 		return
 	}
 	fi, err := os.Stat(s.cfg.LastCheckin)
@@ -304,7 +308,7 @@ func (s *Supervisor) resumeProbation() {
 		_ = os.Remove(s.cfg.ProbationLog) // the flip never happened
 		return
 	}
-	p.SwitchedAt = time.Now()
+	p.SwitchedAt = s.cfg.Now()
 	p.deadline = p.SwitchedAt.Add(s.cfg.Probation)
 	s.probation = &p
 	slog.Info("resuming probation", "version", p.Version)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -25,26 +26,49 @@ type fake struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	notices chan string
+	clock   *clock
 }
+
+// clock is the supervisor's injected clock: real time plus an offset the test sets to end a probation exactly when
+// the test has observed what it needs (no race between a real-time probation and a slow -race run).
+type clock struct {
+	mu     sync.Mutex
+	offset time.Duration
+}
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().Add(c.offset)
+}
+
+func (c *clock) set(offset time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offset = offset
+}
+
+// testProbation is longer than any test; probations end through endProbation.
+const testProbation = time.Hour
 
 // script returns a fake paddockd: `version` prints version, `self-test` exits selfTest, `run` runs run.
 func script(version string, selfTest int, run string) []byte {
 	return fmt.Appendf(nil, "#!/bin/sh\ncase \"$1\" in\nversion) echo %s ;;\nself-test) exit %d ;;\nrun) %s ;;\nesac\n", version, selfTest, run)
 }
 
-func newFake(t *testing.T, probation time.Duration) *fake {
+func newFake(t *testing.T) *fake {
 	t.Helper()
 	dir := t.TempDir()
 	pub, priv, err := minisign.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fake{t: t, dir: dir, priv: priv, usr1: make(chan os.Signal, 1), notices: make(chan string, 1000)}
+	f := &fake{t: t, dir: dir, priv: priv, usr1: make(chan os.Signal, 1), notices: make(chan string, 1000), clock: &clock{}}
 	f.cfg = Config{
 		Slots: filepath.Join(dir, "slots"), Staging: filepath.Join(dir, "staging"), Result: filepath.Join(dir, "result.json"),
 		ProbationLog: filepath.Join(dir, "probation.json"), LastCheckin: filepath.Join(dir, "last-checkin"),
-		PublicKey: &pub, Probation: probation, SelfTest: 5 * time.Second, Tick: 20 * time.Millisecond,
-		MaxBackoff: 2 * time.Second, Notify: func(s string) { f.notices <- s },
+		PublicKey: &pub, Probation: testProbation, SelfTest: 5 * time.Second, Tick: 20 * time.Millisecond,
+		MaxBackoff: 2 * time.Second, Notify: func(s string) { f.notices <- s }, Now: f.clock.now,
 	}
 	for _, d := range []string{"slots/A", "slots/B", "staging"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
@@ -58,8 +82,9 @@ func newFake(t *testing.T, probation time.Duration) *fake {
 	return f
 }
 
-// good is a run behaviour that checks in once and keeps running.
-func (f *fake) good() string { return "trap '' HUP; touch " + f.cfg.LastCheckin + "; exec sleep 300" }
+// good is a run behaviour that checks in once and keeps running. The check-in is a shell builtin, not touch: a
+// forked touch can outlive the SIGTERM of a stopping test and write into its removed temporary directory.
+func (f *fake) good() string { return "trap '' HUP; : >" + f.cfg.LastCheckin + "; exec sleep 300" }
 
 func (f *fake) writeExec(path string, data []byte) {
 	f.t.Helper()
@@ -132,6 +157,43 @@ func (f *fake) waitResult(timeout time.Duration) result {
 	}
 }
 
+// waitFor polls cond until it holds.
+func (f *fake) waitFor(what string, cond func() bool) {
+	f.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			f.t.Fatalf("timed out waiting until %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (f *fake) checkedIn() bool {
+	_, err := os.Stat(f.cfg.LastCheckin)
+	return err == nil
+}
+
+// endProbation waits until the switch to slot happened, moves the clock past the probation and returns the result.
+func (f *fake) endProbation(slot string) result {
+	f.t.Helper()
+	f.waitFor("current → "+slot, func() bool { return f.active() == slot })
+	f.clock.set(testProbation + time.Minute)
+	defer f.clock.set(0)
+	return f.waitResult(10 * time.Second)
+}
+
+// stageAfterCheckin waits until the running agent has checked in, removes its check-in mark (so only the new
+// agent can set it again) and stages a release.
+func (f *fake) stageAfterCheckin(version string, bin []byte) {
+	f.t.Helper()
+	f.waitFor("the running agent checked in", f.checkedIn)
+	if err := os.Remove(f.cfg.LastCheckin); err != nil {
+		f.t.Fatal(err)
+	}
+	f.stage(version, bin, nil)
+}
+
 func (f *fake) active() string {
 	target, _ := os.Readlink(filepath.Join(f.cfg.Slots, "current"))
 	return target
@@ -146,10 +208,11 @@ func (f *fake) expectStagingClean() {
 }
 
 func TestUpdateSuccess(t *testing.T) {
-	f := newFake(t, 500*time.Millisecond)
+	f := newFake(t)
 	f.start()
-	f.stage("1.1.0", script("1.1.0", 0, f.good()), nil)
-	r := f.waitResult(10 * time.Second)
+	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, f.good()))
+	f.waitFor("the new agent checked in", f.checkedIn)
+	r := f.endProbation("B")
 	if r.Outcome != outcomeUpdated || r.Version != "1.1.0" || r.FromVersion != "1.0.0" {
 		t.Fatalf("result %+v", r)
 	}
@@ -162,8 +225,9 @@ func TestUpdateSuccess(t *testing.T) {
 	f.expectStagingClean()
 	// The next update goes into the other slot again.
 	_ = os.Remove(f.cfg.Result)
-	f.stage("1.2.0", script("1.2.0", 0, f.good()), nil)
-	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeUpdated || f.active() != "A" {
+	f.stageAfterCheckin("1.2.0", script("1.2.0", 0, f.good()))
+	f.waitFor("the new agent checked in", f.checkedIn)
+	if r := f.endProbation("A"); r.Outcome != outcomeUpdated || f.active() != "A" {
 		t.Fatalf("second update %+v, current %s", r, f.active())
 	}
 }
@@ -182,7 +246,7 @@ func TestUpdateRefused(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFake(t, time.Second)
+			f := newFake(t)
 			f.start()
 			f.stage("1.1.0", tt.bin(f), tt.signer)
 			if r := f.waitResult(10 * time.Second); r.Outcome != tt.outcome || r.FromVersion != "1.0.0" {
@@ -197,7 +261,7 @@ func TestUpdateRefused(t *testing.T) {
 }
 
 func TestUpdateWithoutReleaseKeyIsRefused(t *testing.T) {
-	f := newFake(t, time.Second)
+	f := newFake(t)
 	f.cfg.PublicKey = nil
 	f.start()
 	f.stage("1.1.0", script("1.1.0", 0, f.good()), nil)
@@ -207,7 +271,7 @@ func TestUpdateWithoutReleaseKeyIsRefused(t *testing.T) {
 }
 
 func TestRollbackOnCrashLoop(t *testing.T) {
-	f := newFake(t, time.Minute)
+	f := newFake(t)
 	f.start()
 	f.stage("1.1.0", script("1.1.0", 0, "exit 1"), nil)
 	r := f.waitResult(20 * time.Second)
@@ -217,18 +281,18 @@ func TestRollbackOnCrashLoop(t *testing.T) {
 }
 
 func TestRollbackOnProbationTimeout(t *testing.T) {
-	f := newFake(t, time.Second)
+	f := newFake(t)
 	f.start()
-	time.Sleep(200 * time.Millisecond) // the old agent checked in before the switch
-	f.stage("1.1.0", script("1.1.0", 0, "trap '' HUP; exec sleep 300"), nil)
-	r := f.waitResult(10 * time.Second)
+	// The old agent checked in before the switch; the new one never does.
+	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
+	r := f.endProbation("B")
 	if r.Outcome != outcomeRolledBack || f.active() != "A" {
 		t.Fatalf("result %+v, current %s", r, f.active())
 	}
 }
 
 func TestResumeProbation(t *testing.T) {
-	f := newFake(t, 500*time.Millisecond)
+	f := newFake(t)
 	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "exit 1"))
 	if err := flip(f.cfg.Slots, "B"); err != nil {
 		t.Fatal(err)
@@ -243,7 +307,7 @@ func TestResumeProbation(t *testing.T) {
 }
 
 func TestRestartsTheAgentAndPetsTheWatchdog(t *testing.T) {
-	f := newFake(t, time.Second)
+	f := newFake(t)
 	runs := filepath.Join(f.dir, "runs")
 	f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("1.0.0", 0, "echo x >> "+runs+"; exit 1"))
 	f.start()
