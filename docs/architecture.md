@@ -1107,6 +1107,12 @@ stateDiagram-v2
 - **Staged rollout:** waves are percentages of the organization's devices by `hash(device_id) mod 100`:
   1 % → 10 % → 50 % → 100 %, minimum 24 h per wave. The worker stops a release automatically when
   `rolled_back + update_failed` **reaches** max(3 devices, 2 % of the eligible devices), and alerts (thresholds configurable per rollout; amended 2026-10-04, M2b).
+- **After the last wave** the release becomes the fleet's *current release*: it is offered to every device that runs
+  another version, including newly enrolled ones. Auto-stop stays active for the current release: failures are
+  counted over a sliding 7-day window against the devices offered the release in that window, with the same
+  thresholds; reaching them sets the rollout to `halted`, and no release is offered until a platform admin resumes it
+  or starts a new rollout. Rollouts are platform-wide (releases are platform objects); waves use `hash(device_id)`.
+  *(Decided 2026-10-04 after M2b.)*
 - The supervisor's own update happens only through the distribution package (`apt`), never through the agent channel.
 
 ### 11.3 Reconcilers (apply engine)
