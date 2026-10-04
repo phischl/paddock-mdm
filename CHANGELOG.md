@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The `paddock-server` image builds again after the agent module joined the Go workspace (M2b).
 - `make up` (audit bucket bootstrap) no longer fails when the generated audit writer access key starts with `-` (M2b step 0).
 - Audit events recorded after their occurrence day was sealed are now covered by the manifest of their recording day (F7, M0.1 step 2).
 - `make up` on a fresh stack no longer fails because both Authentik containers populate the shared data volume at the same time (M0 step 10).
