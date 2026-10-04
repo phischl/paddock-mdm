@@ -15,6 +15,7 @@ FROM ${GO_BUILD_IMAGE} AS build
 WORKDIR /src
 ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-trimpath
 COPY go.work go.work.sum ./
+COPY agent/go.mod agent/go.sum agent/
 COPY pkg/go.mod pkg/go.sum pkg/
 COPY server/go.mod server/go.sum server/
 COPY test/acceptance/go.mod test/acceptance/go.sum test/acceptance/
