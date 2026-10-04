@@ -37,6 +37,9 @@ const (
 	MinWaveMinutesProduction = 60
 	// MaxArtifactBytes bounds an uploaded agent binary.
 	MaxArtifactBytes = 128 << 20
+	// CurrentReleaseWindow is the sliding window over which the failures and offered devices of a completed
+	// rollout (the current release) are counted (plan M2.1 decision 1).
+	CurrentReleaseWindow = 7 * 24 * time.Hour
 )
 
 // Validation errors.
@@ -99,7 +102,8 @@ func Threshold(eligible int64, percent, minimum int) int64 {
 	return max(int64(minimum), (eligible*int64(percent)+99)/100)
 }
 
-// Rollout is the state the worker evaluates.
+// Rollout is the state the worker evaluates. For a completed rollout, Eligible and Failed are counted over
+// CurrentReleaseWindow.
 type Rollout struct {
 	Waves            []int
 	CurrentWave      int
@@ -122,15 +126,18 @@ const (
 	Complete
 )
 
-// Decide evaluates a running rollout at now (plan M2b decision 22): halt when the failed devices reach the
-// threshold, otherwise advance when the current wave is older than the minimum wave duration, and complete after
-// the last wave.
+// Decide evaluates a rollout at now (plan M2b decision 22, M2.1 decision 1): a running or completed rollout halts
+// when the failed devices reach the threshold; otherwise a running one advances when the current wave is older than
+// the minimum wave duration, and completes after the last wave.
 func Decide(r Rollout, now time.Time) Decision {
-	if r.Status != RolloutRunning {
+	if r.Status != RolloutRunning && r.Status != RolloutCompleted {
 		return Keep
 	}
 	if r.Failed > 0 && r.Failed >= Threshold(r.Eligible, r.FailurePercent, r.FailureMin) {
 		return Halt
+	}
+	if r.Status == RolloutCompleted {
+		return Keep
 	}
 	if now.Sub(r.WaveStartedAt) < time.Duration(r.MinWaveMinutes)*time.Minute {
 		return Keep

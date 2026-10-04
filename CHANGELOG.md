@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Auto-stop now also protects the current release: a completed agent rollout halts (audit `agent_rollout.halted` by the worker) when the devices that reported `agent.update_failed` or `agent.rolled_back` within the last 7 days reach the rollout's threshold over the devices that checked in during those 7 days; resuming it makes it the current release again. The migration runs automatically (M2.1 step 1).
 - The `paddock-server` image builds again after the agent module joined the Go workspace (M2b).
 - `make up` (audit bucket bootstrap) no longer fails when the generated audit writer access key starts with `-` (M2b step 0).
 - Audit events recorded after their occurrence day was sealed are now covered by the manifest of their recording day (F7, M0.1 step 2).

@@ -305,11 +305,14 @@ func (a *AgentReleases) Halt(ctx context.Context, version string) (pgstore.Agent
 	return a.transition(ctx, SpecAgentRolloutHalt, version, agentrelease.RolloutRunning, agentrelease.RolloutHalted, &reason)
 }
 
-// Resume continues a halted rollout in the wave where it stopped.
+// Resume continues a halted rollout in the wave where it stopped; a rollout that had completed becomes the current
+// release again (plan M2.1 decision 1).
 func (a *AgentReleases) Resume(ctx context.Context, version string) (pgstore.AgentRollout, error) {
-	return a.transition(ctx, SpecAgentRolloutResume, version, agentrelease.RolloutHalted, agentrelease.RolloutRunning, nil)
+	return a.transition(ctx, SpecAgentRolloutResume, version, agentrelease.RolloutHalted, "", nil)
 }
 
+// transition moves a rollout from status from to status to; an empty to resumes (running, or completed when the
+// rollout had completed).
 func (a *AgentReleases) transition(ctx context.Context, spec ActionSpec, version, from, to string, reason *string) (pgstore.AgentRollout, error) {
 	spec.Params = map[string]any{"version": version}
 	if reason != nil {
@@ -327,7 +330,14 @@ func (a *AgentReleases) transition(ctx context.Context, spec ActionSpec, version
 			return problem.InvalidState.WithDetail("the rollout is " + r.Status)
 		}
 		rec.SetParam("wave", r.CurrentWaveIndex)
-		out, err = q.SetAgentRolloutStatus(ctx, pgstore.SetAgentRolloutStatusParams{Version: version, Status: to, HaltedReason: reason})
+		status := to
+		if status == "" {
+			status = agentrelease.RolloutRunning
+			if r.CompletedAt != nil {
+				status = agentrelease.RolloutCompleted
+			}
+		}
+		out, err = q.SetAgentRolloutStatus(ctx, pgstore.SetAgentRolloutStatusParams{Version: version, Status: status, HaltedReason: reason})
 		if db.IsUniqueViolation(err, "agent_rollout_one_running_idx") {
 			return problem.InvalidState.WithDetail("another rollout is running; halt it first")
 		}
@@ -336,19 +346,30 @@ func (a *AgentReleases) transition(ctx context.Context, spec ActionSpec, version
 	return out, err
 }
 
-// EvaluateRollouts is the worker's rollout round (plan M2b decision 22): every running rollout halts when its
-// failed devices reach the threshold, otherwise advances or completes; each change is audited with the system as
-// actor. It returns what devices are offered now (nil: nothing).
+// EvaluateRollouts is the worker's rollout round (plan M2b decision 22, M2.1 decision 1): every running rollout
+// halts when its failed devices reach the threshold, otherwise advances or completes; the current release (a
+// completed rollout that devices are offered) halts when its failures within agentrelease.CurrentReleaseWindow reach
+// the threshold. Each change is audited with the system as actor. It returns what devices are offered now (nil:
+// nothing).
 func (a *AgentReleases) EvaluateRollouts(ctx context.Context, now time.Time) (*agentrelease.Offer, error) {
-	var running []pgstore.AgentRollout
+	var evaluated []pgstore.AgentRollout
 	if err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
-		running, err = q.ListRunningAgentRollouts(ctx)
+		if evaluated, err = q.ListRunningAgentRollouts(ctx); err != nil {
+			return err
+		}
+		current, err := q.CurrentAgentRollout(ctx)
+		if err == nil && current.Status == agentrelease.RolloutCompleted {
+			evaluated = append(evaluated, current)
+		}
+		if db.IsNoRows(err) {
+			return nil
+		}
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	for _, r := range running {
+	for _, r := range evaluated {
 		if err := a.evaluate(ctx, r, now); err != nil {
 			return nil, fmt.Errorf("evaluate rollout %s: %w", r.Version, err)
 		}
@@ -357,13 +378,8 @@ func (a *AgentReleases) EvaluateRollouts(ctx context.Context, now time.Time) (*a
 }
 
 func (a *AgentReleases) evaluate(ctx context.Context, r pgstore.AgentRollout, now time.Time) error {
-	var stats pgstore.AgentRolloutStatsRow
-	percent := int(r.Waves[r.CurrentWaveIndex])
-	if err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		var err error
-		stats, err = q.AgentRolloutStats(ctx, pgstore.AgentRolloutStatsParams{Version: r.Version, Percent: int32(percent)}) //nolint:gosec // 1..100
-		return err
-	}); err != nil {
+	stats, err := a.evaluationStats(ctx, r, now)
+	if err != nil {
 		return err
 	}
 	waves := make([]int, len(r.Waves))
@@ -383,6 +399,10 @@ func (a *AgentReleases) evaluate(ctx context.Context, r pgstore.AgentRollout, no
 	case agentrelease.Halt:
 		threshold := agentrelease.Threshold(stats.Eligible, in.FailurePercent, in.FailureMin)
 		reason := fmt.Sprintf("%d failed devices reached the threshold of %d", stats.Failed, threshold)
+		if r.Status == agentrelease.RolloutCompleted {
+			reason = fmt.Sprintf("%d failed devices in the last %d days reached the threshold of %d for the current release",
+				stats.Failed, int(agentrelease.CurrentReleaseWindow.Hours()/24), threshold)
+		}
 		params["reason"], params["wave"], params["threshold"] = reason, r.CurrentWaveIndex, threshold
 		spec = ActionSpec{Code: audit.CodeAgentRolloutHalted}
 		fn = func(ctx context.Context, q *pgstore.Queries) error {
@@ -399,7 +419,7 @@ func (a *AgentReleases) evaluate(ctx context.Context, r pgstore.AgentRollout, no
 	case agentrelease.Complete:
 		spec = ActionSpec{Code: audit.CodeAgentRolloutCompleted}
 		fn = func(ctx context.Context, q *pgstore.Queries) error {
-			_, err := q.SetAgentRolloutStatus(ctx, pgstore.SetAgentRolloutStatusParams{Version: r.Version, Status: agentrelease.RolloutCompleted})
+			_, err := q.CompleteAgentRollout(ctx, r.Version)
 			return err
 		}
 	default:
@@ -408,6 +428,23 @@ func (a *AgentReleases) evaluate(ctx context.Context, r pgstore.AgentRollout, no
 	spec.Target, spec.Params = &t, params
 	slog.InfoContext(ctx, "agent rollout changed", "version", r.Version, "code", spec.Code, "eligible", stats.Eligible, "failed", stats.Failed)
 	return a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error { return fn(ctx, q) })
+}
+
+// evaluationStats counts the eligible and failed devices of a rollout: in the waves up to the current one while it
+// runs, and within agentrelease.CurrentReleaseWindow before now once it is the current release.
+func (a *AgentReleases) evaluationStats(ctx context.Context, r pgstore.AgentRollout, now time.Time) (pgstore.AgentRolloutStatsRow, error) {
+	var stats pgstore.AgentRolloutStatsRow
+	err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if r.Status == agentrelease.RolloutCompleted {
+			c, err := q.CurrentReleaseStats(ctx, pgstore.CurrentReleaseStatsParams{Version: r.Version, Since: now.Add(-agentrelease.CurrentReleaseWindow)})
+			stats.Eligible, stats.Failed = c.Offered, c.Failed
+			return err
+		}
+		var err error
+		stats, err = q.AgentRolloutStats(ctx, pgstore.AgentRolloutStatsParams{Version: r.Version, Percent: r.Waves[r.CurrentWaveIndex]})
+		return err
+	})
+	return stats, err
 }
 
 // offer reads the rollout devices are offered and its artifacts.
