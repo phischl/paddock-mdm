@@ -52,6 +52,7 @@ var auditCases = map[string][]auditCase{
 		{"success", func(t *testing.T, w *auditWorld) {
 			res := call(t, w.alice, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": uniqueName("audit create")})
 			expectStatus(t, res, http.StatusCreated, "")
+			createdID(t, w.alice, "/api/v1/device-groups", res)
 			expectOneEvent(t, w.alice, res.RequestID, "device_group.created", "success")
 		}},
 		{"validation failure", func(t *testing.T, w *auditWorld) {
@@ -158,7 +159,7 @@ func createGroup(t *testing.T, p *env.Portal) group {
 	name := uniqueName("audit gate")
 	res := call(t, p, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": name})
 	expectStatus(t, res, http.StatusCreated, "")
-	return group{id: responseID(t, res).String(), name: name}
+	return group{id: createdID(t, p, "/api/v1/device-groups", res), name: name}
 }
 
 func newOrg() map[string]string {

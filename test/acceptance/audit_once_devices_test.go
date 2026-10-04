@@ -9,6 +9,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 	"github.com/paddock-mdm/paddock/test/acceptance/devicesim"
+	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
 )
 
 // pendingDevice enrolls a device with a manual-approval token and returns its ID.
@@ -74,18 +75,27 @@ func tokenBody(maxUses int) map[string]any {
 		"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}
 }
 
-// managedCases returns the cases of the managed file or unit operations below collection.
+// managedCases returns the cases of the managed file or unit operations below collection. valid is a body for
+// create and update; created objects belong to a new device group without devices and are deleted when the case
+// ends (plan M2.1 decision 3).
 func managedCases(collection, kind string, valid func() map[string]any, invalid map[string]any, invalidCode string, invalidStatus int) map[string][]auditCase {
-	create := func(t *testing.T, w *auditWorld) string {
-		res := call(t, w.alice, http.MethodPost, collection, valid())
+	scoped := func(t *testing.T, w *auditWorld) map[string]any {
+		body := valid()
+		body["device_group_id"] = namedGroup(t, w.alice, "a3 managed")
+		return body
+	}
+	created := func(t *testing.T, w *auditWorld, res env.Response) string {
 		expectStatus(t, res, http.StatusCreated, "")
-		return responseID(t, res).String()
+		return createdID(t, w.alice, collection, res)
+	}
+	create := func(t *testing.T, w *auditWorld) string {
+		return created(t, w, call(t, w.alice, http.MethodPost, collection, scoped(t, w)))
 	}
 	return map[string][]auditCase{
 		"POST " + collection: {
 			{"success", func(t *testing.T, w *auditWorld) {
-				res := call(t, w.alice, http.MethodPost, collection, valid())
-				expectStatus(t, res, http.StatusCreated, "")
+				res := call(t, w.alice, http.MethodPost, collection, scoped(t, w))
+				created(t, w, res)
 				expectOneEvent(t, w.alice, res.RequestID, kind+".created", "success")
 			}},
 			{"validation failure", func(t *testing.T, w *auditWorld) {
@@ -94,13 +104,13 @@ func managedCases(collection, kind string, valid func() map[string]any, invalid 
 				expectOneEvent(t, w.alice, res.RequestID, kind+".created", "failure")
 			}},
 			{"wrong role", func(t *testing.T, w *auditWorld) {
-				res := call(t, w.bob, http.MethodPost, collection, valid())
+				res := call(t, w.bob, http.MethodPost, collection, scoped(t, w))
 				expectStatus(t, res, http.StatusForbidden, "forbidden")
 				expectOneEvent(t, w.alice, res.RequestID, kind+".created", "denied")
 			}},
 			{"conflict", func(t *testing.T, w *auditWorld) {
-				body := valid()
-				expectStatus(t, call(t, w.alice, http.MethodPost, collection, body), http.StatusCreated, "")
+				body := scoped(t, w)
+				created(t, w, call(t, w.alice, http.MethodPost, collection, body))
 				res := call(t, w.alice, http.MethodPost, collection, body)
 				expectStatus(t, res, http.StatusConflict, "already_exists")
 				expectOneEvent(t, w.alice, res.RequestID, kind+".created", "failure")
@@ -160,6 +170,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 			{"success", func(t *testing.T, w *auditWorld) {
 				res := call(t, w.alice, http.MethodPost, "/api/v1/enrollment-tokens", tokenBody(1))
 				expectStatus(t, res, http.StatusCreated, "")
+				createdTokenOf(t, w.alice, res)
 				expectOneEvent(t, w.alice, res.RequestID, "enrollment_token.created", "success")
 			}},
 			{"validation failure", func(t *testing.T, w *auditWorld) {
@@ -230,7 +241,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 		},
 		map[string]any{"path": "/etc/sudoers.d/a3", "content": "a3"}, "path_not_allowed", http.StatusUnprocessableEntity)
 	units := managedCases("/api/v1/managed-units", "managed_unit",
-		func() map[string]any { return map[string]any{"unit": "a3-" + uniqueSuffix() + ".service"} },
+		func() map[string]any { return map[string]any{"unit": testUnit()} },
 		map[string]any{"unit": "sshd.service"}, "unit_not_allowed", http.StatusUnprocessableEntity)
 	for _, m := range []map[string][]auditCase{files, units} {
 		for k, v := range m {

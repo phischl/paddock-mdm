@@ -12,6 +12,8 @@ import (
 
 // isolationWorld holds the sessions and the globex resources of the isolation gate.
 type isolationWorld struct {
+	// top is the gate's test: globex resources live until it ends, also those its subtests create.
+	top          *testing.T
 	alice, carol *env.Portal
 	globexIDs    []string // every ID of globex the acme session must never see
 	globexGroups []string
@@ -20,25 +22,30 @@ type isolationWorld struct {
 }
 
 // seedGlobexDevices creates, as carol, a device group with an enrolled device (through the device API), an
-// enrollment token, a managed file and a managed unit — all named "globex-iso…" so the list searches find them.
+// enrollment token, a managed file and a managed unit of that group — all named "globex-iso…" so the list searches
+// find them.
 func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	t.Helper()
 	w.globexDeviceGroup = namedGroup(t, w.carol, "globex isolation devices")
-	tok := createToken(t, w.carol, tokenOptions{name: uniqueName("globex isolation token"), autoApprove: true, groupID: w.globexDeviceGroup})
+	tok := createToken(t, w.carol, tokenOptions{name: uniqueName("globex isolation token"), autoApprove: true})
 	w.globexToken = tok.Token.ID
 	dev, s := enroll(t, tok.EnrollmentConfig, "globex-iso-"+uniqueSuffix())
 	if s.Status != "active" {
 		t.Fatalf("globex device enrollment %+v", s)
 	}
 	w.globexDevice = dev.DeviceID
-	res := call(t, w.carol, http.MethodPost, "/api/v1/managed-files", map[string]any{
+	res := call(t, w.carol, http.MethodPut, "/api/v1/devices/"+dev.DeviceID+"/groups", map[string]any{"device_group_ids": []string{w.globexDeviceGroup}})
+	expectStatus(t, res, http.StatusOK, "")
+	res = call(t, w.carol, http.MethodPost, "/api/v1/managed-files", map[string]any{
 		"path": "/etc/globex-iso-" + uniqueSuffix() + ".conf", "content": "globex", "device_group_id": w.globexDeviceGroup,
 	})
 	expectStatus(t, res, http.StatusCreated, "")
-	w.globexFile = responseID(t, res).String()
-	res = call(t, w.carol, http.MethodPost, "/api/v1/managed-units", map[string]any{"unit": "globex-iso-" + uniqueSuffix() + ".service"})
+	w.globexFile = createdID(t, w.carol, "/api/v1/managed-files", res)
+	res = call(t, w.carol, http.MethodPost, "/api/v1/managed-units", map[string]any{
+		"unit": testUnitPrefix + "globex-iso-" + uniqueSuffix() + ".service", "device_group_id": w.globexDeviceGroup,
+	})
 	expectStatus(t, res, http.StatusCreated, "")
-	w.globexUnit = responseID(t, res).String()
+	w.globexUnit = createdID(t, w.carol, "/api/v1/managed-units", res)
 	w.globexIDs = append(w.globexIDs, w.globexDeviceGroup, w.globexToken, w.globexDevice, w.globexFile, w.globexUnit)
 	w.globexGroups = append(w.globexGroups, w.globexDeviceGroup)
 }
@@ -71,15 +78,10 @@ func globexGroup(t *testing.T, w *isolationWorld) string {
 	t.Helper()
 	res := call(t, w.carol, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": uniqueName("globex isolation")})
 	expectStatus(t, res, http.StatusCreated, "")
-	var g struct {
-		ID string `json:"id"`
-	}
-	if err := res.JSON(&g); err != nil {
-		t.Fatal(err)
-	}
-	w.globexIDs = append(w.globexIDs, g.ID)
-	w.globexGroups = append(w.globexGroups, g.ID)
-	return g.ID
+	id := createdID(w.top, w.carol, "/api/v1/device-groups", res)
+	w.globexIDs = append(w.globexIDs, id)
+	w.globexGroups = append(w.globexGroups, id)
+	return id
 }
 
 // isolationFixtures maps every operation of api/openapi/admin.yaml below /api/v1/ ("METHOD path"). The gate
@@ -136,8 +138,9 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/managed-files": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/managed-files?page_size=100", nil
 	}},
-	"POST /api/v1/managed-files": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
-		return "/api/v1/managed-files", map[string]any{"path": "/etc/acme-iso-" + uniqueSuffix() + ".conf", "content": "acme"}
+	"POST /api/v1/managed-files": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/managed-files", map[string]any{"path": "/etc/acme-iso-" + uniqueSuffix() + ".conf", "content": "acme",
+			"device_group_id": namedGroup(t, w.alice, "acme isolation scope")}
 	}},
 	"GET /api/v1/managed-files/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, nil),
 	"PATCH /api/v1/managed-files/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, map[string]any{"content": "taken over by acme"}),
@@ -146,8 +149,9 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/managed-units": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/managed-units?page_size=100", nil
 	}},
-	"POST /api/v1/managed-units": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
-		return "/api/v1/managed-units", map[string]any{"unit": "acme-iso-" + uniqueSuffix() + ".service"}
+	"POST /api/v1/managed-units": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/managed-units", map[string]any{"unit": testUnitPrefix + "acme-iso-" + uniqueSuffix() + ".service",
+			"device_group_id": namedGroup(t, w.alice, "acme isolation scope")}
 	}},
 	"GET /api/v1/managed-units/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-units/" + w.globexUnit }, nil),
 	"PATCH /api/v1/managed-units/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-units/" + w.globexUnit }, map[string]any{"enabled": false}),

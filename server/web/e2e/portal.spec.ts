@@ -19,6 +19,9 @@ test('organization admin manages a device group and sees the audit trail', async
   await expectAccessible(page)
   await createDialog.getByRole('button', { name: 'Create' }).click()
   await expect(createDialog).toBeHidden()
+  // Find the group by its unique name (the renamed group still matches), never by its position on the first page.
+  await page.getByTestId('list-search').getByRole('searchbox').fill(name)
+  await expect(page).toHaveURL(/[?&]q=/)
   await expect(page.getByRole('cell', { name, exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: `Edit ${name}` }).click()
@@ -173,6 +176,8 @@ test('platform admin sees the organizations page', async ({ page }) => {
   const csp = watchCSP(page)
   await login(page, 'platform-admin@paddock.test', 'dev_platform_admin_password')
   await expect(page).toHaveURL(/\/platform\/organizations$/)
+  await page.getByTestId('list-search').getByRole('searchbox').fill('acme')
+  await expect(page).toHaveURL(/q=acme/)
   await expect(page.getByRole('cell', { name: 'acme', exact: true })).toBeVisible()
   await expectAccessible(page)
 

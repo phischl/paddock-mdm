@@ -69,12 +69,19 @@ func gateS1(t *testing.T, d *Device) {
 	if err := json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev); err != nil || dev.State != "active" {
 		t.Fatalf("device state %q, %v", dev.State, err)
 	}
-	// The development organization also holds organization-wide definitions of the acceptance gates (e.g. units
-	// that do not exist on the VM); only this run's resources and the time resource must apply without error.
+	// Only this run's resources and the time resource must apply without error; other definitions of the
+	// development organization may fail on the VM, but the acceptance gates leave no units behind that real devices
+	// would report as unknown (plan M2.1 decision 3).
 	applied := d.WaitEvent("device.bundle_applied", 5*time.Minute, func(p map[string]any) bool {
 		return len(d.ownErrors(p)) == 0
 	})
-	t.Logf("bundle.applied: changed %v, %d errors of other definitions of the organization", applied["changed"], len(applied["errors"].([]any)))
+	errs := applied["errors"].([]any)
+	t.Logf("bundle.applied: changed %v, %d errors of other definitions of the organization", applied["changed"], len(errs))
+	for _, e := range errs {
+		if m, _ := e.(map[string]any); strings.HasPrefix(fmt.Sprint(m["message"]), "unknown unit ") {
+			t.Errorf("the device reports a unit of the organization as unknown: %v", m)
+		}
+	}
 	for path := range d.Files {
 		if strings.HasPrefix(path, "/etc/paddock-systest/") {
 			if got := d.Must("sudo stat -c '%a %U:%G' " + path); got != "640 root:adm" {
