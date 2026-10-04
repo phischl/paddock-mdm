@@ -90,6 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The agent module requires `golang.org/x/crypto` v0.55.0 (was v0.13.0), so agent builds outside the Go workspace no longer use the outdated version, and `make lint` runs `govulncheck` for every Go module, failing on vulnerabilities in reachable code (M2.1 step 2).
 - Organization data is isolated by PostgreSQL row-level security that fails closed without an organization context; platform endpoints use a separate database role, and cross-organization access returns 404 (F10, M0 steps 4, 9).
 - The portal uses a backend-for-frontend session: tokens stay on the server, the browser only holds an encrypted, `HttpOnly`, `SameSite=Strict` session cookie (F8, M0 step 7).
 - The portal is served with a strict Content Security Policy without `'unsafe-inline'`, with `frame-ancestors 'none'` and no third-party origins (C7, M0 step 8).

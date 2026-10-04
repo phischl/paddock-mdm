@@ -161,17 +161,6 @@ func createGroup(t *testing.T, p *env.Portal) group {
 	return group{id: responseID(t, res).String(), name: name}
 }
 
-func responseID(t *testing.T, res env.Response) uuid.UUID {
-	t.Helper()
-	var body struct {
-		ID string `json:"id"`
-	}
-	if err := res.JSON(&body); err != nil {
-		t.Fatal(err)
-	}
-	return uuid.MustParse(body.ID)
-}
-
 func newOrg() map[string]string {
 	slug := "gate-" + uuid.NewString()[:8]
 	return map[string]string{"slug": slug, "name": "Gate " + slug}

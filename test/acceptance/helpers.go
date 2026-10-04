@@ -219,6 +219,20 @@ func loadSpec(t *testing.T) *openapi3.T {
 
 func uniqueName(prefix string) string { return prefix + " " + uuid.NewString()[:8] }
 
+func uniqueSuffix() string { return strings.ReplaceAll(uniqueName("")[1:], "-", "") }
+
+// responseID is the id of a created resource.
+func responseID(t *testing.T, res env.Response) uuid.UUID {
+	t.Helper()
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := res.JSON(&body); err != nil {
+		t.Fatal(err)
+	}
+	return uuid.MustParse(body.ID)
+}
+
 // rootS3 is the audit object store with root credentials (reading objects for checks).
 func rootS3(t *testing.T) *s3.Client {
 	t.Helper()
