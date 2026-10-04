@@ -92,7 +92,16 @@ func TestDecide(t *testing.T) {
 		{"at the percentage threshold", with(func(r *Rollout) { r.Eligible = 1000; r.Failed = 20 }), Halt},
 		{"first failure with minimum 1 (gate S5)", with(func(r *Rollout) { r.FailureMin = 1; r.Eligible = 2; r.Failed = 1 }), Halt},
 		{"no failures with minimum 0", with(func(r *Rollout) { r.FailureMin = 0; r.Eligible = 0 }), Advance},
-		{"halted", with(func(r *Rollout) { r.Status = RolloutHalted }), Keep},
+		{"halted", with(func(r *Rollout) { r.Status = RolloutHalted; r.Failed = 3 }), Keep},
+		{"completed below threshold", with(func(r *Rollout) { r.Status = RolloutCompleted; r.CurrentWave = 2; r.Failed = 2 }), Keep},
+		{"completed at threshold", with(func(r *Rollout) { r.Status = RolloutCompleted; r.CurrentWave = 2; r.Failed = 3 }), Halt},
+		{"completed at the percentage threshold", with(func(r *Rollout) {
+			r.Status = RolloutCompleted
+			r.CurrentWave = 2
+			r.Eligible = 1000
+			r.Failed = 20
+		}), Halt},
+		{"completed without failures", with(func(r *Rollout) { r.Status = RolloutCompleted; r.CurrentWave = 2; r.FailureMin = 0 }), Keep},
 	}
 	for _, c := range cases {
 		if got := Decide(c.r, now); got != c.want {

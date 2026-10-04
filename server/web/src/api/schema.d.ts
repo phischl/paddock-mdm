@@ -574,8 +574,10 @@ export interface paths {
          * @description Roles: platform_admin. Starts the staged rollout of a published release; only one rollout runs at a time
          *     (409). Devices whose rollout bucket is inside the current wave are offered the release at their next
          *     check-in; the worker advances waves after min_wave_minutes and halts the rollout when the failed devices
-         *     reach max(failure_threshold_min, ceil(eligible × failure_threshold_percent / 100)). min_wave_minutes below
-         *     60 is accepted only in development.
+         *     reach max(failure_threshold_min, ceil(eligible × failure_threshold_percent / 100)). After the last wave the
+         *     release is the current release (completed); it halts when the failed devices of the last 7 days reach the
+         *     same threshold over the devices that checked in within those 7 days. min_wave_minutes below 60 is accepted
+         *     only in development.
          */
         post: operations["startAgentRollout"];
         delete?: never;
@@ -616,7 +618,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Roles: platform_admin. halted → running in the wave where it stopped. */
+        /** @description Roles: platform_admin. halted → running in the wave where it stopped; a rollout that had completed returns to completed (the current release). */
         post: operations["resumeAgentRollout"];
         delete?: never;
         options?: never;

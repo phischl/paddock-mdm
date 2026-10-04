@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -269,6 +270,120 @@ func TestRolloutRoundAdvancesAndCompletes(t *testing.T) {
 	if o, err := h.releases.EvaluateRollouts(sys, later.Add(time.Hour)); err != nil || o == nil || o.Version != v ||
 		agentrelease.Percent(o.Status, o.Waves, o.CurrentWave) != 100 {
 		t.Fatalf("completed offer: %+v, %v", o, err)
+	}
+}
+
+// completedRollout returns a release whose single-wave rollout (failure threshold: one device) has completed.
+func (h releaseHarness) completedRollout(t *testing.T, now time.Time) string {
+	t.Helper()
+	h.haltAll(t)
+	v := h.published(t)
+	one, zero := 1, 0
+	if _, err := h.releases.StartRollout(platformAdmin(), v, app.RolloutOptions{Waves: []int{100}, MinWaveMinutes: &one,
+		FailureThresholdMin: &one, FailureThresholdPercent: &zero}); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := h.releases.EvaluateRollouts(systemCtx(uuid.Nil), now); err != nil || o == nil || o.Version != v || o.Status != agentrelease.RolloutCompleted {
+		t.Fatalf("complete: %+v, %v", o, err)
+	}
+	return v
+}
+
+func (h releaseHarness) reportFailure(t *testing.T, version string) {
+	t.Helper()
+	org, dev := h.device(t)
+	data, _ := json.Marshal(map[string]string{"version": version, "from_version": "0.9.0", "outcome": "update_failed"})
+	ev := protocol.Event{EventSeq: 1, Type: protocol.EventAgentUpdateFailed, OccurredAt: time.Now(), Data: data}
+	if _, err := h.reports.RecordEvent(systemCtx(org), dev, ev); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Plan M2.1 decision 1: the current release halts when its failures within 7 days reach the threshold, and resuming
+// it restores the offer.
+func TestCurrentReleaseAutoStop(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	sys := systemCtx(uuid.Nil)
+	now := time.Now().Add(2 * time.Minute)
+	v := h.completedRollout(t, now)
+
+	// A failure older than the window does not count.
+	h.reportFailure(t, v)
+	if _, err := h.super.Exec(context.Background(), "UPDATE agent_update_report SET reported_at = now() - interval '8 days' WHERE version = $1", v); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := h.releases.EvaluateRollouts(sys, now); err != nil || o == nil || o.Status != agentrelease.RolloutCompleted {
+		t.Fatalf("a failure older than 7 days halted the current release: %+v, %v", o, err)
+	}
+
+	// A failure within the window reaches the threshold of one device: nothing is offered any more.
+	h.reportFailure(t, v)
+	if o, err := h.releases.EvaluateRollouts(sys, now); err != nil || o != nil {
+		t.Fatalf("after a failure within 7 days: offer %+v, %v; want halted (nothing offered)", o, err)
+	}
+	d, _ := h.releases.Get(platformAdmin(), v)
+	if d.Rollout.Status != agentrelease.RolloutHalted || d.Rollout.HaltedReason == nil || d.Rollout.CompletedAt == nil {
+		t.Fatalf("rollout %+v", d.Rollout)
+	}
+	var actor, reason string
+	if err := h.super.QueryRow(context.Background(),
+		"SELECT actor->>'type', params->>'reason' FROM action WHERE code = 'agent_rollout.halted' AND target->>'id' = $1 AND outcome = 'success'", v).Scan(&actor, &reason); err != nil || actor != "system" {
+		t.Fatalf("agent_rollout.halted audit: %q, %v", actor, err)
+	}
+	if !strings.Contains(reason, "current release") {
+		t.Fatalf("halt reason %q", reason)
+	}
+
+	// Resume restores the current-release offer; once the failure has left the window it stays.
+	r, err := h.releases.Resume(platformAdmin(), v)
+	if err != nil || r.Status != agentrelease.RolloutCompleted || r.HaltedReason != nil {
+		t.Fatalf("resume: %+v, %v", r, err)
+	}
+	later := now.Add(agentrelease.CurrentReleaseWindow + time.Hour)
+	if o, err := h.releases.EvaluateRollouts(sys, later); err != nil || o == nil || o.Version != v ||
+		agentrelease.Percent(o.Status, o.Waves, o.CurrentWave) != 100 {
+		t.Fatalf("resumed offer: %+v, %v", o, err)
+	}
+}
+
+// A completed rollout that a newer rollout replaced is not the current release and is not evaluated.
+func TestReplacedReleaseIsNotEvaluated(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	now := time.Now().Add(2 * time.Minute)
+	old := h.completedRollout(t, now)
+	h.completedRollout(t, now)
+	h.reportFailure(t, old)
+	if _, err := h.releases.EvaluateRollouts(systemCtx(uuid.Nil), now); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := h.releases.Get(platformAdmin(), old); d.Rollout.Status != agentrelease.RolloutCompleted {
+		t.Fatalf("replaced rollout %+v", d.Rollout)
+	}
+}
+
+// Offered devices of the current release are the active devices that contacted the server within the window.
+func TestCurrentReleaseStatsWindow(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	ctx := context.Background()
+	since := time.Now().Add(-time.Hour)
+	offered := func() int64 {
+		t.Helper()
+		var n, failed int64
+		if err := h.super.QueryRow(ctx, "SELECT offered, failed FROM paddock_agent_current_release_stats('0.0.0-none', $1)", since).Scan(&n, &failed); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := offered()
+	h.device(t) // never contacted the server
+	for _, contact := range []time.Time{time.Now(), since.Add(-time.Minute)} {
+		org, dev := h.device(t)
+		if _, err := h.super.Exec(ctx, "INSERT INTO device_status (device_id, organization_id, last_contact_at) VALUES ($1, $2, $3)", dev, org, contact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := offered() - before; got != 1 {
+		t.Fatalf("offered devices grew by %d, want 1 (only the device that contacted the server in the window)", got)
 	}
 }
 

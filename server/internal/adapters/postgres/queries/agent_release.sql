@@ -66,6 +66,11 @@ UPDATE agent_rollout SET status = @status, halted_reason = sqlc.narg(halted_reas
 WHERE version = @version
 RETURNING *;
 
+-- name: CompleteAgentRollout :one
+UPDATE agent_rollout SET status = 'completed', completed_at = now(), updated_at = now()
+WHERE version = @version
+RETURNING *;
+
 -- name: AdvanceAgentRollout :one
 UPDATE agent_rollout SET current_wave_index = current_wave_index + 1, wave_started_at = now(), updated_at = now()
 WHERE version = @version
@@ -83,6 +88,10 @@ LIMIT 1;
 
 -- name: AgentRolloutStats :one
 SELECT eligible::bigint, updated::bigint, failed::bigint FROM paddock_agent_rollout_stats(@version, @percent::int);
+
+-- Counts of the current release over the sliding window starting at since (plan M2.1 decision 1).
+-- name: CurrentReleaseStats :one
+SELECT offered::bigint, failed::bigint FROM paddock_agent_current_release_stats(@version, @since::timestamptz);
 
 -- name: InsertAgentUpdateReport :exec
 INSERT INTO agent_update_report (device_id, organization_id, version, outcome)
