@@ -1,5 +1,5 @@
 # 0019 — Login component: Himmelblau in OIDC mode against Authentik (A2)
-Status: Proposed — architect recommendation after PoC M1; awaiting product-owner confirmation because of the login UX consequence
+Status: Accepted (product owner, 2026-10-04)
 
 ## Context
 The concept delegates device login to Himmelblau and requires a time-boxed PoC (items 1–4, plus item 5 from
@@ -26,7 +26,7 @@ PoC M1 (`docs/poc/M1-report.md`, Himmelblau 4.0.4, Authentik 2026.8.3, Ubuntu 24
 - **SSSD against Authentik (fallback).** + Familiar; password at the greeter. − No MFA at the greeter with Authentik,
   day-granular offline cache, no Hello PIN; not evaluated further because Himmelblau passed.
 
-## Decision (proposed)
+## Decision
 Himmelblau 4.x (pinned, official repository, verified key fingerprint) in OIDC mode, configured exclusively through
 `himmelblau.conf`. Binding details are in architecture §9.2–9.5: dot-separated group names (`paddock.<slug>…`), groups
 claim on scope `profile` of the device provider, device provider with authorization code + refresh token + device
