@@ -175,10 +175,12 @@ func newAuditWorld(t *testing.T) *auditWorld {
 }
 
 // TestAuditExactlyOnce is gate A3 (plan M0 §8, AC3): every privileged action produces exactly one audit event
-// with the matching outcome — on success, validation failure, denial, missing resource and conflict.
+// with the matching outcome — on success, validation failure, denial, missing resource and conflict. The cases run
+// in parallel (each identifies its event by its own request ID).
 func TestAuditExactlyOnce(t *testing.T) {
 	doc := loadSpec(t)
 	w := newAuditWorld(t)
+	sem := parallelCases(t)
 	var ops []string
 	for path, item := range doc.Paths.Map() {
 		for method, op := range item.Operations() {
@@ -207,7 +209,12 @@ func TestAuditExactlyOnce(t *testing.T) {
 			continue
 		}
 		for _, c := range cases {
-			t.Run(op+"/"+c.name, func(t *testing.T) { c.run(t, w) })
+			t.Run(op+"/"+c.name, func(t *testing.T) {
+				t.Parallel()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				c.run(t, w)
+			})
 		}
 	}
 }
