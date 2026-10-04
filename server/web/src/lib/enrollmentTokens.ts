@@ -36,7 +36,7 @@ export async function createEnrollmentToken(input: TokenInput, now = new Date())
 
 /** Revokes a token; null on success, otherwise the problem code. */
 export async function revokeEnrollmentToken(id: string): Promise<string | null> {
-  const { error } = await api.POST('/api/v1/enrollment-tokens/{id}:revoke', {
+  const { error } = await api.POST('/api/v1/enrollment-tokens/{id}/revoke', {
     params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
   })
   return error ? problemCode(error) : null

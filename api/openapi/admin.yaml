@@ -369,7 +369,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
-  /api/v1/enrollment-tokens/{id}:revoke:
+  /api/v1/enrollment-tokens/{id}/revoke:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:
@@ -436,7 +436,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
-  /api/v1/devices/{id}:approve:
+  /api/v1/devices/{id}/approve:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:
@@ -453,7 +453,7 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
-  /api/v1/devices/{id}:reject:
+  /api/v1/devices/{id}/reject:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:
@@ -470,7 +470,7 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
-  /api/v1/devices/{id}:release-quarantine:
+  /api/v1/devices/{id}/release-quarantine:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:
@@ -487,7 +487,7 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
-  /api/v1/devices/{id}:retire:
+  /api/v1/devices/{id}/retire:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:

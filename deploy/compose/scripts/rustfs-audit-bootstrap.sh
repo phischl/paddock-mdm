@@ -74,9 +74,10 @@ JSON
 )
 
 printf '%s' "$policy" | rc 'cat >/tmp/policy.json && rc admin policy create audit paddock-audit-writer /tmp/policy.json >/dev/null'
-if ! rc 'rc admin user info audit "$WRITER_ACCESS_KEY"' >/dev/null 2>&1; then
-  rc 'rc admin user add audit "$WRITER_ACCESS_KEY" "$WRITER_SECRET_KEY" >/dev/null'
+# Generated keys may start with "-", hence "--" before positional arguments and "--user=".
+if ! rc 'rc admin user info -- audit "$WRITER_ACCESS_KEY"' >/dev/null 2>&1; then
+  rc 'rc admin user add -- audit "$WRITER_ACCESS_KEY" "$WRITER_SECRET_KEY" >/dev/null'
   echo "created audit writer user"
 fi
-rc 'rc admin policy attach audit paddock-audit-writer --user "$WRITER_ACCESS_KEY" >/dev/null'
+rc 'rc admin policy attach audit paddock-audit-writer --user="$WRITER_ACCESS_KEY" >/dev/null'
 echo "audit bucket bootstrap complete"

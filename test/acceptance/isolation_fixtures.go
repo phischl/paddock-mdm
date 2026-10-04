@@ -118,16 +118,16 @@ var isolationFixtures = map[string]isolationFixture{
 			"auto_approve": false, "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}
 	}},
 	"GET /api/v1/enrollment-tokens/{id}":         itemFixture(func(w *isolationWorld) string { return "/api/v1/enrollment-tokens/" + w.globexToken }, nil),
-	"POST /api/v1/enrollment-tokens/{id}:revoke": itemFixture(func(w *isolationWorld) string { return "/api/v1/enrollment-tokens/" + w.globexToken + ":revoke" }, nil),
+	"POST /api/v1/enrollment-tokens/{id}/revoke": itemFixture(func(w *isolationWorld) string { return "/api/v1/enrollment-tokens/" + w.globexToken + "/revoke" }, nil),
 
 	"GET /api/v1/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/devices?page_size=100", nil
 	}},
 	"GET /api/v1/devices/{id}":                     itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice }, nil),
-	"POST /api/v1/devices/{id}:approve":            itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + ":approve" }, nil),
-	"POST /api/v1/devices/{id}:reject":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + ":reject" }, nil),
-	"POST /api/v1/devices/{id}:release-quarantine": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + ":release-quarantine" }, nil),
-	"POST /api/v1/devices/{id}:retire":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + ":retire" }, nil),
+	"POST /api/v1/devices/{id}/approve":            itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/approve" }, nil),
+	"POST /api/v1/devices/{id}/reject":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/reject" }, nil),
+	"POST /api/v1/devices/{id}/release-quarantine": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/release-quarantine" }, nil),
+	"POST /api/v1/devices/{id}/retire":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/retire" }, nil),
 	"PUT /api/v1/devices/{id}/groups": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/groups" },
 		map[string]any{"device_group_ids": []string{}}),
 	"GET /api/v1/devices/{id}/effective-config": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/effective-config" }, nil),

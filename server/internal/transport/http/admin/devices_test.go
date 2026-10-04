@@ -117,7 +117,7 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	}
 	e.keysDown = false
 
-	revokePath := "/api/v1/enrollment-tokens/" + tok.Token.Id.String() + ":revoke"
+	revokePath := "/api/v1/enrollment-tokens/" + tok.Token.Id.String() + "/revoke"
 	noCSRF := e.do(call{method: "POST", path: revokePath, cookie: alice, noCSRF: true, skipReqCheck: true})
 	if noCSRF.status != http.StatusForbidden || noCSRF.problemCode(t) != "csrf_missing" {
 		t.Fatalf("revoke without CSRF: %d %s", noCSRF.status, noCSRF.body)
@@ -167,10 +167,10 @@ func TestDeviceLifecycle(t *testing.T) {
 	if r := e.do(call{method: "GET", path: base, cookie: dave}); r.status != http.StatusOK {
 		t.Fatalf("auditor get: %d", r.status)
 	}
-	if r := e.do(call{method: "POST", path: base + ":approve", cookie: dave}); r.status != http.StatusForbidden {
+	if r := e.do(call{method: "POST", path: base + "/approve", cookie: dave}); r.status != http.StatusForbidden {
 		t.Fatalf("auditor approve: %d", r.status)
 	}
-	approved := e.do(call{method: "POST", path: base + ":approve", cookie: bob})
+	approved := e.do(call{method: "POST", path: base + "/approve", cookie: bob})
 	if approved.status != http.StatusOK {
 		t.Fatalf("approve: %d %s", approved.status, approved.body)
 	}
@@ -180,18 +180,18 @@ func TestDeviceLifecycle(t *testing.T) {
 	if d.State != "active" {
 		t.Fatalf("state %s", d.State)
 	}
-	again := e.do(call{method: "POST", path: base + ":approve", cookie: bob})
+	again := e.do(call{method: "POST", path: base + "/approve", cookie: bob})
 	if again.status != http.StatusConflict || again.problemCode(t) != "invalid_state" {
 		t.Fatalf("approve twice: %d %s", again.status, again.body)
 	}
 	e.expectEvent(again, "device.approved:failure:invalid_state")
-	if r := e.do(call{method: "POST", path: base + ":retire", cookie: bob}); r.status != http.StatusForbidden {
+	if r := e.do(call{method: "POST", path: base + "/retire", cookie: bob}); r.status != http.StatusForbidden {
 		t.Fatalf("operator retire: %d", r.status)
 	}
-	if r := e.do(call{method: "POST", path: base + ":retire", cookie: carol}); r.status != http.StatusNotFound {
+	if r := e.do(call{method: "POST", path: base + "/retire", cookie: carol}); r.status != http.StatusNotFound {
 		t.Fatalf("globex retire: %d", r.status)
 	}
-	retired := e.do(call{method: "POST", path: base + ":retire", cookie: alice})
+	retired := e.do(call{method: "POST", path: base + "/retire", cookie: alice})
 	if retired.status != http.StatusOK {
 		t.Fatalf("retire: %d %s", retired.status, retired.body)
 	}
@@ -209,16 +209,16 @@ func TestDeviceLifecycle(t *testing.T) {
 	}
 
 	quarantined := e.insertDevice(e.acme, "lt-clone", "quarantined")
-	released := e.do(call{method: "POST", path: "/api/v1/devices/" + quarantined.String() + ":release-quarantine", cookie: bob})
+	released := e.do(call{method: "POST", path: "/api/v1/devices/" + quarantined.String() + "/release-quarantine", cookie: bob})
 	if released.status != http.StatusOK {
 		t.Fatalf("release: %d %s", released.status, released.body)
 	}
 	e.expectEvent(released, "device.quarantine_released:success:")
 	pending := e.insertDevice(e.acme, "lt-unknown", "pending")
-	if r := e.do(call{method: "POST", path: "/api/v1/devices/" + pending.String() + ":reject", cookie: alice}); r.status != http.StatusOK {
+	if r := e.do(call{method: "POST", path: "/api/v1/devices/" + pending.String() + "/reject", cookie: alice}); r.status != http.StatusOK {
 		t.Fatalf("reject: %d %s", r.status, r.body)
 	}
-	if r := e.do(call{method: "POST", path: "/api/v1/devices/not-a-uuid:approve", cookie: alice, skipReqCheck: true}); r.status != http.StatusBadRequest {
+	if r := e.do(call{method: "POST", path: "/api/v1/devices/not-a-uuid/approve", cookie: alice, skipReqCheck: true}); r.status != http.StatusBadRequest {
 		t.Fatalf("malformed id: %d", r.status)
 	} else {
 		e.expectEvent(r, "device.approved:failure:invalid_request")

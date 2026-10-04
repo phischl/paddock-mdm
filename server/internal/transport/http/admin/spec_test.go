@@ -9,7 +9,6 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
 )
 
@@ -46,12 +45,6 @@ func TestOpenAPISpec(t *testing.T) {
 			}
 			pattern := method + " " + path
 			seen[pattern] = true
-			if spec, ok := actionSpecs()[pattern]; ok {
-				if string(spec.Code) != code {
-					t.Errorf("%s: action route code %s, contract %s", pattern, spec.Code, code)
-				}
-				continue
-			}
 			op, ok := privileged[pattern]
 			if !ok {
 				t.Errorf("%s is privileged in the contract but missing from the privileged route table", pattern)
@@ -67,22 +60,4 @@ func TestOpenAPISpec(t *testing.T) {
 			t.Errorf("privileged route %s has no x-paddock-audit in the contract", pattern)
 		}
 	}
-	for pattern := range actionSpecs() {
-		if !seen[pattern] {
-			t.Errorf("action route %s has no x-paddock-audit in the contract", pattern)
-		}
-	}
-}
-
-// actionSpecs maps the contract pattern of every custom-method action (actions.go) to its audit spec.
-func actionSpecs() map[string]app.ActionSpec {
-	s, h := &server{}, &handlers{}
-	out := map[string]app.ActionSpec{}
-	for action, r := range s.deviceActions(h) {
-		out["POST /api/v1/devices/{id}:"+action] = r.spec
-	}
-	for action, r := range s.tokenActions(h) {
-		out["POST /api/v1/enrollment-tokens/{id}:"+action] = r.spec
-	}
-	return out
 }

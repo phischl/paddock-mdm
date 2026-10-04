@@ -9,9 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -237,7 +234,7 @@ func (e *env) do(c call) result {
 	if c.cookie != nil {
 		req.AddCookie(c.cookie)
 	}
-	route, pathParams, err := e.findRoute(req)
+	route, pathParams, err := e.router.FindRoute(req)
 	if err != nil {
 		e.t.Fatalf("%s %s is not in the OpenAPI contract: %v", c.method, c.path, err)
 	}
@@ -267,45 +264,6 @@ func (e *env) do(c call) result {
 	}
 	return res
 }
-
-// findRoute matches req against the contract. The legacy router cannot match custom methods ("{id}:approve"
-// inside one segment), and the embedded spec omits them because they are excluded from code generation; those are
-// resolved here by their literal suffix in api/openapi/admin.yaml.
-func (e *env) findRoute(req *http.Request) (*routers.Route, map[string]string, error) {
-	route, params, err := e.router.FindRoute(req)
-	if err == nil {
-		return route, params, nil
-	}
-	dir, last := path.Split(req.URL.Path)
-	id, action, ok := strings.Cut(last, ":")
-	if !ok {
-		return nil, nil, err
-	}
-	spec, specErr := contractFile()
-	if specErr != nil {
-		return nil, nil, specErr
-	}
-	template := dir + "{id}:" + action
-	item := spec.Paths.Value(template)
-	if item == nil || item.GetOperation(req.Method) == nil {
-		return nil, nil, err
-	}
-	return &routers.Route{Spec: spec, Path: template, PathItem: item, Method: req.Method, Operation: item.GetOperation(req.Method)},
-		map[string]string{"id": id}, nil
-}
-
-var contractOnce = sync.OnceValues(func() (*openapi3.T, error) {
-	_, file, _, _ := runtime.Caller(0)
-	doc, err := openapi3.NewLoader().LoadFromFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "api", "openapi", "admin.yaml"))
-	if err != nil {
-		return nil, err
-	}
-	doc.Servers = openapi3.Servers{{URL: "https://admin.test"}}
-	return doc, nil
-})
-
-// contractFile is api/openapi/admin.yaml as written, including the operations excluded from code generation.
-func contractFile() (*openapi3.T, error) { return contractOnce() }
 
 // events returns the action rows recorded for a request ID.
 func (e *env) events(requestID string) []string {

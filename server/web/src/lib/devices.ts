@@ -71,10 +71,10 @@ export function actionsFor(state: DeviceState): DeviceAction[] {
 }
 
 const actionPaths = {
-  approve: '/api/v1/devices/{id}:approve',
-  reject: '/api/v1/devices/{id}:reject',
-  'release-quarantine': '/api/v1/devices/{id}:release-quarantine',
-  retire: '/api/v1/devices/{id}:retire',
+  approve: '/api/v1/devices/{id}/approve',
+  reject: '/api/v1/devices/{id}/reject',
+  'release-quarantine': '/api/v1/devices/{id}/release-quarantine',
+  retire: '/api/v1/devices/{id}/retire',
 } as const
 
 /** Runs a lifecycle action; null on success, otherwise the problem code. */
