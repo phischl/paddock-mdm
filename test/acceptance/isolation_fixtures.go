@@ -21,6 +21,8 @@ type isolationWorld struct {
 	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
 	// Globex identity resources (seedGlobexIdentity).
 	globexUser, globexUserGroup, globexProfile, globexAssignment string
+	// globexUpstream is the Authentik pk of an upstream group whose only member is a globex user (seedGlobexUpstream).
+	globexUpstream string
 }
 
 // seedGlobexIdentity creates, as carol, a local user in a user group, a permission profile and its assignment to the
@@ -304,9 +306,9 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/user-groups/{id}/members":   {{"q": {"globex-iso"}}, {"source": {"local"}}},
 	"/api/v1/permission-profiles":        {{"q": {"globex-iso"}}, {"class": {"restricted"}, "page_size": {"100"}}},
 	"/api/v1/profile-assignments":        {{"q": {"globex-iso"}}, {"subject_type": {"group"}, "page_size": {"100"}}},
-	// Upstream groups are the Authentik groups outside Paddock's namespace, the same list for every organization
-	// (plan M3a decision 3); the check still requires that no globex ID or name appears in it.
-	"/api/v1/upstream-groups": {{"q": {"authentik"}}},
+	// Upstream groups with a member of the organization only (plan M3b decision 1): the globex-only group of
+	// seedGlobexUpstream is carol's, never alice's.
+	"/api/v1/upstream-groups": {{"q": {"globex-iso"}}, {"page_size": {"100"}}},
 }
 
 // currentLoginSettings returns acme's login settings as an update body (unchanged values).

@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strings"
@@ -28,6 +29,7 @@ func TestOrganizationIsolation(t *testing.T) {
 	globexGroup(t, w)
 	seedGlobexDevices(t, w)
 	seedGlobexIdentity(t, w)
+	seedGlobexUpstream(t, w)
 	ctx := testContext(t, time.Minute)
 	var globexEvents []env.AuditEvent
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
@@ -133,6 +135,20 @@ func TestOrganizationIsolation(t *testing.T) {
 		})
 	}
 
+	// An upstream group without an acme member cannot be imported by acme: not found, like a missing group.
+	t.Run("import of a globex-only upstream group", func(t *testing.T) {
+		res := call(t, w.alice, http.MethodPost, "/api/v1/user-groups", map[string]string{
+			"slug": "acme-iso-" + uniqueSuffix(), "name": "acme-iso import", "upstream_group_id": w.globexUpstream,
+		})
+		if res.Status == http.StatusCreated {
+			removeCreated(t, w.alice, "/api/v1/user-groups", res)
+		}
+		expectStatus(t, res, http.StatusNotFound, "not_found")
+		if leaked := containsAny(res.Body, w.globexIDs); leaked != "" {
+			t.Fatalf("response contains globex ID %s: %s", leaked, res.Body)
+		}
+	})
+
 	// Nothing was changed in globex by the acme calls.
 	for _, id := range w.globexGroups {
 		res := call(t, w.carol, http.MethodGet, "/api/v1/device-groups/"+id, nil)
@@ -151,6 +167,29 @@ func TestOrganizationIsolation(t *testing.T) {
 			t.Fatalf("acme audit log contains globex event %s", leaked)
 		}
 	}
+}
+
+// seedGlobexUpstream creates, directly in Authentik, an upstream group "globex-iso upstream …" whose only member is a
+// user of paddock.globex: carol may list and import it, alice must neither see nor import it (plan M3b decision 1).
+func seedGlobexUpstream(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t, time.Minute)
+	member := newDeviceUser(w.top, ak, "globex-iso-upstream", "globex.test", env.RootGroup("globex"))
+	name := "globex-iso upstream " + uniqueSuffix()
+	pk, err := ak.EnsureGroup(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.top.Cleanup(func() { _ = ak.Delete(context.Background(), "/core/groups/"+pk+"/") })
+	if err := ak.AddToGroup(ctx, member.name, name); err != nil {
+		t.Fatal(err)
+	}
+	w.globexUpstream = pk
+	w.globexIDs = append(w.globexIDs, pk)
 }
 
 // TestPlatformEndpointsForbiddenForOrganizations extends the isolation gate to the platform API (plan M2b decision

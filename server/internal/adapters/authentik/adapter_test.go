@@ -309,8 +309,14 @@ func TestGroupsAndMembers(t *testing.T) {
 	if members, _ := c.GroupMembers(ctx, pk); len(members) != 0 {
 		t.Fatalf("members %v", members)
 	}
+	// Only upstream groups with a member of paddock.acme are acme's (plan M3b decision 1).
 	f.groups["up-1"] = &fakeGroup{pk: "up-1", name: "Engineering: Linux"}
-	upstream, err := c.UpstreamGroups(ctx)
+	f.groups["up-2"] = &fakeGroup{pk: "up-2", name: "Globex only"}
+	f.groups["up-3"] = &fakeGroup{pk: "up-3", name: "Empty"}
+	root := f.groupByName("paddock.acme").pk
+	f.users[5].groups = []string{root, pk, "up-1"}
+	f.users[6] = &fakeUser{pk: 6, username: "frank@globex.test", groups: []string{"up-1", "up-2"}}
+	upstream, err := c.UpstreamGroups(ctx, "acme")
 	if err != nil || len(upstream) != 1 || upstream[0].Name != "Engineering: Linux" {
 		t.Fatalf("upstream groups %+v %v", upstream, err)
 	}

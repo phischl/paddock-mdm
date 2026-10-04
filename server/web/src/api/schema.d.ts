@@ -557,7 +557,8 @@ export interface paths {
         /**
          * @description Roles: org_admin, org_operator. Without upstream_group_id: a local group paddock.<slug>.g.<group_slug> whose
          *     members are managed in Paddock. With upstream_group_id: imports that Authentik group as mirror group
-         *     paddock.<slug>.s.<group_slug>; the worker copies its members of the organization every 5 minutes.
+         *     paddock.<slug>.s.<group_slug>; the worker copies its members of the organization every 5 minutes. An
+         *     upstream group without a member of the organization is not found (404).
          */
         post: operations["createUserGroup"];
         delete?: never;
@@ -637,7 +638,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Roles: org_admin, org_operator. Authentik groups outside Paddock's namespace that can be imported. */
+        /** @description Roles: org_admin, org_operator. Authentik groups outside Paddock's namespace with at least one member of the organization; they can be imported. */
         get: operations["listUpstreamGroups"];
         put?: never;
         post?: never;
@@ -3139,6 +3140,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
         };

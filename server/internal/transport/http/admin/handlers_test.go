@@ -197,12 +197,18 @@ func (f *fakeIdP) GroupMembers(_ context.Context, group string) ([]string, error
 	return slices.Clone(f.members[group]), f.err()
 }
 
-func (f *fakeIdP) UpstreamGroups(context.Context) ([]ports.IdentityGroup, error) {
+func (f *fakeIdP) UpstreamGroups(_ context.Context, slug string) ([]ports.IdentityGroup, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	var root []string
+	for pk, n := range f.groups {
+		if n == "paddock."+slug {
+			root = f.members[pk]
+		}
+	}
 	var out []ports.IdentityGroup
 	for pk, n := range f.groups {
-		if !strings.HasPrefix(n, "paddock.") {
+		if !strings.HasPrefix(n, "paddock.") && slices.ContainsFunc(f.members[pk], func(u string) bool { return slices.Contains(root, u) }) {
 			out = append(out, ports.IdentityGroup{PK: pk, Name: n})
 		}
 	}

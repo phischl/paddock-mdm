@@ -126,7 +126,7 @@ func TestLiveAuthentik(t *testing.T) {
 		t.Fatalf("locked group members after unlock: %v", members)
 	}
 
-	upstream, err := c.UpstreamGroups(ctx)
+	upstream, err := c.UpstreamGroups(ctx, slug)
 	if err != nil {
 		t.Fatal(err)
 	}
