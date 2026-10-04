@@ -1112,7 +1112,8 @@ stateDiagram-v2
   counted over a sliding 7-day window against the devices offered the release in that window, with the same
   thresholds; reaching them sets the rollout to `halted`, and no release is offered until a platform admin resumes it
   or starts a new rollout. Rollouts are platform-wide (releases are platform objects); waves use `hash(device_id)`.
-  *(Decided 2026-10-04 after M2b.)*
+  A resume returns the rollout to `completed` or `running` (whichever it was) and restarts failure counting at the
+  resume time, so failures from before the halt do not re-halt it. *(Decided 2026-10-04 after M2b / M2.1.)*
 - The supervisor's own update happens only through the distribution package (`apt`), never through the agent channel.
 
 ### 11.3 Reconcilers (apply engine)
