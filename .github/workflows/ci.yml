@@ -20,9 +20,7 @@ jobs:
         with:
           go-version: "1.27.1"
           cache-dependency-path: "**/go.sum"
-      - run: make lint
-      - name: govulncheck
-        run: cd server && go tool govulncheck ./...
+      - run: make lint # includes govulncheck for all modules (lint-vuln)
 
   test:
     runs-on: ubuntu-24.04
