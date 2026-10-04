@@ -1,16 +1,11 @@
 package admin
 
 import (
-	"regexp"
 	"slices"
 
+	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
 	"github.com/paddock-mdm/paddock/server/internal/principal"
 )
-
-// PlatformAdminsGroup is the Authentik group of platform administrators.
-const PlatformAdminsGroup = "paddock:platform:admins"
-
-var roleGroup = regexp.MustCompile(`^paddock:([a-z0-9-]{3,32}):(admins|operators|auditors)$`)
 
 // RoleResolution is the result of mapping the groups claim to a portal role (plan M0 §6.7).
 type RoleResolution struct {
@@ -24,8 +19,8 @@ type RoleResolution struct {
 }
 
 // ResolveRole maps Authentik groups to the portal role:
-//   - membership of paddock:platform:admins (and no organization role group) → platform admin;
-//   - otherwise exactly one group ^paddock:<slug>:(admins|operators|auditors)$ → that role in that organization;
+//   - membership of paddock.platform.admins (and no organization role group) → platform admin;
+//   - otherwise exactly one group paddock.<slug>.(admins|operators|auditors) → that role in that organization;
 //   - zero or several matches, or platform plus organization membership → denied.
 func ResolveRole(groups []string) RoleResolution {
 	platform := false
@@ -33,31 +28,32 @@ func ResolveRole(groups []string) RoleResolution {
 	matches := 0
 	var role principal.Role
 	seen := map[string]bool{}
+	platformAdmins := organization.PlatformAdminsGroup()
 	for _, g := range groups {
 		// Identity providers may repeat a group (Authentik merges the groups claim of several scopes).
 		if seen[g] {
 			continue
 		}
 		seen[g] = true
-		if g == PlatformAdminsGroup {
+		if g == platformAdmins {
 			platform = true
 			continue
 		}
-		m := roleGroup.FindStringSubmatch(g)
-		if m == nil || m[1] == "platform" {
+		slug, groupRole, ok := organization.ParseRoleGroup(g)
+		if !ok {
 			continue
 		}
 		matches++
-		switch m[2] {
-		case "admins":
+		switch groupRole {
+		case organization.GroupAdmins:
 			role = principal.RoleOrgAdmin
-		case "operators":
+		case organization.GroupOperators:
 			role = principal.RoleOrgOperator
 		default:
 			role = principal.RoleOrgAuditor
 		}
-		if !slices.Contains(res.Slugs, m[1]) {
-			res.Slugs = append(res.Slugs, m[1])
+		if !slices.Contains(res.Slugs, slug) {
+			res.Slugs = append(res.Slugs, slug)
 		}
 	}
 	switch {

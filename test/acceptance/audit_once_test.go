@@ -40,7 +40,7 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, p.LoginRequestID, "admin.login", "success")
 		}},
 		{"denied", func(t *testing.T, w *auditWorld) {
-			user, pw := tempUser(t, "noadmin", "paddock:acme")
+			user, pw := tempUser(t, "noadmin", env.RootGroup("acme"))
 			p, err := loginAs(t, user, pw)
 			if !errors.Is(err, authflow.ErrDenied) {
 				t.Fatalf("login = %v, want denied", err)

@@ -139,7 +139,7 @@ entries:
       name: paddock-portal-member
     attrs:
       expression: |
-        return request.user.groups.filter(name__startswith="paddock:").exists()
+        return request.user.groups.filter(name__startswith="paddock.").exists()
 
   - model: authentik_policies.policybinding
     identifiers:
@@ -150,7 +150,7 @@ entries:
   # --- Platform administrators ---
   - model: authentik_core.group
     identifiers:
-      name: "paddock:platform:admins"
+      name: "paddock.platform.admins"
 
   # --- Service account used by paddock-server (group management) ---
   - model: authentik_rbac.role

@@ -24,7 +24,7 @@ func TestLoginGate(t *testing.T) {
 	t.Run("user without a Paddock admin group is denied", func(t *testing.T) {
 		// Member of the organization's root group only: Authentik admits the user to the application, Paddock
 		// finds no admin role.
-		user, pw := tempUser(t, "member", "paddock:acme")
+		user, pw := tempUser(t, "member", env.RootGroup("acme"))
 		p, err := loginAs(t, user, pw)
 		if !errors.Is(err, authflow.ErrDenied) || p == nil || !strings.HasPrefix(p.Final, "/login-denied?reason=not_authorized") {
 			t.Fatalf("login = %v (final %q), want /login-denied?reason=not_authorized", err, finalOf(p))
@@ -46,7 +46,7 @@ func TestLoginGate(t *testing.T) {
 	})
 
 	t.Run("user in admin groups of two organizations is denied", func(t *testing.T) {
-		user, pw := tempUser(t, "twoorgs", "paddock:acme:admins", "paddock:globex:admins")
+		user, pw := tempUser(t, "twoorgs", env.RoleGroup("acme", "admins"), env.RoleGroup("globex", "admins"))
 		p, err := loginAs(t, user, pw)
 		if !errors.Is(err, authflow.ErrDenied) || !strings.HasPrefix(p.Final, "/login-denied?reason=not_authorized") {
 			t.Fatalf("login = %v (final %q), want /login-denied?reason=not_authorized", err, finalOf(p))

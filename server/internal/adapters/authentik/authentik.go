@@ -60,19 +60,22 @@ type group struct {
 	Parents []string `json:"parents"`
 }
 
-// EnsureOrganization creates paddock:<slug> and its :admins, :operators and :auditors children if missing.
+// EnsureOrganization creates paddock.<slug> and its .admins, .operators and .auditors children if missing.
 func (c *Client) EnsureOrganization(ctx context.Context, slug string) (ports.OrgIdentityRefs, error) {
-	root, admins, operators, auditors := organization.AuthentikGroups(slug)
-	rootPK, err := c.ensureGroup(ctx, root, "")
+	rootPK, err := c.ensureGroup(ctx, organization.RootGroup(slug), "")
 	if err != nil {
 		return ports.OrgIdentityRefs{}, err
 	}
 	refs := ports.OrgIdentityRefs{RootGroupPK: rootPK}
 	for _, g := range []struct {
-		name string
+		role organization.GroupRole
 		pk   *string
-	}{{admins, &refs.AdminsGroupPK}, {operators, &refs.OperatorsGroupPK}, {auditors, &refs.AuditorsGroupPK}} {
-		pk, err := c.ensureGroup(ctx, g.name, rootPK)
+	}{
+		{organization.GroupAdmins, &refs.AdminsGroupPK},
+		{organization.GroupOperators, &refs.OperatorsGroupPK},
+		{organization.GroupAuditors, &refs.AuditorsGroupPK},
+	} {
+		pk, err := c.ensureGroup(ctx, organization.RoleGroup(slug, g.role), rootPK)
 		if err != nil {
 			return ports.OrgIdentityRefs{}, err
 		}
