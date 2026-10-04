@@ -1,6 +1,6 @@
 # Implementierungsplan: M3a — Identity and privileges, server side
 
-Status: Ready for implementation (after M2.2) · 2026-10-04 · Author: architect
+Status: Ready for implementation · 2026-10-04 · Author: architect
 Basis: `docs/architecture.md` v1.5 §9 (identity, lock, login assignment, suspension), §10 (profiles, sudo), §7 (bundles),
 §21 (schema negotiation); ADR 0007 (amended), 0008, 0013, 0018, 0019; concept F2, F11, F13, F15, A13;
 PoC M1 report ("Configuration that worked")
@@ -207,7 +207,9 @@ Off-limits: as in M2.
 
 ## 7. Steps
 
-0. Wait-free start: M2.2 is merged (Go toolchain); run `git log`.
+0. Housekeeping from the M2.2 review (one commit `chore: ci govulncheck and system-test helper`): the CI workflow's
+   separate `govulncheck` step is replaced by the `make lint` target (no duplicate, includes `-test`); `WaitEvent` in
+   `test/system` uses the calling subtest's `t`, not the parent's.
 1. Migration, domain (users, groups, settings, privilege + rootequiv + property tests), `pkg/sudoers` + `pkg/bundle` v2.
    Commit `feat(identity): users, groups and permission profile domain`.
 2. Authentik adapter + blueprints (decisions 2, 3, 5, 6, 7, 9, 18) with recorded fixtures and real-instance tests.
@@ -217,7 +219,7 @@ Off-limits: as in M2.
    Commit `feat(compiler): bundle schema v2 with login and sudo`.
 5. Portal. Commit `feat(web): identity and privileges`.
 6. Gates P1, P2, I1–I4, E3 + regression from reset (`make dev-secrets up dev-seed acceptance e2e`, plus
-   `system-test VM=all T=S1` to prove M2b agents still get v1 bundles). Commit `test(acceptance): identity gates`.
+   `system-test VM=all T='TestAgentGates/.*/S1'` to prove M2b agents still get v1 bundles). Commit `test(acceptance): identity gates`.
 
 ## 8. Acceptance criteria
 
