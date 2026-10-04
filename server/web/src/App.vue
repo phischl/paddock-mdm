@@ -78,6 +78,34 @@ onBeforeUnmount(() => observer.disconnect())
           {{ t('nav.managedUnits') }}
         </v-btn>
         <v-btn
+          v-if="session.canReadGroups"
+          to="/users"
+          variant="text"
+        >
+          {{ t('nav.users') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/user-groups"
+          variant="text"
+        >
+          {{ t('nav.userGroups') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/permission-profiles"
+          variant="text"
+        >
+          {{ t('nav.permissionProfiles') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/settings/login"
+          variant="text"
+        >
+          {{ t('nav.loginSettings') }}
+        </v-btn>
+        <v-btn
           v-if="session.canReadAudit"
           to="/audit"
           variant="text"
