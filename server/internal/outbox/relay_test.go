@@ -14,6 +14,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
+	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/outbox"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
@@ -406,5 +407,53 @@ func TestReaperFinalizesStuckAction(t *testing.T) {
 	// Idempotent: a second run finds nothing.
 	if n, err := reaper.RunOnce(ctx); err != nil || n != 0 {
 		t.Fatalf("second run finalized %d (%v)", n, err)
+	}
+}
+
+// TestRelayRoutesStateChanges: state.<org> rows go to paddock.state on the organization's partition queue, audit
+// rows of the same batch still reach audit.writer.
+func TestRelayRoutesStateChanges(t *testing.T) {
+	broker := mqtest.Start(t)
+	h := newRelayHarness(t, broker)
+	pub := mq.NewPublisher(broker.Config)
+	defer pub.Close()
+	org := uuid.Must(uuid.NewV7())
+	auditIDs := h.insert(t, []uuid.UUID{org}, 1)
+	sys := principal.With(context.Background(), principal.Principal{Kind: principal.KindSystem})
+	stateID := uuid.Must(uuid.NewV7()).String()
+	payload, _ := json.Marshal(statechange.Event{OrganizationID: org, Scope: statechange.ScopeOrg, ID: org})
+	if err := h.platform.InPlatform(sys, func(ctx context.Context, q *pgstore.Queries) error {
+		return q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
+			OrganizationID: org, Subject: statechange.Subject(org), MsgID: stateID, Payload: payload,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := outbox.NewRelay(h.pool, pub).PublishOnce(context.Background()); err != nil || n != 2 {
+		t.Fatalf("PublishOnce: %d %v", n, err)
+	}
+	checkComplete(t, auditIDs, drain(t, broker))
+
+	conn, err := mq.Dial(broker.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := ch.Consume(mq.StateQueue(mq.StatePartition(org)), "", true, false, false, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case m := <-msgs:
+		var ev statechange.Event
+		if err := json.Unmarshal(m.Body, &ev); err != nil || m.MessageId != stateID || ev.OrganizationID != org {
+			t.Fatalf("state message %s %s: %v", m.MessageId, m.Body, err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("state change not delivered to its partition queue")
 	}
 }

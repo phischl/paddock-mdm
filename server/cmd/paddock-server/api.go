@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/paddock-mdm/paddock/pkg/protocol"
 	"github.com/paddock-mdm/paddock/server/internal/adapters/authentik"
 	"github.com/paddock-mdm/paddock/server/internal/app"
+	"github.com/paddock-mdm/paddock/server/internal/bundlesign"
 	"github.com/paddock-mdm/paddock/server/internal/config"
 	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
@@ -25,6 +27,7 @@ const sessionKeyPath = "secret/data/paddock/session"
 func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error {
 	httpAddr := l.String("PADDOCK_HTTP_ADDR", ":8080")
 	publicURL := strings.TrimRight(l.Required("PADDOCK_PUBLIC_ADMIN_URL"), "/")
+	deviceURL := strings.TrimRight(l.Required("PADDOCK_PUBLIC_DEVICE_URL"), "/")
 	orgDSN := l.SecretFile("PADDOCK_DB_URL_FILE")
 	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")
 	auditDSN := l.SecretFile("PADDOCK_AUDIT_DB_READER_URL_FILE")
@@ -75,8 +78,12 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
+	bundleKeys := func(ctx context.Context) ([]protocol.BundleKey, error) { return bundlesign.PublicKeys(ctx, baoClient) }
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
+		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, deviceURL),
+		Devices:       app.NewDevices(runner, orgPool),
+		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, authentik.New(authentikURL, authentikToken)),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		AuditLog:      app.NewAuditLog(auditReader),

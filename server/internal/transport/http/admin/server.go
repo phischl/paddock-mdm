@@ -22,6 +22,9 @@ type Deps struct {
 	Organizations *app.Organizations
 	Accounts      *app.Accounts
 	AuditLog      *app.AuditLog
+	Tokens        *app.EnrollmentTokens
+	Devices       *app.Devices
+	Managed       *app.ManagedConfig
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -40,6 +43,14 @@ var privileged = map[string]struct {
 	"PATCH /api/v1/device-groups/{id}":    {app.ScopeOrg, app.SpecDeviceGroupUpdate},
 	"DELETE /api/v1/device-groups/{id}":   {app.ScopeOrg, app.SpecDeviceGroupDelete},
 	"POST /api/platform/v1/organizations": {app.ScopePlatform, app.SpecOrganizationCreate},
+	"POST /api/v1/enrollment-tokens":      {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
+	"PUT /api/v1/devices/{id}/groups":     {app.ScopeOrg, app.SpecDeviceSetGroups},
+	"POST /api/v1/managed-files":          {app.ScopeOrg, app.SpecManagedFileCreate},
+	"PATCH /api/v1/managed-files/{id}":    {app.ScopeOrg, app.SpecManagedFileUpdate},
+	"DELETE /api/v1/managed-files/{id}":   {app.ScopeOrg, app.SpecManagedFileDelete},
+	"POST /api/v1/managed-units":          {app.ScopeOrg, app.SpecManagedUnitCreate},
+	"PATCH /api/v1/managed-units/{id}":    {app.ScopeOrg, app.SpecManagedUnitUpdate},
+	"DELETE /api/v1/managed-units/{id}":   {app.ScopeOrg, app.SpecManagedUnitDelete},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -50,8 +61,11 @@ func NewHandler(d Deps) http.Handler {
 	s := &server{d: d, bff: &bff{oidc: d.OIDC, keys: d.Keys, accounts: d.Accounts, now: d.Now}}
 
 	api := http.NewServeMux()
-	strict := adminapi.NewStrictHandlerWithOptions(
-		&handlers{groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog}, nil,
+	h := &handlers{
+		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
+		devices: d.Devices, managed: d.Managed, now: d.Now,
+	}
+	strict := adminapi.NewStrictHandlerWithOptions(h, nil,
 		adminapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc:  s.rejected,
 			ResponseErrorHandlerFunc: httpx.WriteProblem,
@@ -61,6 +75,8 @@ func NewHandler(d Deps) http.Handler {
 		Middlewares:      []adminapi.MiddlewareFunc{s.csrf},
 		ErrorHandlerFunc: s.rejected,
 	})
+	api.Handle("POST /api/v1/devices/{"+actionPathValue+"}", s.actionHandler(s.deviceActions(h)))
+	api.Handle("POST /api/v1/enrollment-tokens/{"+actionPathValue+"}", s.actionHandler(s.tokenActions(h)))
 	api.Handle("POST /api/auth/logout", s.csrf(s.bff.logout(d.PublicURL)))
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { httpx.WriteProblem(w, r, problem.NotFound) })
 	authenticated := s.session(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

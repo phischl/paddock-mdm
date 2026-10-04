@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
@@ -20,6 +21,10 @@ type handlers struct {
 	orgs     *app.Organizations
 	accounts *app.Accounts
 	audit    *app.AuditLog
+	tokens   *app.EnrollmentTokens
+	devices  *app.Devices
+	managed  *app.ManagedConfig
+	now      func() time.Time
 }
 
 var _ adminapi.StrictServerInterface = (*handlers)(nil)

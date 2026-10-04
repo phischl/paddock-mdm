@@ -22,7 +22,7 @@ const superPassword = "test-superuser"
 
 // Paddock holds the DSNs of every role of database paddock.
 type Paddock struct {
-	Super, Owner, API, Platform, Relay string
+	Super, Owner, API, Platform, Relay, Worker, Compiler string
 }
 
 // Audit holds the DSNs of every role of database paddock_audit.
@@ -78,6 +78,8 @@ func StartPaddock(t testing.TB) Paddock {
 		"PADDOCK_API_PASSWORD":      "api-pw",
 		"PADDOCK_PLATFORM_PASSWORD": "platform-pw",
 		"PADDOCK_RELAY_PASSWORD":    "relay-pw",
+		"PADDOCK_WORKER_PASSWORD":   "worker-pw",
+		"PADDOCK_COMPILER_PASSWORD": "compiler-pw",
 	}
 	host := start(t, "paddock", filepath.Join("deploy", "compose", "postgres", "init", "10-roles.sh"), pw)
 	p := Paddock{
@@ -86,6 +88,8 @@ func StartPaddock(t testing.TB) Paddock {
 		API:      dsn(host, "paddock_api", pw["PADDOCK_API_PASSWORD"], "paddock"),
 		Platform: dsn(host, "paddock_platform", pw["PADDOCK_PLATFORM_PASSWORD"], "paddock"),
 		Relay:    dsn(host, "paddock_relay", pw["PADDOCK_RELAY_PASSWORD"], "paddock"),
+		Worker:   dsn(host, "paddock_worker", pw["PADDOCK_WORKER_PASSWORD"], "paddock"),
+		Compiler: dsn(host, "paddock_compiler", pw["PADDOCK_COMPILER_PASSWORD"], "paddock"),
 	}
 	if err := migrate.Paddock(context.Background(), p.Owner); err != nil {
 		t.Fatalf("pgtest: migrate paddock: %v", err)

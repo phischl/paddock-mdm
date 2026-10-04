@@ -28,6 +28,7 @@ import (
 const (
 	AuditActorTypeAdmin         AuditActorType = "admin"
 	AuditActorTypeAnonymous     AuditActorType = "anonymous"
+	AuditActorTypeDevice        AuditActorType = "device"
 	AuditActorTypePlatformAdmin AuditActorType = "platform_admin"
 	AuditActorTypeSystem        AuditActorType = "system"
 )
@@ -38,6 +39,8 @@ func (e AuditActorType) Valid() bool {
 	case AuditActorTypeAdmin:
 		return true
 	case AuditActorTypeAnonymous:
+		return true
+	case AuditActorTypeDevice:
 		return true
 	case AuditActorTypePlatformAdmin:
 		return true
@@ -66,6 +69,114 @@ func (e AuditOutcome) Valid() bool {
 	case Success:
 		return true
 	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BundleResourceType.
+const (
+	BundleResourceTypeFile        BundleResourceType = "file"
+	BundleResourceTypeSystemdUnit BundleResourceType = "systemd_unit"
+	BundleResourceTypeTime        BundleResourceType = "time"
+)
+
+// Valid indicates whether the value is a known member of the BundleResourceType enum.
+func (e BundleResourceType) Valid() bool {
+	switch e {
+	case BundleResourceTypeFile:
+		return true
+	case BundleResourceTypeSystemdUnit:
+		return true
+	case BundleResourceTypeTime:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceIdentityKeyKeyProtection.
+const (
+	DeviceIdentityKeyKeyProtectionFile DeviceIdentityKeyKeyProtection = "file"
+	DeviceIdentityKeyKeyProtectionTpm  DeviceIdentityKeyKeyProtection = "tpm"
+)
+
+// Valid indicates whether the value is a known member of the DeviceIdentityKeyKeyProtection enum.
+func (e DeviceIdentityKeyKeyProtection) Valid() bool {
+	switch e {
+	case DeviceIdentityKeyKeyProtectionFile:
+		return true
+	case DeviceIdentityKeyKeyProtectionTpm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceIdentityKeyStatus.
+const (
+	DeviceIdentityKeyStatusActive  DeviceIdentityKeyStatus = "active"
+	DeviceIdentityKeyStatusRevoked DeviceIdentityKeyStatus = "revoked"
+)
+
+// Valid indicates whether the value is a known member of the DeviceIdentityKeyStatus enum.
+func (e DeviceIdentityKeyStatus) Valid() bool {
+	switch e {
+	case DeviceIdentityKeyStatusActive:
+		return true
+	case DeviceIdentityKeyStatusRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceState.
+const (
+	DeviceStateActive      DeviceState = "active"
+	DeviceStatePending     DeviceState = "pending"
+	DeviceStateQuarantined DeviceState = "quarantined"
+	DeviceStateRejected    DeviceState = "rejected"
+	DeviceStateRetired     DeviceState = "retired"
+)
+
+// Valid indicates whether the value is a known member of the DeviceState enum.
+func (e DeviceState) Valid() bool {
+	switch e {
+	case DeviceStateActive:
+		return true
+	case DeviceStatePending:
+		return true
+	case DeviceStateQuarantined:
+		return true
+	case DeviceStateRejected:
+		return true
+	case DeviceStateRetired:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnrollmentTokenStatus.
+const (
+	EnrollmentTokenStatusActive    EnrollmentTokenStatus = "active"
+	EnrollmentTokenStatusExhausted EnrollmentTokenStatus = "exhausted"
+	EnrollmentTokenStatusExpired   EnrollmentTokenStatus = "expired"
+	EnrollmentTokenStatusRevoked   EnrollmentTokenStatus = "revoked"
+)
+
+// Valid indicates whether the value is a known member of the EnrollmentTokenStatus enum.
+func (e EnrollmentTokenStatus) Valid() bool {
+	switch e {
+	case EnrollmentTokenStatusActive:
+		return true
+	case EnrollmentTokenStatusExhausted:
+		return true
+	case EnrollmentTokenStatusExpired:
+		return true
+	case EnrollmentTokenStatusRevoked:
 		return true
 	default:
 		return false
@@ -128,22 +239,22 @@ func (e MeUpdateLocale) Valid() bool {
 
 // Defines values for OrganizationStatus.
 const (
-	Active             OrganizationStatus = "active"
-	Provisioning       OrganizationStatus = "provisioning"
-	ProvisioningFailed OrganizationStatus = "provisioning_failed"
-	Suspended          OrganizationStatus = "suspended"
+	OrganizationStatusActive             OrganizationStatus = "active"
+	OrganizationStatusProvisioning       OrganizationStatus = "provisioning"
+	OrganizationStatusProvisioningFailed OrganizationStatus = "provisioning_failed"
+	OrganizationStatusSuspended          OrganizationStatus = "suspended"
 )
 
 // Valid indicates whether the value is a known member of the OrganizationStatus enum.
 func (e OrganizationStatus) Valid() bool {
 	switch e {
-	case Active:
+	case OrganizationStatusActive:
 		return true
-	case Provisioning:
+	case OrganizationStatusProvisioning:
 		return true
-	case ProvisioningFailed:
+	case OrganizationStatusProvisioningFailed:
 		return true
-	case Suspended:
+	case OrganizationStatusSuspended:
 		return true
 	default:
 		return false
@@ -219,6 +330,132 @@ func (e DeviceGroupSort) Valid() bool {
 	case DeviceGroupSortName:
 		return true
 	case DeviceGroupSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceSort.
+const (
+	DeviceSortEnrolledAt         DeviceSort = "enrolled_at"
+	DeviceSortHostname           DeviceSort = "hostname"
+	DeviceSortLastContactAt      DeviceSort = "last_contact_at"
+	DeviceSortMinusEnrolledAt    DeviceSort = "-enrolled_at"
+	DeviceSortMinusHostname      DeviceSort = "-hostname"
+	DeviceSortMinusLastContactAt DeviceSort = "-last_contact_at"
+	DeviceSortMinusState         DeviceSort = "-state"
+	DeviceSortState              DeviceSort = "state"
+)
+
+// Valid indicates whether the value is a known member of the DeviceSort enum.
+func (e DeviceSort) Valid() bool {
+	switch e {
+	case DeviceSortEnrolledAt:
+		return true
+	case DeviceSortHostname:
+		return true
+	case DeviceSortLastContactAt:
+		return true
+	case DeviceSortMinusEnrolledAt:
+		return true
+	case DeviceSortMinusHostname:
+		return true
+	case DeviceSortMinusLastContactAt:
+		return true
+	case DeviceSortMinusState:
+		return true
+	case DeviceSortState:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnrollmentTokenSort.
+const (
+	EnrollmentTokenSortCreatedAt      EnrollmentTokenSort = "created_at"
+	EnrollmentTokenSortExpiresAt      EnrollmentTokenSort = "expires_at"
+	EnrollmentTokenSortMinusCreatedAt EnrollmentTokenSort = "-created_at"
+	EnrollmentTokenSortMinusExpiresAt EnrollmentTokenSort = "-expires_at"
+	EnrollmentTokenSortMinusName      EnrollmentTokenSort = "-name"
+	EnrollmentTokenSortName           EnrollmentTokenSort = "name"
+)
+
+// Valid indicates whether the value is a known member of the EnrollmentTokenSort enum.
+func (e EnrollmentTokenSort) Valid() bool {
+	switch e {
+	case EnrollmentTokenSortCreatedAt:
+		return true
+	case EnrollmentTokenSortExpiresAt:
+		return true
+	case EnrollmentTokenSortMinusCreatedAt:
+		return true
+	case EnrollmentTokenSortMinusExpiresAt:
+		return true
+	case EnrollmentTokenSortMinusName:
+		return true
+	case EnrollmentTokenSortName:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ManagedFileSort.
+const (
+	ManagedFileSortCreatedAt      ManagedFileSort = "created_at"
+	ManagedFileSortMinusCreatedAt ManagedFileSort = "-created_at"
+	ManagedFileSortMinusPath      ManagedFileSort = "-path"
+	ManagedFileSortMinusUpdatedAt ManagedFileSort = "-updated_at"
+	ManagedFileSortPath           ManagedFileSort = "path"
+	ManagedFileSortUpdatedAt      ManagedFileSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ManagedFileSort enum.
+func (e ManagedFileSort) Valid() bool {
+	switch e {
+	case ManagedFileSortCreatedAt:
+		return true
+	case ManagedFileSortMinusCreatedAt:
+		return true
+	case ManagedFileSortMinusPath:
+		return true
+	case ManagedFileSortMinusUpdatedAt:
+		return true
+	case ManagedFileSortPath:
+		return true
+	case ManagedFileSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ManagedUnitSort.
+const (
+	ManagedUnitSortCreatedAt      ManagedUnitSort = "created_at"
+	ManagedUnitSortMinusCreatedAt ManagedUnitSort = "-created_at"
+	ManagedUnitSortMinusUnit      ManagedUnitSort = "-unit"
+	ManagedUnitSortMinusUpdatedAt ManagedUnitSort = "-updated_at"
+	ManagedUnitSortUnit           ManagedUnitSort = "unit"
+	ManagedUnitSortUpdatedAt      ManagedUnitSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ManagedUnitSort enum.
+func (e ManagedUnitSort) Valid() bool {
+	switch e {
+	case ManagedUnitSortCreatedAt:
+		return true
+	case ManagedUnitSortMinusCreatedAt:
+		return true
+	case ManagedUnitSortMinusUnit:
+		return true
+	case ManagedUnitSortMinusUpdatedAt:
+		return true
+	case ManagedUnitSortUnit:
+		return true
+	case ManagedUnitSortUpdatedAt:
 		return true
 	default:
 		return false
@@ -513,6 +750,408 @@ func (e UpdateDeviceGroupParamsXPaddockCSRF) Valid() bool {
 	}
 }
 
+// Defines values for ListDeviceGroupDevicesParamsPageSize.
+const (
+	ListDeviceGroupDevicesParamsPageSizeN10  ListDeviceGroupDevicesParamsPageSize = 10
+	ListDeviceGroupDevicesParamsPageSizeN100 ListDeviceGroupDevicesParamsPageSize = 100
+	ListDeviceGroupDevicesParamsPageSizeN25  ListDeviceGroupDevicesParamsPageSize = 25
+	ListDeviceGroupDevicesParamsPageSizeN50  ListDeviceGroupDevicesParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceGroupDevicesParamsPageSize enum.
+func (e ListDeviceGroupDevicesParamsPageSize) Valid() bool {
+	switch e {
+	case ListDeviceGroupDevicesParamsPageSizeN10:
+		return true
+	case ListDeviceGroupDevicesParamsPageSizeN100:
+		return true
+	case ListDeviceGroupDevicesParamsPageSizeN25:
+		return true
+	case ListDeviceGroupDevicesParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDeviceGroupDevicesParamsSort.
+const (
+	ListDeviceGroupDevicesParamsSortEnrolledAt         ListDeviceGroupDevicesParamsSort = "enrolled_at"
+	ListDeviceGroupDevicesParamsSortHostname           ListDeviceGroupDevicesParamsSort = "hostname"
+	ListDeviceGroupDevicesParamsSortLastContactAt      ListDeviceGroupDevicesParamsSort = "last_contact_at"
+	ListDeviceGroupDevicesParamsSortMinusEnrolledAt    ListDeviceGroupDevicesParamsSort = "-enrolled_at"
+	ListDeviceGroupDevicesParamsSortMinusHostname      ListDeviceGroupDevicesParamsSort = "-hostname"
+	ListDeviceGroupDevicesParamsSortMinusLastContactAt ListDeviceGroupDevicesParamsSort = "-last_contact_at"
+	ListDeviceGroupDevicesParamsSortMinusState         ListDeviceGroupDevicesParamsSort = "-state"
+	ListDeviceGroupDevicesParamsSortState              ListDeviceGroupDevicesParamsSort = "state"
+)
+
+// Valid indicates whether the value is a known member of the ListDeviceGroupDevicesParamsSort enum.
+func (e ListDeviceGroupDevicesParamsSort) Valid() bool {
+	switch e {
+	case ListDeviceGroupDevicesParamsSortEnrolledAt:
+		return true
+	case ListDeviceGroupDevicesParamsSortHostname:
+		return true
+	case ListDeviceGroupDevicesParamsSortLastContactAt:
+		return true
+	case ListDeviceGroupDevicesParamsSortMinusEnrolledAt:
+		return true
+	case ListDeviceGroupDevicesParamsSortMinusHostname:
+		return true
+	case ListDeviceGroupDevicesParamsSortMinusLastContactAt:
+		return true
+	case ListDeviceGroupDevicesParamsSortMinusState:
+		return true
+	case ListDeviceGroupDevicesParamsSortState:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDevicesParamsPageSize.
+const (
+	ListDevicesParamsPageSizeN10  ListDevicesParamsPageSize = 10
+	ListDevicesParamsPageSizeN100 ListDevicesParamsPageSize = 100
+	ListDevicesParamsPageSizeN25  ListDevicesParamsPageSize = 25
+	ListDevicesParamsPageSizeN50  ListDevicesParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListDevicesParamsPageSize enum.
+func (e ListDevicesParamsPageSize) Valid() bool {
+	switch e {
+	case ListDevicesParamsPageSizeN10:
+		return true
+	case ListDevicesParamsPageSizeN100:
+		return true
+	case ListDevicesParamsPageSizeN25:
+		return true
+	case ListDevicesParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListDevicesParamsSort.
+const (
+	ListDevicesParamsSortEnrolledAt         ListDevicesParamsSort = "enrolled_at"
+	ListDevicesParamsSortHostname           ListDevicesParamsSort = "hostname"
+	ListDevicesParamsSortLastContactAt      ListDevicesParamsSort = "last_contact_at"
+	ListDevicesParamsSortMinusEnrolledAt    ListDevicesParamsSort = "-enrolled_at"
+	ListDevicesParamsSortMinusHostname      ListDevicesParamsSort = "-hostname"
+	ListDevicesParamsSortMinusLastContactAt ListDevicesParamsSort = "-last_contact_at"
+	ListDevicesParamsSortMinusState         ListDevicesParamsSort = "-state"
+	ListDevicesParamsSortState              ListDevicesParamsSort = "state"
+)
+
+// Valid indicates whether the value is a known member of the ListDevicesParamsSort enum.
+func (e ListDevicesParamsSort) Valid() bool {
+	switch e {
+	case ListDevicesParamsSortEnrolledAt:
+		return true
+	case ListDevicesParamsSortHostname:
+		return true
+	case ListDevicesParamsSortLastContactAt:
+		return true
+	case ListDevicesParamsSortMinusEnrolledAt:
+		return true
+	case ListDevicesParamsSortMinusHostname:
+		return true
+	case ListDevicesParamsSortMinusLastContactAt:
+		return true
+	case ListDevicesParamsSortMinusState:
+		return true
+	case ListDevicesParamsSortState:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SetDeviceGroupsParamsXPaddockCSRF.
+const (
+	SetDeviceGroupsParamsXPaddockCSRFN1 SetDeviceGroupsParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the SetDeviceGroupsParamsXPaddockCSRF enum.
+func (e SetDeviceGroupsParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case SetDeviceGroupsParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListEnrollmentTokensParamsPageSize.
+const (
+	ListEnrollmentTokensParamsPageSizeN10  ListEnrollmentTokensParamsPageSize = 10
+	ListEnrollmentTokensParamsPageSizeN100 ListEnrollmentTokensParamsPageSize = 100
+	ListEnrollmentTokensParamsPageSizeN25  ListEnrollmentTokensParamsPageSize = 25
+	ListEnrollmentTokensParamsPageSizeN50  ListEnrollmentTokensParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListEnrollmentTokensParamsPageSize enum.
+func (e ListEnrollmentTokensParamsPageSize) Valid() bool {
+	switch e {
+	case ListEnrollmentTokensParamsPageSizeN10:
+		return true
+	case ListEnrollmentTokensParamsPageSizeN100:
+		return true
+	case ListEnrollmentTokensParamsPageSizeN25:
+		return true
+	case ListEnrollmentTokensParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListEnrollmentTokensParamsSort.
+const (
+	ListEnrollmentTokensParamsSortCreatedAt      ListEnrollmentTokensParamsSort = "created_at"
+	ListEnrollmentTokensParamsSortExpiresAt      ListEnrollmentTokensParamsSort = "expires_at"
+	ListEnrollmentTokensParamsSortMinusCreatedAt ListEnrollmentTokensParamsSort = "-created_at"
+	ListEnrollmentTokensParamsSortMinusExpiresAt ListEnrollmentTokensParamsSort = "-expires_at"
+	ListEnrollmentTokensParamsSortMinusName      ListEnrollmentTokensParamsSort = "-name"
+	ListEnrollmentTokensParamsSortName           ListEnrollmentTokensParamsSort = "name"
+)
+
+// Valid indicates whether the value is a known member of the ListEnrollmentTokensParamsSort enum.
+func (e ListEnrollmentTokensParamsSort) Valid() bool {
+	switch e {
+	case ListEnrollmentTokensParamsSortCreatedAt:
+		return true
+	case ListEnrollmentTokensParamsSortExpiresAt:
+		return true
+	case ListEnrollmentTokensParamsSortMinusCreatedAt:
+		return true
+	case ListEnrollmentTokensParamsSortMinusExpiresAt:
+		return true
+	case ListEnrollmentTokensParamsSortMinusName:
+		return true
+	case ListEnrollmentTokensParamsSortName:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateEnrollmentTokenParamsXPaddockCSRF.
+const (
+	CreateEnrollmentTokenParamsXPaddockCSRFN1 CreateEnrollmentTokenParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the CreateEnrollmentTokenParamsXPaddockCSRF enum.
+func (e CreateEnrollmentTokenParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case CreateEnrollmentTokenParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListManagedFilesParamsPageSize.
+const (
+	ListManagedFilesParamsPageSizeN10  ListManagedFilesParamsPageSize = 10
+	ListManagedFilesParamsPageSizeN100 ListManagedFilesParamsPageSize = 100
+	ListManagedFilesParamsPageSizeN25  ListManagedFilesParamsPageSize = 25
+	ListManagedFilesParamsPageSizeN50  ListManagedFilesParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListManagedFilesParamsPageSize enum.
+func (e ListManagedFilesParamsPageSize) Valid() bool {
+	switch e {
+	case ListManagedFilesParamsPageSizeN10:
+		return true
+	case ListManagedFilesParamsPageSizeN100:
+		return true
+	case ListManagedFilesParamsPageSizeN25:
+		return true
+	case ListManagedFilesParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListManagedFilesParamsSort.
+const (
+	ListManagedFilesParamsSortCreatedAt      ListManagedFilesParamsSort = "created_at"
+	ListManagedFilesParamsSortMinusCreatedAt ListManagedFilesParamsSort = "-created_at"
+	ListManagedFilesParamsSortMinusPath      ListManagedFilesParamsSort = "-path"
+	ListManagedFilesParamsSortMinusUpdatedAt ListManagedFilesParamsSort = "-updated_at"
+	ListManagedFilesParamsSortPath           ListManagedFilesParamsSort = "path"
+	ListManagedFilesParamsSortUpdatedAt      ListManagedFilesParamsSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ListManagedFilesParamsSort enum.
+func (e ListManagedFilesParamsSort) Valid() bool {
+	switch e {
+	case ListManagedFilesParamsSortCreatedAt:
+		return true
+	case ListManagedFilesParamsSortMinusCreatedAt:
+		return true
+	case ListManagedFilesParamsSortMinusPath:
+		return true
+	case ListManagedFilesParamsSortMinusUpdatedAt:
+		return true
+	case ListManagedFilesParamsSortPath:
+		return true
+	case ListManagedFilesParamsSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateManagedFileParamsXPaddockCSRF.
+const (
+	CreateManagedFileParamsXPaddockCSRFN1 CreateManagedFileParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the CreateManagedFileParamsXPaddockCSRF enum.
+func (e CreateManagedFileParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case CreateManagedFileParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeleteManagedFileParamsXPaddockCSRF.
+const (
+	DeleteManagedFileParamsXPaddockCSRFN1 DeleteManagedFileParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the DeleteManagedFileParamsXPaddockCSRF enum.
+func (e DeleteManagedFileParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case DeleteManagedFileParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateManagedFileParamsXPaddockCSRF.
+const (
+	UpdateManagedFileParamsXPaddockCSRFN1 UpdateManagedFileParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the UpdateManagedFileParamsXPaddockCSRF enum.
+func (e UpdateManagedFileParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case UpdateManagedFileParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListManagedUnitsParamsPageSize.
+const (
+	ListManagedUnitsParamsPageSizeN10  ListManagedUnitsParamsPageSize = 10
+	ListManagedUnitsParamsPageSizeN100 ListManagedUnitsParamsPageSize = 100
+	ListManagedUnitsParamsPageSizeN25  ListManagedUnitsParamsPageSize = 25
+	ListManagedUnitsParamsPageSizeN50  ListManagedUnitsParamsPageSize = 50
+)
+
+// Valid indicates whether the value is a known member of the ListManagedUnitsParamsPageSize enum.
+func (e ListManagedUnitsParamsPageSize) Valid() bool {
+	switch e {
+	case ListManagedUnitsParamsPageSizeN10:
+		return true
+	case ListManagedUnitsParamsPageSizeN100:
+		return true
+	case ListManagedUnitsParamsPageSizeN25:
+		return true
+	case ListManagedUnitsParamsPageSizeN50:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListManagedUnitsParamsSort.
+const (
+	ListManagedUnitsParamsSortCreatedAt      ListManagedUnitsParamsSort = "created_at"
+	ListManagedUnitsParamsSortMinusCreatedAt ListManagedUnitsParamsSort = "-created_at"
+	ListManagedUnitsParamsSortMinusUnit      ListManagedUnitsParamsSort = "-unit"
+	ListManagedUnitsParamsSortMinusUpdatedAt ListManagedUnitsParamsSort = "-updated_at"
+	ListManagedUnitsParamsSortUnit           ListManagedUnitsParamsSort = "unit"
+	ListManagedUnitsParamsSortUpdatedAt      ListManagedUnitsParamsSort = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ListManagedUnitsParamsSort enum.
+func (e ListManagedUnitsParamsSort) Valid() bool {
+	switch e {
+	case ListManagedUnitsParamsSortCreatedAt:
+		return true
+	case ListManagedUnitsParamsSortMinusCreatedAt:
+		return true
+	case ListManagedUnitsParamsSortMinusUnit:
+		return true
+	case ListManagedUnitsParamsSortMinusUpdatedAt:
+		return true
+	case ListManagedUnitsParamsSortUnit:
+		return true
+	case ListManagedUnitsParamsSortUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateManagedUnitParamsXPaddockCSRF.
+const (
+	CreateManagedUnitParamsXPaddockCSRFN1 CreateManagedUnitParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the CreateManagedUnitParamsXPaddockCSRF enum.
+func (e CreateManagedUnitParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case CreateManagedUnitParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeleteManagedUnitParamsXPaddockCSRF.
+const (
+	DeleteManagedUnitParamsXPaddockCSRFN1 DeleteManagedUnitParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the DeleteManagedUnitParamsXPaddockCSRF enum.
+func (e DeleteManagedUnitParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case DeleteManagedUnitParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateManagedUnitParamsXPaddockCSRF.
+const (
+	UpdateManagedUnitParamsXPaddockCSRFN1 UpdateManagedUnitParamsXPaddockCSRF = "1"
+)
+
+// Valid indicates whether the value is a known member of the UpdateManagedUnitParamsXPaddockCSRF enum.
+func (e UpdateManagedUnitParamsXPaddockCSRF) Valid() bool {
+	switch e {
+	case UpdateManagedUnitParamsXPaddockCSRFN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateMeParamsXPaddockCSRF.
 const (
 	UpdateMeParamsXPaddockCSRFN1 UpdateMeParamsXPaddockCSRF = "1"
@@ -581,6 +1220,75 @@ type AuditTarget struct {
 	Type    string  `json:"type"`
 }
 
+// BundleKey defines model for BundleKey.
+type BundleKey struct {
+	// KeyId e.g. "bundle-signing:v1"
+	KeyId string `json:"key_id"`
+
+	// PublicKey Base64 Ed25519 public key.
+	PublicKey string `json:"public_key"`
+}
+
+// BundleResource defines model for BundleResource.
+type BundleResource struct {
+	// Id "time", "file:<path>" or "unit:<name>"
+	Id   string                 `json:"id"`
+	Spec map[string]interface{} `json:"spec"`
+	Type BundleResourceType     `json:"type"`
+}
+
+// BundleResourceType defines model for BundleResource.Type.
+type BundleResourceType string
+
+// ConfigConflict defines model for ConfigConflict.
+type ConfigConflict struct {
+	LoserIds []openapi_types.UUID `json:"loser_ids"`
+	Resource string               `json:"resource"`
+
+	// WinnerId The definition that applies (smallest ID).
+	WinnerId openapi_types.UUID `json:"winner_id"`
+}
+
+// Device defines model for Device.
+type Device struct {
+	AgentVersion         *string `json:"agent_version"`
+	AppliedBundleVersion *int64  `json:"applied_bundle_version"`
+
+	// BundleVersion Latest compiled bundle version (0 = none).
+	BundleVersion     int64               `json:"bundle_version"`
+	EnrolledAt        time.Time           `json:"enrolled_at"`
+	EnrollmentTokenId *openapi_types.UUID `json:"enrollment_token_id"`
+	HardwareUuid      *string             `json:"hardware_uuid"`
+	Hostname          string              `json:"hostname"`
+	Id                openapi_types.UUID  `json:"id"`
+	LastContactAt     *time.Time          `json:"last_contact_at"`
+	MachineId         *string             `json:"machine_id"`
+	OsRelease         map[string]string   `json:"os_release"`
+	State             DeviceState         `json:"state"`
+	StateChangedAt    time.Time           `json:"state_changed_at"`
+}
+
+// DeviceDetail defines model for DeviceDetail.
+type DeviceDetail struct {
+	AgentVersion         *string `json:"agent_version"`
+	AppliedBundleVersion *int64  `json:"applied_bundle_version"`
+
+	// BundleVersion Latest compiled bundle version (0 = none).
+	BundleVersion     int64               `json:"bundle_version"`
+	EnrolledAt        time.Time           `json:"enrolled_at"`
+	EnrollmentTokenId *openapi_types.UUID `json:"enrollment_token_id"`
+	Groups            []DeviceGroupRef    `json:"groups"`
+	HardwareUuid      *string             `json:"hardware_uuid"`
+	Hostname          string              `json:"hostname"`
+	Id                openapi_types.UUID  `json:"id"`
+	IdentityKeys      []DeviceIdentityKey `json:"identity_keys"`
+	LastContactAt     *time.Time          `json:"last_contact_at"`
+	MachineId         *string             `json:"machine_id"`
+	OsRelease         map[string]string   `json:"os_release"`
+	State             DeviceState         `json:"state"`
+	StateChangedAt    time.Time           `json:"state_changed_at"`
+}
+
 // DeviceGroup defines model for DeviceGroup.
 type DeviceGroup struct {
 	CreatedAt   time.Time          `json:"created_at"`
@@ -612,10 +1320,234 @@ type DeviceGroupPage struct {
 	TotalCapped bool `json:"total_capped"`
 }
 
+// DeviceGroupRef defines model for DeviceGroupRef.
+type DeviceGroupRef struct {
+	Id   openapi_types.UUID `json:"id"`
+	Name string             `json:"name"`
+}
+
 // DeviceGroupUpdate defines model for DeviceGroupUpdate.
 type DeviceGroupUpdate struct {
 	Description *string `json:"description,omitempty"`
 	Name        *string `json:"name,omitempty"`
+}
+
+// DeviceGroupsUpdate defines model for DeviceGroupsUpdate.
+type DeviceGroupsUpdate struct {
+	DeviceGroupIds []openapi_types.UUID `json:"device_group_ids"`
+}
+
+// DeviceIdentityKey defines model for DeviceIdentityKey.
+type DeviceIdentityKey struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// KeyId Hex SHA-256 of the public key.
+	KeyId         string                         `json:"key_id"`
+	KeyProtection DeviceIdentityKeyKeyProtection `json:"key_protection"`
+	Status        DeviceIdentityKeyStatus        `json:"status"`
+}
+
+// DeviceIdentityKeyKeyProtection defines model for DeviceIdentityKey.KeyProtection.
+type DeviceIdentityKeyKeyProtection string
+
+// DeviceIdentityKeyStatus defines model for DeviceIdentityKey.Status.
+type DeviceIdentityKeyStatus string
+
+// DevicePage defines model for DevicePage.
+type DevicePage struct {
+	Items    []Device `json:"items"`
+	Page     int      `json:"page"`
+	PageSize int      `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// DeviceState defines model for DeviceState.
+type DeviceState string
+
+// EffectiveConfig defines model for EffectiveConfig.
+type EffectiveConfig struct {
+	Conflicts []ConfigConflict `json:"conflicts"`
+	Files     []ManagedFile    `json:"files"`
+
+	// Resources Bundle resources, sorted by id, exactly as the compiler renders them.
+	Resources []BundleResource `json:"resources"`
+	Units     []ManagedUnit    `json:"units"`
+}
+
+// EnrollmentConfig The document a device needs to enroll; it pins the bundle-signing keys as trust anchor.
+type EnrollmentConfig struct {
+	BundleKeys     []BundleKey        `json:"bundle_keys"`
+	OrganizationId openapi_types.UUID `json:"organization_id"`
+	ServerUrl      string             `json:"server_url"`
+	Token          string             `json:"token"`
+}
+
+// EnrollmentToken defines model for EnrollmentToken.
+type EnrollmentToken struct {
+	AutoApprove   bool                  `json:"auto_approve"`
+	CreatedAt     time.Time             `json:"created_at"`
+	DeviceGroupId *openapi_types.UUID   `json:"device_group_id"`
+	ExpiresAt     time.Time             `json:"expires_at"`
+	Id            openapi_types.UUID    `json:"id"`
+	MaxUses       int                   `json:"max_uses"`
+	Name          string                `json:"name"`
+	RevokedAt     *time.Time            `json:"revoked_at"`
+	Status        EnrollmentTokenStatus `json:"status"`
+	Uses          int                   `json:"uses"`
+}
+
+// EnrollmentTokenCreate defines model for EnrollmentTokenCreate.
+type EnrollmentTokenCreate struct {
+	// AutoApprove Enrolled devices become active without approval.
+	AutoApprove bool `json:"auto_approve"`
+
+	// DeviceGroupId Enrolled devices join this group.
+	DeviceGroupId *openapi_types.UUID `json:"device_group_id,omitempty"`
+
+	// ExpiresAt At most 30 days ahead.
+	ExpiresAt time.Time `json:"expires_at"`
+	MaxUses   int       `json:"max_uses"`
+	Name      string    `json:"name"`
+}
+
+// EnrollmentTokenCreated defines model for EnrollmentTokenCreated.
+type EnrollmentTokenCreated struct {
+	// EnrollmentConfig The document a device needs to enroll; it pins the bundle-signing keys as trust anchor.
+	EnrollmentConfig EnrollmentConfig `json:"enrollment_config"`
+
+	// Secret Shown once; distribute it like a password.
+	Secret string          `json:"secret"`
+	Token  EnrollmentToken `json:"token"`
+}
+
+// EnrollmentTokenPage defines model for EnrollmentTokenPage.
+type EnrollmentTokenPage struct {
+	Items    []EnrollmentToken `json:"items"`
+	Page     int               `json:"page"`
+	PageSize int               `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// EnrollmentTokenStatus defines model for EnrollmentTokenStatus.
+type EnrollmentTokenStatus string
+
+// ManagedFile defines model for ManagedFile.
+type ManagedFile struct {
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// DeviceGroupId null = every device.
+	DeviceGroupId *openapi_types.UUID `json:"device_group_id"`
+	Group         string              `json:"group"`
+	Id            openapi_types.UUID  `json:"id"`
+	Mode          string              `json:"mode"`
+	Owner         string              `json:"owner"`
+	Path          string              `json:"path"`
+	UpdatedAt     time.Time           `json:"updated_at"`
+}
+
+// ManagedFileCreate defines model for ManagedFileCreate.
+type ManagedFileCreate struct {
+	// Content UTF-8 text, at most 64 KiB.
+	Content string `json:"content"`
+
+	// DeviceGroupId Omit for every device of the organization.
+	DeviceGroupId *openapi_types.UUID `json:"device_group_id,omitempty"`
+	Group         *string             `json:"group,omitempty"`
+	Mode          *string             `json:"mode,omitempty"`
+	Owner         *string             `json:"owner,omitempty"`
+
+	// Path Below /etc/, /usr/local/etc/ or /opt/, outside protected paths (422 path_not_allowed).
+	Path string `json:"path"`
+}
+
+// ManagedFilePage defines model for ManagedFilePage.
+type ManagedFilePage struct {
+	Items    []ManagedFile `json:"items"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// ManagedFileUpdate defines model for ManagedFileUpdate.
+type ManagedFileUpdate struct {
+	Content *string `json:"content,omitempty"`
+	Group   *string `json:"group,omitempty"`
+	Mode    *string `json:"mode,omitempty"`
+	Owner   *string `json:"owner,omitempty"`
+	Path    *string `json:"path,omitempty"`
+}
+
+// ManagedUnit defines model for ManagedUnit.
+type ManagedUnit struct {
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// DeviceGroupId null = every device.
+	DeviceGroupId *openapi_types.UUID `json:"device_group_id"`
+	Enabled       bool                `json:"enabled"`
+	Id            openapi_types.UUID  `json:"id"`
+	Unit          string              `json:"unit"`
+	UpdatedAt     time.Time           `json:"updated_at"`
+}
+
+// ManagedUnitCreate defines model for ManagedUnitCreate.
+type ManagedUnitCreate struct {
+	Active *bool `json:"active,omitempty"`
+
+	// DeviceGroupId Omit for every device of the organization.
+	DeviceGroupId *openapi_types.UUID `json:"device_group_id,omitempty"`
+	Enabled       *bool               `json:"enabled,omitempty"`
+
+	// Unit *.service, *.timer, *.socket or *.path; reserved units answer 422 unit_not_allowed.
+	Unit string `json:"unit"`
+}
+
+// ManagedUnitPage defines model for ManagedUnitPage.
+type ManagedUnitPage struct {
+	Items    []ManagedUnit `json:"items"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"page_size"`
+
+	// Sort Applied sort.
+	Sort string `json:"sort"`
+
+	// Total Matching items, counted up to 10000.
+	Total int `json:"total"`
+
+	// TotalCapped More than 10000 items match; total is 10000.
+	TotalCapped bool `json:"total_capped"`
+}
+
+// ManagedUnitUpdate defines model for ManagedUnitUpdate.
+type ManagedUnitUpdate struct {
+	Active  *bool   `json:"active,omitempty"`
+	Enabled *bool   `json:"enabled,omitempty"`
+	Unit    *string `json:"unit,omitempty"`
 }
 
 // Me defines model for Me.
@@ -703,11 +1635,29 @@ type AuditEventSort string
 // Csrf defines model for Csrf.
 type Csrf string
 
+// DeviceGroupFilter defines model for DeviceGroupFilter.
+type DeviceGroupFilter = openapi_types.UUID
+
 // DeviceGroupSort defines model for DeviceGroupSort.
 type DeviceGroupSort string
 
+// DeviceSort defines model for DeviceSort.
+type DeviceSort string
+
+// DeviceStateFilter defines model for DeviceStateFilter.
+type DeviceStateFilter = []DeviceState
+
+// EnrollmentTokenSort defines model for EnrollmentTokenSort.
+type EnrollmentTokenSort string
+
 // Id defines model for Id.
 type Id = openapi_types.UUID
+
+// ManagedFileSort defines model for ManagedFileSort.
+type ManagedFileSort string
+
+// ManagedUnitSort defines model for ManagedUnitSort.
+type ManagedUnitSort string
 
 // OrganizationSort defines model for OrganizationSort.
 type OrganizationSort string
@@ -828,6 +1778,180 @@ type UpdateDeviceGroupParams struct {
 // UpdateDeviceGroupParamsXPaddockCSRF defines parameters for UpdateDeviceGroup.
 type UpdateDeviceGroupParamsXPaddockCSRF string
 
+// ListDeviceGroupDevicesParams defines parameters for ListDeviceGroupDevices.
+type ListDeviceGroupDevicesParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                                 `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListDeviceGroupDevicesParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker.
+	Sort *ListDeviceGroupDevicesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// State Repeatable.
+	State *DeviceStateFilter `form:"state,omitempty" json:"state,omitempty"`
+}
+
+// ListDeviceGroupDevicesParamsPageSize defines parameters for ListDeviceGroupDevices.
+type ListDeviceGroupDevicesParamsPageSize int
+
+// ListDeviceGroupDevicesParamsSort defines parameters for ListDeviceGroupDevices.
+type ListDeviceGroupDevicesParamsSort string
+
+// ListDevicesParams defines parameters for ListDevices.
+type ListDevicesParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                      `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListDevicesParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker.
+	Sort *ListDevicesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// State Repeatable.
+	State *DeviceStateFilter `form:"state,omitempty" json:"state,omitempty"`
+
+	// DeviceGroupId Only members of this device group.
+	DeviceGroupId *openapi_types.UUID `form:"device_group_id,omitempty" json:"device_group_id,omitempty"`
+}
+
+// ListDevicesParamsPageSize defines parameters for ListDevices.
+type ListDevicesParamsPageSize int
+
+// ListDevicesParamsSort defines parameters for ListDevices.
+type ListDevicesParamsSort string
+
+// SetDeviceGroupsParams defines parameters for SetDeviceGroups.
+type SetDeviceGroupsParams struct {
+	XPaddockCSRF SetDeviceGroupsParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// SetDeviceGroupsParamsXPaddockCSRF defines parameters for SetDeviceGroups.
+type SetDeviceGroupsParamsXPaddockCSRF string
+
+// ListEnrollmentTokensParams defines parameters for ListEnrollmentTokens.
+type ListEnrollmentTokensParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                               `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListEnrollmentTokensParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListEnrollmentTokensParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+}
+
+// ListEnrollmentTokensParamsPageSize defines parameters for ListEnrollmentTokens.
+type ListEnrollmentTokensParamsPageSize int
+
+// ListEnrollmentTokensParamsSort defines parameters for ListEnrollmentTokens.
+type ListEnrollmentTokensParamsSort string
+
+// CreateEnrollmentTokenParams defines parameters for CreateEnrollmentToken.
+type CreateEnrollmentTokenParams struct {
+	XPaddockCSRF CreateEnrollmentTokenParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// CreateEnrollmentTokenParamsXPaddockCSRF defines parameters for CreateEnrollmentToken.
+type CreateEnrollmentTokenParamsXPaddockCSRF string
+
+// ListManagedFilesParams defines parameters for ListManagedFiles.
+type ListManagedFilesParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                           `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListManagedFilesParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListManagedFilesParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// DeviceGroupId Only definitions scoped to this device group.
+	DeviceGroupId *DeviceGroupFilter `form:"device_group_id,omitempty" json:"device_group_id,omitempty"`
+}
+
+// ListManagedFilesParamsPageSize defines parameters for ListManagedFiles.
+type ListManagedFilesParamsPageSize int
+
+// ListManagedFilesParamsSort defines parameters for ListManagedFiles.
+type ListManagedFilesParamsSort string
+
+// CreateManagedFileParams defines parameters for CreateManagedFile.
+type CreateManagedFileParams struct {
+	XPaddockCSRF CreateManagedFileParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// CreateManagedFileParamsXPaddockCSRF defines parameters for CreateManagedFile.
+type CreateManagedFileParamsXPaddockCSRF string
+
+// DeleteManagedFileParams defines parameters for DeleteManagedFile.
+type DeleteManagedFileParams struct {
+	XPaddockCSRF DeleteManagedFileParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// DeleteManagedFileParamsXPaddockCSRF defines parameters for DeleteManagedFile.
+type DeleteManagedFileParamsXPaddockCSRF string
+
+// UpdateManagedFileParams defines parameters for UpdateManagedFile.
+type UpdateManagedFileParams struct {
+	XPaddockCSRF UpdateManagedFileParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// UpdateManagedFileParamsXPaddockCSRF defines parameters for UpdateManagedFile.
+type UpdateManagedFileParamsXPaddockCSRF string
+
+// ListManagedUnitsParams defines parameters for ListManagedUnits.
+type ListManagedUnitsParams struct {
+	// Page Page number. page × page_size may not exceed 10000 (400 page_out_of_range).
+	Page     *Page                           `form:"page,omitempty" json:"page,omitempty"`
+	PageSize *ListManagedUnitsParamsPageSize `form:"page_size,omitempty" json:"page_size,omitempty"`
+
+	// Sort Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+	Sort *ListManagedUnitsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Q Case-insensitive substring search over the fields listed in x-paddock-list.search.
+	Q *Search `form:"q,omitempty" json:"q,omitempty"`
+
+	// DeviceGroupId Only definitions scoped to this device group.
+	DeviceGroupId *DeviceGroupFilter `form:"device_group_id,omitempty" json:"device_group_id,omitempty"`
+}
+
+// ListManagedUnitsParamsPageSize defines parameters for ListManagedUnits.
+type ListManagedUnitsParamsPageSize int
+
+// ListManagedUnitsParamsSort defines parameters for ListManagedUnits.
+type ListManagedUnitsParamsSort string
+
+// CreateManagedUnitParams defines parameters for CreateManagedUnit.
+type CreateManagedUnitParams struct {
+	XPaddockCSRF CreateManagedUnitParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// CreateManagedUnitParamsXPaddockCSRF defines parameters for CreateManagedUnit.
+type CreateManagedUnitParamsXPaddockCSRF string
+
+// DeleteManagedUnitParams defines parameters for DeleteManagedUnit.
+type DeleteManagedUnitParams struct {
+	XPaddockCSRF DeleteManagedUnitParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// DeleteManagedUnitParamsXPaddockCSRF defines parameters for DeleteManagedUnit.
+type DeleteManagedUnitParamsXPaddockCSRF string
+
+// UpdateManagedUnitParams defines parameters for UpdateManagedUnit.
+type UpdateManagedUnitParams struct {
+	XPaddockCSRF UpdateManagedUnitParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
+}
+
+// UpdateManagedUnitParamsXPaddockCSRF defines parameters for UpdateManagedUnit.
+type UpdateManagedUnitParamsXPaddockCSRF string
+
 // UpdateMeParams defines parameters for UpdateMe.
 type UpdateMeParams struct {
 	XPaddockCSRF UpdateMeParamsXPaddockCSRF `json:"X-Paddock-CSRF"`
@@ -844,6 +1968,24 @@ type CreateDeviceGroupJSONRequestBody = DeviceGroupCreate
 
 // UpdateDeviceGroupJSONRequestBody defines body for UpdateDeviceGroup for application/json ContentType.
 type UpdateDeviceGroupJSONRequestBody = DeviceGroupUpdate
+
+// SetDeviceGroupsJSONRequestBody defines body for SetDeviceGroups for application/json ContentType.
+type SetDeviceGroupsJSONRequestBody = DeviceGroupsUpdate
+
+// CreateEnrollmentTokenJSONRequestBody defines body for CreateEnrollmentToken for application/json ContentType.
+type CreateEnrollmentTokenJSONRequestBody = EnrollmentTokenCreate
+
+// CreateManagedFileJSONRequestBody defines body for CreateManagedFile for application/json ContentType.
+type CreateManagedFileJSONRequestBody = ManagedFileCreate
+
+// UpdateManagedFileJSONRequestBody defines body for UpdateManagedFile for application/json ContentType.
+type UpdateManagedFileJSONRequestBody = ManagedFileUpdate
+
+// CreateManagedUnitJSONRequestBody defines body for CreateManagedUnit for application/json ContentType.
+type CreateManagedUnitJSONRequestBody = ManagedUnitCreate
+
+// UpdateManagedUnitJSONRequestBody defines body for UpdateManagedUnit for application/json ContentType.
+type UpdateManagedUnitJSONRequestBody = ManagedUnitUpdate
 
 // UpdateMeJSONRequestBody defines body for UpdateMe for application/json ContentType.
 type UpdateMeJSONRequestBody = MeUpdate
@@ -877,6 +2019,60 @@ type ServerInterface interface {
 
 	// (PATCH /api/v1/device-groups/{id})
 	UpdateDeviceGroup(w http.ResponseWriter, r *http.Request, id Id, params UpdateDeviceGroupParams)
+
+	// (GET /api/v1/device-groups/{id}/devices)
+	ListDeviceGroupDevices(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceGroupDevicesParams)
+
+	// (GET /api/v1/devices)
+	ListDevices(w http.ResponseWriter, r *http.Request, params ListDevicesParams)
+
+	// (GET /api/v1/devices/{id})
+	GetDevice(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (GET /api/v1/devices/{id}/effective-config)
+	GetDeviceEffectiveConfig(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (PUT /api/v1/devices/{id}/groups)
+	SetDeviceGroups(w http.ResponseWriter, r *http.Request, id Id, params SetDeviceGroupsParams)
+
+	// (GET /api/v1/enrollment-tokens)
+	ListEnrollmentTokens(w http.ResponseWriter, r *http.Request, params ListEnrollmentTokensParams)
+
+	// (POST /api/v1/enrollment-tokens)
+	CreateEnrollmentToken(w http.ResponseWriter, r *http.Request, params CreateEnrollmentTokenParams)
+
+	// (GET /api/v1/enrollment-tokens/{id})
+	GetEnrollmentToken(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (GET /api/v1/managed-files)
+	ListManagedFiles(w http.ResponseWriter, r *http.Request, params ListManagedFilesParams)
+
+	// (POST /api/v1/managed-files)
+	CreateManagedFile(w http.ResponseWriter, r *http.Request, params CreateManagedFileParams)
+
+	// (DELETE /api/v1/managed-files/{id})
+	DeleteManagedFile(w http.ResponseWriter, r *http.Request, id Id, params DeleteManagedFileParams)
+
+	// (GET /api/v1/managed-files/{id})
+	GetManagedFile(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (PATCH /api/v1/managed-files/{id})
+	UpdateManagedFile(w http.ResponseWriter, r *http.Request, id Id, params UpdateManagedFileParams)
+
+	// (GET /api/v1/managed-units)
+	ListManagedUnits(w http.ResponseWriter, r *http.Request, params ListManagedUnitsParams)
+
+	// (POST /api/v1/managed-units)
+	CreateManagedUnit(w http.ResponseWriter, r *http.Request, params CreateManagedUnitParams)
+
+	// (DELETE /api/v1/managed-units/{id})
+	DeleteManagedUnit(w http.ResponseWriter, r *http.Request, id Id, params DeleteManagedUnitParams)
+
+	// (GET /api/v1/managed-units/{id})
+	GetManagedUnit(w http.ResponseWriter, r *http.Request, id Id)
+
+	// (PATCH /api/v1/managed-units/{id})
+	UpdateManagedUnit(w http.ResponseWriter, r *http.Request, id Id, params UpdateManagedUnitParams)
 
 	// (GET /api/v1/me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -1438,6 +2634,975 @@ func (siw *ServerInterfaceWrapper) UpdateDeviceGroup(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// ListDeviceGroupDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListDeviceGroupDevices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDeviceGroupDevicesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDeviceGroupDevices(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListDevices(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDevicesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "device_group_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "device_group_id", r.URL.Query(), &params.DeviceGroupId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "device_group_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_group_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDevices(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDevice operation middleware
+func (siw *ServerInterfaceWrapper) GetDevice(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDevice(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDeviceEffectiveConfig operation middleware
+func (siw *ServerInterfaceWrapper) GetDeviceEffectiveConfig(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDeviceEffectiveConfig(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetDeviceGroups operation middleware
+func (siw *ServerInterfaceWrapper) SetDeviceGroups(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetDeviceGroupsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF SetDeviceGroupsParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetDeviceGroups(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListEnrollmentTokens operation middleware
+func (siw *ServerInterfaceWrapper) ListEnrollmentTokens(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListEnrollmentTokensParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListEnrollmentTokens(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateEnrollmentToken operation middleware
+func (siw *ServerInterfaceWrapper) CreateEnrollmentToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateEnrollmentTokenParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF CreateEnrollmentTokenParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateEnrollmentToken(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetEnrollmentToken operation middleware
+func (siw *ServerInterfaceWrapper) GetEnrollmentToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetEnrollmentToken(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListManagedFiles operation middleware
+func (siw *ServerInterfaceWrapper) ListManagedFiles(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListManagedFilesParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "device_group_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "device_group_id", r.URL.Query(), &params.DeviceGroupId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "device_group_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_group_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListManagedFiles(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateManagedFile operation middleware
+func (siw *ServerInterfaceWrapper) CreateManagedFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateManagedFileParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF CreateManagedFileParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateManagedFile(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteManagedFile operation middleware
+func (siw *ServerInterfaceWrapper) DeleteManagedFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteManagedFileParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF DeleteManagedFileParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteManagedFile(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetManagedFile operation middleware
+func (siw *ServerInterfaceWrapper) GetManagedFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetManagedFile(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateManagedFile operation middleware
+func (siw *ServerInterfaceWrapper) UpdateManagedFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateManagedFileParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF UpdateManagedFileParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateManagedFile(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListManagedUnits operation middleware
+func (siw *ServerInterfaceWrapper) ListManagedUnits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListManagedUnitsParams
+
+	// ------------- Optional query parameter "page" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page", r.URL.Query(), &params.Page, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "page_size" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "page_size", r.URL.Query(), &params.PageSize, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "page_size"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "page_size", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "device_group_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "device_group_id", r.URL.Query(), &params.DeviceGroupId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "device_group_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_group_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListManagedUnits(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateManagedUnit operation middleware
+func (siw *ServerInterfaceWrapper) CreateManagedUnit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateManagedUnitParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF CreateManagedUnitParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateManagedUnit(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteManagedUnit operation middleware
+func (siw *ServerInterfaceWrapper) DeleteManagedUnit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteManagedUnitParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF DeleteManagedUnitParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteManagedUnit(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetManagedUnit operation middleware
+func (siw *ServerInterfaceWrapper) GetManagedUnit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetManagedUnit(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateManagedUnit operation middleware
+func (siw *ServerInterfaceWrapper) UpdateManagedUnit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id Id
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateManagedUnitParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Paddock-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Paddock-CSRF")]; found {
+		var XPaddockCSRF UpdateManagedUnitParamsXPaddockCSRF
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Paddock-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Paddock-CSRF", valueList[0], &XPaddockCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Paddock-CSRF", Err: err})
+			return
+		}
+
+		params.XPaddockCSRF = XPaddockCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Paddock-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Paddock-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateManagedUnit(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetMe operation middleware
 func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
 
@@ -1625,6 +3790,24 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/device-groups/{id}", wrapper.GetDeviceGroup)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/device-groups/{id}", wrapper.UpdateDeviceGroup)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/audit-events", wrapper.ListAuditEvents)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/device-groups/{id}/devices", wrapper.ListDeviceGroupDevices)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/enrollment-tokens", wrapper.ListEnrollmentTokens)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/enrollment-tokens", wrapper.CreateEnrollmentToken)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/enrollment-tokens/{id}", wrapper.GetEnrollmentToken)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices", wrapper.ListDevices)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}", wrapper.GetDevice)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v1/devices/{id}/groups", wrapper.SetDeviceGroups)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/devices/{id}/effective-config", wrapper.GetDeviceEffectiveConfig)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/managed-files", wrapper.ListManagedFiles)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/managed-files", wrapper.CreateManagedFile)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/managed-files/{id}", wrapper.DeleteManagedFile)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/managed-files/{id}", wrapper.GetManagedFile)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/managed-files/{id}", wrapper.UpdateManagedFile)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/managed-units", wrapper.ListManagedUnits)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/managed-units", wrapper.CreateManagedUnit)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/managed-units/{id}", wrapper.DeleteManagedUnit)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/managed-units/{id}", wrapper.GetManagedUnit)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/v1/managed-units/{id}", wrapper.UpdateManagedUnit)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/platform/v1/organizations", wrapper.ListOrganizations)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/platform/v1/organizations", wrapper.CreateOrganization)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/platform/v1/organizations/{id}", wrapper.GetOrganization)
@@ -2373,6 +4556,1504 @@ func (response UpdateDeviceGroup409ApplicationProblemPlusJSONResponse) VisitUpda
 	return err
 }
 
+type ListDeviceGroupDevicesRequestObject struct {
+	Id     Id `json:"id"`
+	Params ListDeviceGroupDevicesParams
+}
+
+type ListDeviceGroupDevicesResponseObject interface {
+	VisitListDeviceGroupDevicesResponse(w http.ResponseWriter) error
+}
+
+type ListDeviceGroupDevices200JSONResponse DevicePage
+
+func (response ListDeviceGroupDevices200JSONResponse) VisitListDeviceGroupDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceGroupDevices400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListDeviceGroupDevices400ApplicationProblemPlusJSONResponse) VisitListDeviceGroupDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceGroupDevices401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceGroupDevices401ApplicationProblemPlusJSONResponse) VisitListDeviceGroupDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceGroupDevices403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceGroupDevices403ApplicationProblemPlusJSONResponse) VisitListDeviceGroupDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeviceGroupDevices404ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDeviceGroupDevices404ApplicationProblemPlusJSONResponse) VisitListDeviceGroupDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDevicesRequestObject struct {
+	Params ListDevicesParams
+}
+
+type ListDevicesResponseObject interface {
+	VisitListDevicesResponse(w http.ResponseWriter) error
+}
+
+type ListDevices200JSONResponse DevicePage
+
+func (response ListDevices200JSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDevices400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListDevices400ApplicationProblemPlusJSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDevices401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDevices401ApplicationProblemPlusJSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDevices403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListDevices403ApplicationProblemPlusJSONResponse) VisitListDevicesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeviceRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetDeviceResponseObject interface {
+	VisitGetDeviceResponse(w http.ResponseWriter) error
+}
+
+type GetDevice200JSONResponse DeviceDetail
+
+func (response GetDevice200JSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDevice400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetDevice400ApplicationProblemPlusJSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDevice401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDevice401ApplicationProblemPlusJSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDevice403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDevice403ApplicationProblemPlusJSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDevice404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDevice404ApplicationProblemPlusJSONResponse) VisitGetDeviceResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeviceEffectiveConfigRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetDeviceEffectiveConfigResponseObject interface {
+	VisitGetDeviceEffectiveConfigResponse(w http.ResponseWriter) error
+}
+
+type GetDeviceEffectiveConfig200JSONResponse EffectiveConfig
+
+func (response GetDeviceEffectiveConfig200JSONResponse) VisitGetDeviceEffectiveConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeviceEffectiveConfig400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetDeviceEffectiveConfig400ApplicationProblemPlusJSONResponse) VisitGetDeviceEffectiveConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeviceEffectiveConfig401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDeviceEffectiveConfig401ApplicationProblemPlusJSONResponse) VisitGetDeviceEffectiveConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeviceEffectiveConfig403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDeviceEffectiveConfig403ApplicationProblemPlusJSONResponse) VisitGetDeviceEffectiveConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeviceEffectiveConfig404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetDeviceEffectiveConfig404ApplicationProblemPlusJSONResponse) VisitGetDeviceEffectiveConfigResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDeviceGroupsRequestObject struct {
+	Id     Id `json:"id"`
+	Params SetDeviceGroupsParams
+	Body   *SetDeviceGroupsJSONRequestBody
+}
+
+type SetDeviceGroupsResponseObject interface {
+	VisitSetDeviceGroupsResponse(w http.ResponseWriter) error
+}
+
+type SetDeviceGroups200JSONResponse DeviceDetail
+
+func (response SetDeviceGroups200JSONResponse) VisitSetDeviceGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDeviceGroups400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response SetDeviceGroups400ApplicationProblemPlusJSONResponse) VisitSetDeviceGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDeviceGroups401ApplicationProblemPlusJSONResponse Problem
+
+func (response SetDeviceGroups401ApplicationProblemPlusJSONResponse) VisitSetDeviceGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDeviceGroups403ApplicationProblemPlusJSONResponse Problem
+
+func (response SetDeviceGroups403ApplicationProblemPlusJSONResponse) VisitSetDeviceGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDeviceGroups404ApplicationProblemPlusJSONResponse Problem
+
+func (response SetDeviceGroups404ApplicationProblemPlusJSONResponse) VisitSetDeviceGroupsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnrollmentTokensRequestObject struct {
+	Params ListEnrollmentTokensParams
+}
+
+type ListEnrollmentTokensResponseObject interface {
+	VisitListEnrollmentTokensResponse(w http.ResponseWriter) error
+}
+
+type ListEnrollmentTokens200JSONResponse EnrollmentTokenPage
+
+func (response ListEnrollmentTokens200JSONResponse) VisitListEnrollmentTokensResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnrollmentTokens400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListEnrollmentTokens400ApplicationProblemPlusJSONResponse) VisitListEnrollmentTokensResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnrollmentTokens401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListEnrollmentTokens401ApplicationProblemPlusJSONResponse) VisitListEnrollmentTokensResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnrollmentTokens403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListEnrollmentTokens403ApplicationProblemPlusJSONResponse) VisitListEnrollmentTokensResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnrollmentTokenRequestObject struct {
+	Params CreateEnrollmentTokenParams
+	Body   *CreateEnrollmentTokenJSONRequestBody
+}
+
+type CreateEnrollmentTokenResponseObject interface {
+	VisitCreateEnrollmentTokenResponse(w http.ResponseWriter) error
+}
+
+type CreateEnrollmentToken201ResponseHeaders struct {
+	Location *string
+}
+
+type CreateEnrollmentToken201JSONResponse struct {
+	Body    EnrollmentTokenCreated
+	Headers CreateEnrollmentToken201ResponseHeaders
+}
+
+func (response CreateEnrollmentToken201JSONResponse) VisitCreateEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnrollmentToken400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateEnrollmentToken400ApplicationProblemPlusJSONResponse) VisitCreateEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnrollmentToken401ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateEnrollmentToken401ApplicationProblemPlusJSONResponse) VisitCreateEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnrollmentToken403ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateEnrollmentToken403ApplicationProblemPlusJSONResponse) VisitCreateEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnrollmentToken502ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateEnrollmentToken502ApplicationProblemPlusJSONResponse) VisitCreateEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(502)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnrollmentTokenRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetEnrollmentTokenResponseObject interface {
+	VisitGetEnrollmentTokenResponse(w http.ResponseWriter) error
+}
+
+type GetEnrollmentToken200JSONResponse EnrollmentToken
+
+func (response GetEnrollmentToken200JSONResponse) VisitGetEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnrollmentToken400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetEnrollmentToken400ApplicationProblemPlusJSONResponse) VisitGetEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnrollmentToken401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetEnrollmentToken401ApplicationProblemPlusJSONResponse) VisitGetEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnrollmentToken403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetEnrollmentToken403ApplicationProblemPlusJSONResponse) VisitGetEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnrollmentToken404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetEnrollmentToken404ApplicationProblemPlusJSONResponse) VisitGetEnrollmentTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListManagedFilesRequestObject struct {
+	Params ListManagedFilesParams
+}
+
+type ListManagedFilesResponseObject interface {
+	VisitListManagedFilesResponse(w http.ResponseWriter) error
+}
+
+type ListManagedFiles200JSONResponse ManagedFilePage
+
+func (response ListManagedFiles200JSONResponse) VisitListManagedFilesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListManagedFiles400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListManagedFiles400ApplicationProblemPlusJSONResponse) VisitListManagedFilesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListManagedFiles401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListManagedFiles401ApplicationProblemPlusJSONResponse) VisitListManagedFilesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListManagedFiles403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListManagedFiles403ApplicationProblemPlusJSONResponse) VisitListManagedFilesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedFileRequestObject struct {
+	Params CreateManagedFileParams
+	Body   *CreateManagedFileJSONRequestBody
+}
+
+type CreateManagedFileResponseObject interface {
+	VisitCreateManagedFileResponse(w http.ResponseWriter) error
+}
+
+type CreateManagedFile201ResponseHeaders struct {
+	Location *string
+}
+
+type CreateManagedFile201JSONResponse struct {
+	Body    ManagedFile
+	Headers CreateManagedFile201ResponseHeaders
+}
+
+func (response CreateManagedFile201JSONResponse) VisitCreateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedFile400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateManagedFile400ApplicationProblemPlusJSONResponse) VisitCreateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedFile401ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateManagedFile401ApplicationProblemPlusJSONResponse) VisitCreateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedFile403ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateManagedFile403ApplicationProblemPlusJSONResponse) VisitCreateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedFile409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateManagedFile409ApplicationProblemPlusJSONResponse) VisitCreateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedFile422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateManagedFile422ApplicationProblemPlusJSONResponse) VisitCreateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedFileRequestObject struct {
+	Id     Id `json:"id"`
+	Params DeleteManagedFileParams
+}
+
+type DeleteManagedFileResponseObject interface {
+	VisitDeleteManagedFileResponse(w http.ResponseWriter) error
+}
+
+type DeleteManagedFile204Response struct {
+}
+
+func (response DeleteManagedFile204Response) VisitDeleteManagedFileResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteManagedFile400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response DeleteManagedFile400ApplicationProblemPlusJSONResponse) VisitDeleteManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedFile401ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteManagedFile401ApplicationProblemPlusJSONResponse) VisitDeleteManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedFile403ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteManagedFile403ApplicationProblemPlusJSONResponse) VisitDeleteManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedFile404ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteManagedFile404ApplicationProblemPlusJSONResponse) VisitDeleteManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedFileRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetManagedFileResponseObject interface {
+	VisitGetManagedFileResponse(w http.ResponseWriter) error
+}
+
+type GetManagedFile200JSONResponse ManagedFile
+
+func (response GetManagedFile200JSONResponse) VisitGetManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedFile400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetManagedFile400ApplicationProblemPlusJSONResponse) VisitGetManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedFile401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetManagedFile401ApplicationProblemPlusJSONResponse) VisitGetManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedFile403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetManagedFile403ApplicationProblemPlusJSONResponse) VisitGetManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedFile404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetManagedFile404ApplicationProblemPlusJSONResponse) VisitGetManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedFileRequestObject struct {
+	Id     Id `json:"id"`
+	Params UpdateManagedFileParams
+	Body   *UpdateManagedFileJSONRequestBody
+}
+
+type UpdateManagedFileResponseObject interface {
+	VisitUpdateManagedFileResponse(w http.ResponseWriter) error
+}
+
+type UpdateManagedFile200JSONResponse ManagedFile
+
+func (response UpdateManagedFile200JSONResponse) VisitUpdateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedFile400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response UpdateManagedFile400ApplicationProblemPlusJSONResponse) VisitUpdateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedFile401ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedFile401ApplicationProblemPlusJSONResponse) VisitUpdateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedFile403ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedFile403ApplicationProblemPlusJSONResponse) VisitUpdateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedFile404ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedFile404ApplicationProblemPlusJSONResponse) VisitUpdateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedFile409ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedFile409ApplicationProblemPlusJSONResponse) VisitUpdateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedFile422ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedFile422ApplicationProblemPlusJSONResponse) VisitUpdateManagedFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListManagedUnitsRequestObject struct {
+	Params ListManagedUnitsParams
+}
+
+type ListManagedUnitsResponseObject interface {
+	VisitListManagedUnitsResponse(w http.ResponseWriter) error
+}
+
+type ListManagedUnits200JSONResponse ManagedUnitPage
+
+func (response ListManagedUnits200JSONResponse) VisitListManagedUnitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListManagedUnits400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response ListManagedUnits400ApplicationProblemPlusJSONResponse) VisitListManagedUnitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListManagedUnits401ApplicationProblemPlusJSONResponse Problem
+
+func (response ListManagedUnits401ApplicationProblemPlusJSONResponse) VisitListManagedUnitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListManagedUnits403ApplicationProblemPlusJSONResponse Problem
+
+func (response ListManagedUnits403ApplicationProblemPlusJSONResponse) VisitListManagedUnitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedUnitRequestObject struct {
+	Params CreateManagedUnitParams
+	Body   *CreateManagedUnitJSONRequestBody
+}
+
+type CreateManagedUnitResponseObject interface {
+	VisitCreateManagedUnitResponse(w http.ResponseWriter) error
+}
+
+type CreateManagedUnit201ResponseHeaders struct {
+	Location *string
+}
+
+type CreateManagedUnit201JSONResponse struct {
+	Body    ManagedUnit
+	Headers CreateManagedUnit201ResponseHeaders
+}
+
+func (response CreateManagedUnit201JSONResponse) VisitCreateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedUnit400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response CreateManagedUnit400ApplicationProblemPlusJSONResponse) VisitCreateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedUnit401ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateManagedUnit401ApplicationProblemPlusJSONResponse) VisitCreateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedUnit403ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateManagedUnit403ApplicationProblemPlusJSONResponse) VisitCreateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedUnit409ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateManagedUnit409ApplicationProblemPlusJSONResponse) VisitCreateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateManagedUnit422ApplicationProblemPlusJSONResponse Problem
+
+func (response CreateManagedUnit422ApplicationProblemPlusJSONResponse) VisitCreateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedUnitRequestObject struct {
+	Id     Id `json:"id"`
+	Params DeleteManagedUnitParams
+}
+
+type DeleteManagedUnitResponseObject interface {
+	VisitDeleteManagedUnitResponse(w http.ResponseWriter) error
+}
+
+type DeleteManagedUnit204Response struct {
+}
+
+func (response DeleteManagedUnit204Response) VisitDeleteManagedUnitResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteManagedUnit400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response DeleteManagedUnit400ApplicationProblemPlusJSONResponse) VisitDeleteManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedUnit401ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteManagedUnit401ApplicationProblemPlusJSONResponse) VisitDeleteManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedUnit403ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteManagedUnit403ApplicationProblemPlusJSONResponse) VisitDeleteManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteManagedUnit404ApplicationProblemPlusJSONResponse Problem
+
+func (response DeleteManagedUnit404ApplicationProblemPlusJSONResponse) VisitDeleteManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedUnitRequestObject struct {
+	Id Id `json:"id"`
+}
+
+type GetManagedUnitResponseObject interface {
+	VisitGetManagedUnitResponse(w http.ResponseWriter) error
+}
+
+type GetManagedUnit200JSONResponse ManagedUnit
+
+func (response GetManagedUnit200JSONResponse) VisitGetManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedUnit400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response GetManagedUnit400ApplicationProblemPlusJSONResponse) VisitGetManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedUnit401ApplicationProblemPlusJSONResponse Problem
+
+func (response GetManagedUnit401ApplicationProblemPlusJSONResponse) VisitGetManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedUnit403ApplicationProblemPlusJSONResponse Problem
+
+func (response GetManagedUnit403ApplicationProblemPlusJSONResponse) VisitGetManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetManagedUnit404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetManagedUnit404ApplicationProblemPlusJSONResponse) VisitGetManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedUnitRequestObject struct {
+	Id     Id `json:"id"`
+	Params UpdateManagedUnitParams
+	Body   *UpdateManagedUnitJSONRequestBody
+}
+
+type UpdateManagedUnitResponseObject interface {
+	VisitUpdateManagedUnitResponse(w http.ResponseWriter) error
+}
+
+type UpdateManagedUnit200JSONResponse ManagedUnit
+
+func (response UpdateManagedUnit200JSONResponse) VisitUpdateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedUnit400ApplicationProblemPlusJSONResponse struct {
+	ProblemApplicationProblemPlusJSONResponse
+}
+
+func (response UpdateManagedUnit400ApplicationProblemPlusJSONResponse) VisitUpdateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedUnit401ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedUnit401ApplicationProblemPlusJSONResponse) VisitUpdateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedUnit403ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedUnit403ApplicationProblemPlusJSONResponse) VisitUpdateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedUnit404ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedUnit404ApplicationProblemPlusJSONResponse) VisitUpdateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedUnit409ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedUnit409ApplicationProblemPlusJSONResponse) VisitUpdateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateManagedUnit422ApplicationProblemPlusJSONResponse Problem
+
+func (response UpdateManagedUnit422ApplicationProblemPlusJSONResponse) VisitUpdateManagedUnitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetMeRequestObject struct {
 }
 
@@ -2506,6 +6187,60 @@ type StrictServerInterface interface {
 
 	// (PATCH /api/v1/device-groups/{id})
 	UpdateDeviceGroup(ctx context.Context, request UpdateDeviceGroupRequestObject) (UpdateDeviceGroupResponseObject, error)
+
+	// (GET /api/v1/device-groups/{id}/devices)
+	ListDeviceGroupDevices(ctx context.Context, request ListDeviceGroupDevicesRequestObject) (ListDeviceGroupDevicesResponseObject, error)
+
+	// (GET /api/v1/devices)
+	ListDevices(ctx context.Context, request ListDevicesRequestObject) (ListDevicesResponseObject, error)
+
+	// (GET /api/v1/devices/{id})
+	GetDevice(ctx context.Context, request GetDeviceRequestObject) (GetDeviceResponseObject, error)
+
+	// (GET /api/v1/devices/{id}/effective-config)
+	GetDeviceEffectiveConfig(ctx context.Context, request GetDeviceEffectiveConfigRequestObject) (GetDeviceEffectiveConfigResponseObject, error)
+
+	// (PUT /api/v1/devices/{id}/groups)
+	SetDeviceGroups(ctx context.Context, request SetDeviceGroupsRequestObject) (SetDeviceGroupsResponseObject, error)
+
+	// (GET /api/v1/enrollment-tokens)
+	ListEnrollmentTokens(ctx context.Context, request ListEnrollmentTokensRequestObject) (ListEnrollmentTokensResponseObject, error)
+
+	// (POST /api/v1/enrollment-tokens)
+	CreateEnrollmentToken(ctx context.Context, request CreateEnrollmentTokenRequestObject) (CreateEnrollmentTokenResponseObject, error)
+
+	// (GET /api/v1/enrollment-tokens/{id})
+	GetEnrollmentToken(ctx context.Context, request GetEnrollmentTokenRequestObject) (GetEnrollmentTokenResponseObject, error)
+
+	// (GET /api/v1/managed-files)
+	ListManagedFiles(ctx context.Context, request ListManagedFilesRequestObject) (ListManagedFilesResponseObject, error)
+
+	// (POST /api/v1/managed-files)
+	CreateManagedFile(ctx context.Context, request CreateManagedFileRequestObject) (CreateManagedFileResponseObject, error)
+
+	// (DELETE /api/v1/managed-files/{id})
+	DeleteManagedFile(ctx context.Context, request DeleteManagedFileRequestObject) (DeleteManagedFileResponseObject, error)
+
+	// (GET /api/v1/managed-files/{id})
+	GetManagedFile(ctx context.Context, request GetManagedFileRequestObject) (GetManagedFileResponseObject, error)
+
+	// (PATCH /api/v1/managed-files/{id})
+	UpdateManagedFile(ctx context.Context, request UpdateManagedFileRequestObject) (UpdateManagedFileResponseObject, error)
+
+	// (GET /api/v1/managed-units)
+	ListManagedUnits(ctx context.Context, request ListManagedUnitsRequestObject) (ListManagedUnitsResponseObject, error)
+
+	// (POST /api/v1/managed-units)
+	CreateManagedUnit(ctx context.Context, request CreateManagedUnitRequestObject) (CreateManagedUnitResponseObject, error)
+
+	// (DELETE /api/v1/managed-units/{id})
+	DeleteManagedUnit(ctx context.Context, request DeleteManagedUnitRequestObject) (DeleteManagedUnitResponseObject, error)
+
+	// (GET /api/v1/managed-units/{id})
+	GetManagedUnit(ctx context.Context, request GetManagedUnitRequestObject) (GetManagedUnitResponseObject, error)
+
+	// (PATCH /api/v1/managed-units/{id})
+	UpdateManagedUnit(ctx context.Context, request UpdateManagedUnitRequestObject) (UpdateManagedUnitResponseObject, error)
 
 	// (GET /api/v1/me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -2810,6 +6545,522 @@ func (sh *strictHandler) UpdateDeviceGroup(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// ListDeviceGroupDevices operation middleware
+func (sh *strictHandler) ListDeviceGroupDevices(w http.ResponseWriter, r *http.Request, id Id, params ListDeviceGroupDevicesParams) {
+	var request ListDeviceGroupDevicesRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDeviceGroupDevices(ctx, request.(ListDeviceGroupDevicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDeviceGroupDevices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDeviceGroupDevicesResponseObject); ok {
+		if err := validResponse.VisitListDeviceGroupDevicesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListDevices operation middleware
+func (sh *strictHandler) ListDevices(w http.ResponseWriter, r *http.Request, params ListDevicesParams) {
+	var request ListDevicesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDevices(ctx, request.(ListDevicesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDevices")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDevicesResponseObject); ok {
+		if err := validResponse.VisitListDevicesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDevice operation middleware
+func (sh *strictHandler) GetDevice(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetDeviceRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDevice(ctx, request.(GetDeviceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDevice")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDeviceResponseObject); ok {
+		if err := validResponse.VisitGetDeviceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDeviceEffectiveConfig operation middleware
+func (sh *strictHandler) GetDeviceEffectiveConfig(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetDeviceEffectiveConfigRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDeviceEffectiveConfig(ctx, request.(GetDeviceEffectiveConfigRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDeviceEffectiveConfig")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDeviceEffectiveConfigResponseObject); ok {
+		if err := validResponse.VisitGetDeviceEffectiveConfigResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetDeviceGroups operation middleware
+func (sh *strictHandler) SetDeviceGroups(w http.ResponseWriter, r *http.Request, id Id, params SetDeviceGroupsParams) {
+	var request SetDeviceGroupsRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body SetDeviceGroupsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetDeviceGroups(ctx, request.(SetDeviceGroupsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetDeviceGroups")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetDeviceGroupsResponseObject); ok {
+		if err := validResponse.VisitSetDeviceGroupsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListEnrollmentTokens operation middleware
+func (sh *strictHandler) ListEnrollmentTokens(w http.ResponseWriter, r *http.Request, params ListEnrollmentTokensParams) {
+	var request ListEnrollmentTokensRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEnrollmentTokens(ctx, request.(ListEnrollmentTokensRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEnrollmentTokens")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListEnrollmentTokensResponseObject); ok {
+		if err := validResponse.VisitListEnrollmentTokensResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateEnrollmentToken operation middleware
+func (sh *strictHandler) CreateEnrollmentToken(w http.ResponseWriter, r *http.Request, params CreateEnrollmentTokenParams) {
+	var request CreateEnrollmentTokenRequestObject
+
+	request.Params = params
+
+	var body CreateEnrollmentTokenJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateEnrollmentToken(ctx, request.(CreateEnrollmentTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateEnrollmentToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateEnrollmentTokenResponseObject); ok {
+		if err := validResponse.VisitCreateEnrollmentTokenResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetEnrollmentToken operation middleware
+func (sh *strictHandler) GetEnrollmentToken(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetEnrollmentTokenRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetEnrollmentToken(ctx, request.(GetEnrollmentTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetEnrollmentToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetEnrollmentTokenResponseObject); ok {
+		if err := validResponse.VisitGetEnrollmentTokenResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListManagedFiles operation middleware
+func (sh *strictHandler) ListManagedFiles(w http.ResponseWriter, r *http.Request, params ListManagedFilesParams) {
+	var request ListManagedFilesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListManagedFiles(ctx, request.(ListManagedFilesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListManagedFiles")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListManagedFilesResponseObject); ok {
+		if err := validResponse.VisitListManagedFilesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateManagedFile operation middleware
+func (sh *strictHandler) CreateManagedFile(w http.ResponseWriter, r *http.Request, params CreateManagedFileParams) {
+	var request CreateManagedFileRequestObject
+
+	request.Params = params
+
+	var body CreateManagedFileJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateManagedFile(ctx, request.(CreateManagedFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateManagedFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateManagedFileResponseObject); ok {
+		if err := validResponse.VisitCreateManagedFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteManagedFile operation middleware
+func (sh *strictHandler) DeleteManagedFile(w http.ResponseWriter, r *http.Request, id Id, params DeleteManagedFileParams) {
+	var request DeleteManagedFileRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteManagedFile(ctx, request.(DeleteManagedFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteManagedFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteManagedFileResponseObject); ok {
+		if err := validResponse.VisitDeleteManagedFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetManagedFile operation middleware
+func (sh *strictHandler) GetManagedFile(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetManagedFileRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetManagedFile(ctx, request.(GetManagedFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetManagedFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetManagedFileResponseObject); ok {
+		if err := validResponse.VisitGetManagedFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateManagedFile operation middleware
+func (sh *strictHandler) UpdateManagedFile(w http.ResponseWriter, r *http.Request, id Id, params UpdateManagedFileParams) {
+	var request UpdateManagedFileRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body UpdateManagedFileJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateManagedFile(ctx, request.(UpdateManagedFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateManagedFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateManagedFileResponseObject); ok {
+		if err := validResponse.VisitUpdateManagedFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListManagedUnits operation middleware
+func (sh *strictHandler) ListManagedUnits(w http.ResponseWriter, r *http.Request, params ListManagedUnitsParams) {
+	var request ListManagedUnitsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListManagedUnits(ctx, request.(ListManagedUnitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListManagedUnits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListManagedUnitsResponseObject); ok {
+		if err := validResponse.VisitListManagedUnitsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateManagedUnit operation middleware
+func (sh *strictHandler) CreateManagedUnit(w http.ResponseWriter, r *http.Request, params CreateManagedUnitParams) {
+	var request CreateManagedUnitRequestObject
+
+	request.Params = params
+
+	var body CreateManagedUnitJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateManagedUnit(ctx, request.(CreateManagedUnitRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateManagedUnit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateManagedUnitResponseObject); ok {
+		if err := validResponse.VisitCreateManagedUnitResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteManagedUnit operation middleware
+func (sh *strictHandler) DeleteManagedUnit(w http.ResponseWriter, r *http.Request, id Id, params DeleteManagedUnitParams) {
+	var request DeleteManagedUnitRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteManagedUnit(ctx, request.(DeleteManagedUnitRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteManagedUnit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteManagedUnitResponseObject); ok {
+		if err := validResponse.VisitDeleteManagedUnitResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetManagedUnit operation middleware
+func (sh *strictHandler) GetManagedUnit(w http.ResponseWriter, r *http.Request, id Id) {
+	var request GetManagedUnitRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetManagedUnit(ctx, request.(GetManagedUnitRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetManagedUnit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetManagedUnitResponseObject); ok {
+		if err := validResponse.VisitGetManagedUnitResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateManagedUnit operation middleware
+func (sh *strictHandler) UpdateManagedUnit(w http.ResponseWriter, r *http.Request, id Id, params UpdateManagedUnitParams) {
+	var request UpdateManagedUnitRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	var body UpdateManagedUnitJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateManagedUnit(ctx, request.(UpdateManagedUnitRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateManagedUnit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateManagedUnitResponseObject); ok {
+		if err := validResponse.VisitUpdateManagedUnitResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetMe operation middleware
 func (sh *strictHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	var request GetMeRequestObject
@@ -2872,60 +7123,103 @@ func (sh *strictHandler) UpdateMe(w http.ResponseWriter, r *http.Request, params
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"7F39ctu4dn8VDHtnat9SsvyV3cizf2Szyd7M3Z3s5GPamdiVYPJIwpoCGAC0rc14pu/QP/oIfY/2Tfok",
+	"HXyQAklQpGTZ0c36H1uiQOAAOF+/g8PDL0HE5imjQKUIhl+CFHM8Bwlcf3uRxUS+ugYq3zMu1ZUYRMRJ",
+	"KgmjwTBQV9GEQBKfofOgdx6glMOE3CLBuBRINQYaEzrtow8zQKB6GpEYEYHkDJAk0LvkgK+A94MwIKrL",
+	"zxnwRRAGFM8hGAaqoyAMRDSDOTYETHCWyGAY9FgUZZxDPMKqCdBsHgw/BeWrlUYRi0Fdtf9ZJiM211fy",
+	"jxdhIBepHlpyQqfB3V0YvBR8ogbXFM4Ax8CXJP5b7zccxyy66r18/+51EAYcPmeEQxwMJc/AJT6n8dA/",
+	"zE9wTSL4mbMsfU0SCby+4m9pskAxTAgl6opAImIpxEgyJGdELbnqAk1VH01ratqMdJsRiUvLO2F8jtXq",
+	"Zpn+ZSWRW2GKbbGDbrFkA/u1Z/9HHLAsmKL0LUtj5yfn24o9uvfMTTcC3RA5Y5lEEaMSR1K3RAkWcruL",
+	"M2NCVhbIudRzPquxR5YauyT1S0A5S5JizcpfhcRS92o+rFpF1aCJ099BCljiywTUfOE2TZTMWpHyTt+O",
+	"u5w/kTDXeuwvHCbBMPing6WyOzDNxIFDSnBX0Io5xwv1XchFoi4owVDfX+m5zoHKD+wK6E6JQJmv15cE",
+	"uE0JB5Hv6vKbdw/fxIVKTLGcLSnUiqNZCbarmF8xxVOIX5MEdmp97TTzhbVfe/b/1lSMnf5HSuROTT+j",
+	"xOUr+7Vn/29t+m/5FFPyB1aT3an5iySbOvO3X3v2f3cxU4oqE7mGzIR/GX7DU6hPXV1FNJtfAu+jVH35",
+	"3//S/0eC/AFojheIMongNgKI0eFgMBigvZPBwLRhmRyxyYhjOoX9phVQLf0rcBgGc0LJXM3/sKCZUAlT",
+	"4AXR78kfUGgGT9+aUv8AR6fF8h4OwqPT8HQQHg4GF96x3gPm0ay+RC+xgB6hAqggklwDEtmlWVck9C2I",
+	"XQPX/KB5SKCECAkxIhTd9lLry6lrfdO+aaE+lyYxx7e/AJ3KWTA8HAz0SuXfj+r7e6c0pEgZFaAt1G+c",
+	"XSYwVx+VpQWq2R6naUIiLQkHqWnxL78LNcsvzsirrFverx6xYmBfv0TPT06/Q7ZnFIPEJBF9vbq2gwIF",
+	"vIgk01Y65SwFLomhOyYiTfBCfaxMMVR2wHs59V4WEtJR5v52yVgCmC6t8hePmCztzCfz67KnJduwy98h",
+	"kqqj5Vw+2C5zccbxnNAgDNIES2WiRvkFsRAS5kEYYMroYs606Bof2iO5oQOa6suF81VctWfOet9ZyOJb",
+	"sIhxDolmjlHDUgPnjI8ae8jxWAerHJZwldteKfOeJFrp1W+yqKrLjN/atnehQaFmweJYAx2c/OYspHEp",
+	"apvLIWI8XpNEwTIe+ddHYj4FI4hJ8nYSDD91mMYHc9PdRRjQLEmUA2sIrnJrsfphBbO60ygg6xKqWoJD",
+	"y0wFmcWy1VijURA0l+aGpsyphe/cyYl2eN7jQ6d2hKoSDx174P1ZeM3/C6UVIdbWvu/bUskkTur3/Ypl",
+	"NFNmQE8pRBHLqNL7Wargs7aVTncOGbq/UYTTFGJPt4wDkjNMrbnVvaO5GuwM6VuV+1HtvlBuFa4wyx3m",
+	"Vtg1mGZaFXLsIjVu8dulBBaOSxZFINQgE0ySjIPWZ5To3jJ6RdkNbdZsHwqhuLclWEurN/DxjxmNE/g7",
+	"LOoUXcHCKrfyhkF/2kfnwaW+syfIlBI6HV4fngc+Zkqzy4REoyszQrmnH7GAZyfoVXx0enr4HJmm6AoW",
+	"fS+ucWdliSv13zy/d7BUUxU59UzwPFDK7jwI0XkwIQkMz7PB4DhSOEV/gvMAMY7OtQtvf1Q+Tf6jV02m",
+	"EK2tkGXFxlodrGgqDGs80gDiom3BllbJEuNbrZeMTshU/U1I5GHShAngIxKXNVur7asqNA4rrMYNoVQP",
+	"Ut8YhUaWwTulNCTSPh4ItCfmOElASPTmJ+2bt+Nkd3kKklwCQmfCvuUysQ+PmzJVpukauCDG2SxbMs8K",
+	"mVnEIyNU7q3FNAiVz06CsKkvR9/WOykv4y9YqnVSdogkECPTHtn2aG+AfkCUUSgvYz5+fTw3ftXZb4Ai",
+	"EDSS7Apogx/VunIzzOMbzGGkb+iy1kW0rlnVtnJ0NabXNO1WYuZY2VQYdaSdiRGHBLCAZmXSaCkczjXB",
+	"vvVCe/qeUTRT6HedvfYpIidimscdyxtZWpnSvP2sUw2q1oitiYUvVtsghmFFopt1wU8aA3Z3ea0GuQur",
+	"KkSfLog1o7D6VOEdTHw6l8RAJZELZSnX7feNvVe5CbWuK9trCa8OWF+yi/JhSF2LOkGfzlqlpOg2F+9G",
+	"9eAE3+7B/ZbzXWIrES9vkK/KbHrdXurbmrXBBCcCwqqzWV6mcuxlsGJBVkRpDtumrvtomc02wJTLVE9o",
+	"alfQVEVDNTjim0pmo5S1kPJRy9muSs8qysWGpJfOrtf04+f49o1pfOjM028HaiM174RrXrZiBZqQ69/g",
+	"Fr3/24ve0ekzxCY6hL0Sc5qeUs4kRPluF1gsnedQzIf17dGEGyCNJLkGHZ+6ZlcQt0O2AuNWqHCOQJzV",
+	"aV7f7SnVJ326Y/r0fe7HF4eq5uTOhDdzflP36N4+Z5hjKgkFc8YsNWE+/n01mYDuwIQEPHJpgwTdWagS",
+	"XPCwkpKm7v05x9yrggzCE3cygLdoEWpuU0h4gUgcIrjFkUwWCJtjTwuUOeJAY+D64lyfanUhsxKB8lCa",
+	"USLXnvZHSmSrM75cg3xx89FCZwN97LXM01gygCcYw6JMtUE4z5yiALFQEmfg2BkiEqWEmoUshwyV0hV6",
+	"jXkmJMI0mjF9rlxmNIvF1oIty6imZ7mZc0De9fRGAL8GPsp44sfXCoa2uyVOL3Uy8l7C0oxX782HfNxK",
+	"/CmTbITTlLNr8B8Iboatynlvm0RrnKSYzuN23KI5vh1lohQAcbR8I6Kz1vheQZylsV/FlNXUJ3OTkv8G",
+	"qldCx2oOYmnPndWw3Veyk5xZV5BnLaeike82Qp5V1izrlFc2hmO1iUCXELE5IGPLimw/cz9OfBbXy6ct",
+	"o/zOCDX5n0XiZyu7lTm54sNINGdCouMBirHScTPAcanXlQzvcvIc39qEkYFFDI35I1tE6RVucZiptH+d",
+	"mSSu6ygniBcVFqab+FiLpNVyxMGX4TRjNxQxGsEZioma6WUmQdmihFwBwijFQtwwHjd4mFarriHN9WM3",
+	"q8wtiaFnwh2Wbxuue43SJx9+R3x4v0VYhRlzwTSfZjgTssGBd71jn/Oe50jV82K24xqUt0CZUPQDgmvg",
+	"C6t2fVq21dJO81Dxxl5CUzIPu6Emjbp+go3l7AGDwXVTbhNi5zZzRROWTz0s9m69iLHDDhvZbYdjyjv7",
+	"8cPr3vdIwq0MEbZ279kJ+jv5sb8Rp7ydE4kmjJd4JY/WuD5zJytd8MsyDZUzJldxxrLl4NnJidkOCVzR",
+	"9u+DT4Pedxdfju/+4s3WylmofbCcpyq4FBJ2gw5ARgchOsgEP0hYhBN9ATGODlgqD0LEMilIDMiGhCBG",
+	"qjuB9k6OjvTHEWVyhJOE3UCsD3FLDsHRSRtf5hnZds9b+GkbNqoFyz/Zp69in5xd2SjavMrMNGvyXBDX",
+	"l7tGMevA/02T13EWXyIqeWBs/TAGFKj6OfZT3tGGZnZJHs0gFk9OGNqd2OYGJlBt6GbQtdjzQr+XFnkd",
+	"CLpdK+dsaitp+eaV6flrXwBXNITor321VVx9ECy6Aqksz1/7SpTOEAcdw4qRjiIiTMUNcKTsjrrg2p2K",
+	"2Tk6PW3b/Eoem3fjtmhr/AHUJ1vzdW2N2pWNbM0qjbxS6eUC0c6sdZqhMY93dO8MM+X5lY52wJ9V7GqL",
+	"7olHv4L7nJgv3T4MOCsTwPi0eKpDfVbTxiaHXv+UxcR8qzwD4qM6E8DXOMsvmoflBbZEVlahWD0vo5Vn",
+	"vuVEhNA819ZtVu6jb35SNxKFjqxToWjFkq1esE38nQda5K6h+NIzkjYO37ZB3U/d3d438jQ8cdyj1jju",
+	"clEcx/kT7v0x6D2/sP97F18Ow+PBXX75L60eWRuLunPdhnEua6Un67wj1tkjMG7SAWfXRBBGK5kH7vXR",
+	"BBPjvItMpEDjhril8yRnFUw2RO7iIue2rmaokJhG4CuP8DkzDwsEKw/0PDtIZAIrn8cpj5RxOrRPxQ7t",
+	"o6L2mRE1I/PMSKsY2gc3zNiuJjIxwmKe9b0zpyQZJ3LxXsmYWUwBIn82QD+aGzF2RcB90FgTPMrbLQUx",
+	"JfpY/U6v7oR5RErZfPTitzc5nLHlXVDKuGLgvTTBFP06QP/z38/6z/b76L1OUdCteSZnGhap+6ZAlX8B",
+	"MfqZIXN0jtQ+8AmOQGGPWDU7p6bffxbowyKF95oSpKgVffSvnEgJFOnjPUBvU6CKsOP+oH+sn2sGiS4h",
+	"wpkAxHBKdGGbKVAUMxD6SfCUswiEQMf9w/45Pac99CJJkH4wVCDMATU9Boz2xk2PH4/39UkmGqvRxnoi",
+	"43wHx2iPF6y531cD/ppJLJWusT8IZDlDz8mU00HjchmdITocoz0mZ8BviAB0MjhG40jwyWhOhCB0OjZ9",
+	"f6jATaVeqMKkKMVcqj3BOqI4REQ/MAICTTib65EtbyBGk0Uf5QkuQt2kBy51LM4pKuDi4ASNFVScsIzG",
+	"42W+jT6cswQus3M0oW+1r6lL9pjHfjiglJNrksAUYn1ArH6LMOcLNF4+h66d0iGqCtz4DAGOZkhZynmq",
+	"tznOFPE5KYyCpljdbgovmT3Tg6t+NFWvNHqPWJKY1Dw0/vnVhzEi8zSBubJreqESIkyFGo4jifZe/PQO",
+	"DQaH3+8P0Vjp5HFo/mvdPEZ7h4MQHZ2G6HQQKlW/HypCxko1j9GeRte6xxCNe+O8csMPTtWG0CQ2cjLH",
+	"fIGuYKE2VWl4pXN1vs2yjMN+iMafx2qAvajtuf8QHf3ff/zn4WCAohlWUwEu9nMxLFKBIEYTXZJGnCFl",
+	"H/JvasfUOHxZl0ZzX/4YvyJy/MWaU7Uc4bIuQ2hsn/1nzZVJ2rob983qlQo5jPNKDmrEejGHca2aw3j/",
+	"DI1172NFiMechwhfsmswDGCaoh/MT1qE9Sa59KEflD6Dsa3ddSvVwioWKRdJGBcrJ0z1IlNUIUQ2kqMv",
+	"hnnpBVtxwY6XLy2bGG7WRRfOaWEohkGuewulHIRB8VxYMOgf9gcaQ6ZAcUqCYaBVoz2D0pbiAKfkAGdy",
+	"dhDhJLnE0VUw/HIXOtcTNlU2pHaRZdK5mmPCg+vDg5Ji0E+7+A7x37EExBCVwaRye1iuC97EwTD4hQj5",
+	"ttRhWCrD1gCEl00OtN96F3Zqp6tzdGhbq8LS4R5bkUO13EItJ+0frFnMyYeL2mo6XVRKcRwNBivKcKxX",
+	"fqOGLjx1ON5SMJVclN1x+aCvaD0x1PgGKaheVvlQ7Q/XbH+8RntdFGEqtM9s2Vq5bGWN4IRxRwa15CjM",
+	"yrvGZUWalrB1XGpYzdz7qQJivcleirCUic5CiAysFbVwtTYHRAr0IpMzoJJcmZQqoRwExcTKnEit9o2T",
+	"o5w9TM9p2QmhyFCGPAgit8OABJ4DUrNDHHpFS6Fclb2jwWDfqMKytjCEvy1Hi9ZTF7qaoWF7PYcfWbx4",
+	"EI63sYO7MhjIg3OPIXPeujfOWkOshezICM2jDG8TypQiNK6vXoBfWFREp5bj1KoG7ZxCUO2fr9X+dHC0",
+	"TYWjHVwFF90zJ6sj9O2rjffBFxLf3deC/wyyIpBfjbk/1I7fdpJlTu7LAnfrKr03sXliV7PD9eGB5pue",
+	"BkatHlxxbhAi55zA78ktK+Hshh9XKeF7Ly/u9Ut0fHz8/Kxw7SVDPfSdzhFuKpKm0La/wuzKU/X2sSm7",
+	"sQBM4R+Nl0SKaZHD9fzI5C5rwKTbjCRjowTzFbXvJNsCra8UBLeYWyHtMxczdvN/bVjM4/221iapFCy9",
+	"tyvuFJ5azxevFvV6aEJ1OaxRXiFmA1qXZeG+KmaoVOZqQQxOgGfHAYOx1F3QQqVot4MarDbRYlorjOYw",
+	"QAlW2Ib6535epiovm1ZccACHt2Z4USD87s4xIybxpbesdrGGHcmPnztYFfe56Z0wK9Uq4GvYlYeUnWol",
+	"hhbhcaul77j0lBmtixRZvLyUnpJQeEp4OBLgw9pudlor3m5g9X4DnnVLXuwUnK0XKumEZg8fgoAnNLmZ",
+	"fOQQ0U1qrEPEqjIvkGEMCUho5/Q6b/+k79wSb5f466ROjhks/rYA37q7avYq1vnZWzfEP4Ms7+VjmLEm",
+	"kF9+0cc3vOebIX19AOSrDr6ufTIJbP8I9smm2j1ytLWFVQ1R34JWekTbZD2tFttkL20HdehIyhzml/Y4",
+	"FtfeJLQSlNjX2ewQNNkg2tWtX+edNY8AZbqgGLNteTGAP40D0AB7nMqclePGSljAaVgu3engoJUvRvK9",
+	"9sggo3tFprcp1ivk9k8nrKH3XWqOznuUF6jthsrYXV1Rk/37S339cbZH0QN1ke502HhPbPLwsMSWCF6N",
+	"S3SOg9HaJqXClkjUNbO+RRMltnAm6bLJAeQF7HrL8jLbcfOKxFR/cTiTvrxUhUWesvvaSTmDhc6n1em0",
+	"Z6goxoYuQd4A0HJsVae7mtcshTY/dw58CrEvxaXg5WoNvwdk7epQHu4umiCzIRn/Bk/YH4iZl+cjm2H5",
+	"bP1IM3oHaYJzLne5Mbf5M5KKuiZ9D/c7bXksuC++Jt7vbgOIFIjCTXnNv0mJaYb1fcP+eTX/oMk1GDp1",
+	"5bYnfENTP3Xrneq3GfSWFVm3PoAkfAudLsuW9XRJs02BlR9LVSpg7Qao8r2jdkcOaH3l4VqwynIDkdnA",
+	"3UYtdX7rlPJQOmpddWbbckrrvrW3+ylt5VGWCHNOrOXUk0CmCmDxsIyzJyVnyHn8KIIz/WTVOcVohsUs",
+	"f5rO9kQEEpJxvwdoTjWrdf92yhL7a4k+8uFwQ63KP8E58cZZxC3imRvu6it6vOfFtb7uA/C9mL4uAo+l",
+	"mZt8u6o2Rnt5UVsj2PvflnfnYZd7IyM/2wxNicz7OzxzU4imVxSjf5goslNbbTe8nupb4x8gnqyB12Mc",
+	"/lSrE7adAJnmSG/5brtHOXcuSwi3+ka2mqMT110Zz9XNHS/J93r+h8xlc0tB7pTLUi+h+sjuSqlI5lMu",
+	"W6390dH2ZSp3aGybkVIRXmemZDbWTn5rEw2TnbYl0fhTpsKtvckPnQtX3szHMIVNPqlr/r7tTX/cZDgd",
+	"FBARSwHtVUzuPoowpUyiS0A2rNmUO/ePYA+/Tiy9hbX/vLlzj2kLfcl2eSfFi60eFEJ9tC+02hkIpQj6",
+	"ViBUUXS3I4TSW/7NQShbgLorhMorGecQyt7+2BDqoxl290yGU4L760AoU/v5CUJ9FbOhpGElhNI65GEh",
+	"1H1F4wlCddnkR4JQdjMfwxS2QSg97ScItZsQaqft4VeFUE2s/QShHkNNeiEUOLiprvgeNmTUGCkSZEoh",
+	"7hGKtLASIa2xXXu/3fUCq1WsgvBK8K7FPr5WyGNVpMO7KbsKwvIc/7w4td7Soiz1p4u7i/yty2a39auX",
+	"g5mUqRgeHJisGytVff3qghkTcvj9ycmx3nQ7zpeiuk0mDcq23+fgfis/JuX8UD+/rt1VulSRfecXI/nO",
+	"haIY193F3f8HAAD//w==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

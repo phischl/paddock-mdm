@@ -47,3 +47,7 @@ RETURNING *;
 -- Returns uuid.Nil when no active organization has this slug.
 -- name: OrganizationIDBySlug :one
 SELECT coalesce(paddock_org_id_by_slug(@slug), '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS id;
+
+-- Worker and compiler loops: organization IDs without an organization context (SECURITY DEFINER function).
+-- name: ListOrganizationIDs :many
+SELECT id::uuid FROM paddock_organization_ids() AS id;

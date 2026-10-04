@@ -17,6 +17,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
+	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/principal"
 	"github.com/paddock-mdm/paddock/server/internal/problem"
@@ -48,6 +49,9 @@ type Recorder interface {
 	SetTarget(t audit.Target)
 	SetParam(key string, value any)
 	SetOrganization(id uuid.UUID) // platform actions only, e.g. organization.created
+	// StateChanged queues a state change for the compiler; it is written to the outbox in the same transaction,
+	// only when the action succeeds (plan M2a §6.4).
+	StateChanged(scope string, id uuid.UUID)
 }
 
 // CorrelationIDFunc extracts the request ID from ctx (set by the httpx middleware).
@@ -92,6 +96,7 @@ type recorder struct {
 	params     map[string]any
 	correlated string
 	startedAt  time.Time
+	changes    []statechange.Event
 }
 
 func (r *recorder) SetTarget(t audit.Target) { r.target = &t }
@@ -102,6 +107,10 @@ func (r *recorder) SetParam(key string, value any) {
 }
 
 func (r *recorder) SetOrganization(id uuid.UUID) { r.org = id }
+
+func (r *recorder) StateChanged(scope string, id uuid.UUID) {
+	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id})
+}
 
 var secretParamWords = []string{"password", "secret", "token"}
 
@@ -368,7 +377,29 @@ func (r *ActionRunner) insertFinished(ctx context.Context, q *pgstore.Queries, r
 	}); err != nil {
 		return err
 	}
+	if outcome == audit.OutcomeSuccess {
+		if err := insertStateChanges(ctx, q, rec); err != nil {
+			return err
+		}
+	}
 	return insertOutbox(ctx, q, rec, outcome, code, finished)
+}
+
+// insertStateChanges writes the queued state changes of a successful action to the outbox.
+func insertStateChanges(ctx context.Context, q *pgstore.Queries, rec *recorder) error {
+	for _, ev := range rec.changes {
+		payload, err := json.Marshal(ev)
+		if err != nil {
+			return err
+		}
+		if err := q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
+			OrganizationID: ev.OrganizationID, Subject: statechange.Subject(ev.OrganizationID),
+			MsgID: uuid.Must(uuid.NewV7()).String(), Payload: payload,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *ActionRunner) finishStarted(ctx context.Context, q *pgstore.Queries, rec *recorder, cause error) error {

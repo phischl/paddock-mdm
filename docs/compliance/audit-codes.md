@@ -9,7 +9,25 @@ The portal renders them through the message key `audit.<code>`.
 | --- | --- | --- | --- |
 | `action.finalized_unknown` | Metric label of the reaper. The reaper finalizes a stuck action with outcome unknown under the original action code; this code is never emitted as an event. | – | – (never emitted) |
 | `admin.login` | An administrator signed in to the portal, or a sign-in was rejected. Platform administrators and rejected sign-ins without a resolvable organization are recorded in the platform pseudo-organization. | `role`, `organization_slug`, `reason` | success, failure, denied |
+| `device.approved` | An administrator approved a pending device. | `hostname`, `from_state` | success, failure, denied |
+| `device.bundle_applied` | A device reported that it applied a bundle (actor: the device). | `event_seq`, `occurred_at`, `bundle_version`, `reason`, `resource` | success |
+| `device.bundle_rejected` | A device reported that it rejected a bundle, e.g. a failed signature check (actor: the device). | `event_seq`, `occurred_at`, `bundle_version`, `reason`, `resource` | success |
+| `device.clone_suspected` | The sequence numbers of a device diverged (cloned identity); the device was quarantined. | `hostname`, `reported_seq`, `issued_seq`, `from_state` | success, failure |
+| `device.config_drift_corrected` | A device reported that it corrected a local change of a managed resource (actor: the device). | `event_seq`, `occurred_at`, `bundle_version`, `reason`, `resource` | success |
+| `device.enrolled` | A device enrolled with an enrollment token (actor: the device), or its enrollment was rejected. A failure carries the rejection reason as error_code: token_revoked, token_expired, token_exhausted or invalid_request. | `hostname`, `state`, `key_protection`, `enrollment_token_id`, `reason` | success, failure |
+| `device.groups_changed` | The device group memberships of a device were replaced. | `hostname`, `added`, `removed` | success, failure, denied |
+| `device.quarantine_released` | An administrator released a quarantined device back to active. | `hostname`, `from_state` | success, failure, denied |
+| `device.rejected` | An administrator rejected a pending device. | `hostname`, `from_state` | success, failure, denied |
+| `device.retired` | An administrator retired a device; its identity keys are revoked. | `hostname`, `from_state` | success, failure, denied |
 | `device_group.created` | A device group was created. | `name` | success, failure, denied |
 | `device_group.deleted` | A device group was deleted. | `name` | success, failure, denied |
 | `device_group.updated` | A device group was renamed or its description changed. | `name`, `old_name`, `description_changed` | success, failure, denied |
+| `enrollment_token.created` | An enrollment token was created. The token secret is never recorded. | `name`, `expires_at`, `max_uses`, `auto_approve`, `device_group_id` | success, failure, denied |
+| `enrollment_token.revoked` | An enrollment token was revoked. | `name` | success, failure, denied |
+| `managed_file.created` | A managed file was defined for the organization or a device group. | `path`, `device_group_id`, `mode`, `owner`, `group` | success, failure, denied |
+| `managed_file.deleted` | A managed file definition was deleted. | `path`, `device_group_id` | success, failure, denied |
+| `managed_file.updated` | A managed file definition was changed. | `path`, `device_group_id`, `mode`, `owner`, `group`, `content_changed`, `old_path` | success, failure, denied |
+| `managed_unit.created` | A managed systemd unit was defined for the organization or a device group. | `unit`, `device_group_id`, `enabled`, `active` | success, failure, denied |
+| `managed_unit.deleted` | A managed systemd unit definition was deleted. | `unit`, `device_group_id` | success, failure, denied |
+| `managed_unit.updated` | A managed systemd unit definition was changed. | `unit`, `device_group_id`, `enabled`, `active`, `old_unit` | success, failure, denied |
 | `organization.created` | A platform administrator created (or re-provisioned) an organization and its Authentik groups. | `slug`, `name`, `reprovisioned` | success, failure, denied, unknown |

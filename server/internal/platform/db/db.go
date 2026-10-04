@@ -124,6 +124,45 @@ func (p *OrgPool) ResolveSlug(ctx context.Context, slug string) (uuid.UUID, erro
 	return id, err
 }
 
+// OrganizationIDs lists every organization ID before an organization context exists, for the cache loops of worker
+// and compiler. It runs only the SECURITY DEFINER function paddock_organization_ids; all organization data is
+// then read with InOrg.
+func (p *OrgPool) OrganizationIDs(ctx context.Context) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := inTx(ctx, p.p, nil, func(tx pgx.Tx) error {
+		var err error
+		ids, err = pgstore.New(tx).ListOrganizationIDs(ctx)
+		return err
+	})
+	return ids, err
+}
+
+// Listen holds a dedicated connection with LISTEN channel and calls fn with the payload of every notification. It
+// returns when ctx ends or the connection fails; notifications sent meanwhile are lost, so callers reconcile.
+func (p *OrgPool) Listen(ctx context.Context, channel string, fn func(payload string)) error {
+	return listen(ctx, p.p, channel, fn)
+}
+
+func listen(ctx context.Context, p *pgxpool.Pool, channel string, fn func(payload string)) error {
+	conn, err := p.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize()); err != nil {
+		return err
+	}
+	for {
+		n, err := conn.Conn().WaitForNotification(ctx)
+		if err != nil {
+			// The connection state is unknown after an interrupted wait; do not return it to the pool.
+			_ = conn.Conn().Close(context.WithoutCancel(ctx))
+			return err
+		}
+		fn(n.Payload)
+	}
+}
+
 // PlatformPool is the pool of role paddock_platform (platform endpoints only).
 type PlatformPool struct{ pool }
 
@@ -165,25 +204,12 @@ func (p *RelayPool) InRelay(ctx context.Context, fn func(ctx context.Context, q 
 // Listen holds a dedicated connection with LISTEN channel and sends to notify on every notification (non-blocking).
 // It returns when ctx ends or the connection fails.
 func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- struct{}) error {
-	conn, err := p.p.Acquire(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize()); err != nil {
-		return err
-	}
-	for {
-		if _, err := conn.Conn().WaitForNotification(ctx); err != nil {
-			// The connection state is unknown after an interrupted wait; do not return it to the pool.
-			_ = conn.Conn().Close(context.WithoutCancel(ctx))
-			return err
-		}
+	return listen(ctx, p.p, channel, func(string) {
 		select {
 		case notify <- struct{}{}:
 		default:
 		}
-	}
+	})
 }
 
 // AuditReader is the read-only pool of role paddock_audit_reader, with the same InOrg semantics as OrgPool.
@@ -273,6 +299,13 @@ func IsUniqueViolation(err error, constraint string) bool {
 		return false
 	}
 	return constraint == "" || pgErr.ConstraintName == constraint
+}
+
+// IsForeignKeyViolation reports whether err is a foreign key violation (a referenced row is missing or still
+// referenced).
+func IsForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
 // IsCheckViolation reports whether err is a check constraint violation.
