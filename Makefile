@@ -60,6 +60,14 @@ test: ## Unit and integration tests (requires Docker)
 	go test -count=1 $(UNIT_PACKAGES)
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
 
+.PHONY: fuzz
+fuzz: ## Run every fuzz test of pkg for FUZZTIME each (default 30s)
+	@for target in $$(grep -rhoE '^func Fuzz[A-Za-z0-9_]+' pkg --include='*_test.go' | sed 's/^func //'); do \
+		dir=$$(grep -rlE "^func $$target\(" pkg --include='*_test.go' | xargs dirname); \
+		echo "fuzz $$target ($$dir)"; \
+		go test -run '^$$' -fuzz "^$$target$$" -fuzztime $(or $(FUZZTIME),30s) ./$$dir/ || exit 1; \
+	done
+
 .PHONY: web
 web: ## Build the portal into server/web/dist (containerized)
 	@if [ -f $(WEB_DIR)/package.json ]; then \
