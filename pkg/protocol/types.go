@@ -110,15 +110,22 @@ type CheckinResponse struct {
 	AgentUpdate  *AgentUpdate `json:"agent_update"`
 }
 
-// Device event types accepted by POST /v1/events (closed set).
+// Device event types accepted by POST /v1/events (closed set, plan M2a decision 14 and M2b decision 23).
 const (
 	EventBundleApplied        = "bundle.applied"
 	EventBundleRejected       = "bundle.rejected"
 	EventConfigDriftCorrected = "config.drift_corrected"
+	EventAgentUpdated         = "agent.updated"
+	EventAgentUpdateFailed    = "agent.update_failed"
+	EventAgentRolledBack      = "agent.rolled_back"
+	EventAgentEventsDropped   = "agent.events_dropped"
 )
 
 // EventTypes is the closed set of event types.
-var EventTypes = []string{EventBundleApplied, EventBundleRejected, EventConfigDriftCorrected}
+var EventTypes = []string{
+	EventBundleApplied, EventBundleRejected, EventConfigDriftCorrected, EventAgentUpdated, EventAgentUpdateFailed,
+	EventAgentRolledBack, EventAgentEventsDropped,
+}
 
 // MaxEventsPerBatch bounds POST /v1/events.
 const MaxEventsPerBatch = 500

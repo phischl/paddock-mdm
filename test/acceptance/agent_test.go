@@ -66,6 +66,8 @@ type agentState struct {
 	DeviceID string `json:"device_id"`
 	Status   string `json:"status"`
 	Seq      int64  `json:"seq"`
+	// AppliedBundleVersion is the last applied bundle.
+	AppliedBundleVersion int64 `json:"applied_bundle_version"`
 }
 
 func readAgentState(t *testing.T, root string) agentState {
@@ -81,8 +83,9 @@ func readAgentState(t *testing.T, root string) agentState {
 	return s
 }
 
-// TestAgentEnrollmentAndCheckin is the integration test of plan M2b step 1: paddockd enrolls against the running
-// stack (pending, approval, resume with the same key), then `paddockd run` checks in and serves its health socket.
+// TestAgentEnrollmentAndCheckin is the integration test of plan M2b steps 1 and 2: paddockd enrolls against the
+// running stack (pending, approval, resume with the same key), then `paddockd run` checks in, applies its first
+// bundle, reports bundle.applied and serves its health socket.
 func TestAgentEnrollmentAndCheckin(t *testing.T) {
 	alice := login(t, env.Alice)
 	bin := paddockd(t)
@@ -112,6 +115,8 @@ func TestAgentEnrollmentAndCheckin(t *testing.T) {
 		t.Fatalf("state after approval: %+v", s)
 	}
 
+	// Start the agent once the compiler rendered the device's first bundle, so that the first check-in offers it.
+	waitDevice(t, alice, pending.DeviceID, time.Minute, func(d deviceState) bool { return d.BundleVersion >= 1 })
 	run := agentCmd(t, ctx, bin, root, "run")
 	logs, err := os.Create(filepath.Join(t.TempDir(), "run.log"))
 	if err != nil {
@@ -123,8 +128,19 @@ func TestAgentEnrollmentAndCheckin(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = run.Process.Kill() })
 	waitDevice(t, alice, pending.DeviceID, time.Minute, func(d deviceState) bool { return d.LastContactAt != nil })
-	if s := readAgentState(t, root); s.Seq < 1 {
-		t.Fatalf("sequence number not persisted: %+v", s)
+	// The new device's first bundle (time only) is applied right after the first check-in and reported at once;
+	// below a test root the agent does not touch the host's services, so the time resource is reported as an
+	// error, but the bundle counts as applied.
+	deadline := time.Now().Add(time.Minute)
+	for eventCount(t, alice, "device.bundle_applied", pending.DeviceID) == 0 {
+		if time.Now().After(deadline) {
+			data, _ := os.ReadFile(logs.Name())
+			t.Fatalf("no device.bundle_applied audit event within a minute; agent log:\n%s", data)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if s := readAgentState(t, root); s.Seq < 1 || s.AppliedBundleVersion < 1 {
+		t.Fatalf("state after the first check-in: %+v", s)
 	}
 	health := agentHealth(t, filepath.Join(root, "run/paddock/agent.sock"))
 	if health["status"] != "ok" || health["last_checkin_at"] == nil {

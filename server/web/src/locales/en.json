@@ -137,7 +137,11 @@
       "clone_suspected": "The device {hostname} was quarantined because its identity seems to be cloned",
       "bundle_applied": "The device {target} applied bundle {bundle_version, number}",
       "bundle_rejected": "The device {target} rejected a bundle",
-      "config_drift_corrected": "The device {target} corrected a local change"
+      "config_drift_corrected": "The device {target} corrected a local change",
+      "agent_updated": "The device {target} updated its agent to {version}",
+      "agent_update_failed": "The device {target} refused agent {version} ({outcome})",
+      "agent_rolled_back": "The device {target} rolled agent {version} back to {from_version}",
+      "agent_events_dropped": "The device {target} dropped {count, number} events while the server was unreachable"
     },
     "managed_file": {
       "created": "{actor} defined the managed file {path}",

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/paddock-mdm/paddock/agent/internal/apply"
 	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
 	"github.com/paddock-mdm/paddock/agent/internal/client"
 	"github.com/paddock-mdm/paddock/agent/internal/config"
@@ -21,6 +22,8 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/health"
 	"github.com/paddock-mdm/paddock/agent/internal/identity"
 	"github.com/paddock-mdm/paddock/agent/internal/paths"
+	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
+	"github.com/paddock-mdm/paddock/agent/internal/spool"
 	"github.com/paddock-mdm/paddock/agent/internal/state"
 	"github.com/paddock-mdm/paddock/pkg/bundle"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
@@ -34,6 +37,8 @@ type Deps struct {
 	Key      identity.Key
 	Client   *client.Client
 	Health   *health.State
+	Applier  *apply.Applier
+	Spool    *spool.Spool    // nil: the agent's own spool below Layout
 	Triggers <-chan struct{} // immediate check-in requests (network up, resume, SIGHUP)
 	Now      func() time.Time
 	Rand     func() float64 // uniform in [0, 1)
@@ -43,6 +48,7 @@ type Deps struct {
 type Agent struct {
 	d           Deps
 	st          state.State
+	current     *bundle.Bundle // last applied bundle (drift loop)
 	failures    int
 	lastAttempt time.Time
 }
@@ -65,7 +71,12 @@ func Load(l paths.Layout) (Deps, error) {
 	if err != nil {
 		return Deps{}, err
 	}
-	return Deps{Layout: l, Config: cfg, Trust: trust, Key: key, Client: c}, nil
+	managed, err := reconcile.LoadManaged(l.Managed())
+	if err != nil {
+		return Deps{}, err
+	}
+	sys := reconcile.OS{Root: l.Root}
+	return Deps{Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Applier: apply.New(sys, managed)}, nil
 }
 
 // New creates the run loop.
@@ -84,7 +95,11 @@ func New(d Deps) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{d: d, st: st}
+	if a.d.Spool == nil {
+		a.d.Spool = a.newSpool()
+	}
 	a.refreshHealth()
+	a.loadCurrent()
 	return a, nil
 }
 
@@ -110,11 +125,15 @@ func (a *Agent) Run(ctx context.Context) error {
 func (a *Agent) loop(ctx context.Context) error {
 	next := time.NewTimer(0) // check in at start
 	defer next.Stop()
+	drift := time.NewTicker(a.d.Config.DriftInterval)
+	defer drift.Stop()
 	nextAt := a.d.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-drift.C:
+			a.drift(ctx)
 		case <-a.d.Triggers:
 			if at := triggered(a.d.Now(), a.lastAttempt, a.d.Rand()); at.Before(nextAt) {
 				nextAt = at
@@ -182,6 +201,8 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	} else {
 		a.setError("")
 	}
+	a.handleBundle(ctx, resp.Bundle)
+	a.flush(ctx)
 	return afterSuccess(resp.NextCheckinS, a.d.Rand())
 }
 

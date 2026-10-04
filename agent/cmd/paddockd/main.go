@@ -31,6 +31,7 @@ commands:
                  enroll this device (root only); exit 0 active, 2 pending, 3 rejected, 1 error
   run            run the agent (started by paddock-supervisor)
   self-test      check this binary against the device's configuration; JSON report, exit 0 or 1
+  plan           show what applying the last applied bundle again would change (read-only); JSON report
   version        print the version
 `
 
@@ -59,6 +60,8 @@ func run(args []string, stdout io.Writer) int {
 		return runEnroll(ctx, layout, rest)
 	case "run":
 		return runAgent(ctx, layout)
+	case "plan":
+		return runPlan(ctx, layout, stdout)
 	case "self-test":
 		r := selftest.Run(ctx, layout)
 		enc := json.NewEncoder(stdout)
@@ -136,6 +139,24 @@ func runAgent(ctx context.Context, layout paths.Layout) int {
 		slog.ErrorContext(ctx, "agent stopped", "error", err)
 		return 1
 	}
+	return 0
+}
+
+// runPlan prints the plan of the cached, verified bundle: the "second run" of plan M2b gate S2 without changing
+// anything.
+func runPlan(ctx context.Context, layout paths.Layout, stdout io.Writer) int {
+	plan, version, err := agent.PlanCurrent(ctx, layout)
+	if err != nil {
+		slog.ErrorContext(ctx, "plan failed", "error", err)
+		return 1
+	}
+	changes := 0
+	for _, p := range plan {
+		changes += len(p.Changes)
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(map[string]any{"bundle_version": version, "changes": changes, "resources": plan})
 	return 0
 }
 

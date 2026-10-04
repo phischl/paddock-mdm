@@ -25,6 +25,10 @@ const (
 	CodeDeviceBundleApplied        Code = "device.bundle_applied"
 	CodeDeviceBundleRejected       Code = "device.bundle_rejected"
 	CodeDeviceConfigDriftCorrected Code = "device.config_drift_corrected"
+	CodeDeviceAgentUpdated         Code = "device.agent_updated"
+	CodeDeviceAgentUpdateFailed    Code = "device.agent_update_failed"
+	CodeDeviceAgentRolledBack      Code = "device.agent_rolled_back"
+	CodeDeviceAgentEventsDropped   Code = "device.agent_events_dropped"
 	CodeManagedFileCreated         Code = "managed_file.created"
 	CodeManagedFileUpdated         Code = "managed_file.updated"
 	CodeManagedFileDeleted         Code = "managed_file.deleted"
@@ -46,8 +50,12 @@ type Definition struct {
 // adminOutcomes are the outcomes of database-only administrator actions.
 var adminOutcomes = []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
 
-// deviceEventParams are the parameters of audit events reported by devices (plan M2a decision 14).
-var deviceEventParams = []string{"event_seq", "occurred_at", "bundle_version", "reason", "resource"}
+// deviceEventParams are the parameters of audit events reported by devices (plan M2a decision 14, M2b decisions 9,
+// 11, 12 and 16); each event carries the subset its type defines.
+var deviceEventParams = []string{
+	"event_seq", "occurred_at", "bundle_version", "reason", "resource", "version", "changed", "errors", "resource_ids",
+	"from_version", "outcome", "count", "from_seq", "to_seq",
+}
 
 var registry = map[Code]Definition{
 	CodeAdminLogin: {
@@ -151,6 +159,31 @@ var registry = map[Code]Definition{
 	CodeDeviceConfigDriftCorrected: {
 		Code: CodeDeviceConfigDriftCorrected, Emitted: true,
 		Description: "A device reported that it corrected a local change of a managed resource (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceAgentUpdated: {
+		Code: CodeDeviceAgentUpdated, Emitted: true,
+		Description: "A device's supervisor switched to a new agent version that passed self-test and probation (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceAgentUpdateFailed: {
+		Code: CodeDeviceAgentUpdateFailed, Emitted: true,
+		Description: "A device's supervisor refused an agent release before switching: invalid signature or failed self-test (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "outcome is signature_invalid or self_test_failed.",
+	},
+	CodeDeviceAgentRolledBack: {
+		Code: CodeDeviceAgentRolledBack, Emitted: true,
+		Description: "A device's supervisor rolled a new agent version back because it crashed or did not report healthy within its probation (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceAgentEventsDropped: {
+		Code: CodeDeviceAgentEventsDropped, Emitted: true,
+		Description: "A device's event spool overflowed while the server was unreachable; the events from_seq..to_seq were dropped (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 	},
