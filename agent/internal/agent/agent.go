@@ -25,6 +25,7 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
 	"github.com/paddock-mdm/paddock/agent/internal/spool"
 	"github.com/paddock-mdm/paddock/agent/internal/state"
+	"github.com/paddock-mdm/paddock/agent/internal/update"
 	"github.com/paddock-mdm/paddock/pkg/bundle"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 )
@@ -40,8 +41,11 @@ type Deps struct {
 	Applier  *apply.Applier
 	Spool    *spool.Spool    // nil: the agent's own spool below Layout
 	Triggers <-chan struct{} // immediate check-in requests (network up, resume, SIGHUP)
-	Now      func() time.Time
-	Rand     func() float64 // uniform in [0, 1)
+	// Supervisor returns the PID of paddock-supervisor and Signal sends it SIGUSR1 (tests replace both).
+	Supervisor func() (int, error)
+	Signal     func(pid int) error
+	Now        func() time.Time
+	Rand       func() float64 // uniform in [0, 1)
 }
 
 // Agent is the run loop. All state is owned by the goroutine that calls Run.
@@ -97,6 +101,12 @@ func New(d Deps) (*Agent, error) {
 	a := &Agent{d: d, st: st}
 	if a.d.Spool == nil {
 		a.d.Spool = a.newSpool()
+	}
+	if a.d.Supervisor == nil {
+		a.d.Supervisor = func() (int, error) { return update.SupervisorPID(a.d.Layout) }
+	}
+	if a.d.Signal == nil {
+		a.d.Signal = update.Notify
 	}
 	a.refreshHealth()
 	a.loadCurrent()
@@ -201,8 +211,11 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	} else {
 		a.setError("")
 	}
+	a.reportUpdate()
 	a.handleBundle(ctx, resp.Bundle)
+	a.handleUpdate(ctx, resp.AgentUpdate)
 	a.flush(ctx)
+	a.clearUpdateResult()
 	return afterSuccess(resp.NextCheckinS, a.d.Rand())
 }
 
