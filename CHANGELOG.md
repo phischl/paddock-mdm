@@ -66,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Paddock is built with Go 1.27.1 (was 1.25): `go.work` and every `go.mod` declare `go 1.27.0` and `toolchain go1.27.1`, the build image is `golang:1.27.1-trixie`; an older host Go downloads the toolchain automatically, a host environment with `GOTOOLCHAIN=local` must unset it for `go` commands outside make (M2.2 step 1).
 - **BREAKING:** `paddock-api` requires the agent release public key (`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) and the artifact store (`PADDOCK_ARTIFACTS_S3_ENDPOINT`, `PADDOCK_ARTIFACTS_S3_BUCKET`, `PADDOCK_ARTIFACTS_S3_ACCESS_KEY_FILE`, `PADDOCK_ARTIFACTS_S3_SECRET_KEY_FILE`), `paddock-worker` requires `PADDOCK_DB_PLATFORM_URL_FILE`, and `paddock-gateway` reads `PADDOCK_ARTIFACTS_S3_BUCKET`; the database migration `00004` adds the release tables. Development stacks: `make dev-secrets` (creates the development release key) and `make up` (M2b step 4).
 - **BREAKING:** device and enrollment token actions are sub-resources: `POST /api/v1/devices/{id}/approve`, `/reject`, `/release-quarantine`, `/retire` and `POST /api/v1/enrollment-tokens/{id}/revoke` replace the `{id}:<action>` paths; API clients must switch to the new paths (M2b step 0).
 - **BREAKING:** the control-plane database has the new roles `paddock_worker` and `paddock_compiler`, created when the PostgreSQL volume is initialized, and `paddock-api` requires `PADDOCK_PUBLIC_DEVICE_URL`. Development stacks: `make down V=1`, `make dev-secrets`, `make up`. Existing installations: none (pre-release) (M2a step 3).
@@ -91,6 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The agent, server and test modules require `golang.org/x/crypto` v0.57.0, which fixes GO-2026-6354 and GO-2026-6355, together with the newest goose, oauth2, sqlc and govulncheck; `make lint` runs `govulncheck` for every package of every module, including the server's test support, without exclusions (M2.2 step 1).
 - The agent module requires `golang.org/x/crypto` v0.55.0 (was v0.13.0), so agent builds outside the Go workspace no longer use the outdated version, and `make lint` runs `govulncheck` for every Go module, failing on vulnerabilities in reachable code (M2.1 step 2).
 - Organization data is isolated by PostgreSQL row-level security that fails closed without an organization context; platform endpoints use a separate database role, and cross-organization access returns 404 (F10, M0 steps 4, 9).
 - The portal uses a backend-for-frontend session: tokens stay on the server, the browser only holds an encrypted, `HttpOnly`, `SameSite=Strict` session cookie (F8, M0 step 7).

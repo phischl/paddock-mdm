@@ -9,8 +9,9 @@ contributors and AI agents: `CLAUDE.md`.
 
 ## Quick start (local development)
 
-Prerequisites: Docker Engine with Compose v2, GNU make, Go 1.25. Node is not needed on the host. Free ports:
-`8443` and the loopback ports listed in `docs/operations/local-dev.md`.
+Prerequisites: Docker Engine with Compose v2, GNU make, Go 1.21 or newer (fetches the declared Go 1.27.1 toolchain
+automatically). Node is not needed on the host. Free ports: `8443` and the loopback ports listed in
+`docs/operations/local-dev.md`.
 
 ```sh
 make dev-secrets   # random secrets in deploy/compose/.secrets/ and settings in deploy/compose/.env
