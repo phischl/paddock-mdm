@@ -88,9 +88,14 @@ func run() error {
 	return nil
 }
 
+// blueprintSource is the part of the Authentik API the blueprint wait reads (env.Authentik).
+type blueprintSource interface {
+	Blueprint(ctx context.Context, path string) (env.Blueprint, bool, error)
+}
+
 // waitBlueprints waits until every Paddock blueprint file has been discovered and applied successfully by Authentik,
 // polling every interval until timeout.
-func waitBlueprints(ctx context.Context, ak *env.Authentik, timeout, interval time.Duration) error {
+func waitBlueprints(ctx context.Context, ak blueprintSource, timeout, interval time.Duration) error {
 	paths, err := paddockBlueprints()
 	if err != nil {
 		return err
@@ -144,7 +149,7 @@ func paddockBlueprints() ([]string, error) {
 }
 
 // pendingBlueprints describes every blueprint that is not applied successfully yet as "<name> (<path>): <status>".
-func pendingBlueprints(ctx context.Context, ak *env.Authentik, paths []string) ([]string, error) {
+func pendingBlueprints(ctx context.Context, ak blueprintSource, paths []string) ([]string, error) {
 	var pending []string
 	for _, p := range paths {
 		b, ok, err := ak.Blueprint(ctx, p)
