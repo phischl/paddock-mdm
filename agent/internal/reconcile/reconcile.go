@@ -49,6 +49,24 @@ type System interface {
 	Systemctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	Timedatectl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	PackageInstalled(name string) bool
+	// PackageVersion returns the version of an installed package, "" if it is not installed.
+	PackageVersion(name string) string
+	// AptGet runs apt-get non-interactively (DEBIAN_FRONTEND=noninteractive); it may take minutes.
+	AptGet(ctx context.Context, args ...string) (output string, exit int, err error)
+	// Loginctl runs loginctl.
+	Loginctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
+}
+
+// Events forwards the device events of reconcilers to the agent (plan M3b decision 5); without Emit they are
+// dropped.
+type Events struct {
+	Emit func(typ string, data any)
+}
+
+func (e *Events) emit(typ string, data any) {
+	if e != nil && e.Emit != nil {
+		e.Emit(typ, data)
+	}
 }
 
 func errorResult(id string, err error) Result {

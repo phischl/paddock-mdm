@@ -42,7 +42,7 @@ func fixture(t *testing.T) (*fakesys.System, *apply.Applier) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sys, apply.New(sys, m)
+	return sys, apply.New(sys, m, nil)
 }
 
 func TestApplyOrderAndIdempotency(t *testing.T) {

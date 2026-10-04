@@ -1,5 +1,5 @@
-// Package fakesys is an in-memory reconcile.System for tests: files, users, systemd units, timedated and
-// installed packages, with a log of every state-changing call.
+// Package fakesys is an in-memory reconcile.System for tests: files, users, systemd units, timedated, installed
+// packages, apt-get and logind sessions, with a log of every state-changing call.
 package fakesys
 
 import (
@@ -36,12 +36,26 @@ type System struct {
 	Groups   map[string]int
 	FailCmd  string   // a command ("systemctl start x.service") that fails
 	Calls    []string // state-changing calls
+	// Versions are the versions of installed packages (PackageVersion); AptVersion is the version apt-get install
+	// installs.
+	Versions   map[string]string
+	AptVersion string
+	// Sessions are the logind sessions loginctl lists.
+	Sessions []Session
+}
+
+// Session is a fake logind session.
+type Session struct {
+	ID    string
+	UID   int
+	User  string
+	Class string
 }
 
 // New returns a fake with root/root, nobody and an empty file system.
 func New() *System {
 	return &System{
-		Files: map[string]*File{}, Units: map[string]*Unit{}, Packages: map[string]bool{},
+		Files: map[string]*File{}, Units: map[string]*Unit{}, Packages: map[string]bool{}, Versions: map[string]string{},
 		Users: map[string]int{"root": 0, "nobody": 65534}, Groups: map[string]int{"root": 0, "adm": 4},
 	}
 }
@@ -154,10 +168,11 @@ func (s *System) Systemctl(_ context.Context, args ...string) (string, int, erro
 		u.State = "enabled"
 	case "disable":
 		u.State = "disabled"
-	case "start":
+	case "start", "restart":
 		u.Active = true
 	case "stop":
 		u.Active = false
+	case "reset-failed":
 	default:
 		return "", 1, fmt.Errorf("fake systemctl: unsupported %v", args)
 	}
@@ -180,7 +195,80 @@ func (s *System) Timedatectl(_ context.Context, args ...string) (string, int, er
 }
 
 // PackageInstalled implements reconcile.System.
-func (s *System) PackageInstalled(name string) bool { return s.Packages[name] }
+func (s *System) PackageInstalled(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Packages[name]
+}
+
+// PackageVersion implements reconcile.System.
+func (s *System) PackageVersion(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.Packages[name] {
+		return ""
+	}
+	return s.Versions[name]
+}
+
+// AptGet implements reconcile.System: "install" installs its package arguments with AptVersion; a call equal to
+// FailCmd fails with exit 100.
+func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var words []string // arguments without options and their -o values
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-o":
+			i++
+		case !strings.HasPrefix(args[i], "-"):
+			words = append(words, args[i])
+		}
+	}
+	cmd := "apt-get " + strings.Join(words, " ")
+	s.Calls = append(s.Calls, cmd)
+	if strings.HasPrefix(s.FailCmd, "apt-get") && strings.HasPrefix(cmd, s.FailCmd) {
+		return "E: Could not get lock /var/lib/dpkg/lock-frontend\n", 100, nil
+	}
+	if len(words) > 0 && words[0] == "install" {
+		for _, p := range words[1:] {
+			s.Packages[p] = true
+			s.Versions[p] = s.AptVersion
+		}
+	}
+	return "", 0, nil
+}
+
+// Loginctl implements reconcile.System for list-sessions --no-legend and show-session of Sessions, lock-session and
+// terminate-user.
+func (s *System) Loginctl(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch args[0] {
+	case "list-sessions":
+		var b strings.Builder
+		for _, ss := range s.Sessions {
+			fmt.Fprintf(&b, "%6s %5d %s -\n", ss.ID, ss.UID, ss.User)
+		}
+		return b.String(), 0, nil
+	case "show-session":
+		var blocks []string
+		for _, id := range args[1:] {
+			for _, ss := range s.Sessions {
+				if ss.ID == id {
+					blocks = append(blocks, fmt.Sprintf("Id=%s\nUser=%d\nName=%s\nClass=%s\n", ss.ID, ss.UID, ss.User, ss.Class))
+				}
+			}
+		}
+		return strings.Join(blocks, "\n"), 0, nil
+	}
+	cmd := "loginctl " + strings.Join(args, " ")
+	s.Calls = append(s.Calls, cmd)
+	if cmd == s.FailCmd {
+		return "Failed\n", 1, nil
+	}
+	return "", 0, nil
+}
 
 // TakeCalls returns and clears the call log.
 func (s *System) TakeCalls() []string {

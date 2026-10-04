@@ -27,7 +27,7 @@ func newAgent(t *testing.T, g *testgw.Gateway) *Agent {
 	}
 	cfg, _ := config.LoadAgent(l.AgentConfig())
 	a, err := New(Deps{Layout: l, Config: cfg, Trust: trust, Key: key, Client: g.Client(key), Rand: func() float64 { return 0.5 },
-		Applier: apply.New(fakesys.New(), &reconcile.Managed{Files: map[string]string{}})})
+		Applier: apply.New(fakesys.New(), &reconcile.Managed{Files: map[string]string{}}, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}

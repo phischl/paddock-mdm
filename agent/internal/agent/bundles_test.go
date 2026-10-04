@@ -29,7 +29,9 @@ func withSystem(t *testing.T, a *Agent) *fakesys.System {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.d.Applier = apply.New(sys, m)
+	a.d.Events = &reconcile.Events{Emit: a.event}
+	a.d.Applier = apply.New(sys, m, a.d.Events)
+	a.d.Sys = sys
 	return sys
 }
 
@@ -188,5 +190,37 @@ func TestDriftLoop(t *testing.T) {
 	_ = json.Unmarshal(pending[0].Data, &data)
 	if !slices.Equal(data.ResourceIDs, []string{"time", "file:/etc/motd"}) {
 		t.Fatalf("resource_ids %v", data.ResourceIDs)
+	}
+}
+
+// TestSessionLogins: a directory user's session is reported once per 24 h with username and time only; local
+// accounts and the greeter are never reported (plan M3b decision 11).
+func TestSessionLogins(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	sys.Files["/etc/passwd"] = &fakesys.File{Data: []byte("paddock:x:1000:1000::/home/paddock:/bin/bash\n"), Mode: 0o644}
+	sys.Sessions = []fakesys.Session{
+		{ID: "c1", UID: 60578, User: "gdm-greeter", Class: "greeter"},
+		{ID: "4", UID: 1000, User: "paddock", Class: "user"},
+		{ID: "7", UID: 811622788, User: "dave@acme.test", Class: "user"},
+	}
+	now := time.Date(2026, 10, 4, 8, 0, 0, 0, time.UTC)
+	a.d.Now = func() time.Time { return now }
+	a.trackSessions(ctx)
+	a.trackSessions(ctx)
+	pending, _ := a.d.Spool.Pending()
+	if len(pending) != 1 || pending[0].Type != protocol.EventSessionLogin || string(pending[0].Data) != `{"username":"dave@acme.test","at":"2026-10-04T08:00:00Z"}` {
+		t.Fatalf("spool %+v", pending)
+	}
+	st, _ := state.Load(a.d.Layout.State())
+	if !st.SessionsReported["dave@acme.test"].Equal(now) {
+		t.Fatalf("persisted %v", st.SessionsReported)
+	}
+	now = now.Add(24 * time.Hour)
+	a.trackSessions(ctx)
+	if pending, _ := a.d.Spool.Pending(); len(pending) != 2 {
+		t.Fatalf("not reported again after 24 h: %+v", pending)
 	}
 }
