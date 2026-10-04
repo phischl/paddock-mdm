@@ -237,7 +237,7 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 func (a *Agent) checkinRequest() protocol.CheckinRequest {
 	return protocol.CheckinRequest{
 		AppliedBundleVersion: a.st.AppliedBundleVersion, AgentVersion: buildinfo.Version,
-		SchemaVersions: []int{bundle.SchemaVersion}, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH,
+		SchemaVersions: acceptedSchemas, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH,
 	}
 }
 

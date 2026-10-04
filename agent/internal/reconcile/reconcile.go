@@ -55,6 +55,16 @@ type System interface {
 	AptGet(ctx context.Context, args ...string) (output string, exit int, err error)
 	// Loginctl runs loginctl.
 	Loginctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
+	// Getent looks key up in an NSS database (passwd, group); exit 2 means not found.
+	Getent(ctx context.Context, database, key string) (stdout string, exit int, err error)
+	// Visudo runs visudo (checks only: -c, -c -f <file>).
+	Visudo(ctx context.Context, args ...string) (output string, exit int, err error)
+	// Gpasswd runs gpasswd (-d <user> <group>).
+	Gpasswd(ctx context.Context, args ...string) (output string, exit int, err error)
+	// Rename renames a file within the file system (rename(2)).
+	Rename(oldPath, newPath string) error
+	// ReadDir returns the names of the entries of a directory, sorted.
+	ReadDir(path string) ([]string, error)
 }
 
 // Events forwards the device events of reconcilers to the agent (plan M3b decision 5); without Emit they are

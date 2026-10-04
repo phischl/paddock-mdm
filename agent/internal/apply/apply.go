@@ -55,7 +55,7 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 		file: file,
 		recs: map[string]reconcile.Reconciler{
 			bundle.TypeFile: file, bundle.TypeSystemdUnit: &reconcile.Unit{Sys: sys}, bundle.TypeTime: &reconcile.Time{Sys: sys},
-			bundle.TypeLogin: &reconcile.Login{Sys: sys, Events: events},
+			bundle.TypeLogin: &reconcile.Login{Sys: sys, Events: events}, bundle.TypeSudo: &reconcile.Sudo{Sys: sys, Events: events},
 		},
 	}
 }

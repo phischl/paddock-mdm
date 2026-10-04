@@ -17,7 +17,7 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
 )
 
-// commandTimeout bounds every systemctl, timedatectl, loginctl and dpkg-query call.
+// commandTimeout bounds every call of systemctl, timedatectl, loginctl, getent, visudo, gpasswd and dpkg-query.
 const commandTimeout = 2 * time.Minute
 
 // OS is the System of a real device. Root prefixes every file path (tests use a temporary directory).
@@ -158,6 +158,51 @@ func (o OS) Loginctl(ctx context.Context, args ...string) (string, int, error) {
 		return "", -1, errTestRoot
 	}
 	return command(ctx, "loginctl", args...)
+}
+
+// Getent implements System.
+func (o OS) Getent(ctx context.Context, database, key string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "getent", database, key)
+}
+
+// Visudo implements System.
+func (o OS) Visudo(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "visudo", args...)
+}
+
+// Gpasswd implements System.
+func (o OS) Gpasswd(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "gpasswd", args...)
+}
+
+// Rename implements System.
+func (o OS) Rename(oldPath, newPath string) error {
+	if err := os.Rename(o.path(oldPath), o.path(newPath)); err != nil {
+		return err
+	}
+	return fsutil.SyncDir(o.path(filepath.Dir(newPath)))
+}
+
+// ReadDir implements System.
+func (o OS) ReadDir(path string) ([]string, error) {
+	entries, err := os.ReadDir(o.path(path))
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	return names, nil
 }
 
 // command runs a tool and returns its stdout and exit code; err is set only if it could not run.
