@@ -204,7 +204,10 @@ func TestAuditExactlyOnce(t *testing.T) {
 	for _, op := range ops {
 		cases, ok := auditCases[op]
 		if !ok {
-			t.Errorf("privileged operation %s has no cases in audit_once_test.go", op)
+			cases, ok = deviceAuditCases[op]
+		}
+		if !ok {
+			t.Errorf("privileged operation %s has no cases in audit_once_test.go or audit_once_devices_test.go", op)
 			continue
 		}
 		for _, c := range cases {

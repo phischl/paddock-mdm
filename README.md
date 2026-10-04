@@ -2,8 +2,9 @@
 
 Open-source management for Linux workstations that keeps local administrator rights with their users.
 
-Status: milestone M0 (foundations): control plane, audit domain, admin portal with organizations, device groups and
-audit log. Architecture: `docs/architecture.md`, decisions: `docs/adr/`, plans: `docs/plans/`, binding rules for
+Status: milestone M2a (device control plane): control plane, audit domain, admin portal with organizations, device
+groups, audit log, devices, enrollment tokens and managed files and units; device API (enrollment, check-in, signed
+bundles) proven by the reference client `test/acceptance/devicesim`. The device agent follows in M2b. Architecture: `docs/architecture.md`, decisions: `docs/adr/`, plans: `docs/plans/`, binding rules for
 contributors and AI agents: `CLAUDE.md`.
 
 ## Quick start (local development)
@@ -13,15 +14,16 @@ Prerequisites: Docker Engine with Compose v2, GNU make, Go 1.25. Node is not nee
 
 ```sh
 make dev-secrets   # random secrets in deploy/compose/.secrets/ and settings in deploy/compose/.env
-make up            # builds the paddock-server image, starts everything, initializes OpenBao and the audit bucket
+make up            # builds the paddock-server image, starts everything, initializes OpenBao and the buckets
 make dev-seed      # creates the organizations acme and globex and assigns the test users
 ```
 
 `make up` takes a few minutes on the first run (image pulls, Authentik migrations). It is idempotent; after a
-restart of the machine run it again (it also unseals OpenBao). `make bao-bootstrap` and `make audit-bootstrap` exist
-as separate targets but are already part of `make up`.
+restart of the machine run it again (it also unseals OpenBao). `make bao-bootstrap`, `make audit-bootstrap` and
+`make bundles-bootstrap` exist as separate targets but are already part of `make up`.
 
-Open <https://admin.paddock.localhost:8443>. The certificate comes from Caddy's internal CA
+Open <https://admin.paddock.localhost:8443>. Devices talk to <https://device.paddock.localhost:8443> and download
+bundles from <https://bundles.paddock.localhost:8443>. The certificate comes from Caddy's internal CA
 (`deploy/compose/.secrets/caddy-root.crt`); accept the warning or import that certificate.
 
 ### Test accounts
@@ -48,7 +50,8 @@ The Authentik admin interface is at <https://auth.paddock.localhost:8443/if/admi
 | `make web` | Builds the portal into `server/web/dist` (in the pinned Node container) |
 | `make image` | Builds the `paddock-server:dev` image |
 | `make acceptance` | Acceptance gates against the running stack (`T=<regex>` to select, e.g. `T=TestWORM`) |
-| `make e2e` | Playwright end-to-end tests against the running stack |
+| `make e2e` | Playwright end-to-end tests against the running stack (builds `bin/devicesim` first) |
+| `make fuzz` | Fuzz tests of `pkg` (`FUZZTIME=30s` per target by default) |
 | `make logs` / `make down` | Logs of the stack / stop it (`make down V=1` also deletes all volumes) |
 
 `make ci` runs `lint test web`. The acceptance gates are the definition of done (`CLAUDE.md`); run
@@ -58,10 +61,11 @@ The Authentik admin interface is at <https://auth.paddock.localhost:8443/if/admi
 
 ```
 api/openapi/admin.yaml   admin API contract (source of truth)
+api/openapi/device.yaml  device API contract
 server/                  paddock-server (Go): cmd, internal packages, migrations, web/ (Vue portal)
-pkg/                     Go module shared with the future agent
+pkg/                     Go module shared with the agent: device protocol, DSSE, canonical JSON, bundle schema
 deploy/compose/          Compose stack, pinned image versions, bootstrap scripts
-test/acceptance/         acceptance gates
+test/acceptance/         acceptance gates and the reference device client devicesim
 docs/                    architecture, ADRs, plans, operations runbooks, compliance
 ```
 

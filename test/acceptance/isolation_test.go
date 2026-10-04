@@ -24,6 +24,7 @@ func TestOrganizationIsolation(t *testing.T) {
 
 	// Globex activity that must stay invisible to acme, including its audit events.
 	globexGroup(t, w)
+	seedGlobexDevices(t, w)
 	ctx := testContext(t, time.Minute)
 	var globexEvents []env.AuditEvent
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
@@ -88,8 +89,12 @@ func TestOrganizationIsolation(t *testing.T) {
 			if !ok {
 				t.Fatalf("collection GET %s has no entry in listIsolationQueries", path)
 			}
+			resolved, parent := path, listParents[path]
+			if parent != nil {
+				resolved = strings.Replace(path, "{id}", parent(w), 1)
+			}
 			for _, q := range queries {
-				target := path + "?" + q.Encode()
+				target := resolved + "?" + q.Encode()
 				// The audit pipeline is asynchronous: wait until carol sees this run's globex data.
 				var res env.Response
 				for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
@@ -106,7 +111,12 @@ func TestOrganizationIsolation(t *testing.T) {
 					}
 				}
 				res = call(t, w.alice, http.MethodGet, target, nil)
-				expectStatus(t, res, http.StatusOK, "")
+				if parent != nil {
+					// The parent belongs to globex: not found, exactly like a missing parent.
+					expectStatus(t, res, http.StatusNotFound, "not_found")
+				} else {
+					expectStatus(t, res, http.StatusOK, "")
+				}
 				if leaked := containsAny(res.Body, w.globexIDs); leaked != "" {
 					t.Fatalf("%s as alice contains globex ID %s: %s", target, leaked, res.Body)
 				}

@@ -26,7 +26,7 @@ itself; all are idempotent and can also be run on their own.
 
 | Path | Purpose |
 | --- | --- |
-| `compose.yaml` | Control plane: Caddy, PostgreSQL, RabbitMQ, Valkey, RustFS (bundles), OpenBao, Authentik, Paddock roles |
+| `compose.yaml` | Control plane: Caddy, PostgreSQL, RabbitMQ, Valkey, RustFS (bundles), OpenBao, Authentik, Paddock roles (`api`, `gateway`, `worker`, `compiler`, `outbox-relay`) |
 | `compose.audit.yaml` | Audit domain: `audit-postgres`, `audit-rustfs`, audit writer |
 | `compose.dev.yaml` | Development overrides: `PADDOCK_ENV=development`, dev blueprint, loopback port mappings |
 | `versions.env` | Pinned images (tag and digest) |
@@ -45,11 +45,13 @@ The acceptance gate A3 sets them while it runs.
 
 - `https://admin.paddock.localhost:8443` – portal and admin API
 - `https://auth.paddock.localhost:8443` – Authentik
+- `https://device.paddock.localhost:8443` – device API (gateway)
 - `https://bundles.paddock.localhost:8443` – bundles bucket; only presigned `GET`/`HEAD` below `/paddock-bundles/`
   pass, everything else is answered 403 by Caddy
 
 Inside containers `.localhost` does not resolve. Caddy therefore carries the network aliases
-`admin.paddock.localhost`, `auth.paddock.localhost` and `bundles.paddock.localhost` on network `cp` and listens on the public port inside the
+`admin.paddock.localhost`, `auth.paddock.localhost`, `device.paddock.localhost` and `bundles.paddock.localhost` on
+network `cp` and listens on the public port inside the
 container as well, so containers use exactly the same URLs as the browser (the OIDC issuer must match).
 
 Caddy uses its internal CA (`tls internal`). The one-shot service `caddy-ca-export` copies the root certificate to
@@ -61,6 +63,22 @@ import that certificate.
 Valkey holds caches, nonces and bundle pointers of the device control plane; it is never a source of truth
 (architecture §8.3). The password is in `.secrets/valkey_password`, e.g.
 `REDISCLI_AUTH="$(cat deploy/compose/.secrets/valkey_password)" valkey-cli -h 127.0.0.1 ping`.
+
+Losing Valkey's data is harmless apart from a short interruption: the worker rewrites the enrollment token and
+device key caches (`et:`, `dk:`) and restores sequence numbers (`seq:`) from PostgreSQL every 60 s, and the compiler
+rewrites the bundle pointers (`bp:`) every 60 s. Until then devices get 401 `invalid_signature` and retry. Lost
+nonces only reopen the ±300 s replay window for that time.
+
+## Trying the device API
+
+There is no agent yet (M2b). The reference client of the acceptance gates enrolls a simulated device: create an
+enrollment token in the portal (*Enrollment tokens*), copy the enrollment configuration into a file and run
+
+```sh
+go run ./test/acceptance/cmd/devicesim enroll --hostname lt-test-01 < enrollment-config.json
+```
+
+The device appears under *Devices* (pending unless the token approves automatically).
 
 ## OpenBao after a restart
 
