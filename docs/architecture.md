@@ -1,6 +1,6 @@
 # Paddock – Technical Architecture
 
-Status: **Proposed** · Version 1.5 · 2026-10-04 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
+Status: **Proposed** · Version 1.6 · 2026-10-04 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
 
 This document turns the product concept into a technical architecture. It answers the delegated
 decisions A1–A14 (or states why one stays open), fixes the technology stack, and defines the
@@ -830,8 +830,11 @@ the user then signs in with the device code flow and enrolls a new Hello PIN.
 membership) are read-only; Paddock-owned attributes (lock state, Paddock groups, profile
 assignments, login assignments) are writable for all users.
 
-**Groups (open point in the concept).** Both: local groups are managed in Paddock; synced groups
-are imported read-only and can be targets of profile and login assignments.
+**Groups (open point in the concept).** Both: local groups (`paddock.<slug>.g.<group>`) are managed in
+Paddock; synced groups are **imported**: Paddock creates a mirror group `paddock.<slug>.s.<group>` whose
+membership a worker copies from the upstream group (read-only in Paddock). The mirror gives every group a
+claim-safe name, because upstream names may contain `:` or spaces, which Himmelblau drops. Both kinds can
+be targets of profile and login assignments. *(Decided 2026-10-04, plan M3a.)*
 
 ### 9.3 Himmelblau configuration
 
@@ -859,8 +862,9 @@ alternative does not change the schema version.
 ### 9.4 Login assignment and suspension (F15)
 
 Each device has a **login assignment** (users and/or groups). The compiler turns it into the
-login component's allow list `pam_allow_groups` (bundle field `login.allow_groups`): the names of the
-assigned groups. Directly assigned users are made members of a per-device Authentik group
+login component's allow list `pam_allow_groups` (bundle field `login.himmelblau.pam_allow_groups`): the
+names of the assigned groups. **An empty login assignment means every user of the organization** (allow list
+`paddock.<slug>`). Directly assigned users are made members of a per-device Authentik group
 `paddock.<org_slug>.d.<device_id>`, created on first direct assignment, whose name is then added to the
 allow list. (`login.allow_users` stays in the schema, unused in v1.) Membership changes take effect at
 the user's next token refresh without a bundle change; allow-list changes need a `himmelblaud` restart.
@@ -1028,12 +1032,15 @@ flowchart TB
 
 File name `paddock-u-<first 16 hex chars of sha256(username)>`. sudo ignores files in `includedir`
 whose names contain `.` or end in `~`; usernames such as `alice@example.org` therefore never appear
-in file names. Content:
+in file names. **The bundle carries structured entries; the device renders the file** (shared renderer
+`pkg/sudoers`) and uses the user's numeric UID resolved through NSS as user spec (`#<uid>`), so a local
+account with the same short name can never match. The compiler validates every entry with the same renderer
+and a placeholder UID before signing. *(Decided 2026-10-04, plan M3a.)* Content, as rendered on the device:
 
 ```
 # Managed by Paddock. Do not edit. Bundle 4182, profile digest 9c1f…
-Defaults:"alice@example.org" lecture=always, lecture_file=/etc/paddock/sudo_lecture, timestamp_timeout=5
-"alice@example.org" ALL=(root) /usr/bin/systemctl restart nginx.service, /usr/bin/journalctl
+Defaults:#120034 lecture=always, lecture_file=/etc/paddock/sudo_lecture, timestamp_timeout=5
+#120034 ALL=(root) /usr/bin/systemctl restart nginx.service, /usr/bin/journalctl
 ```
 
 Apply procedure on the device:
