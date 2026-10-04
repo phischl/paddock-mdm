@@ -73,7 +73,8 @@ func gateS1(t *testing.T, d *Device) {
 	// development organization may fail on the VM, but the acceptance gates leave no units behind that real devices
 	// would report as unknown (plan M2.1 decision 3).
 	applied := d.WaitEvent("device.bundle_applied", 5*time.Minute, func(p map[string]any) bool {
-		return len(d.ownErrors(p)) == 0
+		version, _ := p["bundle_version"].(float64)
+		return version >= d.Bundle && len(d.ownErrors(p)) == 0
 	})
 	errs := applied["errors"].([]any)
 	t.Logf("bundle.applied: changed %v, %d errors of other definitions of the organization", applied["changed"], len(errs))

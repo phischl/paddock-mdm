@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { expect, test } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { login } from './auth'
 import { expectAccessible, watchCSP } from './checks'
+import { test } from './cleanup'
 
 // The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
 const devicesim = process.env.PADDOCK_E2E_DEVICESIM ?? '../../bin/devicesim'
@@ -14,7 +15,7 @@ function enrollDevice(config: string, hostname: string): { device_id: string; st
 
 // Gate E2 (plan M2a §8): token shown once with a copy button, enrollment, approval, group membership, managed file
 // in the effective configuration, retirement with the typed hostname; accessible and without CSP violations.
-test('organization admin enrolls, configures and retires a device', async ({ page, context }) => {
+test('organization admin enrolls, configures and retires a device', async ({ page, context, cleanup }) => {
   const csp = watchCSP(page)
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
   await login(page, 'alice@acme.test', 'dev_alice_password')
@@ -22,6 +23,9 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   const hostname = `e2e-${stamp}`
   const groupName = `E2E devices ${stamp}`
   const path = `/etc/paddock-e2e-${stamp}.conf`
+  cleanup.remove('/api/v1/enrollment-tokens', `E2E token ${stamp}`)
+  cleanup.remove('/api/v1/device-groups', groupName)
+  cleanup.remove('/api/v1/managed-files', path)
 
   // Enrollment token: the configuration with the secret is shown once.
   await page.getByRole('link', { name: 'Enrollment tokens' }).click()

@@ -1,8 +1,9 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { login } from './auth'
 import { expectAccessible, watchCSP } from './checks'
+import { test } from './cleanup'
 
-test('organization admin manages a device group and sees the audit trail', async ({ page }) => {
+test('organization admin manages a device group and sees the audit trail', async ({ page, cleanup }) => {
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
   await expect(page).toHaveURL(/\/device-groups$/)
@@ -11,6 +12,7 @@ test('organization admin manages a device group and sees the audit trail', async
 
   const name = `E2E ${Date.now()}`
   const renamed = `${name} renamed`
+  cleanup.remove('/api/v1/device-groups', name) // the test deletes the group itself, unless it fails before
 
   await page.getByTestId('create-device-group').click()
   const createDialog = page.getByRole('dialog', { name: 'New device group' })
@@ -68,20 +70,11 @@ test('organization admin manages a device group and sees the audit trail', async
   expect(csp).toEqual([])
 })
 
-/** Creates device groups through the API with the signed-in browser session and returns their IDs. */
-async function createGroups(page: Page, names: string[]): Promise<string[]> {
-  const ids: string[] = []
+/** Creates device groups through the API with the signed-in browser session. */
+async function createGroups(page: Page, names: string[]): Promise<void> {
   for (const name of names) {
     const res = await page.request.post('/api/v1/device-groups', { headers: { 'X-Paddock-CSRF': '1' }, data: { name } })
     expect(res.status()).toBe(201)
-    ids.push((await res.json()).id)
-  }
-  return ids
-}
-
-async function deleteGroups(page: Page, ids: string[]): Promise<void> {
-  for (const id of ids) {
-    await page.request.delete('/api/v1/device-groups/' + id, { headers: { 'X-Paddock-CSRF': '1' } })
   }
 }
 
@@ -90,48 +83,45 @@ function firstColumn(page: Page) {
   return page.locator('.v-data-table tbody tr td:first-child')
 }
 
-test('device group list searches, sorts, pages and keeps its state in the URL', async ({ page }) => {
+test('device group list searches, sorts, pages and keeps its state in the URL', async ({ page, cleanup }) => {
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
   const prefix = `E2E list ${Date.now()}`
   const names = Array.from({ length: 12 }, (_, i) => `${prefix} ${String(i + 1).padStart(2, '0')}`)
-  const ids = await createGroups(page, names)
-  try {
-    await page.goto('/device-groups')
-    await page.getByTestId('list-search').getByRole('searchbox').fill(prefix)
-    await expect(page).toHaveURL(/[?&]q=/)
-    await expect(page.getByTestId('list-range')).toHaveText('1–12 of 12 results')
+  cleanup.remove('/api/v1/device-groups', prefix)
+  await createGroups(page, names)
+  await page.goto('/device-groups')
+  await page.getByTestId('list-search').getByRole('searchbox').fill(prefix)
+  await expect(page).toHaveURL(/[?&]q=/)
+  await expect(page.getByTestId('list-range')).toHaveText('1–12 of 12 results')
 
-    // 10 items per page: page numbers appear.
-    await page.getByTestId('list-page-size').click()
-    await page.getByRole('option', { name: '10', exact: true }).click()
-    await expect(page).toHaveURL(/page_size=10/)
-    await expect(firstColumn(page)).toHaveCount(10)
-    const pagination = page.getByRole('navigation', { name: 'Pagination Navigation' })
-    await expect(pagination.getByRole('button', { name: 'Go to page 2' })).toBeVisible()
-    await expectAccessible(page)
-    await pagination.getByRole('button', { name: 'Go to page 2' }).click()
-    await expect(page).toHaveURL(/page=2/)
-    await expect(firstColumn(page)).toHaveText([names[10], names[11]])
+  // 10 items per page: page numbers appear.
+  await page.getByTestId('list-page-size').click()
+  await page.getByRole('option', { name: '10', exact: true }).click()
+  await expect(page).toHaveURL(/page_size=10/)
+  await expect(firstColumn(page)).toHaveCount(10)
+  const pagination = page.getByRole('navigation', { name: 'Pagination Navigation' })
+  await expect(pagination.getByRole('button', { name: 'Go to page 2' })).toBeVisible()
+  await expectAccessible(page)
+  await pagination.getByRole('button', { name: 'Go to page 2' }).click()
+  await expect(page).toHaveURL(/page=2/)
+  await expect(firstColumn(page)).toHaveText([names[10], names[11]])
 
-    // Reload keeps page, page size and search.
-    await page.reload()
-    await expect(page.getByTestId('list-range')).toHaveText('11–12 of 12 results')
-    await expect(page.getByTestId('list-search').getByRole('searchbox')).toHaveValue(prefix)
+  // Reload keeps page, page size and search.
+  await page.reload()
+  await expect(page.getByTestId('list-range')).toHaveText('11–12 of 12 results')
+  await expect(page.getByTestId('list-search').getByRole('searchbox')).toHaveValue(prefix)
 
-    // Sorting by name descending starts again at page 1.
-    await page.getByRole('columnheader', { name: 'Name' }).click()
-    await expect(page).toHaveURL(/sort=-name/)
-    await expect(page).not.toHaveURL(/page=2/)
-    await expect(firstColumn(page).first()).toHaveText(names[11])
+  // Sorting by name descending starts again at page 1.
+  await page.getByRole('columnheader', { name: 'Name' }).click()
+  await expect(page).toHaveURL(/sort=-name/)
+  await expect(page).not.toHaveURL(/page=2/)
+  await expect(firstColumn(page).first()).toHaveText(names[11])
 
-    // A search without hits shows the empty state.
-    await page.getByTestId('list-search').getByRole('searchbox').fill(prefix + ' none')
-    await expect(page.getByText('No results match the search or filters.')).toBeVisible()
-    await expectAccessible(page)
-  } finally {
-    await deleteGroups(page, ids)
-  }
+  // A search without hits shows the empty state.
+  await page.getByTestId('list-search').getByRole('searchbox').fill(prefix + ' none')
+  await expect(page.getByText('No results match the search or filters.')).toBeVisible()
+  await expectAccessible(page)
   expect(csp).toEqual([])
 })
 

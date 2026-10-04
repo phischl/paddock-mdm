@@ -19,6 +19,8 @@ type Device struct {
 	run   string            // unique suffix of this run's names
 	Files map[string]string // managed file path → id
 	Unit  string
+	// Bundle is the first compiled bundle version with this device's group.
+	Bundle float64
 }
 
 // managedPath is a managed file of this run.
@@ -28,7 +30,8 @@ func (d *Device) managedPath(name string) string {
 
 // Install prepares the guest (hosts entries, Caddy CA), installs the packages from debDir and enrolls the device
 // into a new device group with managed files a and b, a unit file and the unit itself. The drift interval is set
-// to 30 s (development build).
+// to 30 s (development build). Group, files, unit and enrollment token are removed when the test ends (plan M2.2
+// decision 7).
 func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 	t.Helper()
 	d := &Device{VM: vm, s: s, run: unique(), Files: map[string]string{}}
@@ -53,14 +56,16 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 	}
 	vm.Must("sudo dpkg -i " + strings.Join(remote, " ") + " && systemctl is-enabled paddock-supervisor && readlink /opt/paddock/agent/current")
 
-	// Configuration of this device, before enrollment: the first bundle carries all of it.
+	// Configuration of this device, before enrollment.
 	d.Group = s.ID(s.Call(http.MethodPost, "/api/v1/device-groups", map[string]string{"name": "systest " + vm.Name + " " + d.run}, http.StatusCreated))
+	s.DeleteOnCleanup("/api/v1/device-groups/" + d.Group)
 	for _, name := range []string{"a", "b"} {
 		res := s.Call(http.MethodPost, "/api/v1/managed-files", map[string]any{
 			"path": d.managedPath(name), "content": "managed " + name + " " + d.run + "\n", "mode": "0640", "owner": "root",
 			"group": "adm", "device_group_id": d.Group,
 		}, http.StatusCreated)
 		d.Files[d.managedPath(name)] = s.ID(res)
+		s.DeleteOnCleanup("/api/v1/managed-files/" + d.Files[d.managedPath(name)])
 	}
 	unitFile := "/etc/systemd/system/" + d.Unit
 	res := s.Call(http.MethodPost, "/api/v1/managed-files", map[string]any{
@@ -68,24 +73,61 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 		"content": "[Unit]\nDescription=Paddock system test unit\n\n[Service]\nExecStart=/bin/sleep infinity\n\n[Install]\nWantedBy=multi-user.target\n",
 	}, http.StatusCreated)
 	d.Files[unitFile] = s.ID(res)
-	s.Call(http.MethodPost, "/api/v1/managed-units", map[string]any{"unit": d.Unit, "enabled": true, "active": true, "device_group_id": d.Group}, http.StatusCreated)
+	s.DeleteOnCleanup("/api/v1/managed-files/" + d.Files[unitFile])
+	res = s.Call(http.MethodPost, "/api/v1/managed-units", map[string]any{"unit": d.Unit, "enabled": true, "active": true, "device_group_id": d.Group}, http.StatusCreated)
+	s.DeleteOnCleanup("/api/v1/managed-units/" + s.ID(res))
 
+	// The token names no group: a group that an enrollment token names cannot be deleted. The device joins the
+	// group after enrollment, so its first bundle may lack this configuration (see Bundle).
 	tok := s.Call(http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{
-		"name": "systest " + vm.Name + " " + d.run, "max_uses": 1, "auto_approve": true, "device_group_id": d.Group,
+		"name": "systest " + vm.Name + " " + d.run, "max_uses": 1, "auto_approve": true,
 		"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 	}, http.StatusCreated)
 	var created struct {
+		Token struct {
+			ID string `json:"id"`
+		} `json:"token"`
 		EnrollmentConfig json.RawMessage `json:"enrollment_config"`
 	}
-	if err := json.Unmarshal(tok.Body, &created); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(tok.Body, &created); err != nil || created.Token.ID == "" {
+		t.Fatalf("enrollment token %s: %v", tok.Body, err)
 	}
+	s.RevokeOnCleanup(created.Token.ID)
 	vm.MustIn(created.EnrollmentConfig, "umask 077 && cat > /tmp/enroll.json")
 	vm.Must("sudo paddockd enroll --config /tmp/enroll.json --remove-config && test ! -e /tmp/enroll.json")
-	vm.Must("echo 'drift_interval_s: 30' | sudo tee -a /etc/paddock/agent.yml >/dev/null && sudo systemctl restart paddock-supervisor")
 	d.ID = d.State()["device_id"].(string)
-	t.Logf("%s enrolled as device %s (group %s)", vm.Name, d.ID, d.Group)
+	d.joinGroup()
+	vm.Must("echo 'drift_interval_s: 30' | sudo tee -a /etc/paddock/agent.yml >/dev/null && sudo systemctl restart paddock-supervisor")
+	t.Logf("%s enrolled as device %s (group %s, bundle %v)", vm.Name, d.ID, d.Group, d.Bundle)
 	return d
+}
+
+// joinGroup makes the device a member of its group and sets Bundle. It waits for the bundle compiled at
+// enrollment first, so that the next compiled version is one that started after the membership.
+func (d *Device) joinGroup() {
+	d.t.Helper()
+	var enrolled float64
+	Until(d.t, "bundle compiled at enrollment", time.Minute, 2*time.Second, nil, func() bool {
+		enrolled = d.bundleVersion()
+		return enrolled > 0
+	})
+	d.s.Call(http.MethodPut, "/api/v1/devices/"+d.ID+"/groups", map[string]any{"device_group_ids": []string{d.Group}}, http.StatusOK)
+	Until(d.t, "bundle compiled with the device group", time.Minute, 2*time.Second, nil, func() bool {
+		d.Bundle = d.bundleVersion()
+		return d.Bundle > enrolled
+	})
+}
+
+// bundleVersion is the latest bundle version the server compiled for the device (0 = none).
+func (d *Device) bundleVersion() float64 {
+	d.t.Helper()
+	var dev struct {
+		BundleVersion float64 `json:"bundle_version"`
+	}
+	if err := json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev); err != nil {
+		d.t.Fatal(err)
+	}
+	return dev.BundleVersion
 }
 
 // State reads the agent's state.json.
