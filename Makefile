@@ -38,7 +38,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-web ## Run all linters
+lint: lint-go lint-vuln lint-image lint-web ## Run all linters, govulncheck and the server image build
 
 .PHONY: lint-go
 lint-go:
@@ -48,6 +48,27 @@ lint-go:
 		$(GOLANGCI_LINT_IMAGE) golangci-lint run $(GO_PACKAGES)
 	go vet $(GO_PACKAGES)
 	go test -count=1 -run '^TestOpenAPISpec$$' ./server/internal/transport/http/admin/
+
+# govulncheck checks every workspace module, including its tests, in the pinned Go image (plan M2.1 decision 2); a
+# vulnerability in reachable code fails. The server is checked without internal/testsupport/... and therefore without
+# its tests, which reach the test containers only through those packages: GO-2026-6354 and GO-2026-6355
+# (golang.org/x/crypto/ssh via testcontainers) need Go 1.26 — remove with toolchain upgrade (plan M2.2).
+.PHONY: lint-vuln
+lint-vuln:
+	docker run --rm -v $(CURDIR):/src -w /src/server \
+		-v paddock-gomod:/go/pkg/mod -v paddock-govulncheck-cache:/root/.cache \
+		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
+		$(GO_BUILD_IMAGE) sh -c 'set -e; \
+			for m in $(filter-out ./server,$(GO_MODULES)); do echo "govulncheck $$m"; go tool govulncheck -test -C /src/$$m ./...; done; \
+			echo "govulncheck ./server without internal/testsupport"; go tool govulncheck $$(go list ./... | grep -v /internal/testsupport/)'
+
+# The build stage of the server image compiles the Go workspace, so a commit that breaks the image fails lint (plan
+# M2.1 decision 5).
+.PHONY: lint-image
+lint-image:
+	docker build --target build -f $(COMPOSE_DIR)/Dockerfile \
+		--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
+		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) .
 
 .PHONY: lint-web
 lint-web:

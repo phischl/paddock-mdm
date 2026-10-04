@@ -107,5 +107,3 @@ func expectEffectiveResources(t *testing.T, p *env.Portal, deviceID string, b *b
 		t.Fatalf("bundle resources differ from the effective configuration:\nbundle: %s\napi:    %s", asJSON(t, got), asJSON(t, want))
 	}
 }
-
-func uniqueSuffix() string { return strings.ReplaceAll(uniqueName("")[1:], "-", "") }
