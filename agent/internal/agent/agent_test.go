@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestCycleSuccess(t *testing.T) {
 		t.Fatalf("check-ins %+v: the device must send the last received sequence number", g.Checkins)
 	}
 	req := g.Checkins[0].Req
-	if req.AgentVersion != buildinfo.Version || req.Arch == "" || len(req.SchemaVersions) != 1 {
+	if req.AgentVersion != buildinfo.Version || req.Arch == "" || !slices.Equal(req.SchemaVersions, []int{1, 2}) {
 		t.Fatalf("check-in request %+v", req)
 	}
 	st, _ := state.Load(a.d.Layout.State())

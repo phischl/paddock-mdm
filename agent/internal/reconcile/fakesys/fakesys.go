@@ -6,6 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +45,11 @@ type System struct {
 	AptVersion string
 	// Sessions are the logind sessions loginctl lists.
 	Sessions []Session
+	// Passwd are the users getent passwd resolves (name → UID); Members the members of groups getent group lists.
+	Passwd  map[string]int
+	Members map[string][]string
+	// VisudoReject makes visudo fail for a file (or, with -c alone, a configuration) that contains it.
+	VisudoReject string
 }
 
 // Session is a fake logind session.
@@ -56,6 +64,7 @@ type Session struct {
 func New() *System {
 	return &System{
 		Files: map[string]*File{}, Units: map[string]*Unit{}, Packages: map[string]bool{}, Versions: map[string]string{},
+		Passwd: map[string]int{}, Members: map[string][]string{},
 		Users: map[string]int{"root": 0, "nobody": 65534}, Groups: map[string]int{"root": 0, "adm": 4},
 	}
 }
@@ -268,6 +277,93 @@ func (s *System) Loginctl(_ context.Context, args ...string) (string, int, error
 		return "Failed\n", 1, nil
 	}
 	return "", 0, nil
+}
+
+// Getent implements reconcile.System for passwd (Passwd) and group (Members).
+func (s *System) Getent(_ context.Context, database, key string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch database {
+	case "passwd":
+		if uid, ok := s.Passwd[key]; ok {
+			return fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash\n", key, uid, uid, key), 0, nil
+		}
+	case "group":
+		if members, ok := s.Members[key]; ok {
+			return fmt.Sprintf("%s:x:27:%s\n", key, strings.Join(members, ",")), 0, nil
+		}
+	}
+	return "", 2, nil
+}
+
+// Visudo implements reconcile.System: `-c -f <file>` checks one file, `-c` every regular file in /etc/sudoers.d that
+// sudo reads (no "." in the name); both fail on VisudoReject.
+func (s *System) Visudo(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Calls = append(s.Calls, "visudo "+strings.Join(args, " "))
+	var check []string
+	if len(args) == 3 && args[0] == "-c" && args[1] == "-f" {
+		check = []string{args[2]}
+	} else {
+		for path := range s.Files {
+			if dir, name := filepath.Split(path); dir == "/etc/sudoers.d/" && !strings.Contains(name, ".") {
+				check = append(check, path)
+			}
+		}
+		check = append(check, "/etc/sudoers")
+	}
+	for _, path := range check {
+		f, ok := s.Files[path]
+		if !ok {
+			continue
+		}
+		if s.VisudoReject != "" && strings.Contains(string(f.Data), s.VisudoReject) {
+			return path + ":2:16: syntax error\n", 1, nil
+		}
+	}
+	return "", 0, nil
+}
+
+// Gpasswd implements reconcile.System for -d <user> <group> (Members); FailCmd makes it fail.
+func (s *System) Gpasswd(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cmd := "gpasswd " + strings.Join(args, " ")
+	s.Calls = append(s.Calls, cmd)
+	if cmd == s.FailCmd || len(args) != 3 || args[0] != "-d" {
+		return "gpasswd: user is not a member\n", 3, nil
+	}
+	s.Members[args[2]] = slices.DeleteFunc(s.Members[args[2]], func(m string) bool { return m == args[1] })
+	return "", 0, nil
+}
+
+// Rename implements reconcile.System.
+func (s *System) Rename(oldPath, newPath string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.Files[oldPath]
+	if !ok {
+		return fs.ErrNotExist
+	}
+	s.Calls = append(s.Calls, "rename "+oldPath+" "+newPath)
+	delete(s.Files, oldPath)
+	s.Files[newPath] = f
+	return nil
+}
+
+// ReadDir implements reconcile.System.
+func (s *System) ReadDir(path string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var names []string
+	for p := range s.Files {
+		if dir, name := filepath.Split(p); filepath.Clean(dir) == filepath.Clean(path) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // TakeCalls returns and clears the call log.
