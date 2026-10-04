@@ -392,10 +392,22 @@ services:
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_worker_password
       PADDOCK_VALKEY_ADDR: valkey:6379
       PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
-    secrets: [db_paddock_worker_url, db_paddock_platform_url, rabbitmq_worker_password, valkey_password]
+      # Identity synchronization and reconcile (plan M3a decisions 2, 3, 5, 9).
+      PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
+      PADDOCK_AUTHENTIK_TOKEN_FILE: /run/secrets/authentik_service_token
+      SSL_CERT_FILE: /run/secrets/caddy_root_crt
+    secrets:
+      - db_paddock_worker_url
+      - db_paddock_platform_url
+      - rabbitmq_worker_password
+      - valkey_password
+      - authentik_service_token
+      - caddy_root_crt
     networks: [cp]
     depends_on:
       paddock-migrate:
+        condition: service_completed_successfully
+      caddy-ca-export:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy

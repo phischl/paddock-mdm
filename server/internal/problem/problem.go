@@ -35,7 +35,7 @@ func (e *Error) WithDetail(detail string) *Error {
 	return &c
 }
 
-// Problem codes of M0, M0.2 and M2a.
+// Problem codes of M0, M0.2, M2a and M3a.
 var (
 	InvalidRequest      = &Error{Code: "invalid_request", Status: http.StatusBadRequest}
 	RangeTooLarge       = &Error{Code: "range_too_large", Status: http.StatusBadRequest}
@@ -53,6 +53,11 @@ var (
 	InUse               = &Error{Code: "in_use", Status: http.StatusConflict}
 	PathNotAllowed      = &Error{Code: "path_not_allowed", Status: http.StatusUnprocessableEntity}
 	UnitNotAllowed      = &Error{Code: "unit_not_allowed", Status: http.StatusUnprocessableEntity}
+	// Identity and privileges (plan M3a).
+	UsernameTaken          = &Error{Code: "username_taken", Status: http.StatusConflict}
+	DomainTaken            = &Error{Code: "domain_taken", Status: http.StatusConflict}
+	AttributeOwnedUpstream = &Error{Code: "attribute_owned_upstream", Status: http.StatusConflict}
+	InvalidCommand         = &Error{Code: "invalid_command", Status: http.StatusUnprocessableEntity}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}

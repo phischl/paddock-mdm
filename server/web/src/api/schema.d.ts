@@ -435,6 +435,400 @@ export interface paths {
         patch: operations["updateManagedUnit"];
         trace?: never;
     };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. Local and synced users of the organization. */
+        get: operations["listUsers"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Creates a local user in Authentik (no password, member of paddock.<slug>) and
+         *     returns a one-time recovery link (valid 24 h) with which the user sets a password; it is returned only here.
+         *     The username is <local-part>@<a domain of the organization> (409 username_taken if it exists anywhere).
+         */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getUser"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin. Deletes a local user in Authentik and Paddock. Synced users: 409 attribute_owned_upstream. */
+        delete: operations["deleteUser"];
+        options?: never;
+        head?: never;
+        /** @description Roles: org_admin, org_operator. Synced users: 409 attribute_owned_upstream. */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/users/{id}/lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Locks the user: the affected devices get the lock in their next bundle (priority lane), and in
+         *     Authentik the user joins paddock.<slug>.locked and loses its refresh tokens, access tokens and sessions.
+         */
+        post: operations["lockUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: org_admin. Removes the user from paddock.<slug>.locked; the devices get the unlock in their next bundle. */
+        post: operations["unlockUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/effective-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The effective sudo profile of the user on a device with the
+         *     assignment that granted each part; without device_id on a device in no device group (only unscoped
+         *     assignments apply).
+         */
+        get: operations["getUserEffectiveProfile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. Local groups and imported upstream groups. */
+        get: operations["listUserGroups"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Without upstream_group_id: a local group paddock.<slug>.g.<group_slug> whose
+         *     members are managed in Paddock. With upstream_group_id: imports that Authentik group as mirror group
+         *     paddock.<slug>.s.<group_slug>; the worker copies its members of the organization every 5 minutes.
+         */
+        post: operations["createUserGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user-groups/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getUserGroup"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin. Deletes the group in Authentik and Paddock with its login and profile assignments. */
+        delete: operations["deleteUserGroup"];
+        options?: never;
+        head?: never;
+        /** @description Roles: org_admin, org_operator. Renames the group; the slug and the Authentik name stay. */
+        patch: operations["updateUserGroup"];
+        trace?: never;
+    };
+    "/api/v1/user-groups/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The members of a user group. */
+        get: operations["listUserGroupMembers"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Adds a user to a local group. The members of imported groups are mirrored
+         *     from upstream (409 attribute_owned_upstream).
+         */
+        post: operations["addUserGroupMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user-groups/{id}/members/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin, org_operator. Removes a user from a local group (imported groups: 409 attribute_owned_upstream). */
+        delete: operations["removeUserGroupMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/upstream-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator. Authentik groups outside Paddock's namespace that can be imported. */
+        get: operations["listUpstreamGroups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getLoginSettings"];
+        /** @description Roles: org_admin. Replaces the login settings; every device is recompiled. */
+        put: operations["updateLoginSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/login-assignment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Replaces the users and groups that may log in on the device. Empty lists mean
+         *     every user of the organization. Directly assigned users become members of paddock.<slug>.d.<device_id>.
+         */
+        put: operations["setDeviceLoginAssignment"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/suspend-logins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: org_admin, org_operator. Denies every directory user on the device (priority lane); break-glass accounts are unaffected. */
+        post: operations["suspendDeviceLogins"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/resume-logins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: org_admin, org_operator. Allows directory logins on the device again. */
+        post: operations["resumeDeviceLogins"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/effective-sudo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The effective sudo profiles of the users allowed on the device
+         *     whose class is not none, sorted by username (the content of the device's sudo resource).
+         */
+        get: operations["getDeviceEffectiveSudo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listPermissionProfiles"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. A restricted profile lists absolute command paths with optional arguments;
+         *     commands with ALL, "!", "#" or the sudoers separators ,:=\ are refused with 422 invalid_command.
+         */
+        post: operations["createPermissionProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-profiles/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getPermissionProfile"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin, org_operator. A profile that is still assigned: 409 in_use. */
+        delete: operations["deletePermissionProfile"];
+        options?: never;
+        head?: never;
+        /** @description Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given. */
+        patch: operations["updatePermissionProfile"];
+        trace?: never;
+    };
+    "/api/v1/profile-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listProfileAssignments"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Assigns a profile globally, to a group or to a user, optionally only on the
+         *     devices of one device group.
+         */
+        post: operations["createProfileAssignment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/profile-assignments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getProfileAssignment"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin, org_operator. */
+        delete: operations["deleteProfileAssignment"];
+        options?: never;
+        head?: never;
+        /** @description Roles: org_admin, org_operator. Changes the device group scope (null = every device). */
+        patch: operations["updateProfileAssignment"];
+        trace?: never;
+    };
     "/api/platform/v1/organizations": {
         parameters: {
             query?: never;
@@ -472,7 +866,12 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * @description Roles: platform_admin. Replaces the domains of the organization (plan M3a decision 1): lowercase DNS names,
+         *     each belonging to one organization only (409 domain_taken); the first is the primary domain of device logins
+         *     and local usernames must use one of them.
+         */
+        patch: operations["updateOrganization"];
         trace?: never;
     };
     "/api/platform/v1/agent-releases": {
@@ -786,6 +1185,8 @@ export interface components {
             slug: string;
             name: string;
             status: components["schemas"]["OrganizationStatus"];
+            /** @description The organization's domains; the first is the primary domain. */
+            domains: string[];
             /** Format: date-time */
             created_at: string;
         };
@@ -964,6 +1365,12 @@ export interface components {
         DeviceDetail: components["schemas"]["Device"] & {
             groups: components["schemas"]["DeviceGroupRef"][];
             identity_keys: components["schemas"]["DeviceIdentityKey"][];
+            logins_suspended: boolean;
+            login_assignment: components["schemas"]["DeviceLoginAssignment"];
+            /** @description Bundle schema versions the agent reported in its last check-in. */
+            schema_versions: number[];
+            /** @description The agent supports bundle schema 2 (login and sudo); false means "agent too old for login management". */
+            login_management: boolean;
         };
         DevicePage: {
             items: components["schemas"]["Device"][];
@@ -1102,6 +1509,294 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        OrganizationDomainsUpdate: {
+            /** @description Lowercase DNS names; the first one is the primary domain of device logins. */
+            domains: string[];
+        };
+        /** @enum {string} */
+        IdentitySource: "local" | "synced";
+        User: {
+            /** Format: uuid */
+            id: string;
+            /** @description UPN, lowercase, e.g. dave@acme.test. */
+            username: string;
+            display_name: string;
+            email: string;
+            source: components["schemas"]["IdentitySource"];
+            locked: boolean;
+            /** Format: date-time */
+            locked_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        UserRef: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            display_name: string;
+        };
+        UserDetail: components["schemas"]["User"] & {
+            groups: components["schemas"]["UserGroupRef"][];
+        };
+        UserCreate: {
+            username: string;
+            display_name: string;
+            email?: string;
+        };
+        UserCreated: {
+            user: components["schemas"]["User"];
+            /** @description One-time link (valid 24 h) with which the user sets a password. Returned only here, never stored. */
+            recovery_link: string;
+        };
+        UserUpdate: {
+            display_name?: string;
+            email?: string;
+        };
+        UserPage: {
+            items: components["schemas"]["User"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        UserGroup: {
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            name: string;
+            source: components["schemas"]["IdentitySource"];
+            /** @description Authentik pk of the imported upstream group. */
+            upstream_group_id: string | null;
+            /** @description paddock.<slug>.g.<group> or paddock.<slug>.s.<group>; the name devices see. */
+            authentik_name: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        UserGroupRef: {
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            name: string;
+            source: components["schemas"]["IdentitySource"];
+        };
+        UserGroupCreate: {
+            slug: string;
+            name: string;
+            /** @description Import this upstream Authentik group. */
+            upstream_group_id?: string;
+        };
+        UserGroupUpdate: {
+            name: string;
+        };
+        UserGroupPage: {
+            items: components["schemas"]["UserGroup"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        UserGroupMemberAdd: {
+            /** Format: uuid */
+            user_id: string;
+        };
+        UpstreamGroup: {
+            /** @description Authentik pk. */
+            id: string;
+            name: string;
+        };
+        UpstreamGroupPage: {
+            items: components["schemas"]["UpstreamGroup"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @enum {string} */
+        SessionAction: "lock_screen" | "terminate";
+        LoginSettingsUpdate: {
+            hello_enabled: boolean;
+            hello_pin_min_length: number;
+            user_lock_session_action: components["schemas"]["SessionAction"];
+            /** @description Local accounts never touched by the privileged group policy or the deny list. */
+            break_glass_accounts: string[];
+            /** @description Files in /etc/sudoers.d/ the agent leaves alone. */
+            sudoers_d_allowlist: string[];
+            sudo_lecture_text: string;
+        };
+        LoginSettings: {
+            hello_enabled: boolean;
+            hello_pin_min_length: number;
+            user_lock_session_action: components["schemas"]["SessionAction"];
+            break_glass_accounts: string[];
+            sudoers_d_allowlist: string[];
+            sudo_lecture_text: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        LoginAssignmentUpdate: {
+            users: string[];
+            groups: string[];
+        };
+        DeviceLoginAssignment: {
+            users: components["schemas"]["UserRef"][];
+            groups: components["schemas"]["UserGroupRef"][];
+        };
+        /** @enum {string} */
+        PrivilegeClass: "none" | "restricted" | "full";
+        /** @enum {string} */
+        Lecture: "always" | "once" | "never";
+        /** @enum {string} */
+        SubjectType: "global" | "group" | "user";
+        PermissionProfile: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            class: components["schemas"]["PrivilegeClass"];
+            commands: string[];
+            require_password: boolean;
+            timestamp_timeout_min: number;
+            lecture: components["schemas"]["Lecture"];
+            /** @description A command hands out root on its own or in combination. */
+            root_equivalent: boolean;
+            root_equivalent_commands: string[];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PermissionProfileCreate: {
+            name: string;
+            class: components["schemas"]["PrivilegeClass"];
+            commands?: string[];
+            /** @default true */
+            require_password: boolean;
+            /** @default 5 */
+            timestamp_timeout_min: number;
+            lecture?: components["schemas"]["Lecture"];
+        };
+        PermissionProfileUpdate: {
+            name?: string;
+            class?: components["schemas"]["PrivilegeClass"];
+            commands?: string[];
+            require_password?: boolean;
+            timestamp_timeout_min?: number;
+            lecture?: components["schemas"]["Lecture"];
+        };
+        PermissionProfilePage: {
+            items: components["schemas"]["PermissionProfile"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        ProfileAssignment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            profile_id: string;
+            subject_type: components["schemas"]["SubjectType"];
+            /**
+             * Format: uuid
+             * @description User or group; null for global.
+             */
+            subject_id: string | null;
+            /**
+             * Format: uuid
+             * @description Only on devices of this group; null = every device.
+             */
+            device_group_id: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ProfileAssignmentCreate: {
+            /** Format: uuid */
+            profile_id: string;
+            subject_type: components["schemas"]["SubjectType"];
+            /** Format: uuid */
+            subject_id?: string;
+            /** Format: uuid */
+            device_group_id?: string;
+        };
+        ProfileAssignmentUpdate: {
+            /** Format: uuid */
+            device_group_id: string | null;
+        };
+        ProfileAssignmentPage: {
+            items: components["schemas"]["ProfileAssignment"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        DerivationSubject: {
+            type: components["schemas"]["SubjectType"];
+            /** Format: uuid */
+            id: string | null;
+        };
+        Derivation: {
+            /** @enum {string} */
+            kind: "class" | "command" | "scalar";
+            /** @description "class", the command, or the scalar name. */
+            item: string;
+            value: string;
+            /** Format: uuid */
+            assignment_id: string;
+            /** Format: uuid */
+            profile_id: string;
+            profile_name: string;
+            subject: components["schemas"]["DerivationSubject"];
+        };
+        EffectiveProfile: {
+            class: components["schemas"]["PrivilegeClass"];
+            /** @description full for a root-equivalent restricted profile (detection and warnings). */
+            reported_class: components["schemas"]["PrivilegeClass"];
+            root_equivalent: boolean;
+            root_equivalent_commands: string[];
+            /** @description Version of the root-equivalence rules. */
+            catalog_version: number;
+            commands: string[];
+            require_password: boolean;
+            timestamp_timeout_min: number;
+            lecture: components["schemas"]["Lecture"];
+        };
+        UserEffectiveProfile: components["schemas"]["EffectiveProfile"] & {
+            user: components["schemas"]["UserRef"];
+            /** Format: uuid */
+            device_id: string | null;
+            derivation: components["schemas"]["Derivation"][];
+        };
+        EffectiveSudoEntry: components["schemas"]["EffectiveProfile"] & {
+            user: components["schemas"]["UserRef"];
+        };
+        EffectiveSudo: {
+            /** Format: uuid */
+            device_id: string;
+            entries: components["schemas"]["EffectiveSudoEntry"][];
+        };
     };
     responses: {
         /** @description The device after the transition. */
@@ -1153,6 +1848,18 @@ export interface components {
         DeviceStateFilter: components["schemas"]["DeviceState"][];
         /** @description Only definitions scoped to this device group. */
         DeviceGroupFilter: string;
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        UserSort: "username" | "-username" | "display_name" | "-display_name" | "created_at" | "-created_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        UserGroupSort: "name" | "-name" | "slug" | "-slug" | "created_at" | "-created_at";
+        /** @description Sort field; "-" prefix sorts descending (case-insensitive). The id is the tie-breaker. */
+        UpstreamGroupSort: "name" | "-name";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        PermissionProfileSort: "name" | "-name" | "class" | "-class" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        ProfileAssignmentSort: "created_at" | "-created_at" | "subject_type" | "-subject_type";
+        /** @description Repeatable. */
+        UserSourceFilter: components["schemas"]["IdentitySource"][];
     };
     requestBodies: never;
     headers: never;
@@ -2125,6 +2832,999 @@ export interface operations {
             422: components["responses"]["Problem"];
         };
     };
+    listUsers: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["UserSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                source?: components["parameters"]["UserSourceFilter"];
+                locked?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of users. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserCreated"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    getUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user with its groups. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteUser: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    lockUser: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Locked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    unlockUser: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unlocked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    getUserEffectiveProfile: {
+        parameters: {
+            query?: {
+                device_id?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective profile. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserEffectiveProfile"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listUserGroups: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["UserGroupSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                source?: components["parameters"]["UserSourceFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of user groups. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroupPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createUserGroup: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserGroupCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    getUserGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user group. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteUserGroup: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    updateUserGroup: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserGroupUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGroup"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listUserGroupMembers: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["UserSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                source?: components["parameters"]["UserSourceFilter"];
+                locked?: boolean;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of members. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    addUserGroupMember: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserGroupMemberAdd"];
+            };
+        };
+        responses: {
+            /** @description Added (or already a member). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    removeUserGroupMember: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed (or not a member). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    listUpstreamGroups: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending (case-insensitive). The id is the tie-breaker. */
+                sort?: components["parameters"]["UpstreamGroupSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of upstream groups. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpstreamGroupPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    getLoginSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The login settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateLoginSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    setDeviceLoginAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginAssignmentUpdate"];
+            };
+        };
+        responses: {
+            /** @description The device after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    suspendDeviceLogins: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    resumeDeviceLogins: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The device after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    getDeviceEffectiveSudo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective sudo profiles. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EffectiveSudo"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listPermissionProfiles: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["PermissionProfileSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                class?: components["schemas"]["PrivilegeClass"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of permission profiles. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfilePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createPermissionProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PermissionProfileCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getPermissionProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The permission profile. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deletePermissionProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    updatePermissionProfile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PermissionProfileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listProfileAssignments: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["ProfileAssignmentSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                profile_id?: string;
+                /** @description Repeatable. */
+                subject_type?: components["schemas"]["SubjectType"][];
+                subject_id?: string;
+                /** @description Only definitions scoped to this device group. */
+                device_group_id?: components["parameters"]["DeviceGroupFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of profile assignments. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileAssignmentPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createProfileAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileAssignmentCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileAssignment"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getProfileAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The profile assignment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileAssignment"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteProfileAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updateProfileAssignment: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileAssignmentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileAssignment"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
     listOrganizations: {
         parameters: {
             query?: {
@@ -2223,6 +3923,39 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    updateOrganization: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationDomainsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     listAgentReleases: {

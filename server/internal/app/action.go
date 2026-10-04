@@ -50,8 +50,12 @@ type Recorder interface {
 	SetParam(key string, value any)
 	SetOrganization(id uuid.UUID) // platform actions only, e.g. organization.created
 	// StateChanged queues a state change for the compiler; it is written to the outbox in the same transaction,
-	// only when the action succeeds (plan M2a §6.4).
+	// only when the action succeeds (plan M2a §6.4). In RunExternal, changes queued by prepare are written with the
+	// started action (before the external call), changes queued by finalize only on success.
 	StateChanged(scope string, id uuid.UUID)
+	// PriorityStateChanged is StateChanged on the compiler's priority lane (user lock and unlock, login suspension,
+	// architecture §9.5).
+	PriorityStateChanged(scope string, id uuid.UUID)
 }
 
 // CorrelationIDFunc extracts the request ID from ctx (set by the httpx middleware).
@@ -110,6 +114,10 @@ func (r *recorder) SetOrganization(id uuid.UUID) { r.org = id }
 
 func (r *recorder) StateChanged(scope string, id uuid.UUID) {
 	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id})
+}
+
+func (r *recorder) PriorityStateChanged(scope string, id uuid.UUID) {
+	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id, Priority: true})
 }
 
 var secretParamWords = []string{"password", "secret", "token"}
@@ -273,7 +281,7 @@ func (r *ActionRunner) recordPanic(ctx context.Context, p principal.Principal, s
 
 // RunExternal runs an action with side effects outside PostgreSQL.
 //
-//	tx1: prepare(ctx, q, rec) + insert action(status=started); commit.
+//	tx1: prepare(ctx, q, rec) + insert action(status=started) + the state changes prepare queued; commit.
 //	external(ctx) runs outside any transaction.
 //	tx2: finalize(ctx, q, rec, externalErr) + update action to finished with outcome + outbox row; commit.
 //
@@ -376,15 +384,24 @@ func (r *ActionRunner) recordFinal(ctx context.Context, p principal.Principal, s
 	}
 }
 
+// insertStarted records the started action and writes the state changes prepare queued: they must not wait for the
+// external call (e.g. a lock reaches the devices even when Authentik is down, architecture §9.5).
 func (r *ActionRunner) insertStarted(ctx context.Context, q *pgstore.Queries, rec *recorder) error {
 	actor, target, params, err := encodeParts(rec)
 	if err != nil {
 		return err
 	}
-	return q.InsertAction(ctx, pgstore.InsertActionParams{
+	if err := q.InsertAction(ctx, pgstore.InsertActionParams{
 		ID: rec.id, OrganizationID: rec.org, Code: string(rec.code), Status: "started",
 		Actor: actor, Target: target, Params: params, CorrelationID: rec.correlated, StartedAt: rec.startedAt,
-	})
+	}); err != nil {
+		return err
+	}
+	if err := insertStateChanges(ctx, q, rec); err != nil {
+		return err
+	}
+	rec.changes = nil
+	return nil
 }
 
 func (r *ActionRunner) insertFinished(ctx context.Context, q *pgstore.Queries, rec *recorder, cause error) error {
@@ -418,7 +435,7 @@ func insertStateChanges(ctx context.Context, q *pgstore.Queries, rec *recorder) 
 			return err
 		}
 		if err := q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
-			OrganizationID: ev.OrganizationID, Subject: statechange.Subject(ev.OrganizationID),
+			OrganizationID: ev.OrganizationID, Subject: statechange.Subject(ev),
 			MsgID: uuid.Must(uuid.NewV7()).String(), Payload: payload,
 		}); err != nil {
 			return err
@@ -444,6 +461,11 @@ func (r *ActionRunner) finishStarted(ctx context.Context, q *pgstore.Queries, re
 	}
 	if n != 1 {
 		return fmt.Errorf("app: action %s is not in state started", rec.id)
+	}
+	if outcome == audit.OutcomeSuccess {
+		if err := insertStateChanges(ctx, q, rec); err != nil {
+			return err
+		}
 	}
 	return insertOutbox(ctx, q, rec, outcome, code, finished)
 }

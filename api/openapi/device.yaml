@@ -290,7 +290,7 @@ components:
         type:
           type: string
           enum: [bundle.applied, bundle.rejected, config.drift_corrected, agent.updated, agent.update_failed,
-                 agent.rolled_back, agent.events_dropped]
+                 agent.rolled_back, agent.events_dropped, session.login]
         occurred_at: { type: string, format: date-time }
         data:
           type: object

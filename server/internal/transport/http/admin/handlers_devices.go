@@ -158,6 +158,21 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		StateChangedAt: base.StateChangedAt, BundleVersion: base.BundleVersion, LastContactAt: base.LastContactAt,
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion,
 		Groups: make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
+		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
+		LoginAssignment: adminapi.DeviceLoginAssignment{
+			Users: make([]adminapi.UserRef, len(d.Login.Users)), Groups: make([]adminapi.UserGroupRef, len(d.Login.Groups)),
+		},
+	}
+	if d.Status != nil {
+		for _, v := range d.Status.SchemaVersions {
+			out.SchemaVersions = append(out.SchemaVersions, int(v))
+		}
+	}
+	for i, u := range d.Login.Users {
+		out.LoginAssignment.Users[i] = toUserRef(u)
+	}
+	for i, g := range d.Login.Groups {
+		out.LoginAssignment.Groups[i] = toUserGroupRef(g)
 	}
 	for i, g := range d.Groups {
 		out.Groups[i] = adminapi.DeviceGroupRef{Id: g.ID, Name: g.Name}

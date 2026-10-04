@@ -9,8 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -36,19 +39,174 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
 )
 
-// fakeIdP is the identity provider of the handler tests.
+// fakeIdP is the identity provider of the handler tests: organizations, users and groups in memory.
 type fakeIdP struct {
-	mu   sync.Mutex
-	fail bool
+	mu      sync.Mutex
+	fail    bool
+	users   map[string]ports.NewIdentityUser // pk → user
+	groups  map[string]string                // pk → name
+	members map[string][]string              // group pk → user pks
+	locked  map[string]bool                  // user pk → locked (and tokens revoked)
+}
+
+// fakePKs numbers the users of every fake identity provider of the test binary.
+var fakePKs atomic.Int64
+
+func newFakeIdP() *fakeIdP {
+	return &fakeIdP{users: map[string]ports.NewIdentityUser{}, groups: map[string]string{}, members: map[string][]string{},
+		locked: map[string]bool{}}
+}
+
+func (f *fakeIdP) err() error {
+	if f.fail {
+		return problem.UpstreamUnavailable
+	}
+	return nil
 }
 
 func (f *fakeIdP) EnsureOrganization(context.Context, string) (ports.OrgIdentityRefs, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.fail {
-		return ports.OrgIdentityRefs{}, problem.UpstreamUnavailable
+	if err := f.err(); err != nil {
+		return ports.OrgIdentityRefs{}, err
 	}
-	return ports.OrgIdentityRefs{RootGroupPK: "r", AdminsGroupPK: "a", OperatorsGroupPK: "o", AuditorsGroupPK: "u"}, nil
+	return ports.OrgIdentityRefs{RootGroupPK: "r", AdminsGroupPK: "a", OperatorsGroupPK: "o", AuditorsGroupPK: "u", LockedGroupPK: "l"}, nil
+}
+
+func (f *fakeIdP) CreateUser(_ context.Context, _ string, u ports.NewIdentityUser) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return "", err
+	}
+	for _, x := range f.users {
+		if x.Username == u.Username {
+			return "", ports.ErrUsernameTaken
+		}
+	}
+	// Authentik pks are unique across the shared test database.
+	pk := strconv.FormatInt(fakePKs.Add(1), 10)
+	f.users[pk] = u
+	return pk, nil
+}
+
+func (f *fakeIdP) UpdateUser(_ context.Context, pk, name, email string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u := f.users[pk]
+	u.Name, u.Email = name, email
+	f.users[pk] = u
+	return f.err()
+}
+
+func (f *fakeIdP) DeleteUser(_ context.Context, pk string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.users, pk)
+	return f.err()
+}
+
+func (f *fakeIdP) RecoveryLink(_ context.Context, pk string) (string, error) {
+	return "https://auth.test/if/flow/paddock-recovery/?flow_token=" + pk, f.err()
+}
+
+func (f *fakeIdP) LockUser(_ context.Context, _, pk string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return err
+	}
+	f.locked[pk] = true
+	return nil
+}
+
+func (f *fakeIdP) UnlockUser(_ context.Context, _, pk string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return err
+	}
+	delete(f.locked, pk)
+	return nil
+}
+
+func (f *fakeIdP) OrganizationUsers(context.Context, string) ([]ports.IdentityUser, error) {
+	return nil, f.err()
+}
+
+func (f *fakeIdP) EnsureGroup(_ context.Context, _, name string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return "", err
+	}
+	for pk, n := range f.groups {
+		if n == name {
+			return pk, nil
+		}
+	}
+	pk := "g-" + uuid.NewString()
+	f.groups[pk] = name
+	return pk, nil
+}
+
+func (f *fakeIdP) FindGroup(_ context.Context, name string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for pk, n := range f.groups {
+		if n == name {
+			return pk, nil
+		}
+	}
+	return "", f.err()
+}
+
+func (f *fakeIdP) DeleteGroup(_ context.Context, pk string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.groups, pk)
+	delete(f.members, pk)
+	return f.err()
+}
+
+func (f *fakeIdP) AddMember(_ context.Context, group, user string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return err
+	}
+	if !slices.Contains(f.members[group], user) {
+		f.members[group] = append(f.members[group], user)
+	}
+	return nil
+}
+
+func (f *fakeIdP) RemoveMember(_ context.Context, group, user string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.err(); err != nil {
+		return err
+	}
+	f.members[group] = slices.DeleteFunc(f.members[group], func(x string) bool { return x == user })
+	return nil
+}
+
+func (f *fakeIdP) GroupMembers(_ context.Context, group string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.members[group]), f.err()
+}
+
+func (f *fakeIdP) UpstreamGroups(context.Context) ([]ports.IdentityGroup, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []ports.IdentityGroup
+	for pk, n := range f.groups {
+		if !strings.HasPrefix(n, "paddock.") {
+			out = append(out, ports.IdentityGroup{PK: pk, Name: n})
+		}
+	}
+	return out, f.err()
 }
 
 // discardStore accepts agent artifacts without storing them.
@@ -108,7 +266,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID)
-	idp := &fakeIdP{}
+	idp := newFakeIdP()
 	static, err := admin.NewStaticHandler(fstest.MapFS{"index.html": {Data: []byte(testIndex)}})
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +291,11 @@ func newEnv(t *testing.T) *env {
 		Organizations: app.NewOrganizations(runner, platformPool, idp),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, true),
+		Users:         app.NewUsers(runner, orgPool, idp),
+		UserGroups:    app.NewUserGroups(runner, orgPool, idp),
+		Logins:        app.NewLogins(runner, orgPool, idp),
+		LoginSettings: app.NewLoginSettings(runner, orgPool),
+		Privileges:    app.NewPrivileges(runner, orgPool),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,

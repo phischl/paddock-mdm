@@ -25,7 +25,14 @@ type handlers struct {
 	devices  *app.Devices
 	managed  *app.ManagedConfig
 	releases *app.AgentReleases
-	now      func() time.Time
+
+	users         *app.Users
+	userGroups    *app.UserGroups
+	logins        *app.Logins
+	loginSettings *app.LoginSettings
+	privileges    *app.Privileges
+
+	now func() time.Time
 }
 
 var _ adminapi.StrictServerInterface = (*handlers)(nil)
@@ -224,6 +231,7 @@ func (h *handlers) GetOrganization(ctx context.Context, req adminapi.GetOrganiza
 
 func toOrganization(o pgstore.Organization) adminapi.Organization {
 	return adminapi.Organization{
-		Id: openapi_types.UUID(o.ID), Slug: o.Slug, Name: o.Name, Status: adminapi.OrganizationStatus(o.Status), CreatedAt: o.CreatedAt.UTC(),
+		Id: openapi_types.UUID(o.ID), Slug: o.Slug, Name: o.Name, Status: adminapi.OrganizationStatus(o.Status),
+		Domains: o.Domains, CreatedAt: o.CreatedAt.UTC(),
 	}
 }

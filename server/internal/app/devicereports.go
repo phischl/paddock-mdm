@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -80,6 +81,9 @@ var eventCodes = map[string]audit.Code{
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
 // It reports whether the event was new.
 func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev protocol.Event) (bool, error) {
+	if ev.Type == protocol.EventSessionLogin {
+		return true, d.recordSessionLogin(ctx, deviceID, ev)
+	}
 	code, ok := eventCodes[ev.Type]
 	if !ok {
 		return false, nil // the gateway admits only known types; anything else is ignored
@@ -109,6 +113,28 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 			}
 		}
 		return true, err
+	})
+}
+
+// recordSessionLogin notes that a user logged in on a device (device_user_seen, plan M3a decision 10); logins are not
+// audited (privacy, volume), and a redelivered event only repeats the same upsert. A malformed event is ignored.
+func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UUID, ev protocol.Event) error {
+	var login protocol.SessionLogin
+	if json.Unmarshal(ev.Data, &login) != nil {
+		return nil
+	}
+	username := strings.ToLower(strings.TrimSpace(login.Username))
+	if username == "" || len(username) > maxParamString {
+		return nil
+	}
+	at := login.At
+	if at.IsZero() || at.After(ev.OccurredAt.Add(time.Minute)) {
+		at = ev.OccurredAt
+	}
+	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		return q.UpsertDeviceUserSeen(ctx, pgstore.UpsertDeviceUserSeenParams{
+			OrganizationID: mustOrg(ctx), DeviceID: deviceID, Username: username, LastSeenAt: at.UTC(),
+		})
 	})
 }
 

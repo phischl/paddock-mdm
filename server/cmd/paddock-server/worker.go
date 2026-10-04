@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
+	"github.com/paddock-mdm/paddock/server/internal/adapters/authentik"
 	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/config"
 	"github.com/paddock-mdm/paddock/server/internal/devicecache"
@@ -21,6 +23,10 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")
 	amqpCfg := config.LoadAMQP(l)
 	vkCfg := config.LoadValkey(l)
+	authentikURL := strings.TrimRight(l.Required("PADDOCK_AUTHENTIK_URL"), "/")
+	authentikToken := l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")
+	syncEvery := l.Duration("PADDOCK_IDENTITY_SYNC_INTERVAL", worker.DefaultIdentitySyncInterval)
+	reconcileEvery := l.Duration("PADDOCK_IDENTITY_RECONCILE_INTERVAL", worker.DefaultReconcileInterval)
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -50,6 +56,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), cache)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, common.Development()), platformPool, cache)
+	ak := authentik.New(authentikURL, authentikToken)
+	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), pool, platformPool, syncEvery, reconcileEvery)
 	slog.InfoContext(ctx, "worker starting")
 
 	return runAll(ctx,
@@ -67,5 +75,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		func(ctx context.Context) error { return eventQueue.Run(ctx, reports.HandleEvents) },
 		cacheSync.Run,
 		rollouts.Run,
+		identity.RunSync,
+		identity.RunReconcile,
 	)
 }
