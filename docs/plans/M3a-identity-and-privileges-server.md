@@ -111,7 +111,7 @@ application, claims, mandatory MFA, lock) is provisioned automatically.
     require_password bool, timestamp_timeout_min int (0–60), lecture always|once|never, created/updated)` and
     `profile_assignment(id, organization_id, profile_id, subject_type global|group|user, subject_id nullable,
     device_group_id nullable)`. A `restricted` profile's commands are absolute paths with optional arguments
-    (`^/[^\s]+( .*)?$`, no `ALL`, no `!`, no sudoers meta characters `,:=\\` — 422 `invalid_command`); `none` and
+    (`^/[^\s]+( .*)?$`, no `ALL`, no `!`, no sudoers meta characters `,:=\\` — 422 `invalid_command`); also no `#` (sudoers comment after whitespace); `none` and
     `full` profiles have no commands.
 13. **Effective profile** (pure domain function in `server/internal/domain/privilege`, no I/O):
     `Effective(user, device, assignments, profiles, groupMemberships, deviceGroups) → EffectiveProfile` per
@@ -132,7 +132,7 @@ application, claims, mandatory MFA, lock) is provisioned automatically.
     typed-confirmation variant of `ConfirmDialog` (step-up comes in M4).
 
 ### 3.4 Bundle schema v2
-14a. `pkg/bundle` gets **schema version 2** = v1 + resource types `login` and `sudo` + top-level `policy`. The compiler
+14a. `pkg/bundle` gets **schema version 2** = v1 + resource types `login` and `sudo` (no further top-level keys; amended after QUESTION 2). The compiler
     renders v2 only for devices whose last heartbeat lists 2 in `schema_versions`; otherwise v1 exactly as today (no
     login/sudo content; portal shows "agent too old for login management" on the device). M2b agents are unaffected.
 15. **`login` resource** (one per bundle, id `login`):
