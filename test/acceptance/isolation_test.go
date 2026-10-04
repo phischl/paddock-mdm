@@ -17,7 +17,7 @@ import (
 // and filters of every list (plan M0.2 AC5).
 func TestOrganizationIsolation(t *testing.T) {
 	doc := loadSpec(t)
-	w := &isolationWorld{alice: login(t, env.Alice), carol: login(t, env.Carol)}
+	w := &isolationWorld{top: t, alice: login(t, env.Alice), carol: login(t, env.Carol)}
 	acme, globex := orgOf(t, w.alice), orgOf(t, w.carol)
 	if acme == globex {
 		t.Fatal("alice and carol are in the same organization; run `make dev-seed`")
@@ -67,6 +67,9 @@ func TestOrganizationIsolation(t *testing.T) {
 			method := strings.SplitN(op, " ", 2)[0]
 			path, body := fx.request(t, w)
 			res := call(t, w.alice, method, path, body)
+			if method == http.MethodPost && res.Status == http.StatusCreated {
+				removeCreated(t, w.alice, path, res)
+			}
 			switch fx.kind {
 			case isoItem:
 				expectStatus(t, res, http.StatusNotFound, "not_found")

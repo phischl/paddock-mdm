@@ -42,7 +42,7 @@ func TestDeviceProtocol(t *testing.T) {
 		"device_group_id": groupID, "path": path, "content": "gate=d1\n",
 	})
 	expectStatus(t, res, http.StatusCreated, "")
-	fileID := responseID(t, res).String()
+	fileID := createdID(t, alice, "/api/v1/managed-files", res)
 	changed := time.Now()
 	next := checkinUntil(t, dev, 10*time.Second, func(r protocol.CheckinResponse) bool { return r.Bundle != nil })
 	t.Logf("managed-file change visible after %s", time.Since(changed).Round(time.Millisecond))

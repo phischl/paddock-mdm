@@ -43,6 +43,8 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await expectAccessible(page)
   await page.getByTestId('close-token').click()
   await expect(dialog).toBeHidden()
+  await page.getByTestId('list-search').getByRole('searchbox').fill(`E2E token ${stamp}`)
+  await expect(page).toHaveURL(/[?&]q=/)
   await expect(page.getByRole('cell', { name: `E2E token ${stamp}`, exact: true })).toBeVisible()
   expect(await page.content()).not.toContain(secret)
   const tokens = await page.request.get('/api/v1/enrollment-tokens?q=' + encodeURIComponent(`E2E token ${stamp}`))
@@ -87,6 +89,8 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await expectAccessible(page)
   await fileDialog.getByRole('button', { name: 'Create' }).click()
   await expect(fileDialog).toBeHidden()
+  await page.getByTestId('list-search').getByRole('searchbox').fill(path)
+  await expect(page).toHaveURL(/[?&]q=/)
   await expect(page.getByRole('cell', { name: path, exact: true })).toBeVisible()
 
   // The device detail shows the file in the effective configuration.
