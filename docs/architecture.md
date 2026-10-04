@@ -820,7 +820,7 @@ for local users; synced users keep their upstream UPN. Paddock refuses a user wh
 with a user of another organization (409 `username_taken`, without revealing the other organization).
 
 **Lock (F2).** Lock = add to `.locked` **and** revoke the user's sessions, access tokens and refresh
-tokens in Authentik via API — both are mandatory. PoC M1 (C2) showed that Authentik's refresh-token
+tokens in Authentik — both are mandatory (revocation implemented by an `is_active` toggle, ADR 0007 amendment). PoC M1 (C2) showed that Authentik's refresh-token
 grant does not evaluate application policies: with the group alone, Hello PIN logins keep working;
 with the revocation they fail within ≈ 2 s. Using a group instead of `is_active=false` keeps the lock
 effective even when an upstream source sync rewrites user attributes. Unlock removes the membership;
