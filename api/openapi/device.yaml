@@ -247,6 +247,7 @@ components:
           type: object
           additionalProperties: true
         event_seq_high: { type: integer, format: int64, minimum: 0 }
+        arch: { type: string, enum: [amd64, arm64], description: "Agent architecture; selects the artifact of an agent_update." }
     BundleRef:
       type: object
       required: [version, sha256, url]
@@ -265,6 +266,22 @@ components:
             - $ref: "#/components/schemas/BundleRef"
           nullable: true
         next_checkin_s: { type: integer, description: "300 × random(0.8, 1.2)" }
+        agent_update:
+          description: |
+            Set only when an agent rollout is running, the device is eligible in its current wave and reports another
+            agent_version (plan M2b decision 21).
+          allOf:
+            - $ref: "#/components/schemas/AgentUpdate"
+          nullable: true
+    AgentUpdate:
+      type: object
+      required: [version, url, sha256, size, minisig]
+      properties:
+        version: { type: string, description: Semantic version of the release. }
+        url: { type: string, description: "Presigned GET URL of the paddockd binary on bundles.<domain>." }
+        sha256: { type: string, description: Hex SHA-256 of the binary. }
+        size: { type: integer, format: int64, description: Size of the binary in bytes. }
+        minisig: { type: string, description: Standard base64 of the minisign signature file. }
     Event:
       type: object
       required: [event_seq, type, occurred_at]

@@ -57,7 +57,7 @@ linters:
         text: InsertAction|FinishAction|InsertOutbox
       - path: _test\.go$
         linters: [gosec, forbidigo]
-      - path: ^server/internal/testsupport/
+      - path: ^(server/internal/testsupport|agent/internal/testgw)/
         linters: [gosec, forbidigo]
 
 formatters:

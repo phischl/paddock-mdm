@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Metrics `paddock_compiler_bundles_total{result}` and `paddock_compiler_latency_seconds` (M2a step 5).
 - Acceptance gates D1–D4 for the device protocol, its security, clone detection and the absence of a synchronous device-to-database path, run with the reference device client `test/acceptance/devicesim` (`go run ./test/acceptance/cmd/devicesim enroll` enrolls a simulated device) (M2a step 6).
 - Portal pages *Devices* (list with state and device group filters; detail with identity, device groups, effective configuration and conflicts, approve, reject, release quarantine and retire — retiring requires typing the hostname), *Enrollment tokens* (the enrollment configuration with its copy button is shown once), *Managed files* and *Managed units*; a device group page lists its devices (AC1, AC2, M2a step 7).
+- Device agent `paddockd` (module `agent/`, static binary for linux/amd64 and linux/arm64): `paddockd enroll --config <file> [--remove-config] [--no-wait]` stores `/etc/paddock/agent.yml` and `/etc/paddock/trust.json`, creates the device key `/var/lib/paddock/identity/sign.key` and waits for approval (exit code 0 active, 2 pending, 3 rejected, 1 error; re-running resumes with the same key and enrollment) (A6, M2b step 1).
+- `paddockd run` checks in every `next_checkin_s` (back-off 30 s to 30 min while the server is unreachable), at start, and within 15 s after NetworkManager reports full connectivity or the device resumes; a device that is still pending approval keeps polling its enrollment (C2, M2b step 1).
+- `paddockd self-test` prints a JSON report of the agent's own checks (configuration, trust anchor, identity key, cached bundle, server reachability) and exits 0 or 1; `GET /health` on `/run/paddock/agent.sock` reports status, version, last check-in, last bundle version and last error (M2b step 1).
+- Device API: the check-in request may carry `arch` (`amd64`, `arm64`) and the response may carry `agent_update` (M2b §6.1).
 
 ### Changed
 
