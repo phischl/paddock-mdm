@@ -142,10 +142,7 @@ func TestConsumerDuplicateDelivery(t *testing.T) {
 		t.Fatalf("dlq.audit.writer holds %d messages, want the 1 invalid message", depth)
 	}
 
-	var key string
-	if err := s.super.QueryRow(context.Background(), "SELECT object_key FROM audit_object WHERE organization_id = $1", org).Scan(&key); err != nil {
-		t.Fatal(err)
-	}
+	recordedAt, key, _ := s.recordedObject(t, ev.EventID)
 	mode, until, err := s.store.Retention(context.Background(), key)
 	if err != nil {
 		t.Fatal(err)
@@ -153,8 +150,9 @@ func TestConsumerDuplicateDelivery(t *testing.T) {
 	if mode != types.ObjectLockRetentionModeCompliance {
 		t.Fatalf("object retention mode %s, want COMPLIANCE", mode)
 	}
-	if until.Before(time.Now().AddDate(0, 0, 399)) {
-		t.Fatalf("object retained until %s, want >= 400 days", until)
+	// Retention counts from the UTC recording day (architecture §14.4), never from the local date or the test clock.
+	if want := utcDay(recordedAt).AddDate(0, 0, 400); !until.Equal(want) {
+		t.Fatalf("object retained until %s, want recording day + 400 days = %s", until, want)
 	}
 	body2, err := s.store.Get(context.Background(), key)
 	if err != nil {
