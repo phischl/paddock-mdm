@@ -4,18 +4,19 @@ SHELL := /bin/bash
 include deploy/compose/versions.env
 export
 
+# GOTOOLCHAIN=auto lets an older host Go fetch the toolchain go.work and go.mod declare (toolchain line); $(shell) does
+# not see exported variables before GNU make 4.4, hence the explicit setting there.
+export GOTOOLCHAIN := auto
+
 COMPOSE_DIR   := deploy/compose
 SECRETS_DIR   := $(COMPOSE_DIR)/.secrets
-GO_MODULES    := $(shell go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
+GO_MODULES    := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) go list -m -f '{{.Dir}}' | sed 's|^$(CURDIR)|.|')
 GO_PACKAGES   := $(addsuffix /...,$(GO_MODULES))
 UNIT_PACKAGES := $(filter-out ./test/acceptance/... ./test/system/...,$(GO_PACKAGES)) ./test/acceptance/cmd/devseed/...
 WEB_DIR       := server/web
 IMAGE         ?= paddock-server:dev
 UID           := $(shell id -u)
 GID           := $(shell id -g)
-
-# GOTOOLCHAIN=local keeps every build on the toolchain the module declares (go 1.25).
-export GOTOOLCHAIN := local
 
 COMPOSE := docker compose --project-directory $(COMPOSE_DIR) -p paddock \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
@@ -50,17 +51,14 @@ lint-go:
 	go test -count=1 -run '^TestOpenAPISpec$$' ./server/internal/transport/http/admin/
 
 # govulncheck checks every workspace module, including its tests, in the pinned Go image (plan M2.1 decision 2); a
-# vulnerability in reachable code fails. The server is checked without internal/testsupport/... and therefore without
-# its tests, which reach the test containers only through those packages: GO-2026-6354 and GO-2026-6355
-# (golang.org/x/crypto/ssh via testcontainers) need Go 1.26 — remove with toolchain upgrade (plan M2.2).
+# vulnerability in reachable code fails.
 .PHONY: lint-vuln
 lint-vuln:
 	docker run --rm -v $(CURDIR):/src -w /src/server \
 		-v paddock-gomod:/go/pkg/mod -v paddock-govulncheck-cache:/root/.cache \
 		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
 		$(GO_BUILD_IMAGE) sh -c 'set -e; \
-			for m in $(filter-out ./server,$(GO_MODULES)); do echo "govulncheck $$m"; go tool govulncheck -test -C /src/$$m ./...; done; \
-			echo "govulncheck ./server without internal/testsupport"; go tool govulncheck $$(go list ./... | grep -v /internal/testsupport/)'
+			for m in $(GO_MODULES); do echo "govulncheck $$m"; go tool govulncheck -test -C /src/$$m ./...; done'
 
 # The build stage of the server image compiles the Go workspace, so a commit that breaks the image fails lint (plan
 # M2.1 decision 5).
