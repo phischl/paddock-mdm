@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Device API at `https://device.<domain>` served by the new `gateway` role (`paddock-server serve gateway`, Compose service `paddock-gateway`): enrollment, enrollment status, check-in with presigned bundle URLs (valid 120 s) and device event batches, contract `api/openapi/device.yaml`. Every request is signed with the device's ECDSA P-256 key (timestamp within ±300 s, single-use nonce); the gateway has no database credentials and keeps answering check-ins while PostgreSQL is down (A5, C2, M2a step 4).
 - The gateway limits device requests to 30 per minute per key and 300 per minute per source address (429 with `Retry-After`) and answers 503 `backpressure` when an ingest queue refuses a message (M2a step 4).
 - Metrics `paddock_gateway_requests_total{route,code}` and `paddock_gateway_auth_failures_total{reason}` (M2a step 4).
+- `compiler` role (`paddock-server serve compiler`, Compose service `paddock-compiler`): after every change of a device's inputs it renders the device's bundle (schema v1: NTP, managed files, managed units), signs it as a DSSE envelope with the OpenBao key `bundle-signing` and stores it as `org/<organization>/devices/<device>/bundles/<version>.dsse` in `paddock-bundles`; content-equal renders keep the version, changes within 2 s are coalesced, and bundle pointers in Valkey are rebuilt from PostgreSQL every 60 s (F1, A9, M2a step 5).
+- The worker records check-ins in the device status at most once per minute per device, quarantines a device whose sequence numbers diverge (cloned identity, audit event `device.clone_suspected`) and records device events as audit events `device.bundle_applied`, `device.bundle_rejected` and `device.config_drift_corrected`, each once per event sequence number (A6, M2a step 5).
+- Metrics `paddock_compiler_bundles_total{result}` and `paddock_compiler_latency_seconds` (M2a step 5).
 
 ### Changed
 

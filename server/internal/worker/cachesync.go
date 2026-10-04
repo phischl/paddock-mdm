@@ -22,7 +22,8 @@ const ReconcileInterval = 60 * time.Second
 const notifyChannel = "device_cache"
 
 // CacheSync keeps et: and dk: in Valkey equal to PostgreSQL: immediately on change notifications and completely
-// every ReconcileInterval, which also repairs lost notifications and an emptied Valkey.
+// every ReconcileInterval, which also repairs lost notifications and an emptied Valkey (and then restores seq:
+// from device_status.last_seq).
 type CacheSync struct {
 	pool     *db.OrgPool
 	cache    *devicecache.Cache
@@ -108,7 +109,8 @@ func (s *CacheSync) ReconcileAll(ctx context.Context) error {
 	return nil
 }
 
-// Reconcile rewrites the live tokens and the identity keys of one organization.
+// Reconcile rewrites the live tokens and the identity keys of one organization and restores missing sequence
+// numbers.
 func (s *CacheSync) Reconcile(ctx context.Context, org uuid.UUID) error {
 	ctx = systemContext(ctx, org, "cache-sync")
 	return s.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -118,6 +120,15 @@ func (s *CacheSync) Reconcile(ctx context.Context, org uuid.UUID) error {
 		}
 		for _, tok := range tokens {
 			if err := s.putToken(ctx, tok); err != nil {
+				return err
+			}
+		}
+		seqs, err := q.ListDeviceSeqs(ctx)
+		if err != nil {
+			return err
+		}
+		for _, sq := range seqs {
+			if err := s.cache.RestoreSeq(ctx, sq.DeviceID, sq.LastSeq); err != nil {
 				return err
 			}
 		}
