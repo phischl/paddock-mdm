@@ -20,7 +20,7 @@ import (
 const usage = `usage: paddock-server <command> [arguments] [+ <command> [arguments] ...]
 
 commands:
-  serve api|gateway|worker|outbox-relay|audit-writer
+  serve api|gateway|worker|compiler|outbox-relay|audit-writer
   migrate paddock|audit
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
@@ -113,6 +113,8 @@ func runServe(ctx context.Context, l *config.Loader, common config.Common, args 
 		return serveWorker(ctx, l, common)
 	case "gateway":
 		return serveGateway(ctx, l, common)
+	case "compiler":
+		return serveCompiler(ctx, l, common)
 	default:
 		return errUsage
 	}

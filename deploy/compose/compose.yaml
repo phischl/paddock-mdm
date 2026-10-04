@@ -334,6 +334,43 @@ services:
       valkey:
         condition: service_healthy
 
+  paddock-compiler:
+    <<: *paddock
+    command: ["serve", "compiler"]
+    environment:
+      <<: *paddock-env
+      PADDOCK_DB_COMPILER_URL_FILE: /run/secrets/db_paddock_compiler_url
+      PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
+      PADDOCK_AMQP_USER: compiler
+      PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_compiler_password
+      PADDOCK_VALKEY_ADDR: valkey:6379
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_compiler_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_compiler_secret_id
+      PADDOCK_BUNDLES_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
+      PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_compiler_access_key
+      PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_compiler_secret_key
+    secrets:
+      - db_paddock_compiler_url
+      - rabbitmq_compiler_password
+      - valkey_password
+      - approle_compiler_role_id
+      - approle_compiler_secret_id
+      - rustfs_bundles_compiler_access_key
+      - rustfs_bundles_compiler_secret_key
+    networks: [cp]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+
   paddock-worker:
     <<: *paddock
     command: ["serve", "worker"]
@@ -388,6 +425,11 @@ secrets:
   rabbitmq_relay_password: { file: ./.secrets/rabbitmq_relay_password }
   rabbitmq_worker_password: { file: ./.secrets/rabbitmq_worker_password }
   rabbitmq_gateway_password: { file: ./.secrets/rabbitmq_gateway_password }
+  rabbitmq_compiler_password: { file: ./.secrets/rabbitmq_compiler_password }
+  rustfs_bundles_compiler_access_key: { file: ./.secrets/rustfs_bundles_compiler_access_key }
+  rustfs_bundles_compiler_secret_key: { file: ./.secrets/rustfs_bundles_compiler_secret_key }
+  approle_compiler_role_id: { file: ./.secrets/approle/paddock-compiler/role_id }
+  approle_compiler_secret_id: { file: ./.secrets/approle/paddock-compiler/secret_id }
   rustfs_bundles_gateway_access_key: { file: ./.secrets/rustfs_bundles_gateway_access_key }
   rustfs_bundles_gateway_secret_key: { file: ./.secrets/rustfs_bundles_gateway_secret_key }
   authentik_postgres_password: { file: ./.secrets/authentik_postgres_password }

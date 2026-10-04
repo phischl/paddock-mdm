@@ -108,3 +108,25 @@ func (c *Cache) Allow(ctx context.Context, scope string, limit int, now time.Tim
 	}
 	return false, time.Duration(60-now.Unix()%60) * time.Second, nil
 }
+
+// HeartbeatInterval coalesces device_status writes to one per device and interval (plan M2a decision 12).
+const HeartbeatInterval = 60 * time.Second
+
+func heartbeatKey(device uuid.UUID) string { return "hb:" + device.String() }
+
+// ClaimHeartbeat sets hb:<device> with SET NX EX 60 and reports whether this heartbeat should be materialized.
+func (c *Cache) ClaimHeartbeat(ctx context.Context, device uuid.UUID) (bool, error) {
+	err := c.c.Do(ctx, c.c.B().Set().Key(heartbeatKey(device)).Value("1").Nx().Ex(HeartbeatInterval).Build()).Error()
+	if valkey.IsValkeyNil(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("devicecache: heartbeat: %w", err)
+	}
+	return true, nil
+}
+
+// ReleaseHeartbeat deletes hb:<device> after a failed write, so the retried heartbeat is materialized.
+func (c *Cache) ReleaseHeartbeat(ctx context.Context, device uuid.UUID) error {
+	return c.c.Do(ctx, c.c.B().Del().Key(heartbeatKey(device)).Build()).Error()
+}

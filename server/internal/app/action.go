@@ -230,6 +230,31 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 	return nil
 }
 
+// RecordOnce records a successful event reported by a device exactly once per natural key: claim runs first in the
+// same transaction and inserts the key with ON CONFLICT DO NOTHING; when the key existed (a redelivered message)
+// nothing is recorded and RecordOnce returns false.
+func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return false, problem.Unauthenticated
+	}
+	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
+	recorded := false
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		fresh, err := claim(ctx, q)
+		if err != nil || !fresh {
+			return err
+		}
+		recorded = true
+		return r.insertFinished(ctx, q, rec, nil)
+	})
+	if err != nil {
+		return false, err
+	}
+	return recorded, nil
+}
+
 // RecordRejected records a privileged action that was rejected before its use case ran (malformed request, missing
 // CSRF header): exactly one event, denied when the principal may not perform the action at all, otherwise with the
 // rejection's outcome. It returns the error to send to the client.

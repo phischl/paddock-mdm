@@ -68,6 +68,10 @@ services:
     environment:
       PADDOCK_ENV: development
 
+  paddock-compiler:
+    environment:
+      PADDOCK_ENV: development
+
   paddock-audit-migrate:
     environment:
       PADDOCK_ENV: development

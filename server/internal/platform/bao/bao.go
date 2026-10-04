@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,6 +132,67 @@ func (c *Client) Sign(ctx context.Context, key string, message []byte) (Signatur
 		return Signature{}, fmt.Errorf("bao: unexpected sign response: %v", s.Data)
 	}
 	return Signature{Value: sig, KeyVersion: version}, nil
+}
+
+// MaxBatch is the largest batch_input SignBatch sends in one call. OpenBao refuses requests with more than about
+// 1000 JSON strings by default (each item carries two), so batches stay well below the 1000 items of
+// architecture §7.1.
+const MaxBatch = 250
+
+// SignBatch signs every message with the Transit key using batch_input (at most MaxBatch per call). The result has
+// one signature per message in order; Value is the raw signature (without the "vault:v<N>:" prefix).
+func (c *Client) SignBatch(ctx context.Context, key string, messages [][]byte) ([]RawSignature, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	out := make([]RawSignature, 0, len(messages))
+	for start := 0; start < len(messages); start += MaxBatch {
+		chunk := messages[start:min(start+MaxBatch, len(messages))]
+		batch := make([]map[string]any, len(chunk))
+		for i, m := range chunk {
+			batch[i] = map[string]any{"input": base64.StdEncoding.EncodeToString(m)}
+		}
+		s, err := c.api.Logical().WriteWithContext(ctx, "transit/sign/"+key, map[string]any{"batch_input": batch, "prehashed": false})
+		if err != nil {
+			return nil, fmt.Errorf("bao: sign batch: %w", err)
+		}
+		results, ok := s.Data["batch_results"].([]any)
+		if s == nil || !ok || len(results) != len(chunk) {
+			return nil, errors.New("bao: sign batch returned an unexpected number of results")
+		}
+		for _, r := range results {
+			sig, err := rawSignature(r)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, sig)
+		}
+	}
+	return out, nil
+}
+
+// RawSignature is a decoded Transit signature.
+type RawSignature struct {
+	Value      []byte
+	KeyVersion int
+}
+
+func rawSignature(r any) (RawSignature, error) {
+	m, _ := r.(map[string]any)
+	if e, _ := m["error"].(string); e != "" {
+		return RawSignature{}, fmt.Errorf("bao: sign batch item: %s", e)
+	}
+	value, _ := m["signature"].(string)
+	parts := strings.SplitN(value, ":", 3)
+	version, err := toInt(m["key_version"])
+	if len(parts) != 3 || parts[0] != "vault" || err != nil {
+		return RawSignature{}, fmt.Errorf("bao: unexpected signature %q", value)
+	}
+	raw, err := base64.StdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return RawSignature{}, fmt.Errorf("bao: signature encoding: %w", err)
+	}
+	return RawSignature{Value: raw, KeyVersion: version}, nil
 }
 
 // PublicKeys returns the public keys of a Transit key by version.

@@ -38,7 +38,10 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	runner := app.NewActionRunner(pool, nil, httpx.RequestID)
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
 	enrollQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEnroll), worker.Prefetch)
+	heartbeatQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestHeartbeat), worker.Prefetch)
+	eventQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEvent), worker.Prefetch)
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
+	reports := worker.NewReports(app.NewDeviceReports(runner, pool), cache)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	slog.InfoContext(ctx, "worker starting")
 
@@ -46,13 +49,15 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		func(ctx context.Context) error {
 			return ops.Serve(ctx, common.OpsAddr, func(ctx context.Context) error {
 				var notConnected error
-				if !enrollQueue.Connected() {
-					notConnected = errors.New("rabbitmq consumer not connected")
+				if !enrollQueue.Connected() || !heartbeatQueue.Connected() || !eventQueue.Connected() {
+					notConnected = errors.New("rabbitmq consumers not connected")
 				}
 				return errors.Join(pool.Ping(ctx), valkey.Ping(ctx, vk), notConnected)
 			})
 		},
 		func(ctx context.Context) error { return enrollQueue.Run(ctx, enroll.Handle) },
+		func(ctx context.Context) error { return heartbeatQueue.Run(ctx, reports.HandleHeartbeats) },
+		func(ctx context.Context) error { return eventQueue.Run(ctx, reports.HandleEvents) },
 		cacheSync.Run,
 	)
 }

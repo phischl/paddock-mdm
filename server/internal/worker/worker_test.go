@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,4 +194,97 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		}
 	}
 	t.Fatalf("timeout waiting for %s", what)
+}
+
+func (f fixture) device(t *testing.T, state string) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(context.Background(), "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'hb', $3)", id, f.org, state); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func (f fixture) count(t *testing.T, sql string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := f.super.QueryRow(context.Background(), sql, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestHeartbeatsAndClones(t *testing.T) {
+	f := newFixture(t)
+	runner := app.NewActionRunner(f.pool, nil, httpx.RequestID)
+	r := NewReports(app.NewDeviceReports(runner, f.pool), f.cache)
+	ctx := context.Background()
+	dev := f.device(t, "active")
+	hb := func(seq, reported int64, clone bool, at time.Time) []byte {
+		b, _ := json.Marshal(ingest.Heartbeat{DeviceID: dev, OrganizationID: f.org, ReceivedAt: at, AppliedBundleVersion: 2,
+			AgentVersion: "0.1.0", Health: json.RawMessage(`{"reconcile":"ok"}`), Seq: seq, ReportedSeq: reported, CloneSuspected: clone})
+		return b
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if o := r.heartbeat(ctx, "m1", hb(1, 0, false, now)); o != ack {
+		t.Fatalf("outcome %v", o)
+	}
+	var last time.Time
+	var applied, seq int64
+	if err := f.super.QueryRow(ctx, "SELECT last_contact_at, applied_bundle_version, last_seq FROM device_status WHERE device_id = $1", dev).Scan(&last, &applied, &seq); err != nil {
+		t.Fatal(err)
+	}
+	if !last.Equal(now) || applied != 2 || seq != 1 {
+		t.Fatalf("status %s %d %d", last, applied, seq)
+	}
+	// Coalesced: a second heartbeat within 60 s does not write.
+	if o := r.heartbeat(ctx, "m2", hb(2, 1, false, now.Add(time.Second))); o != ack {
+		t.Fatalf("outcome %v", o)
+	}
+	if f.count(t, "SELECT count(*) FROM device_status WHERE device_id = $1 AND last_seq = 1", dev) != 1 {
+		t.Fatal("heartbeat within 60 s was materialized")
+	}
+
+	// Two clone reports quarantine the device once, with exactly one audit event.
+	for i, id := range []string{"m3", "m4"} {
+		if o := r.heartbeat(ctx, id, hb(int64(5+i), 1, true, now.Add(2*time.Second))); o != ack {
+			t.Fatalf("outcome %v", o)
+		}
+	}
+	if f.count(t, "SELECT count(*) FROM device WHERE id = $1 AND state = 'quarantined'", dev) != 1 {
+		t.Fatal("device not quarantined")
+	}
+	if n := f.count(t, "SELECT count(*) FROM action WHERE code = 'device.clone_suspected' AND target->>'id' = $1", dev.String()); n != 1 {
+		t.Fatalf("%d clone events, want 1", n)
+	}
+	if o := r.heartbeat(ctx, "m5", []byte("{")); o != poison {
+		t.Fatalf("garbage: %v", o)
+	}
+}
+
+func TestEventsAreRecordedOnce(t *testing.T) {
+	f := newFixture(t)
+	runner := app.NewActionRunner(f.pool, nil, httpx.RequestID)
+	r := NewReports(app.NewDeviceReports(runner, f.pool), f.cache)
+	ctx := context.Background()
+	dev := f.device(t, "active")
+	body, _ := json.Marshal(ingest.Events{DeviceID: dev, OrganizationID: f.org, ReceivedAt: time.Now(), Events: []protocol.Event{
+		{EventSeq: 1, Type: protocol.EventBundleApplied, OccurredAt: time.Now(), Data: json.RawMessage(`{"bundle_version":3,"secret":"x"}`)},
+		{EventSeq: 2, Type: protocol.EventBundleRejected, OccurredAt: time.Now(), Data: json.RawMessage(`{"reason":"signature"}`)},
+	}})
+	for range 2 { // redelivery
+		if o := r.events(ctx, "batch", body); o != ack {
+			t.Fatalf("outcome %v", o)
+		}
+	}
+	rows, err := f.super.Query(ctx, `SELECT code || ':' || (actor->>'type') || ':' || params::text FROM action
+		WHERE target->>'id' = $1 ORDER BY code`, dev.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := pgx.CollectRows(rows, pgx.RowTo[string])
+	if len(got) != 2 || !strings.HasPrefix(got[0], "device.bundle_applied:device:") || !strings.Contains(got[0], `"bundle_version": 3`) ||
+		strings.Contains(got[0], "secret") || !strings.Contains(got[1], `"reason": "signature"`) {
+		t.Fatalf("events %v", got)
+	}
 }
