@@ -35,6 +35,15 @@ const (
 	CodeManagedUnitCreated         Code = "managed_unit.created"
 	CodeManagedUnitUpdated         Code = "managed_unit.updated"
 	CodeManagedUnitDeleted         Code = "managed_unit.deleted"
+
+	CodeAgentReleaseCreated          Code = "agent_release.created"
+	CodeAgentReleaseArtifactUploaded Code = "agent_release.artifact_uploaded"
+	CodeAgentReleasePublished        Code = "agent_release.published"
+	CodeAgentRolloutStarted          Code = "agent_rollout.started"
+	CodeAgentRolloutAdvanced         Code = "agent_rollout.advanced"
+	CodeAgentRolloutHalted           Code = "agent_rollout.halted"
+	CodeAgentRolloutResumed          Code = "agent_rollout.resumed"
+	CodeAgentRolloutCompleted        Code = "agent_rollout.completed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -222,6 +231,54 @@ var registry = map[Code]Definition{
 		Description: "A managed systemd unit definition was deleted.",
 		Params:      []string{"unit", "device_group_id"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeAgentReleaseCreated: {
+		Code: CodeAgentReleaseCreated, Emitted: true,
+		Description: "A platform administrator created an agent release (draft).",
+		Params:      []string{"version"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAgentReleaseArtifactUploaded: {
+		Code: CodeAgentReleaseArtifactUploaded, Emitted: true,
+		Description: "A platform administrator uploaded the signed agent binary of a release for one architecture; the server verified its signature with the release public key.",
+		Params:      []string{"version", "arch", "sha256", "size"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAgentReleasePublished: {
+		Code: CodeAgentReleasePublished, Emitted: true,
+		Description: "A platform administrator published an agent release; it can now be rolled out.",
+		Params:      []string{"version", "arches"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAgentRolloutStarted: {
+		Code: CodeAgentRolloutStarted, Emitted: true,
+		Description: "A platform administrator started the staged rollout of an agent release.",
+		Params:      []string{"version", "waves", "min_wave_minutes", "failure_threshold_percent", "failure_threshold_min"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAgentRolloutAdvanced: {
+		Code: CodeAgentRolloutAdvanced, Emitted: true,
+		Description: "The worker moved a rollout to its next wave (actor: system).",
+		Params:      []string{"version", "wave", "percent", "eligible", "failed"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeAgentRolloutHalted: {
+		Code: CodeAgentRolloutHalted, Emitted: true,
+		Description: "A rollout was halted: automatically by the worker when failed devices reached the threshold (actor: system), or by a platform administrator.",
+		Params:      []string{"version", "reason", "wave", "eligible", "failed", "threshold"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
+	},
+	CodeAgentRolloutResumed: {
+		Code: CodeAgentRolloutResumed, Emitted: true,
+		Description: "A platform administrator resumed a halted rollout.",
+		Params:      []string{"version", "wave"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeAgentRolloutCompleted: {
+		Code: CodeAgentRolloutCompleted, Emitted: true,
+		Description: "The worker completed a rollout after its last wave (actor: system).",
+		Params:      []string{"version", "eligible", "failed"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

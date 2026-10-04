@@ -25,6 +25,11 @@ export type ManagedFile = components['schemas']['ManagedFile']
 export type ManagedFileSort = components['parameters']['ManagedFileSort']
 export type ManagedUnit = components['schemas']['ManagedUnit']
 export type ManagedUnitSort = components['parameters']['ManagedUnitSort']
+export type AgentRelease = components['schemas']['AgentRelease']
+export type AgentReleaseDetail = components['schemas']['AgentReleaseDetail']
+export type AgentReleaseSort = components['parameters']['AgentReleaseSort']
+export type AgentReleaseStatus = components['schemas']['AgentReleaseStatus']
+export type AgentRolloutStatus = components['schemas']['AgentRolloutStatus']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

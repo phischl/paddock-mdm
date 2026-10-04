@@ -27,6 +27,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 	"github.com/paddock-mdm/paddock/server/internal/devicecache"
+	"github.com/paddock-mdm/paddock/server/internal/domain/agentrelease"
 	"github.com/paddock-mdm/paddock/server/internal/domain/enrollment"
 	"github.com/paddock-mdm/paddock/server/internal/ingest"
 	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
@@ -90,7 +91,7 @@ func newEnv(t *testing.T, perKey, perIP int) *env {
 	e := &env{t: t, cache: devicecache.New(valkeytest.Start(t).Client(t)), pub: &fakePublisher{},
 		now: time.Now().Truncate(time.Second), org: uuid.New()}
 	e.handler = device.NewHandler(device.Deps{
-		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, PerKeyLimit: perKey, PerIPLimit: perIP,
+		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, PerKeyLimit: perKey, PerIPLimit: perIP,
 		Now: func() time.Time { return e.now }, CheckinDelay: func() int { return 300 },
 	})
 	_, file, _, _ := runtime.Caller(0)
@@ -496,6 +497,58 @@ func TestCheckinSeqBundleAndClone(t *testing.T) {
 	_ = json.Unmarshal(r.body, &out)
 	if r.status != http.StatusOK || out.Bundle != nil {
 		t.Fatalf("quarantined device: %d %+v", r.status, out)
+	}
+}
+
+func TestCheckinAgentUpdate(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	seq := int64(0)
+	checkin := func(arch, version string) *protocol.AgentUpdate {
+		t.Helper()
+		body := checkinBody(0)
+		body.Arch, body.AgentVersion = arch, version
+		r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: body, seq: seq})
+		if r.status != http.StatusOK {
+			t.Fatalf("checkin: %d %s", r.status, r.body)
+		}
+		var out protocol.CheckinResponse
+		_ = json.Unmarshal(r.body, &out)
+		seq = out.Seq
+		return out.AgentUpdate
+	}
+	if u := checkin("amd64", "1.0.0"); u != nil {
+		t.Fatalf("offer without a rollout: %+v", u)
+	}
+	offer := agentrelease.Offer{Version: "1.1.0", Status: agentrelease.RolloutRunning, Waves: []int{100},
+		Artifacts: map[string]agentrelease.Artifact{"amd64": {SHA256: "ab12", Size: 42, Minisig: "c2ln", ObjectKey: "releases/1.1.0/amd64/paddockd"}}}
+	if err := e.cache.PutOffer(context.Background(), &offer); err != nil {
+		t.Fatal(err)
+	}
+	u := checkin("amd64", "1.0.0")
+	if u == nil || u.Version != "1.1.0" || u.SHA256 != "ab12" || u.Size != 42 || u.Minisig != "c2ln" ||
+		!strings.Contains(u.URL, "releases/1.1.0/amd64/paddockd") || !strings.Contains(u.URL, "X-Amz-Expires=300") {
+		t.Fatalf("offer %+v", u)
+	}
+	for _, tc := range []struct{ arch, version string }{{"amd64", "1.1.0"}, {"arm64", "1.0.0"}, {"", "1.0.0"}} {
+		if u := checkin(tc.arch, tc.version); u != nil {
+			t.Fatalf("arch %q version %q offered %+v", tc.arch, tc.version, u)
+		}
+	}
+	offer.Status = agentrelease.RolloutHalted
+	_ = e.cache.PutOffer(context.Background(), &offer)
+	if u := checkin("amd64", "1.0.0"); u != nil {
+		t.Fatalf("halted rollout offered %+v", u)
+	}
+	offer.Status, offer.Waves = agentrelease.RolloutRunning, []int{agentrelease.Bucket(id), 100}
+	_ = e.cache.PutOffer(context.Background(), &offer)
+	if u := checkin("amd64", "1.0.0"); u != nil {
+		t.Fatal("offered to a device outside the current wave")
+	}
+	_ = e.cache.PutOffer(context.Background(), nil)
+	if u := checkin("amd64", "1.0.0"); u != nil {
+		t.Fatal("offered after the offer was deleted")
 	}
 }
 

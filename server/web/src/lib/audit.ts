@@ -7,6 +7,14 @@ import type { ListFilter, ListParams, Page } from './listQuery'
 /** Codes offered in the filter (the closed registry, server/internal/domain/audit/codes.go). */
 export const auditCodes = [
   'admin.login',
+  'agent_release.artifact_uploaded',
+  'agent_release.created',
+  'agent_release.published',
+  'agent_rollout.advanced',
+  'agent_rollout.completed',
+  'agent_rollout.halted',
+  'agent_rollout.resumed',
+  'agent_rollout.started',
   'device.agent_events_dropped',
   'device.agent_rolled_back',
   'device.agent_update_failed',

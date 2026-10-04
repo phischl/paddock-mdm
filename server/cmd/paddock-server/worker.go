@@ -18,6 +18,7 @@ import (
 
 func serveWorker(ctx context.Context, l *config.Loader, common config.Common) error {
 	dsn := l.SecretFile("PADDOCK_DB_WORKER_URL_FILE")
+	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")
 	amqpCfg := config.LoadAMQP(l)
 	vkCfg := config.LoadValkey(l)
 	if err := l.Err(); err != nil {
@@ -28,14 +29,19 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		return err
 	}
 	defer pool.Close()
+	// The platform pool serves the rollout round only (agent releases are platform data, plan M2b decision 19).
+	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 2})
+	if err != nil {
+		return err
+	}
+	defer platformPool.Close()
 	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
 	if err != nil {
 		return err
 	}
 	defer vk.Close()
 	cache := devicecache.New(vk)
-	// The worker acts only in organization scope; it has no platform pool.
-	runner := app.NewActionRunner(pool, nil, httpx.RequestID)
+	runner := app.NewActionRunner(pool, platformPool, httpx.RequestID)
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
 	enrollQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEnroll), worker.Prefetch)
 	heartbeatQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestHeartbeat), worker.Prefetch)
@@ -43,6 +49,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), cache)
 	cacheSync := worker.NewCacheSync(pool, cache)
+	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, common.Development()), platformPool, cache)
 	slog.InfoContext(ctx, "worker starting")
 
 	return runAll(ctx,
@@ -52,12 +59,13 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 				if !enrollQueue.Connected() || !heartbeatQueue.Connected() || !eventQueue.Connected() {
 					notConnected = errors.New("rabbitmq consumers not connected")
 				}
-				return errors.Join(pool.Ping(ctx), valkey.Ping(ctx, vk), notConnected)
+				return errors.Join(pool.Ping(ctx), platformPool.Ping(ctx), valkey.Ping(ctx, vk), notConnected)
 			})
 		},
 		func(ctx context.Context) error { return enrollQueue.Run(ctx, enroll.Handle) },
 		func(ctx context.Context) error { return heartbeatQueue.Run(ctx, reports.HandleHeartbeats) },
 		func(ctx context.Context) error { return eventQueue.Run(ctx, reports.HandleEvents) },
 		cacheSync.Run,
+		rollouts.Run,
 	)
 }

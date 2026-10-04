@@ -15,6 +15,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"aead.dev/minisign"
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/getkin/kin-openapi/routers"
@@ -50,6 +51,11 @@ func (f *fakeIdP) EnsureOrganization(context.Context, string) (ports.OrgIdentity
 	return ports.OrgIdentityRefs{RootGroupPK: "r", AdminsGroupPK: "a", OperatorsGroupPK: "o", AuditorsGroupPK: "u"}, nil
 }
 
+// discardStore accepts agent artifacts without storing them.
+type discardStore struct{}
+
+func (discardStore) Put(context.Context, string, string, string, []byte) error { return nil }
+
 type env struct {
 	t        *testing.T
 	keysDown bool // the fake bundle key source fails
@@ -59,6 +65,7 @@ type env struct {
 	super    *pgx.Conn
 	writer   *db.AuditWriterPool
 	idp      *fakeIdP
+	release  minisign.PrivateKey // signs agent releases the server accepts
 	acme     uuid.UUID
 	globex   uuid.UUID
 }
@@ -106,7 +113,12 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp}
+	releasePub, releaseKey, err := minisign.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey}
+	verifyRelease := func(bin, sig []byte) bool { return minisign.Verify(releasePub, bin, sig) }
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
 		if e.keysDown {
 			return nil, problem.UpstreamUnavailable
@@ -120,6 +132,7 @@ func newEnv(t *testing.T) *env {
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, idp),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
+		Releases:      app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, true),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,
@@ -191,7 +204,9 @@ type call struct {
 	cookie       *http.Cookie
 	noCSRF       bool
 	rawBody      string
-	skipReqCheck bool // negative tests send requests that violate the contract on purpose
+	contentType  string            // default application/json
+	headers      map[string]string // additional request headers
+	skipReqCheck bool              // negative tests send requests that violate the contract on purpose
 }
 
 type result struct {
@@ -227,6 +242,12 @@ func (e *env) do(c call) result {
 	req := httptest.NewRequest(c.method, "https://admin.test"+c.path, bytes.NewReader(body))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.contentType != "" {
+		req.Header.Set("Content-Type", c.contentType)
+	}
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
 	}
 	if c.method != http.MethodGet && !c.noCSRF {
 		req.Header.Set("X-Paddock-CSRF", "1")

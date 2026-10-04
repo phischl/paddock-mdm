@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"aead.dev/minisign"
 
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 	"github.com/paddock-mdm/paddock/server/internal/adapters/authentik"
@@ -16,6 +19,7 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
+	"github.com/paddock-mdm/paddock/server/internal/platform/objectstore"
 	"github.com/paddock-mdm/paddock/server/internal/platform/ops"
 	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin"
 	"github.com/paddock-mdm/paddock/server/web"
@@ -40,6 +44,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
 	authentikToken := l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")
+	releaseKey := l.SecretFile("PADDOCK_RELEASE_PUBLIC_KEY_FILE")
+	artifacts := objectstore.New(l.Required("PADDOCK_ARTIFACTS_S3_ENDPOINT"), l.SecretFile("PADDOCK_ARTIFACTS_S3_ACCESS_KEY_FILE"),
+		l.SecretFile("PADDOCK_ARTIFACTS_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ARTIFACTS_S3_BUCKET", "paddock-agent-artifacts"))
 	var runnerOpts []app.RunnerOption
 	if common.Development() {
 		// Development-only test hook for the reaper acceptance test (plan M0 §8, A3).
@@ -50,6 +57,11 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	if err := l.Err(); err != nil {
 		return err
 	}
+	var releasePub minisign.PublicKey
+	if err := releasePub.UnmarshalText([]byte(releaseKey)); err != nil {
+		return fmt.Errorf("PADDOCK_RELEASE_PUBLIC_KEY_FILE: %w", err)
+	}
+	verifyRelease := func(binary, sig []byte) bool { return minisign.Verify(releasePub, binary, sig) }
 
 	orgPool, err := db.NewOrgPool(ctx, orgDSN, db.Options{ApplicationName: "paddock-api"})
 	if err != nil {
@@ -86,6 +98,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, authentik.New(authentikURL, authentikToken)),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
+		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),
 		Runner:        runner,
 		Keys:          keys,

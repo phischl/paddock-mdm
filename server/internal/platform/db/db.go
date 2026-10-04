@@ -184,6 +184,27 @@ func (p *PlatformPool) InPlatform(ctx context.Context, fn func(ctx context.Conte
 	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
+// WithLeaderLock runs fn while holding the session advisory lock key on a dedicated connection, so that only one
+// replica of a role runs a periodic job at a time. It reports false (and does not call fn) when another session
+// holds the lock.
+func (p *PlatformPool) WithLeaderLock(ctx context.Context, key int64, fn func(ctx context.Context) error) (bool, error) {
+	conn, err := p.p.Acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Release()
+	var locked bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&locked); err != nil || !locked {
+		return false, err
+	}
+	defer func() {
+		if _, err := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", key); err != nil {
+			_ = conn.Conn().Close(context.WithoutCancel(ctx)) // closing the session releases the lock
+		}
+	}()
+	return true, fn(ctx)
+}
+
 // RelayPool is the pool of role paddock_relay (outbox relay and reaper).
 type RelayPool struct{ pool }
 

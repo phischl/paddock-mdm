@@ -175,8 +175,33 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 			g.fail(w, r, err)
 			return
 		}
+		if out.AgentUpdate, err = g.agentUpdate(r, dev, req); err != nil {
+			g.fail(w, r, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// agentUpdate offers the release of the current rollout to an eligible device (plan M2b decision 21): its rollout
+// bucket is inside the current wave, it reports another agent version and there is an artifact for its arch.
+func (g *gateway) agentUpdate(r *http.Request, dev device, req protocol.CheckinRequest) (*protocol.AgentUpdate, error) {
+	if g.d.Artifacts == nil || req.Arch == "" {
+		return nil, nil
+	}
+	offer, ok, err := g.d.Cache.Offer(r.Context())
+	if err != nil || !ok {
+		return nil, err
+	}
+	art, ok := offer.For(dev.id, req.Arch, req.AgentVersion)
+	if !ok {
+		return nil, nil
+	}
+	url, err := g.d.Artifacts.PresignGet(r.Context(), art.ObjectKey, ArtifactURLTTL)
+	if err != nil {
+		return nil, err
+	}
+	return &protocol.AgentUpdate{Version: offer.Version, URL: url, SHA256: art.SHA256, Size: art.Size, Minisig: art.Minisig}, nil
 }
 
 func (g *gateway) bundleRef(r *http.Request, dev device, applied int64) (*protocol.BundleRef, error) {

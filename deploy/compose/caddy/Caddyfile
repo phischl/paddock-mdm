@@ -26,7 +26,7 @@ bundles.{$PADDOCK_DOMAIN} {
 	tls internal
 	@read {
 		method GET HEAD
-		path /paddock-bundles/*
+		path /paddock-bundles/* /paddock-agent-artifacts/*
 	}
 	handle @read {
 		reverse_proxy rustfs:9000

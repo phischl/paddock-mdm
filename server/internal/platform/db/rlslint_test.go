@@ -19,7 +19,11 @@ func TestRLSLint(t *testing.T) {
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
-	allow := map[string]bool{"goose_db_version": true, "organization": true, "platform_admin": true}
+	allow := map[string]bool{
+		"goose_db_version": true, "organization": true, "platform_admin": true,
+		// Platform data of agent releases (plan M2b decision 19), role paddock_platform only.
+		"agent_release": true, "agent_artifact": true, "agent_rollout": true,
+	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
 		       EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'organization_id'
