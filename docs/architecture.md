@@ -1,6 +1,6 @@
 # Paddock – Technical Architecture
 
-Status: **Proposed** · Version 1.4 · 2026-10-04 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
+Status: **Proposed** · Version 1.5 · 2026-10-04 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
 
 This document turns the product concept into a technical architecture. It answers the delegated
 decisions A1–A14 (or states why one stays open), fixes the technology stack, and defines the
@@ -548,8 +548,9 @@ sequenceDiagram
 
 - `url` is only included when the version is newer than the applied one; presigning is a local HMAC
   computation in the gateway and needs no network call.
-- The `seq` value in the response is the gateway's prediction (`last_issued + 1`, read from Valkey); the
-  worker confirms it when processing the heartbeat. Divergence handling is as in §6.4.
+- The `seq` value is issued by the gateway with an atomic `INCR seq:<device>` in Valkey; the worker persists
+  `last_seq` from the heartbeat (rebuild source after a Valkey loss). A request whose `Paddock-Seq` is lower than
+  the stored value minus 1 raises `clone_suspected` (§6.4). *(Amended 2026-10-04, M2a.)*
 - **Event-triggered check-ins:** besides the timer, the agent checks in immediately (with 0–15 s random delay) when network connectivity becomes available (NetworkManager `Connectivity` = `FULL` via D-Bus, or `systemd-networkd` state change), after resume from suspend (logind `PrepareForSleep(false)`), and at boot. A laptop that comes online therefore receives a pending user lock within seconds, not after up to five minutes. Event-triggered check-ins are rate-limited to one per 60 s.
 - `next_checkin_s` = 300 × random(0.8, 1.2). Failure back-off: 30 s, 60 s, 2 min, 5 min, 10 min,
   30 min (cap), each with ±20 % jitter. The server MAY raise `next_checkin_s` under load (backpressure, §8).
@@ -717,7 +718,8 @@ source exchange) → redelivered after 5 s. Poison messages end in `dlq.<queue>`
   `ON CONFLICT DO NOTHING`. Duplicates are therefore harmless by construction.
 - **Poison messages:** a DLQ depth > 0 raises an alert; audit messages in a DLQ are a **critical** alert.
 - **Backpressure:** when an ingest queue reaches its byte limit, RabbitMQ rejects the publish
-  (negative confirm); the gateway answers 429 + `Retry-After` and the agent keeps the data in its
+  (negative confirm); the gateway answers **503 `backpressure`** + `Retry-After` (429 is reserved for per-device and
+  per-IP rate limits) and the agent keeps the data in its
   local spool (§11.5). Independently, the gateway reads queue depths (passive `queue.declare`, cached
   10 s) and raises `next_checkin_s` up to 900 s when a queue exceeds 70 % of its limit.
 - **Ordering** is only guaranteed where it matters (state compilation per organization, §7.1);
