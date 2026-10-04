@@ -227,9 +227,12 @@ func (r *Relay) gauge(ctx context.Context) {
 
 // route maps an outbox subject to exchange and routing key: audit.<organization_id>.<source> goes to paddock.audit
 // as audit.<source>.<organization_id>; state.<organization_id> goes to paddock.state on the organization's
-// partition (architecture §7.1).
+// partition (architecture §7.1), state.priority.<organization_id> to the priority lane (§9.5).
 func route(subject string) (string, string, error) {
-	if org, ok := statechange.ParseSubject(subject); ok {
+	if org, priority, ok := statechange.ParseSubject(subject); ok {
+		if priority {
+			return mq.ExchangeState, mq.StatePriority, nil
+		}
 		return mq.ExchangeState, mq.StatePartition(org), nil
 	}
 	parts := strings.Split(subject, ".")

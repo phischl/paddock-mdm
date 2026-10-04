@@ -51,3 +51,14 @@ SELECT coalesce(paddock_org_id_by_slug(@slug), '00000000-0000-0000-0000-00000000
 -- Worker and compiler loops: organization IDs without an organization context (SECURITY DEFINER function).
 -- name: ListOrganizationIDs :many
 SELECT id::uuid FROM paddock_organization_ids() AS id;
+
+-- Organization domains (plan M3a decision 1). The platform use case serializes domain changes with this advisory
+-- lock, so two organizations can never claim the same domain concurrently.
+-- name: LockOrganizationDomains :exec
+SELECT pg_advisory_xact_lock(hashtext('paddock.organization.domains'));
+
+-- name: ListOrganizationsClaimingDomains :many
+SELECT id, slug FROM organization WHERE domains && @domains::text[] AND id <> @id ORDER BY slug;
+
+-- name: UpdateOrganizationDomains :one
+UPDATE organization SET domains = @domains, updated_at = now() WHERE id = @id RETURNING *;

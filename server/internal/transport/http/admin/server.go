@@ -26,6 +26,11 @@ type Deps struct {
 	Devices       *app.Devices
 	Managed       *app.ManagedConfig
 	Releases      *app.AgentReleases
+	Users         *app.Users
+	UserGroups    *app.UserGroups
+	Logins        *app.Logins
+	LoginSettings *app.LoginSettings
+	Privileges    *app.Privileges
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -63,6 +68,27 @@ var privileged = map[string]struct {
 	"POST /api/v1/managed-units":                                     {app.ScopeOrg, app.SpecManagedUnitCreate},
 	"PATCH /api/v1/managed-units/{id}":                               {app.ScopeOrg, app.SpecManagedUnitUpdate},
 	"DELETE /api/v1/managed-units/{id}":                              {app.ScopeOrg, app.SpecManagedUnitDelete},
+	"PATCH /api/platform/v1/organizations/{id}":                      {app.ScopePlatform, app.SpecOrganizationSetDomains},
+	"POST /api/v1/users":                                             {app.ScopeOrg, app.SpecUserCreate},
+	"PATCH /api/v1/users/{id}":                                       {app.ScopeOrg, app.SpecUserUpdate},
+	"DELETE /api/v1/users/{id}":                                      {app.ScopeOrg, app.SpecUserDelete},
+	"POST /api/v1/users/{id}/lock":                                   {app.ScopeOrg, app.SpecUserLock},
+	"POST /api/v1/users/{id}/unlock":                                 {app.ScopeOrg, app.SpecUserUnlock},
+	"POST /api/v1/user-groups":                                       {app.ScopeOrg, app.SpecUserGroupCreate},
+	"PATCH /api/v1/user-groups/{id}":                                 {app.ScopeOrg, app.SpecUserGroupUpdate},
+	"DELETE /api/v1/user-groups/{id}":                                {app.ScopeOrg, app.SpecUserGroupDelete},
+	"POST /api/v1/user-groups/{id}/members":                          {app.ScopeOrg, app.SpecUserGroupMemberAdd},
+	"DELETE /api/v1/user-groups/{id}/members/{user_id}":              {app.ScopeOrg, app.SpecUserGroupMemberRemove},
+	"PUT /api/v1/settings/login":                                     {app.ScopeOrg, app.SpecLoginSettingsUpdate},
+	"PUT /api/v1/devices/{id}/login-assignment":                      {app.ScopeOrg, app.SpecDeviceSetLoginAssignment},
+	"POST /api/v1/devices/{id}/suspend-logins":                       {app.ScopeOrg, app.SpecDeviceSuspendLogins},
+	"POST /api/v1/devices/{id}/resume-logins":                        {app.ScopeOrg, app.SpecDeviceResumeLogins},
+	"POST /api/v1/permission-profiles":                               {app.ScopeOrg, app.SpecProfileCreate},
+	"PATCH /api/v1/permission-profiles/{id}":                         {app.ScopeOrg, app.SpecProfileUpdate},
+	"DELETE /api/v1/permission-profiles/{id}":                        {app.ScopeOrg, app.SpecProfileDelete},
+	"POST /api/v1/profile-assignments":                               {app.ScopeOrg, app.SpecAssignmentCreate},
+	"PATCH /api/v1/profile-assignments/{id}":                         {app.ScopeOrg, app.SpecAssignmentUpdate},
+	"DELETE /api/v1/profile-assignments/{id}":                        {app.ScopeOrg, app.SpecAssignmentDelete},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -75,7 +101,8 @@ func NewHandler(d Deps) http.Handler {
 	api := http.NewServeMux()
 	h := &handlers{
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
-		devices: d.Devices, managed: d.Managed, releases: d.Releases, now: d.Now,
+		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
+		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, now: d.Now,
 	}
 	strict := adminapi.NewStrictHandlerWithOptions(h, nil,
 		adminapi.StrictHTTPServerOptions{

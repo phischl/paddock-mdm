@@ -1,6 +1,8 @@
 // Command devseed prepares the development stack (`make dev-seed`): it signs in as the platform admin, creates
-// the organizations acme and globex through the platform API and assigns the dev users to their Authentik groups.
-// It waits until Authentik has applied the Paddock blueprints and the login flow is executable, and is idempotent.
+// the organizations acme and globex with their domains acme.test and globex.test through the platform API, assigns
+// the dev users to their Authentik groups and sets acme's login settings for the test VMs (break-glass account
+// paddock, sudoers.d allow list README and 90-paddock). It waits until Authentik has applied the Paddock blueprints
+// and the login flow is executable, and is idempotent.
 package main
 
 import (
@@ -8,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -60,7 +63,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("login as %s: %w", env.PlatformAdmin, err)
 	}
-	for _, org := range []struct{ slug, name string }{{"acme", "Acme Corporation"}, {"globex", "Globex Corporation"}} {
+	for _, org := range []struct{ slug, name, domain string }{
+		{"acme", "Acme Corporation", "acme.test"}, {"globex", "Globex Corporation", "globex.test"},
+	} {
 		res, err := admin.Do(ctx, http.MethodPost, "/api/platform/v1/organizations", map[string]string{"slug": org.slug, "name": org.name})
 		if err != nil {
 			return err
@@ -72,6 +77,9 @@ func run() error {
 			fmt.Printf("organization %s exists\n", org.slug)
 		default:
 			return fmt.Errorf("create organization %s: HTTP %d: %s", org.slug, res.Status, res.Body)
+		}
+		if err := setDomains(ctx, admin, org.slug, org.domain); err != nil {
+			return err
 		}
 	}
 
@@ -85,6 +93,67 @@ func run() error {
 		}
 		fmt.Printf("%s is member of %s\n", m.user, m.group)
 	}
+	return seedLoginSettings(ctx)
+}
+
+// setDomains sets the domains of an organization found by slug.
+func setDomains(ctx context.Context, admin *env.Portal, slug string, domains ...string) error {
+	res, err := admin.Do(ctx, http.MethodGet, "/api/platform/v1/organizations?q="+url.QueryEscape(slug)+"&page_size=100", nil)
+	if err != nil {
+		return err
+	}
+	var page struct {
+		Items []struct {
+			ID   string `json:"id"`
+			Slug string `json:"slug"`
+		} `json:"items"`
+	}
+	if err := res.JSON(&page); err != nil {
+		return fmt.Errorf("list organizations: HTTP %d: %w", res.Status, err)
+	}
+	for _, o := range page.Items {
+		if o.Slug != slug {
+			continue
+		}
+		res, err := admin.Do(ctx, http.MethodPatch, "/api/platform/v1/organizations/"+o.ID, map[string][]string{"domains": domains})
+		if err != nil {
+			return err
+		}
+		if res.Status != http.StatusOK {
+			return fmt.Errorf("set domains of %s: HTTP %d: %s", slug, res.Status, res.Body)
+		}
+		fmt.Printf("organization %s has domains %v\n", slug, domains)
+		return nil
+	}
+	return fmt.Errorf("organization %s not found", slug)
+}
+
+// seedLoginSettings gives acme the login settings of the test VMs: the VMs' local admin paddock is a break-glass
+// account and the VMs' /etc/sudoers.d/90-paddock is left alone.
+func seedLoginSettings(ctx context.Context) error {
+	alice, err := env.Login(ctx, env.Alice, "")
+	if err != nil {
+		return fmt.Errorf("login as %s: %w", env.Alice, err)
+	}
+	res, err := alice.Do(ctx, http.MethodGet, "/api/v1/settings/login", nil)
+	if err != nil {
+		return err
+	}
+	var settings map[string]any
+	if err := res.JSON(&settings); err != nil {
+		return fmt.Errorf("login settings: HTTP %d: %w", res.Status, err)
+	}
+	delete(settings, "updated_at")
+	settings["break_glass_accounts"] = []string{"paddock"}
+	settings["sudoers_d_allowlist"] = []string{"README", "90-paddock"}
+	res, err = alice.Do(ctx, http.MethodPut, "/api/v1/settings/login", settings)
+	if err != nil {
+		return err
+	}
+	if res.Status != http.StatusOK {
+		return fmt.Errorf("set login settings of acme: HTTP %d: %s", res.Status, res.Body)
+	}
+	fmt.Println("acme login settings: break-glass account paddock, sudoers.d allow list README and 90-paddock")
 	return nil
 }
 

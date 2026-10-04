@@ -93,13 +93,20 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 	return nil
 }
 
-// DeviceDetail is a device with status, latest bundle, group memberships and identity keys.
+// DeviceDetail is a device with status, latest bundle, group memberships, identity keys and login assignment.
 type DeviceDetail struct {
 	Device       pgstore.Device
 	Status       *pgstore.DeviceStatus
 	LatestBundle *pgstore.Bundle
 	Groups       []pgstore.ListDeviceGroupsOfDeviceRow
 	IdentityKeys []pgstore.DeviceIdentityKey
+	Login        LoginAssignment
+}
+
+// LoginManagement reports whether the device's agent supports bundle schema v2 (login and sudo, plan M3a decision
+// 14a); older agents get v1 bundles without them.
+func (d DeviceDetail) LoginManagement() bool {
+	return d.Status != nil && slices.Contains(d.Status.SchemaVersions, int32(bundle.SchemaVersion2))
 }
 
 // Get returns one device; missing and foreign devices are both not_found.
@@ -139,7 +146,10 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 	if out.Groups, err = q.ListDeviceGroupsOfDevice(ctx, id); err != nil {
 		return out, err
 	}
-	out.IdentityKeys, err = q.ListDeviceIdentityKeys(ctx, id)
+	if out.IdentityKeys, err = q.ListDeviceIdentityKeys(ctx, id); err != nil {
+		return out, err
+	}
+	out.Login, err = loadLoginAssignment(ctx, q, id)
 	return out, err
 }
 

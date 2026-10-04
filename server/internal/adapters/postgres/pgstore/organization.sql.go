@@ -194,6 +194,51 @@ func (q *Queries) ListOrganizations(ctx context.Context, arg ListOrganizationsPa
 	return items, nil
 }
 
+const listOrganizationsClaimingDomains = `-- name: ListOrganizationsClaimingDomains :many
+SELECT id, slug FROM organization WHERE domains && $1::text[] AND id <> $2 ORDER BY slug
+`
+
+type ListOrganizationsClaimingDomainsParams struct {
+	Domains []string
+	ID      uuid.UUID
+}
+
+type ListOrganizationsClaimingDomainsRow struct {
+	ID   uuid.UUID
+	Slug string
+}
+
+func (q *Queries) ListOrganizationsClaimingDomains(ctx context.Context, arg ListOrganizationsClaimingDomainsParams) ([]ListOrganizationsClaimingDomainsRow, error) {
+	rows, err := q.db.Query(ctx, listOrganizationsClaimingDomains, arg.Domains, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrganizationsClaimingDomainsRow{}
+	for rows.Next() {
+		var i ListOrganizationsClaimingDomainsRow
+		if err := rows.Scan(&i.ID, &i.Slug); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockOrganizationDomains = `-- name: LockOrganizationDomains :exec
+SELECT pg_advisory_xact_lock(hashtext('paddock.organization.domains'))
+`
+
+// Organization domains (plan M3a decision 1). The platform use case serializes domain changes with this advisory
+// lock, so two organizations can never claim the same domain concurrently.
+func (q *Queries) LockOrganizationDomains(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockOrganizationDomains)
+	return err
+}
+
 const organizationIDBySlug = `-- name: OrganizationIDBySlug :one
 SELECT coalesce(paddock_org_id_by_slug($1), '00000000-0000-0000-0000-000000000000'::uuid)::uuid AS id
 `
@@ -204,6 +249,30 @@ func (q *Queries) OrganizationIDBySlug(ctx context.Context, slug string) (uuid.U
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const updateOrganizationDomains = `-- name: UpdateOrganizationDomains :one
+UPDATE organization SET domains = $1, updated_at = now() WHERE id = $2 RETURNING id, slug, name, status, created_at, updated_at, domains
+`
+
+type UpdateOrganizationDomainsParams struct {
+	Domains []string
+	ID      uuid.UUID
+}
+
+func (q *Queries) UpdateOrganizationDomains(ctx context.Context, arg UpdateOrganizationDomainsParams) (Organization, error) {
+	row := q.db.QueryRow(ctx, updateOrganizationDomains, arg.Domains, arg.ID)
+	var i Organization
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Domains,
+	)
+	return i, err
 }
 
 const updateOrganizationStatus = `-- name: UpdateOrganizationStatus :one

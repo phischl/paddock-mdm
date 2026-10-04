@@ -91,12 +91,18 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
 	bundleKeys := func(ctx context.Context) ([]protocol.BundleKey, error) { return bundlesign.PublicKeys(ctx, baoClient) }
+	ak := authentik.New(authentikURL, authentikToken)
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
 		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, deviceURL),
 		Devices:       app.NewDevices(runner, orgPool),
 		Managed:       app.NewManagedConfig(runner, orgPool),
-		Organizations: app.NewOrganizations(runner, platformPool, authentik.New(authentikURL, authentikToken)),
+		Organizations: app.NewOrganizations(runner, platformPool, ak),
+		Users:         app.NewUsers(runner, orgPool, ak),
+		UserGroups:    app.NewUserGroups(runner, orgPool, ak),
+		Logins:        app.NewLogins(runner, orgPool, ak),
+		LoginSettings: app.NewLoginSettings(runner, orgPool),
+		Privileges:    app.NewPrivileges(runner, orgPool),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),

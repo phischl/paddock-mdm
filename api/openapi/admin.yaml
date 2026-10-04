@@ -30,6 +30,9 @@ tags:
   - name: enrollment-tokens
   - name: devices
   - name: managed-config
+  - name: users
+  - name: privileges
+  - name: settings
   - name: audit
   - name: platform
 paths:
@@ -761,6 +764,758 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      description: "Roles: org_admin, org_operator, org_auditor. Local and synced users of the organization."
+      x-paddock-list:
+        sort: [username, display_name, created_at]
+        default_sort: username
+        search: [username, display_name, email]
+        filters: [source, locked]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/UserSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/UserSourceFilter"
+        - name: locked
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: One page of users.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createUser
+      tags: [users]
+      description: |
+        Roles: org_admin, org_operator. Creates a local user in Authentik (no password, member of paddock.<slug>) and
+        returns a one-time recovery link (valid 24 h) with which the user sets a password; it is returned only here.
+        The username is <local-part>@<a domain of the organization> (409 username_taken if it exists anywhere).
+      x-paddock-audit: user.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserCreated" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getUser
+      tags: [users]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The user with its groups.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateUser
+      tags: [users]
+      description: "Roles: org_admin, org_operator. Synced users: 409 attribute_owned_upstream."
+      x-paddock-audit: user.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteUser
+      tags: [users]
+      description: "Roles: org_admin. Deletes a local user in Authentik and Paddock. Synced users: 409 attribute_owned_upstream."
+      x-paddock-audit: user.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/users/{id}/lock:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: lockUser
+      tags: [users]
+      description: |
+        Roles: org_admin. Locks the user: the affected devices get the lock in their next bundle (priority lane), and in
+        Authentik the user joins paddock.<slug>.locked and loses its refresh tokens, access tokens and sessions.
+      x-paddock-audit: user.locked
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Locked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/users/{id}/unlock:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: unlockUser
+      tags: [users]
+      description: "Roles: org_admin. Removes the user from paddock.<slug>.locked; the devices get the unlock in their next bundle."
+      x-paddock-audit: user.unlocked
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Unlocked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/users/{id}/effective-profile:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getUserEffectiveProfile
+      tags: [privileges]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The effective sudo profile of the user on a device with the
+        assignment that granted each part; without device_id on a device in no device group (only unscoped
+        assignments apply).
+      parameters:
+        - name: device_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The effective profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserEffectiveProfile" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/user-groups:
+    get:
+      operationId: listUserGroups
+      tags: [users]
+      description: "Roles: org_admin, org_operator, org_auditor. Local groups and imported upstream groups."
+      x-paddock-list:
+        sort: [name, slug, created_at]
+        default_sort: name
+        search: [name, slug]
+        filters: [source]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/UserGroupSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/UserSourceFilter"
+      responses:
+        "200":
+          description: One page of user groups.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserGroupPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createUserGroup
+      tags: [users]
+      description: |
+        Roles: org_admin, org_operator. Without upstream_group_id: a local group paddock.<slug>.g.<group_slug> whose
+        members are managed in Paddock. With upstream_group_id: imports that Authentik group as mirror group
+        paddock.<slug>.s.<group_slug>; the worker copies its members of the organization every 5 minutes.
+      x-paddock-audit: user_group.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserGroupCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserGroup" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/user-groups/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getUserGroup
+      tags: [users]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The user group.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserGroup" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateUserGroup
+      tags: [users]
+      description: "Roles: org_admin, org_operator. Renames the group; the slug and the Authentik name stay."
+      x-paddock-audit: user_group.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserGroupUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserGroup" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteUserGroup
+      tags: [users]
+      description: "Roles: org_admin. Deletes the group in Authentik and Paddock with its login and profile assignments."
+      x-paddock-audit: user_group.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/user-groups/{id}/members:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listUserGroupMembers
+      tags: [users]
+      description: "Roles: org_admin, org_operator, org_auditor. The members of a user group."
+      x-paddock-list:
+        sort: [username, display_name, created_at]
+        default_sort: username
+        search: [username, display_name, email]
+        filters: [source, locked]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/UserSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/UserSourceFilter"
+        - name: locked
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: One page of members.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: addUserGroupMember
+      tags: [users]
+      description: |
+        Roles: org_admin, org_operator. Adds a user to a local group. The members of imported groups are mirrored
+        from upstream (409 attribute_owned_upstream).
+      x-paddock-audit: user_group.member_added
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserGroupMemberAdd" }
+      responses:
+        "204":
+          description: Added (or already a member).
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/user-groups/{id}/members/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: removeUserGroupMember
+      tags: [users]
+      description: "Roles: org_admin, org_operator. Removes a user from a local group (imported groups: 409 attribute_owned_upstream)."
+      x-paddock-audit: user_group.member_removed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Removed (or not a member).
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/upstream-groups:
+    get:
+      operationId: listUpstreamGroups
+      tags: [users]
+      description: "Roles: org_admin, org_operator. Authentik groups outside Paddock's namespace that can be imported."
+      x-paddock-list:
+        sort: [name]
+        default_sort: name
+        search: [name]
+        filters: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/UpstreamGroupSort"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: One page of upstream groups.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpstreamGroupPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/settings/login:
+    get:
+      operationId: getLoginSettings
+      tags: [settings]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The login settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginSettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateLoginSettings
+      tags: [settings]
+      description: "Roles: org_admin. Replaces the login settings; every device is recompiled."
+      x-paddock-audit: settings.login_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginSettingsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginSettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/devices/{id}/login-assignment:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: setDeviceLoginAssignment
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator. Replaces the users and groups that may log in on the device. Empty lists mean
+        every user of the organization. Directly assigned users become members of paddock.<slug>.d.<device_id>.
+      x-paddock-audit: device.login_assignment_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginAssignmentUpdate" }
+      responses:
+        "200":
+          description: The device after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/suspend-logins:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: suspendDeviceLogins
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. Denies every directory user on the device (priority lane); break-glass accounts are unaffected."
+      x-paddock-audit: device.logins_suspended
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The device after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/resume-logins:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: resumeDeviceLogins
+      tags: [devices]
+      description: "Roles: org_admin, org_operator. Allows directory logins on the device again."
+      x-paddock-audit: device.logins_resumed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The device after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/effective-sudo:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDeviceEffectiveSudo
+      tags: [privileges]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The effective sudo profiles of the users allowed on the device
+        whose class is not none, sorted by username (the content of the device's sudo resource).
+      responses:
+        "200":
+          description: The effective sudo profiles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EffectiveSudo" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/permission-profiles:
+    get:
+      operationId: listPermissionProfiles
+      tags: [privileges]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      x-paddock-list:
+        sort: [name, class, created_at, updated_at]
+        default_sort: name
+        search: [name]
+        filters: [class]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/PermissionProfileSort"
+        - $ref: "#/components/parameters/Search"
+        - name: class
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/PrivilegeClass" }
+      responses:
+        "200":
+          description: One page of permission profiles.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PermissionProfilePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createPermissionProfile
+      tags: [privileges]
+      description: |
+        Roles: org_admin, org_operator. A restricted profile lists absolute command paths with optional arguments;
+        commands with ALL, "!", "#" or the sudoers separators ,:=\ are refused with 422 invalid_command.
+      x-paddock-audit: permission_profile.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PermissionProfileCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PermissionProfile" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/permission-profiles/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getPermissionProfile
+      tags: [privileges]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The permission profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PermissionProfile" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updatePermissionProfile
+      tags: [privileges]
+      description: "Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given."
+      x-paddock-audit: permission_profile.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PermissionProfileUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PermissionProfile" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deletePermissionProfile
+      tags: [privileges]
+      description: "Roles: org_admin, org_operator. A profile that is still assigned: 409 in_use."
+      x-paddock-audit: permission_profile.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/profile-assignments:
+    get:
+      operationId: listProfileAssignments
+      tags: [privileges]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      x-paddock-list:
+        sort: [created_at, subject_type]
+        default_sort: created_at
+        search: [profile_name]
+        filters: [profile_id, subject_type, subject_id, device_group_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ProfileAssignmentSort"
+        - $ref: "#/components/parameters/Search"
+        - name: profile_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: subject_type
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/SubjectType" }
+        - name: subject_id
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DeviceGroupFilter"
+      responses:
+        "200":
+          description: One page of profile assignments.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileAssignmentPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createProfileAssignment
+      tags: [privileges]
+      description: |
+        Roles: org_admin, org_operator. Assigns a profile globally, to a group or to a user, optionally only on the
+        devices of one device group.
+      x-paddock-audit: profile_assignment.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfileAssignmentCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileAssignment" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/profile-assignments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getProfileAssignment
+      tags: [privileges]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The profile assignment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileAssignment" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateProfileAssignment
+      tags: [privileges]
+      description: "Roles: org_admin, org_operator. Changes the device group scope (null = every device)."
+      x-paddock-audit: profile_assignment.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfileAssignmentUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileAssignment" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteProfileAssignment
+      tags: [privileges]
+      description: "Roles: org_admin, org_operator."
+      x-paddock-audit: profile_assignment.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api/platform/v1/organizations:
     get:
       operationId: listOrganizations
@@ -842,6 +1597,32 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateOrganization
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Replaces the domains of the organization (plan M3a decision 1): lowercase DNS names,
+        each belonging to one organization only (409 domain_taken); the first is the primary domain of device logins
+        and local usernames must use one of them.
+      x-paddock-audit: organization.domains_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizationDomainsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Organization" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /api/platform/v1/agent-releases:
     get:
@@ -1167,6 +1948,55 @@ components:
       in: query
       description: Only definitions scoped to this device group.
       schema: { type: string, format: uuid }
+    UserSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [username, -username, display_name, -display_name, created_at, -created_at]
+        default: username
+    UserGroupSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, slug, -slug, created_at, -created_at]
+        default: name
+    UpstreamGroupSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending (case-insensitive). The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name]
+        default: name
+    PermissionProfileSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, class, -class, created_at, -created_at, updated_at, -updated_at]
+        default: name
+    ProfileAssignmentSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [created_at, -created_at, subject_type, -subject_type]
+        default: created_at
+    UserSourceFilter:
+      name: source
+      in: query
+      description: Repeatable.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/IdentitySource" }
   responses:
     Device:
       description: The device after the transition.
@@ -1345,12 +2175,16 @@ components:
         counts: { $ref: "#/components/schemas/AgentRolloutCounts" }
     Organization:
       type: object
-      required: [id, slug, name, status, created_at]
+      required: [id, slug, name, status, domains, created_at]
       properties:
         id: { type: string, format: uuid }
         slug: { type: string }
         name: { type: string }
         status: { $ref: "#/components/schemas/OrganizationStatus" }
+        domains:
+          type: array
+          description: The organization's domains; the first is the primary domain.
+          items: { type: string }
         created_at: { type: string, format: date-time }
     OrganizationStatus:
       type: string
@@ -1532,7 +2366,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Device"
         - type: object
-          required: [groups, identity_keys]
+          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management]
           properties:
             groups:
               type: array
@@ -1540,6 +2374,15 @@ components:
             identity_keys:
               type: array
               items: { $ref: "#/components/schemas/DeviceIdentityKey" }
+            logins_suspended: { type: boolean }
+            login_assignment: { $ref: "#/components/schemas/DeviceLoginAssignment" }
+            schema_versions:
+              type: array
+              description: Bundle schema versions the agent reported in its last check-in.
+              items: { type: integer }
+            login_management:
+              type: boolean
+              description: The agent supports bundle schema 2 (login and sudo); false means "agent too old for login management".
     DevicePage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -1680,3 +2523,380 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    OrganizationDomainsUpdate:
+      type: object
+      required: [domains]
+      additionalProperties: false
+      properties:
+        domains:
+          type: array
+          maxItems: 20
+          description: Lowercase DNS names; the first one is the primary domain of device logins.
+          items: { type: string, maxLength: 253 }
+    IdentitySource:
+      type: string
+      enum: [local, synced]
+    User:
+      type: object
+      required: [id, username, display_name, email, source, locked, locked_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string, description: "UPN, lowercase, e.g. dave@acme.test." }
+        display_name: { type: string }
+        email: { type: string }
+        source: { $ref: "#/components/schemas/IdentitySource" }
+        locked: { type: boolean }
+        locked_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    UserRef:
+      type: object
+      required: [id, username, display_name]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+    UserDetail:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          required: [groups]
+          properties:
+            groups:
+              type: array
+              items: { $ref: "#/components/schemas/UserGroupRef" }
+    UserCreate:
+      type: object
+      required: [username, display_name]
+      additionalProperties: false
+      properties:
+        username: { type: string, maxLength: 256 }
+        display_name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, maxLength: 254 }
+    UserCreated:
+      type: object
+      required: [user, recovery_link]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        recovery_link:
+          type: string
+          description: One-time link (valid 24 h) with which the user sets a password. Returned only here, never stored.
+    UserUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, maxLength: 254 }
+    UserPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/User" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    UserGroup:
+      type: object
+      required: [id, slug, name, source, upstream_group_id, authentik_name, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        source: { $ref: "#/components/schemas/IdentitySource" }
+        upstream_group_id: { type: string, nullable: true, description: Authentik pk of the imported upstream group. }
+        authentik_name: { type: string, description: "paddock.<slug>.g.<group> or paddock.<slug>.s.<group>; the name devices see." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    UserGroupRef:
+      type: object
+      required: [id, slug, name, source]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        source: { $ref: "#/components/schemas/IdentitySource" }
+    UserGroupCreate:
+      type: object
+      required: [slug, name]
+      additionalProperties: false
+      properties:
+        slug: { type: string, pattern: "^[a-z0-9][a-z0-9-]{0,40}[a-z0-9]$" }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        upstream_group_id: { type: string, maxLength: 64, description: Import this upstream Authentik group. }
+    UserGroupUpdate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+    UserGroupPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/UserGroup" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    UserGroupMemberAdd:
+      type: object
+      required: [user_id]
+      additionalProperties: false
+      properties:
+        user_id: { type: string, format: uuid }
+    UpstreamGroup:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, description: Authentik pk. }
+        name: { type: string }
+    UpstreamGroupPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/UpstreamGroup" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    SessionAction:
+      type: string
+      enum: [lock_screen, terminate]
+    LoginSettingsUpdate:
+      type: object
+      required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
+                 sudoers_d_allowlist, sudo_lecture_text]
+      additionalProperties: false
+      properties:
+        hello_enabled: { type: boolean }
+        hello_pin_min_length: { type: integer, minimum: 6, maximum: 32 }
+        user_lock_session_action: { $ref: "#/components/schemas/SessionAction" }
+        break_glass_accounts:
+          type: array
+          maxItems: 50
+          description: Local accounts never touched by the privileged group policy or the deny list.
+          items: { type: string, maxLength: 32 }
+        sudoers_d_allowlist:
+          type: array
+          maxItems: 50
+          description: Files in /etc/sudoers.d/ the agent leaves alone.
+          items: { type: string, maxLength: 64 }
+        sudo_lecture_text: { type: string, minLength: 1, maxLength: 2000 }
+    LoginSettings:
+      type: object
+      required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
+                 sudoers_d_allowlist, sudo_lecture_text, updated_at]
+      properties:
+        hello_enabled: { type: boolean }
+        hello_pin_min_length: { type: integer }
+        user_lock_session_action: { $ref: "#/components/schemas/SessionAction" }
+        break_glass_accounts:
+          type: array
+          items: { type: string }
+        sudoers_d_allowlist:
+          type: array
+          items: { type: string }
+        sudo_lecture_text: { type: string }
+        updated_at: { type: string, format: date-time }
+    LoginAssignmentUpdate:
+      type: object
+      required: [users, groups]
+      additionalProperties: false
+      properties:
+        users:
+          type: array
+          maxItems: 500
+          items: { type: string, format: uuid }
+        groups:
+          type: array
+          maxItems: 500
+          items: { type: string, format: uuid }
+    DeviceLoginAssignment:
+      type: object
+      required: [users, groups]
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/UserRef" }
+        groups:
+          type: array
+          items: { $ref: "#/components/schemas/UserGroupRef" }
+    PrivilegeClass:
+      type: string
+      enum: [none, restricted, full]
+    Lecture:
+      type: string
+      enum: [always, once, never]
+    SubjectType:
+      type: string
+      enum: [global, group, user]
+    PermissionProfile:
+      type: object
+      required: [id, name, class, commands, require_password, timestamp_timeout_min, lecture, root_equivalent,
+                 root_equivalent_commands, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        class: { $ref: "#/components/schemas/PrivilegeClass" }
+        commands:
+          type: array
+          items: { type: string }
+        require_password: { type: boolean }
+        timestamp_timeout_min: { type: integer }
+        lecture: { $ref: "#/components/schemas/Lecture" }
+        root_equivalent: { type: boolean, description: A command hands out root on its own or in combination. }
+        root_equivalent_commands:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PermissionProfileCreate:
+      type: object
+      required: [name, class]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        class: { $ref: "#/components/schemas/PrivilegeClass" }
+        commands:
+          type: array
+          maxItems: 100
+          items: { type: string, maxLength: 1024 }
+        require_password: { type: boolean, default: true }
+        timestamp_timeout_min: { type: integer, minimum: 0, maximum: 60, default: 5 }
+        lecture: { $ref: "#/components/schemas/Lecture" }
+    PermissionProfileUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        class: { $ref: "#/components/schemas/PrivilegeClass" }
+        commands:
+          type: array
+          maxItems: 100
+          items: { type: string, maxLength: 1024 }
+        require_password: { type: boolean }
+        timestamp_timeout_min: { type: integer, minimum: 0, maximum: 60 }
+        lecture: { $ref: "#/components/schemas/Lecture" }
+    PermissionProfilePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PermissionProfile" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ProfileAssignment:
+      type: object
+      required: [id, profile_id, subject_type, subject_id, device_group_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        profile_id: { type: string, format: uuid }
+        subject_type: { $ref: "#/components/schemas/SubjectType" }
+        subject_id: { type: string, format: uuid, nullable: true, description: User or group; null for global. }
+        device_group_id: { type: string, format: uuid, nullable: true, description: Only on devices of this group; null = every device. }
+        created_at: { type: string, format: date-time }
+    ProfileAssignmentCreate:
+      type: object
+      required: [profile_id, subject_type]
+      additionalProperties: false
+      properties:
+        profile_id: { type: string, format: uuid }
+        subject_type: { $ref: "#/components/schemas/SubjectType" }
+        subject_id: { type: string, format: uuid }
+        device_group_id: { type: string, format: uuid }
+    ProfileAssignmentUpdate:
+      type: object
+      required: [device_group_id]
+      additionalProperties: false
+      properties:
+        device_group_id: { type: string, format: uuid, nullable: true }
+    ProfileAssignmentPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ProfileAssignment" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    DerivationSubject:
+      type: object
+      required: [type, id]
+      properties:
+        type: { $ref: "#/components/schemas/SubjectType" }
+        id: { type: string, format: uuid, nullable: true }
+    Derivation:
+      type: object
+      required: [kind, item, value, assignment_id, profile_id, profile_name, subject]
+      properties:
+        kind: { type: string, enum: [class, command, scalar] }
+        item: { type: string, description: '"class", the command, or the scalar name.' }
+        value: { type: string }
+        assignment_id: { type: string, format: uuid }
+        profile_id: { type: string, format: uuid }
+        profile_name: { type: string }
+        subject: { $ref: "#/components/schemas/DerivationSubject" }
+    EffectiveProfile:
+      type: object
+      required: [class, reported_class, root_equivalent, root_equivalent_commands, catalog_version, commands,
+                 require_password, timestamp_timeout_min, lecture]
+      properties:
+        class: { $ref: "#/components/schemas/PrivilegeClass" }
+        reported_class:
+          allOf:
+            - $ref: "#/components/schemas/PrivilegeClass"
+          description: full for a root-equivalent restricted profile (detection and warnings).
+        root_equivalent: { type: boolean }
+        root_equivalent_commands:
+          type: array
+          items: { type: string }
+        catalog_version: { type: integer, description: Version of the root-equivalence rules. }
+        commands:
+          type: array
+          items: { type: string }
+        require_password: { type: boolean }
+        timestamp_timeout_min: { type: integer }
+        lecture: { $ref: "#/components/schemas/Lecture" }
+    UserEffectiveProfile:
+      allOf:
+        - $ref: "#/components/schemas/EffectiveProfile"
+        - type: object
+          required: [user, device_id, derivation]
+          properties:
+            user: { $ref: "#/components/schemas/UserRef" }
+            device_id: { type: string, format: uuid, nullable: true }
+            derivation:
+              type: array
+              items: { $ref: "#/components/schemas/Derivation" }
+    EffectiveSudoEntry:
+      allOf:
+        - $ref: "#/components/schemas/EffectiveProfile"
+        - type: object
+          required: [user]
+          properties:
+            user: { $ref: "#/components/schemas/UserRef" }
+    EffectiveSudo:
+      type: object
+      required: [device_id, entries]
+      properties:
+        device_id: { type: string, format: uuid }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/EffectiveSudoEntry" }

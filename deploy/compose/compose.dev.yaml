@@ -63,6 +63,8 @@ services:
   paddock-worker:
     environment:
       PADDOCK_ENV: development
+      # Shorter identity rounds so that the acceptance gates do not wait 5 minutes for a sync round.
+      PADDOCK_IDENTITY_SYNC_INTERVAL: ${PADDOCK_IDENTITY_SYNC_INTERVAL:-60s}
 
   paddock-gateway:
     environment:

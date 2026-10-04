@@ -10,6 +10,7 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
 	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
+	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/ports"
 	"github.com/paddock-mdm/paddock/server/internal/principal"
@@ -28,8 +29,11 @@ func NewOrganizations(runner *ActionRunner, platform *db.PlatformPool, idp ports
 	return &Organizations{runner: runner, platform: platform, idp: idp}
 }
 
-// SpecOrganizationCreate is the privileged action organization.created.
-var SpecOrganizationCreate = ActionSpec{Code: audit.CodeOrganizationCreated, AllowedRoles: RolesPlatform}
+// Specs of the privileged platform actions on organizations.
+var (
+	SpecOrganizationCreate     = ActionSpec{Code: audit.CodeOrganizationCreated, AllowedRoles: RolesPlatform}
+	SpecOrganizationSetDomains = ActionSpec{Code: audit.CodeOrganizationDomainsChanged, AllowedRoles: RolesPlatform}
+)
 
 // List returns one page of organizations, optionally limited to statuses, and the capped number of matches
 // (ADR 0018).
@@ -130,6 +134,49 @@ func (o *Organizations) Create(ctx context.Context, slug, name string) (org pgst
 			return err
 		})
 	return org, reprovisioned, err
+}
+
+// SetDomains replaces the domains of an organization (plan M3a decision 1, audited in the organization:
+// organization.domains_changed). A domain of another organization is 409 domain_taken. The organization's devices
+// are recompiled (the primary domain is part of the login resource).
+func (o *Organizations) SetDomains(ctx context.Context, id uuid.UUID, domains []string) (pgstore.Organization, error) {
+	spec := SpecOrganizationSetDomains
+	spec.Target = &audit.Target{Type: "organization", ID: id.String()}
+	normalized := make([]string, len(domains))
+	for i, d := range domains {
+		normalized[i] = strings.ToLower(strings.TrimSpace(d))
+	}
+	var out pgstore.Organization
+	err := o.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		cur, err := q.GetOrganization(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		rec.SetOrganization(cur.ID)
+		rec.SetTarget(audit.Target{Type: "organization", ID: cur.ID.String(), Display: cur.Slug})
+		rec.SetParam("slug", cur.Slug)
+		rec.SetParam("domains", normalized)
+		rec.SetParam("old_domains", cur.Domains)
+		if err := organization.ValidateDomains(normalized); err != nil {
+			return problem.InvalidRequest.WithDetail(err.Error())
+		}
+		if err := q.LockOrganizationDomains(ctx); err != nil {
+			return err
+		}
+		others, err := q.ListOrganizationsClaimingDomains(ctx, pgstore.ListOrganizationsClaimingDomainsParams{Domains: normalized, ID: id})
+		if err != nil {
+			return err
+		}
+		if len(others) > 0 {
+			return problem.DomainTaken.WithDetail("a domain belongs to another organization")
+		}
+		if out, err = q.UpdateOrganizationDomains(ctx, pgstore.UpdateOrganizationDomainsParams{ID: id, Domains: normalized}); err != nil {
+			return err
+		}
+		rec.StateChanged(statechange.ScopeOrg, id)
+		return nil
+	})
+	return out, err
 }
 
 // orgOf returns the organization of the principal.

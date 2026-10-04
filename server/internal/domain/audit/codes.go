@@ -44,6 +44,30 @@ const (
 	CodeAgentRolloutHalted           Code = "agent_rollout.halted"
 	CodeAgentRolloutResumed          Code = "agent_rollout.resumed"
 	CodeAgentRolloutCompleted        Code = "agent_rollout.completed"
+
+	CodeOrganizationDomainsChanged  Code = "organization.domains_changed"
+	CodeUserCreated                 Code = "user.created"
+	CodeUserUpdated                 Code = "user.updated"
+	CodeUserDeleted                 Code = "user.deleted"
+	CodeUserLocked                  Code = "user.locked"
+	CodeUserUnlocked                Code = "user.unlocked"
+	CodeUserSyncedAdded             Code = "user.synced_added"
+	CodeUserSyncedRemoved           Code = "user.synced_removed"
+	CodeUserGroupCreated            Code = "user_group.created"
+	CodeUserGroupUpdated            Code = "user_group.updated"
+	CodeUserGroupDeleted            Code = "user_group.deleted"
+	CodeUserGroupMemberAdded        Code = "user_group.member_added"
+	CodeUserGroupMemberRemoved      Code = "user_group.member_removed"
+	CodeSettingsLoginChanged        Code = "settings.login_changed"
+	CodeDeviceLoginAssignmentChange Code = "device.login_assignment_changed"
+	CodeDeviceLoginsSuspended       Code = "device.logins_suspended"
+	CodeDeviceLoginsResumed         Code = "device.logins_resumed"
+	CodePermissionProfileCreated    Code = "permission_profile.created"
+	CodePermissionProfileUpdated    Code = "permission_profile.updated"
+	CodePermissionProfileDeleted    Code = "permission_profile.deleted"
+	CodeProfileAssignmentCreated    Code = "profile_assignment.created"
+	CodeProfileAssignmentUpdated    Code = "profile_assignment.updated"
+	CodeProfileAssignmentDeleted    Code = "profile_assignment.deleted"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -279,6 +303,147 @@ var registry = map[Code]Definition{
 		Description: "The worker completed a rollout after its last wave (actor: system).",
 		Params:      []string{"version", "eligible", "failed"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeOrganizationDomainsChanged: {
+		Code: CodeOrganizationDomainsChanged, Emitted: true,
+		Description: "A platform administrator changed the domains of an organization; the first domain is the primary domain of device logins.",
+		Params:      []string{"slug", "domains", "old_domains"},
+		Outcomes:    adminOutcomes,
+		Note:        "Recorded in the organization whose domains changed. A domain of another organization is refused with error_code domain_taken.",
+	},
+	CodeUserCreated: {
+		Code: CodeUserCreated, Emitted: true,
+		Description: "A local user was created in Authentik (without password) and in Paddock; the one-time recovery link is shown once and never recorded.",
+		Params:      []string{"username", "display_name"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeUserUpdated: {
+		Code: CodeUserUpdated, Emitted: true,
+		Description: "The display name or email of a local user was changed; attributes of synced users are refused with error_code attribute_owned_upstream.",
+		Params:      []string{"username", "display_name_changed", "email_changed"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeUserDeleted: {
+		Code: CodeUserDeleted, Emitted: true,
+		Description: "A local user was deleted in Authentik and Paddock, with their group memberships and assignments.",
+		Params:      []string{"username"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeUserLocked: {
+		Code: CodeUserLocked, Emitted: true,
+		Description: "An organization administrator locked a user: member of paddock.<slug>.locked, refresh tokens, access tokens and sessions deleted in Authentik; the affected devices get the lock in their next bundle.",
+		Params:      []string{"username", "source"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+		Note:        "The device path does not wait for Authentik: Paddock marks the user locked and recompiles before the Authentik call, so a failure leaves the user locked on the devices.",
+	},
+	CodeUserUnlocked: {
+		Code: CodeUserUnlocked, Emitted: true,
+		Description: "An organization administrator unlocked a user (removed from paddock.<slug>.locked); the user signs in with the device code flow again.",
+		Params:      []string{"username", "source"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeUserSyncedAdded: {
+		Code: CodeUserSyncedAdded, Emitted: true,
+		Description: "The worker found a new synced user (member of paddock.<slug> put there by an upstream source) (actor: system).",
+		Params:      []string{"username"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeUserSyncedRemoved: {
+		Code: CodeUserSyncedRemoved, Emitted: true,
+		Description: "The worker removed a synced user that is no longer a member of paddock.<slug>, with their group memberships and assignments (actor: system).",
+		Params:      []string{"username"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeUserGroupCreated: {
+		Code: CodeUserGroupCreated, Emitted: true,
+		Description: "A local user group (paddock.<slug>.g.<group>) was created, or an upstream group was imported as mirror group paddock.<slug>.s.<group>.",
+		Params:      []string{"slug", "name", "source", "upstream_group", "members"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeUserGroupUpdated: {
+		Code: CodeUserGroupUpdated, Emitted: true,
+		Description: "A user group was renamed (the slug and the Authentik group name stay).",
+		Params:      []string{"slug", "name", "old_name"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeUserGroupDeleted: {
+		Code: CodeUserGroupDeleted, Emitted: true,
+		Description: "A user group was deleted in Authentik and Paddock, with its login and profile assignments.",
+		Params:      []string{"slug", "name"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeUserGroupMemberAdded: {
+		Code: CodeUserGroupMemberAdded, Emitted: true,
+		Description: "A user became member of a user group: by an administrator (local groups) or by the worker's mirror of an imported group (actor: system). A privilege change: the params carry the user's highest effective class over all devices before and after.",
+		Params:      []string{"user", "group", "effective_class_before", "effective_class_after"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeUserGroupMemberRemoved: {
+		Code: CodeUserGroupMemberRemoved, Emitted: true,
+		Description: "A user left a user group (administrator or the worker's mirror). The params carry the user's highest effective class over all devices before and after.",
+		Params:      []string{"user", "group", "effective_class_before", "effective_class_after"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeSettingsLoginChanged: {
+		Code: CodeSettingsLoginChanged, Emitted: true,
+		Description: "The organization's login settings were changed (Hello PIN, session action of a lock, break-glass accounts, sudoers.d allow list, sudo lecture text).",
+		Params:      []string{"changed"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceLoginAssignmentChange: {
+		Code: CodeDeviceLoginAssignmentChange, Emitted: true,
+		Description: "The users and groups that may log in on a device were replaced; empty means every user of the organization.",
+		Params:      []string{"hostname", "users", "groups"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied, OutcomeUnknown},
+	},
+	CodeDeviceLoginsSuspended: {
+		Code: CodeDeviceLoginsSuspended, Emitted: true,
+		Description: "Directory logins on a device were suspended (its bundle denies every directory user).",
+		Params:      []string{"hostname"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceLoginsResumed: {
+		Code: CodeDeviceLoginsResumed, Emitted: true,
+		Description: "Directory logins on a device were resumed.",
+		Params:      []string{"hostname"},
+		Outcomes:    adminOutcomes,
+	},
+	CodePermissionProfileCreated: {
+		Code: CodePermissionProfileCreated, Emitted: true,
+		Description: "A permission profile was created.",
+		Params:      []string{"name", "class", "commands", "root_equivalent"},
+		Outcomes:    adminOutcomes,
+		Note:        "root_equivalent is true when a command of the profile hands out root on its own or in combination (catalog version in the effective profile).",
+	},
+	CodePermissionProfileUpdated: {
+		Code: CodePermissionProfileUpdated, Emitted: true,
+		Description: "A permission profile was changed.",
+		Params:      []string{"name", "class", "old_class", "commands", "root_equivalent"},
+		Outcomes:    adminOutcomes,
+	},
+	CodePermissionProfileDeleted: {
+		Code: CodePermissionProfileDeleted, Emitted: true,
+		Description: "A permission profile without assignments was deleted.",
+		Params:      []string{"name", "class"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeProfileAssignmentCreated: {
+		Code: CodeProfileAssignmentCreated, Emitted: true,
+		Description: "A permission profile was assigned globally, to a group or to a user, optionally only on the devices of one device group.",
+		Params:      []string{"profile", "class", "root_equivalent", "subject_type", "subject_id", "device_group_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeProfileAssignmentUpdated: {
+		Code: CodeProfileAssignmentUpdated, Emitted: true,
+		Description: "The device group scope of a profile assignment was changed.",
+		Params:      []string{"profile", "class", "root_equivalent", "subject_type", "subject_id", "device_group_id", "old_device_group_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeProfileAssignmentDeleted: {
+		Code: CodeProfileAssignmentDeleted, Emitted: true,
+		Description: "A profile assignment was removed.",
+		Params:      []string{"profile", "class", "subject_type", "subject_id", "device_group_id"},
+		Outcomes:    adminOutcomes,
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

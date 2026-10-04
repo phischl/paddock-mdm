@@ -110,7 +110,8 @@ type CheckinResponse struct {
 	AgentUpdate  *AgentUpdate `json:"agent_update"`
 }
 
-// Device event types accepted by POST /v1/events (closed set, plan M2a decision 14 and M2b decision 23).
+// Device event types accepted by POST /v1/events (closed set, plan M2a decision 14, M2b decision 23, M3a decision
+// 10).
 const (
 	EventBundleApplied        = "bundle.applied"
 	EventBundleRejected       = "bundle.rejected"
@@ -119,12 +120,20 @@ const (
 	EventAgentUpdateFailed    = "agent.update_failed"
 	EventAgentRolledBack      = "agent.rolled_back"
 	EventAgentEventsDropped   = "agent.events_dropped"
+	EventSessionLogin         = "session.login"
 )
 
 // EventTypes is the closed set of event types.
 var EventTypes = []string{
 	EventBundleApplied, EventBundleRejected, EventConfigDriftCorrected, EventAgentUpdated, EventAgentUpdateFailed,
-	EventAgentRolledBack, EventAgentEventsDropped,
+	EventAgentRolledBack, EventAgentEventsDropped, EventSessionLogin,
+}
+
+// SessionLogin is the data of a session.login event: a user logged in on the device. It carries only the username
+// and the time, never process or command data (architecture §9.4); the server records it without an audit event.
+type SessionLogin struct {
+	Username string    `json:"username"`
+	At       time.Time `json:"at"`
 }
 
 // MaxEventsPerBatch bounds POST /v1/events.

@@ -33,6 +33,14 @@ var lists = map[string]struct {
 	"listManagedUnits":       {managedUnitList, "postgres/queries/managed_config.sql", "ListManagedUnits", "id"},
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
+
+	"listUsers":              {userList, "postgres/queries/user.sql", "ListAppUsers", "id"},
+	"listUserGroupMembers":   {userList, "postgres/queries/user.sql", "ListAppUsers", "id"},
+	"listUserGroups":         {userGroupList, "postgres/queries/user.sql", "ListUserGroups", "id"},
+	"listPermissionProfiles": {permissionProfileList, "postgres/queries/privilege.sql", "ListPermissionProfiles", "id"},
+	"listProfileAssignments": {profileAssignmentList, "postgres/queries/privilege.sql", "ListProfileAssignments", "id"},
+	// Authentik groups, listed from the identity provider and sorted in memory: no query.
+	"listUpstreamGroups": {upstreamGroupList, "", "", ""},
 }
 
 // TestListSpecsMatchContract keeps the handlers' list definitions equal to x-paddock-list and the sort enum of the
@@ -110,6 +118,9 @@ func TestListQueriesSortBranches(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	adapters := filepath.Join(filepath.Dir(file), "..", "..", "..", "adapters")
 	for id, l := range lists {
+		if l.queryFile == "" {
+			continue
+		}
 		raw, err := os.ReadFile(filepath.Join(adapters, l.queryFile)) //nolint:gosec // fixed paths of the test table
 		if err != nil {
 			t.Fatal(err)
