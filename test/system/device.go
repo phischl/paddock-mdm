@@ -151,12 +151,13 @@ func (d *Device) AgentVersion() string { return d.Must("/usr/bin/paddockd versio
 // Slot is the active A/B slot.
 func (d *Device) Slot() string { return d.Must("readlink /opt/paddock/agent/current") }
 
-// WaitEvent waits until an audit event of code for the device satisfies match, checking in every 65 s.
-func (d *Device) WaitEvent(code string, timeout time.Duration, match func(params map[string]any) bool) map[string]any {
-	d.t.Helper()
+// WaitEvent waits until an audit event of code for the device satisfies match, checking in every 65 s. A timeout fails
+// t, the calling (sub)test.
+func (d *Device) WaitEvent(t *testing.T, code string, timeout time.Duration, match func(params map[string]any) bool) map[string]any {
+	t.Helper()
 	var found map[string]any
 	last := time.Time{}
-	Until(d.t, fmt.Sprintf("%s: audit event %s", d.Name, code), timeout, 5*time.Second, func() {
+	Until(t, fmt.Sprintf("%s: audit event %s", d.Name, code), timeout, 5*time.Second, func() {
 		if time.Since(last) > 65*time.Second {
 			d.Checkin()
 			last = time.Now()

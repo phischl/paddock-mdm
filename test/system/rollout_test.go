@@ -25,8 +25,8 @@ func TestRolloutAutoStop(t *testing.T) {
 	second.Fresh()
 	a := Install(t, s, first, debDir(s))
 	b := Install(t, s, second, debDir(s))
-	a.WaitEvent("device.bundle_applied", 5*time.Minute, nil)
-	b.WaitEvent("device.bundle_applied", 5*time.Minute, nil)
+	a.WaitEvent(t, "device.bundle_applied", 5*time.Minute, nil)
+	b.WaitEvent(t, "device.bundle_applied", 5*time.Minute, nil)
 	before := b.AgentVersion() // the packaged version, or a release of an earlier completed rollout
 	b.Must("sudo systemctl stop paddock-supervisor")
 
@@ -36,7 +36,7 @@ func TestRolloutAutoStop(t *testing.T) {
 	v := version(6, "autostop")
 	s.Release(v, []string{"paddock_testbroken_selftest"}, "--failure-threshold-min", "1", "--failure-threshold-percent", "0",
 		"--min-wave-minutes", "60")
-	a.WaitEvent("device.agent_update_failed", 10*time.Minute, func(p map[string]any) bool { return p["version"] == v })
+	a.WaitEvent(t, "device.agent_update_failed", 10*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 
 	idx, err := portal.NewAuditIndex(context.Background())
 	if err != nil {

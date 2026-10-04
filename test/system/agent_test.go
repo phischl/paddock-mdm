@@ -72,7 +72,7 @@ func gateS1(t *testing.T, d *Device) {
 	// Only this run's resources and the time resource must apply without error; other definitions of the
 	// development organization may fail on the VM, but the acceptance gates leave no units behind that real devices
 	// would report as unknown (plan M2.1 decision 3).
-	applied := d.WaitEvent("device.bundle_applied", 5*time.Minute, func(p map[string]any) bool {
+	applied := d.WaitEvent(t, "device.bundle_applied", 5*time.Minute, func(p map[string]any) bool {
 		version, _ := p["bundle_version"].(float64)
 		return version >= d.Bundle && len(d.ownErrors(p)) == 0
 	})
@@ -116,7 +116,7 @@ func gateS2(t *testing.T, d *Device) {
 	want := fileFacts(d, a)
 	d.Must("echo local edit | sudo tee -a " + a + " >/dev/null && sudo chmod 0666 " + a)
 	Until(t, "drift corrected", 2*time.Minute, 5*time.Second, nil, func() bool { return fileFacts(d, a) == want })
-	d.WaitEvent("device.config_drift_corrected", 3*time.Minute, func(p map[string]any) bool {
+	d.WaitEvent(t, "device.config_drift_corrected", 3*time.Minute, func(p map[string]any) bool {
 		ids, _ := p["resource_ids"].([]any)
 		return slices.Contains(ids, any("file:"+a))
 	})
@@ -136,7 +136,7 @@ func gateS2(t *testing.T, d *Device) {
 		return dev.BundleVersion > versionBefore
 	})
 	d.Must("sudo systemctl stop paddock-supervisor && echo local | sudo tee -a " + b + " >/dev/null && sudo systemctl start paddock-supervisor")
-	d.WaitEvent("device.bundle_applied", 3*time.Minute, func(p map[string]any) bool {
+	d.WaitEvent(t, "device.bundle_applied", 3*time.Minute, func(p map[string]any) bool {
 		errs, _ := p["errors"].([]any)
 		for _, e := range errs {
 			if m, _ := e.(map[string]any); m["id"] == "file:"+b && m["message"] == "left_modified_file" {
@@ -257,7 +257,7 @@ func gateS4(t *testing.T, d *Device) {
 	t.Run("good release", func(t *testing.T) {
 		v := version(2, "good")
 		d.s.Release(v, nil)
-		d.WaitEvent("device.agent_updated", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
+		d.WaitEvent(t, "device.agent_updated", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 		if got := d.AgentVersion(); got != v {
 			t.Fatalf("agent version %s, want %s", got, v)
 		}
@@ -268,7 +268,7 @@ func gateS4(t *testing.T, d *Device) {
 	t.Run("probation failure", func(t *testing.T) {
 		v := version(3, "probation")
 		d.s.Release(v, []string{"paddock_testbroken_probation"})
-		p := d.WaitEvent("device.agent_rolled_back", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
+		p := d.WaitEvent(t, "device.agent_rolled_back", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 		if p["from_version"] != good || d.AgentVersion() != good || d.Slot() != slot {
 			t.Fatalf("after the rollback: %v, version %s slot %s; want %s in %s", p, d.AgentVersion(), d.Slot(), good, slot)
 		}
@@ -277,7 +277,7 @@ func gateS4(t *testing.T, d *Device) {
 	t.Run("self-test failure", func(t *testing.T) {
 		v := version(4, "selftest")
 		d.s.Release(v, []string{"paddock_testbroken_selftest"})
-		d.WaitEvent("device.agent_update_failed", 10*time.Minute, func(p map[string]any) bool {
+		d.WaitEvent(t, "device.agent_update_failed", 10*time.Minute, func(p map[string]any) bool {
 			return p["version"] == v && p["outcome"] == "self_test_failed"
 		})
 		if d.AgentVersion() != good || d.Slot() != slot {
@@ -304,7 +304,7 @@ func gateS4(t *testing.T, d *Device) {
 		d.MustIn(minisign.Sign(forger, data), "sudo tee "+dir+"/paddockd.minisig >/dev/null")
 		d.MustIn([]byte(fmt.Sprintf(`{"version":%q}`, v)), "sudo tee /var/lib/paddock/staging/request.json >/dev/null")
 		d.Must("sudo kill -USR1 $(pidof paddock-supervisor)")
-		d.WaitEvent("device.agent_update_failed", 6*time.Minute, func(p map[string]any) bool {
+		d.WaitEvent(t, "device.agent_update_failed", 6*time.Minute, func(p map[string]any) bool {
 			return p["version"] == v && p["outcome"] == "signature_invalid"
 		})
 		if d.AgentVersion() != good || d.Slot() != slot || d.Must("sudo ls /var/lib/paddock/staging") != "" {
