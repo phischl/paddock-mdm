@@ -58,7 +58,7 @@ func TestLiveAuthentik(t *testing.T) {
 	app := organization.DeviceLoginApp(slug)
 	prov := admin.first("/providers/oauth2/?name=" + app)
 	if prov["client_type"] != "public" || prov["refresh_token_validity"] != "days=30" || prov["access_token_validity"] != "minutes=10" ||
-		prov["issuer_mode"] != "per_provider" || prov["sub_mode"] != "hashed_user_id" || len(prov["property_mappings"].([]any)) != 5 {
+		prov["issuer_mode"] != "per_provider" || prov["sub_mode"] != "hashed_user_id" || len(prov["property_mappings"].([]any)) != 4 {
 		t.Errorf("provider %v", prov)
 	}
 	if got := fmt.Sprint(prov["grant_types"]); !strings.Contains(got, "device_code") || !strings.Contains(got, "refresh_token") {

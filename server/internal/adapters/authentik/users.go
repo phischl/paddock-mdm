@@ -88,9 +88,11 @@ func (c *Client) RecoveryLink(ctx context.Context, pk string) (string, error) {
 	return res.Link, nil
 }
 
-// LockUser adds the user to paddock.<slug>.locked and deletes the user's refresh tokens, access tokens and
-// authenticated sessions. The group alone does not stop Hello PIN logins: the refresh grant does not evaluate
-// application policies (PoC M1 C2).
+// LockUser adds the user to paddock.<slug>.locked and revokes the user's refresh tokens, access tokens and sessions.
+// The group alone does not stop Hello PIN logins: the refresh grant does not evaluate application policies (PoC M1
+// C2). Authentik lists other users' tokens only to superusers, so the revocation uses its deactivation cleanup: the
+// user is deactivated (Authentik deletes all of the user's tokens and sessions) and activated again at once — the
+// lock itself stays the group membership, which survives upstream attribute syncs (architecture §9.2).
 func (c *Client) LockUser(ctx context.Context, slug, pk string) error {
 	lockedPK, err := c.EnsureGroup(ctx, slug, organization.LockedGroup(slug))
 	if err != nil {
@@ -99,35 +101,30 @@ func (c *Client) LockUser(ctx context.Context, slug, pk string) error {
 	if err := c.AddMember(ctx, lockedPK, pk); err != nil {
 		return err
 	}
-	for _, kind := range []string{"refresh_tokens", "access_tokens"} {
-		var ids []int
-		err := pages(ctx, c, "/api/v3/oauth2/"+kind+"/", url.Values{"user": {pk}}, func(t struct {
-			PK int `json:"pk"`
-		}) {
-			ids = append(ids, t.PK)
-		})
-		if err != nil {
-			return err
-		}
-		for _, id := range ids {
-			if err := c.deleteIgnoringMissing(ctx, "/api/v3/oauth2/"+kind+"/"+strconv.Itoa(id)+"/"); err != nil {
-				return err
-			}
-		}
+	if err := c.setActive(ctx, pk, false); err != nil {
+		return err
 	}
-	if err := c.do(ctx, http.MethodDelete, "/api/v3/core/authenticated_sessions/bulk_delete/?"+url.Values{"user_pks": {pk}}.Encode(), nil, nil); err != nil {
-		return upstream(err)
-	}
-	return nil
+	return c.setActive(ctx, pk, true)
 }
 
-// UnlockUser removes the user from paddock.<slug>.locked; the user then signs in with the device code flow again.
+// UnlockUser removes the user from paddock.<slug>.locked (and activates it, should a lock have stopped between
+// deactivation and activation); the user then signs in with the device code flow again.
 func (c *Client) UnlockUser(ctx context.Context, slug, pk string) error {
 	lockedPK, err := c.EnsureGroup(ctx, slug, organization.LockedGroup(slug))
 	if err != nil {
 		return err
 	}
+	if err := c.setActive(ctx, pk, true); err != nil {
+		return err
+	}
 	return c.RemoveMember(ctx, lockedPK, pk)
+}
+
+func (c *Client) setActive(ctx context.Context, pk string, active bool) error {
+	if err := c.do(ctx, http.MethodPatch, userPath(pk), map[string]bool{"is_active": active}, nil); err != nil {
+		return upstream(err)
+	}
+	return nil
 }
 
 // OrganizationUsers lists the direct members of paddock.<slug>.

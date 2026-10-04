@@ -11,10 +11,11 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
 )
 
-// Platform-wide objects of blueprint paddock-device.yaml and of Authentik's defaults the device providers use.
+// Platform-wide objects of blueprint paddock-device.yaml and of Authentik's defaults the device providers use. The
+// authorization flow enforces MFA on every device approval (see the blueprint).
 const (
 	deviceAuthenticationFlow = "paddock-device-authentication"
-	authorizationFlow        = "default-provider-authorization-implicit-consent"
+	authorizationFlow        = "paddock-device-authorization"
 	invalidationFlow         = "default-provider-invalidation-flow"
 	signingKeyName           = "authentik Self-signed Certificate"
 	// DeviceRedirectURI is registered for the authorization code grant; Himmelblau uses the device code and refresh
@@ -22,23 +23,32 @@ const (
 	DeviceRedirectURI = "http://127.0.0.1:8765/callback"
 )
 
-// standardScopes are the managed scope mappings of the device provider; Himmelblau requests exactly these scopes.
+// standardScopes are the managed scope mappings of the device provider. Himmelblau requests openid, profile, email
+// and offline_access; Paddock's own mapping serves the scope profile (GroupsExpression).
 var standardScopes = []string{
 	"goauthentik.io/providers/oauth2/scope-openid", "goauthentik.io/providers/oauth2/scope-email",
-	"goauthentik.io/providers/oauth2/scope-profile", "goauthentik.io/providers/oauth2/scope-offline_access",
+	"goauthentik.io/providers/oauth2/scope-offline_access",
 }
 
 // GroupsMappingName is the name of an organization's groups claim mapping.
 func GroupsMappingName(slug string) string { return "paddock-device-groups-" + slug }
 
-// GroupsExpression is the scope mapping on scope profile that emits the groups claim: the user's paddock.<slug>.*
-// groups and paddock.<slug> for members of the root group, never other organizations' or non-Paddock groups.
-// Himmelblau requests only openid, profile, email and offline_access and drops values containing ":" (PoC M1 C1).
+// GroupsExpression is the mapping of scope profile: the standard profile claims and the groups claim with the
+// user's paddock.<slug>.* groups and paddock.<slug> for members of the root group, never other organizations' or
+// non-Paddock groups. It replaces Authentik's managed profile mapping, which emits every group of the user and would
+// be merged into the claim. Himmelblau requests only openid, profile, email and offline_access and drops values
+// containing ":" (PoC M1 C1).
 func GroupsExpression(slug string) string {
 	root := organization.RootGroup(slug)
 	return fmt.Sprintf(`root = %q
 names = {g.name for g in request.user.all_groups()}
-return {"groups": sorted(n for n in names if n.startswith(root + ".")) + ([root] if root in names else [])}
+return {
+    "name": request.user.name,
+    "given_name": request.user.name,
+    "preferred_username": request.user.username,
+    "nickname": request.user.username,
+    "groups": sorted(n for n in names if n.startswith(root + ".")) + ([root] if root in names else []),
+}
 `, root)
 }
 
@@ -81,6 +91,9 @@ func (c *Client) ensureDeviceLogin(ctx context.Context, slug string) error {
 	authzFlow, err := c.findOne(ctx, "/api/v3/flows/instances/", url.Values{"slug": {authorizationFlow}})
 	if err != nil {
 		return err
+	}
+	if authzFlow == "" {
+		return upstream(fmt.Errorf("flow %s missing (blueprint paddock-device.yaml not applied)", authorizationFlow))
 	}
 	invalFlow, err := c.findOne(ctx, "/api/v3/flows/instances/", url.Values{"slug": {invalidationFlow}})
 	if err != nil {

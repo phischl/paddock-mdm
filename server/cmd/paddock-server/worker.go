@@ -35,8 +35,10 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		return err
 	}
 	defer pool.Close()
-	// The platform pool serves the rollout round only (agent releases are platform data, plan M2b decision 19).
-	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 2})
+	// The platform pool serves the rollout round (agent releases are platform data, plan M2b decision 19) and holds
+	// the advisory locks of the rollout and the two identity rounds for their whole duration; one more connection is
+	// left for the readiness check.
+	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 5})
 	if err != nil {
 		return err
 	}
