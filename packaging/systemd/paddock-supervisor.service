@@ -1,0 +1,24 @@
+[Unit]
+Description=Paddock supervisor (runs, monitors and updates the Paddock agent)
+Documentation=file:///usr/share/doc/paddock-supervisor
+# Deliberately no dependency on network-online.target: the agent works offline (fail safe) and checks in as soon
+# as the network is up.
+After=local-fs.target dbus.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/sbin/paddock-supervisor
+Restart=always
+RestartSec=5
+WatchdogSec=60
+RuntimeDirectory=paddock
+RuntimeDirectoryMode=0755
+StateDirectory=paddock
+StateDirectoryMode=0700
+# The agent manages files, units and time synchronization of the device; it runs as root without sandboxing.
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

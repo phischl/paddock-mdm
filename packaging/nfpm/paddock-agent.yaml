@@ -1,0 +1,38 @@
+# nfpm configuration of the paddock-agent package (plan M2b decision 25); built by `make deb`. The package carries
+# paddockd in /usr/lib/paddock; its postinst installs it into slot A only on a device without an agent. Later
+# versions arrive as signed releases through paddock-supervisor, so a package upgrade never touches a slot.
+name: paddock-agent
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Paddock <paddock@paddock-mdm.invalid>
+description: |-
+  Paddock device agent
+  Enrolls the device with the Paddock control plane, checks in, applies the
+  signed device configuration and corrects drift. Run
+  `paddockd enroll --config <file>` once after installation.
+vendor: Paddock
+homepage: https://github.com/paddock-mdm/paddock
+license: MIT
+depends:
+  - paddock-supervisor
+contents:
+  - src: bin/deb/stage/paddockd
+    dst: /usr/lib/paddock/paddockd
+    file_info: { mode: 0755 }
+  - src: /opt/paddock/agent/current/paddockd
+    dst: /usr/bin/paddockd
+    type: symlink
+  - src: packaging/debian/copyright
+    dst: /usr/share/doc/paddock-agent/copyright
+    file_info: { mode: 0644 }
+  - src: bin/deb/stage/paddock-agent.changelog.gz
+    dst: /usr/share/doc/paddock-agent/changelog.gz
+    file_info: { mode: 0644 }
+  - src: packaging/debian/paddock-agent.lintian-overrides
+    dst: /usr/share/lintian/overrides/paddock-agent
+    file_info: { mode: 0644 }
+scripts:
+  postinstall: packaging/scripts/agent-postinst.sh
