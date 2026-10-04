@@ -5,11 +5,14 @@ package testgw
 import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +23,8 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/identity"
 	"github.com/paddock-mdm/paddock/agent/internal/paths"
 	"github.com/paddock-mdm/paddock/agent/internal/state"
+	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/paddock-mdm/paddock/pkg/dsse"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 )
 
@@ -232,4 +237,35 @@ func (g *Gateway) Enrolled(t *testing.T) (paths.Layout, identity.Key) {
 // Client returns a device API client for key that trusts the fake's certificate.
 func (g *Gateway) Client(key identity.Key) *client.Client {
 	return client.NewWithHTTP(g.URL, g.Server.Client(), key, time.Now)
+}
+
+// SignedBundle signs b with TrustKey and returns the DSSE envelope and its hex SHA-256.
+func SignedBundle(t *testing.T, b bundle.Bundle) ([]byte, string) {
+	t.Helper()
+	payload, err := bundle.Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := dsse.New(bundle.PayloadType, payload, dsse.SignEd25519(TrustKey, "bundle-signing:v1", bundle.PayloadType, payload)).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(env)
+	return env, hex.EncodeToString(sum[:])
+}
+
+// OfferBundle serves env and points the next check-ins to it.
+func (g *Gateway) OfferBundle(version int64, env []byte, sum string) {
+	g.Mu.Lock()
+	defer g.Mu.Unlock()
+	name := "bundle-" + strconv.FormatInt(version, 10)
+	g.Files[name] = env
+	g.Checkin.Bundle = &protocol.BundleRef{Version: version, SHA256: sum, URL: g.FileURL(name)}
+}
+
+// SignedBundleOffer is SignedBundle in the argument order of OfferBundle.
+func SignedBundleOffer(t *testing.T, b bundle.Bundle) (int64, []byte, string) {
+	t.Helper()
+	env, sum := SignedBundle(t, b)
+	return b.BundleVersion, env, sum
 }

@@ -6,6 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/paddock-mdm/paddock/pkg/policy"
+
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
 	"github.com/paddock-mdm/paddock/server/internal/domain/managedconfig"
@@ -191,11 +193,11 @@ func recordFile(rec Recorder, f pgstore.ManagedFile, group *uuid.UUID) {
 }
 
 func validateFile(f pgstore.ManagedFile) error {
-	if err := managedconfig.ValidatePath(f.Path); err != nil {
+	if err := policy.ValidatePath(f.Path); err != nil {
 		return problem.PathNotAllowed.WithDetail(err.Error())
 	}
 	for _, err := range []error{
-		managedconfig.ValidateMode(f.Mode), managedconfig.ValidateOwner(f.Owner), managedconfig.ValidateOwner(f.Grp),
+		policy.ValidateMode(f.Mode), policy.ValidateOwner(f.Owner), policy.ValidateOwner(f.Grp),
 		managedconfig.ValidateContent(f.Content),
 	} {
 		if err != nil {
@@ -256,7 +258,7 @@ func (m *ManagedConfig) CreateUnit(ctx context.Context, in UnitInput) (pgstore.M
 	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		next := pgstore.ManagedUnit{Unit: deref(in.Unit, ""), Enabled: deref(in.Enabled, true), Active: deref(in.Active, true)}
 		recordUnit(rec, next, in.DeviceGroupID)
-		if err := managedconfig.ValidateUnit(next.Unit); err != nil {
+		if err := policy.ValidateUnit(next.Unit); err != nil {
 			return problem.UnitNotAllowed.WithDetail(err.Error())
 		}
 		if err := requireGroups(ctx, q, optionalID(in.DeviceGroupID)); err != nil {
@@ -299,7 +301,7 @@ func (m *ManagedConfig) UpdateUnit(ctx context.Context, id uuid.UUID, in UnitInp
 		if next.Unit != old.Unit {
 			rec.SetParam("old_unit", old.Unit)
 		}
-		if err := managedconfig.ValidateUnit(next.Unit); err != nil {
+		if err := policy.ValidateUnit(next.Unit); err != nil {
 			return problem.UnitNotAllowed.WithDetail(err.Error())
 		}
 		u, err = q.UpdateManagedUnit(ctx, pgstore.UpdateManagedUnitParams{ID: id, Unit: next.Unit, Enabled: next.Enabled, Active: next.Active})

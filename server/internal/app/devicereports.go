@@ -71,6 +71,10 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventBundleApplied:        audit.CodeDeviceBundleApplied,
 	protocol.EventBundleRejected:       audit.CodeDeviceBundleRejected,
 	protocol.EventConfigDriftCorrected: audit.CodeDeviceConfigDriftCorrected,
+	protocol.EventAgentUpdated:         audit.CodeDeviceAgentUpdated,
+	protocol.EventAgentUpdateFailed:    audit.CodeDeviceAgentUpdateFailed,
+	protocol.EventAgentRolledBack:      audit.CodeDeviceAgentRolledBack,
+	protocol.EventAgentEventsDropped:   audit.CodeDeviceAgentEventsDropped,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -98,20 +102,63 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 	})
 }
 
-// eventParams copies the documented fields of an event; other data a device sends is not recorded.
+// Bounds of the device-reported values copied into audit params.
+const (
+	maxParamString = 256
+	maxParamList   = 50
+)
+
+// eventParams copies the documented fields of an event (audit.deviceEventParams) with bounded sizes; other data a
+// device sends is not recorded.
 func eventParams(ev protocol.Event) map[string]any {
 	params := map[string]any{"event_seq": ev.EventSeq, "occurred_at": audit.Timestamp(ev.OccurredAt).Format(time.RFC3339Nano)}
 	var data map[string]any
 	if json.Unmarshal(ev.Data, &data) != nil {
 		return params
 	}
-	if v, ok := data["bundle_version"].(float64); ok {
-		params["bundle_version"] = int64(v)
+	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq"} {
+		if v, ok := data[key].(float64); ok {
+			params[key] = int64(v)
+		}
 	}
-	for _, key := range []string{"reason", "resource"} {
-		if v, ok := data[key].(string); ok && len(v) <= 256 {
+	for _, key := range []string{"reason", "resource", "from_version", "outcome"} {
+		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}
 	}
+	switch v := data["version"].(type) { // a bundle version (number) or an agent version (string)
+	case float64:
+		params["bundle_version"] = int64(v)
+	case string:
+		if s, ok := boundedString(v); ok {
+			params["version"] = s
+		}
+	}
+	if ids, ok := data["resource_ids"].([]any); ok {
+		out := []string{}
+		for _, id := range ids[:min(len(ids), maxParamList)] {
+			if s, ok := boundedString(id); ok {
+				out = append(out, s)
+			}
+		}
+		params["resource_ids"] = out
+	}
+	if errs, ok := data["errors"].([]any); ok {
+		out := []map[string]string{}
+		for _, e := range errs[:min(len(errs), maxParamList)] {
+			m, _ := e.(map[string]any)
+			id, okID := boundedString(m["id"])
+			msg, okMsg := boundedString(m["message"])
+			if okID && okMsg {
+				out = append(out, map[string]string{"id": id, "message": msg})
+			}
+		}
+		params["errors"] = out
+	}
 	return params
+}
+
+func boundedString(v any) (string, bool) {
+	s, ok := v.(string)
+	return s, ok && len(s) <= maxParamString
 }

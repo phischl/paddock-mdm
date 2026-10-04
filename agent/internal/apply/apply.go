@@ -1,0 +1,178 @@
+// Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10): resources in the order
+// time → file → systemd_unit, each independently (an error does not stop the others), then the removal of files
+// that left the bundle.
+package apply
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"slices"
+	"strings"
+
+	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
+	"github.com/paddock-mdm/paddock/pkg/bundle"
+)
+
+// order is the apply order of resource types: units may depend on files.
+var order = []string{bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit}
+
+// ResourceError is one entry of Report.Errors.
+type ResourceError struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
+}
+
+// Report is the outcome of an apply; it is the data of the bundle.applied event.
+type Report struct {
+	Version int64           `json:"version"`
+	Changed int             `json:"changed"`
+	Errors  []ResourceError `json:"errors"`
+	// ChangedIDs are the resources that changed (not part of the event).
+	ChangedIDs []string `json:"-"`
+}
+
+// Planned is the plan of one resource.
+type Planned struct {
+	ID      string   `json:"id"`
+	Changes []string `json:"changes,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// Applier applies bundles with a set of reconcilers.
+type Applier struct {
+	recs map[string]reconcile.Reconciler
+	file *reconcile.File
+}
+
+// New creates an applier for sys; managed is the record of files Paddock wrote.
+func New(sys reconcile.System, managed *reconcile.Managed) *Applier {
+	file := &reconcile.File{Sys: sys, Managed: managed}
+	return &Applier{
+		file: file,
+		recs: map[string]reconcile.Reconciler{
+			bundle.TypeFile: file, bundle.TypeSystemdUnit: &reconcile.Unit{Sys: sys}, bundle.TypeTime: &reconcile.Time{Sys: sys},
+		},
+	}
+}
+
+// sorted returns the resources of b in apply order, filtered by keep.
+func sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource {
+	var out []bundle.Resource
+	for _, typ := range order {
+		for _, r := range b.Resources {
+			if r.Type == typ && keep(r) {
+				out = append(out, r)
+			}
+		}
+	}
+	for _, r := range b.Resources {
+		if !slices.Contains(order, r.Type) && keep(r) {
+			out = append(out, r) // reported as unsupported
+		}
+	}
+	return out
+}
+
+func all(bundle.Resource) bool { return true }
+
+// Apply applies every resource of b and removes managed files that are no longer part of it.
+func (a *Applier) Apply(ctx context.Context, b *bundle.Bundle) Report {
+	r := a.apply(ctx, b, all)
+	a.removeStale(b, &r)
+	return r
+}
+
+// ApplyResources applies only the resources with the given IDs (drift correction).
+func (a *Applier) ApplyResources(ctx context.Context, b *bundle.Bundle, ids []string) Report {
+	return a.apply(ctx, b, func(r bundle.Resource) bool { return slices.Contains(ids, r.ID) })
+}
+
+func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.Resource) bool) Report {
+	rep := Report{Version: b.BundleVersion, Errors: []ResourceError{}}
+	for _, res := range sorted(b, keep) {
+		rec, ok := a.recs[res.Type]
+		if !ok {
+			rep.Errors = append(rep.Errors, ResourceError{ID: res.ID, Message: "unsupported resource type " + res.Type})
+			continue
+		}
+		switch out := rec.Apply(ctx, res); out.Status {
+		case reconcile.Changed:
+			rep.Changed++
+			rep.ChangedIDs = append(rep.ChangedIDs, res.ID)
+		case reconcile.Error:
+			rep.Errors = append(rep.Errors, ResourceError{ID: res.ID, Message: out.Message})
+		}
+	}
+	return rep
+}
+
+// removeStale deletes files Paddock wrote that left the bundle, unless they were changed locally (plan M2b
+// decision 10). A removed unit resource leaves the unit as it is.
+func (a *Applier) removeStale(b *bundle.Bundle, rep *Report) {
+	wanted := map[string]bool{}
+	for _, r := range b.Resources {
+		if r.Type == bundle.TypeFile {
+			var s bundle.FileSpec
+			if json.Unmarshal(r.Spec, &s) == nil {
+				wanted[s.Path] = true
+			}
+		}
+	}
+	for _, path := range a.file.Managed.Paths() {
+		if wanted[path] {
+			continue
+		}
+		id := "file:" + path
+		if err := a.file.Remove(path); err != nil { // reconcile.ErrModified: left in place and reported
+			rep.Errors = append(rep.Errors, ResourceError{ID: id, Message: err.Error()})
+			continue
+		}
+		rep.Changed++
+		rep.ChangedIDs = append(rep.ChangedIDs, id)
+	}
+}
+
+// Plan plans every resource of b without changing the system.
+func (a *Applier) Plan(ctx context.Context, b *bundle.Bundle) []Planned {
+	var out []Planned
+	for _, res := range sorted(b, all) {
+		p := Planned{ID: res.ID}
+		if rec, ok := a.recs[res.Type]; !ok {
+			p.Error = "unsupported resource type " + res.Type
+		} else if changes, err := rec.Plan(ctx, res); err != nil {
+			p.Error = err.Error()
+		} else {
+			p.Changes = changes
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// Drifted returns the IDs of planned resources with changes.
+func Drifted(plan []Planned) []string {
+	var ids []string
+	for _, p := range plan {
+		if len(p.Changes) > 0 {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
+}
+
+// RejectReason maps a verification error to the reason of bundle.rejected.
+func RejectReason(err error) string {
+	switch {
+	case errors.Is(err, bundle.ErrSignature):
+		return "signature"
+	case errors.Is(err, bundle.ErrWrongDevice):
+		return "wrong_device"
+	case errors.Is(err, bundle.ErrDowngrade):
+		return "downgrade"
+	case errors.Is(err, bundle.ErrSchema):
+		return "schema"
+	default:
+		return strings.ReplaceAll(err.Error(), " ", "_")
+	}
+}

@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/paddock-mdm/paddock/agent/internal/apply"
 	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
 	"github.com/paddock-mdm/paddock/agent/internal/config"
 	"github.com/paddock-mdm/paddock/agent/internal/health"
+	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
+	"github.com/paddock-mdm/paddock/agent/internal/reconcile/fakesys"
 	"github.com/paddock-mdm/paddock/agent/internal/state"
 	"github.com/paddock-mdm/paddock/agent/internal/testgw"
 )
@@ -23,7 +26,8 @@ func newAgent(t *testing.T, g *testgw.Gateway) *Agent {
 		t.Fatal(err)
 	}
 	cfg, _ := config.LoadAgent(l.AgentConfig())
-	a, err := New(Deps{Layout: l, Config: cfg, Trust: trust, Key: key, Client: g.Client(key), Rand: func() float64 { return 0.5 }})
+	a, err := New(Deps{Layout: l, Config: cfg, Trust: trust, Key: key, Client: g.Client(key), Rand: func() float64 { return 0.5 },
+		Applier: apply.New(fakesys.New(), &reconcile.Managed{Files: map[string]string{}})})
 	if err != nil {
 		t.Fatal(err)
 	}

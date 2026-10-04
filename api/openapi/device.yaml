@@ -287,7 +287,10 @@ components:
       required: [event_seq, type, occurred_at]
       properties:
         event_seq: { type: integer, format: int64, minimum: 0 }
-        type: { type: string, enum: [bundle.applied, bundle.rejected, config.drift_corrected] }
+        type:
+          type: string
+          enum: [bundle.applied, bundle.rejected, config.drift_corrected, agent.updated, agent.update_failed,
+                 agent.rolled_back, agent.events_dropped]
         occurred_at: { type: string, format: date-time }
         data:
           type: object
