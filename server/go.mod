@@ -25,6 +25,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	github.com/valkey-io/valkey-go v1.0.78
 	golang.org/x/oauth2 v0.37.0
+	pgregory.net/rapid v1.2.0
 )
 
 require (

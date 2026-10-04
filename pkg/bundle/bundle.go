@@ -1,5 +1,6 @@
-// Package bundle defines bundle schema v1 — the signed desired state of one device — and its verification on the
-// device (architecture §7.2, plan M2a §6.3).
+// Package bundle defines the bundle schemas — the signed desired state of one device — and their verification on the
+// device (architecture §7.2, plan M2a §6.3). Schema v2 adds the resources login and sudo (plan M3a decision 14a); the
+// compiler renders v2 only for agents that report it (architecture §21).
 package bundle
 
 import (
@@ -11,16 +12,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/paddock-mdm/paddock/pkg/canonicaljson"
 	"github.com/paddock-mdm/paddock/pkg/dsse"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/paddock-mdm/paddock/pkg/sudoers"
 )
 
-// SchemaVersion is the schema version this package produces and accepts.
+// SchemaVersion is the schema version the agent of this release accepts (Verify) and reports in its check-in.
 const SchemaVersion = 1
+
+// SchemaVersion2 is v1 plus the resources login and sudo (plan M3a decision 14a).
+const SchemaVersion2 = 2
 
 // PayloadType is the DSSE payload type of bundles.
 const PayloadType = "application/vnd.paddock.bundle.v1+json"
@@ -30,6 +36,8 @@ const (
 	TypeTime        = "time"
 	TypeFile        = "file"
 	TypeSystemdUnit = "systemd_unit"
+	TypeLogin       = "login" // schema v2
+	TypeSudo        = "sudo"  // schema v2
 )
 
 // Bundle is the desired state of one device.
@@ -77,6 +85,46 @@ type TimeSpec struct {
 	NTP bool `json:"ntp"`
 }
 
+// LoginSpec is the spec of the TypeLogin resource (id "login", plan M3a decision 15).
+type LoginSpec struct {
+	Provider   string         `json:"provider"` // "himmelblau"
+	Himmelblau HimmelblauSpec `json:"himmelblau"`
+	Suspended  bool           `json:"suspended"`
+	// LockedUsers are the locked users among the users affected on this device, sorted.
+	LockedUsers        []string `json:"locked_users"`
+	SessionAction      string   `json:"session_action"` // lock_screen | terminate
+	BreakGlassAccounts []string `json:"break_glass_accounts"`
+}
+
+// Login providers and session actions of LoginSpec.
+const (
+	ProviderHimmelblau      = "himmelblau"
+	SessionActionLockScreen = "lock_screen"
+	SessionActionTerminate  = "terminate"
+)
+
+// HimmelblauSpec are the himmelblau.conf values Paddock owns (architecture §9.3).
+type HimmelblauSpec struct {
+	OIDCIssuerURL string `json:"oidc_issuer_url"`
+	AppID         string `json:"app_id"`
+	Domain        string `json:"domain"`
+	// PamAllowGroups is written explicitly, also when empty: an empty value denies everyone, a missing line allows
+	// everyone (PoC M1 C3).
+	PamAllowGroups    []string `json:"pam_allow_groups"`
+	EnableHello       bool     `json:"enable_hello"`
+	HelloPinMinLength int      `json:"hello_pin_min_length"`
+}
+
+// SudoSpec is the spec of the TypeSudo resource (id "sudo", plan M3a decision 16). The device renders each entry
+// with pkg/sudoers.
+type SudoSpec struct {
+	LectureText        string          `json:"lecture_text"`
+	Entries            []sudoers.Entry `json:"entries"` // sorted by username
+	PrivilegedGroups   []string        `json:"privileged_groups"`
+	SudoersDAllowlist  []string        `json:"sudoers_d_allowlist"`
+	BreakGlassAccounts []string        `json:"break_glass_accounts"`
+}
+
 // FileResource builds a file resource; ContentSHA256 is computed from Content.
 func FileResource(s FileSpec) (Resource, error) {
 	sum := sha256.Sum256([]byte(s.Content))
@@ -89,6 +137,35 @@ func UnitResource(s UnitSpec) (Resource, error) { return resource("unit:"+s.Unit
 
 // TimeResource builds the time resource.
 func TimeResource(s TimeSpec) (Resource, error) { return resource("time", TypeTime, s) }
+
+// LoginResource builds the login resource (schema v2). Nil lists are encoded as empty lists.
+func LoginResource(s LoginSpec) (Resource, error) {
+	s.Himmelblau.PamAllowGroups = nonNil(s.Himmelblau.PamAllowGroups)
+	s.LockedUsers = nonNil(s.LockedUsers)
+	s.BreakGlassAccounts = nonNil(s.BreakGlassAccounts)
+	return resource("login", TypeLogin, s)
+}
+
+// SudoResource builds the sudo resource (schema v2). Nil lists are encoded as empty lists.
+func SudoResource(s SudoSpec) (Resource, error) {
+	if s.Entries == nil {
+		s.Entries = []sudoers.Entry{}
+	}
+	for i := range s.Entries {
+		s.Entries[i].Commands = nonNil(s.Entries[i].Commands)
+	}
+	s.PrivilegedGroups = nonNil(s.PrivilegedGroups)
+	s.SudoersDAllowlist = nonNil(s.SudoersDAllowlist)
+	s.BreakGlassAccounts = nonNil(s.BreakGlassAccounts)
+	return resource("sudo", TypeSudo, s)
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
 
 func resource(id, typ string, spec any) (Resource, error) {
 	b, err := json.Marshal(spec)
@@ -157,9 +234,14 @@ var (
 )
 
 // Verify checks, in this order, the DSSE signature against any trusted key and the payload type, device and
-// organization, version > minVersion and the schema version. It returns the decoded bundle or one of ErrSignature,
-// ErrWrongDevice, ErrDowngrade, ErrSchema.
+// organization, version > minVersion and the schema version (SchemaVersion). It returns the decoded bundle or one of
+// ErrSignature, ErrWrongDevice, ErrDowngrade, ErrSchema.
 func Verify(envelope []byte, trust Trust, deviceID, orgID string, minVersion int64) (*Bundle, error) {
+	return VerifyVersions(envelope, trust, deviceID, orgID, minVersion, []int{SchemaVersion})
+}
+
+// VerifyVersions is Verify for a reader that accepts the schema versions in accepted.
+func VerifyVersions(envelope []byte, trust Trust, deviceID, orgID string, minVersion int64, accepted []int) (*Bundle, error) {
 	env, payload, err := dsse.Decode(envelope)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSignature, err)
@@ -181,7 +263,7 @@ func Verify(envelope []byte, trust Trust, deviceID, orgID string, minVersion int
 	if b.BundleVersion <= minVersion {
 		return nil, fmt.Errorf("%w: %d <= %d", ErrDowngrade, b.BundleVersion, minVersion)
 	}
-	if b.SchemaVersion != SchemaVersion {
+	if !slices.Contains(accepted, b.SchemaVersion) {
 		return nil, fmt.Errorf("%w: schema_version %d", ErrSchema, b.SchemaVersion)
 	}
 	return &b, nil

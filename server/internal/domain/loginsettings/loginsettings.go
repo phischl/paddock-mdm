@@ -1,0 +1,99 @@
+// Package loginsettings holds the rules of an organization's login settings (plan M3a decision 8): Hello PIN,
+// the session action of a user lock, break-glass accounts, the sudoers.d allow list and the sudo lecture text.
+package loginsettings
+
+import (
+	"errors"
+	"regexp"
+	"slices"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/paddock-mdm/paddock/pkg/policy"
+)
+
+// Settings are the login settings of one organization.
+type Settings struct {
+	HelloEnabled          bool
+	HelloPinMinLength     int
+	UserLockSessionAction string
+	BreakGlassAccounts    []string
+	SudoersDAllowlist     []string
+	SudoLectureText       string
+}
+
+// Bounds of the settings.
+const (
+	MinPinLength    = 6
+	MaxPinLength    = 32
+	MaxListEntries  = 50
+	MaxLectureChars = 2000
+)
+
+// Validation errors.
+var (
+	ErrPinLength     = errors.New("hello_pin_min_length must be 6 to 32")
+	ErrSessionAction = errors.New("user_lock_session_action must be lock_screen or terminate")
+	ErrBreakGlass    = errors.New("break_glass_accounts must be at most 50 distinct local account names matching ^[a-z_][a-z0-9_-]{0,31}$")
+	ErrAllowlist     = errors.New("sudoers_d_allowlist must be at most 50 distinct file names matching ^[A-Za-z0-9_-]{1,64}$ that do not start with paddock-")
+	ErrLecture       = errors.New("sudo_lecture_text must be 1 to 2000 characters")
+)
+
+// allowlistPattern matches the file names sudo reads from an includedir (no "." and no trailing "~").
+var allowlistPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// Normalize trims the lecture text and the list entries.
+func Normalize(s Settings) Settings {
+	s.SudoLectureText = strings.TrimSpace(s.SudoLectureText)
+	s.BreakGlassAccounts = trimAll(s.BreakGlassAccounts)
+	s.SudoersDAllowlist = trimAll(s.SudoersDAllowlist)
+	return s
+}
+
+func trimAll(in []string) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = strings.TrimSpace(v)
+	}
+	return out
+}
+
+// Validate checks normalized settings.
+func Validate(s Settings) error {
+	if s.HelloPinMinLength < MinPinLength || s.HelloPinMinLength > MaxPinLength {
+		return ErrPinLength
+	}
+	if s.UserLockSessionAction != bundle.SessionActionLockScreen && s.UserLockSessionAction != bundle.SessionActionTerminate {
+		return ErrSessionAction
+	}
+	if !distinct(s.BreakGlassAccounts) {
+		return ErrBreakGlass
+	}
+	for _, a := range s.BreakGlassAccounts {
+		if policy.ValidateOwner(a) != nil {
+			return ErrBreakGlass
+		}
+	}
+	if !distinct(s.SudoersDAllowlist) {
+		return ErrAllowlist
+	}
+	for _, f := range s.SudoersDAllowlist {
+		// Files named paddock-* belong to Paddock; allow-listing them would let a foreign file pass as Paddock's.
+		if !allowlistPattern.MatchString(f) || strings.HasPrefix(f, "paddock-") {
+			return ErrAllowlist
+		}
+	}
+	if n := utf8.RuneCountInString(s.SudoLectureText); n < 1 || n > MaxLectureChars {
+		return ErrLecture
+	}
+	return nil
+}
+
+func distinct(list []string) bool {
+	if len(list) > MaxListEntries {
+		return false
+	}
+	sorted := slices.Sorted(slices.Values(list))
+	return len(slices.Compact(sorted)) == len(list)
+}

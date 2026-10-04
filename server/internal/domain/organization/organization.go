@@ -3,8 +3,12 @@ package organization
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
+	"strings"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // Statuses.
@@ -72,4 +76,56 @@ func ParseRoleGroup(name string) (slug string, role GroupRole, ok bool) {
 		return "", "", false
 	}
 	return m[1], GroupRole(m[2]), true
+}
+
+// LockedGroup returns the group whose members are locked: paddock.<slug>.locked (architecture §9.2).
+func LockedGroup(slug string) string { return RootGroup(slug) + ".locked" }
+
+// LocalUserGroup returns the Authentik group of a local Paddock user group: paddock.<slug>.g.<group_slug>.
+func LocalUserGroup(slug, groupSlug string) string { return RootGroup(slug) + ".g." + groupSlug }
+
+// SyncedUserGroup returns the mirror group of an imported upstream group: paddock.<slug>.s.<group_slug>.
+func SyncedUserGroup(slug, groupSlug string) string { return RootGroup(slug) + ".s." + groupSlug }
+
+// DeviceLoginGroup returns the per-device group of directly assigned users: paddock.<slug>.d.<device_id>.
+func DeviceLoginGroup(slug string, deviceID uuid.UUID) string {
+	return RootGroup(slug) + ".d." + deviceID.String()
+}
+
+// DeviceLoginApp returns the slug of the device login OAuth2 provider and application: paddock-device-<slug>.
+func DeviceLoginApp(slug string) string { return "paddock-device-" + slug }
+
+// IsPaddockGroup reports whether an Authentik group name belongs to Paddock's namespace (paddock.*).
+func IsPaddockGroup(name string) bool { return strings.HasPrefix(name, groupPrefix) }
+
+// MaxDomains bounds the domains of one organization.
+const MaxDomains = 20
+
+// ErrInvalidDomains is returned for malformed or duplicate domains.
+var ErrInvalidDomains = fmt.Errorf("domains must be at most %d distinct lowercase DNS names such as example.org", MaxDomains)
+
+var domainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$`)
+
+// ValidateDomains checks the domains of an organization (plan M3a decision 1); the order is kept because the first
+// domain is the primary domain.
+func ValidateDomains(domains []string) error {
+	if len(domains) > MaxDomains {
+		return ErrInvalidDomains
+	}
+	seen := map[string]bool{}
+	for _, d := range domains {
+		if len(d) > 253 || !domainPattern.MatchString(d) || seen[d] {
+			return ErrInvalidDomains
+		}
+		seen[d] = true
+	}
+	return nil
+}
+
+// PrimaryDomain is the first domain, or "" for an organization without domains.
+func PrimaryDomain(domains []string) string {
+	if len(domains) == 0 {
+		return ""
+	}
+	return domains[0]
 }

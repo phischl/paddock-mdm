@@ -61,7 +61,7 @@ func (q *Queries) DeleteDeviceGroupMember(ctx context.Context, arg DeleteDeviceG
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at FROM device WHERE id = $1
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended FROM device WHERE id = $1
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -79,6 +79,7 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 		&i.EnrollmentTokenID,
 		&i.EnrolledAt,
 		&i.StateChangedAt,
+		&i.LoginsSuspended,
 	)
 	return i, err
 }
@@ -103,7 +104,7 @@ func (q *Queries) GetDeviceIdentityKey(ctx context.Context, keyID string) (Devic
 }
 
 const getDeviceStatus = `-- name: GetDeviceStatus :one
-SELECT device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health FROM device_status WHERE device_id = $1
+SELECT device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health, schema_versions FROM device_status WHERE device_id = $1
 `
 
 func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (DeviceStatus, error) {
@@ -117,6 +118,7 @@ func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (Devi
 		&i.AgentVersion,
 		&i.LastSeq,
 		&i.Health,
+		&i.SchemaVersions,
 	)
 	return i, err
 }
@@ -144,7 +146,7 @@ const insertDevice = `-- name: InsertDevice :one
 INSERT INTO device (id, organization_id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
         $8)
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended
 `
 
 type InsertDeviceParams struct {
@@ -182,6 +184,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 		&i.EnrollmentTokenID,
 		&i.EnrolledAt,
 		&i.StateChangedAt,
+		&i.LoginsSuspended,
 	)
 	return i, err
 }
@@ -359,7 +362,7 @@ func (q *Queries) ListDeviceIdentityKeys(ctx context.Context, deviceID uuid.UUID
 
 const listDevices = `-- name: ListDevices :many
 
-SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device_status.last_contact_at, device_status.applied_bundle_version,
+SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 WHERE ($1::text IS NULL
@@ -427,6 +430,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.Device.EnrollmentTokenID,
 			&i.Device.EnrolledAt,
 			&i.Device.StateChangedAt,
+			&i.Device.LoginsSuspended,
 			&i.LastContactAt,
 			&i.AppliedBundleVersion,
 			&i.AgentVersion,
@@ -442,7 +446,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 }
 
 const lockDevice = `-- name: LockDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at FROM device WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended FROM device WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -460,6 +464,7 @@ func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) 
 		&i.EnrollmentTokenID,
 		&i.EnrolledAt,
 		&i.StateChangedAt,
+		&i.LoginsSuspended,
 	)
 	return i, err
 }
@@ -476,7 +481,7 @@ func (q *Queries) RevokeDeviceIdentityKeys(ctx context.Context, deviceID uuid.UU
 const setDeviceState = `-- name: SetDeviceState :one
 UPDATE device SET state = $1, state_changed_at = now()
 WHERE id = $2 AND state = $3
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended
 `
 
 type SetDeviceStateParams struct {
@@ -500,6 +505,7 @@ func (q *Queries) SetDeviceState(ctx context.Context, arg SetDeviceStateParams) 
 		&i.EnrollmentTokenID,
 		&i.EnrolledAt,
 		&i.StateChangedAt,
+		&i.LoginsSuspended,
 	)
 	return i, err
 }
