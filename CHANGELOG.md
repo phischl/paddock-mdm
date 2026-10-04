@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The worker records check-ins in the device status at most once per minute per device, quarantines a device whose sequence numbers diverge (cloned identity, audit event `device.clone_suspected`) and records device events as audit events `device.bundle_applied`, `device.bundle_rejected` and `device.config_drift_corrected`, each once per event sequence number (A6, M2a step 5).
 - Metrics `paddock_compiler_bundles_total{result}` and `paddock_compiler_latency_seconds` (M2a step 5).
 - Acceptance gates D1–D4 for the device protocol, its security, clone detection and the absence of a synchronous device-to-database path, run with the reference device client `test/acceptance/devicesim` (`go run ./test/acceptance/cmd/devicesim enroll` enrolls a simulated device) (M2a step 6).
+- Portal pages *Devices* (list with state and device group filters; detail with identity, device groups, effective configuration and conflicts, approve, reject, release quarantine and retire — retiring requires typing the hostname), *Enrollment tokens* (the enrollment configuration with its copy button is shown once), *Managed files* and *Managed units*; a device group page lists its devices (AC1, AC2, M2a step 7).
 
 ### Changed
 

@@ -58,6 +58,11 @@ const columns = computed<ListColumn[]>(() => [
       item-value="id"
       data-testid="device-group-list"
     >
+      <template #[`item.name`]="{ item }: { item: DeviceGroup }">
+        <RouterLink :to="{ name: 'device-group', params: { id: item.id } }">
+          {{ item.name }}
+        </RouterLink>
+      </template>
       <template #[`item.created_at`]="{ item }: { item: DeviceGroup }">
         {{ formatDateTime(item.created_at, locale) }}
       </template>

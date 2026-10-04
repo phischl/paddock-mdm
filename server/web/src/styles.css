@@ -43,3 +43,11 @@ h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.75rem; }
   background: #1f5135; color: #fff; border-radius: 4px; padding: 0.5rem 1rem; text-decoration: none;
 }
 .link-button:hover { background: #163b27; }
+
+.facts th { width: 14rem; font-weight: 600; text-align: left; }
+.form-row { display: flex; gap: 1rem; }
+.form-row > * { flex: 1; }
+.config-text textarea { font-family: ui-monospace, monospace; }
+.conflict { margin-bottom: 1rem; }
+.state-quarantined, .state-rejected, .state-retired { color: var(--danger); font-weight: 600; }
+.state-pending { color: #7a4b00; font-weight: 600; }

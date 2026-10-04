@@ -22,6 +22,7 @@ export function auditText(t: Translate, te: Exists, ev: AuditEvent): string {
   }
   if (values.name === undefined) values.name = ev.target?.display ?? ''
   if (values.slug === undefined) values.slug = ev.target?.display ?? ''
+  if (values.hostname === undefined) values.hostname = ev.target?.display ?? ev.target?.id ?? ''
   try {
     return t(key, values)
   } catch {

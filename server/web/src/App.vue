@@ -44,10 +44,38 @@ onBeforeUnmount(() => observer.disconnect())
       >
         <v-btn
           v-if="session.canReadGroups"
+          to="/devices"
+          variant="text"
+        >
+          {{ t('nav.devices') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
           to="/device-groups"
           variant="text"
         >
           {{ t('nav.deviceGroups') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canWrite"
+          to="/enrollment-tokens"
+          variant="text"
+        >
+          {{ t('nav.enrollmentTokens') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/managed-files"
+          variant="text"
+        >
+          {{ t('nav.managedFiles') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/managed-units"
+          variant="text"
+        >
+          {{ t('nav.managedUnits') }}
         </v-btn>
         <v-btn
           v-if="session.canReadAudit"
