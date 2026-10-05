@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
 	"github.com/paddock-mdm/paddock/server/internal/principal"
 	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
 )
@@ -344,6 +345,47 @@ func grpPK(e *env, name string) string {
 		}
 	}
 	return ""
+}
+
+// TestPatternCommandsAreRefused: sudo regular expressions and globs widen a restricted command, so every pattern
+// character is refused with 422 invalid_command naming it; a profile stored before the check was tightened is
+// reported with its invalid commands (plan M3.1 decision 1).
+func TestPatternCommandsAreRefused(t *testing.T) {
+	e := newEnv(t)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	for _, char := range []string{"^", "$", "*", "?", "[", "]"} {
+		res := e.do(call{method: "POST", path: "/api/v1/permission-profiles", cookie: alice, body: map[string]any{
+			"name": "pattern", "class": "restricted", "commands": []string{"/usr/bin/systemctl restart x" + char},
+		}})
+		var p httpx.Problem
+		res.decode(t, &p)
+		if res.status != http.StatusUnprocessableEntity || p.Code != "invalid_command" ||
+			!strings.Contains(p.Detail, "character '"+char+"' is not allowed") {
+			t.Fatalf("%s: %d %s", char, res.status, res.body)
+		}
+		e.expectEvent(res, "permission_profile.created:failure:invalid_command")
+	}
+
+	valid := e.profile(alice, map[string]any{"name": "nginx", "class": "restricted", "commands": []string{"/usr/bin/systemctl restart nginx.service"}})
+	if len(valid.InvalidCommands) != 0 {
+		t.Fatalf("valid profile reported invalid: %+v", valid)
+	}
+	id := uuid.Must(uuid.NewV7())
+	if _, err := e.super.Exec(context.Background(), `INSERT INTO permission_profile (id, organization_id, name, class, commands)
+		VALUES ($1, $2, 'legacy', 'restricted', '{"/usr/bin/journalctl","/usr/bin/systemctl ^.*$"}')`, id, e.acme); err != nil {
+		t.Fatal(err)
+	}
+	res := e.do(call{method: "GET", path: "/api/v1/permission-profiles/" + id.String(), cookie: alice})
+	var legacy adminapi.PermissionProfile
+	res.decode(t, &legacy)
+	if res.status != http.StatusOK || !slices.Equal(legacy.InvalidCommands, []string{"/usr/bin/systemctl ^.*$"}) {
+		t.Fatalf("legacy profile: %d %s", res.status, res.body)
+	}
+	// The stored profile cannot be saved until the command is fixed.
+	patch := e.do(call{method: "PATCH", path: "/api/v1/permission-profiles/" + id.String(), cookie: alice, body: map[string]any{"lecture": "always"}})
+	if patch.status != http.StatusUnprocessableEntity || patch.problemCode(t) != "invalid_command" {
+		t.Fatalf("patch of the legacy profile: %d %s", patch.status, patch.body)
+	}
 }
 
 func (e *env) profile(cookie *http.Cookie, body map[string]any) adminapi.PermissionProfile {

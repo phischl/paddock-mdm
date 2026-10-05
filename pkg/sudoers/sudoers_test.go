@@ -97,6 +97,35 @@ func TestValidateCommand(t *testing.T) {
 	}
 }
 
+// TestValidateCommandRefusesPatterns: sudo regular expressions and globs widen a command, so every pattern character
+// is refused anywhere, and the error names it (plan M3.1 decision 1).
+func TestValidateCommandRefusesPatterns(t *testing.T) {
+	cases := map[string]string{
+		"/usr/bin/systemctl ^.*$":       "'^'",
+		"/usr/bin/systemctl restart x$": "'$'",
+		"/usr/bin/systemctl restart *":  "'*'",
+		"/usr/bin/systemctl restart ?":  "'?'",
+		"/usr/bin/systemctl [a]":        "'['",
+		"/usr/bin/systemctl a]":         "']'",
+		"/usr/bin/syst?mctl status":     "'?'",
+		"^/usr/bin/systemctl$":          "'^'",
+	}
+	for c, char := range cases {
+		err := ValidateCommand(c)
+		if !errors.Is(err, ErrCommand) || !strings.Contains(err.Error(), "character "+char+" is not allowed") {
+			t.Errorf("%q: %v, want an error naming %s", c, err, char)
+		}
+	}
+	// The device renderer refuses the same input.
+	e := restricted()
+	e.Commands = []string{"/usr/bin/systemctl ^.*$"}
+	for _, flavor := range Flavors {
+		if out, err := Render(e, 1000, flavor); !errors.Is(err, ErrCommand) || out != nil {
+			t.Errorf("%s rendered a pattern command (%v):\n%s", flavor, err, out)
+		}
+	}
+}
+
 func TestValidate(t *testing.T) {
 	cases := map[string]struct {
 		mutate func(*Entry)
@@ -159,7 +188,7 @@ func TestRenderedFilesPassVisudo(t *testing.T) {
 		restricted(),
 		{Username: "erin@acme.test", Class: ClassFull, RequirePassword: true, TimestampTimeoutMin: 0, Lecture: LectureOnce},
 		{Username: "frank@acme.test", Class: ClassFull, Lecture: LectureNever, TimestampTimeoutMin: 60},
-		{Username: "gina@acme.test", Class: ClassRestricted, Commands: []string{`/usr/bin/foo ""`, "/usr/bin/x a(b) *"},
+		{Username: "gina@acme.test", Class: ClassRestricted, Commands: []string{`/usr/bin/foo ""`, "/usr/bin/x a(b) {c}"},
 			Lecture: LectureAlways},
 	}
 	for _, e := range entries {

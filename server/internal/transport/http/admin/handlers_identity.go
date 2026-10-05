@@ -353,10 +353,14 @@ func toPermissionProfile(p pgstore.PermissionProfile) adminapi.PermissionProfile
 	if root == nil {
 		root = []string{}
 	}
+	invalid := privilege.InvalidCommands(p.Commands)
+	if invalid == nil {
+		invalid = []string{}
+	}
 	return adminapi.PermissionProfile{
 		Id: p.ID, Name: p.Name, Class: adminapi.PrivilegeClass(p.Class), Commands: p.Commands, RequirePassword: p.RequirePassword,
 		TimestampTimeoutMin: int(p.TimestampTimeoutMin), Lecture: adminapi.Lecture(p.Lecture), RootEquivalent: len(root) > 0,
-		RootEquivalentCommands: root, CreatedAt: p.CreatedAt.UTC(), UpdatedAt: p.UpdatedAt.UTC(),
+		RootEquivalentCommands: root, InvalidCommands: invalid, CreatedAt: p.CreatedAt.UTC(), UpdatedAt: p.UpdatedAt.UTC(),
 	}
 }
 

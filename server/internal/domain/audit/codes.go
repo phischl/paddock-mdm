@@ -69,6 +69,7 @@ const (
 	CodeProfileAssignmentUpdated    Code = "profile_assignment.updated"
 	CodeProfileAssignmentDeleted    Code = "profile_assignment.deleted"
 	CodeDeviceBundleRenderFailed    Code = "device.bundle_render_failed"
+	CodeDeviceBundleEntryOmitted    Code = "device.bundle_entry_omitted"
 
 	// Identity and privileges reported by devices (plan M3b decision 5).
 	CodeDeviceLoginApplied               Code = "device.login_applied"
@@ -528,6 +529,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"username", "reason"},
 		Outcomes:    []Outcome{OutcomeFailure},
 		Note:        "error_code is render_failed; reason is visudo's message (at most 500 characters).",
+	},
+	CodeDeviceBundleEntryOmitted: {
+		Code: CodeDeviceBundleEntryOmitted, Emitted: true,
+		Description: "The compiler published a device's bundle without a user's sudo entry because a permission profile holds a command that is no longer allowed (stored before the command check was tightened); the user has no sudo rights on the device until the profile is fixed (actor: system).",
+		Params:      []string{"username", "reason"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded at most once per user and bundle version; reason names the command, the profiles it comes from and the refused character (at most 500 characters).",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

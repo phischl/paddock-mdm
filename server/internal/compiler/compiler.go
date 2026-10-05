@@ -121,6 +121,7 @@ type rendered struct {
 	schema  int
 	content [32]byte
 	payload []byte
+	omitted []omittedEntry
 }
 
 // compileTarget is a device to compile with what decides its schema.
@@ -210,6 +211,27 @@ func (c *Compiler) recordFailures(ctx context.Context, failures []renderFailure)
 	}
 }
 
+// specEntryOmitted is the privileged action device.bundle_entry_omitted (actor: system).
+var specEntryOmitted = app.ActionSpec{Code: audit.CodeDeviceBundleEntryOmitted}
+
+// recordOmissions records every sudo entry left out of a published bundle. Only published bundles get here, so each
+// omission is recorded once per bundle version (plan M3.1 decision 7).
+func (c *Compiler) recordOmissions(ctx context.Context, r rendered) {
+	for _, o := range r.omitted {
+		slog.WarnContext(ctx, "sudo entry omitted: a profile holds an invalid command", "device_id", r.device,
+			"bundle_version", r.oldSeq+1, "reason", o.reason)
+		spec := specEntryOmitted
+		spec.Target = &audit.Target{Type: "device", ID: r.device.String()}
+		spec.Params = map[string]any{"username": o.username, "reason": truncateReason(o.reason)}
+		err := c.cfg.Runner.RunTx(ctx, app.ScopeOrg, spec, func(context.Context, *pgstore.Queries, app.Recorder) error {
+			return nil
+		})
+		if err != nil {
+			slog.WarnContext(ctx, "recording the omitted sudo entry failed", "device_id", r.device, "error", err)
+		}
+	}
+}
+
 func truncateReason(s string) string {
 	if len(s) > 500 {
 		return s[:500]
@@ -258,7 +280,8 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event,
 
 // render builds the next bundle of an active device and reports whether its content differs from the last one.
 // Agents that report schema 2 get v2 with the login and sudo resources; all others get v1 exactly as before (plan
-// M3a decision 14a). A sudo entry that fails the server-side check blocks the device's bundle (failure).
+// M3a decision 14a). A sudo entry that fails the server-side check blocks the device's bundle (failure); one with an
+// invalid command is omitted and recorded once the bundle is published.
 func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID, t compileTarget,
 	defs app.ManagedDefinitions, identity *identityLoader) (rendered, bool, *renderFailure, error) {
 	if !device.Compiled(t.state) {
@@ -273,15 +296,17 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		return rendered{}, false, nil, err
 	}
 	schema := bundle.SchemaVersion
+	var omitted []omittedEntry
 	if t.v2 {
 		id, err := identity.get(ctx)
 		if err != nil {
 			return rendered{}, false, nil, err
 		}
-		extra, failure, err := c.renderV2(ctx, id, t)
+		extra, omits, failure, err := c.renderV2(ctx, id, t)
 		if err != nil || failure != nil {
 			return rendered{}, false, failure, err
 		}
+		omitted = omits
 		schema = bundle.SchemaVersion2
 		resources = append(resources, extra...)
 		bundle.SortResources(resources)
@@ -307,7 +332,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	if err != nil {
 		return rendered{}, false, nil, err
 	}
-	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload}, true, nil, nil
+	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted}, true, nil, nil
 }
 
 // publish signs all bundles in one batch, then per device increments bundle_seq, records the bundle row and uploads
@@ -336,6 +361,7 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 			continue
 		}
 		metricBundles.WithLabelValues("new").Inc()
+		c.recordOmissions(ctx, r)
 	}
 	return errors.Join(errs...)
 }

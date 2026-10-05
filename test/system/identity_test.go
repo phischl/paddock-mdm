@@ -687,14 +687,15 @@ func gateP4(t *testing.T, w *identityWorld) {
 		t.Errorf("90-paddock changed: %s → %s", before, after)
 	}
 
-	// A broken entry that only a test-only bundle can carry (the compiler checks every entry with visudo before
-	// signing): dave's command list gets a command visudo rejects.
+	// A broken entry that only a test-only bundle can carry (the compiler checks every entry before signing): dave's
+	// command list gets a command the agent refuses for dave alone.
 	daveFile := "/etc/sudoers.d/" + sudoers.FileName(w.dave.name)
 	daveBefore := w.Must("sudo sha256sum " + daveFile)
 	restore := w.forgeBundle(t, func(s *bundle.SudoSpec) {
 		for i := range s.Entries {
 			if s.Entries[i].Username == w.dave.name {
-				// A leading ^ starts a sudoers regular expression; without the closing $ visudo refuses it.
+				// A sudoers regular expression: the device's renderer refuses it (plan M3.1 decision 1). sudo-rs's visudo
+				// accepts every command the check lets through, so no bundle reaches a visudo refusal on every VM.
 				s.Entries[i].Commands = []string{"/usr/bin/systemctl ^"}
 			}
 		}

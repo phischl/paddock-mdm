@@ -182,6 +182,15 @@ async function unassign(a: ProfileAssignment): Promise<void> {
         </div>
       </div>
       <v-alert
+        v-if="profile.invalid_commands.length > 0"
+        type="error"
+        variant="tonal"
+        class="conflict"
+        data-testid="invalid-profile"
+      >
+        {{ t('profiles.invalidProfile', { commands: profile.invalid_commands.join(', ') }) }}
+      </v-alert>
+      <v-alert
         v-if="profile.root_equivalent"
         type="warning"
         variant="tonal"

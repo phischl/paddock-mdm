@@ -142,9 +142,9 @@ func TestSudoVisudoFailureKeepsThePreviousState(t *testing.T) {
 	name := "/etc/sudoers.d/" + sudoers.FileName("dave@acme.test")
 	before := string(sys.Files[name].Data)
 
-	// The file itself fails visudo -c -f: never renamed into place.
-	sys.VisudoReject = "^"
-	broken := restricted("dave@acme.test", "/usr/bin/x ^")
+	// The file itself fails visudo -c -f (a directory with arguments): never renamed into place.
+	sys.VisudoReject = "/usr/bin/x/ a"
+	broken := restricted("dave@acme.test", "/usr/bin/x/ a")
 	for range 2 {
 		if res := s.Apply(ctx, sudoResource(t, broken)); res.Status != reconcile.Error {
 			t.Fatalf("apply %+v", res)
@@ -175,6 +175,33 @@ func TestSudoVisudoFailureKeepsThePreviousState(t *testing.T) {
 	// A new file that breaks the configuration is removed again.
 	if s.Apply(ctx, sudoResource(t, dave, restricted("erin@acme.test", "/usr/bin/true"))); sys.Files["/etc/sudoers.d/"+sudoers.FileName("erin@acme.test")] != nil {
 		t.Fatal("a new file that broke the configuration was kept")
+	}
+}
+
+// TestSudoRefusesPatternCommands: an entry with a sudo regular expression or glob is refused for its user, whatever
+// the server sent (plan M3.1 decision 1, defence in depth); the other entries still apply.
+func TestSudoRefusesPatternCommands(t *testing.T) {
+	ctx := context.Background()
+	sys, s, events := sudoFixture(t)
+	s.Apply(ctx, sudoResource(t, restricted("dave@acme.test", "/usr/bin/true")))
+	name := "/etc/sudoers.d/" + sudoers.FileName("dave@acme.test")
+	before := string(sys.Files[name].Data)
+	takeEvents(events)
+
+	res := s.Apply(ctx, sudoResource(t, restricted("dave@acme.test", "/usr/bin/systemctl ^.*$"), restricted("erin@acme.test", "/usr/bin/true")))
+	if res.Status != reconcile.Error || !strings.Contains(res.Message, "character '^' is not allowed") {
+		t.Fatalf("apply %+v", res)
+	}
+	if string(sys.Files[name].Data) != before {
+		t.Fatal("a pattern command replaced the working file")
+	}
+	if sys.Files["/etc/sudoers.d/"+sudoers.FileName("erin@acme.test")] == nil {
+		t.Fatal("the valid entry was not applied")
+	}
+	got := takeEvents(events)
+	if len(got) != 1 || got[0].typ != protocol.EventSudoApplyFailed || !strings.Contains(got[0].data, `"username":"dave@acme.test"`) ||
+		!strings.Contains(got[0].data, "character '^' is not allowed") {
+		t.Fatalf("events %v (want exactly one sudo.apply_failed for dave)", got)
 	}
 }
 

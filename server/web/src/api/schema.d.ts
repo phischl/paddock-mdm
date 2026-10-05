@@ -760,7 +760,8 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, org_operator. A restricted profile lists absolute command paths with optional arguments;
-         *     commands with ALL, "!", "#" or the sudoers separators ,:=\ are refused with 422 invalid_command.
+         *     commands with ALL, "!", "#", the sudoers separators ,:=\ or the pattern characters ^$*?[] are refused with 422
+         *     invalid_command; the detail names a refused pattern character.
          */
         post: operations["createPermissionProfile"];
         delete?: never;
@@ -1703,6 +1704,12 @@ export interface components {
             /** @description A command hands out root on its own or in combination. */
             root_equivalent: boolean;
             root_equivalent_commands: string[];
+            /**
+             * @description Commands stored before the command check was tightened that it now refuses. A profile with invalid commands
+             *     is invalid: the sudo entries it contributes to are omitted from bundles (audit device.bundle_entry_omitted)
+             *     until the commands are changed.
+             */
+            invalid_commands: string[];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */

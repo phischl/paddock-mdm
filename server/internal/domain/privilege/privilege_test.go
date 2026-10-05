@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -170,6 +171,8 @@ func TestValidateProfile(t *testing.T) {
 		"command with ALL":      {Profile{Name: "x", Class: ClassRestricted, Lecture: LectureOnce, Commands: []string{"ALL"}}, ErrInvalidCommand},
 		"command with comma":    {Profile{Name: "x", Class: ClassRestricted, Lecture: LectureOnce, Commands: []string{"/usr/bin/a, /usr/bin/b"}}, ErrInvalidCommand},
 		"negated command":       {Profile{Name: "x", Class: ClassRestricted, Lecture: LectureOnce, Commands: []string{"!/usr/bin/su"}}, ErrInvalidCommand},
+		"regex command":         {Profile{Name: "x", Class: ClassRestricted, Lecture: LectureOnce, Commands: []string{"/usr/bin/systemctl ^.*$"}}, ErrInvalidCommand},
+		"glob command":          {Profile{Name: "x", Class: ClassRestricted, Lecture: LectureOnce, Commands: []string{"/usr/bin/systemctl restart *"}}, ErrInvalidCommand},
 		"timeout 61":            {Profile{Name: "x", Class: ClassNone, Lecture: LectureOnce, TimestampTimeoutMin: 61}, ErrInvalidScalars},
 		"no lecture":            {Profile{Name: "x", Class: ClassNone}, ErrInvalidScalars},
 	}
@@ -177,6 +180,17 @@ func TestValidateProfile(t *testing.T) {
 		if err := ValidateProfile(NormalizeProfile(c.p)); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
 		}
+	}
+	if err := ValidateProfile(Profile{Name: "x", Class: ClassRestricted, Lecture: LectureOnce, Commands: []string{"/usr/bin/id [a]"}}); err == nil ||
+		!strings.Contains(err.Error(), "character '[' is not allowed") {
+		t.Errorf("the error does not name the character: %v", err)
+	}
+	if got := InvalidCommands([]string{"/usr/bin/id", "/usr/bin/systemctl ^.*$", "ALL", "/usr/bin/x ?"}); !slices.Equal(got,
+		[]string{"/usr/bin/systemctl ^.*$", "ALL", "/usr/bin/x ?"}) {
+		t.Errorf("InvalidCommands: %v", got)
+	}
+	if got := InvalidCommands([]string{"/usr/bin/id"}); got != nil {
+		t.Errorf("InvalidCommands of valid commands: %v", got)
 	}
 	if ValidateAssignmentSubject(SubjectGlobal, dave) == nil || ValidateAssignmentSubject(SubjectUser, uuid.Nil) == nil ||
 		ValidateAssignmentSubject("device", dave) == nil || ValidateAssignmentSubject(SubjectGroup, ops) != nil {

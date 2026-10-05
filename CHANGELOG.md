@@ -134,6 +134,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Commands of restricted permission profiles are refused (422 `invalid_command`, the detail names the character) when they contain `^`, `$`, `*`, `?`, `[` or `]`: sudo reads them as regular expressions or globs, so `/usr/bin/systemctl ^.*$` would allow every argument; devices refuse such an entry as well, for its user alone, and report `device.sudo_apply_failed` (M3.1 step 1).
+- Profiles stored with such a command before this release are marked *invalid* in the portal, and the compiler leaves out the sudo rights of every user they apply to (audit `device.bundle_entry_omitted`) until the command is changed or removed; review the permission profiles after the update (M3.1 step 1).
 - `GET /api/v1/upstream-groups` lists only Authentik groups that have at least one member of the organization, and importing any other upstream group answers 404 `not_found`: before, every organization saw the names of all upstream groups (M3b decision 1).
 - Device logins through the QR code URL (`/device?code=`) require MFA as well: the device providers use the Paddock authorization flow `paddock-device-authorization` with a mandatory MFA stage, because Authentik otherwise authenticates this path through the brand's default flow (M3a decision 6, ADR 0007 amendment).
 - Device tokens carry only the organization's own `paddock.<slug>…` groups in the `groups` claim: the device providers use a Paddock profile mapping instead of Authentik's managed `profile` mapping, which emits all groups of a user, including non-Paddock groups and groups of other organizations (M3a decision 5, ADR 0007 amendment).
