@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 4 * * 1" # weekly: new CVEs in unchanged dependencies and images
 
 permissions:
   contents: read
@@ -33,6 +35,26 @@ jobs:
       - run: make test
       - run: make fuzz
 
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # gitleaks scans the full history
+      - run: make scan-secrets
+
+  trivy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: trivy-db-
+      - run: make scan-fs
+      - run: make scan-images
+
   web:
     runs-on: ubuntu-24.04
     steps:
@@ -41,7 +63,7 @@ jobs:
 
   acceptance:
     if: github.ref == 'refs/heads/main'
-    needs: [lint, test, web]
+    needs: [lint, test, web, secrets, trivy]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:

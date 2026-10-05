@@ -32,7 +32,9 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # 17). The compiler never runs sudo, so the image keeps no setuid binaries; visudo refuses to run for a uid without a
 # passwd entry, hence the user nonroot with distroless' uid.
 FROM ${COMPILER_RUNTIME_IMAGE} AS compiler
-RUN apt-get update && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/* \
+# apt-get upgrade: security fixes released after the pinned base digest (trivy image scan, `make scan-images`).
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/* \
     && find / -xdev -perm /6000 -type f -exec chmod ug-s {} + \
     && groupadd --system --gid 65532 nonroot \
     && useradd --system --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin nonroot

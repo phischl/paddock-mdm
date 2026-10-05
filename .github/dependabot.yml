@@ -1,0 +1,31 @@
+# Dependency updates. Updates of existing dependencies are routine; new dependencies still need architect approval
+# (CLAUDE.md). Container images pinned in deploy/compose/versions.env are not covered by Dependabot and are updated
+# deliberately (see docs/operations/local-dev.md); the weekly trivy run reports CVEs in them.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories: ["/pkg", "/server", "/agent", "/test/acceptance", "/test/system"]
+    schedule: { interval: weekly, day: monday }
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: npm
+    directory: /server/web
+    schedule: { interval: weekly, day: monday }
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /deploy/compose
+    schedule: { interval: weekly, day: monday }
