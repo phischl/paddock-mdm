@@ -1,6 +1,6 @@
 # Implementierungsplan: M4a — Commands, step-up authentication, managed local administrator, login notice
 
-Status: Ready for implementation (after M3.1) · 2026-10-05 · Author: architect
+Status: Ready for implementation · 2026-10-05 · Author: architect
 Basis: `docs/architecture.md` v1.6 §6.8, §9.6, §11.4, §12.2, §13; concept F16, "Local admin model / Three layers"
 (layer 2 notice); ADR 0006, 0014 (step-up), 0018; M3b (break-glass list, sudo-rs residual risk)
 
@@ -156,6 +156,20 @@ AppRoles), compiler (keys, local admin, notice, break-glass injection), agent (`
 | A2/A3/list/E | existing | new endpoints covered; e2e: reveal flow with step-up (TOTP via helper) and auto-hide |
 
 ## 7. Steps
+0. **M3.1 review follow-ups** (one commit each, `make lint test` green):
+   a) Usernames anywhere (API validation, `pkg/sudoers`, agent) MUST NOT start with `-`; every external command that
+      takes a user-supplied name gets `--` before it (`getent passwd -- <name>`, `gpasswd -d -- …` where supported,
+      otherwise reject). Test with `-x@acme.test`. CHANGELOG `Security`.
+   b) The portal's audit code list is generated from `server/internal/domain/audit/codes.go` by `make gen`
+      (`server/web/src/lib/auditCodes.gen.ts`), never maintained by hand; English display messages exist for every
+      code (lint check: every generated code has an `audit.<code>` key in `en.json`).
+   c) The agent writes an empty `/etc/paddock/login-deny` whenever the PAM profile is enabled, also on devices
+      without a `login` resource.
+   d) `TestDeviceSecurity/timestamp_5m1s`: use 5 min 10 s (still outside the window, robust against second truncation
+      and latency); the boundary itself stays covered by the gateway unit test.
+   e) `test/system`: after restoring `base-installed`, stop and mask `apt-daily.timer`, `apt-daily-upgrade.timer` and
+      `unattended-upgrades.service` in the guest for the duration of the test (test harness only — devices in
+      production keep their timers; update control is M5).
 1. Commands end to end (server, device API, agent execution framework with a no-op test command behind a test build
    tag) + C1. Commit `feat(commands): signed device commands`.
 2. Step-up + U1. Commit `feat(auth): step-up authentication`.
