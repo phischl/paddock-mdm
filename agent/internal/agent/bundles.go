@@ -21,9 +21,6 @@ import (
 // maxBundle bounds a bundle download.
 const maxBundle = 16 << 20
 
-// acceptedSchemas are the bundle schema versions this agent verifies and applies (plan M3b decision 4).
-var acceptedSchemas = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
-
 // loadCurrent reads the last applied bundle for the drift loop. A cached bundle that no longer verifies is ignored
 // (the next check-in delivers a fresh one).
 func (a *Agent) loadCurrent() {
@@ -32,7 +29,7 @@ func (a *Agent) loadCurrent() {
 		return
 	}
 	if err == nil {
-		a.current, err = bundle.VerifyVersions(env, a.d.Trust, a.st.DeviceID, a.d.Config.OrganizationID, a.st.AppliedBundleVersion-1, acceptedSchemas)
+		a.current, err = bundle.VerifyVersions(env, a.d.Trust, a.st.DeviceID, a.d.Config.OrganizationID, a.st.AppliedBundleVersion-1, apply.SchemaVersions)
 	}
 	if err != nil {
 		slog.Warn("cached bundle unusable; waiting for the next one", "error", err)
@@ -57,7 +54,7 @@ func (a *Agent) handleBundle(ctx context.Context, ref *protocol.BundleRef) {
 	if hex.EncodeToString(sum[:]) != ref.SHA256 {
 		err = errors.New("sha256_mismatch")
 	} else {
-		b, err = bundle.VerifyVersions(env, a.d.Trust, a.st.DeviceID, a.d.Config.OrganizationID, a.st.AppliedBundleVersion, acceptedSchemas)
+		b, err = bundle.VerifyVersions(env, a.d.Trust, a.st.DeviceID, a.d.Config.OrganizationID, a.st.AppliedBundleVersion, apply.SchemaVersions)
 	}
 	if err == nil {
 		err = a.d.Applier.CheckTypes(b)

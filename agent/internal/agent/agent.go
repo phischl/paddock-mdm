@@ -244,7 +244,7 @@ func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	}
 	return protocol.CheckinRequest{
 		AppliedBundleVersion: a.st.AppliedBundleVersion, AgentVersion: buildinfo.Version,
-		SchemaVersions: acceptedSchemas, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH, Health: health,
+		SchemaVersions: apply.SchemaVersions, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH, Health: health,
 	}
 }
 

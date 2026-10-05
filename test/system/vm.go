@@ -5,6 +5,7 @@ package system
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -138,16 +139,27 @@ func (v *VM) Must(command string) string {
 	return v.MustIn(nil, command)
 }
 
-// MustIn runs a command with stdin and fails the test on error.
+// MustIn runs a command with stdin and fails the test on error. SSH connection failures (ssh exit 255 with a
+// connection error, e.g. while a package installation restarts sshd) are retried for up to two minutes; a failing
+// command is not.
 func (v *VM) MustIn(stdin []byte, command string) string {
 	v.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	out, err := v.SSH(ctx, stdin, command)
-	if err != nil {
-		v.t.Fatalf("%s: %s: %v\n%s", v.Name, command, err, out)
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		out, err := v.SSH(ctx, stdin, command)
+		if err == nil {
+			return strings.TrimSpace(out)
+		}
+		var exit *exec.ExitError
+		connection := errors.As(err, &exit) && exit.ExitCode() == 255 && strings.Contains(out, "Connection")
+		if !connection || time.Now().After(deadline) {
+			v.t.Fatalf("%s: %s: %v\n%s", v.Name, command, err, out)
+		}
+		v.t.Logf("%s: SSH connection failed (%s), retrying", v.Name, strings.TrimSpace(out))
+		time.Sleep(5 * time.Second)
 	}
-	return strings.TrimSpace(out)
 }
 
 // Copy copies a local file into the guest.

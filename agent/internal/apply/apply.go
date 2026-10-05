@@ -15,6 +15,10 @@ import (
 	"github.com/paddock-mdm/paddock/pkg/bundle"
 )
 
+// SchemaVersions are the bundle schema versions this agent verifies and applies, reported in every check-in and used
+// by the run loop and the self-test alike (plan M3b decision 4).
+var SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
+
 // order is the apply order of resource types: units may depend on files; sudo rights follow the login component
 // that resolves their users.
 var order = []string{bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit, bundle.TypeLogin, bundle.TypeSudo}
