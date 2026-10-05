@@ -113,6 +113,14 @@ function groupName(id: string | null | undefined): string {
             </th>
             <td>{{ t('devices.versions', { applied: device.applied_bundle_version ?? 0, latest: device.bundle_version }) }}</td>
           </tr>
+          <tr>
+            <th scope="row">
+              {{ t('devices.sudoFlavor') }}
+            </th>
+            <td data-testid="device-sudo-flavor">
+              {{ device.sudo_flavor ? t('devices.sudoFlavors.' + device.sudo_flavor) : '–' }}
+            </td>
+          </tr>
           <tr
             v-for="key in device.identity_keys"
             :key="key.key_id"
@@ -232,6 +240,15 @@ function groupName(id: string | null | undefined): string {
       </form>
 
       <h2>{{ t('devices.sudo.title') }}</h2>
+      <v-alert
+        v-if="device.sudo_flavor === 'sudo-rs'"
+        type="info"
+        variant="tonal"
+        class="conflict"
+        data-testid="sudo-rs-lecture"
+      >
+        {{ t('devices.sudo.sudoRsLecture') }}
+      </v-alert>
       <template v-if="sudo">
         <v-alert
           v-for="e in sudo.entries.filter((x) => x.root_equivalent)"

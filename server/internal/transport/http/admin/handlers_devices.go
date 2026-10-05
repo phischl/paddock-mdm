@@ -168,6 +168,7 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 			out.SchemaVersions = append(out.SchemaVersions, int(v))
 		}
 		out.LoginStatus = toDeviceLoginStatus(d.Status.LoginState)
+		out.SudoFlavor = toSudoFlavor(d.Status.Health)
 	}
 	for i, u := range d.Login.Users {
 		out.LoginAssignment.Users[i] = toUserRef(u)
@@ -194,6 +195,17 @@ func toDeviceLoginStatus(raw json.RawMessage) adminapi.DeviceLoginStatus {
 		return adminapi.DeviceLoginStatus{}
 	}
 	return adminapi.DeviceLoginStatus{Login: state["login"], Sudo: state["sudo"]}
+}
+
+// toSudoFlavor reads sudo_flavor from the health report of the last check-in; an unknown value counts as not reported.
+func toSudoFlavor(health json.RawMessage) *adminapi.DeviceDetailSudoFlavor {
+	var h struct {
+		SudoFlavor adminapi.DeviceDetailSudoFlavor `json:"sudo_flavor"`
+	}
+	if json.Unmarshal(health, &h) != nil || !h.SudoFlavor.Valid() {
+		return nil
+	}
+	return &h.SudoFlavor
 }
 
 func (h *handlers) GetDevice(ctx context.Context, req adminapi.GetDeviceRequestObject) (adminapi.GetDeviceResponseObject, error) {

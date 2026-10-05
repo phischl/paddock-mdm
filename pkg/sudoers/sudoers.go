@@ -119,17 +119,40 @@ func Validate(e Entry) error {
 
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// Render returns the sudoers file of e for the user with the numeric uid. A full entry grants ALL; a restricted
-// entry lists its commands in the given order. Without require_password the commands are tagged NOPASSWD.
-func Render(e Entry, uid uint32) ([]byte, error) {
+// Flavor is the sudo implementation of a device (plan M3b, answer to question 1).
+type Flavor string
+
+// Flavors. SudoRS (sudo-rs, the default sudo of Ubuntu 26.04) does not know the setting lecture_file; its users see
+// sudo's default lecture.
+const (
+	Classic Flavor = "classic"
+	SudoRS  Flavor = "sudo-rs"
+)
+
+// Flavors are the supported flavors; the compiler validates every entry in each of them.
+var Flavors = []Flavor{Classic, SudoRS}
+
+// ErrFlavor is returned for an unknown flavor.
+var ErrFlavor = errors.New("sudoers: flavor must be classic or sudo-rs")
+
+// Render returns the sudoers file of e for the user with the numeric uid in the given flavor. A full entry grants ALL;
+// a restricted entry lists its commands in the given order. Without require_password the commands are tagged NOPASSWD.
+// The flavors differ only in the lecture_file setting, which SudoRS leaves out.
+func Render(e Entry, uid uint32, flavor Flavor) ([]byte, error) {
+	if flavor != Classic && flavor != SudoRS {
+		return nil, ErrFlavor
+	}
 	if err := Validate(e); err != nil {
 		return nil, err
 	}
 	user := fmt.Sprintf("#%d", uid)
+	lectureFile := ""
+	if flavor == Classic {
+		lectureFile = ", lecture_file=" + LectureFile
+	}
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "# Managed by Paddock. Do not edit. User %s, profile digest %s\n", e.Username, e.ProfileDigest)
-	fmt.Fprintf(&b, "Defaults:%s lecture=%s, lecture_file=%s, timestamp_timeout=%d\n", user, e.Lecture, LectureFile,
-		e.TimestampTimeoutMin)
+	fmt.Fprintf(&b, "Defaults:%s lecture=%s%s, timestamp_timeout=%d\n", user, e.Lecture, lectureFile, e.TimestampTimeoutMin)
 	cmds := "ALL"
 	if e.Class == ClassRestricted {
 		cmds = strings.Join(e.Commands, ", ")

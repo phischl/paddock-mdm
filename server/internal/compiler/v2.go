@@ -85,7 +85,9 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 		if !ok {
 			continue
 		}
-		rendered, err := sudoers.Render(entry, sudoers.PlaceholderUID)
+		// Only the classic flavor is validated: the sudo-rs flavor is the same file without the lecture_file setting
+		// (pkg/sudoers tests), and the sudo-rs of Debian 13 parses settings differently from the one devices run.
+		rendered, err := sudoers.Render(entry, sudoers.PlaceholderUID, sudoers.Classic)
 		if err == nil {
 			err = c.cfg.Sudoers.Validate(ctx, rendered)
 		}

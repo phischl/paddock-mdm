@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -206,7 +207,7 @@ func (a *Agent) waitActive(ctx context.Context) error {
 // Cycle runs one check-in and returns the time until the next one.
 func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	a.lastAttempt = a.d.Now()
-	resp, err := a.d.Client.Checkin(ctx, a.st.DeviceID, a.st.Seq, a.checkinRequest())
+	resp, err := a.d.Client.Checkin(ctx, a.st.DeviceID, a.st.Seq, a.checkinRequest(ctx))
 	if err != nil {
 		a.failures++
 		var retryAfter time.Duration
@@ -234,11 +235,31 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	return afterSuccess(resp.NextCheckinS, a.d.Rand())
 }
 
-func (a *Agent) checkinRequest() protocol.CheckinRequest {
+// checkinRequest carries the health report, which includes the device's sudo flavor (shown on the device detail).
+func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
+	a.refreshSudoFlavor(ctx)
+	health, err := json.Marshal(a.d.Health.Report())
+	if err != nil {
+		health = nil
+	}
 	return protocol.CheckinRequest{
 		AppliedBundleVersion: a.st.AppliedBundleVersion, AgentVersion: buildinfo.Version,
-		SchemaVersions: acceptedSchemas, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH,
+		SchemaVersions: acceptedSchemas, EventSeqHigh: a.st.EventSeq, Arch: runtime.GOARCH, Health: health,
 	}
+}
+
+// refreshSudoFlavor detects the active sudo implementation for the health report; a failed detection keeps the last
+// value.
+func (a *Agent) refreshSudoFlavor(ctx context.Context) {
+	if a.d.Sys == nil {
+		return
+	}
+	flavor, _, err := reconcile.SudoFlavor(ctx, a.d.Sys)
+	if err != nil {
+		slog.DebugContext(ctx, "sudo flavor unknown", "error", err)
+		return
+	}
+	a.d.Health.Update(func(r *health.Report) { r.SudoFlavor = string(flavor) })
 }
 
 // checkedIn persists the new sequence number first (clone detection depends on it) and marks the check-in for the

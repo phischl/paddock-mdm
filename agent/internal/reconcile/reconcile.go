@@ -57,8 +57,12 @@ type System interface {
 	Loginctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// Getent looks key up in an NSS database (passwd, group); exit 2 means not found.
 	Getent(ctx context.Context, database, key string) (stdout string, exit int, err error)
-	// Visudo runs visudo (checks only: -c, -c -f <file>).
-	Visudo(ctx context.Context, args ...string) (output string, exit int, err error)
+	// Visudo runs the visudo binary at path (checks only: -c, -c -f <file>).
+	Visudo(ctx context.Context, path string, args ...string) (output string, exit int, err error)
+	// SudoVersion runs `<path> --version` of a sudo binary.
+	SudoVersion(ctx context.Context, path string) (output string, exit int, err error)
+	// EvalSymlinks resolves every symlink of path (alternatives included).
+	EvalSymlinks(path string) (string, error)
 	// Gpasswd runs gpasswd (-d <user> <group>).
 	Gpasswd(ctx context.Context, args ...string) (output string, exit int, err error)
 	// Rename renames a file within the file system (rename(2)).

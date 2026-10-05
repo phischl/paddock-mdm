@@ -370,7 +370,8 @@
       "title": "Effective sudo rights",
       "caption": "Users allowed on this device with sudo rights",
       "none": "Nobody has sudo rights on this device.",
-      "rootEquivalent": "{username} effectively has root on this device: {commands}"
+      "rootEquivalent": "{username} effectively has root on this device: {commands}",
+      "sudoRsLecture": "Custom sudo lecture text is not supported by sudo-rs; users see the default lecture."
     },
     "report": {
       "title": "Latest reports of the agent",
@@ -390,6 +391,11 @@
         "sudo_apply_failed_config": "The sudo configuration failed its check: {message}",
         "sudo_user_unresolved": "{username} has sudo rights but is not known on the device yet"
       }
+    },
+    "sudoFlavor": "Sudo implementation",
+    "sudoFlavors": {
+      "classic": "sudo",
+      "sudo-rs": "sudo-rs"
     }
   },
   "tokens": {

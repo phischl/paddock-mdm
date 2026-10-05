@@ -234,3 +234,28 @@ func TestSessionLogins(t *testing.T) {
 		t.Fatalf("not reported again after 24 h: %+v", pending)
 	}
 }
+
+// TestCheckinReportsSudoFlavor: the check-in health carries the active sudo implementation.
+func TestCheckinReportsSudoFlavor(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	a.Cycle(ctx)
+	sys.Links = map[string]string{"/usr/bin/sudo": "/usr/lib/cargo/bin/sudo", "/usr/sbin/visudo": "/usr/lib/cargo/bin/visudo"}
+	sys.SudoVersions = map[string]string{"/usr/lib/cargo/bin/sudo": "sudo-rs 0.2.13-0ubuntu1.2\n"}
+	a.Cycle(ctx)
+	var flavors []string
+	for _, c := range g.Checkins {
+		var h struct {
+			SudoFlavor string `json:"sudo_flavor"`
+		}
+		if err := json.Unmarshal(c.Req.Health, &h); err != nil {
+			t.Fatalf("health %s: %v", c.Req.Health, err)
+		}
+		flavors = append(flavors, h.SudoFlavor)
+	}
+	if !slices.Equal(flavors, []string{"classic", "sudo-rs"}) {
+		t.Fatalf("sudo flavors %v", flavors)
+	}
+}

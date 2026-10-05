@@ -58,7 +58,7 @@ func sudoResource(t *testing.T, entries ...sudoers.Entry) bundle.Resource {
 
 func render(t *testing.T, e sudoers.Entry, uid uint32) string {
 	t.Helper()
-	b, err := sudoers.Render(e, uid)
+	b, err := sudoers.Render(e, uid, sudoers.Classic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,5 +263,46 @@ func TestPrivilegedGroupsKeepOnlyBreakGlassAccounts(t *testing.T) {
 	}
 	if got := takeEvents(events); !slices.Equal(got, want) {
 		t.Fatalf("events %v", got)
+	}
+}
+
+// TestSudoRendersForTheActiveImplementation: with sudo-rs behind /usr/bin/sudo (Ubuntu 26.04) the file has no
+// lecture_file and is checked with sudo-rs's visudo; when an operator switches the alternative back to classic sudo,
+// the next apply rewrites it for classic sudo.
+func TestSudoRendersForTheActiveImplementation(t *testing.T) {
+	ctx := context.Background()
+	sys, s, events := sudoFixture(t)
+	sys.Links = map[string]string{"/usr/bin/sudo": "/usr/lib/cargo/bin/sudo", "/usr/sbin/visudo": "/usr/lib/cargo/bin/visudo"}
+	sys.SudoVersions = map[string]string{"/usr/lib/cargo/bin/sudo": "sudo-rs 0.2.13-0ubuntu1.2\n"}
+	dave := restricted("dave@acme.test", "/usr/bin/true")
+	r := sudoResource(t, dave)
+	if flavor, visudo, err := reconcile.SudoFlavor(ctx, sys); err != nil || flavor != sudoers.SudoRS || visudo != "/usr/lib/cargo/bin/visudo" {
+		t.Fatalf("SudoFlavor = %s %s %v", flavor, visudo, err)
+	}
+	if res := s.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v (events %v)", res, takeEvents(events))
+	}
+	name := "/etc/sudoers.d/" + sudoers.FileName("dave@acme.test")
+	rs, err := sudoers.Render(dave, 811622788, sudoers.SudoRS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(sys.Files[name].Data); got != string(rs) {
+		t.Fatalf("sudo-rs file\n%s\nwant\n%s", got, rs)
+	}
+	if calls := sys.TakeCalls(); !slices.Contains(calls, "visudo-rs -c") || slices.Contains(calls, "visudo -c") {
+		t.Fatalf("not checked with sudo-rs's visudo: %v", calls)
+	}
+	if changes, _ := s.Plan(ctx, r); len(changes) != 0 {
+		t.Fatalf("second plan %v", changes)
+	}
+
+	sys.Links = nil // update-alternatives --set sudo /usr/bin/sudo.ws
+	if changes, _ := s.Plan(ctx, r); !slices.Equal(changes, []string{"write " + sudoers.FileName("dave@acme.test")}) {
+		t.Fatalf("plan after the switch %v", changes)
+	}
+	s.Apply(ctx, r)
+	if got := string(sys.Files[name].Data); got != render(t, dave, 811622788) {
+		t.Fatalf("classic file after the switch\n%s", got)
 	}
 }

@@ -218,7 +218,7 @@ func TestEffectiveProfileGate(t *testing.T) {
 		t.Fatalf("identical inputs, different entries:\n%s\n%s", ja, jb)
 	}
 	for i, e := range ea {
-		out, err := sudoers.Render(e, sudoers.PlaceholderUID)
+		out, err := sudoers.Render(e, sudoers.PlaceholderUID, sudoers.Classic)
 		if err != nil {
 			t.Fatal(err)
 		}

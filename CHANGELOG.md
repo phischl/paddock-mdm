@@ -114,6 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sudo rights apply on Ubuntu 26.04, whose default sudo is sudo-rs: the agent detects the implementation behind `/usr/bin/sudo` at every apply, writes the sudoers files in its flavor (sudo-rs does not know the setting `lecture_file`) and checks them with that implementation's `visudo`; the device detail shows the device's sudo implementation (M3b, answer to question 1).
 - The agent no longer passes the supervisor's `NOTIFY_SOCKET` to the tools it runs, so systemd stops logging "Got notification message from PID …, but reception only permitted for main PID" for every `systemctl` or `loginctl` call (M3b step 5).
 - Auto-stop now also protects the current release: a completed agent rollout halts (audit `agent_rollout.halted` by the worker) when the devices that reported `agent.update_failed` or `agent.rolled_back` within the last 7 days reach the rollout's threshold over the devices that checked in during those 7 days; resuming it makes it the current release again. The migration runs automatically (M2.1 step 1).
 - Resuming a halted agent rollout starts its failure count again: failures reported before the resume no longer count, so a resumed rollout is not halted again at once by the failures that halted it; the migration runs automatically (M2.1 step 1).
@@ -125,6 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `make dev-seed` right after `make up` waits up to 300 s until Authentik reports every Paddock blueprint as applied successfully before it checks the login flow, and names the pending blueprints and their status on timeout (M0.3 step 3).
 - The development blueprint `paddock-dev.yaml` no longer ends in status `error` when Authentik re-applies it after the first start (M0.3 step 3).
 - `make up` after `make down V=1` no longer leaves `paddock-api` and `paddock-audit-writer` unhealthy: re-initializing OpenBao now also replaces the stored AppRole secret-ids (M1 step 1).
+
+### Known limitations
+
+- On devices with sudo-rs (Ubuntu 26.04 by default) the organization's custom sudo lecture text has no effect; users see sudo-rs's default lecture. The device detail shows a note for such devices (M3b).
+- On devices with sudo-rs, sudo rights of users whose UID has 10 digits (1 000 000 000 or more; Himmelblau assigns UIDs up to 2 000 200 000) are not applied: sudo-rs refuses a numeric user of that length in the per-user `Defaults` line, the agent keeps the previous state and reports `device.sudo_apply_failed` (M3b, open question).
 
 ### Security
 

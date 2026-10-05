@@ -31,6 +31,38 @@ const (
 	sudoersHash = "/var/lib/paddock/state/sudoers.sha256"
 )
 
+// The sudo and visudo of the active sudo implementation: on Ubuntu 26.04 both are alternatives (visudo follows sudo)
+// that point to sudo-rs or to classic sudo.
+const (
+	sudoBinary   = "/usr/bin/sudo"
+	visudoBinary = "/usr/sbin/visudo"
+)
+
+// SudoFlavor detects the active sudo implementation: the version output of the binary /usr/bin/sudo resolves to
+// starts with "sudo-rs" for sudo-rs; anything else is classic sudo. It also returns the resolved visudo that belongs
+// to it. An operator can switch the alternative at any time, so it is detected at every plan and apply.
+func SudoFlavor(ctx context.Context, sys System) (sudoers.Flavor, string, error) {
+	bin, err := sys.EvalSymlinks(sudoBinary)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve %s: %w", sudoBinary, err)
+	}
+	out, exit, err := sys.SudoVersion(ctx, bin)
+	if err == nil && exit != 0 {
+		err = fmt.Errorf("exit %d", exit)
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("%s --version: %w", bin, err)
+	}
+	visudo, err := sys.EvalSymlinks(visudoBinary)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve %s: %w", visudoBinary, err)
+	}
+	if strings.HasPrefix(firstLine(out), "sudo-rs") {
+		return sudoers.SudoRS, visudo, nil
+	}
+	return sudoers.Classic, visudo, nil
+}
+
 // includedir is the line of /etc/sudoers that makes sudo read /etc/sudoers.d.
 var includedir = regexp.MustCompile(`(?m)^[@#]includedir\s+/etc/sudoers\.d\s*$`)
 
@@ -70,6 +102,8 @@ func (s *Sudo) spec(r bundle.Resource) (bundle.SudoSpec, error) {
 
 // sudoPlan is what Apply has to do.
 type sudoPlan struct {
+	flavor     sudoers.Flavor
+	visudo     string
 	lecture    bool
 	write      map[string][]byte // file name → content
 	users      map[string]string // file name → username
@@ -111,6 +145,10 @@ func (p sudoPlan) changes() []string {
 
 func (s *Sudo) plan(ctx context.Context, spec bundle.SudoSpec) (sudoPlan, error) {
 	p := sudoPlan{write: map[string][]byte{}, users: map[string]string{}, members: map[string][]string{}}
+	var err error
+	if p.flavor, p.visudo, err = SudoFlavor(ctx, s.Sys); err != nil {
+		return p, err
+	}
 	p.lecture = !fileHas(s.Sys, sudoers.LectureFile, []byte(spec.LectureText), 0o644)
 	wanted := map[string]bool{}
 	for _, e := range spec.Entries {
@@ -124,7 +162,7 @@ func (s *Sudo) plan(ctx context.Context, spec bundle.SudoSpec) (sudoPlan, error)
 			p.unresolved = append(p.unresolved, e.Username)
 			continue
 		}
-		content, err := sudoers.Render(e, uid)
+		content, err := sudoers.Render(e, uid, p.flavor)
 		if err != nil {
 			return p, err
 		}
@@ -186,7 +224,7 @@ func (s *Sudo) Apply(ctx context.Context, r bundle.Resource) Result {
 	changed := false
 	var errs []error
 	if p.sudoersSum != "" {
-		errs = append(errs, s.checkSudoers(ctx, p.sudoersSum))
+		errs = append(errs, s.checkSudoers(ctx, p.visudo, p.sudoersSum))
 	}
 	for _, name := range p.quarantine {
 		err := s.quarantine(name)
@@ -201,7 +239,7 @@ func (s *Sudo) Apply(ctx context.Context, r bundle.Resource) Result {
 	s.reportUnresolved(p.unresolved)
 	for _, name := range sortedKeys(p.write) {
 		username := p.users[name]
-		if err := s.install(ctx, name, p.write[name]); err != nil {
+		if err := s.install(ctx, p.visudo, name, p.write[name]); err != nil {
 			s.reportFailure(username, err)
 			errs = append(errs, fmt.Errorf("%s: %w", username, err))
 			continue
@@ -246,7 +284,7 @@ func (s *Sudo) uid(ctx context.Context, username string) (uint32, bool, error) {
 // install applies one sudoers file with the procedure of architecture §10.3: rollback copy, a temporary file sudo
 // ignores (dot name), `visudo -c -f`, rename into place, `visudo -c` over the whole configuration, and on failure
 // the previous state is restored.
-func (s *Sudo) install(ctx context.Context, name string, content []byte) error {
+func (s *Sudo) install(ctx context.Context, visudo, name string, content []byte) error {
 	path := SudoersDir + "/" + name
 	old, _, err := s.Sys.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -261,7 +299,7 @@ func (s *Sudo) install(ctx context.Context, name string, content []byte) error {
 	if err := s.Sys.WriteFileAtomic(tmp, content, 0o440, 0, 0); err != nil {
 		return err
 	}
-	if err := s.visudo(ctx, "-c", "-f", tmp); err != nil {
+	if err := s.visudo(ctx, visudo, "-c", "-f", tmp); err != nil {
 		_ = s.Sys.Remove(tmp)
 		// The message names the target, not the random temporary file, so the same failure is reported once.
 		return errors.New(strings.ReplaceAll(err.Error(), tmp, path))
@@ -270,7 +308,7 @@ func (s *Sudo) install(ctx context.Context, name string, content []byte) error {
 		_ = s.Sys.Remove(tmp)
 		return err
 	}
-	if err := s.visudo(ctx, "-c"); err != nil {
+	if err := s.visudo(ctx, visudo, "-c"); err != nil {
 		if old != nil {
 			return errors.Join(err, s.Sys.WriteFileAtomic(path, old, 0o440, 0, 0))
 		}
@@ -279,8 +317,8 @@ func (s *Sudo) install(ctx context.Context, name string, content []byte) error {
 	return nil
 }
 
-func (s *Sudo) visudo(ctx context.Context, args ...string) error {
-	out, exit, err := s.Sys.Visudo(ctx, args...)
+func (s *Sudo) visudo(ctx context.Context, path string, args ...string) error {
+	out, exit, err := s.Sys.Visudo(ctx, path, args...)
 	if err != nil {
 		return fmt.Errorf("visudo: %w", err)
 	}
@@ -292,7 +330,7 @@ func (s *Sudo) visudo(ctx context.Context, args ...string) error {
 
 // checkSudoers reports a changed /etc/sudoers (never at the first apply, which only records it) and checks that
 // it still includes /etc/sudoers.d and passes visudo; the agent never rewrites it (plan M3b decision 14).
-func (s *Sudo) checkSudoers(ctx context.Context, sum string) error {
+func (s *Sudo) checkSudoers(ctx context.Context, visudo, sum string) error {
 	recorded, _, err := s.Sys.ReadFile(sudoersHash)
 	if err == nil {
 		s.Events.emit(protocol.EventTamperSudoersChanged, protocol.TamperSudoersChanged{
@@ -307,7 +345,7 @@ func (s *Sudo) checkSudoers(ctx context.Context, sum string) error {
 	if !includedir.Match(data) {
 		problem = fmt.Errorf("%s lacks @includedir %s", Sudoers, SudoersDir)
 	} else {
-		problem = s.visudo(ctx, "-c")
+		problem = s.visudo(ctx, visudo, "-c")
 	}
 	if problem != nil {
 		s.reportFailure("", problem)

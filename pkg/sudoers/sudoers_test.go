@@ -20,7 +20,7 @@ func restricted() Entry {
 }
 
 func TestRenderGolden(t *testing.T) {
-	got, err := Render(restricted(), 120034)
+	got, err := Render(restricted(), 120034, Classic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,12 +32,36 @@ func TestRenderGolden(t *testing.T) {
 	}
 
 	full := Entry{Username: "erin@acme.test", Class: ClassFull, Lecture: LectureNever, TimestampTimeoutMin: 0}
-	got, err = Render(full, 7)
+	got, err = Render(full, 7, Classic)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(string(got), "#7 ALL=(root) NOPASSWD: ALL\n") {
 		t.Fatalf("full entry without password:\n%s", got)
+	}
+}
+
+// TestFlavorsDifferOnlyInLectureFile: the sudo-rs file is the classic file without the lecture_file setting, byte for
+// byte; an unknown flavor is refused.
+func TestFlavorsDifferOnlyInLectureFile(t *testing.T) {
+	for _, e := range []Entry{
+		restricted(),
+		{Username: "erin@acme.test", Class: ClassFull, Lecture: LectureNever, TimestampTimeoutMin: 60},
+	} {
+		classic, err := Render(e, 120034, Classic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rs, err := Render(e, 120034, SudoRS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := strings.Replace(string(classic), ", lecture_file="+LectureFile, "", 1); string(rs) != want || bytes.Contains(rs, []byte("lecture_file")) {
+			t.Fatalf("sudo-rs\n%s\nwant\n%s", rs, want)
+		}
+	}
+	if _, err := Render(restricted(), 1, Flavor("doas")); !errors.Is(err, ErrFlavor) {
+		t.Fatalf("unknown flavor: %v", err)
 	}
 }
 
@@ -82,7 +106,7 @@ func TestValidate(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := restricted()
 			c.mutate(&e)
-			if _, err := Render(e, 1); !errors.Is(err, c.want) {
+			if _, err := Render(e, 1, Classic); !errors.Is(err, c.want) {
 				t.Fatalf("got %v, want %v", err, c.want)
 			}
 		})
@@ -129,7 +153,7 @@ func TestRenderedFilesPassVisudo(t *testing.T) {
 			Lecture: LectureAlways},
 	}
 	for _, e := range entries {
-		out, err := Render(e, PlaceholderUID)
+		out, err := Render(e, PlaceholderUID, Classic)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -169,9 +193,13 @@ func FuzzRender(f *testing.F) {
 	f.Fuzz(func(t *testing.T, user, c1, c2 string, timeout int, password bool) {
 		e := Entry{Username: user, Class: ClassRestricted, Commands: []string{c1, c2}, RequirePassword: password,
 			TimestampTimeoutMin: timeout, Lecture: LectureOnce}
-		out, err := Render(e, 1000)
+		out, err := Render(e, 1000, Classic)
 		if err != nil {
 			return
+		}
+		rs, err := Render(e, 1000, SudoRS)
+		if err != nil || string(rs) != strings.Replace(string(out), ", lecture_file="+LectureFile, "", 1) {
+			t.Fatalf("sudo-rs differs beyond lecture_file (%v):\n%s\n%s", err, rs, out)
 		}
 		lines := bytes.Split(bytes.TrimSuffix(out, []byte("\n")), []byte("\n"))
 		if len(lines) != 3 {
