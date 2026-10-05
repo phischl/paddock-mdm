@@ -82,7 +82,7 @@ func TestIdentityBundles(t *testing.T) {
 	login, _ := resourceSpec[bundle.LoginSpec](t, b, "login")
 	if login.Provider != "himmelblau" || login.Himmelblau.AppID != "paddock-device-acme" || login.Himmelblau.Domain != "acme.test" ||
 		!slices.Equal(login.Himmelblau.PamAllowGroups, []string{"paddock.acme"}) || login.Suspended ||
-		!slices.Equal(login.BreakGlassAccounts, []string{"paddock"}) {
+		!slices.Equal(login.BreakGlassAccounts, []string{"paddock", "paddock-admin"}) { // plus the local administrator (M4a)
 		t.Fatalf("login resource %+v", login)
 	}
 	sudo, _ := resourceSpec[bundle.SudoSpec](t, b, "sudo")
