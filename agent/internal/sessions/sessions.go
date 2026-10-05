@@ -129,15 +129,16 @@ func IsDirectoryUser(s Session, local map[string]int, breakGlass []string) bool 
 // ReportInterval is how often a user's login is reported at most (plan M3b decision 11).
 const ReportInterval = 24 * time.Hour
 
-// NewLogins returns the directory users of sessions that were not reported within ReportInterval and records them
-// in seen (username → last report); entries older than ReportInterval are pruned. Local accounts are never reported.
-func NewLogins(sessions []Session, local map[string]int, seen map[string]time.Time, now time.Time) []string {
+// NewLogins returns one session of each directory user that was not reported within ReportInterval and records the
+// users in seen (username → last report); entries older than ReportInterval are pruned. Local accounts are never
+// reported.
+func NewLogins(sessions []Session, local map[string]int, seen map[string]time.Time, now time.Time) []Session {
 	for user, at := range seen {
 		if now.Sub(at) >= ReportInterval {
 			delete(seen, user)
 		}
 	}
-	var out []string
+	var out []Session
 	for _, s := range sessions {
 		if !IsDirectoryUser(s, local, nil) {
 			continue
@@ -146,7 +147,7 @@ func NewLogins(sessions []Session, local map[string]int, seen map[string]time.Ti
 			continue
 		}
 		seen[s.User] = now
-		out = append(out, s.User)
+		out = append(out, s)
 	}
 	return out
 }

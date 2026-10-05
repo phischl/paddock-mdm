@@ -156,9 +156,7 @@ func newIdentityWorld(t *testing.T, s *Stack, d *Device) *identityWorld {
 	for _, u := range []*directoryUser{w.dave, w.fred, w.nina, w.erin} {
 		w.syncedID(t, u)
 	}
-	s.Call(http.MethodPut, "/api/v1/devices/"+d.ID+"/login-assignment", map[string]any{
-		"users": []string{w.dave.id, w.fred.id, w.nina.id}, "groups": []string{},
-	}, http.StatusOK)
+	w.assignLogins(t, w.dave, w.fred, w.nina)
 
 	// Profiles scoped to this run's device group, so no other device and no other test sees them.
 	w.restrictedCommands = []string{"/usr/bin/journalctl -u systest.service", "/usr/bin/systemctl restart systest.service"}
@@ -515,6 +513,37 @@ echo "rc=$?"
 	if exit := w.pamLogin(t, w.dave, true, 4*time.Minute); exit != 0 {
 		t.Errorf("login of %s after the unlock: exit %d", w.dave.name, exit)
 	}
+
+	// The lock also reaches a device the user is no longer assigned to, through the logins the device reported
+	// (device_user_seen, M3a decision 10).
+	w.assignLogins(t, w.fred, w.nina)
+	relocked := time.Now().Add(-10 * time.Second)
+	w.s.Call(http.MethodPost, "/api/v1/users/"+w.dave.id+"/lock", nil, http.StatusOK)
+	w.toggleLink(t)
+	w.WaitEvent(t, "device.user_lock_applied", 3*time.Minute, func(p map[string]any) bool {
+		at, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(p["occurred_at"]))
+		return p["username"] == w.dave.name && at.After(relocked)
+	})
+	if !strings.Contains(w.Must("cat /etc/paddock/login-deny"), w.dave.name) {
+		t.Errorf("deny list lacks %s, who is seen on the device but no longer assigned", w.dave.name)
+	}
+	w.s.Call(http.MethodPost, "/api/v1/users/"+w.dave.id+"/unlock", nil, http.StatusOK)
+	w.assignLogins(t, w.dave, w.fred, w.nina)
+	w.toggleLink(t)
+	Until(t, "deny list without "+w.dave.name+" again", 3*time.Minute, 5*time.Second, nil, func() bool {
+		out, _ := w.SSH(context.Background(), nil, "cat /etc/paddock/login-deny 2>/dev/null || true")
+		return !strings.Contains(out, w.dave.name)
+	})
+}
+
+// assignLogins sets the device's login assignment to users.
+func (w *identityWorld) assignLogins(t *testing.T, users ...*directoryUser) {
+	t.Helper()
+	ids := []string{}
+	for _, u := range users {
+		ids = append(ids, u.id)
+	}
+	w.s.Call(http.MethodPut, "/api/v1/devices/"+w.ID+"/login-assignment", map[string]any{"users": ids, "groups": []string{}}, http.StatusOK)
 }
 
 // gateL3: suspending logins ends the directory sessions within one check-in and refuses directory logins; the
