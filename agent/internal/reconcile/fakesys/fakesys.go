@@ -428,8 +428,8 @@ func (s *System) TakeCalls() []string {
 	return c
 }
 
-// UserTool implements localadmin.System for useradd (adds the user to Passwd, its -G group to Members and a
-// /etc/shadow line), passwd -l (locks) and usermod (logged only).
+// UserTool implements localadmin.System for useradd (adds the user to /etc/passwd, to its -G group in /etc/group
+// and a /etc/shadow line), passwd -l (locks) and usermod (logged only).
 func (s *System) UserTool(_ context.Context, tool string, args ...string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -441,9 +441,9 @@ func (s *System) UserTool(_ context.Context, tool string, args ...string) (strin
 	name := args[len(args)-1]
 	switch tool {
 	case "useradd":
-		s.Passwd[name] = 1001
+		s.appendLine("/etc/passwd", name+":x:1001:1001::/home/"+name+":/bin/bash")
 		if i := slices.Index(args, "-G"); i >= 0 {
-			s.Members[args[i+1]] = append(s.Members[args[i+1]], name)
+			s.addMember(args[i+1], name)
 		}
 		s.setShadow(name, "")
 	case "passwd":
@@ -464,6 +464,34 @@ func (s *System) Chpasswd(_ context.Context, input []byte) (string, int, error) 
 	}
 	s.setShadow(name, fmt.Sprintf("$y$%d", len(pw)))
 	return "", 0, nil
+}
+
+func (s *System) appendLine(path, line string) {
+	f := s.Files[path]
+	if f == nil {
+		f = &File{Mode: 0o644}
+		s.Files[path] = f
+	}
+	f.Data = append(f.Data, line+"\n"...)
+}
+
+// addMember adds name to group in /etc/group.
+func (s *System) addMember(group, name string) {
+	f := s.Files["/etc/group"]
+	if f == nil {
+		return
+	}
+	lines := strings.Split(strings.TrimSuffix(string(f.Data), "\n"), "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(l, group+":") {
+			if strings.HasSuffix(l, ":") {
+				lines[i] = l + name
+			} else {
+				lines[i] = l + "," + name
+			}
+		}
+	}
+	f.Data = []byte(strings.Join(lines, "\n") + "\n")
 }
 
 // setShadow replaces the /etc/shadow line of name.
