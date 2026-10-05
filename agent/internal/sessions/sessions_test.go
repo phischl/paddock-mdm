@@ -72,13 +72,13 @@ func TestNewLoginsOncePerDay(t *testing.T) {
 	local := LocalUIDs([]byte(passwd))
 	seen := map[string]time.Time{}
 	now := time.Date(2026, 10, 4, 8, 0, 0, 0, time.UTC)
-	if got := NewLogins(list, local, seen, now); !slices.Equal(got, []string{"dave@acme.test"}) {
+	if got := NewLogins(list, local, seen, now); len(got) != 1 || got[0].User != "dave@acme.test" || got[0].UID != 811622788 {
 		t.Fatalf("first poll %v", got)
 	}
 	if got := NewLogins(list, local, seen, now.Add(23*time.Hour)); len(got) != 0 {
 		t.Fatalf("reported again within 24 h: %v", got)
 	}
-	if got := NewLogins(list, local, seen, now.Add(24*time.Hour)); !slices.Equal(got, []string{"dave@acme.test"}) {
+	if got := NewLogins(list, local, seen, now.Add(24*time.Hour)); len(got) != 1 || got[0].User != "dave@acme.test" {
 		t.Fatalf("not reported again after 24 h: %v", got)
 	}
 }

@@ -218,6 +218,14 @@ func TestSessionLogins(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.current = &bundle.Bundle{Resources: []bundle.Resource{login}}
+	// The short name is reported as the UPN only once NSS resolves the UPN to the session's UID.
+	sys.Passwd = map[string]int{"dave@acme.test": 1234}
+	a.trackSessions(ctx)
+	if pending, _ := a.d.Spool.Pending(); len(pending) != 0 {
+		t.Fatalf("reported with a UPN of another UID: %+v", pending)
+	}
+	delete(a.st.SessionsReported, "dave")
+	sys.Passwd["dave@acme.test"] = 811622788
 	a.trackSessions(ctx)
 	a.trackSessions(ctx)
 	pending, _ := a.d.Spool.Pending()
