@@ -224,14 +224,15 @@ func (o OS) UserTool(ctx context.Context, tool string, args ...string) (string, 
 }
 
 // Chpasswd runs chpasswd with input ("name:password\n") on stdin, so the password never appears in a process
-// list; the output never contains it.
+// list; the output never contains it. The crypt method makes chpasswd hash the password itself instead of going
+// through PAM, where pam_himmelblau would handle it.
 func (o OS) Chpasswd(ctx context.Context, input []byte) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "chpasswd")
+	cmd := exec.CommandContext(ctx, "chpasswd", "--crypt-method", "SHA512")
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NOTIFY_SOCKET=") })
 	cmd.Stdin = bytes.NewReader(input)
 	out, err := cmd.CombinedOutput()

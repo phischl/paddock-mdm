@@ -34,11 +34,14 @@ const (
 // Shell is the login shell of the account.
 const Shell = "/bin/bash"
 
-// System is the OS port of the local administrator (reconcile.OS).
+// System is the OS port of the local administrator (reconcile.OS). The account is always read from the local files
+// (/etc/passwd, /etc/shadow, /etc/group), never through NSS: Himmelblau's NSS module answers for any user name of
+// its domain, so a missing local account would look present.
 type System interface {
 	ReadFile(path string) ([]byte, fs.FileInfo, error)
-	Getent(ctx context.Context, database, key string) (string, int, error)
 	UserTool(ctx context.Context, tool string, args ...string) (string, int, error)
+	// Chpasswd sets a password from "name:password\n" without PAM (pam_himmelblau would take it for a change of a
+	// directory user's credentials).
 	Chpasswd(ctx context.Context, input []byte) (string, int, error)
 }
 

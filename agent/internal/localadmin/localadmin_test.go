@@ -41,29 +41,27 @@ func newFakeSys() *fakeSys {
 		groups: map[string][]string{"sudo": {"paddock"}}}
 }
 
+// ReadFile serves the local account databases; NSS (and Himmelblau's answers for any name) is never asked.
 func (f *fakeSys) ReadFile(path string) ([]byte, fs.FileInfo, error) {
-	if path != "/etc/shadow" {
+	var b strings.Builder
+	switch path {
+	case "/etc/shadow":
+		for name, h := range f.hash {
+			fmt.Fprintf(&b, "%s:%s:20000:0:99999:7::%s:\n", name, h, f.expire[name])
+		}
+	case "/etc/passwd":
+		b.WriteString("root:x:0:0:root:/root:/bin/bash\n")
+		for name, sh := range f.shell {
+			fmt.Fprintf(&b, "%s:x:1001:1001::/home/%s:%s\n", name, name, sh)
+		}
+	case "/etc/group":
+		for name, m := range f.groups {
+			fmt.Fprintf(&b, "%s:x:27:%s\n", name, strings.Join(m, ","))
+		}
+	default:
 		return nil, nil, fs.ErrNotExist
 	}
-	var b strings.Builder
-	for name, h := range f.hash {
-		fmt.Fprintf(&b, "%s:%s:20000:0:99999:7::%s:\n", name, h, f.expire[name])
-	}
 	return []byte(b.String()), nil, nil
-}
-
-func (f *fakeSys) Getent(_ context.Context, database, key string) (string, int, error) {
-	switch database {
-	case "passwd":
-		if sh, ok := f.shell[key]; ok {
-			return key + ":x:1001:1001::/home/" + key + ":" + sh + "\n", 0, nil
-		}
-	case "group":
-		if m, ok := f.groups[key]; ok {
-			return key + ":x:27:" + strings.Join(m, ",") + "\n", 0, nil
-		}
-	}
-	return "", 2, nil
 }
 
 func (f *fakeSys) UserTool(_ context.Context, tool string, args ...string) (string, int, error) {
@@ -212,7 +210,7 @@ func (w *world) rotate() string {
 func TestFirstRotation(t *testing.T) {
 	w := newWorld(t)
 	w.tick()
-	if w.sys.calls[0] != "useradd -m -K HOME_MODE=0700 -s /bin/bash -G sudo -- paddock-admin" || w.sys.calls[1] != "passwd -l -- paddock-admin" {
+	if w.sys.calls[0] != "useradd --prefix /. -m -K HOME_MODE=0700 -s /bin/bash -G sudo -- paddock-admin" || w.sys.calls[1] != "passwd -l -- paddock-admin" {
 		t.Fatalf("calls %v", w.sys.calls)
 	}
 	if !strings.HasPrefix(w.sys.hash["paddock-admin"], "!") || len(w.esc.uploads) != 1 {

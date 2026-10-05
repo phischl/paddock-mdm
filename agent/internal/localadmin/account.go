@@ -35,58 +35,62 @@ func (a account) locked() bool {
 	return a.hash == "" || strings.HasPrefix(a.hash, "!") || strings.HasPrefix(a.hash, "*") || a.expire != ""
 }
 
-// adminGroup is the group that grants sudo: sudo (Debian, Ubuntu) or wheel.
-func (m *Manager) adminGroup(ctx context.Context) (string, error) {
+// localEntry returns the fields of name's line in a colon-separated local database file (nil if absent).
+func (m *Manager) localEntry(path, name string) ([]string, error) {
+	data, _, err := m.Sys.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		if f := strings.Split(sc.Text(), ":"); len(f) > 1 && f[0] == name {
+			return f, nil
+		}
+	}
+	return nil, nil
+}
+
+// adminGroup is the local group that grants sudo: sudo (Debian, Ubuntu) or wheel.
+func (m *Manager) adminGroup() (string, error) {
 	for _, g := range []string{"sudo", "wheel"} {
-		_, exit, err := m.Sys.Getent(ctx, "group", g)
+		f, err := m.localEntry("/etc/group", g)
 		if err != nil {
 			return "", err
 		}
-		if exit == 0 {
+		if f != nil {
 			return g, nil
 		}
 	}
 	return "", ErrNoAdminGroup
 }
 
-// read returns the account from NSS and /etc/shadow.
-func (m *Manager) read(ctx context.Context, name string) (account, error) {
+// read returns the local account from /etc/passwd, /etc/shadow and /etc/group.
+func (m *Manager) read(_ context.Context, name string) (account, error) {
 	var a account
-	group, err := m.adminGroup(ctx)
+	group, err := m.adminGroup()
 	if err != nil {
 		return a, err
 	}
 	a.group = group
-	out, exit, err := m.Sys.Getent(ctx, "passwd", name)
+	pw, err := m.localEntry("/etc/passwd", name)
+	if err != nil || pw == nil {
+		return a, err
+	}
+	if len(pw) < 7 {
+		return a, fmt.Errorf("/etc/passwd: unexpected entry of %s", name)
+	}
+	a.exists, a.shell = true, pw[6]
+	if sh, err := m.localEntry("/etc/shadow", name); err != nil {
+		return a, err
+	} else if len(sh) >= 8 {
+		a.hash, a.expire = sh[1], sh[7]
+	}
+	gr, err := m.localEntry("/etc/group", group)
 	if err != nil {
-		return a, fmt.Errorf("getent passwd %s: %w", name, err)
+		return a, err
 	}
-	if exit != 0 {
-		return a, nil
-	}
-	f := strings.Split(strings.TrimSpace(out), ":")
-	if len(f) < 7 {
-		return a, fmt.Errorf("getent passwd %s: unexpected entry", name)
-	}
-	a.exists, a.shell = true, f[6]
-	shadow, _, err := m.Sys.ReadFile("/etc/shadow")
-	if err != nil {
-		return a, fmt.Errorf("read /etc/shadow: %w", err)
-	}
-	sc := bufio.NewScanner(bytes.NewReader(shadow))
-	for sc.Scan() {
-		s := strings.Split(sc.Text(), ":")
-		if len(s) >= 8 && s[0] == name {
-			a.hash, a.expire = s[1], s[7]
-			break
-		}
-	}
-	members, exit, err := m.Sys.Getent(ctx, "group", group)
-	if err != nil {
-		return a, fmt.Errorf("getent group %s: %w", group, err)
-	}
-	if g := strings.Split(strings.TrimSpace(members), ":"); exit == 0 && len(g) >= 4 {
-		a.inGroup = slices.Contains(strings.Split(g[3], ","), name)
+	if len(gr) >= 4 {
+		a.inGroup = slices.Contains(strings.Split(gr[3], ","), name)
 	}
 	return a, nil
 }
@@ -101,7 +105,9 @@ func (m *Manager) ensure(ctx context.Context, name string) (account, error) {
 	if m.State.Generation > 0 {
 		m.tampered(protocol.LocalAdminFieldMissing)
 	}
-	if err := m.tool(ctx, "useradd", "-m", "-K", "HOME_MODE=0700", "-s", Shell, "-G", a.group, "--", name); err != nil {
+	// --prefix /. makes useradd check the local files instead of NSS, which Himmelblau answers for any name ("/"
+	// alone would mean no prefix); everything else is created as without it.
+	if err := m.tool(ctx, "useradd", "--prefix", "/.", "-m", "-K", "HOME_MODE=0700", "-s", Shell, "-G", a.group, "--", name); err != nil {
 		return a, err
 	}
 	if err := m.tool(ctx, "passwd", "-l", "--", name); err != nil {
@@ -154,7 +160,7 @@ func (m *Manager) tampered(field string) {
 // repairAccount restores shell, admin group membership and removes an expiry; failures are logged and retried at
 // the next tick.
 func (m *Manager) repairAccount(ctx context.Context, name string) {
-	group, err := m.adminGroup(ctx)
+	group, err := m.adminGroup()
 	if err != nil {
 		slog.WarnContext(ctx, "local administrator repair", "error", err)
 		return

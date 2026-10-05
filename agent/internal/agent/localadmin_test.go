@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/paddock-mdm/paddock/agent/internal/localadmin"
+	"github.com/paddock-mdm/paddock/agent/internal/reconcile/fakesys"
 	"github.com/paddock-mdm/paddock/agent/internal/testgw"
 	"github.com/paddock-mdm/paddock/pkg/bundle"
 	"github.com/paddock-mdm/paddock/pkg/command"
@@ -42,7 +43,8 @@ func TestLocalAdminWiring(t *testing.T) {
 	g := testgw.New(t)
 	a := newAgent(t, g)
 	sys := withSystem(t, a)
-	sys.Members["sudo"] = []string{}
+	sys.Files["/etc/passwd"] = &fakesys.File{Data: []byte("root:x:0:0:root:/root:/bin/bash\n"), Mode: 0o644}
+	sys.Files["/etc/group"] = &fakesys.File{Data: []byte("sudo:x:27:\n"), Mode: 0o644}
 	a.d.Accounts, a.localAdmin.Sys = sys, sys
 	now := time.Now().UTC()
 	a.localAdmin.Now = func() time.Time { return now }
