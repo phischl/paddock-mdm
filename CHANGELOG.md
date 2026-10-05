@@ -112,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The agent no longer passes the supervisor's `NOTIFY_SOCKET` to the tools it runs, so systemd stops logging "Got notification message from PID …, but reception only permitted for main PID" for every `systemctl` or `loginctl` call (M3b step 5).
 - Auto-stop now also protects the current release: a completed agent rollout halts (audit `agent_rollout.halted` by the worker) when the devices that reported `agent.update_failed` or `agent.rolled_back` within the last 7 days reach the rollout's threshold over the devices that checked in during those 7 days; resuming it makes it the current release again. The migration runs automatically (M2.1 step 1).
 - Resuming a halted agent rollout starts its failure count again: failures reported before the resume no longer count, so a resumed rollout is not halted again at once by the failures that halted it; the migration runs automatically (M2.1 step 1).
 - The `paddock-server` image builds again after the agent module joined the Go workspace (M2b).

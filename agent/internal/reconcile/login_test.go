@@ -37,11 +37,12 @@ func loginFixture(t *testing.T) (*fakesys.System, *reconcile.Login, *[]event) {
 	sys := fakesys.New()
 	sys.AptVersion = "4.0.4-ubuntu24.04"
 	for path, content := range map[string]string{
-		"/etc/os-release": "PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"\nID=ubuntu\nVERSION_ID=\"24.04\"\n", "/etc/passwd": passwd,
+		"/usr/lib/os-release": "PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"\nID=ubuntu\nVERSION_ID=\"24.04\"\n", "/etc/passwd": passwd,
 		"/etc/pam.d/common-auth": pamAuth, "/etc/pam.d/common-account": pamAccount,
 	} {
 		sys.Files[path] = &fakesys.File{Data: []byte(content), Mode: 0o644}
 	}
+	sys.Files["/etc/os-release"] = &fakesys.File{Symlink: true} // → ../usr/lib/os-release, as on Ubuntu
 	for _, u := range []string{"himmelblaud.service", "himmelblaud-tasks.service"} {
 		sys.Units[u] = &fakesys.Unit{State: "enabled"}
 	}

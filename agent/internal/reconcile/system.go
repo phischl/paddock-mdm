@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -215,9 +216,8 @@ func commandEnv(ctx context.Context, timeout time.Duration, env []string, name s
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed tools; arguments are policy-checked unit names
-	if env != nil {
-		cmd.Env = append(os.Environ(), env...)
-	}
+	// Tools must not talk to the supervisor's notification socket (systemd logs every such message as refused).
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NOTIFY_SOCKET=") }), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
