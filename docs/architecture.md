@@ -1,6 +1,6 @@
 # Paddock – Technical Architecture
 
-Status: **Proposed** · Version 1.6 · 2026-10-04 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
+Status: **Proposed** · Version 1.7 · 2026-10-04 · Basis: `docs/reqirements/00_concept_v1.md` (Product Concept v1)
 
 This document turns the product concept into a technical architecture. It answers the delegated
 decisions A1–A14 (or states why one stays open), fixes the technology stack, and defines the
@@ -1312,8 +1312,12 @@ At first apply (`luks` reconciler, once per device and after every keyslot chang
 
 1. Verify root volume is LUKS2; otherwise report `luks.not_encrypted` (device marked non-compliant; nothing else happens).
 2. Generate recovery key (systemd-cryptenroll `--recovery-key` format, 256 bit) and enroll it.
-3. Enroll TPM2 + PIN (`systemd-cryptenroll --tpm2-device=auto --tpm2-with-pin=yes --tpm2-pcrs=7`)
-   — the PIN is entered by the user during first-boot onboarding (A14 open, §25).
+3. Enroll TPM2 + PIN (`systemd-cryptenroll --tpm2-device=auto --tpm2-with-pin=yes --tpm2-pcrs=7`).
+   **Decided 2026-10-05 (product owner): the boot PIN is set at installation.** The Paddock autoinstall installs with a
+   random temporary passphrase (stored root-only on the device until step 5); at first boot a console setup unit asks
+   the person installing the device for the PIN (twice) before the display manager starts and enrolls it. The PIN never
+   leaves the device. Skipping is possible (fail safe); the device is then reported non-compliant. Devices not installed
+   by the Paddock autoinstall stay in passphrase mode and are reported `luks.unmanaged` (no in-place conversion).
 4. Escrow: header backup (`cryptsetup luksHeaderBackup`), encrypted with a random DEK (AES-256-GCM);
    DEK and recovery key wrapped with `escrow_wrap_public`; uploaded via `/v1/escrow`; wait for `stored`.
 5. Only after `stored`: remove remaining low-entropy keyslots (installer passphrase), escrow the
@@ -1321,7 +1325,11 @@ At first apply (`luks` reconciler, once per device and after every keyslot chang
 6. Expected keyslot set (`tpm2`, `recovery`) recorded in state; any other change is `tamper.keyslot_changed`.
 
 Escrow objects live in a separate bucket `paddock-escrow` (versioning on, **no** Object Lock, so Destroy
-can delete them), keys `org/<org>/devices/<dev>/luks-header/<generation>.bin`.
+can delete them), keys `org/<org>/devices/<dev>/luks-header/<generation>.bin`. Headers (16 MiB) are uploaded by the
+device with a short-lived presigned PUT issued by the gateway, not through the queue.
+
+**A14 (decided 2026-10-05):** boot PIN (TPM2+PIN, set at installation) **and** Hello PIN (login) — both. The separate UX
+test is replaced by the pilot feedback of the reference deployment.
 
 ### 12.5 Patch management (F6)
 
@@ -1849,7 +1857,7 @@ Implementation plans for the coding agent are written per milestone, following `
 | # | Question | Default until decided |
 | --- | --- | --- |
 | O1 | ~~A2 Himmelblau PoC~~ — **resolved**: Himmelblau 4.x OIDC (ADR 0019, accepted); deny list in auth + account phase (§9.5) | – |
-| O2 | **A14 boot PIN vs. login PIN** after UX test | Both technically supported; per-organization setting `pin_model: tpm_pin_only \| tpm_pin_and_hello_pin`; default `tpm_pin_and_hello_pin` |
+| O2 | ~~A14~~ — **resolved 2026-10-05**: both PINs; boot PIN set at installation (§12.4) | Both technically supported; per-organization setting `pin_model: tpm_pin_only \| tpm_pin_and_hello_pin`; default `tpm_pin_and_hello_pin` |
 | O3 | **Object storage — decided: RustFS (ADR 0017, accepted).** The concept names MinIO. MinIO stopped publishing community images and binaries in October 2025, put the community edition into maintenance mode in December 2025 and archived the repository in 2026; the Docker Hub images no longer resolve. It can therefore not be the bundled component. The Paddock code is unaffected (it uses only the S3 API with Object Lock). Candidates: **Ceph RGW** (LGPL, mature Object Lock, heavy to operate), **RustFS** (Apache-2.0, 1.0 GA in September 2026, had an Object Lock enforcement CVE before 1.0), **SeaweedFS** (Apache-2.0, recent issues with COMPLIANCE enforcement on delete), **external S3** of a provider with Object Lock. **Decision owner:** product owner, on the architect's recommendation (ADR 0017). **Verification:** not the Himmelblau PoC, but the audit acceptance gate ("an event in WORM storage cannot be deleted, even with admin credentials") run against the chosen product in M0. | Proposed: RustFS for bundles + escrow and as default audit store, gated by the WORM acceptance test in M0; Ceph RGW or external S3 documented for operators who need a proven WORM store. If RustFS fails the gate, Ceph RGW becomes the default |
 | O4 | ~~Ubuntu 24.04 TPM2+PIN via dracut~~ — **resolved by PoC M1 (C7)**: works with dracut 060 (`hostonly`, explicit modules, text prompt — no Plymouth). Supported only for devices installed by the Paddock autoinstall, which installs dracut from the start; no in-place switch on existing 24.04 devices (it removes `initramfs-tools` and `brltty`). Recovery: the recovery key is accepted at the PIN prompt only after the TPM PIN attempts are used up — operator docs must say so; re-test lockout on real hardware in M4 | – |
 | O5 | Shared devices: attribution when several users log in | Login assignment by group; audit carries the session user |
