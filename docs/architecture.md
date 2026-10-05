@@ -1043,6 +1043,14 @@ Defaults:#120034 lecture=always, lecture_file=/etc/paddock/sudo_lecture, timesta
 #120034 ALL=(root) /usr/bin/systemctl restart nginx.service, /usr/bin/journalctl
 ```
 
+**sudo implementations (amended 2026-10-05, M3b):** Ubuntu 26.04 ships `sudo-rs` as `/usr/bin/sudo`; it rejects the
+`lecture_file` setting. `pkg/sudoers` therefore renders two flavors (`Classic`, `SudoRS`) that differ only in that
+line; the agent detects the active implementation on every apply and validates with its matching `visudo`. Paddock
+does not switch the distribution's sudo implementation. **Residual risk:** on `sudo-rs` devices the organization's
+lecture text (concept layer 2, "Notice") is not shown at `sudo` — users see the default lecture. The notice must then
+come from another channel (login banner / acceptable-use acknowledgment, planned with the device-notice work in a
+later milestone); operators record this in their ISMS until then.
+
 Apply procedure on the device:
 
 1. Copy the current file to `/var/lib/paddock/rollback/`.
