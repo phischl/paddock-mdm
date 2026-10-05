@@ -201,13 +201,23 @@ func TestSessionLogins(t *testing.T) {
 	a := newAgent(t, g)
 	sys := withSystem(t, a)
 	sys.Files["/etc/passwd"] = &fakesys.File{Data: []byte("paddock:x:1000:1000::/home/paddock:/bin/bash\n"), Mode: 0o644}
+	// Himmelblau lists users of its domain by their short name.
 	sys.Sessions = []fakesys.Session{
 		{ID: "c1", UID: 60578, User: "gdm-greeter", Class: "greeter"},
 		{ID: "4", UID: 1000, User: "paddock", Class: "user"},
-		{ID: "7", UID: 811622788, User: "dave@acme.test", Class: "user"},
+		{ID: "7", UID: 811622788, User: "dave", Class: "user"},
 	}
 	now := time.Date(2026, 10, 4, 8, 0, 0, 0, time.UTC)
 	a.d.Now = func() time.Time { return now }
+	a.trackSessions(ctx)
+	if pending, _ := a.d.Spool.Pending(); len(pending) != 0 {
+		t.Fatalf("reported without a login resource: %+v", pending)
+	}
+	login, err := bundle.LoginResource(bundle.LoginSpec{Provider: bundle.ProviderHimmelblau, Himmelblau: bundle.HimmelblauSpec{Domain: "acme.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.current = &bundle.Bundle{Resources: []bundle.Resource{login}}
 	a.trackSessions(ctx)
 	a.trackSessions(ctx)
 	pending, _ := a.d.Spool.Pending()
@@ -215,7 +225,7 @@ func TestSessionLogins(t *testing.T) {
 		t.Fatalf("spool %+v", pending)
 	}
 	st, _ := state.Load(a.d.Layout.State())
-	if !st.SessionsReported["dave@acme.test"].Equal(now) {
+	if !st.SessionsReported["dave"].Equal(now) {
 		t.Fatalf("persisted %v", st.SessionsReported)
 	}
 	now = now.Add(24 * time.Hour)

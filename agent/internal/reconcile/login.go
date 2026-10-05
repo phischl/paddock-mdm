@@ -305,9 +305,13 @@ func (l *Login) apt(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// ubuntuVersion returns VERSION_ID of an Ubuntu system; the repository has one tree per release.
+// ubuntuVersion returns VERSION_ID of an Ubuntu system; the repository has one tree per release. /etc/os-release is
+// usually a symlink to /usr/lib/os-release, which os-release(5) names as the fallback.
 func (l *Login) ubuntuVersion() (string, error) {
 	data, _, err := l.Sys.ReadFile("/etc/os-release")
+	if data == nil {
+		data, _, err = l.Sys.ReadFile("/usr/lib/os-release")
+	}
 	if err != nil {
 		return "", fmt.Errorf("read os-release: %w", err)
 	}
