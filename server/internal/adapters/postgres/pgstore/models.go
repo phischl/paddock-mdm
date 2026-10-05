@@ -121,6 +121,22 @@ type Device struct {
 	LoginsSuspended   bool
 }
 
+type DeviceCommand struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Type           string
+	Params         json.RawMessage
+	Status         string
+	IssuedBy       uuid.NullUUID
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
+	NotBefore      *time.Time
+	DeliveredAt    *time.Time
+	FinishedAt     *time.Time
+	Result         json.RawMessage
+}
+
 type DeviceEventSeen struct {
 	DeviceID       uuid.UUID
 	EventSeq       int64

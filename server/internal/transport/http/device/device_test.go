@@ -512,6 +512,107 @@ func TestCheckinSeqBundleAndClone(t *testing.T) {
 	}
 }
 
+// envelope is a stand-in for a signed command envelope; the gateway passes envelopes through unchanged.
+func envelope(id uuid.UUID) json.RawMessage {
+	return json.RawMessage(`{"payloadType":"application/vnd.paddock.command.v1+json","payload":"` +
+		base64.StdEncoding.EncodeToString([]byte(id.String())) + `","signatures":[{"keyid":"command-signing:v1","sig":"AA=="}]}`)
+}
+
+// TestCheckinCommands: the check-in carries the unexpired commands of an active device oldest first and reports
+// them as delivered in the heartbeat; a quarantined device gets none (plan M4a decision 3).
+func TestCheckinCommands(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	ctx := context.Background()
+	first, second, expired := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for cmd, expires := range map[uuid.UUID]time.Time{first: e.now.Add(time.Hour), second: e.now.Add(time.Hour), expired: e.now} {
+		if err := e.cache.PutCommand(ctx, id, cmd, devicecache.Command{ExpiresAt: expires, Envelope: envelope(cmd)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0)})
+	var out protocol.CheckinResponse
+	if err := json.Unmarshal(r.body, &out); err != nil || r.status != http.StatusOK {
+		t.Fatalf("checkin: %d %s", r.status, r.body)
+	}
+	if len(out.Commands) != 2 || string(out.Commands[0]) != string(envelope(first)) || string(out.Commands[1]) != string(envelope(second)) {
+		t.Fatalf("commands %s", out.Commands)
+	}
+	var hb ingest.Heartbeat
+	_ = json.Unmarshal(e.pub.last(t).Body, &hb)
+	if !slices.Equal(hb.DeliveredCommands, []uuid.UUID{first, second}) {
+		t.Fatalf("delivered %v", hb.DeliveredCommands)
+	}
+
+	q := newClient(t)
+	qid := e.enrolled(q, "quarantined")
+	if err := e.cache.PutCommand(ctx, qid, first, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: envelope(first)}); err != nil {
+		t.Fatal(err)
+	}
+	r = e.send(q, request{method: "POST", path: "/v1/checkin", device: qid.String(), body: checkinBody(0)})
+	out = protocol.CheckinResponse{}
+	if err := json.Unmarshal(r.body, &out); err != nil || r.status != http.StatusOK || out.Commands == nil || len(out.Commands) != 0 {
+		t.Fatalf("quarantined device: %d %s", r.status, r.body)
+	}
+}
+
+// TestCommandResult: a result is accepted for a pending command of the signing device, published once per status,
+// repeated idempotently and refused with another status or for any other command (plan M4a decision 3).
+func TestCommandResult(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c, other := newClient(t), newClient(t)
+	id, otherID := e.enrolled(c, "active"), e.enrolled(other, "active")
+	ctx := context.Background()
+	cmd := uuid.Must(uuid.NewV7())
+	if err := e.cache.PutCommand(ctx, id, cmd, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: envelope(cmd)}); err != nil {
+		t.Fatal(err)
+	}
+	post := func(c client, dev uuid.UUID, cmd uuid.UUID, body any) result {
+		t.Helper()
+		return e.send(c, request{method: "POST", path: "/v1/commands/" + cmd.String() + "/result", device: dev.String(), body: body})
+	}
+	ok := protocol.CommandResult{Status: "succeeded", Result: json.RawMessage(`{"generation":2}`)}
+
+	e.expectProblem(post(other, otherID, cmd, ok), http.StatusNotFound, "not_found")
+	e.expectProblem(post(c, id, uuid.Must(uuid.NewV7()), ok), http.StatusNotFound, "not_found")
+	if r := post(c, id, cmd, ok); r.status != http.StatusAccepted {
+		t.Fatalf("result: %d %s", r.status, r.body)
+	}
+	msg := e.pub.last(t)
+	var in ingest.CommandResult
+	if err := json.Unmarshal(msg.Body, &in); err != nil || msg.RoutingKey != "ingest.command_result."+e.org.String() ||
+		msg.MessageID != cmd.String()+":succeeded" || in.CommandID != cmd || in.DeviceID != id || in.Status != "succeeded" ||
+		string(in.Result) != `{"generation":2}` {
+		t.Fatalf("published %s %s %s", msg.RoutingKey, msg.MessageID, msg.Body)
+	}
+	// The worker removes the command once it recorded the result; the gateway still answers repeated posts.
+	if err := e.cache.DeleteCommand(ctx, id, cmd); err != nil {
+		t.Fatal(err)
+	}
+	published := len(e.pub.msgs[mq.ExchangeIngest])
+	if r := post(c, id, cmd, ok); r.status != http.StatusAccepted || len(e.pub.msgs[mq.ExchangeIngest]) != published {
+		t.Fatalf("repeated result: %d %s, %d messages", r.status, r.body, len(e.pub.msgs[mq.ExchangeIngest])-published)
+	}
+	e.expectProblem(post(c, id, cmd, protocol.CommandResult{Status: "failed"}), http.StatusConflict, "conflict")
+	e.expectProblem(post(other, otherID, cmd, ok), http.StatusNotFound, "not_found")
+
+	invalid := uuid.Must(uuid.NewV7())
+	if err := e.cache.PutCommand(ctx, id, invalid, devicecache.Command{ExpiresAt: e.now.Add(time.Hour), Envelope: envelope(invalid)}); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"unknown status": `{"status":"done"}`, "result not an object": `{"status":"failed","result":[1]}`,
+		"result too large": `{"status":"failed","result":{"x":"` + strings.Repeat("a", protocol.MaxCommandResult) + `"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := e.send(c, request{method: "POST", path: "/v1/commands/" + invalid.String() + "/result", device: id.String(),
+				body: json.RawMessage(body), skipReqCheck: true})
+			e.expectProblem(r, http.StatusBadRequest, "invalid_request")
+		})
+	}
+}
+
 func TestCheckinAgentUpdate(t *testing.T) {
 	e := newEnv(t, 0, 0)
 	c := newClient(t)

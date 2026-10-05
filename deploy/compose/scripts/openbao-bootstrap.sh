@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Development bootstrap of OpenBao (plan M0 §6.8, M2a decision 15): init (5 shares, threshold 3), unseal, transit
-# keys audit-chain and bundle-signing, KV secret/paddock/session, policies and AppRoles. Idempotent. `openbao-bootstrap.sh unseal` only unseals.
+# Development bootstrap of OpenBao (plan M0 §6.8, M2a decision 15, M4a decision 2): init (5 shares, threshold 3),
+# unseal, transit keys audit-chain, bundle-signing and command-signing, KV secret/paddock/session, policies and
+# AppRoles. Idempotent. `openbao-bootstrap.sh unseal` only unseals.
 # Production: refuses to run; follow docs/operations/openbao.md.
 set -euo pipefail
 
@@ -81,10 +82,12 @@ if ! bao read transit/keys/audit-chain >/dev/null 2>&1; then
   echo "created transit key audit-chain"
 fi
 
-if ! bao read transit/keys/bundle-signing >/dev/null 2>&1; then
-  bao write transit/keys/bundle-signing type=ed25519 exportable=false allow_plaintext_backup=false >/dev/null
-  echo "created transit key bundle-signing"
-fi
+for key in bundle-signing command-signing; do
+  if ! bao read "transit/keys/$key" >/dev/null 2>&1; then
+    bao write "transit/keys/$key" type=ed25519 exportable=false allow_plaintext_backup=false >/dev/null
+    echo "created transit key $key"
+  fi
+done
 
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
   bao kv put secret/paddock/session \
@@ -109,6 +112,15 @@ path "transit/sign/bundle-signing" {
 path "transit/keys/bundle-signing" {
   capabilities = ["read"]
 }
+path "transit/keys/command-signing" {
+  capabilities = ["read"]
+}
+EOF
+
+bao policy write paddock-worker - >/dev/null <<'EOF'
+path "transit/sign/command-signing" {
+  capabilities = ["update"]
+}
 EOF
 
 bao policy write paddock-audit-writer - >/dev/null <<'EOF'
@@ -120,7 +132,7 @@ path "transit/keys/audit-chain" {
 }
 EOF
 
-for role in paddock-api paddock-audit-writer paddock-compiler; do
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h \
     secret_id_ttl=0 token_no_default_policy=false >/dev/null
   dir="$SECRETS_DIR/approle/$role"

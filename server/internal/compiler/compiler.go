@@ -25,6 +25,7 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/bundlesign"
+	"github.com/paddock-mdm/paddock/server/internal/commandsign"
 	"github.com/paddock-mdm/paddock/server/internal/devicecache"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
 	"github.com/paddock-mdm/paddock/server/internal/domain/device"
@@ -69,6 +70,8 @@ type Config struct {
 	Sudoers SudoersValidator
 	// Runner records device.bundle_render_failed.
 	Runner *app.ActionRunner
+	// Keys reads the public keys of command-signing for the keys object of v2 bundles (plan M4a decision 5).
+	Keys commandsign.PublicKeyReader
 }
 
 // Compiler renders, signs and uploads bundles.
@@ -151,7 +154,11 @@ func (l *identityLoader) get(ctx context.Context) (*app.Identity, error) {
 func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []statechange.Event) error {
 	var todo []rendered
 	var failures []renderFailure
-	err := c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	keys, err := c.keys(ctx)
+	if err != nil {
+		return err
+	}
+	err = c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		identity := &identityLoader{q: q}
 		ids, err := expand(ctx, q, events, identity)
 		if err != nil || len(ids) == 0 {
@@ -168,7 +175,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		for _, row := range rows {
 			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
 				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2))}
-			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity)
+			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
 			}
@@ -283,7 +290,7 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event,
 // M3a decision 14a). A sudo entry that fails the server-side check blocks the device's bundle (failure); one with an
 // invalid command is omitted and recorded once the bundle is published.
 func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID, t compileTarget,
-	defs app.ManagedDefinitions, identity *identityLoader) (rendered, bool, *renderFailure, error) {
+	defs app.ManagedDefinitions, identity *identityLoader, keys *bundle.Keys) (rendered, bool, *renderFailure, error) {
 	if !device.Compiled(t.state) {
 		return rendered{}, false, nil, nil
 	}
@@ -297,7 +304,9 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	}
 	schema := bundle.SchemaVersion
 	var omitted []omittedEntry
+	var v2Keys *bundle.Keys
 	if t.v2 {
+		v2Keys = keys
 		id, err := identity.get(ctx)
 		if err != nil {
 			return rendered{}, false, nil, err
@@ -314,7 +323,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	b := bundle.Bundle{
 		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
-		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources,
+		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources, Keys: v2Keys,
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -333,6 +342,15 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		return rendered{}, false, nil, err
 	}
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted}, true, nil, nil
+}
+
+// keys returns the keys object of v2 bundles: every version of command-signing (plan M4a decision 5).
+func (c *Compiler) keys(ctx context.Context) (*bundle.Keys, error) {
+	commandKeys, err := commandsign.PublicKeys(ctx, c.cfg.Keys)
+	if err != nil {
+		return nil, err
+	}
+	return &bundle.Keys{CommandSigning: commandKeys}, nil
 }
 
 // publish signs all bundles in one batch, then per device increments bundle_seq, records the bundle row and uploads

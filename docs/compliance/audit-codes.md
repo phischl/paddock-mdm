@@ -51,6 +51,7 @@ The portal renders them through the message key `audit.<code>`.
 | `device_group.updated` | A device group was renamed or its description changed. | `name`, `old_name`, `description_changed` | success, failure, denied |
 | `enrollment_token.created` | An enrollment token was created. The token secret is never recorded. | `name`, `expires_at`, `max_uses`, `auto_approve`, `device_group_id` | success, failure, denied |
 | `enrollment_token.revoked` | An enrollment token was revoked. | `name` | success, failure, denied |
+| `local_admin.rotation_requested` | An administrator or operator issued the command rotate_admin_password to a device. | `hostname`, `command_id` | success, failure, denied |
 | `managed_file.created` | A managed file was defined for the organization or a device group. | `path`, `device_group_id`, `mode`, `owner`, `group` | success, failure, denied |
 | `managed_file.deleted` | A managed file definition was deleted. | `path`, `device_group_id` | success, failure, denied |
 | `managed_file.updated` | A managed file definition was changed. | `path`, `device_group_id`, `mode`, `owner`, `group`, `content_changed`, `old_path` | success, failure, denied |

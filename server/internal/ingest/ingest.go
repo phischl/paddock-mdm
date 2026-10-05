@@ -43,6 +43,8 @@ type Heartbeat struct {
 	Seq                  int64           `json:"seq"`
 	ReportedSeq          int64           `json:"reported_seq"`
 	CloneSuspected       bool            `json:"clone_suspected"`
+	// DeliveredCommands are the commands the check-in response carried (plan M4a decision 3).
+	DeliveredCommands []uuid.UUID `json:"delivered_commands,omitempty"`
 }
 
 // Events is a batch of device events (routing key ingest.event.<org>, message_id random).
@@ -51,4 +53,15 @@ type Events struct {
 	OrganizationID uuid.UUID        `json:"organization_id"`
 	ReceivedAt     time.Time        `json:"received_at"`
 	Events         []protocol.Event `json:"events"`
+}
+
+// CommandResult is the result of a device command (routing key ingest.command_result.<org>, message_id = CommandID +
+// ":" + Status). The gateway checked that the command was pending for the device.
+type CommandResult struct {
+	DeviceID       uuid.UUID       `json:"device_id"`
+	OrganizationID uuid.UUID       `json:"organization_id"`
+	CommandID      uuid.UUID       `json:"command_id"`
+	Status         string          `json:"status"`
+	Result         json.RawMessage `json:"result,omitempty"`
+	ReceivedAt     time.Time       `json:"received_at"`
 }

@@ -31,6 +31,8 @@ type Deps struct {
 	Logins        *app.Logins
 	LoginSettings *app.LoginSettings
 	Privileges    *app.Privileges
+	Commands      *app.DeviceCommands
+	LocalAdmin    *app.LocalAdmin
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -89,6 +91,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/profile-assignments":                               {app.ScopeOrg, app.SpecAssignmentCreate},
 	"PATCH /api/v1/profile-assignments/{id}":                         {app.ScopeOrg, app.SpecAssignmentUpdate},
 	"DELETE /api/v1/profile-assignments/{id}":                        {app.ScopeOrg, app.SpecAssignmentDelete},
+	"POST /api/v1/devices/{id}/local-admin/rotate":                   {app.ScopeOrg, app.SpecLocalAdminRotate},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -102,7 +105,8 @@ func NewHandler(d Deps) http.Handler {
 	h := &handlers{
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
-		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, now: d.Now,
+		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
+		localAdmin: d.LocalAdmin, now: d.Now,
 	}
 	strict := adminapi.NewStrictHandlerWithOptions(h, nil,
 		adminapi.StrictHTTPServerOptions{

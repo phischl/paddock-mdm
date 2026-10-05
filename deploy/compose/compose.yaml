@@ -409,6 +409,10 @@ services:
       PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_worker_password
       PADDOCK_VALKEY_ADDR: valkey:6379
       PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      # Signs device commands with command-signing (plan M4a decision 2).
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_worker_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_worker_secret_id
       # Identity synchronization and reconcile (plan M3a decisions 2, 3, 5, 9).
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_AUTHENTIK_TOKEN_FILE: /run/secrets/authentik_service_token
@@ -418,6 +422,8 @@ services:
       - db_paddock_platform_url
       - rabbitmq_worker_password
       - valkey_password
+      - approle_worker_role_id
+      - approle_worker_secret_id
       - authentik_service_token
       - caddy_root_crt
     networks: [cp]
@@ -427,6 +433,8 @@ services:
       caddy-ca-export:
         condition: service_completed_successfully
       valkey:
+        condition: service_healthy
+      openbao:
         condition: service_healthy
 
 networks:
@@ -469,6 +477,8 @@ secrets:
   rustfs_bundles_compiler_secret_key: { file: ./.secrets/rustfs_bundles_compiler_secret_key }
   approle_compiler_role_id: { file: ./.secrets/approle/paddock-compiler/role_id }
   approle_compiler_secret_id: { file: ./.secrets/approle/paddock-compiler/secret_id }
+  approle_worker_role_id: { file: ./.secrets/approle/paddock-worker/role_id }
+  approle_worker_secret_id: { file: ./.secrets/approle/paddock-worker/secret_id }
   rustfs_bundles_gateway_access_key: { file: ./.secrets/rustfs_bundles_gateway_access_key }
   rustfs_bundles_gateway_secret_key: { file: ./.secrets/rustfs_bundles_gateway_secret_key }
   rustfs_artifacts_api_access_key: { file: ./.secrets/rustfs_artifacts_api_access_key }

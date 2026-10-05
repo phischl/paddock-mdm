@@ -151,6 +151,11 @@ func (c *Client) Events(ctx context.Context, deviceID string, seq int64, events 
 	return c.do(ctx, http.MethodPost, "/v1/events", deviceID, seq, protocol.EventsRequest{Events: events}, nil)
 }
 
+// CommandResult posts the result of a command; nil means 202.
+func (c *Client) CommandResult(ctx context.Context, deviceID string, seq int64, commandID string, res protocol.CommandResult) error {
+	return c.do(ctx, http.MethodPost, "/v1/commands/"+url.PathEscape(commandID)+"/result", deviceID, seq, res, nil)
+}
+
 // Reachable reports whether the server answers HTTPS at all (any HTTP status counts).
 func (c *Client) Reachable(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)

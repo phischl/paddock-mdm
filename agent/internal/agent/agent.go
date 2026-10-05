@@ -17,6 +17,7 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/apply"
 	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
 	"github.com/paddock-mdm/paddock/agent/internal/client"
+	"github.com/paddock-mdm/paddock/agent/internal/commands"
 	"github.com/paddock-mdm/paddock/agent/internal/config"
 	"github.com/paddock-mdm/paddock/agent/internal/enroll"
 	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
@@ -40,6 +41,8 @@ type Deps struct {
 	Client  *client.Client
 	Health  *health.State
 	Applier *apply.Applier
+	// Commands executes the commands of check-ins; nil means the handlers of this build (commands.Handlers).
+	Commands *commands.Executor
 	// Events receives the device events of the reconcilers; New connects it to the spool.
 	Events *reconcile.Events
 	// Sys is the device for the session tracking (plan M3b decision 11); nil disables it.
@@ -102,6 +105,9 @@ func New(d Deps) (*Agent, error) {
 	}
 	if d.Health == nil {
 		d.Health = health.NewState(buildinfo.Version)
+	}
+	if d.Commands == nil {
+		d.Commands = commands.New(commands.Handlers(nil), d.Now)
 	}
 	st, err := state.Load(d.Layout.State())
 	if err != nil {
@@ -229,8 +235,10 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	}
 	a.reportUpdate()
 	a.handleBundle(ctx, resp.Bundle)
+	a.handleCommands(ctx, resp.Commands)
 	a.handleUpdate(ctx, resp.AgentUpdate)
 	a.flush(ctx)
+	a.postResults(ctx)
 	a.clearUpdateResult()
 	return afterSuccess(resp.NextCheckinS, a.d.Rand())
 }

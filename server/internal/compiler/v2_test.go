@@ -63,13 +63,18 @@ func TestSchemaNegotiation(t *testing.T) {
 	old := w.device("active") // never checked in
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	for _, d := range []uuid.UUID{v1, old} {
-		if b := w.fetch(d); b.SchemaVersion != bundle.SchemaVersion || resourceIDs(b) != "time" {
-			t.Fatalf("v1 device got schema %d with %s", b.SchemaVersion, resourceIDs(b))
+		if b := w.fetch(d); b.SchemaVersion != bundle.SchemaVersion || resourceIDs(b) != "time" || b.Keys != nil {
+			t.Fatalf("v1 device got schema %d with %s, keys %+v", b.SchemaVersion, resourceIDs(b), b.Keys)
 		}
 	}
 	b := w.fetch(v2)
 	if b.SchemaVersion != bundle.SchemaVersion2 || resourceIDs(b) != "login,sudo,time" {
 		t.Fatalf("v2 device got schema %d with %s", b.SchemaVersion, resourceIDs(b))
+	}
+	// Plan M4a decision 5: v2 bundles carry every version of command-signing.
+	if b.Keys == nil || len(b.Keys.CommandSigning) != 1 || b.Keys.CommandSigning[0].KeyID != "command-signing:v1" ||
+		len(b.Keys.CommandSigning[0].PublicKey) != 44 {
+		t.Fatalf("keys %+v", b.Keys)
 	}
 	login := spec[bundle.LoginSpec](t, b, "login")
 	slug := "c" + w.org.String()[24:]

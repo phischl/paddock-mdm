@@ -22,21 +22,27 @@ const (
 	ExchangeAudit   = "paddock.audit"
 	ExchangeIngest  = "paddock.ingest"
 	ExchangeState   = "paddock.state"
+	ExchangeCommand = "paddock.command"
 	ExchangeDLX     = "paddock.dlx"
 	QueueAudit      = "audit.writer"
 	QueueAuditDLQ   = "dlq.audit.writer"
 	AuditBindingKey = "audit.#"
+	// QueueCommandIssued receives the command.issued messages of the outbox (routing key CommandIssuedKey); the worker
+	// signs and delivers the commands (plan M4a decision 2).
+	QueueCommandIssued = "command.issued"
+	CommandIssuedKey   = "issued"
 )
 
-// Ingest kinds of M2a; each has the queue ingest.<kind> and routing keys ingest.<kind>.<organization_id>.
+// Ingest kinds (M2a, M4a); each has the queue ingest.<kind> and routing keys ingest.<kind>.<organization_id>.
 const (
-	IngestEnroll    = "enroll"
-	IngestHeartbeat = "heartbeat"
-	IngestEvent     = "event"
+	IngestEnroll        = "enroll"
+	IngestHeartbeat     = "heartbeat"
+	IngestEvent         = "event"
+	IngestCommandResult = "command_result"
 )
 
 // IngestKinds are the provisioned ingest kinds.
-var IngestKinds = []string{IngestEnroll, IngestHeartbeat, IngestEvent}
+var IngestKinds = []string{IngestEnroll, IngestHeartbeat, IngestEvent, IngestCommandResult}
 
 // IngestQueue is the queue of an ingest kind.
 func IngestQueue(kind string) string { return "ingest." + kind }
@@ -270,7 +276,7 @@ func Provision(ctx context.Context, cfg Config, o ProvisionOptions) error {
 
 	exchanges := []struct{ name, kind string }{
 		{ExchangeAudit, amqp.ExchangeTopic}, {ExchangeIngest, amqp.ExchangeTopic},
-		{ExchangeState, amqp.ExchangeDirect}, {ExchangeDLX, amqp.ExchangeTopic},
+		{ExchangeState, amqp.ExchangeDirect}, {ExchangeCommand, amqp.ExchangeDirect}, {ExchangeDLX, amqp.ExchangeTopic},
 	}
 	for _, ex := range exchanges {
 		if err := ch.ExchangeDeclare(ex.name, ex.kind, true, false, false, false, nil); err != nil {
@@ -310,7 +316,7 @@ func topology(o ProvisionOptions) []queueSpec {
 			args: amqp.Table{"x-single-active-consumer": true},
 		})
 	}
-	return qs
+	return append(qs, queueSpec{name: QueueCommandIssued, exchange: ExchangeCommand, keys: []string{CommandIssuedKey}})
 }
 
 func declare(ch *amqp.Channel, q queueSpec) error {

@@ -32,6 +32,9 @@ type handlers struct {
 	loginSettings *app.LoginSettings
 	privileges    *app.Privileges
 
+	commands   *app.DeviceCommands
+	localAdmin *app.LocalAdmin
+
 	now func() time.Time
 }
 

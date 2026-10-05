@@ -18,6 +18,7 @@ const (
 	CodeRateLimited      = "rate_limited"
 	CodeBackpressure     = "backpressure"
 	CodePayloadTooLarge  = "payload_too_large"
+	CodeConflict         = "conflict"
 )
 
 // Problem is the RFC 9457 body of device API errors. 401 responses carry ServerTime.
@@ -108,6 +109,25 @@ type CheckinResponse struct {
 	Bundle       *BundleRef   `json:"bundle"`
 	NextCheckinS int          `json:"next_checkin_s"`
 	AgentUpdate  *AgentUpdate `json:"agent_update"`
+	// Commands are the device's pending commands, each a DSSE envelope verified with pkg/command (plan M4a
+	// decision 3).
+	Commands []json.RawMessage `json:"commands"`
+}
+
+// Command result statuses of CommandResult.Status.
+const (
+	CommandSucceeded = "succeeded"
+	CommandFailed    = "failed"
+)
+
+// MaxCommandResult bounds the result object of POST /v1/commands/{command_id}/result.
+const MaxCommandResult = 4 << 10
+
+// CommandResult is the body of POST /v1/commands/{command_id}/result. Result is a JSON object of at most
+// MaxCommandResult bytes; it never carries secrets.
+type CommandResult struct {
+	Status string          `json:"status"`
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 // Device event types accepted by POST /v1/events (closed set, plan M2a decision 14, M2b decision 23, M3a decision

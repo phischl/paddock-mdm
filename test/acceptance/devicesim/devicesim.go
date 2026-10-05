@@ -245,3 +245,9 @@ func (d *Device) Download(ctx context.Context, url string) ([]byte, int, error) 
 func (d *Device) SendEvents(ctx context.Context, events []protocol.Event) (Response, error) {
 	return d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/events", Body: protocol.EventsRequest{Events: events}})
 }
+
+// CommandResult posts the result of a command.
+func (d *Device) CommandResult(ctx context.Context, commandID, status string, result json.RawMessage) (Response, error) {
+	return d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/commands/" + commandID + "/result",
+		Body: protocol.CommandResult{Status: status, Result: result}})
+}

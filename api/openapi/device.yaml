@@ -80,7 +80,7 @@ paths:
   /v1/checkin:
     post:
       operationId: checkin
-      summary: Heartbeat and bundle pointer
+      summary: Heartbeat, bundle pointer and pending commands
       parameters:
         - $ref: "#/components/parameters/Device"
         - $ref: "#/components/parameters/KeyId"
@@ -98,12 +98,48 @@ paths:
         "200":
           description: |
             seq is the new sequence number the device sends back as Paddock-Seq. bundle is set only when a newer
-            bundle than applied_bundle_version exists and the device is active (not quarantined).
+            bundle than applied_bundle_version exists and the device is active (not quarantined). commands are the
+            device's pending, unexpired commands (empty for a quarantined device).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CheckinResponse" }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /v1/commands/{command_id}/result:
+    post:
+      operationId: postCommandResult
+      summary: Result of a command (plan M4a decision 3)
+      description: |
+        Idempotent per command: the same status again is accepted (202), another status is refused with 409
+        conflict. A command that is not pending for the signing device (unknown, of another device, expired or
+        removed) is 404.
+      parameters:
+        - name: command_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CommandResult" }
+      responses:
+        "202":
+          description: Accepted for processing.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "503": { $ref: "#/components/responses/Problem" }
@@ -204,7 +240,7 @@ components:
         code:
           type: string
           enum: [invalid_request, invalid_signature, clock_skew, replay, invalid_token, identity_revoked,
-                 unknown_event_type, not_found, rate_limited, backpressure, payload_too_large, internal]
+                 unknown_event_type, not_found, rate_limited, backpressure, payload_too_large, conflict, internal]
         detail: { type: string }
         instance: { type: string }
         server_time: { type: string, format: date-time, description: Set on 401 responses. }
@@ -273,6 +309,42 @@ components:
           allOf:
             - $ref: "#/components/schemas/AgentUpdate"
           nullable: true
+        commands:
+          type: array
+          maxItems: 20
+          description: |
+            Pending commands of the device, oldest first, each a DSSE envelope with payload type
+            application/vnd.paddock.command.v1+json signed by a command-signing key from the device's bundle
+            (pkg/command). Agents that do not know commands ignore the field.
+          items: { $ref: "#/components/schemas/CommandEnvelope" }
+    CommandEnvelope:
+      type: object
+      required: [payloadType, payload, signatures]
+      properties:
+        payloadType: { type: string, enum: [application/vnd.paddock.command.v1+json] }
+        payload:
+          type: string
+          description: |
+            Standard base64 of the canonical JSON (RFC 8785) {command_id, device_id, organization_id, type, params,
+            issued_at, expires_at}.
+        signatures:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [keyid, sig]
+            properties:
+              keyid: { type: string, description: 'e.g. "command-signing:v1"' }
+              sig: { type: string, description: Standard base64 Ed25519 signature over the DSSE PAE. }
+    CommandResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [succeeded, failed] }
+        result:
+          type: object
+          additionalProperties: true
+          description: Outcome details, at most 4 KiB; never secrets.
     AgentUpdate:
       type: object
       required: [version, url, sha256, size, minisig]
