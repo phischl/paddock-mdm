@@ -1,5 +1,5 @@
-// Package baotest starts OpenBao in dev mode with the transit keys audit-chain, bundle-signing and command-signing,
-// the session KV secret and AppRoles equivalent to deploy/compose/scripts/openbao-bootstrap.sh.
+// Package baotest starts OpenBao in dev mode with the transit keys audit-chain, bundle-signing, command-signing and
+// escrow-wrap, the session KV secret and AppRoles equivalent to deploy/compose/scripts/openbao-bootstrap.sh.
 package baotest
 
 import (
@@ -66,6 +66,10 @@ func Start(t testing.TB) *Bao {
 		})
 		must(t, err)
 	}
+	_, err = b.Root.Logical().Write("transit/keys/escrow-wrap", map[string]any{
+		"type": "rsa-4096", "exportable": false, "allow_plaintext_backup": false,
+	})
+	must(t, err)
 	_, err = b.Root.Logical().Write("secret/data/paddock/session", map[string]any{
 		"data": map[string]any{"current": "Y3VycmVudC1rZXktMzItYnl0ZXMtbG9uZy0tLS0tLS0=", "previous": "cHJldmlvdXMta2V5LTMyLWJ5dGVzLWxvbmctLS0tLS0="},
 	})
@@ -80,7 +84,10 @@ path "transit/keys/bundle-signing" { capabilities = ["read"] }`))
 	must(t, b.Root.Sys().PutPolicy("paddock-compiler", `
 path "transit/sign/bundle-signing" { capabilities = ["update"] }
 path "transit/keys/bundle-signing" { capabilities = ["read"] }
-path "transit/keys/command-signing" { capabilities = ["read"] }`))
+path "transit/keys/command-signing" { capabilities = ["read"] }
+path "transit/keys/escrow-wrap" { capabilities = ["read"] }`))
+	must(t, b.Root.Sys().PutPolicy("paddock-escrow-reader", `
+path "transit/decrypt/escrow-wrap" { capabilities = ["update"] }`))
 	must(t, b.Root.Sys().PutPolicy("paddock-worker", `
 path "transit/sign/command-signing" { capabilities = ["update"] }`))
 	return b

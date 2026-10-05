@@ -228,6 +228,55 @@ func (c *Client) PublicKeys(ctx context.Context, key string) (map[int][]byte, er
 	return out, nil
 }
 
+// LatestPublicKeyPEM returns the latest version of an asymmetric encryption key (e.g. rsa-4096) and its PEM public
+// key.
+func (c *Client) LatestPublicKeyPEM(ctx context.Context, key string) (int, string, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return 0, "", err
+	}
+	s, err := c.api.Logical().ReadWithContext(ctx, "transit/keys/"+key)
+	if err != nil {
+		return 0, "", fmt.Errorf("bao: read key: %w", err)
+	}
+	if s == nil || s.Data == nil {
+		return 0, "", fmt.Errorf("bao: key %s not found", key)
+	}
+	latest, err := toInt(s.Data["latest_version"])
+	if err != nil {
+		return 0, "", fmt.Errorf("bao: key %s: latest_version: %w", key, err)
+	}
+	keys, _ := s.Data["keys"].(map[string]any)
+	entry, _ := keys[strconv.Itoa(latest)].(map[string]any)
+	pem, _ := entry["public_key"].(string)
+	if !strings.HasPrefix(pem, "-----BEGIN PUBLIC KEY-----") {
+		return 0, "", fmt.Errorf("bao: key %s v%d has no PEM public key", key, latest)
+	}
+	return latest, pem, nil
+}
+
+// Decrypt decrypts a raw ciphertext (standard base64) that was encrypted with version of the Transit key outside
+// OpenBao, e.g. RSA-OAEP on a device, and returns the plaintext. The caller must zero it after use.
+func (c *Client) Decrypt(ctx context.Context, key string, version int, ciphertext string) ([]byte, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	s, err := c.api.Logical().WriteWithContext(ctx, "transit/decrypt/"+key, map[string]any{
+		"ciphertext": "vault:v" + strconv.Itoa(version) + ":" + ciphertext,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bao: decrypt: %w", err)
+	}
+	plain, _ := s.Data["plaintext"].(string)
+	if s == nil || plain == "" {
+		return nil, errors.New("bao: decrypt returned no plaintext")
+	}
+	out, err := base64.StdEncoding.DecodeString(plain)
+	if err != nil {
+		return nil, fmt.Errorf("bao: plaintext encoding: %w", err)
+	}
+	return out, nil
+}
+
 // KV reads the data of a KV v2 secret, e.g. path "secret/data/paddock/session".
 func (c *Client) KV(ctx context.Context, path string) (map[string]string, error) {
 	if err := c.ensureToken(ctx); err != nil {

@@ -143,6 +143,72 @@ paths:
         "413": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }
         "503": { $ref: "#/components/responses/Problem" }
+  /v1/escrow:
+    post:
+      operationId: postEscrow
+      summary: Upload an escrowed secret (plan M4a decision 12)
+      description: |
+        The secret (M4a: the local administrator password) is encrypted on the device with RSA-OAEP and SHA-256 to
+        the escrow-wrap public key of the bundle (keys.escrow_wrap). The worker stores it; poll
+        GET /v1/escrow/{escrow_id} until stored before using the secret. A generation that is not above the active
+        one fails.
+      parameters:
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EscrowRequest" }
+      responses:
+        "202":
+          description: Accepted for storage.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [escrow_id]
+                properties:
+                  escrow_id: { type: string, format: uuid }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/Problem" }
+  /v1/escrow/{escrow_id}:
+    get:
+      operationId: getEscrow
+      summary: Storage status of an escrow upload
+      parameters:
+        - name: escrow_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/Device"
+        - $ref: "#/components/parameters/KeyId"
+        - $ref: "#/components/parameters/Timestamp"
+        - $ref: "#/components/parameters/Nonce"
+        - $ref: "#/components/parameters/ContentSHA256"
+        - $ref: "#/components/parameters/Seq"
+        - $ref: "#/components/parameters/Signature"
+      responses:
+        "200":
+          description: pending until the worker processed the upload (also for unknown IDs), then stored or failed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [pending, stored, failed] }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /v1/events:
     post:
       operationId: postEvents
@@ -336,6 +402,15 @@ components:
             properties:
               keyid: { type: string, description: 'e.g. "command-signing:v1"' }
               sig: { type: string, description: Standard base64 Ed25519 signature over the DSSE PAE. }
+    EscrowRequest:
+      type: object
+      required: [escrow_id, kind, generation, key_version, ciphertext]
+      properties:
+        escrow_id: { type: string, format: uuid, description: Chosen by the device; idempotency key. }
+        kind: { type: string, enum: [admin_password] }
+        generation: { type: integer, minimum: 1 }
+        key_version: { type: integer, minimum: 1, description: Version of escrow-wrap the secret is encrypted to. }
+        ciphertext: { type: string, description: "Standard base64 RSA-OAEP-SHA256 ciphertext, at most 4096 bytes." }
     CommandResult:
       type: object
       required: [status]

@@ -613,6 +613,58 @@ func TestCommandResult(t *testing.T) {
 	}
 }
 
+// TestEscrow: an upload is validated and published to ingest.escrow; the status is pending until the worker sets
+// it, and another device's status is not found (plan M4a decision 12).
+func TestEscrow(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c, other := newClient(t), newClient(t)
+	id, otherID := e.enrolled(c, "active"), e.enrolled(other, "active")
+	escrowID := uuid.Must(uuid.NewV7())
+	ct := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 512))
+	body := map[string]any{"escrow_id": escrowID.String(), "kind": "admin_password", "generation": 2, "key_version": 1, "ciphertext": ct}
+	r := e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: body})
+	if r.status != http.StatusAccepted || !strings.Contains(string(r.body), escrowID.String()) {
+		t.Fatalf("upload: %d %s", r.status, r.body)
+	}
+	msg := e.pub.last(t)
+	var in ingest.Escrow
+	if err := json.Unmarshal(msg.Body, &in); err != nil || msg.RoutingKey != "ingest.escrow."+e.org.String() || msg.MessageID != escrowID.String() ||
+		in.DeviceID != id || in.Generation != 2 || in.KeyVersion != 1 || len(in.Ciphertext) != 512 {
+		t.Fatalf("published %s %s %+v", msg.RoutingKey, msg.MessageID, in)
+	}
+	status := func(c client, dev uuid.UUID) result {
+		t.Helper()
+		return e.send(c, request{method: "GET", path: "/v1/escrow/" + escrowID.String(), device: dev.String()})
+	}
+	if r := status(c, id); r.status != http.StatusOK || !strings.Contains(string(r.body), `"pending"`) {
+		t.Fatalf("status before the worker: %d %s", r.status, r.body)
+	}
+	if err := e.cache.PutEscrowStatus(context.Background(), escrowID, id, "stored"); err != nil {
+		t.Fatal(err)
+	}
+	if r := status(c, id); r.status != http.StatusOK || !strings.Contains(string(r.body), `"stored"`) {
+		t.Fatalf("status after the worker: %d %s", r.status, r.body)
+	}
+	e.expectProblem(status(other, otherID), http.StatusNotFound, "not_found")
+
+	for name, mutate := range map[string]func(map[string]any){
+		"kind":       func(b map[string]any) { b["kind"] = "luks_header" },
+		"generation": func(b map[string]any) { b["generation"] = 0 },
+		"escrow_id":  func(b map[string]any) { b["escrow_id"] = "x" },
+		"ciphertext": func(b map[string]any) { b["ciphertext"] = base64.StdEncoding.EncodeToString(make([]byte, 4097)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := map[string]any{}
+			for k, v := range body {
+				bad[k] = v
+			}
+			mutate(bad)
+			r := e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: bad, skipReqCheck: true})
+			e.expectProblem(r, http.StatusBadRequest, "invalid_request")
+		})
+	}
+}
+
 func TestCheckinAgentUpdate(t *testing.T) {
 	e := newEnv(t, 0, 0)
 	c := newClient(t)

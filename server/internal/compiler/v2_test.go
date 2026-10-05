@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/paddock-mdm/paddock/pkg/escrow"
 	"github.com/paddock-mdm/paddock/pkg/sudoers"
 	"github.com/paddock-mdm/paddock/server/internal/compiler"
 	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
@@ -73,8 +74,11 @@ func TestSchemaNegotiation(t *testing.T) {
 	}
 	// Plan M4a decision 5: v2 bundles carry every version of command-signing.
 	if b.Keys == nil || len(b.Keys.CommandSigning) != 1 || b.Keys.CommandSigning[0].KeyID != "command-signing:v1" ||
-		len(b.Keys.CommandSigning[0].PublicKey) != 44 {
+		len(b.Keys.CommandSigning[0].PublicKey) != 44 || b.Keys.EscrowWrap == nil || b.Keys.EscrowWrap.KeyID != "escrow-wrap:v1" {
 		t.Fatalf("keys %+v", b.Keys)
+	}
+	if _, err := escrow.ParsePublicKey(b.Keys.EscrowWrap.PublicKeyPEM); err != nil {
+		t.Fatalf("escrow-wrap key: %v", err)
 	}
 	login := spec[bundle.LoginSpec](t, b, "login")
 	slug := "c" + w.org.String()[24:]
@@ -281,6 +285,31 @@ func TestReconcileRecompilesOutdatedSchemas(t *testing.T) {
 	}
 	if b := w.fetch(dev); b.SchemaVersion != bundle.SchemaVersion2 {
 		t.Fatalf("after the reconcile: schema %d", b.SchemaVersion)
+	}
+}
+
+// TestReconcileDeliversRotatedKeys (plan M4a decision 5): after command-signing is rotated, the reconcile loop
+// recompiles the organization and v2 bundles list both versions; without a change a reconcile keeps the version.
+func TestReconcileDeliversRotatedKeys(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeDevice, dev)
+	ctx := context.Background()
+	for range 2 { // the first round after start recompiles content-equal bundles: no new version
+		if err := w.comp.Reconcile(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := w.version(dev)
+	if _, err := w.bao.Root.Logical().Write("transit/keys/command-signing/rotate", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.comp.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b := w.fetch(dev)
+	if b.BundleVersion != before+1 || len(b.Keys.CommandSigning) != 2 || b.Keys.CommandSigning[1].KeyID != "command-signing:v2" {
+		t.Fatalf("version %d→%d, keys %+v", before, b.BundleVersion, b.Keys)
 	}
 }
 

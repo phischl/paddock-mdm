@@ -39,10 +39,11 @@ const (
 	IngestHeartbeat     = "heartbeat"
 	IngestEvent         = "event"
 	IngestCommandResult = "command_result"
+	IngestEscrow        = "escrow"
 )
 
 // IngestKinds are the provisioned ingest kinds.
-var IngestKinds = []string{IngestEnroll, IngestHeartbeat, IngestEvent, IngestCommandResult}
+var IngestKinds = []string{IngestEnroll, IngestHeartbeat, IngestEvent, IngestCommandResult, IngestEscrow}
 
 // IngestQueue is the queue of an ingest kind.
 func IngestQueue(kind string) string { return "ingest." + kind }

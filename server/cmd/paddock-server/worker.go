@@ -63,11 +63,13 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	eventQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEvent), worker.Prefetch)
 	issuedQueue := mq.NewConsumer(mqCfg, mq.QueueCommandIssued, worker.Prefetch)
 	resultQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestCommandResult), worker.Prefetch)
-	queues := []*mq.Consumer{enrollQueue, heartbeatQueue, eventQueue, issuedQueue, resultQueue}
+	escrowQueue := mq.NewConsumer(mqCfg, mq.IngestQueue(mq.IngestEscrow), worker.Prefetch)
+	queues := []*mq.Consumer{enrollQueue, heartbeatQueue, eventQueue, issuedQueue, resultQueue, escrowQueue}
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	deviceCommands := app.NewDeviceCommands(pool)
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache)
 	commands := worker.NewCommands(deviceCommands, pool, platformPool, cache, signer)
+	escrowStore := worker.NewEscrow(app.NewEscrow(pool), cache)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
@@ -91,6 +93,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		func(ctx context.Context) error { return eventQueue.Run(ctx, reports.HandleEvents) },
 		func(ctx context.Context) error { return issuedQueue.Run(ctx, commands.HandleIssued) },
 		func(ctx context.Context) error { return resultQueue.Run(ctx, commands.HandleResults) },
+		func(ctx context.Context) error { return escrowQueue.Run(ctx, escrowStore.Handle) },
 		commands.Run,
 		cacheSync.Run,
 		rollouts.Run,
