@@ -47,13 +47,19 @@ var deviceCode = regexp.MustCompile(`(?i)(?:code=|code[:\s]+)(\d{6,})`)
 // exit code (-1 if it did not finish) and the transcript, which never contains the answers.
 func (v *VM) PAM(t *testing.T, service, user string, ops []string, o pamOpts) (int, string) {
 	t.Helper()
+	return v.Converse(t, fmt.Sprintf("sudo pamtester -v %s %s %s", service, user, strings.Join(ops, " ")), o)
+}
+
+// Converse runs command in the guest (as paddock, with a pseudo terminal) and answers its PIN and password prompts
+// like PAM. It returns the command's exit code (-1 if it did not finish) and the transcript without the answers.
+func (v *VM) Converse(t *testing.T, command string, o pamOpts) (int, string) {
+	t.Helper()
 	if o.timeout == 0 {
 		o.timeout = 3 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), o.timeout)
 	defer cancel()
-	args := append(v.sshArgs(), "-tt", "-p", v.port, "paddock@127.0.0.1",
-		fmt.Sprintf("sudo pamtester -v %s %s %s; echo PAMTESTER_EXIT=$?", service, user, strings.Join(ops, " ")))
+	args := append(v.sshArgs(), "-tt", "-p", v.port, "paddock@127.0.0.1", command+"; echo PAMTESTER_EXIT=$?")
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
