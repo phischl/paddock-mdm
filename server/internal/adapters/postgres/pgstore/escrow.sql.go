@@ -12,6 +12,38 @@ import (
 	"github.com/google/uuid"
 )
 
+const activateEscrowGeneration = `-- name: ActivateEscrowGeneration :execrows
+WITH activated AS (
+  UPDATE escrow_secret SET status = 'active', activated_at = $4::timestamptz
+  WHERE device_id = $1::uuid AND kind = $2::text AND generation = $3::int AND status IN ('stored','active')
+  RETURNING generation
+)
+UPDATE escrow_secret SET status = 'superseded'
+WHERE device_id = $1::uuid AND kind = $2::text AND generation < $3::int AND status IN ('stored','active')
+  AND EXISTS (SELECT 1 FROM activated)
+`
+
+type ActivateEscrowGenerationParams struct {
+	DeviceID    uuid.UUID
+	Kind        string
+	Generation  int32
+	ActivatedAt time.Time
+}
+
+// The device applied generation: it becomes active, every other active or stored generation below it superseded.
+func (q *Queries) ActivateEscrowGeneration(ctx context.Context, arg ActivateEscrowGenerationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, activateEscrowGeneration,
+		arg.DeviceID,
+		arg.Kind,
+		arg.Generation,
+		arg.ActivatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const activeEscrowGeneration = `-- name: ActiveEscrowGeneration :one
 SELECT coalesce(max(generation), 0)::int FROM escrow_secret
 WHERE device_id = $1 AND kind = $2 AND status = 'active'
@@ -86,4 +118,58 @@ func (q *Queries) InsertEscrowSecret(ctx context.Context, arg InsertEscrowSecret
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const listLocalAdminSecrets = `-- name: ListLocalAdminSecrets :many
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at FROM escrow_secret
+WHERE device_id = $1::uuid AND kind = 'admin_password'
+  AND (status = 'active' OR (status = 'stored' AND generation > (
+    SELECT coalesce(max(generation), 0) FROM escrow_secret a
+    WHERE a.device_id = $1::uuid AND a.kind = 'admin_password' AND a.status = 'active')))
+ORDER BY generation
+`
+
+// The active generation and the stored generations above it: the passwords a reveal returns.
+func (q *Queries) ListLocalAdminSecrets(ctx context.Context, deviceID uuid.UUID) ([]EscrowSecret, error) {
+	rows, err := q.db.Query(ctx, listLocalAdminSecrets, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EscrowSecret{}
+	for rows.Next() {
+		var i EscrowSecret
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.DeviceID,
+			&i.Kind,
+			&i.Generation,
+			&i.Status,
+			&i.Ciphertext,
+			&i.KeyVersion,
+			&i.CreatedAt,
+			&i.ActivatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const organizationHasActiveLocalAdmin = `-- name: OrganizationHasActiveLocalAdmin :one
+SELECT EXISTS (SELECT 1 FROM escrow_secret WHERE kind = 'admin_password' AND status = 'active')
+`
+
+// Whether any device of the organization has an active local administrator password (the account name is then
+// locked, plan M4a decision 13).
+func (q *Queries) OrganizationHasActiveLocalAdmin(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, organizationHasActiveLocalAdmin)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

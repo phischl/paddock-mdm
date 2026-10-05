@@ -201,6 +201,42 @@ func (o OS) Gpasswd(ctx context.Context, args ...string) (string, int, error) {
 	return command(ctx, "gpasswd", args...)
 }
 
+// userTools are the account tools UserTool runs (the managed local administrator, plan M4a decision 15).
+var userTools = []string{"useradd", "usermod", "passwd"}
+
+// UserTool runs useradd, usermod or passwd; callers put "--" before the account name.
+func (o OS) UserTool(ctx context.Context, tool string, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	if !slices.Contains(userTools, tool) {
+		return "", -1, errors.New("reconcile: not an account tool: " + tool)
+	}
+	return command(ctx, tool, args...)
+}
+
+// Chpasswd runs chpasswd with input ("name:password\n") on stdin, so the password never appears in a process
+// list; the output never contains it.
+func (o OS) Chpasswd(ctx context.Context, input []byte) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "chpasswd")
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NOTIFY_SOCKET=") })
+	cmd.Stdin = bytes.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return string(out), exit.ExitCode(), nil
+	}
+	if err != nil {
+		return "", -1, err
+	}
+	return string(out), 0, nil
+}
+
 // Rename implements System.
 func (o OS) Rename(oldPath, newPath string) error {
 	if err := os.Rename(o.path(oldPath), o.path(newPath)); err != nil {

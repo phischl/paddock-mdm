@@ -63,7 +63,12 @@ type omittedEntry struct {
 func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarget) ([]bundle.Resource, []omittedEntry, *renderFailure, error) {
 	var out []bundle.Resource
 	s := id.Settings
+	// The managed local administrator is a break-glass account everywhere: never denied, never removed from the
+	// privileged groups (plan M4a decision 14).
 	breakGlass := slices.Clone(s.BreakGlassAccounts)
+	if !slices.Contains(breakGlass, s.LocalAdminUsername) {
+		breakGlass = append(breakGlass, s.LocalAdminUsername)
+	}
 	if domain := organization.PrimaryDomain(id.Org.Domains); domain != "" {
 		client := organization.DeviceLoginApp(id.Org.Slug)
 		login, err := bundle.LoginResource(bundle.LoginSpec{
@@ -75,6 +80,7 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 			},
 			Suspended: t.suspended, LockedUsers: id.LockedUsernames(t.id), SessionAction: s.UserLockSessionAction,
 			BreakGlassAccounts: breakGlass,
+			LocalAdmin:         &bundle.LocalAdminSpec{Username: s.LocalAdminUsername, RotationDays: int(s.LocalAdminRotationDays)},
 		})
 		if err != nil {
 			return nil, nil, nil, err

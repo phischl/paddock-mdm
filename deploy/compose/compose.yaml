@@ -271,6 +271,9 @@ services:
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_api_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_api_secret_id
+      # Decrypts escrowed secrets for the reveal only (plan M4a decision 9).
+      PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE: /run/secrets/approle_escrow_reader_role_id
+      PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE: /run/secrets/approle_escrow_reader_secret_id
       PADDOCK_OIDC_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal/
       PADDOCK_OIDC_CLIENT_ID: paddock-portal
       PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
@@ -292,6 +295,8 @@ services:
       - db_paddock_audit_reader_url
       - approle_api_role_id
       - approle_api_secret_id
+      - approle_escrow_reader_role_id
+      - approle_escrow_reader_secret_id
       - oidc_client_secret
       - authentik_service_token
       - caddy_root_crt
@@ -497,4 +502,6 @@ secrets:
   rustfs_root_password: { file: ./.secrets/rustfs_root_password }
   approle_api_role_id: { file: ./.secrets/approle/paddock-api/role_id }
   approle_api_secret_id: { file: ./.secrets/approle/paddock-api/secret_id }
+  approle_escrow_reader_role_id: { file: ./.secrets/approle/paddock-escrow-reader/role_id }
+  approle_escrow_reader_secret_id: { file: ./.secrets/approle/paddock-escrow-reader/secret_id }
   caddy_root_crt: { file: ./.secrets/caddy-root.crt }

@@ -257,14 +257,17 @@ type Organization struct {
 }
 
 type OrganizationLoginSetting struct {
-	OrganizationID        uuid.UUID
-	HelloEnabled          bool
-	HelloPinMinLength     int32
-	UserLockSessionAction string
-	BreakGlassAccounts    []string
-	SudoersDAllowlist     []string
-	SudoLectureText       string
-	UpdatedAt             time.Time
+	OrganizationID         uuid.UUID
+	HelloEnabled           bool
+	HelloPinMinLength      int32
+	UserLockSessionAction  string
+	BreakGlassAccounts     []string
+	SudoersDAllowlist      []string
+	SudoLectureText        string
+	UpdatedAt              time.Time
+	LocalAdminUsername     string
+	LocalAdminRotationDays int32
+	RotateAfterRevealHours *int32
 }
 
 type Outbox struct {

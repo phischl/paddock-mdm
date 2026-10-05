@@ -20,8 +20,12 @@ import (
 const Retention = 60 * 24 * time.Hour
 
 // Handler executes one verified command and returns its status (protocol.CommandSucceeded or CommandFailed) and a
-// result object without secrets.
+// result object without secrets. Deferred ("") means the handler reports the result itself later, e.g. after a
+// rotation that waits for the server.
 type Handler func(ctx context.Context, c *command.Command) (status string, result map[string]any)
+
+// Deferred is the status of a handler that reports its result later.
+const Deferred = ""
 
 // Result is the result of one executed command.
 type Result struct {
@@ -81,20 +85,30 @@ func (e *Executor) Run(ctx context.Context, envelopes []json.RawMessage, keys *b
 			delete(executed, c.CommandID)
 			return results, err
 		}
-		results = append(results, e.execute(ctx, c))
+		if r, ok := e.execute(ctx, c); ok {
+			results = append(results, r)
+		}
 	}
 	return results, nil
 }
 
-func (e *Executor) execute(ctx context.Context, c *command.Command) Result {
+func (e *Executor) execute(ctx context.Context, c *command.Command) (Result, bool) {
 	status, result := protocol.CommandFailed, map[string]any{"reason": "unsupported_type"}
 	if h, ok := e.handlers[c.Type]; ok {
 		status, result = h(ctx, c)
 	}
 	slog.InfoContext(ctx, "command executed", "command_id", c.CommandID, "type", c.Type, "status", status)
+	if status == Deferred {
+		return Result{}, false
+	}
+	return Result{CommandID: c.CommandID, Status: status, Result: Encode(result)}, true
+}
+
+// Encode returns a result object as JSON ({} for nil).
+func Encode(result map[string]any) json.RawMessage {
 	raw, err := json.Marshal(result)
 	if err != nil || result == nil {
-		raw = json.RawMessage(`{}`)
+		return json.RawMessage(`{}`)
 	}
-	return Result{CommandID: c.CommandID, Status: status, Result: raw}
+	return raw
 }

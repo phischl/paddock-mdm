@@ -16,6 +16,7 @@ import (
 	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/bundlesign"
 	"github.com/paddock-mdm/paddock/server/internal/config"
+	"github.com/paddock-mdm/paddock/server/internal/escrowreader"
 	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
@@ -36,6 +37,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")
 	auditDSN := l.SecretFile("PADDOCK_AUDIT_DB_READER_URL_FILE")
 	baoCfg := config.LoadOpenBao(l)
+	// The reveal's own AppRole paddock-escrow-reader (plan M4a decision 9).
+	escrowRoleID := l.SecretFile("PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE")
+	escrowSecretID := l.SecretFile("PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE")
 	oidcCfg := admin.OIDCConfig{
 		Issuer:       l.Required("PADDOCK_OIDC_ISSUER"),
 		ClientID:     l.Required("PADDOCK_OIDC_CLIENT_ID"),
@@ -93,6 +97,10 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		return err
 	}
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
+	escrowReader, err := escrowreader.New(baoCfg.Addr, escrowRoleID, escrowSecretID)
+	if err != nil {
+		return err
+	}
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
 	stepUp := admin.NewOIDC(stepUpCfg)
@@ -110,7 +118,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		LoginSettings: app.NewLoginSettings(runner, orgPool),
 		Privileges:    app.NewPrivileges(runner, orgPool),
 		Commands:      app.NewDeviceCommands(orgPool),
-		LocalAdmin:    app.NewLocalAdmin(runner, orgPool),
+		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowReader),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),

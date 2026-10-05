@@ -23,12 +23,14 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
 	"github.com/paddock-mdm/paddock/agent/internal/health"
 	"github.com/paddock-mdm/paddock/agent/internal/identity"
+	"github.com/paddock-mdm/paddock/agent/internal/localadmin"
 	"github.com/paddock-mdm/paddock/agent/internal/paths"
 	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
 	"github.com/paddock-mdm/paddock/agent/internal/spool"
 	"github.com/paddock-mdm/paddock/agent/internal/state"
 	"github.com/paddock-mdm/paddock/agent/internal/update"
 	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/paddock-mdm/paddock/pkg/command"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 )
 
@@ -46,9 +48,13 @@ type Deps struct {
 	// Events receives the device events of the reconcilers; New connects it to the spool.
 	Events *reconcile.Events
 	// Sys is the device for the session tracking (plan M3b decision 11); nil disables it.
-	Sys      reconcile.System
-	Spool    *spool.Spool    // nil: the agent's own spool below Layout
-	Triggers <-chan struct{} // immediate check-in requests (network up, resume, SIGHUP)
+	Sys reconcile.System
+	// Accounts is the device for the managed local administrator (plan M4a decision 15); nil disables it.
+	Accounts localadmin.System
+	// FollowLogins sends the PAM session openings of the device until ctx ends (journal); nil: none.
+	FollowLogins func(ctx context.Context, out chan<- localadmin.Login)
+	Spool        *spool.Spool    // nil: the agent's own spool below Layout
+	Triggers     <-chan struct{} // immediate check-in requests (network up, resume, SIGHUP)
 	// Supervisor returns the PID of paddock-supervisor and Signal sends it SIGUSR1 (tests replace both).
 	Supervisor func() (int, error)
 	Signal     func(pid int) error
@@ -63,6 +69,7 @@ type Agent struct {
 	current     *bundle.Bundle // last applied bundle (drift loop)
 	failures    int
 	lastAttempt time.Time
+	localAdmin  *localadmin.Manager
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -89,10 +96,14 @@ func Load(l paths.Layout) (Deps, error) {
 	}
 	sys := reconcile.OS{Root: l.Root}
 	events := &reconcile.Events{}
-	return Deps{
+	d := Deps{
 		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Applier: apply.New(sys, managed, events), Events: events,
-		Sys: sys,
-	}, nil
+		Sys: sys, Accounts: sys,
+	}
+	if l.Root == "" || l.Root == "/" {
+		d.FollowLogins = localadmin.FollowJournal
+	}
+	return d, nil
 }
 
 // New creates the run loop.
@@ -106,14 +117,19 @@ func New(d Deps) (*Agent, error) {
 	if d.Health == nil {
 		d.Health = health.NewState(buildinfo.Version)
 	}
-	if d.Commands == nil {
-		d.Commands = commands.New(commands.Handlers(nil), d.Now)
-	}
+
 	st, err := state.Load(d.Layout.State())
 	if err != nil {
 		return nil, err
 	}
 	a := &Agent{d: d, st: st}
+	a.localAdmin = &localadmin.Manager{Sys: d.Accounts, Escrow: escrowClient{a}, State: &a.st.LocalAdmin, Save: a.persist,
+		Emit: a.event, Result: a.commandResult, Now: d.Now}
+	if a.d.Commands == nil {
+		a.d.Commands = commands.New(commands.Handlers(map[string]commands.Handler{
+			command.TypeRotateAdminPassword: a.rotateCommand,
+		}), d.Now)
+	}
 	if a.d.Spool == nil {
 		a.d.Spool = a.newSpool()
 	}
@@ -147,12 +163,22 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.waitActive(ctx); err != nil {
 		return err
 	}
-	return a.loop(ctx)
+	logins := make(chan localadmin.Login, 16)
+	if a.d.FollowLogins != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.d.FollowLogins(ctx, logins)
+		}()
+	}
+	return a.loop(ctx, logins)
 }
 
-func (a *Agent) loop(ctx context.Context) error {
+func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error {
 	next := time.NewTimer(0) // check in at start
 	defer next.Stop()
+	localAdmin := time.NewTicker(localadmin.PollInterval)
+	defer localAdmin.Stop()
 	drift := time.NewTicker(a.d.Config.DriftInterval)
 	defer drift.Stop()
 	sessionPoll := time.NewTicker(SessionPoll)
@@ -166,6 +192,10 @@ func (a *Agent) loop(ctx context.Context) error {
 			a.drift(ctx)
 		case <-sessionPoll.C:
 			a.trackSessions(ctx)
+		case <-localAdmin.C:
+			a.tickLocalAdmin(ctx)
+		case l := <-logins:
+			a.localAdminLogin(l)
 		case <-a.d.Triggers:
 			if at := triggered(a.d.Now(), a.lastAttempt, a.d.Rand()); at.Before(nextAt) {
 				nextAt = at
@@ -175,6 +205,7 @@ func (a *Agent) loop(ctx context.Context) error {
 			d := a.Cycle(ctx)
 			nextAt = a.d.Now().Add(d)
 			next.Reset(d)
+			a.tickLocalAdmin(ctx)
 		}
 	}
 }

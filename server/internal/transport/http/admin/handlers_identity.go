@@ -278,6 +278,8 @@ func (h *handlers) UpdateLoginSettings(ctx context.Context, req adminapi.UpdateL
 	s, err := h.loginSettings.Update(ctx, loginsettings.Settings{
 		HelloEnabled: b.HelloEnabled, HelloPinMinLength: b.HelloPinMinLength, UserLockSessionAction: string(b.UserLockSessionAction),
 		BreakGlassAccounts: b.BreakGlassAccounts, SudoersDAllowlist: b.SudoersDAllowlist, SudoLectureText: b.SudoLectureText,
+		LocalAdminUsername: b.LocalAdminUsername, LocalAdminRotationDays: b.LocalAdminRotationDays,
+		RotateAfterRevealHours: b.RotateAfterRevealHours,
 	})
 	if err != nil {
 		return nil, err
@@ -290,6 +292,8 @@ func toLoginSettings(s pgstore.OrganizationLoginSetting) adminapi.LoginSettings 
 		HelloEnabled: s.HelloEnabled, HelloPinMinLength: int(s.HelloPinMinLength),
 		UserLockSessionAction: adminapi.SessionAction(s.UserLockSessionAction), BreakGlassAccounts: s.BreakGlassAccounts,
 		SudoersDAllowlist: s.SudoersDAllowlist, SudoLectureText: s.SudoLectureText, UpdatedAt: s.UpdatedAt.UTC(),
+		LocalAdminUsername: s.LocalAdminUsername, LocalAdminRotationDays: int(s.LocalAdminRotationDays),
+		RotateAfterRevealHours: intPtr(s.RotateAfterRevealHours),
 	}
 }
 
@@ -543,4 +547,12 @@ func (h *handlers) UpdateOrganization(ctx context.Context, req adminapi.UpdateOr
 		return nil, err
 	}
 	return adminapi.UpdateOrganization200JSONResponse(toOrganization(o)), nil
+}
+
+func intPtr(v *int32) *int {
+	if v == nil {
+		return nil
+	}
+	n := int(*v)
+	return &n
 }

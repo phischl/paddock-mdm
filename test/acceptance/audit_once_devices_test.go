@@ -166,7 +166,39 @@ func managedCases(collection, kind string, valid func() map[string]any, invalid 
 // deviceAuditCases are the A3 cases of the M2a operations (plan M2a §8: the existing gates include them).
 var deviceAuditCases = func() map[string][]auditCase {
 	rotate := func(id string) string { return "/api/v1/devices/" + id + "/local-admin/rotate" }
+	reveal := func(id string) string { return "/api/v1/devices/" + id + "/local-admin/reveal" }
 	cases := map[string][]auditCase{
+		// Each reveal case signs in on its own: a step-up changes the session it runs in.
+		"POST /api/v1/devices/{id}/local-admin/reveal": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				alice := login(t, env.Alice)
+				d, _ := escrowedDevice(t, alice)
+				stepUp(t, alice, env.Alice, true)
+				res := call(t, alice, http.MethodPost, reveal(d.DeviceID), map[string]any{"confirm_hostname": getDevice(t, alice, d.DeviceID).Hostname})
+				expectStatus(t, res, http.StatusOK, "")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "success")
+			}},
+			{"no step-up", func(t *testing.T, w *auditWorld) {
+				res := call(t, login(t, env.Alice), http.MethodPost, reveal(activeID(t, w)), map[string]any{"confirm_hostname": "x"})
+				expectStatus(t, res, http.StatusForbidden, "step_up_required")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "denied")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.bob, http.MethodPost, reveal(activeID(t, w)), map[string]any{"confirm_hostname": "x"})
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "denied")
+			}},
+			{"validation failure", func(t *testing.T, w *auditWorld) {
+				alice := login(t, env.Alice)
+				stepUp(t, alice, env.Alice, true)
+				res := call(t, alice, http.MethodPost, reveal(activeID(t, w)), map[string]any{"confirm_hostname": "not-the-hostname"})
+				expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "failure")
+				res = call(t, alice, http.MethodPost, reveal(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.revealed", "failure")
+			}},
+		},
 		"POST /api/v1/devices/{id}/local-admin/rotate": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				res := call(t, w.alice, http.MethodPost, rotate(activeID(t, w)), nil)

@@ -152,6 +152,11 @@ const (
 	EventTamperSudoersDFile         = "tamper.sudoers_d_file"
 	EventTamperSudoersChanged       = "tamper.sudoers_changed"
 	EventTamperProtectedFileChanged = "tamper.protected_file_changed"
+	// Managed local administrator (plan M4a decisions 15, 16 and 18).
+	EventLocalAdminRotated        = "local_admin.rotated"
+	EventLocalAdminRotationFailed = "local_admin.rotation_failed"
+	EventLocalAdminLogin          = "local_admin.login"
+	EventTamperLocalAdminChanged  = "tamper.local_admin_changed"
 )
 
 // EventTypes is the closed set of event types.
@@ -161,7 +166,47 @@ var EventTypes = []string{
 	EventLoginApplied, EventLoginApplyFailed, EventUserLockApplied, EventLoginsSuspensionApplied, EventSudoApplyFailed,
 	EventSudoUserUnresolved, EventTamperSudoGroupMember, EventTamperSudoersDFile, EventTamperSudoersChanged,
 	EventTamperProtectedFileChanged,
+	EventLocalAdminRotated, EventLocalAdminRotationFailed, EventLocalAdminLogin, EventTamperLocalAdminChanged,
 }
+
+// The data of the managed local administrator's events (plan M4a decision 18). They never carry passwords,
+// ciphertexts, terminals or remote hosts.
+type (
+	// LocalAdminRotated: the device set the password of generation, which the server had stored.
+	LocalAdminRotated struct {
+		Generation int64 `json:"generation"`
+	}
+	// LocalAdminRotationFailed: a rotation to generation did not happen; the previous password stays valid.
+	LocalAdminRotationFailed struct {
+		Generation int64  `json:"generation"`
+		Reason     string `json:"reason"` // one of the RotationFailure constants
+	}
+	// LocalAdminLogin: a session of the local administrator was opened through the PAM service (e.g. sshd, login).
+	LocalAdminLogin struct {
+		Service string    `json:"service"`
+		At      time.Time `json:"at"`
+	}
+	// TamperLocalAdminChanged: the account changed outside Paddock; Field is one of the LocalAdminField constants.
+	TamperLocalAdminChanged struct {
+		Field string `json:"field"`
+	}
+)
+
+// Reasons of LocalAdminRotationFailed.
+const (
+	RotationEscrowFailed  = "escrow_failed"  // the server refused to store the password
+	RotationEscrowTimeout = "escrow_timeout" // not stored within 15 minutes
+	RotationApplyFailed   = "apply_failed"   // chpasswd failed
+)
+
+// Fields of TamperLocalAdminChanged.
+const (
+	LocalAdminFieldPassword = "password"
+	LocalAdminFieldShell    = "shell"
+	LocalAdminFieldGroup    = "group"
+	LocalAdminFieldLocked   = "locked"
+	LocalAdminFieldMissing  = "missing"
+)
 
 // SessionLogin is the data of a session.login event: a user logged in on the device. It carries only the username
 // and the time, never process or command data (architecture §9.4); the server records it without an audit event.

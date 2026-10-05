@@ -23,6 +23,21 @@ func NewLoginSettings(runner *ActionRunner, org *db.OrgPool) *LoginSettings {
 	return &LoginSettings{runner: runner, org: org}
 }
 
+func equalHours(cur *int32, in *int) bool {
+	if cur == nil || in == nil {
+		return cur == nil && in == nil
+	}
+	return int(*cur) == *in
+}
+
+func int32Ptr(v *int) *int32 {
+	if v == nil {
+		return nil
+	}
+	n := int32(*v) //nolint:gosec // validated 1–168
+	return &n
+}
+
 // SpecLoginSettingsUpdate is the privileged action settings.login_changed.
 var SpecLoginSettingsUpdate = ActionSpec{Code: audit.CodeSettingsLoginChanged, AllowedRoles: RolesAdmin}
 
@@ -53,12 +68,15 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 		rec.SetTarget(audit.Target{Type: "organization", ID: cur.OrganizationID.String()})
 		changed := []string{}
 		for name, differs := range map[string]bool{
-			"hello_enabled":            cur.HelloEnabled != in.HelloEnabled,
-			"hello_pin_min_length":     int(cur.HelloPinMinLength) != in.HelloPinMinLength,
-			"user_lock_session_action": cur.UserLockSessionAction != in.UserLockSessionAction,
-			"break_glass_accounts":     !slices.Equal(cur.BreakGlassAccounts, in.BreakGlassAccounts),
-			"sudoers_d_allowlist":      !slices.Equal(cur.SudoersDAllowlist, in.SudoersDAllowlist),
-			"sudo_lecture_text":        cur.SudoLectureText != in.SudoLectureText,
+			"hello_enabled":             cur.HelloEnabled != in.HelloEnabled,
+			"hello_pin_min_length":      int(cur.HelloPinMinLength) != in.HelloPinMinLength,
+			"user_lock_session_action":  cur.UserLockSessionAction != in.UserLockSessionAction,
+			"break_glass_accounts":      !slices.Equal(cur.BreakGlassAccounts, in.BreakGlassAccounts),
+			"sudoers_d_allowlist":       !slices.Equal(cur.SudoersDAllowlist, in.SudoersDAllowlist),
+			"sudo_lecture_text":         cur.SudoLectureText != in.SudoLectureText,
+			"local_admin_username":      cur.LocalAdminUsername != in.LocalAdminUsername,
+			"local_admin_rotation_days": int(cur.LocalAdminRotationDays) != in.LocalAdminRotationDays,
+			"rotate_after_reveal_hours": !equalHours(cur.RotateAfterRevealHours, in.RotateAfterRevealHours),
 		} {
 			if differs {
 				changed = append(changed, name)
@@ -69,10 +87,21 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 		if err := loginsettings.Validate(in); err != nil {
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}
+		if cur.LocalAdminUsername != in.LocalAdminUsername {
+			locked, err := q.OrganizationHasActiveLocalAdmin(ctx)
+			if err != nil {
+				return err
+			}
+			if locked {
+				return problem.SettingLocked.WithDetail("local_admin_username cannot change: devices have an active password for " + cur.LocalAdminUsername)
+			}
+		}
 		out, err = q.UpdateLoginSettings(ctx, pgstore.UpdateLoginSettingsParams{
 			HelloEnabled: in.HelloEnabled, HelloPinMinLength: int32(in.HelloPinMinLength), //nolint:gosec // validated 6–32
 			UserLockSessionAction: in.UserLockSessionAction, BreakGlassAccounts: in.BreakGlassAccounts,
 			SudoersDAllowlist: in.SudoersDAllowlist, SudoLectureText: in.SudoLectureText,
+			LocalAdminUsername: in.LocalAdminUsername, LocalAdminRotationDays: int32(in.LocalAdminRotationDays), //nolint:gosec // validated 1–365
+			RotateAfterRevealHours: int32Ptr(in.RotateAfterRevealHours),
 		})
 		if err != nil {
 			return err

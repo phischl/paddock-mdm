@@ -415,3 +415,58 @@ func (s *System) TakeCalls() []string {
 	s.Calls = nil
 	return c
 }
+
+// UserTool implements localadmin.System for useradd (adds the user to Passwd, its -G group to Members and a
+// /etc/shadow line), passwd -l (locks) and usermod (logged only).
+func (s *System) UserTool(_ context.Context, tool string, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cmd := tool + " " + strings.Join(args, " ")
+	s.Calls = append(s.Calls, cmd)
+	if cmd == s.FailCmd || len(args) < 2 || args[len(args)-2] != "--" {
+		return tool + ": failure\n", 1, nil
+	}
+	name := args[len(args)-1]
+	switch tool {
+	case "useradd":
+		s.Passwd[name] = 1001
+		if i := slices.Index(args, "-G"); i >= 0 {
+			s.Members[args[i+1]] = append(s.Members[args[i+1]], name)
+		}
+		s.setShadow(name, "")
+	case "passwd":
+		s.setShadow(name, "!")
+	}
+	return "", 0, nil
+}
+
+// Chpasswd implements localadmin.System: the hash of "name:password" becomes "$y$" + password length (the fake
+// never keeps the password).
+func (s *System) Chpasswd(_ context.Context, input []byte) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Calls = append(s.Calls, "chpasswd")
+	name, pw, ok := strings.Cut(strings.TrimSuffix(string(input), "\n"), ":")
+	if !ok || s.FailCmd == "chpasswd" {
+		return "chpasswd: failure\n", 1, nil
+	}
+	s.setShadow(name, fmt.Sprintf("$y$%d", len(pw)))
+	return "", 0, nil
+}
+
+// setShadow replaces the /etc/shadow line of name.
+func (s *System) setShadow(name, hash string) {
+	f := s.Files["/etc/shadow"]
+	if f == nil {
+		f = &File{Mode: 0o640}
+		s.Files["/etc/shadow"] = f
+	}
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(string(f.Data)), "\n") {
+		if l != "" && !strings.HasPrefix(l, name+":") {
+			lines = append(lines, l)
+		}
+	}
+	lines = append(lines, name+":"+hash+":20000:0:99999:7:::")
+	f.Data = []byte(strings.Join(lines, "\n") + "\n")
+}

@@ -84,7 +84,12 @@ const (
 	CodeDeviceTamperProtectedFileChanged Code = "device.tamper_protected_file_changed"
 
 	// Managed local administrator (plan M4a decisions 17 and 18).
-	CodeLocalAdminRotationRequested Code = "local_admin.rotation_requested"
+	CodeLocalAdminRotationRequested   Code = "local_admin.rotation_requested"
+	CodeLocalAdminRevealed            Code = "local_admin.revealed"
+	CodeLocalAdminRotated             Code = "local_admin.rotated"
+	CodeLocalAdminRotationFailed      Code = "local_admin.rotation_failed"
+	CodeLocalAdminLogin               Code = "local_admin.login"
+	CodeDeviceTamperLocalAdminChanged Code = "device.tamper_local_admin_changed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -106,6 +111,7 @@ var deviceEventParams = []string{
 	"event_seq", "occurred_at", "bundle_version", "reason", "resource", "version", "changed", "errors", "resource_ids",
 	"from_version", "outcome", "count", "from_seq", "to_seq", "stage", "message", "username", "sessions_locked",
 	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
+	"generation", "service", "at", "field",
 }
 
 var registry = map[Code]Definition{
@@ -545,6 +551,40 @@ var registry = map[Code]Definition{
 		Description: "An administrator or operator issued the command rotate_admin_password to a device.",
 		Params:      []string{"hostname", "command_id"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeLocalAdminRevealed: {
+		Code: CodeLocalAdminRevealed, Emitted: true,
+		Description: "An organization administrator revealed the local administrator password of a device after a step-up; the passwords are never recorded.",
+		Params:      []string{"hostname", "generations", "rotation_scheduled_at"},
+		Outcomes:    adminOutcomes,
+		Note:        "generations lists the revealed generations; rotation_scheduled_at is set when the organization rotates after a reveal.",
+	},
+	CodeLocalAdminRotated: {
+		Code: CodeLocalAdminRotated, Emitted: true,
+		Description: "A device set a new local administrator password after the server stored it; the generation is active, older ones are superseded (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeLocalAdminRotationFailed: {
+		Code: CodeLocalAdminRotationFailed, Emitted: true,
+		Description: "A device could not rotate its local administrator password; the previous password stays valid (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "reason is escrow_failed, escrow_timeout or apply_failed.",
+	},
+	CodeLocalAdminLogin: {
+		Code: CodeLocalAdminLogin, Emitted: true,
+		Description: "A session of the local administrator account was opened on a device (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "service is the PAM service, e.g. sshd or login; no terminal or remote host is recorded.",
+	},
+	CodeDeviceTamperLocalAdminChanged: {
+		Code: CodeDeviceTamperLocalAdminChanged, Emitted: true,
+		Description: "A device found its local administrator account changed outside Paddock; the agent repairs it and rotates the password (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "field is password, shell, group, locked or missing.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

@@ -93,6 +93,7 @@ var privileged = map[string]struct {
 	"PATCH /api/v1/profile-assignments/{id}":                         {app.ScopeOrg, app.SpecAssignmentUpdate},
 	"DELETE /api/v1/profile-assignments/{id}":                        {app.ScopeOrg, app.SpecAssignmentDelete},
 	"POST /api/v1/devices/{id}/local-admin/rotate":                   {app.ScopeOrg, app.SpecLocalAdminRotate},
+	"POST /api/v1/devices/{id}/local-admin/reveal":                   {app.ScopeOrg, app.SpecLocalAdminReveal},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
