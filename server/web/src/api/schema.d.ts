@@ -789,6 +789,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/local-admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The managed local administrator of the device (plan M4a decision
+         *     17): the active and a pending password generation (stored by the server, not yet confirmed by the device),
+         *     the last rotation and the last failed one.
+         */
+        get: operations["getDeviceLocalAdmin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/local-admin/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns the active password
+         *     and a pending one; confirm_hostname must equal the device's hostname. If the organization rotates after a
+         *     reveal, a rotate_admin_password command is scheduled. Responses are never cached.
+         */
+        post: operations["revealDeviceLocalAdmin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/local-admin/rotate": {
         parameters: {
             query?: never;
@@ -1488,6 +1534,37 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        LocalAdmin: {
+            username: string;
+            active_generation: number | null;
+            /** @description Stored by the server, not yet applied by the device. */
+            pending_generation: number | null;
+            /** Format: date-time */
+            last_rotated_at: string | null;
+            /**
+             * Format: date-time
+             * @description When the device rotates next; earlier means overdue (the device rotates only while it reaches the server).
+             */
+            next_rotation_at: string | null;
+            last_rotation_error: {
+                /** @enum {string} */
+                reason: "escrow_failed" | "escrow_timeout" | "apply_failed";
+                generation: number;
+                /** Format: date-time */
+                at: string;
+            } | null;
+        };
+        LocalAdminRevealRequest: {
+            confirm_hostname: string;
+        };
+        LocalAdminRevealed: {
+            passwords: {
+                generation: number;
+                /** @enum {string} */
+                state: "active" | "pending";
+                password: string;
+            }[];
+        };
         /** @enum {string} */
         DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
         /** @enum {string} */
@@ -1796,6 +1873,14 @@ export interface components {
             /** @description Files in /etc/sudoers.d/ the agent leaves alone. */
             sudoers_d_allowlist: string[];
             sudo_lecture_text: string;
+            /**
+             * @description Managed local administrator account of every device (plan M4a decision 13). It cannot change once a device
+             *     has an active password for it (409 setting_locked).
+             */
+            local_admin_username: string;
+            local_admin_rotation_days: number;
+            /** @description Hours after a reveal until the device rotates the password; absent or null means no rotation. */
+            rotate_after_reveal_hours?: number | null;
         };
         LoginSettings: {
             hello_enabled: boolean;
@@ -1804,6 +1889,9 @@ export interface components {
             break_glass_accounts: string[];
             sudoers_d_allowlist: string[];
             sudo_lecture_text: string;
+            local_admin_username: string;
+            local_admin_rotation_days: number;
+            rotate_after_reveal_hours: number | null;
             /** Format: date-time */
             updated_at: string;
         };
@@ -3617,6 +3705,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     setDeviceLoginAssignment: {
@@ -3744,6 +3833,66 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    getDeviceLocalAdmin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The local administrator state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalAdmin"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    revealDeviceLocalAdmin: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalAdminRevealRequest"];
+            };
+        };
+        responses: {
+            /** @description The passwords. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalAdminRevealed"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     rotateDeviceLocalAdmin: {

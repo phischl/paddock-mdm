@@ -445,7 +445,10 @@ func TestLoginSettingsAssignmentAndSuspension(t *testing.T) {
 	put := map[string]any{
 		"hello_enabled": true, "hello_pin_min_length": 8, "user_lock_session_action": "terminate",
 		"break_glass_accounts": []string{"paddock"}, "sudoers_d_allowlist": []string{"README", "90-paddock"},
-		"sudo_lecture_text": "Be careful.",
+		"sudo_lecture_text": "Be careful.", "local_admin_username": "paddock-admin", "local_admin_rotation_days": 30,
+	}
+	if s.LocalAdminUsername != "paddock-admin" || s.LocalAdminRotationDays != 30 || s.RotateAfterRevealHours != nil {
+		t.Fatalf("local admin defaults %+v", s)
 	}
 	if res := e.do(call{method: "PUT", path: "/api/v1/settings/login", cookie: operator, body: put}); res.status != http.StatusForbidden {
 		t.Fatalf("operator changes settings: %d", res.status)
@@ -458,6 +461,31 @@ func TestLoginSettingsAssignmentAndSuspension(t *testing.T) {
 	put["sudoers_d_allowlist"] = []string{"paddock-u-0123456789abcdef"}
 	if res := e.do(call{method: "PUT", path: "/api/v1/settings/login", cookie: alice, body: put}); res.status != http.StatusBadRequest {
 		t.Fatalf("Paddock file allow-listed: %d", res.status)
+	}
+	put["sudoers_d_allowlist"] = []string{"README"}
+
+	// The local administrator's name can change until a device has an active password for it (plan M4a decision 13).
+	put["local_admin_username"], put["rotate_after_reveal_hours"] = "fleet-admin", 24
+	res = e.do(call{method: "PUT", path: "/api/v1/settings/login", cookie: alice, body: put})
+	var changed adminapi.LoginSettings
+	res.decode(t, &changed)
+	if res.status != http.StatusOK || changed.LocalAdminUsername != "fleet-admin" || changed.RotateAfterRevealHours == nil || *changed.RotateAfterRevealHours != 24 {
+		t.Fatalf("local admin settings: %d %s", res.status, res.body)
+	}
+	adminDevice := e.insertDevice(e.acme, "admin-"+domain, "active")
+	if _, err := e.super.Exec(context.Background(), `INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status,
+		ciphertext, key_version) VALUES ($1, $2, $3, 'admin_password', 1, 'active', '\x01', 1)`, uuid.New(), e.acme, adminDevice); err != nil {
+		t.Fatal(err)
+	}
+	put["local_admin_username"] = "other-admin"
+	locked := e.do(call{method: "PUT", path: "/api/v1/settings/login", cookie: alice, body: put})
+	if locked.status != http.StatusConflict || locked.problemCode(t) != "setting_locked" {
+		t.Fatalf("rename with an active password: %d %s", locked.status, locked.body)
+	}
+	e.expectEvent(locked, "settings.login_changed:failure:setting_locked")
+	put["local_admin_username"], put["local_admin_rotation_days"] = "fleet-admin", 7
+	if res := e.do(call{method: "PUT", path: "/api/v1/settings/login", cookie: alice, body: put}); res.status != http.StatusOK {
+		t.Fatalf("other settings with an active password: %d %s", res.status, res.body)
 	}
 
 	var dave adminapi.UserCreated

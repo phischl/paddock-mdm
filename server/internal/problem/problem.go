@@ -52,6 +52,7 @@ var (
 	InvalidState        = &Error{Code: "invalid_state", Status: http.StatusConflict}
 	AlreadyExists       = &Error{Code: "already_exists", Status: http.StatusConflict}
 	InUse               = &Error{Code: "in_use", Status: http.StatusConflict}
+	SettingLocked       = &Error{Code: "setting_locked", Status: http.StatusConflict}
 	PathNotAllowed      = &Error{Code: "path_not_allowed", Status: http.StatusUnprocessableEntity}
 	UnitNotAllowed      = &Error{Code: "unit_not_allowed", Status: http.StatusUnprocessableEntity}
 	// Identity and privileges (plan M3a).

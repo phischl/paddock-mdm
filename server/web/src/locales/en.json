@@ -96,7 +96,9 @@
     "username_taken": "This username is already taken.",
     "domain_taken": "One of these domains belongs to another organization.",
     "attribute_owned_upstream": "This is managed by the upstream directory and cannot be changed in Paddock.",
-    "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\ ^ $ * ? [ ]."
+    "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\ ^ $ * ? [ ].",
+    "setting_locked": "This setting cannot change any more: devices already use it.",
+    "step_up_required": "Confirm your identity to continue."
   },
   "audit": {
     "title": "Audit log",
@@ -166,7 +168,8 @@
       "tamper_sudo_group_member": "The device {target} removed {username} from the privileged group {group}",
       "tamper_sudoers_d_file": "The device {target} quarantined the unexpected sudoers file {file}",
       "tamper_sudoers_changed": "The device {target} found /etc/sudoers changed",
-      "tamper_protected_file_changed": "The device {target} found the protected file {file} changed"
+      "tamper_protected_file_changed": "The device {target} found the protected file {file} changed",
+      "tamper_local_admin_changed": "The device {target} found its local administrator account changed ({field})"
     },
     "agent_release": {
       "created": "{actor} created the agent release {version}",
@@ -220,7 +223,11 @@
       "deleted": "{actor} removed an assignment of {profile}"
     },
     "local_admin": {
-      "rotation_requested": "{actor} requested a new local administrator password for {hostname}"
+      "rotation_requested": "{actor} requested a new local administrator password for {hostname}",
+      "revealed": "{actor} revealed the local administrator password of {hostname}",
+      "rotated": "The device {target} set local administrator password {generation, number}",
+      "rotation_failed": "The device {target} could not rotate its local administrator password ({reason})",
+      "login": "The local administrator logged in on {target} ({service})"
     }
   },
   "organizations": {
@@ -623,6 +630,12 @@
     "allowlistHint": "One file name per line; any other file there is moved away by the agent.",
     "lecture": "sudo lecture",
     "lectureHint": "Shown by sudo according to each profile's lecture setting.",
+    "localAdmin": "Local administrator",
+    "localAdminUsername": "Account name",
+    "localAdminUsernameHint": "Paddock creates this account on every device and rotates its password. The name cannot change once a device uses it.",
+    "rotationDays": "Rotate the password every … days",
+    "rotateAfterReveal": "Rotate … hours after a reveal",
+    "rotateAfterRevealHint": "Leave empty to keep a revealed password until the next regular rotation.",
     "saved": "Login settings saved."
   }
 }

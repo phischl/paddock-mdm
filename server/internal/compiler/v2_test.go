@@ -93,6 +93,11 @@ func TestSchemaNegotiation(t *testing.T) {
 		sudo.LectureText == "" || len(sudo.Entries) != 0 {
 		t.Fatalf("sudo %+v", sudo)
 	}
+	// Plan M4a decision 14: the managed local administrator, a break-glass account in both resources.
+	if login.LocalAdmin == nil || *login.LocalAdmin != (bundle.LocalAdminSpec{Username: "paddock-admin", RotationDays: 30}) ||
+		!slices.Equal(login.BreakGlassAccounts, []string{"paddock-admin"}) || !slices.Equal(sudo.BreakGlassAccounts, []string{"paddock-admin"}) {
+		t.Fatalf("local admin %+v, break-glass %v / %v", login.LocalAdmin, login.BreakGlassAccounts, sudo.BreakGlassAccounts)
+	}
 	// An organization without a primary domain gets no login resource.
 	w.exec("UPDATE organization SET domains = '{}' WHERE id = $1", w.org)
 	w.mustCompile(statechange.ScopeDevice, v2)

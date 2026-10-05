@@ -302,6 +302,8 @@ func newEnv(t *testing.T) *env {
 		Logins:        app.NewLogins(runner, orgPool, idp),
 		LoginSettings: app.NewLoginSettings(runner, orgPool),
 		Privileges:    app.NewPrivileges(runner, orgPool),
+		Commands:      app.NewDeviceCommands(orgPool),
+		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, fakeDecrypter{}),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,

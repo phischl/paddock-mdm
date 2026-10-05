@@ -26,6 +26,7 @@ import (
 	"github.com/paddock-mdm/paddock/pkg/bundle"
 	"github.com/paddock-mdm/paddock/pkg/command"
 	"github.com/paddock-mdm/paddock/pkg/dsse"
+	"github.com/paddock-mdm/paddock/pkg/escrow"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 )
 
@@ -43,6 +44,9 @@ type Gateway struct {
 	Files        map[string][]byte // GET /files/<name> (presigned downloads)
 	// Results are the accepted command results by command ID.
 	Results map[string]protocol.CommandResult
+	// Escrows are the accepted escrow uploads; EscrowAnswer is the status GET /v1/escrow/{id} answers.
+	Escrows      []escrow.Request
+	EscrowAnswer string
 
 	keys     map[string]*ecdsa.PublicKey // key ID → key (enrolled keys)
 	Enrolls  []protocol.EnrollRequest
@@ -59,7 +63,7 @@ type Checkin struct {
 
 // New starts a TLS fake gateway.
 func New(t *testing.T) *Gateway {
-	g := &Gateway{t: t, keys: map[string]*ecdsa.PublicKey{}, Files: map[string][]byte{}, Results: map[string]protocol.CommandResult{},
+	g := &Gateway{t: t, keys: map[string]*ecdsa.PublicKey{}, Files: map[string][]byte{}, Results: map[string]protocol.CommandResult{}, EscrowAnswer: escrow.StatusStored,
 		EnrollStatus: protocol.EnrollStatus{Status: protocol.EnrollProcessing}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/enroll", g.enroll)
@@ -67,6 +71,8 @@ func New(t *testing.T) *Gateway {
 	mux.HandleFunc("POST /v1/checkin", g.checkin)
 	mux.HandleFunc("POST /v1/events", g.events)
 	mux.HandleFunc("POST /v1/commands/{id}/result", g.result)
+	mux.HandleFunc("POST /v1/escrow", g.escrow)
+	mux.HandleFunc("GET /v1/escrow/{id}", g.escrowStatus)
 	mux.HandleFunc("GET /files/{name}", func(w http.ResponseWriter, r *http.Request) {
 		g.Mu.Lock()
 		data, ok := g.Files[r.PathValue("name")]
@@ -188,6 +194,28 @@ func (g *Gateway) result(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(body, &req)
 	g.Results[r.PathValue("id")] = req
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (g *Gateway) escrow(w http.ResponseWriter, r *http.Request) {
+	body, _, ok := g.verify(w, r, nil)
+	if !ok {
+		return
+	}
+	g.Mu.Lock()
+	defer g.Mu.Unlock()
+	var req escrow.Request
+	_ = json.Unmarshal(body, &req)
+	g.Escrows = append(g.Escrows, req)
+	writeJSON(w, http.StatusAccepted, escrow.Accepted{EscrowID: req.EscrowID})
+}
+
+func (g *Gateway) escrowStatus(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := g.verify(w, r, nil); !ok {
+		return
+	}
+	g.Mu.Lock()
+	defer g.Mu.Unlock()
+	writeJSON(w, http.StatusOK, escrow.Status{Status: g.EscrowAnswer})
 }
 
 // CommandKey is the command-signing key of the fake (seeded, so tests can sign commands).

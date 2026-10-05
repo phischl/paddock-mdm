@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/paddock-mdm/paddock/agent/internal/identity"
+	"github.com/paddock-mdm/paddock/pkg/escrow"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 )
 
@@ -154,6 +155,18 @@ func (c *Client) Events(ctx context.Context, deviceID string, seq int64, events 
 // CommandResult posts the result of a command; nil means 202.
 func (c *Client) CommandResult(ctx context.Context, deviceID string, seq int64, commandID string, res protocol.CommandResult) error {
 	return c.do(ctx, http.MethodPost, "/v1/commands/"+url.PathEscape(commandID)+"/result", deviceID, seq, res, nil)
+}
+
+// EscrowUpload uploads an escrowed secret; nil means 202.
+func (c *Client) EscrowUpload(ctx context.Context, deviceID string, seq int64, req escrow.Request) error {
+	return c.do(ctx, http.MethodPost, "/v1/escrow", deviceID, seq, req, nil)
+}
+
+// EscrowStatus returns the storage status of an escrow upload (pending, stored or failed).
+func (c *Client) EscrowStatus(ctx context.Context, deviceID string, seq int64, escrowID string) (string, error) {
+	var out escrow.Status
+	err := c.do(ctx, http.MethodGet, "/v1/escrow/"+url.PathEscape(escrowID), deviceID, seq, nil, &out)
+	return out.Status, err
 }
 
 // Reachable reports whether the server answers HTTPS at all (any HTTP status counts).

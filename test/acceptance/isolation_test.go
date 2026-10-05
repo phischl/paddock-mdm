@@ -48,6 +48,8 @@ func TestOrganizationIsolation(t *testing.T) {
 		w.globexIDs = append(w.globexIDs, e.EventID)
 	}
 
+	// Actions that need a step-up must still answer 404 for globex resources, not step_up_required.
+	stepUp(t, w.alice, env.Alice, true)
 	var ops []string
 	for path, item := range doc.Paths.Map() {
 		if !strings.HasPrefix(path, "/api/v1/") {

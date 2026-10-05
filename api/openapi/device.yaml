@@ -440,7 +440,8 @@ components:
                  agent.rolled_back, agent.events_dropped, session.login, login.applied, login.apply_failed,
                  user.lock_applied, logins.suspension_applied, sudo.apply_failed, sudo.user_unresolved,
                  tamper.sudo_group_member, tamper.sudoers_d_file, tamper.sudoers_changed,
-                 tamper.protected_file_changed]
+                 tamper.protected_file_changed, local_admin.rotated, local_admin.rotation_failed, local_admin.login,
+                 tamper.local_admin_changed]
         occurred_at: { type: string, format: date-time }
         data:
           type: object

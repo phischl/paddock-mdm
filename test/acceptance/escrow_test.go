@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/pkg/bundle"
 	"github.com/paddock-mdm/paddock/pkg/escrow"
+	"github.com/paddock-mdm/paddock/pkg/protocol"
 	"github.com/paddock-mdm/paddock/test/acceptance/devicesim"
 	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
 )
@@ -65,5 +67,36 @@ func TestEscrowEndpoints(t *testing.T) {
 	other := activeDevice(t, alice, "", "esc-other-"+uniqueSuffix())
 	if _, res, err := other.EscrowStatus(testContext(t, time.Minute), id); err != nil || res.Status != http.StatusNotFound {
 		t.Fatalf("status of another device's upload: %v HTTP %d", err, res.Status)
+	}
+}
+
+// escrowedDevice enrolls a v2 device of alice's organization whose local administrator password generation 1 is
+// escrowed and confirmed (local_admin.rotated), as an agent does it, and returns the device and the password.
+func escrowedDevice(t *testing.T, alice *env.Portal) (*devicesim.Device, string) {
+	t.Helper()
+	d := v2Device(t, alice, "", 1, 2)
+	b := latestBundle(t, d, time.Minute, func(b *bundle.Bundle) bool { return b.Keys != nil && b.Keys.EscrowWrap != nil })
+	password := "escrowed-" + uniqueSuffix()
+	if _, status := escrowUpload(t, d, b, 1, password); status != escrow.StatusStored {
+		t.Fatalf("escrow upload %s", status)
+	}
+	data, _ := json.Marshal(protocol.LocalAdminRotated{Generation: 1})
+	res, err := d.SendEvents(testContext(t, time.Minute), []protocol.Event{{EventSeq: 1, Type: protocol.EventLocalAdminRotated, OccurredAt: time.Now(), Data: data}})
+	if err != nil || res.Status != http.StatusAccepted {
+		t.Fatalf("rotated event: %v HTTP %d %s", err, res.Status, res.Body)
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+		var state struct {
+			Active *int `json:"active_generation"`
+		}
+		if err := call(t, alice, http.MethodGet, "/api/v1/devices/"+d.DeviceID+"/local-admin", nil).JSON(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state.Active != nil && *state.Active == 1 {
+			return d, password
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("generation 1 not active")
+		}
 	}
 }

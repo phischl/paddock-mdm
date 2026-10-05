@@ -1237,6 +1237,7 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /api/v1/devices/{id}/login-assignment:
     parameters:
@@ -1349,6 +1350,56 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/local-admin:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDeviceLocalAdmin
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The managed local administrator of the device (plan M4a decision
+        17): the active and a pending password generation (stored by the server, not yet confirmed by the device),
+        the last rotation and the last failed one.
+      responses:
+        "200":
+          description: The local administrator state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalAdmin" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/local-admin/reveal:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: revealDeviceLocalAdmin
+      tags: [devices]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns the active password
+        and a pending one; confirm_hostname must equal the device's hostname. If the organization rotates after a
+        reveal, a rotate_admin_password command is scheduled. Responses are never cached.
+      x-paddock-audit: local_admin.revealed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LocalAdminRevealRequest" }
+      responses:
+        "200":
+          description: The passwords.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalAdminRevealed" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/local-admin/rotate:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -2537,6 +2588,46 @@ components:
           type: object
           additionalProperties: true
           description: The parameters of the event as recorded in the audit log (device.<type>).
+    LocalAdmin:
+      type: object
+      required: [username, active_generation, pending_generation, last_rotated_at, next_rotation_at, last_rotation_error]
+      properties:
+        username: { type: string }
+        active_generation: { type: integer, nullable: true }
+        pending_generation: { type: integer, nullable: true, description: "Stored by the server, not yet applied by the device." }
+        last_rotated_at: { type: string, format: date-time, nullable: true }
+        next_rotation_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the device rotates next; earlier means overdue (the device rotates only while it reaches the server).
+        last_rotation_error:
+          type: object
+          nullable: true
+          required: [reason, generation, at]
+          properties:
+            reason: { type: string, enum: [escrow_failed, escrow_timeout, apply_failed] }
+            generation: { type: integer }
+            at: { type: string, format: date-time }
+    LocalAdminRevealRequest:
+      type: object
+      required: [confirm_hostname]
+      additionalProperties: false
+      properties:
+        confirm_hostname: { type: string, maxLength: 253 }
+    LocalAdminRevealed:
+      type: object
+      required: [passwords]
+      properties:
+        passwords:
+          type: array
+          items:
+            type: object
+            required: [generation, state, password]
+            properties:
+              generation: { type: integer }
+              state: { type: string, enum: [active, pending] }
+              password: { type: string }
     DeviceCommandStatus:
       type: string
       enum: [pending, delivered, succeeded, failed, expired, cancelled]
@@ -2867,7 +2958,7 @@ components:
     LoginSettingsUpdate:
       type: object
       required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
-                 sudoers_d_allowlist, sudo_lecture_text]
+                 sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days]
       additionalProperties: false
       properties:
         hello_enabled: { type: boolean }
@@ -2884,10 +2975,24 @@ components:
           description: Files in /etc/sudoers.d/ the agent leaves alone.
           items: { type: string, maxLength: 64 }
         sudo_lecture_text: { type: string, minLength: 1, maxLength: 2000 }
+        local_admin_username:
+          type: string
+          pattern: "^[a-z_][a-z0-9_-]{0,31}$"
+          description: |
+            Managed local administrator account of every device (plan M4a decision 13). It cannot change once a device
+            has an active password for it (409 setting_locked).
+        local_admin_rotation_days: { type: integer, minimum: 1, maximum: 365 }
+        rotate_after_reveal_hours:
+          type: integer
+          minimum: 1
+          maximum: 168
+          nullable: true
+          description: Hours after a reveal until the device rotates the password; absent or null means no rotation.
     LoginSettings:
       type: object
       required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
-                 sudoers_d_allowlist, sudo_lecture_text, updated_at]
+                 sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days,
+                 rotate_after_reveal_hours, updated_at]
       properties:
         hello_enabled: { type: boolean }
         hello_pin_min_length: { type: integer }
@@ -2899,6 +3004,9 @@ components:
           type: array
           items: { type: string }
         sudo_lecture_text: { type: string }
+        local_admin_username: { type: string }
+        local_admin_rotation_days: { type: integer }
+        rotate_after_reveal_hours: { type: integer, nullable: true }
         updated_at: { type: string, format: date-time }
     LoginAssignmentUpdate:
       type: object

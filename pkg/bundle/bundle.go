@@ -118,6 +118,15 @@ type LoginSpec struct {
 	LockedUsers        []string `json:"locked_users"`
 	SessionAction      string   `json:"session_action"` // lock_screen | terminate
 	BreakGlassAccounts []string `json:"break_glass_accounts"`
+	// LocalAdmin is the managed local administrator account (plan M4a decision 14); agents of earlier releases
+	// ignore it. Its username is always one of BreakGlassAccounts.
+	LocalAdmin *LocalAdminSpec `json:"local_admin,omitempty"`
+}
+
+// LocalAdminSpec is the managed local administrator of the login resource.
+type LocalAdminSpec struct {
+	Username     string `json:"username"`
+	RotationDays int    `json:"rotation_days"`
 }
 
 // Login providers and session actions of LoginSpec.

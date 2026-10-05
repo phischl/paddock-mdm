@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/paddock-mdm/paddock/pkg/escrow"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
@@ -92,6 +93,11 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventTamperSudoersDFile:         audit.CodeDeviceTamperSudoersDFile,
 	protocol.EventTamperSudoersChanged:       audit.CodeDeviceTamperSudoersChanged,
 	protocol.EventTamperProtectedFileChanged: audit.CodeDeviceTamperProtectedFileChanged,
+
+	protocol.EventLocalAdminRotated:        audit.CodeLocalAdminRotated,
+	protocol.EventLocalAdminRotationFailed: audit.CodeLocalAdminRotationFailed,
+	protocol.EventLocalAdminLogin:          audit.CodeLocalAdminLogin,
+	protocol.EventTamperLocalAdminChanged:  audit.CodeDeviceTamperLocalAdminChanged,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -131,6 +137,11 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 		if area := loginStateArea(ev.Type); area != "" && err == nil {
 			err = setLoginState(ctx, q, deviceID, org, area, ev, spec.Params)
 		}
+		if g, ok := spec.Params["generation"].(int64); ok && ev.Type == protocol.EventLocalAdminRotated && err == nil && g > 0 && g <= 1<<31-1 {
+			_, err = q.ActivateEscrowGeneration(ctx, pgstore.ActivateEscrowGenerationParams{
+				DeviceID: deviceID, Kind: escrow.KindAdminPassword, Generation: int32(g), ActivatedAt: ev.OccurredAt, //nolint:gosec // bounded above
+			})
+		}
 		return true, err
 	})
 }
@@ -158,8 +169,12 @@ func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UU
 }
 
 // loginStateArea is the area of device_status.login_state an event updates: "login" for login.*, "sudo" for
-// sudo.* (plan M3b decision 17), "" for every other event.
+// sudo.* (plan M3b decision 17), "local_admin" for the outcome of a rotation (plan M4a decision 17), "" for every
+// other event.
 func loginStateArea(typ string) string {
+	if typ == protocol.EventLocalAdminRotated || typ == protocol.EventLocalAdminRotationFailed {
+		return "local_admin"
+	}
 	area, _, _ := strings.Cut(typ, ".")
 	if area == "login" || area == "sudo" {
 		return area
@@ -197,13 +212,13 @@ func eventParams(ev protocol.Event) map[string]any {
 	if json.Unmarshal(ev.Data, &data) != nil {
 		return params
 	}
-	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq", "sessions_locked", "sessions_terminated"} {
+	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq", "sessions_locked", "sessions_terminated", "generation"} {
 		if v, ok := data[key].(float64); ok {
 			params[key] = int64(v)
 		}
 	}
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
-		"file", "quarantined_as", "sha256_before", "sha256_after"} {
+		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}

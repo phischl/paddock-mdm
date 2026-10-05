@@ -1,5 +1,6 @@
 // Package loginsettings holds the rules of an organization's login settings (plan M3a decision 8): Hello PIN,
-// the session action of a user lock, break-glass accounts, the sudoers.d allow list and the sudo lecture text.
+// the session action of a user lock, break-glass accounts, the sudoers.d allow list, the sudo lecture text and the
+// managed local administrator (plan M4a decision 13).
 package loginsettings
 
 import (
@@ -21,6 +22,12 @@ type Settings struct {
 	BreakGlassAccounts    []string
 	SudoersDAllowlist     []string
 	SudoLectureText       string
+	// LocalAdminUsername is the managed local administrator account; it cannot change once a device has an active
+	// password for it.
+	LocalAdminUsername     string
+	LocalAdminRotationDays int
+	// RotateAfterRevealHours schedules a rotation that many hours after a reveal; nil: no rotation after a reveal.
+	RotateAfterRevealHours *int
 }
 
 // Bounds of the settings.
@@ -29,6 +36,11 @@ const (
 	MaxPinLength    = 32
 	MaxListEntries  = 50
 	MaxLectureChars = 2000
+
+	DefaultLocalAdminUsername     = "paddock-admin"
+	DefaultLocalAdminRotationDays = 30
+	MaxRotationDays               = 365
+	MaxRotateAfterRevealHours     = 168
 )
 
 // Validation errors.
@@ -38,6 +50,9 @@ var (
 	ErrBreakGlass    = errors.New("break_glass_accounts must be at most 50 distinct local account names matching ^[a-z_][a-z0-9_-]{0,31}$")
 	ErrAllowlist     = errors.New("sudoers_d_allowlist must be at most 50 distinct file names matching ^[A-Za-z0-9_-]{1,64}$ that do not start with paddock-")
 	ErrLecture       = errors.New("sudo_lecture_text must be 1 to 2000 characters")
+	ErrLocalAdmin    = errors.New("local_admin_username must match ^[a-z_][a-z0-9_-]{0,31}$")
+	ErrRotationDays  = errors.New("local_admin_rotation_days must be 1 to 365")
+	ErrRevealHours   = errors.New("rotate_after_reveal_hours must be empty or 1 to 168")
 )
 
 // allowlistPattern matches the file names sudo reads from an includedir (no "." and no trailing "~").
@@ -46,6 +61,7 @@ var allowlistPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 // Normalize trims the lecture text and the list entries.
 func Normalize(s Settings) Settings {
 	s.SudoLectureText = strings.TrimSpace(s.SudoLectureText)
+	s.LocalAdminUsername = strings.TrimSpace(s.LocalAdminUsername)
 	s.BreakGlassAccounts = trimAll(s.BreakGlassAccounts)
 	s.SudoersDAllowlist = trimAll(s.SudoersDAllowlist)
 	return s
@@ -86,6 +102,15 @@ func Validate(s Settings) error {
 	}
 	if n := utf8.RuneCountInString(s.SudoLectureText); n < 1 || n > MaxLectureChars {
 		return ErrLecture
+	}
+	if policy.ValidateOwner(s.LocalAdminUsername) != nil {
+		return ErrLocalAdmin
+	}
+	if s.LocalAdminRotationDays < 1 || s.LocalAdminRotationDays > MaxRotationDays {
+		return ErrRotationDays
+	}
+	if h := s.RotateAfterRevealHours; h != nil && (*h < 1 || *h > MaxRotateAfterRevealHours) {
+		return ErrRevealHours
 	}
 	return nil
 }

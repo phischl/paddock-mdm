@@ -244,6 +244,11 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/devices/{id}/resume-logins":  itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/resume-logins" }, nil),
 	"GET /api/v1/devices/{id}/effective-sudo":  itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/effective-sudo" }, nil),
 	"GET /api/v1/devices/{id}/commands":        itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/commands" }, nil),
+	"GET /api/v1/devices/{id}/local-admin":     itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/local-admin" }, nil),
+	// alice has a step-up (TestOrganizationIsolation), so the reveal reaches the device lookup.
+	"POST /api/v1/devices/{id}/local-admin/reveal": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/devices/" + w.globexDevice + "/local-admin/reveal"
+	}, map[string]any{"confirm_hostname": "x"}),
 	"POST /api/v1/devices/{id}/local-admin/rotate": itemFixture(func(w *isolationWorld) string {
 		return "/api/v1/devices/" + w.globexDevice + "/local-admin/rotate"
 	}, nil),

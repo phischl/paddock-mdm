@@ -44,6 +44,27 @@ type State struct {
 	ExecutedCommands map[string]time.Time `json:"executed_commands,omitempty"`
 	// CommandResults are the results the server has not accepted yet.
 	CommandResults []CommandResult `json:"command_results,omitempty"`
+	// LocalAdmin is the managed local administrator (plan M4a decision 15).
+	LocalAdmin LocalAdmin `json:"local_admin"`
+}
+
+// LocalAdmin is the persistent state of the managed local administrator. The password itself is never stored.
+type LocalAdmin struct {
+	Username string `json:"username,omitempty"`
+	// Generation is the password generation the device set last; 0 before the first rotation.
+	Generation int64 `json:"generation,omitempty"`
+	// Attempted is the highest generation uploaded for escrow; a new rotation uses Attempted+1, so a generation
+	// the server stored late is never reused.
+	Attempted int64      `json:"attempted,omitempty"`
+	RotatedAt *time.Time `json:"rotated_at,omitempty"`
+	// ShadowSHA256 is the hex SHA-256 of the account's /etc/shadow hash field after the last rotation.
+	ShadowSHA256 string `json:"shadow_sha256,omitempty"`
+	// Tampered are the fields reported as changed and not yet repaired (each is reported once).
+	Tampered []string `json:"tampered,omitempty"`
+	// Commands are rotate_admin_password commands waiting for the result of the next rotation.
+	Commands []string `json:"commands,omitempty"`
+	// RetryAt delays an automatic rotation after a failed one.
+	RetryAt *time.Time `json:"retry_at,omitempty"`
 }
 
 // CommandResult is the result of an executed command, kept until the server accepted it.

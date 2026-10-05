@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/app"
@@ -58,4 +59,39 @@ func toDeviceCommand(c pgstore.DeviceCommand) adminapi.DeviceCommand {
 		out.Result = &result
 	}
 	return out
+}
+
+func (h *handlers) GetDeviceLocalAdmin(ctx context.Context, req adminapi.GetDeviceLocalAdminRequestObject) (adminapi.GetDeviceLocalAdminResponseObject, error) {
+	s, err := h.localAdmin.Get(ctx, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	out := adminapi.GetDeviceLocalAdmin200JSONResponse{
+		Username: s.Username, ActiveGeneration: s.ActiveGeneration, PendingGeneration: s.PendingGeneration,
+		LastRotatedAt: utcPtr(s.LastRotatedAt), NextRotationAt: utcPtr(s.NextRotationAt),
+	}
+	if e := s.LastRotationError; e != nil {
+		out.LastRotationError = &struct {
+			At         time.Time                                  `json:"at"`
+			Generation int                                        `json:"generation"`
+			Reason     adminapi.LocalAdminLastRotationErrorReason `json:"reason"`
+		}{At: e.At.UTC(), Generation: int(e.Generation), Reason: adminapi.LocalAdminLastRotationErrorReason(e.Reason)}
+	}
+	return out, nil
+}
+
+func (h *handlers) RevealDeviceLocalAdmin(ctx context.Context, req adminapi.RevealDeviceLocalAdminRequestObject) (adminapi.RevealDeviceLocalAdminResponseObject, error) {
+	passwords, err := h.localAdmin.Reveal(ctx, req.Id, req.Body.ConfirmHostname)
+	if err != nil {
+		return nil, err
+	}
+	out := adminapi.RevealDeviceLocalAdmin200JSONResponse{}
+	for _, p := range passwords {
+		out.Passwords = append(out.Passwords, struct {
+			Generation int                                       `json:"generation"`
+			Password   string                                    `json:"password"`
+			State      adminapi.LocalAdminRevealedPasswordsState `json:"state"`
+		}{Generation: p.Generation, Password: p.Password, State: adminapi.LocalAdminRevealedPasswordsState(p.State)})
+	}
+	return out, nil
 }

@@ -19,6 +19,9 @@ const sessionAction = ref<SessionAction>('lock_screen')
 const breakGlass = ref('')
 const allowlist = ref('')
 const lecture = ref('')
+const localAdmin = ref('')
+const rotationDays = ref('30')
+const revealHours = ref('')
 const updatedAt = ref('')
 const problem = ref('')
 const saved = ref(false)
@@ -30,6 +33,9 @@ function apply(s: Exclude<Awaited<ReturnType<typeof getLoginSettings>>, string>)
   breakGlass.value = s.break_glass_accounts.join('\n')
   allowlist.value = s.sudoers_d_allowlist.join('\n')
   lecture.value = s.sudo_lecture_text
+  localAdmin.value = s.local_admin_username
+  rotationDays.value = String(s.local_admin_rotation_days)
+  revealHours.value = s.rotate_after_reveal_hours === null ? '' : String(s.rotate_after_reveal_hours)
   updatedAt.value = s.updated_at
   loaded.value = true
 }
@@ -47,6 +53,8 @@ async function save(): Promise<void> {
     hello_enabled: helloEnabled.value, hello_pin_min_length: Number(pinLength.value),
     user_lock_session_action: sessionAction.value, break_glass_accounts: lines(breakGlass.value),
     sudoers_d_allowlist: lines(allowlist.value), sudo_lecture_text: lecture.value.trim(),
+    local_admin_username: localAdmin.value.trim(), local_admin_rotation_days: Number(rotationDays.value),
+    rotate_after_reveal_hours: revealHours.value.trim() === '' ? null : Number(revealHours.value),
   })
   if (typeof res === 'string') {
     problem.value = res
@@ -124,6 +132,34 @@ async function save(): Promise<void> {
           persistent-hint
           rows="4"
           counter="2000"
+        />
+      </fieldset>
+      <fieldset :disabled="!session.canDelete">
+        <legend>{{ t('loginSettings.localAdmin') }}</legend>
+        <v-text-field
+          id="settings-local-admin"
+          v-model="localAdmin"
+          :label="t('loginSettings.localAdminUsername')"
+          :hint="t('loginSettings.localAdminUsernameHint')"
+          persistent-hint
+        />
+        <v-text-field
+          id="settings-rotation-days"
+          v-model="rotationDays"
+          :label="t('loginSettings.rotationDays')"
+          type="number"
+          min="1"
+          max="365"
+        />
+        <v-text-field
+          id="settings-reveal-hours"
+          v-model="revealHours"
+          :label="t('loginSettings.rotateAfterReveal')"
+          :hint="t('loginSettings.rotateAfterRevealHint')"
+          persistent-hint
+          type="number"
+          min="1"
+          max="168"
         />
       </fieldset>
       <p

@@ -11,7 +11,7 @@ import (
 
 const getLoginSettings = `-- name: GetLoginSettings :one
 
-SELECT organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at FROM organization_login_settings
+SELECT organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours FROM organization_login_settings
 `
 
 // Login settings (plan M3a decision 8): one row per organization, created with the defaults by a trigger.
@@ -27,6 +27,9 @@ func (q *Queries) GetLoginSettings(ctx context.Context) (OrganizationLoginSettin
 		&i.SudoersDAllowlist,
 		&i.SudoLectureText,
 		&i.UpdatedAt,
+		&i.LocalAdminUsername,
+		&i.LocalAdminRotationDays,
+		&i.RotateAfterRevealHours,
 	)
 	return i, err
 }
@@ -35,17 +38,22 @@ const updateLoginSettings = `-- name: UpdateLoginSettings :one
 UPDATE organization_login_settings
 SET hello_enabled = $1, hello_pin_min_length = $2,
     user_lock_session_action = $3, break_glass_accounts = $4,
-    sudoers_d_allowlist = $5, sudo_lecture_text = $6, updated_at = now()
-RETURNING organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at
+    sudoers_d_allowlist = $5, sudo_lecture_text = $6,
+    local_admin_username = $7, local_admin_rotation_days = $8,
+    rotate_after_reveal_hours = $9, updated_at = now()
+RETURNING organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours
 `
 
 type UpdateLoginSettingsParams struct {
-	HelloEnabled          bool
-	HelloPinMinLength     int32
-	UserLockSessionAction string
-	BreakGlassAccounts    []string
-	SudoersDAllowlist     []string
-	SudoLectureText       string
+	HelloEnabled           bool
+	HelloPinMinLength      int32
+	UserLockSessionAction  string
+	BreakGlassAccounts     []string
+	SudoersDAllowlist      []string
+	SudoLectureText        string
+	LocalAdminUsername     string
+	LocalAdminRotationDays int32
+	RotateAfterRevealHours *int32
 }
 
 func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettingsParams) (OrganizationLoginSetting, error) {
@@ -56,6 +64,9 @@ func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettin
 		arg.BreakGlassAccounts,
 		arg.SudoersDAllowlist,
 		arg.SudoLectureText,
+		arg.LocalAdminUsername,
+		arg.LocalAdminRotationDays,
+		arg.RotateAfterRevealHours,
 	)
 	var i OrganizationLoginSetting
 	err := row.Scan(
@@ -67,6 +78,9 @@ func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettin
 		&i.SudoersDAllowlist,
 		&i.SudoLectureText,
 		&i.UpdatedAt,
+		&i.LocalAdminUsername,
+		&i.LocalAdminRotationDays,
+		&i.RotateAfterRevealHours,
 	)
 	return i, err
 }
