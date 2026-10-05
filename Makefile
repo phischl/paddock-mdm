@@ -220,3 +220,33 @@ ci: lint test web ## Everything CI runs
 .PHONY: logs
 logs: ## Show logs of the stack
 	$(COMPOSE) --profile paddock logs --no-color --tail 300
+
+# --- Security scans (CI jobs `secrets` and `trivy`) --------------------------------------------------------------
+TRIVY_CACHE     ?= $(HOME)/.cache/trivy
+TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
+COMPILER_IMAGE  ?= paddock-compiler:dev
+
+.PHONY: scan scan-secrets scan-fs scan-images image-compiler
+scan: scan-secrets scan-fs scan-images ## Run gitleaks (full history) and trivy (filesystem and images)
+
+scan-secrets: ## gitleaks over the full git history (false positives: .gitleaksignore)
+	docker run --rm -v $(CURDIR):/repo $(GITLEAKS_IMAGE) git /repo --no-banner --redact
+
+scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tree
+	mkdir -p $(TRIVY_CACHE)
+	docker run --rm -v $(CURDIR):/src:ro -v $(TRIVY_CACHE):/root/.cache/trivy $(TRIVY_IMAGE) fs \
+		--scanners vuln,misconfig,secret $(TRIVY_ARGS) \
+		--skip-dirs /src/server/web/node_modules --skip-dirs /src/bin --skip-dirs /src/test/vms/virtualbox/work /src
+
+image-compiler: ## Build the compiler container image
+	docker build --target compiler -f $(COMPOSE_DIR)/Dockerfile \
+		--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
+		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
+		--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) -t $(COMPILER_IMAGE) .
+
+scan-images: image image-compiler ## trivy: OS packages and Go binaries in the built images
+	mkdir -p $(TRIVY_CACHE)
+	for img in $(IMAGE) $(COMPILER_IMAGE); do \
+		docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(TRIVY_CACHE):/root/.cache/trivy \
+			$(TRIVY_IMAGE) image $(TRIVY_ARGS) $$img || exit 1; \
+	done
