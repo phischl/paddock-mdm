@@ -609,8 +609,9 @@ func gateL3(t *testing.T, w *identityWorld) {
 	}
 }
 
-// gateL4: without the deny file (deleted locally) logins work until the agent restores it at the next drift pass; with
-// the Himmelblau daemons stopped the local accounts still log in.
+// gateL4: without the deny file (deleted locally) logins work until the agent restores it at the next drift pass, also
+// when nobody is locked and the file is empty (then PAM logs no open errors); with the Himmelblau daemons stopped the
+// local accounts still log in.
 func gateL4(t *testing.T, w *identityWorld) {
 	w.s.Call(http.MethodPost, "/api/v1/users/"+w.nina.id+"/lock", nil, http.StatusOK)
 	t.Cleanup(func() { w.s.cleanupCall(http.MethodPost, "/api/v1/users/"+w.nina.id+"/unlock", http.StatusOK) })
@@ -637,6 +638,31 @@ func gateL4(t *testing.T, w *identityWorld) {
 		ids, _ := p["resource_ids"].([]any)
 		return slices.Contains(ids, any("login"))
 	})
+
+	// Nobody locked (plan M3.1 decision 3, AC3): the deny file exists and is empty, is restored empty, and PAM logs
+	// no open errors.
+	w.s.Call(http.MethodPost, "/api/v1/users/"+w.nina.id+"/unlock", nil, http.StatusOK)
+	w.toggleLink(t)
+	emptyDeny := func() bool {
+		out, _ := w.SSH(context.Background(), nil, "test -f /etc/paddock/login-deny && ! test -s /etc/paddock/login-deny && echo empty")
+		return strings.TrimSpace(out) == "empty"
+	}
+	Until(t, "empty deny list after the unlock", 3*time.Minute, 5*time.Second, nil, emptyDeny)
+	w.Must("sudo rm /etc/paddock/login-deny")
+	if exit := w.localLogin(t); exit != 0 {
+		t.Errorf("break-glass login without the empty deny file: exit %d", exit)
+	}
+	Until(t, "empty deny file restored by the drift pass", 2*time.Minute, 3*time.Second, nil, emptyDeny)
+	// The SSH login of the poll that saw the restored file ran PAM just before the restore and may have logged an open
+	// error in the same second: count from two seconds later (every login after that sees the file).
+	since := w.Must("sleep 2; date +%s")
+	if exit := w.localLogin(t); exit != 0 {
+		t.Errorf("break-glass login with the empty deny file: exit %d", exit)
+	}
+	if out := w.Must("sudo journalctl --since @" + since + " --no-pager -q -o short-precise | grep 'Couldn.t open /etc/paddock/login-deny' || true"); out != "" {
+		t.Errorf("PAM logged open errors of the deny file after it was restored (since %s):\n%s\n%s", since, out,
+			w.Must("sudo journalctl --since @"+since+" --no-pager -q -o short-precise | head -40"))
+	}
 
 	w.Must("sudo systemctl stop himmelblaud-tasks himmelblaud")
 	if exit := w.localLogin(t); exit != 0 {

@@ -43,6 +43,9 @@ type System struct {
 	// installs.
 	Versions   map[string]string
 	AptVersion string
+	// StaleLists makes apt-get install fail on an unmet dependency until an apt-get update of every source (not
+	// limited with Dir::Etc::sourceparts=-) refreshed the package lists.
+	StaleLists bool
 	// Sessions are the logind sessions loginctl lists.
 	Sessions []Session
 	// Passwd are the users getent passwd resolves (name → UID); Members the members of groups getent group lists.
@@ -243,6 +246,13 @@ func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) 
 	s.Calls = append(s.Calls, cmd)
 	if strings.HasPrefix(s.FailCmd, "apt-get") && strings.HasPrefix(cmd, s.FailCmd) {
 		return "E: Could not get lock /var/lib/dpkg/lock-frontend\n", 100, nil
+	}
+	if len(words) > 0 && words[0] == "update" && !slices.Contains(args, "Dir::Etc::sourceparts=-") {
+		s.StaleLists = false
+	}
+	if len(words) > 0 && words[0] == "install" && s.StaleLists {
+		return "The following packages have unmet dependencies:\n himmelblau : Depends: libtss2-esys-3.0.2-0t64 (>= 4.0.1-7.1ubuntu5.1) but 4.0.1-7.1ubuntu5 is to be installed\n" +
+			"E: Unable to correct problems, you have held broken packages.\n", 100, nil
 	}
 	if len(words) > 0 && words[0] == "install" {
 		for _, p := range words[1:] {

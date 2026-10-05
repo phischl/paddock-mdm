@@ -174,7 +174,7 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	wasDenied := denied(l.read(DenyList))
 	if !l.fileIs(DenyList, st.wantDeny) {
-		if err := l.writeOrRemove(DenyList, st.wantDeny); err != nil {
+		if err := l.Sys.WriteFileAtomic(DenyList, st.wantDeny, 0o644, 0, 0); err != nil {
 			return l.fail(r.ID, protocol.LoginStageDenyList, err)
 		}
 		changed = append(changed, "deny_list")
@@ -271,7 +271,9 @@ func (l *Login) installed(version string) bool {
 
 // install adds the official repository of version with the embedded key, updates only that source and installs the
 // packages non-interactively with the dpkg options of the upstream installer (PoC M1). apt waits up to 10 minutes
-// for a dpkg lock held by e.g. unattended-upgrades (plan M3b risk R1).
+// for a dpkg lock held by e.g. unattended-upgrades (plan M3b risk R1). If the installation fails on a dependency, the
+// device's other package lists may be stale: install updates every source once and tries again (plan M3.1
+// decision 4).
 func (l *Login) install(ctx context.Context, version string) error {
 	versionID, err := l.ubuntuVersion()
 	if err != nil {
@@ -284,13 +286,19 @@ func (l *Login) install(ctx context.Context, version string) error {
 	if err := l.Sys.WriteFileAtomic(himmelblauSource, []byte(source), 0o644, 0, 0); err != nil {
 		return err
 	}
-	if err := l.apt(ctx, "update", "-q", "-o", "Dir::Etc::sourcelist=sources.list.d/paddock-himmelblau.list",
+	if _, err := l.apt(ctx, "update", "-q", "-o", "Dir::Etc::sourcelist=sources.list.d/paddock-himmelblau.list",
 		"-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0", "-o", "DPkg::Lock::Timeout=600"); err != nil {
 		return err
 	}
 	args := append([]string{"install", "-y", "-q", "-o", "DPkg::Lock::Timeout=600", "-o", "Dpkg::Options::=--force-confdef",
 		"-o", "Dpkg::Options::=--force-confold"}, himmelblauPackages...)
-	if err := l.apt(ctx, args...); err != nil {
+	out, err := l.apt(ctx, args...)
+	if err != nil && dependencyFailure(out) {
+		if _, err = l.apt(ctx, "update", "-q", "-o", "DPkg::Lock::Timeout=600"); err == nil {
+			_, err = l.apt(ctx, args...)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	if !l.installed(version) {
@@ -299,15 +307,25 @@ func (l *Login) install(ctx context.Context, version string) error {
 	return nil
 }
 
-func (l *Login) apt(ctx context.Context, args ...string) error {
+// apt runs apt-get and returns its output; a non-zero exit is an error with the last output line.
+func (l *Login) apt(ctx context.Context, args ...string) (string, error) {
 	out, exit, err := l.Sys.AptGet(ctx, args...)
 	if err != nil {
-		return fmt.Errorf("apt-get %s: %w", args[0], err)
+		return out, fmt.Errorf("apt-get %s: %w", args[0], err)
 	}
 	if exit != 0 {
-		return fmt.Errorf("apt-get %s: exit %d: %s", args[0], exit, lastLine(out))
+		return out, fmt.Errorf("apt-get %s: exit %d: %s", args[0], exit, lastLine(out))
 	}
-	return nil
+	return out, nil
+}
+
+// aptDependencyErrors are apt-get install messages that stale package lists cause: a dependency the lists name in a
+// version the mirror no longer has (404, then "Unable to fetch some archives"), or a dependency they do not know in
+// the version a Himmelblau package needs.
+var aptDependencyErrors = []string{"Unable to fetch some archives", "unmet dependencies", "has no installation candidate"}
+
+func dependencyFailure(out string) bool {
+	return slices.ContainsFunc(aptDependencyErrors, func(m string) bool { return strings.Contains(out, m) })
 }
 
 // ubuntuVersion returns VERSION_ID of an Ubuntu system; the repository has one tree per release. /etc/os-release is
@@ -473,16 +491,6 @@ func (l *Login) fileIs(path string, want []byte) bool {
 	return uid == 0 && gid == 0
 }
 
-func (l *Login) writeOrRemove(path string, data []byte) error {
-	if data != nil {
-		return l.Sys.WriteFileAtomic(path, data, 0o644, 0, 0)
-	}
-	if err := l.Sys.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
 // renderHimmelblauConf renders himmelblau.conf as in PoC M1 (plan M3b decision 7) plus the fixed idmap_range.
 // pam_allow_groups is always written: empty denies everyone (suspension), a missing line would allow everyone.
 func renderHimmelblauConf(s bundle.LoginSpec) []byte {
@@ -508,8 +516,8 @@ func suspendedConf(conf []byte) bool {
 }
 
 // renderDenyList returns the deny list (plan M3b decision 8): for every locked user that is no break-glass account
-// the UPN and the short name, except a short name that is a local account below the directory UIDs. nil means no
-// file.
+// the UPN and the short name, except a short name that is a local account below the directory UIDs. Without locked
+// users it is empty, never absent: pam_listfile logs every authentication without the file (plan M3.1 decision 3).
 func renderDenyList(s bundle.LoginSpec, local map[string]int) []byte {
 	var names []string
 	add := func(n string) {
@@ -529,7 +537,7 @@ func renderDenyList(s bundle.LoginSpec, local map[string]int) []byte {
 		}
 	}
 	if len(names) == 0 {
-		return nil
+		return []byte{}
 	}
 	return []byte(strings.Join(names, "\n") + "\n")
 }

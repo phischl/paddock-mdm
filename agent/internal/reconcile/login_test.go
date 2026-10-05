@@ -102,7 +102,7 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 	sys, l, events := loginFixture(t)
 	r := loginResource(t, loginSpec())
 	changes, err := l.Plan(ctx, r)
-	if err != nil || !slices.Equal(changes, []string{"package", "config"}) {
+	if err != nil || !slices.Equal(changes, []string{"package", "config", "deny_list"}) {
 		t.Fatalf("plan %v %v", changes, err)
 	}
 	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
@@ -112,7 +112,7 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 	want := []string{
 		"write /etc/apt/keyrings/himmelblau.gpg", "write /etc/apt/sources.list.d/paddock-himmelblau.list", "apt-get update",
 		"apt-get install himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config",
-		"write /etc/himmelblau/himmelblau.conf",
+		"write /etc/paddock/login-deny", "write /etc/himmelblau/himmelblau.conf",
 		"systemctl reset-failed himmelblaud.service", "systemctl reset-failed himmelblaud-tasks.service",
 		"systemctl restart himmelblaud.service", "systemctl restart himmelblaud-tasks.service",
 	}
@@ -126,10 +126,11 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 	if f := sys.Files["/etc/himmelblau/himmelblau.conf"]; string(f.Data) != wantConf || f.Mode != 0o644 || f.UID != 0 {
 		t.Fatalf("himmelblau.conf %o %d\n%s", f.Mode, f.UID, f.Data)
 	}
-	if _, ok := sys.Files["/etc/paddock/login-deny"]; ok {
-		t.Fatal("deny list written without locked users")
+	// Without locked users the deny list is empty, never absent: pam_listfile logs every authentication without it.
+	if f := sys.Files["/etc/paddock/login-deny"]; f == nil || len(f.Data) != 0 || f.Mode != 0o644 || f.UID != 0 {
+		t.Fatalf("deny list without locked users: %+v", f)
 	}
-	if got := takeEvents(events); !slices.Equal(got, []event{{protocol.EventLoginApplied, `{"changed":["package","config"]}`}}) {
+	if got := takeEvents(events); !slices.Equal(got, []event{{protocol.EventLoginApplied, `{"changed":["package","deny_list","config"]}`}}) {
 		t.Fatalf("events %v", got)
 	}
 
@@ -193,10 +194,21 @@ func TestLoginDenyListNames(t *testing.T) {
 	if calls := sys.TakeCalls(); slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "systemctl") }) {
 		t.Fatalf("a deny list change restarted the daemon: %v", calls)
 	}
-	// Unlocking everyone removes the file.
+	// Unlocking everyone empties the file.
 	l.Apply(ctx, loginResource(t, loginSpec()))
-	if _, ok := sys.Files["/etc/paddock/login-deny"]; ok {
-		t.Fatal("deny list left after the unlock")
+	if f := sys.Files["/etc/paddock/login-deny"]; f == nil || len(f.Data) != 0 {
+		t.Fatalf("deny list after the unlock: %+v", f)
+	}
+	// A deleted file is written again, empty (system gate L4 checks that logins work without it meanwhile).
+	delete(sys.Files, "/etc/paddock/login-deny")
+	if changes, _ := l.Plan(ctx, r); !slices.Equal(changes, []string{"deny_list"}) {
+		t.Fatalf("plan without the file %v", changes)
+	}
+	if res := l.Apply(ctx, loginResource(t, loginSpec())); res.Status != reconcile.Changed {
+		t.Fatalf("apply without the file %+v", res)
+	}
+	if f := sys.Files["/etc/paddock/login-deny"]; f == nil || len(f.Data) != 0 {
+		t.Fatalf("deny list restored as %+v", f)
 	}
 }
 
@@ -309,6 +321,47 @@ func TestLoginAptFailureIsReportedOnceAndLocksStillApply(t *testing.T) {
 	sys.FailCmd = ""
 	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
 		t.Fatalf("after the lock was released: %+v", res)
+	}
+}
+
+// TestLoginAptUpdatesEverySourceOnDependencyFailure: stale Ubuntu package lists make the installation fail on a
+// dependency; the agent updates every source once and retries (plan M3.1 decision 4). A failure that is not about
+// dependencies (here: the dpkg lock) is not retried.
+func TestLoginAptUpdatesEverySourceOnDependencyFailure(t *testing.T) {
+	ctx := context.Background()
+	sys, l, _ := loginFixture(t)
+	sys.StaleLists = true
+	r := loginResource(t, loginSpec())
+	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v", res)
+	}
+	install := "apt-get install himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config"
+	var apt []string
+	for _, c := range sys.TakeCalls() {
+		if strings.HasPrefix(c, "apt-get") {
+			apt = append(apt, c)
+		}
+	}
+	if want := []string{"apt-get update", install, "apt-get update", install}; !slices.Equal(apt, want) {
+		t.Fatalf("apt calls\n%q\nwant\n%q", apt, want)
+	}
+	if sys.StaleLists || sys.Versions["himmelblau"] != "4.0.4-ubuntu24.04" {
+		t.Fatal("the retry did not follow an update of every source")
+	}
+
+	sys, l, _ = loginFixture(t)
+	sys.FailCmd = "apt-get install"
+	if res := l.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply with the dpkg lock held %+v", res)
+	}
+	apt = nil
+	for _, c := range sys.TakeCalls() {
+		if strings.HasPrefix(c, "apt-get") {
+			apt = append(apt, c)
+		}
+	}
+	if want := []string{"apt-get update", install}; !slices.Equal(apt, want) {
+		t.Fatalf("apt calls with the dpkg lock held\n%q\nwant\n%q", apt, want)
 	}
 }
 

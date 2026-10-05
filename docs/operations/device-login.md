@@ -12,14 +12,16 @@ At the first bundle with login management (agents report bundle schema 2), the a
    official repository `https://packages.himmelblau-idm.org/stable/<version>/deb/ubuntu<release>/`. The repository
    signing key is built into the agent (fingerprint `E87F D8D4 63A5 E481 4B9C DBA9 0CC0 D400 2C42 5E03`) and written
    to `/etc/apt/keyrings/himmelblau.gpg`; the source is `/etc/apt/sources.list.d/paddock-himmelblau.list`. Only this
-   source is updated; apt waits up to 10 minutes for a dpkg lock held by unattended upgrades. A failure is reported as
-   `device.login_apply_failed` (stage `apt`) and retried at every drift pass;
+   source is updated; if the installation then fails on a dependency (stale package lists of the other sources), the
+   agent runs one `apt-get update` of every source and tries once more. apt waits up to 10 minutes for a dpkg lock
+   held by unattended upgrades. A failure is reported as `device.login_apply_failed` (stage `apt`) and retried at
+   every drift pass;
 2. writes `/etc/himmelblau/himmelblau.conf` (issuer and client of the organization's device application, the device's
    allow list `pam_allow_groups`, Hello PIN settings, no console password login, the fixed UID range
    `idmap_range = 200000-999999999` — sudo-rs cannot handle longer numeric users, and changing the range would give
    every directory user a new UID) and restarts `himmelblaud` and
    `himmelblaud-tasks`, which read the allow list only at start. Local changes are reverted at the next drift pass;
-3. keeps the deny list `/etc/paddock/login-deny` of locked users (see below).
+3. keeps the deny list `/etc/paddock/login-deny` of locked users (see below), an empty file when nobody is locked.
 
 The `paddock-agent` package enables the PAM profile `paddock-deny` (`/usr/share/pam-configs/paddock-deny`). It puts
 `pam_listfile` with the deny list in front of every other primary module:
@@ -37,7 +39,8 @@ Restore the profile with:
 sudo dpkg-reconfigure paddock-agent
 ```
 
-Without the deny file every login works (`onerr=succeed`): the deny list can only refuse, never lock out a device.
+Without the deny file every login works (`onerr=succeed`): the deny list can only refuse, never lock out a device. A
+missing file is written again (empty, or with the locked users) at the next drift pass.
 
 ## Signing in (users)
 
