@@ -88,8 +88,13 @@ func (v *VM) Start(ctx context.Context) error {
 	return nil
 }
 
-// Fresh restores base-installed, boots, and restores base-installed again (powered off) when the test ends. With
-// PADDOCK_SYSTEM_KEEP set, a failed test leaves the VM running as it is, for inspection.
+// aptUnits run apt on their own; a background apt run competes with the agent's Himmelblau installation for the
+// dpkg lock and makes gate timings unpredictable. They are stopped and masked for the duration of a test only (plan
+// M4a step 0e): base-installed keeps them, as devices in production do.
+const aptUnits = "apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service"
+
+// Fresh restores base-installed, boots, stops and masks aptUnits, and restores base-installed again (powered off)
+// when the test ends. With PADDOCK_SYSTEM_KEEP set, a failed test leaves the VM running as it is, for inspection.
 func (v *VM) Fresh() {
 	v.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -111,6 +116,7 @@ func (v *VM) Fresh() {
 	if err := v.Start(ctx); err != nil {
 		v.t.Fatal(err)
 	}
+	v.Must("sudo systemctl mask --now " + aptUnits)
 }
 
 func (v *VM) sshArgs() []string {
