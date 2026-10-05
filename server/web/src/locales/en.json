@@ -625,6 +625,8 @@
     "sessionActionHint": "What devices do with the open sessions of a locked user.",
     "breakGlass": "Break-glass accounts",
     "breakGlassHint": "Local accounts, one per line, that Paddock never restricts.",
+    "notice": "Login notice",
+    "noticeHint": "Shown at the login screen, on text consoles and before SSH logins of every device. Leave empty for no notice.",
     "privileges": "Privileges",
     "allowlist": "Files kept in /etc/sudoers.d",
     "allowlistHint": "One file name per line; any other file there is moved away by the agent.",

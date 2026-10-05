@@ -193,6 +193,14 @@ func (o OS) EvalSymlinks(path string) (string, error) {
 	return filepath.EvalSymlinks(path)
 }
 
+// Dconf implements System.
+func (o OS) Dconf(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "dconf", args...)
+}
+
 // Gpasswd implements System.
 func (o OS) Gpasswd(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {

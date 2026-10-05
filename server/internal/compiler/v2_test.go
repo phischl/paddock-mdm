@@ -95,7 +95,8 @@ func TestSchemaNegotiation(t *testing.T) {
 	}
 	// Plan M4a decision 14: the managed local administrator, a break-glass account in both resources.
 	if login.LocalAdmin == nil || *login.LocalAdmin != (bundle.LocalAdminSpec{Username: "paddock-admin", RotationDays: 30}) ||
-		!slices.Equal(login.BreakGlassAccounts, []string{"paddock-admin"}) || !slices.Equal(sudo.BreakGlassAccounts, []string{"paddock-admin"}) {
+		!slices.Equal(login.BreakGlassAccounts, []string{"paddock-admin"}) || !slices.Equal(sudo.BreakGlassAccounts, []string{"paddock-admin"}) ||
+		!strings.HasPrefix(login.Notice, "This device is managed by your organization.") {
 		t.Fatalf("local admin %+v, break-glass %v / %v", login.LocalAdmin, login.BreakGlassAccounts, sudo.BreakGlassAccounts)
 	}
 	// An organization without a primary domain gets no login resource.

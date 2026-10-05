@@ -81,6 +81,7 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 			Suspended: t.suspended, LockedUsers: id.LockedUsernames(t.id), SessionAction: s.UserLockSessionAction,
 			BreakGlassAccounts: breakGlass,
 			LocalAdmin:         &bundle.LocalAdminSpec{Username: s.LocalAdminUsername, RotationDays: int(s.LocalAdminRotationDays)},
+			Notice:             s.NoticeText,
 		})
 		if err != nil {
 			return nil, nil, nil, err
