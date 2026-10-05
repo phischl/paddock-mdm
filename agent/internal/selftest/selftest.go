@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/paddock-mdm/paddock/agent/internal/apply"
 	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
 	"github.com/paddock-mdm/paddock/agent/internal/client"
 	"github.com/paddock-mdm/paddock/agent/internal/config"
@@ -83,7 +84,7 @@ func bundleCheck(l paths.Layout, trust bundle.Trust, cfg config.Agent, st state.
 	case prereq != nil:
 		c.Result, c.Message = Skipped, "configuration unreadable"
 	default:
-		if _, err := bundle.Verify(env, trust, st.DeviceID, cfg.OrganizationID, st.AppliedBundleVersion-1); err != nil {
+		if _, err := bundle.VerifyVersions(env, trust, st.DeviceID, cfg.OrganizationID, st.AppliedBundleVersion-1, apply.SchemaVersions); err != nil {
 			c.Result, c.Message = Fail, err.Error()
 		}
 	}
