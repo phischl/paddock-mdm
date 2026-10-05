@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Development bootstrap of OpenBao (plan M0 §6.8, M2a decision 15, M4a decision 2): init (5 shares, threshold 3),
-# unseal, transit keys audit-chain, bundle-signing and command-signing, KV secret/paddock/session, policies and
-# AppRoles. Idempotent. `openbao-bootstrap.sh unseal` only unseals.
+# unseal, transit keys audit-chain, bundle-signing, command-signing and escrow-wrap (M4a decision 9), KV
+# secret/paddock/session, policies and AppRoles. Idempotent. `openbao-bootstrap.sh unseal` only unseals.
 # Production: refuses to run; follow docs/operations/openbao.md.
 set -euo pipefail
 
@@ -89,6 +89,11 @@ for key in bundle-signing command-signing; do
   fi
 done
 
+if ! bao read transit/keys/escrow-wrap >/dev/null 2>&1; then
+  bao write transit/keys/escrow-wrap type=rsa-4096 exportable=false allow_plaintext_backup=false >/dev/null
+  echo "created transit key escrow-wrap"
+fi
+
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
   bao kv put secret/paddock/session \
     current="$(head -c 32 /dev/urandom | base64 -w0)" \
@@ -115,6 +120,16 @@ path "transit/keys/bundle-signing" {
 path "transit/keys/command-signing" {
   capabilities = ["read"]
 }
+path "transit/keys/escrow-wrap" {
+  capabilities = ["read"]
+}
+EOF
+
+# Used only by the api's reveal of escrowed secrets after a step-up (plan M4a decision 9).
+bao policy write paddock-escrow-reader - >/dev/null <<'EOF'
+path "transit/decrypt/escrow-wrap" {
+  capabilities = ["update"]
+}
 EOF
 
 bao policy write paddock-worker - >/dev/null <<'EOF'
@@ -132,7 +147,7 @@ path "transit/keys/audit-chain" {
 }
 EOF
 
-for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker; do
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h \
     secret_id_ttl=0 token_no_default_policy=false >/dev/null
   dir="$SECRETS_DIR/approle/$role"

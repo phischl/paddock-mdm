@@ -22,6 +22,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/pkg/bundle"
 	"github.com/paddock-mdm/paddock/pkg/dsse"
+	"github.com/paddock-mdm/paddock/pkg/escrow"
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/app"
 	"github.com/paddock-mdm/paddock/server/internal/bundlesign"
@@ -70,8 +71,15 @@ type Config struct {
 	Sudoers SudoersValidator
 	// Runner records device.bundle_render_failed.
 	Runner *app.ActionRunner
-	// Keys reads the public keys of command-signing for the keys object of v2 bundles (plan M4a decision 5).
-	Keys commandsign.PublicKeyReader
+	// Keys reads the public keys of command-signing and escrow-wrap for the keys object of v2 bundles (plan M4a
+	// decision 5).
+	Keys KeyReader
+}
+
+// KeyReader reads public keys of Transit keys (bao.Client).
+type KeyReader interface {
+	commandsign.PublicKeyReader
+	LatestPublicKeyPEM(ctx context.Context, key string) (int, string, error)
 }
 
 // Compiler renders, signs and uploads bundles.
@@ -82,6 +90,8 @@ type Compiler struct {
 	cache  *devicecache.Cache
 	cfg    Config
 	now    func() time.Time
+	// keysDigest is the digest of the keys object the last complete reconcile saw (owned by RunReconcile).
+	keysDigest [32]byte
 }
 
 // New creates a compiler.
@@ -344,13 +354,18 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted}, true, nil, nil
 }
 
-// keys returns the keys object of v2 bundles: every version of command-signing (plan M4a decision 5).
+// keys returns the keys object of v2 bundles: every version of command-signing and the latest of escrow-wrap (plan
+// M4a decision 5).
 func (c *Compiler) keys(ctx context.Context) (*bundle.Keys, error) {
 	commandKeys, err := commandsign.PublicKeys(ctx, c.cfg.Keys)
 	if err != nil {
 		return nil, err
 	}
-	return &bundle.Keys{CommandSigning: commandKeys}, nil
+	version, pem, err := c.cfg.Keys.LatestPublicKeyPEM(ctx, escrow.KeyName)
+	if err != nil {
+		return nil, fmt.Errorf("escrow-wrap public key: %w", err)
+	}
+	return &bundle.Keys{CommandSigning: commandKeys, EscrowWrap: &bundle.EncryptionKey{KeyID: escrow.KeyID(version), PublicKeyPEM: pem}}, nil
 }
 
 // publish signs all bundles in one batch, then per device increments bundle_seq, records the bundle row and uploads

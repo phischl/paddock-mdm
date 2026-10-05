@@ -54,6 +54,7 @@ type world struct {
 	g1, g2 uuid.UUID
 
 	validator *fakeValidator
+	bao       *baotest.Bao
 }
 
 // fakeValidator refuses rendered sudoers files that contain reject (no visudo needed in unit tests; the real visudo
@@ -98,7 +99,7 @@ func newWorld(t *testing.T) *world {
 	rfs := s3test.StartPlain(t, "paddock-bundles")
 	vk := valkeytest.Start(t).Client(t)
 	w := &world{
-		t: t, cache: devicecache.New(vk), valkey: vk, s3: rfs, super: super,
+		t: t, cache: devicecache.New(vk), valkey: vk, s3: rfs, super: super, bao: b,
 		store: &flakyStore{store: objectstore.New(rfs.Endpoint, s3test.RootUser, s3test.RootPassword, rfs.Bucket)},
 		trust: bundle.Trust{Keys: map[string]ed25519.PublicKey{"bundle-signing:v1": keys[1]}},
 		org:   uuid.Must(uuid.NewV7()), g1: uuid.Must(uuid.NewV7()), g2: uuid.Must(uuid.NewV7()),

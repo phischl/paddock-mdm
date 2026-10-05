@@ -209,6 +209,19 @@ type EnrollmentToken struct {
 	CreatedAt      time.Time
 }
 
+type EscrowSecret struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Kind           string
+	Generation     int32
+	Status         string
+	Ciphertext     []byte
+	KeyVersion     int32
+	CreatedAt      time.Time
+	ActivatedAt    *time.Time
+}
+
 type ManagedFile struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID

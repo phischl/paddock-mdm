@@ -55,6 +55,19 @@ type Events struct {
 	Events         []protocol.Event `json:"events"`
 }
 
+// Escrow is an escrowed secret uploaded by a device (routing key ingest.escrow.<org>, message_id = EscrowID, plan M4a
+// decision 12). Ciphertext is the RSA-OAEP ciphertext; only OpenBao can decrypt it.
+type Escrow struct {
+	DeviceID       uuid.UUID `json:"device_id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+	EscrowID       uuid.UUID `json:"escrow_id"`
+	Kind           string    `json:"kind"`
+	Generation     int64     `json:"generation"`
+	KeyVersion     int       `json:"key_version"`
+	Ciphertext     []byte    `json:"ciphertext"`
+	ReceivedAt     time.Time `json:"received_at"`
+}
+
 // CommandResult is the result of a device command (routing key ingest.command_result.<org>, message_id = CommandID +
 // ":" + Status). The gateway checked that the command was pending for the device.
 type CommandResult struct {

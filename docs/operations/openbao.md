@@ -7,6 +7,7 @@ OpenBao holds Paddock's keys (ADR 0006):
 | `transit/keys/audit-chain` | Ed25519 key that signs the daily audit manifests (non-exportable) | `audit-writer` (AppRole `paddock-audit-writer`) |
 | `transit/keys/bundle-signing` | Ed25519 key that signs device bundles (non-exportable) | `compiler` (AppRole `paddock-compiler`); `api` reads the public keys |
 | `transit/keys/command-signing` | Ed25519 key that signs device commands (non-exportable); its public keys reach devices in their bundles | `worker` (AppRole `paddock-worker`, sign only); `compiler` reads the public keys |
+| `transit/keys/escrow-wrap` | RSA-4096 key (non-exportable) devices encrypt escrowed secrets to (RSA-OAEP with SHA-256); its latest public key reaches devices in their bundles | encrypt: devices; decrypt: `api` reveal only (AppRole `paddock-escrow-reader`); `compiler` reads the public key |
 | `secret/paddock/session` (KV v2) | AES-256 keys `current` / `previous` of the portal session cookie | `api` (AppRole `paddock-api`) |
 
 Storage is the integrated Raft backend on the `openbao-data` volume (`deploy/compose/openbao/config.hcl`).
@@ -44,6 +45,7 @@ bao auth enable approle
 for key in audit-chain bundle-signing command-signing; do
   bao write "transit/keys/$key" type=ed25519 exportable=false allow_plaintext_backup=false
 done
+bao write transit/keys/escrow-wrap type=rsa-4096 exportable=false allow_plaintext_backup=false
 bao kv put secret/paddock/session current="$(head -c 32 /dev/urandom | base64 -w0)" \
   previous="$(head -c 32 /dev/urandom | base64 -w0)"
 ```
@@ -63,17 +65,22 @@ bao policy write paddock-compiler - <<'EOF'
 path "transit/sign/bundle-signing" { capabilities = ["update"] }
 path "transit/keys/bundle-signing" { capabilities = ["read"] }
 path "transit/keys/command-signing" { capabilities = ["read"] }
+path "transit/keys/escrow-wrap" { capabilities = ["read"] }
 EOF
 bao policy write paddock-worker - <<'EOF'
 path "transit/sign/command-signing" { capabilities = ["update"] }
 EOF
-for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker; do
+bao policy write paddock-escrow-reader - <<'EOF'
+path "transit/decrypt/escrow-wrap" { capabilities = ["update"] }
+EOF
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h
 done
 ```
 
 Deliver role ID and secret ID of each AppRole to the host of the role (control plane: `paddock-api`,
-`paddock-compiler`, `paddock-worker`; audit host: `paddock-audit-writer`) as files referenced by
+`paddock-compiler`, `paddock-worker`, and `paddock-escrow-reader` to the host of `paddock-api` as a second
+credential; audit host: `paddock-audit-writer`) as files referenced by
 `PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`:
 
 ```sh

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/paddock-mdm/paddock/pkg/escrow"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 )
 
@@ -250,4 +251,20 @@ func (d *Device) SendEvents(ctx context.Context, events []protocol.Event) (Respo
 func (d *Device) CommandResult(ctx context.Context, commandID, status string, result json.RawMessage) (Response, error) {
 	return d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/commands/" + commandID + "/result",
 		Body: protocol.CommandResult{Status: status, Result: result}})
+}
+
+// Escrow uploads an escrowed secret.
+func (d *Device) Escrow(ctx context.Context, req escrow.Request) (Response, error) {
+	return d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/escrow", Body: req})
+}
+
+// EscrowStatus polls the storage status of an escrow upload.
+func (d *Device) EscrowStatus(ctx context.Context, escrowID string) (string, Response, error) {
+	res, err := d.Do(ctx, Request{Method: http.MethodGet, Path: "/v1/escrow/" + escrowID})
+	if err != nil || res.Status != http.StatusOK {
+		return "", res, err
+	}
+	var s escrow.Status
+	err = json.Unmarshal(res.Body, &s)
+	return s.Status, res, err
 }

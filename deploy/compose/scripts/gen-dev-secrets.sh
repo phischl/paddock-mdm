@@ -106,7 +106,7 @@ done
 [[ -e "$SECRETS_DIR/caddy-root.crt" ]] || { : >"$SECRETS_DIR/caddy-root.crt"; chmod 666 "$SECRETS_DIR/caddy-root.crt"; }
 
 # AppRole credential directories are filled by openbao-bootstrap.sh; they must exist for the bind mounts.
-for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker; do
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader; do
   mkdir -p "$SECRETS_DIR/approle/$role"
   for f in role_id secret_id; do
     [[ -e "$SECRETS_DIR/approle/$role/$f" ]] || { : >"$SECRETS_DIR/approle/$role/$f"; chmod 644 "$SECRETS_DIR/approle/$role/$f"; }

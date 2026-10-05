@@ -59,6 +59,14 @@ type Bundle struct {
 type Keys struct {
 	// CommandSigning are all active versions of the command-signing key.
 	CommandSigning []SigningKey `json:"command_signing"`
+	// EscrowWrap is the latest version of the escrow-wrap key that devices encrypt escrowed secrets to.
+	EscrowWrap *EncryptionKey `json:"escrow_wrap,omitempty"`
+}
+
+// EncryptionKey is an RSA public key with its key ID, e.g. "escrow-wrap:v1".
+type EncryptionKey struct {
+	KeyID        string `json:"key_id"`
+	PublicKeyPEM string `json:"public_key_pem"`
 }
 
 // SigningKey is an Ed25519 public key with its DSSE key ID, e.g. "command-signing:v1".
