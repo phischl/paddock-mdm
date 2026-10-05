@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Login notice: the organization's `notice_text` (login settings, at most 2000 characters, with an English default about the acceptable-use policy and logging; empty removes it) is shown at the GDM login screen, on text consoles and before SSH logins of every device with login management; the agent restores the four files when they are changed locally, and the database migration `00014` runs automatically; see `docs/operations/device-login.md` (M4a step 5).
 - Managed local administrator (F16): devices with login management create the account `paddock-admin` (setting `local_admin_username`, member of `sudo`, a break-glass account in both bundle resources) and rotate its password every `local_admin_rotation_days` (default 30) — escrowed first, set only after the server stored it, so the password is never unknown; changes of password, lock, shell or group are reported (`device.tamper_local_admin_changed`) and repaired, logins with the account are audited (`local_admin.login`); see `docs/operations/local-admin.md` (M4a step 4).
 - Admin API `GET /api/v1/devices/{id}/local-admin` and `POST /api/v1/devices/{id}/local-admin/reveal` (organization administrators, step-up and typed hostname; returns the active and a pending password with `Cache-Control: no-store`, audit `local_admin.revealed` without passwords; with `rotate_after_reveal_hours` a rotation follows that many hours later); login settings `local_admin_username`, `local_admin_rotation_days` and `rotate_after_reveal_hours` (database migration `00013`, runs automatically); device events and audit codes `local_admin.rotated`, `local_admin.rotation_failed`, `local_admin.login`, `device.tamper_local_admin_changed` (M4a step 4).
 - Secret escrow (shared with M4b): the new OpenBao Transit key `escrow-wrap` (RSA-4096, not exportable), whose latest public key v2 bundles carry as `keys.escrow_wrap`; devices encrypt secrets to it with RSA-OAEP and SHA-256 and upload them with `POST /v1/escrow` (device API, at most 4 KiB), the worker stores them (database migration `00012`, table `escrow_secret`, runs automatically) and devices poll `GET /v1/escrow/{escrow_id}` until `stored` or `failed` (a generation not above the active one fails); only the new AppRole `paddock-escrow-reader` may decrypt (M4a step 3).
@@ -104,6 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `PUT /api/v1/settings/login` requires `notice_text` (M4a step 5).
 - **BREAKING:** `paddock-api` requires the credential of the OpenBao AppRole `paddock-escrow-reader` (`PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE`, `PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE`), used only to decrypt for a reveal; `PUT /api/v1/settings/login` requires `local_admin_username` and `local_admin_rotation_days` (M4a step 4).
 - **BREAKING:** OpenBao needs the Transit key `escrow-wrap` (`type=rsa-4096 exportable=false`), the `paddock-compiler` policy `read` on `transit/keys/escrow-wrap`, and the AppRole `paddock-escrow-reader` (`update` on `transit/decrypt/escrow-wrap`); the RabbitMQ worker user must also read `ingest.escrow`. Production: follow `docs/operations/openbao.md`; development: `make dev-secrets && make up` and restart RabbitMQ (M4a step 3).
 - **BREAKING:** `paddock-api` requires `PADDOCK_OIDC_STEPUP_ISSUER` (issuer of the Authentik application `paddock-portal-stepup`, e.g. `https://auth.<domain>/application/o/paddock-portal-stepup/`) and is not ready until it is discovered; assigning a `full` profile or changing a profile to `full` now also needs a step-up, so administrators need an MFA authenticator (M4a step 2).
@@ -151,7 +153,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known limitations
 
-- On devices with sudo-rs (Ubuntu 26.04 by default) the organization's custom sudo lecture text has no effect; users see sudo-rs's default lecture. The device detail shows a note for such devices (M3b).
+- On devices with sudo-rs (Ubuntu 26.04 by default) the organization's custom sudo lecture text has no effect; users see sudo-rs's default lecture. The device detail shows a note for such devices (M3b); the login notice shows the usage policy before every login on these devices too (M4a step 5).
 
 ### Security
 

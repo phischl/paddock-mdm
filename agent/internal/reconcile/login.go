@@ -85,6 +85,9 @@ func (l *Login) spec(r bundle.Resource) (bundle.LoginSpec, error) {
 	if s.SessionAction != bundle.SessionActionLockScreen && s.SessionAction != bundle.SessionActionTerminate {
 		return s, fmt.Errorf("invalid session_action %q", s.SessionAction)
 	}
+	if !validNotice(s.Notice) {
+		return s, errors.New("invalid notice: not plain text of at most 2000 characters")
+	}
 	// Defence in depth: every value ends up in a line-based file.
 	h := s.Himmelblau
 	values := append([]string{h.OIDCIssuerURL, h.AppID, h.Domain}, h.PamAllowGroups...)
@@ -151,6 +154,9 @@ func (l *Login) Plan(_ context.Context, r bundle.Resource) ([]string, error) {
 	if file := l.pamProblem(); file != "" {
 		changes = append(changes, "pam "+file)
 	}
+	for _, path := range l.noticeChanges(l.renderNotice(s.Notice)) {
+		changes = append(changes, "notice "+path)
+	}
 	return changes, nil
 }
 
@@ -189,6 +195,10 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 			return l.fail(r.ID, protocol.LoginStageRestart, err)
 		}
 	}
+	noticeChanged, noticeErr := l.applyNotice(ctx, s.Notice)
+	if noticeChanged && noticeErr == nil {
+		changed = append(changed, "notice")
+	}
 	if len(changed) > 0 {
 		l.Events.emit(protocol.EventLoginApplied, protocol.LoginApplied{Changed: changed})
 	}
@@ -200,6 +210,9 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	if res, ok := l.checkPAM(r.ID); !ok {
 		return res
+	}
+	if noticeErr != nil {
+		return l.fail(r.ID, protocol.LoginStageNotice, noticeErr)
 	}
 	l.lastFailure = ""
 	if len(changed) == 0 {

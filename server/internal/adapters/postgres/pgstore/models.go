@@ -268,6 +268,7 @@ type OrganizationLoginSetting struct {
 	LocalAdminUsername     string
 	LocalAdminRotationDays int32
 	RotateAfterRevealHours *int32
+	NoticeText             string
 }
 
 type Outbox struct {

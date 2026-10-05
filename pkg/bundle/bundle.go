@@ -121,6 +121,8 @@ type LoginSpec struct {
 	// LocalAdmin is the managed local administrator account (plan M4a decision 14); agents of earlier releases
 	// ignore it. Its username is always one of BreakGlassAccounts.
 	LocalAdmin *LocalAdminSpec `json:"local_admin,omitempty"`
+	// Notice is the login notice (plan M4a decision 19): plain text, "" for none.
+	Notice string `json:"notice,omitempty"`
 }
 
 // LocalAdminSpec is the managed local administrator of the login resource.

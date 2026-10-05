@@ -77,6 +77,7 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 			"local_admin_username":      cur.LocalAdminUsername != in.LocalAdminUsername,
 			"local_admin_rotation_days": int(cur.LocalAdminRotationDays) != in.LocalAdminRotationDays,
 			"rotate_after_reveal_hours": !equalHours(cur.RotateAfterRevealHours, in.RotateAfterRevealHours),
+			"notice_text":               cur.NoticeText != in.NoticeText,
 		} {
 			if differs {
 				changed = append(changed, name)
@@ -101,7 +102,7 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 			UserLockSessionAction: in.UserLockSessionAction, BreakGlassAccounts: in.BreakGlassAccounts,
 			SudoersDAllowlist: in.SudoersDAllowlist, SudoLectureText: in.SudoLectureText,
 			LocalAdminUsername: in.LocalAdminUsername, LocalAdminRotationDays: int32(in.LocalAdminRotationDays), //nolint:gosec // validated 1–365
-			RotateAfterRevealHours: int32Ptr(in.RotateAfterRevealHours),
+			RotateAfterRevealHours: int32Ptr(in.RotateAfterRevealHours), NoticeText: in.NoticeText,
 		})
 		if err != nil {
 			return err

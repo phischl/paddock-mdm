@@ -63,6 +63,8 @@ type System interface {
 	SudoVersion(ctx context.Context, path string) (output string, exit int, err error)
 	// EvalSymlinks resolves every symlink of path (alternatives included).
 	EvalSymlinks(path string) (string, error)
+	// Dconf runs dconf (update: compile the system databases).
+	Dconf(ctx context.Context, args ...string) (output string, exit int, err error)
 	// Gpasswd runs gpasswd (-d <user> <group>).
 	Gpasswd(ctx context.Context, args ...string) (output string, exit int, err error)
 	// Rename renames a file within the file system (rename(2)).

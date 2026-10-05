@@ -1881,6 +1881,11 @@ export interface components {
             local_admin_rotation_days: number;
             /** @description Hours after a reveal until the device rotates the password; absent or null means no rotation. */
             rotate_after_reveal_hours?: number | null;
+            /**
+             * @description Login notice of every device (plan M4a decision 19): plain text with line breaks, shown at the login
+             *     screen (GDM banner), on text consoles (/etc/issue.d) and before SSH logins. Empty removes it.
+             */
+            notice_text: string;
         };
         LoginSettings: {
             hello_enabled: boolean;
@@ -1892,6 +1897,7 @@ export interface components {
             local_admin_username: string;
             local_admin_rotation_days: number;
             rotate_after_reveal_hours: number | null;
+            notice_text: string;
             /** Format: date-time */
             updated_at: string;
         };

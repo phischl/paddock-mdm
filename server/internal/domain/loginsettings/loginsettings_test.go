@@ -42,6 +42,8 @@ func TestValidate(t *testing.T) {
 		"rotation 366 days":    {func(s *Settings) { s.LocalAdminRotationDays = 366 }, ErrRotationDays},
 		"reveal 0 hours":       {func(s *Settings) { s.RotateAfterRevealHours = hours(0) }, ErrRevealHours},
 		"reveal 169 hours":     {func(s *Settings) { s.RotateAfterRevealHours = hours(169) }, ErrRevealHours},
+		"long notice":          {func(s *Settings) { s.NoticeText = strings.Repeat("x", 2001) }, ErrNotice},
+		"notice with escape":   {func(s *Settings) { s.NoticeText = "a\x1b[31mred" }, ErrNotice},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

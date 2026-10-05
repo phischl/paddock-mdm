@@ -366,6 +366,18 @@ func (s *System) EvalSymlinks(path string) (string, error) {
 	return path, nil
 }
 
+// Dconf implements reconcile.System: the call is logged; FailCmd makes it fail.
+func (s *System) Dconf(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cmd := "dconf " + strings.Join(args, " ")
+	s.Calls = append(s.Calls, cmd)
+	if cmd == s.FailCmd {
+		return "error\n", 1, nil
+	}
+	return "", 0, nil
+}
+
 // Gpasswd implements reconcile.System for -d <user> <group> (Members); FailCmd makes it fail.
 func (s *System) Gpasswd(_ context.Context, args ...string) (string, int, error) {
 	s.mu.Lock()

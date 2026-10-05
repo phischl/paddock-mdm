@@ -22,6 +22,7 @@ const lecture = ref('')
 const localAdmin = ref('')
 const rotationDays = ref('30')
 const revealHours = ref('')
+const notice = ref('')
 const updatedAt = ref('')
 const problem = ref('')
 const saved = ref(false)
@@ -36,6 +37,7 @@ function apply(s: Exclude<Awaited<ReturnType<typeof getLoginSettings>>, string>)
   localAdmin.value = s.local_admin_username
   rotationDays.value = String(s.local_admin_rotation_days)
   revealHours.value = s.rotate_after_reveal_hours === null ? '' : String(s.rotate_after_reveal_hours)
+  notice.value = s.notice_text
   updatedAt.value = s.updated_at
   loaded.value = true
 }
@@ -55,6 +57,7 @@ async function save(): Promise<void> {
     sudoers_d_allowlist: lines(allowlist.value), sudo_lecture_text: lecture.value.trim(),
     local_admin_username: localAdmin.value.trim(), local_admin_rotation_days: Number(rotationDays.value),
     rotate_after_reveal_hours: revealHours.value.trim() === '' ? null : Number(revealHours.value),
+    notice_text: notice.value.trim(),
   })
   if (typeof res === 'string') {
     problem.value = res
@@ -112,6 +115,15 @@ async function save(): Promise<void> {
           :hint="t('loginSettings.breakGlassHint')"
           persistent-hint
           rows="2"
+        />
+        <v-textarea
+          id="settings-notice"
+          v-model="notice"
+          :label="t('loginSettings.notice')"
+          :hint="t('loginSettings.noticeHint')"
+          persistent-hint
+          rows="4"
+          counter="2000"
         />
       </fieldset>
       <fieldset :disabled="!session.canDelete">

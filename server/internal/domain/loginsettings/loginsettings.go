@@ -28,6 +28,8 @@ type Settings struct {
 	LocalAdminRotationDays int
 	// RotateAfterRevealHours schedules a rotation that many hours after a reveal; nil: no rotation after a reveal.
 	RotateAfterRevealHours *int
+	// NoticeText is the login notice of the devices (plan M4a decision 19); "" shows none.
+	NoticeText string
 }
 
 // Bounds of the settings.
@@ -41,6 +43,7 @@ const (
 	DefaultLocalAdminRotationDays = 30
 	MaxRotationDays               = 365
 	MaxRotateAfterRevealHours     = 168
+	MaxNoticeChars                = 2000
 )
 
 // Validation errors.
@@ -53,6 +56,7 @@ var (
 	ErrLocalAdmin    = errors.New("local_admin_username must match ^[a-z_][a-z0-9_-]{0,31}$")
 	ErrRotationDays  = errors.New("local_admin_rotation_days must be 1 to 365")
 	ErrRevealHours   = errors.New("rotate_after_reveal_hours must be empty or 1 to 168")
+	ErrNotice        = errors.New("notice_text must be plain text of at most 2000 characters (line breaks and tabs allowed)")
 )
 
 // allowlistPattern matches the file names sudo reads from an includedir (no "." and no trailing "~").
@@ -62,6 +66,7 @@ var allowlistPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 func Normalize(s Settings) Settings {
 	s.SudoLectureText = strings.TrimSpace(s.SudoLectureText)
 	s.LocalAdminUsername = strings.TrimSpace(s.LocalAdminUsername)
+	s.NoticeText = strings.TrimSpace(strings.ReplaceAll(s.NoticeText, "\r\n", "\n"))
 	s.BreakGlassAccounts = trimAll(s.BreakGlassAccounts)
 	s.SudoersDAllowlist = trimAll(s.SudoersDAllowlist)
 	return s
@@ -111,6 +116,14 @@ func Validate(s Settings) error {
 	}
 	if h := s.RotateAfterRevealHours; h != nil && (*h < 1 || *h > MaxRotateAfterRevealHours) {
 		return ErrRevealHours
+	}
+	if utf8.RuneCountInString(s.NoticeText) > MaxNoticeChars || !utf8.ValidString(s.NoticeText) {
+		return ErrNotice
+	}
+	for _, r := range s.NoticeText {
+		if (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f {
+			return ErrNotice
+		}
 	}
 	return nil
 }

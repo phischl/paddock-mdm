@@ -2958,7 +2958,8 @@ components:
     LoginSettingsUpdate:
       type: object
       required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
-                 sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days]
+                 sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days,
+                 notice_text]
       additionalProperties: false
       properties:
         hello_enabled: { type: boolean }
@@ -2988,11 +2989,17 @@ components:
           maximum: 168
           nullable: true
           description: Hours after a reveal until the device rotates the password; absent or null means no rotation.
+        notice_text:
+          type: string
+          maxLength: 2000
+          description: |
+            Login notice of every device (plan M4a decision 19): plain text with line breaks, shown at the login
+            screen (GDM banner), on text consoles (/etc/issue.d) and before SSH logins. Empty removes it.
     LoginSettings:
       type: object
       required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
                  sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days,
-                 rotate_after_reveal_hours, updated_at]
+                 rotate_after_reveal_hours, notice_text, updated_at]
       properties:
         hello_enabled: { type: boolean }
         hello_pin_min_length: { type: integer }
@@ -3007,6 +3014,7 @@ components:
         local_admin_username: { type: string }
         local_admin_rotation_days: { type: integer }
         rotate_after_reveal_hours: { type: integer, nullable: true }
+        notice_text: { type: string }
         updated_at: { type: string, format: date-time }
     LoginAssignmentUpdate:
       type: object

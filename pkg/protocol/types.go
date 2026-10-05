@@ -278,6 +278,7 @@ const (
 	LoginStageDenyList = "deny_list"
 	LoginStagePAM      = "pam"
 	LoginStageSessions = "sessions"
+	LoginStageNotice   = "notice"
 )
 
 // MaxEventsPerBatch bounds POST /v1/events.

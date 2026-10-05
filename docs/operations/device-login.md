@@ -44,6 +44,20 @@ missing file is written again (empty, or with the locked users) at the next drif
 management (its organization has no domain) the agent still creates the file empty while the
 profile is enabled, but never changes an existing one.
 
+## Login notice
+
+The organization's login notice (*Login & privileges → Login notice*, setting `notice_text`, at most 2000
+characters of plain text; empty removes it) is shown before every login (plan M4a decision 19):
+
+| Where | File (written by the agent, restored when changed locally) |
+| --- | --- |
+| GDM login screen | `/etc/dconf/db/gdm.d/90-paddock-notice` (`banner-message-enable`, `banner-message-text`), then `dconf update`; only with `gdm3` installed |
+| Text consoles | `/etc/issue.d/90-paddock.issue` |
+| SSH | `/etc/paddock/notice` and `/etc/ssh/sshd_config.d/90-paddock-banner.conf` (`Banner /etc/paddock/notice`), then `systemctl try-reload-or-restart ssh.service`; only with `openssh-server` installed |
+
+The GDM greeter shows a changed banner the next time it starts (logout or restart). The notice replaces the sudo
+lecture as the place for the usage policy on devices whose sudo is sudo-rs, which ignores custom lectures.
+
 ## Signing in (users)
 
 - **First login** on a device, and the first login after a lock and unlock or after three wrong PINs: at the login
