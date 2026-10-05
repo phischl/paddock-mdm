@@ -40,7 +40,9 @@ sudo dpkg-reconfigure paddock-agent
 ```
 
 Without the deny file every login works (`onerr=succeed`): the deny list can only refuse, never lock out a device. A
-missing file is written again (empty, or with the locked users) at the next drift pass.
+missing file is written again (empty, or with the locked users) at the next drift pass. On a device without login
+management (its organization has no domain) the agent still creates the file empty while the
+profile is enabled, but never changes an existing one.
 
 ## Signing in (users)
 

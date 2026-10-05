@@ -47,19 +47,22 @@ type Planned struct {
 
 // Applier applies bundles with a set of reconcilers.
 type Applier struct {
-	recs map[string]reconcile.Reconciler
-	file *reconcile.File
+	recs  map[string]reconcile.Reconciler
+	file  *reconcile.File
+	login *reconcile.Login
 }
 
 // New creates an applier for sys; managed is the record of files Paddock wrote, events receives the device events
 // of the reconcilers.
 func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Events) *Applier {
 	file := &reconcile.File{Sys: sys, Managed: managed}
+	login := &reconcile.Login{Sys: sys, Events: events}
 	return &Applier{
-		file: file,
+		file:  file,
+		login: login,
 		recs: map[string]reconcile.Reconciler{
 			bundle.TypeFile: file, bundle.TypeSystemdUnit: &reconcile.Unit{Sys: sys}, bundle.TypeTime: &reconcile.Time{Sys: sys},
-			bundle.TypeLogin: &reconcile.Login{Sys: sys, Events: events}, bundle.TypeSudo: &reconcile.Sudo{Sys: sys, Events: events},
+			bundle.TypeLogin: login, bundle.TypeSudo: &reconcile.Sudo{Sys: sys, Events: events},
 		},
 	}
 }
@@ -126,7 +129,22 @@ func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.
 			rep.Errors = append(rep.Errors, ResourceError{ID: res.ID, Message: out.Message})
 		}
 	}
+	if !hasLogin(b) && keep(bundle.Resource{ID: reconcile.DenyListID}) {
+		switch written, err := a.login.EnsureDenyList(); {
+		case err != nil:
+			rep.Errors = append(rep.Errors, ResourceError{ID: reconcile.DenyListID, Message: err.Error()})
+		case written:
+			rep.Changed++
+			rep.ChangedIDs = append(rep.ChangedIDs, reconcile.DenyListID)
+		}
+	}
 	return rep
+}
+
+// hasLogin reports whether b has a login resource; without one, the applier keeps the deny list of the PAM profile
+// in place itself (plan M4a step 0c).
+func hasLogin(b *bundle.Bundle) bool {
+	return slices.ContainsFunc(b.Resources, func(r bundle.Resource) bool { return r.Type == bundle.TypeLogin })
 }
 
 // removeStale deletes files Paddock wrote that left the bundle, unless they were changed locally (plan M2b
@@ -168,6 +186,9 @@ func (a *Applier) Plan(ctx context.Context, b *bundle.Bundle) []Planned {
 			p.Changes = changes
 		}
 		out = append(out, p)
+	}
+	if !hasLogin(b) && a.login.DenyListMissing() {
+		out = append(out, Planned{ID: reconcile.DenyListID, Changes: []string{"create"}})
 	}
 	return out
 }

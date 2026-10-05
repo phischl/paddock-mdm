@@ -115,6 +115,38 @@ func TestDriftCorrection(t *testing.T) {
 	}
 }
 
+// TestDenyListWithoutLoginResource: with the PAM profile enabled, a device without a login resource gets an empty
+// deny list, restored by the drift pass; an existing list is kept (plan M4a step 0c).
+func TestDenyListWithoutLoginResource(t *testing.T) {
+	ctx := context.Background()
+	sys, a := fixture(t)
+	b := newBundle(t, 1, nil)
+	a.Apply(ctx, b)
+	if _, ok := sys.Files[reconcile.DenyList]; ok {
+		t.Fatal("deny list written without the PAM profile")
+	}
+	sys.Files["/etc/pam.d/common-auth"] = &fakesys.File{Data: []byte(reconcile.DenyAuthLine + "\n"), Mode: 0o644}
+	rep := a.Apply(ctx, b)
+	if f := sys.Files[reconcile.DenyList]; f == nil || len(f.Data) != 0 || f.Mode != 0o644 || !slices.Equal(rep.ChangedIDs, []string{reconcile.DenyListID}) {
+		t.Fatalf("deny list %+v, report %+v", f, rep)
+	}
+	if ids := apply.Drifted(a.Plan(ctx, b)); len(ids) != 0 {
+		t.Fatalf("drifted %v", ids)
+	}
+	delete(sys.Files, reconcile.DenyList)
+	ids := apply.Drifted(a.Plan(ctx, b))
+	if !slices.Equal(ids, []string{reconcile.DenyListID}) {
+		t.Fatalf("drifted %v", ids)
+	}
+	if rep := a.ApplyResources(ctx, b, ids); !slices.Equal(rep.ChangedIDs, ids) || sys.Files[reconcile.DenyList] == nil {
+		t.Fatalf("drift apply %+v", rep)
+	}
+	sys.Files[reconcile.DenyList].Data = []byte("eve@acme.test\n")
+	if rep := a.Apply(ctx, b); rep.Changed != 0 || string(sys.Files[reconcile.DenyList].Data) != "eve@acme.test\n" {
+		t.Fatalf("existing list changed: %+v", rep)
+	}
+}
+
 func TestRejectReason(t *testing.T) {
 	for err, want := range map[error]string{
 		bundle.ErrSignature: "signature", bundle.ErrWrongDevice: "wrong_device", bundle.ErrDowngrade: "downgrade", bundle.ErrSchema: "schema",
