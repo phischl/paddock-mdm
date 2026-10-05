@@ -117,6 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The agent always writes `/etc/paddock/login-deny`, empty when nobody is locked, so `pam_listfile` no longer logs "Couldn't open /etc/paddock/login-deny" at every authentication; without the file every login still works (M3.1 step 3).
+- If installing Himmelblau fails on a dependency because the device's other package lists are stale, the agent runs one `apt-get update` of every source and tries again, instead of failing until someone updates the device by hand (M3.1 step 3).
 - Creating a local user on a fresh installation no longer fails with 502 because Authentik's default brand has no recovery flow: `paddock-worker` sets the brand's recovery and device-code flows at start and every 10 minutes instead of the blueprints, whose brand condition raced with the creation of the default brand, and `make dev-seed` fails if they are not set within 120 s (M3.1 step 2).
 - Sudo rights apply on Ubuntu 26.04, whose default sudo is sudo-rs: the agent detects the implementation behind `/usr/bin/sudo` at every apply, writes the sudoers files in its flavor (sudo-rs does not know the setting `lecture_file`) and checks them with that implementation's `visudo`; the device detail shows the device's sudo implementation (M3b, answer to question 1).
 - The agent no longer passes the supervisor's `NOTIFY_SOCKET` to the tools it runs, so systemd stops logging "Got notification message from PID …, but reception only permitted for main PID" for every `systemctl` or `loginctl` call (M3b step 5).
