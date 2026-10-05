@@ -1,57 +1,9 @@
 import {
   api, listPage, type AuditActorType, type AuditEvent, type AuditEventSort, type AuditOutcome,
 } from '../api/client'
+import { auditCodes } from './auditCodes.gen'
 import { dateInputToRFC3339 } from './format'
 import type { ListFilter, ListParams, Page } from './listQuery'
-
-/** Codes offered in the filter (the closed registry, server/internal/domain/audit/codes.go). */
-export const auditCodes = [
-  'admin.login',
-  'agent_release.artifact_uploaded',
-  'agent_release.created',
-  'agent_release.published',
-  'agent_rollout.advanced',
-  'agent_rollout.completed',
-  'agent_rollout.halted',
-  'agent_rollout.resumed',
-  'agent_rollout.started',
-  'device.agent_events_dropped',
-  'device.agent_rolled_back',
-  'device.agent_update_failed',
-  'device.agent_updated',
-  'device.approved',
-  'device.bundle_applied',
-  'device.bundle_rejected',
-  'device.clone_suspected',
-  'device.config_drift_corrected',
-  'device.enrolled',
-  'device.groups_changed',
-  'device.login_applied',
-  'device.login_apply_failed',
-  'device.logins_suspension_applied',
-  'device.quarantine_released',
-  'device.rejected',
-  'device.retired',
-  'device.sudo_apply_failed',
-  'device.sudo_user_unresolved',
-  'device.tamper_protected_file_changed',
-  'device.tamper_sudo_group_member',
-  'device.tamper_sudoers_changed',
-  'device.tamper_sudoers_d_file',
-  'device.user_lock_applied',
-  'device_group.created',
-  'device_group.updated',
-  'device_group.deleted',
-  'enrollment_token.created',
-  'enrollment_token.revoked',
-  'managed_file.created',
-  'managed_file.updated',
-  'managed_file.deleted',
-  'managed_unit.created',
-  'managed_unit.updated',
-  'managed_unit.deleted',
-  'organization.created',
-] as const
 
 const outcomes: AuditOutcome[] = ['success', 'failure', 'denied', 'unknown']
 const actorTypes: AuditActorType[] = ['admin', 'platform_admin', 'system', 'anonymous', 'device']
