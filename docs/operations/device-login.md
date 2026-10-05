@@ -84,7 +84,10 @@ Paddock alone grants sudo on its devices (architecture §10). Set in *Login & pr
 **Configure both before devices get an agent of this release**; otherwise the first apply takes sudo away from your
 local administrator.
 
-Users with a permission profile get a file `/etc/sudoers.d/paddock-u-<hash>` that names their numeric UID. A user who
+Users with a permission profile get a file `/etc/sudoers.d/paddock-u-<hash>` that names their numeric UID. The agent
+writes it for the sudo implementation behind `/usr/bin/sudo` — classic sudo, or sudo-rs, the default of Ubuntu 26.04 —
+and checks it with that implementation's `visudo`. sudo-rs does not support a custom lecture text: on such devices users
+see sudo-rs's default lecture, and the device detail says so. A user who
 never signed in on a device is not known there yet (`device.sudo_user_unresolved`); the rights apply after the first
 login. Changes of `/etc/sudoers` are reported (`device.tamper_sudoers_changed`) but not reverted; a missing
 `@includedir /etc/sudoers.d` is reported as `device.sudo_apply_failed`.

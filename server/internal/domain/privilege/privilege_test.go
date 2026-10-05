@@ -373,7 +373,7 @@ func TestGoldenSudoersPermutation(t *testing.T) {
 		if err != nil || !ok {
 			t.Fatalf("%v %v", ok, err)
 		}
-		out, err := sudoers.Render(entry, sudoers.PlaceholderUID)
+		out, err := sudoers.Render(entry, sudoers.PlaceholderUID, sudoers.Classic)
 		if err != nil {
 			t.Fatal(err)
 		}

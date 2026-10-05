@@ -2370,7 +2370,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Device"
         - type: object
-          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status]
+          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor]
           properties:
             groups:
               type: array
@@ -2388,6 +2388,11 @@ components:
               type: boolean
               description: The agent supports bundle schema 2 (login and sudo); false means "agent too old for login management".
             login_status: { $ref: "#/components/schemas/DeviceLoginStatus" }
+            sudo_flavor:
+              type: string
+              enum: [classic, sudo-rs]
+              nullable: true
+              description: The device's sudo implementation as its agent reported it last; null until reported. sudo-rs ignores the custom lecture text.
     DeviceLoginStatus:
       type: object
       description: The latest login.* and sudo.* report of the device's agent (plan M3b decision 17).

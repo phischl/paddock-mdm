@@ -18,7 +18,7 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
 )
 
-// commandTimeout bounds every call of systemctl, timedatectl, loginctl, getent, visudo, gpasswd and dpkg-query.
+// commandTimeout bounds every call of systemctl, timedatectl, loginctl, getent, sudo, visudo, gpasswd and dpkg-query.
 const commandTimeout = 2 * time.Minute
 
 // OS is the System of a real device. Root prefixes every file path (tests use a temporary directory).
@@ -170,11 +170,27 @@ func (o OS) Getent(ctx context.Context, database, key string) (string, int, erro
 }
 
 // Visudo implements System.
-func (o OS) Visudo(ctx context.Context, args ...string) (string, int, error) {
+func (o OS) Visudo(ctx context.Context, path string, args ...string) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return command(ctx, "visudo", args...)
+	return command(ctx, path, args...)
+}
+
+// SudoVersion implements System.
+func (o OS) SudoVersion(ctx context.Context, path string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, path, "--version")
+}
+
+// EvalSymlinks implements System.
+func (o OS) EvalSymlinks(path string) (string, error) {
+	if o.testRoot() {
+		return "", errTestRoot
+	}
+	return filepath.EvalSymlinks(path)
 }
 
 // Gpasswd implements System.

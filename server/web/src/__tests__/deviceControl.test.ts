@@ -42,6 +42,10 @@ describe('device reports', () => {
       .toBe('erin@acme.test has sudo rights but is not known on the device yet')
     expect(reportText(t, { type: 'login.future', occurred_at: at, params: {} })).toBe('login.future')
   })
+
+  it('explains the lecture text on sudo-rs devices', () => {
+    expect(t('devices.sudo.sudoRsLecture')).toBe('Custom sudo lecture text is not supported by sudo-rs; users see the default lecture.')
+  })
 })
 
 describe('managed configuration validation', () => {

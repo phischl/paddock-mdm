@@ -29,6 +29,8 @@ type Report struct {
 	LastCheckinAt     *time.Time `json:"last_checkin_at"`
 	LastBundleVersion int64      `json:"last_bundle_version"`
 	LastError         string     `json:"last_error"`
+	// SudoFlavor is the active sudo implementation, classic or sudo-rs (empty until detected).
+	SudoFlavor string `json:"sudo_flavor,omitempty"`
 }
 
 // State is the current health, shared between the run loop (writer) and the socket server (reader).

@@ -202,7 +202,7 @@ func TestVisudo(t *testing.T) {
 		t.Skip("visudo not installed on this host")
 	}
 	v := compiler.Visudo{Path: path}
-	good, err := sudoers.Render(sudoers.Entry{Username: "dave@c.test", Class: sudoers.ClassFull, Lecture: sudoers.LectureOnce}, sudoers.PlaceholderUID)
+	good, err := sudoers.Render(sudoers.Entry{Username: "dave@c.test", Class: sudoers.ClassFull, Lecture: sudoers.LectureOnce}, sudoers.PlaceholderUID, sudoers.Classic)
 	if err != nil {
 		t.Fatal(err)
 	}

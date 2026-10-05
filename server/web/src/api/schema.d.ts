@@ -1375,6 +1375,11 @@ export interface components {
             /** @description The agent supports bundle schema 2 (login and sudo); false means "agent too old for login management". */
             login_management: boolean;
             login_status: components["schemas"]["DeviceLoginStatus"];
+            /**
+             * @description The device's sudo implementation as its agent reported it last; null until reported. sudo-rs ignores the custom lecture text.
+             * @enum {string|null}
+             */
+            sudo_flavor: "classic" | "sudo-rs" | null;
         };
         /** @description The latest login.* and sudo.* report of the device's agent (plan M3b decision 17). */
         DeviceLoginStatus: {

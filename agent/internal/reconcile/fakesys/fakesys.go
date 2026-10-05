@@ -48,8 +48,13 @@ type System struct {
 	// Passwd are the users getent passwd resolves (name → UID); Members the members of groups getent group lists.
 	Passwd  map[string]int
 	Members map[string][]string
-	// VisudoReject makes visudo fail for a file (or, with -c alone, a configuration) that contains it.
+	// VisudoReject makes visudo fail for a file (or, with -c alone, a configuration) that contains it. A visudo
+	// below /usr/lib/cargo (sudo-rs) also refuses lecture_file, like sudo-rs 0.2.
 	VisudoReject string
+	// Links resolve paths for EvalSymlinks (unlisted paths resolve to themselves); SudoVersions are the --version
+	// outputs of sudo binaries (default: classic sudo).
+	Links        map[string]string
+	SudoVersions map[string]string
 }
 
 // Session is a fake logind session.
@@ -297,11 +302,17 @@ func (s *System) Getent(_ context.Context, database, key string) (string, int, e
 }
 
 // Visudo implements reconcile.System: `-c -f <file>` checks one file, `-c` every regular file in /etc/sudoers.d that
-// sudo reads (no "." in the name); both fail on VisudoReject.
-func (s *System) Visudo(_ context.Context, args ...string) (string, int, error) {
+// sudo reads (no "." in the name); both fail on VisudoReject and, for sudo-rs's visudo, on lecture_file. The call is
+// logged as "visudo <args>" for classic sudo and "visudo-rs <args>" for sudo-rs.
+func (s *System) Visudo(_ context.Context, path string, args ...string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Calls = append(s.Calls, "visudo "+strings.Join(args, " "))
+	rs := strings.HasPrefix(path, "/usr/lib/cargo/")
+	name := "visudo"
+	if rs {
+		name = "visudo-rs"
+	}
+	s.Calls = append(s.Calls, name+" "+strings.Join(args, " "))
 	var check []string
 	if len(args) == 3 && args[0] == "-c" && args[1] == "-f" {
 		check = []string{args[2]}
@@ -313,16 +324,36 @@ func (s *System) Visudo(_ context.Context, args ...string) (string, int, error) 
 		}
 		check = append(check, "/etc/sudoers")
 	}
-	for _, path := range check {
-		f, ok := s.Files[path]
+	for _, file := range check {
+		f, ok := s.Files[file]
 		if !ok {
 			continue
 		}
-		if s.VisudoReject != "" && strings.Contains(string(f.Data), s.VisudoReject) {
-			return path + ":2:16: syntax error\n", 1, nil
+		if (s.VisudoReject != "" && strings.Contains(string(f.Data), s.VisudoReject)) || (rs && strings.Contains(string(f.Data), "lecture_file")) {
+			return file + ":2:16: syntax error\n", 1, nil
 		}
 	}
 	return "", 0, nil
+}
+
+// SudoVersion implements reconcile.System.
+func (s *System) SudoVersion(_ context.Context, path string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if out, ok := s.SudoVersions[path]; ok {
+		return out, 0, nil
+	}
+	return "Sudo version 1.9.15p5\nSudoers policy plugin version 1.9.15p5\n", 0, nil
+}
+
+// EvalSymlinks implements reconcile.System.
+func (s *System) EvalSymlinks(path string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if target, ok := s.Links[path]; ok {
+		return target, nil
+	}
+	return path, nil
 }
 
 // Gpasswd implements reconcile.System for -d <user> <group> (Members); FailCmd makes it fail.
