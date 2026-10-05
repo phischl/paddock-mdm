@@ -165,7 +165,30 @@ func managedCases(collection, kind string, valid func() map[string]any, invalid 
 
 // deviceAuditCases are the A3 cases of the M2a operations (plan M2a §8: the existing gates include them).
 var deviceAuditCases = func() map[string][]auditCase {
+	rotate := func(id string) string { return "/api/v1/devices/" + id + "/local-admin/rotate" }
 	cases := map[string][]auditCase{
+		"POST /api/v1/devices/{id}/local-admin/rotate": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPost, rotate(activeID(t, w)), nil)
+				expectStatus(t, res, http.StatusAccepted, "")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.rotation_requested", "success")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.bob, http.MethodPost, rotate(activeID(t, w)), nil)
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.rotation_requested", "denied")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPost, rotate(uuid.NewString()), nil)
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.rotation_requested", "failure")
+			}},
+			{"conflict", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPost, rotate(pendingDevice(t, w)), nil)
+				expectStatus(t, res, http.StatusConflict, "invalid_state")
+				expectOneEvent(t, w.alice, res.RequestID, "local_admin.rotation_requested", "failure")
+			}},
+		},
 		"POST /api/v1/enrollment-tokens": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				res := call(t, w.alice, http.MethodPost, "/api/v1/enrollment-tokens", tokenBody(1))

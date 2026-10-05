@@ -1,5 +1,6 @@
 // Package device is the device API of the gateway role (api/openapi/device.yaml, plan M2a §6.2): request signature
-// verification in the order of architecture §6.3, rate limits, and the enrollment, check-in and event endpoints.
+// verification in the order of architecture §6.3, rate limits, and the enrollment, check-in, event and command
+// result endpoints.
 // The gateway reads only Valkey and writes only to RabbitMQ (and nonces, sequence numbers and enrollment requests to
 // Valkey); it has no database credentials.
 package device
@@ -96,6 +97,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /v1/enroll/{enrollment_id}", g.enrollStatus)
 	mux.HandleFunc("POST /v1/checkin", g.checkin)
 	mux.HandleFunc("POST /v1/events", g.events)
+	mux.HandleFunc("POST /v1/commands/{command_id}/result", g.commandResult)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, errNotFound)
 	})
@@ -130,6 +132,7 @@ var (
 	errIdentityRevoked  = newError(http.StatusUnauthorized, protocol.CodeIdentityRevoked)
 	errNotFound         = newError(http.StatusNotFound, protocol.CodeNotFound)
 	errTooLarge         = newError(http.StatusRequestEntityTooLarge, protocol.CodePayloadTooLarge)
+	errConflict         = newError(http.StatusConflict, protocol.CodeConflict)
 	errRateLimited      = newError(http.StatusTooManyRequests, protocol.CodeRateLimited)
 	errBackpressure     = newError(http.StatusServiceUnavailable, protocol.CodeBackpressure)
 	errInternal         = newError(http.StatusInternalServerError, "internal")

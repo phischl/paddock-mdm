@@ -24,6 +24,7 @@ import (
 	"github.com/paddock-mdm/paddock/agent/internal/paths"
 	"github.com/paddock-mdm/paddock/agent/internal/state"
 	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/paddock-mdm/paddock/pkg/command"
 	"github.com/paddock-mdm/paddock/pkg/dsse"
 	"github.com/paddock-mdm/paddock/pkg/protocol"
 )
@@ -38,7 +39,10 @@ type Gateway struct {
 	CheckinFail  int                   // HTTP status of the next check-ins (0 = success)
 	Checkin      protocol.CheckinResponse
 	EventsFail   int
+	ResultFail   int               // HTTP status of the next command result posts (0 = 202)
 	Files        map[string][]byte // GET /files/<name> (presigned downloads)
+	// Results are the accepted command results by command ID.
+	Results map[string]protocol.CommandResult
 
 	keys     map[string]*ecdsa.PublicKey // key ID → key (enrolled keys)
 	Enrolls  []protocol.EnrollRequest
@@ -55,13 +59,14 @@ type Checkin struct {
 
 // New starts a TLS fake gateway.
 func New(t *testing.T) *Gateway {
-	g := &Gateway{t: t, keys: map[string]*ecdsa.PublicKey{}, Files: map[string][]byte{},
+	g := &Gateway{t: t, keys: map[string]*ecdsa.PublicKey{}, Files: map[string][]byte{}, Results: map[string]protocol.CommandResult{},
 		EnrollStatus: protocol.EnrollStatus{Status: protocol.EnrollProcessing}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/enroll", g.enroll)
 	mux.HandleFunc("GET /v1/enroll/{id}", g.status)
 	mux.HandleFunc("POST /v1/checkin", g.checkin)
 	mux.HandleFunc("POST /v1/events", g.events)
+	mux.HandleFunc("POST /v1/commands/{id}/result", g.result)
 	mux.HandleFunc("GET /files/{name}", func(w http.ResponseWriter, r *http.Request) {
 		g.Mu.Lock()
 		data, ok := g.Files[r.PathValue("name")]
@@ -166,6 +171,46 @@ func (g *Gateway) events(w http.ResponseWriter, r *http.Request) {
 	}
 	g.Events = append(g.Events, req.Events...)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (g *Gateway) result(w http.ResponseWriter, r *http.Request) {
+	body, _, ok := g.verify(w, r, nil)
+	if !ok {
+		return
+	}
+	g.Mu.Lock()
+	defer g.Mu.Unlock()
+	if g.ResultFail != 0 {
+		problem(w, g.ResultFail, "internal")
+		return
+	}
+	var req protocol.CommandResult
+	_ = json.Unmarshal(body, &req)
+	g.Results[r.PathValue("id")] = req
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// CommandKey is the command-signing key of the fake (seeded, so tests can sign commands).
+var CommandKey = ed25519.NewKeyFromSeed(append(make([]byte, ed25519.SeedSize-1), 1))
+
+// CommandKeys are the bundle keys object that trusts CommandKey.
+func CommandKeys() *bundle.Keys {
+	return &bundle.Keys{CommandSigning: []bundle.SigningKey{{KeyID: "command-signing:v1",
+		PublicKey: base64.StdEncoding.EncodeToString(CommandKey.Public().(ed25519.PublicKey))}}}
+}
+
+// SignedCommand signs c with CommandKey and returns the DSSE envelope.
+func SignedCommand(t *testing.T, c command.Command) json.RawMessage {
+	t.Helper()
+	payload, err := command.Encode(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := dsse.New(command.PayloadType, payload, dsse.SignEd25519(CommandKey, "command-signing:v1", command.PayloadType, payload)).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
 }
 
 // EventTypes returns the types of the received events in order.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
+	"github.com/paddock-mdm/paddock/server/internal/domain/devicecommand"
 	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/outbox"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
@@ -411,7 +412,8 @@ func TestReaperFinalizesStuckAction(t *testing.T) {
 }
 
 // TestRelayRoutesStateChanges: state.<org> rows go to paddock.state on the organization's partition queue, priority
-// rows to state.priority, audit rows of the same batch still reach audit.writer.
+// rows to state.priority, command.<org> rows to command.issued (plan M4a decision 2), audit rows of the same batch
+// still reach audit.writer.
 func TestRelayRoutesStateChanges(t *testing.T) {
 	broker := mqtest.Start(t)
 	h := newRelayHarness(t, broker)
@@ -423,6 +425,7 @@ func TestRelayRoutesStateChanges(t *testing.T) {
 	stateID, priorityID := uuid.Must(uuid.NewV7()).String(), uuid.Must(uuid.NewV7()).String()
 	state := statechange.Event{OrganizationID: org, Scope: statechange.ScopeOrg, ID: org}
 	priority := statechange.Event{OrganizationID: org, Scope: statechange.ScopeUser, ID: uuid.New(), Priority: true}
+	commandID := uuid.Must(uuid.NewV7())
 	if err := h.platform.InPlatform(sys, func(ctx context.Context, q *pgstore.Queries) error {
 		for id, ev := range map[string]statechange.Event{stateID: state, priorityID: priority} {
 			payload, _ := json.Marshal(ev)
@@ -432,11 +435,14 @@ func TestRelayRoutesStateChanges(t *testing.T) {
 				return err
 			}
 		}
-		return nil
+		payload, _ := json.Marshal(devicecommand.Issued{OrganizationID: org, CommandID: commandID})
+		return q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
+			OrganizationID: org, Subject: devicecommand.Subject(org), MsgID: commandID.String(), Payload: payload,
+		})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := outbox.NewRelay(h.pool, pub).PublishOnce(context.Background()); err != nil || n != 3 {
+	if n, err := outbox.NewRelay(h.pool, pub).PublishOnce(context.Background()); err != nil || n != 4 {
 		t.Fatalf("PublishOnce: %d %v", n, err)
 	}
 	checkComplete(t, auditIDs, drain(t, broker))
@@ -475,5 +481,18 @@ func TestRelayRoutesStateChanges(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("priority state change not delivered to state.priority")
+	}
+	commands, err := ch.Consume(mq.QueueCommandIssued, "", true, false, false, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case m := <-commands:
+		var ev devicecommand.Issued
+		if err := json.Unmarshal(m.Body, &ev); err != nil || m.MessageId != commandID.String() || ev.CommandID != commandID || ev.OrganizationID != org {
+			t.Fatalf("command message %s %s: %v", m.MessageId, m.Body, err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("command.issued not delivered to its queue")
 	}
 }

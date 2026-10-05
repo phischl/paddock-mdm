@@ -63,6 +63,7 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 		AuthentikURL: authentikURL, HimmelblauVersion: himmelblau, Sudoers: compiler.Visudo{Path: visudo},
 		// The compiler records only organization events (device.bundle_render_failed): no platform pool.
 		Runner: app.NewActionRunner(pool, nil, httpx.RequestID),
+		Keys:   signer,
 	})
 
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}

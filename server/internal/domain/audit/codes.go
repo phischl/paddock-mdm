@@ -82,6 +82,9 @@ const (
 	CodeDeviceTamperSudoersDFile         Code = "device.tamper_sudoers_d_file"
 	CodeDeviceTamperSudoersChanged       Code = "device.tamper_sudoers_changed"
 	CodeDeviceTamperProtectedFileChanged Code = "device.tamper_protected_file_changed"
+
+	// Managed local administrator (plan M4a decisions 17 and 18).
+	CodeLocalAdminRotationRequested Code = "local_admin.rotation_requested"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -536,6 +539,12 @@ var registry = map[Code]Definition{
 		Params:      []string{"username", "reason"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded at most once per user and bundle version; reason names the command, the profiles it comes from and the refused character (at most 500 characters).",
+	},
+	CodeLocalAdminRotationRequested: {
+		Code: CodeLocalAdminRotationRequested, Emitted: true,
+		Description: "An administrator or operator issued the command rotate_admin_password to a device.",
+		Params:      []string{"hostname", "command_id"},
+		Outcomes:    adminOutcomes,
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

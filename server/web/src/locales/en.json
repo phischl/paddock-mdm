@@ -218,6 +218,9 @@
       "created": "{actor} assigned the permission profile {profile}",
       "updated": "{actor} changed the devices of an assignment of {profile}",
       "deleted": "{actor} removed an assignment of {profile}"
+    },
+    "local_admin": {
+      "rotation_requested": "{actor} requested a new local administrator password for {hostname}"
     }
   },
   "organizations": {

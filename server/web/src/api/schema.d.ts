@@ -726,6 +726,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The commands issued to the device (plan M4a decision 1). */
+        get: operations["listDeviceCommands"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/local-admin/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Issues the command rotate_admin_password (valid 7 days) to an active device;
+         *     another state is 409 invalid_state.
+         */
+        post: operations["rotateDeviceLocalAdmin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/effective-sudo": {
         parameters: {
             query?: never;
@@ -1399,6 +1440,46 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** @enum {string} */
+        DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
+        /** @enum {string} */
+        DeviceCommandType: "rotate_admin_password";
+        DeviceCommand: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            device_id: string;
+            type: components["schemas"]["DeviceCommandType"];
+            status: components["schemas"]["DeviceCommandStatus"];
+            /** Format: date-time */
+            issued_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /**
+             * Format: date-time
+             * @description Delivered to the device only from then on.
+             */
+            not_before?: string;
+            /** Format: date-time */
+            delivered_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+            /** @description Outcome details reported by the device. */
+            result?: {
+                [key: string]: unknown;
+            };
+        };
+        DeviceCommandPage: {
+            items: components["schemas"]["DeviceCommand"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         DevicePage: {
             items: components["schemas"]["Device"][];
             page: number;
@@ -1879,6 +1960,8 @@ export interface components {
         ManagedFileSort: "path" | "-path" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         ManagedUnitSort: "unit" | "-unit" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        DeviceCommandSort: "issued_at" | "-issued_at" | "expires_at" | "-expires_at" | "type" | "-type" | "status" | "-status";
         /** @description Repeatable. */
         DeviceStateFilter: components["schemas"]["DeviceState"][];
         /** @description Only definitions scoped to this device group. */
@@ -3528,6 +3611,73 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceCommands: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["DeviceCommandSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["DeviceCommandStatus"][];
+                /** @description Repeatable. */
+                type?: components["schemas"]["DeviceCommandType"][];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of commands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommandPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    rotateDeviceLocalAdmin: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The issued command. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommand"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     getDeviceEffectiveSudo: {

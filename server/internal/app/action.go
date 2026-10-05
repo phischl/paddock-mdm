@@ -17,6 +17,7 @@ import (
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
 	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
+	"github.com/paddock-mdm/paddock/server/internal/domain/devicecommand"
 	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/principal"
@@ -56,6 +57,9 @@ type Recorder interface {
 	// PriorityStateChanged is StateChanged on the compiler's priority lane (user lock and unlock, login suspension,
 	// architecture §9.5).
 	PriorityStateChanged(scope string, id uuid.UUID)
+	// CommandIssued queues the command.issued message of a device command inserted by the action; like a state
+	// change it is written to the outbox only when the action succeeds (plan M4a decision 2).
+	CommandIssued(id uuid.UUID)
 }
 
 // CorrelationIDFunc extracts the request ID from ctx (set by the httpx middleware).
@@ -101,6 +105,7 @@ type recorder struct {
 	correlated string
 	startedAt  time.Time
 	changes    []statechange.Event
+	commands   []uuid.UUID
 }
 
 func (r *recorder) SetTarget(t audit.Target) { r.target = &t }
@@ -119,6 +124,8 @@ func (r *recorder) StateChanged(scope string, id uuid.UUID) {
 func (r *recorder) PriorityStateChanged(scope string, id uuid.UUID) {
 	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id, Priority: true})
 }
+
+func (r *recorder) CommandIssued(id uuid.UUID) { r.commands = append(r.commands, id) }
 
 var secretParamWords = []string{"password", "secret", "token"}
 
@@ -400,7 +407,7 @@ func (r *ActionRunner) insertStarted(ctx context.Context, q *pgstore.Queries, re
 	if err := insertStateChanges(ctx, q, rec); err != nil {
 		return err
 	}
-	rec.changes = nil
+	rec.changes, rec.commands = nil, nil
 	return nil
 }
 
@@ -427,7 +434,8 @@ func (r *ActionRunner) insertFinished(ctx context.Context, q *pgstore.Queries, r
 	return insertOutbox(ctx, q, rec, outcome, code, finished)
 }
 
-// insertStateChanges writes the queued state changes of a successful action to the outbox.
+// insertStateChanges writes the queued state changes and command.issued messages of a successful action to the
+// outbox.
 func insertStateChanges(ctx context.Context, q *pgstore.Queries, rec *recorder) error {
 	for _, ev := range rec.changes {
 		payload, err := json.Marshal(ev)
@@ -437,6 +445,17 @@ func insertStateChanges(ctx context.Context, q *pgstore.Queries, rec *recorder) 
 		if err := q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
 			OrganizationID: ev.OrganizationID, Subject: statechange.Subject(ev),
 			MsgID: uuid.Must(uuid.NewV7()).String(), Payload: payload,
+		}); err != nil {
+			return err
+		}
+	}
+	for _, id := range rec.commands {
+		payload, err := json.Marshal(devicecommand.Issued{OrganizationID: rec.org, CommandID: id})
+		if err != nil {
+			return err
+		}
+		if err := q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
+			OrganizationID: rec.org, Subject: devicecommand.Subject(rec.org), MsgID: id.String(), Payload: payload,
 		}); err != nil {
 			return err
 		}

@@ -107,6 +107,7 @@ func newWorld(t *testing.T) *world {
 	w.comp = compiler.New(pool, signer, w.store, w.cache, compiler.Config{
 		AuthentikURL: "https://auth.test/", HimmelblauVersion: "4.0.4", Sudoers: w.validator,
 		Runner: app.NewActionRunner(pool, nil, func(context.Context) string { return "compiler-test" }),
+		Keys:   signer,
 	})
 	w.exec("INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'C', 'active')", w.org, "c"+w.org.String()[24:])
 	w.exec("INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'g1'), ($3, $2, 'g2')", w.g1, w.org, w.g2)

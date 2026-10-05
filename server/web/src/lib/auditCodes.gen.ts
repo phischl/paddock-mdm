@@ -45,6 +45,7 @@ export const auditCodes = [
   'device_group.updated',
   'enrollment_token.created',
   'enrollment_token.revoked',
+  'local_admin.rotation_requested',
   'managed_file.created',
   'managed_file.deleted',
   'managed_file.updated',

@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
+	"github.com/paddock-mdm/paddock/server/internal/domain/devicecommand"
 	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
 	"github.com/paddock-mdm/paddock/server/internal/platform/db"
 	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
@@ -227,13 +228,17 @@ func (r *Relay) gauge(ctx context.Context) {
 
 // route maps an outbox subject to exchange and routing key: audit.<organization_id>.<source> goes to paddock.audit
 // as audit.<source>.<organization_id>; state.<organization_id> goes to paddock.state on the organization's
-// partition (architecture §7.1), state.priority.<organization_id> to the priority lane (§9.5).
+// partition (architecture §7.1), state.priority.<organization_id> to the priority lane (§9.5);
+// command.<organization_id> goes to paddock.command as issued (plan M4a decision 2).
 func route(subject string) (string, string, error) {
 	if org, priority, ok := statechange.ParseSubject(subject); ok {
 		if priority {
 			return mq.ExchangeState, mq.StatePriority, nil
 		}
 		return mq.ExchangeState, mq.StatePartition(org), nil
+	}
+	if _, ok := devicecommand.ParseSubject(subject); ok {
+		return mq.ExchangeCommand, mq.CommandIssuedKey, nil
 	}
 	parts := strings.Split(subject, ".")
 	if len(parts) != 3 || parts[0] != "audit" {

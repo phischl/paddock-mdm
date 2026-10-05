@@ -1,5 +1,5 @@
-// Package baotest starts OpenBao in dev mode with the transit keys audit-chain and bundle-signing, the session KV
-// secret and AppRoles equivalent to deploy/compose/scripts/openbao-bootstrap.sh.
+// Package baotest starts OpenBao in dev mode with the transit keys audit-chain, bundle-signing and command-signing,
+// the session KV secret and AppRoles equivalent to deploy/compose/scripts/openbao-bootstrap.sh.
 package baotest
 
 import (
@@ -24,8 +24,8 @@ type Bao struct {
 // AppRole holds AppRole credentials.
 type AppRole struct{ RoleID, SecretID string }
 
-// Start starts OpenBao and creates transit/keys/audit-chain and transit/keys/bundle-signing (ed25519,
-// non-exportable) and secret/paddock/session.
+// Start starts OpenBao and creates transit/keys/audit-chain, transit/keys/bundle-signing and
+// transit/keys/command-signing (ed25519, non-exportable) and secret/paddock/session.
 func Start(t testing.TB) *Bao {
 	t.Helper()
 	ctx := context.Background()
@@ -60,10 +60,12 @@ func Start(t testing.TB) *Bao {
 		"type": "ed25519", "exportable": false, "allow_plaintext_backup": false,
 	})
 	must(t, err)
-	_, err = b.Root.Logical().Write("transit/keys/bundle-signing", map[string]any{
-		"type": "ed25519", "exportable": false, "allow_plaintext_backup": false,
-	})
-	must(t, err)
+	for _, key := range []string{"bundle-signing", "command-signing"} {
+		_, err = b.Root.Logical().Write("transit/keys/"+key, map[string]any{
+			"type": "ed25519", "exportable": false, "allow_plaintext_backup": false,
+		})
+		must(t, err)
+	}
 	_, err = b.Root.Logical().Write("secret/data/paddock/session", map[string]any{
 		"data": map[string]any{"current": "Y3VycmVudC1rZXktMzItYnl0ZXMtbG9uZy0tLS0tLS0=", "previous": "cHJldmlvdXMta2V5LTMyLWJ5dGVzLWxvbmctLS0tLS0="},
 	})
@@ -77,7 +79,10 @@ path "secret/data/paddock/session" { capabilities = ["read"] }
 path "transit/keys/bundle-signing" { capabilities = ["read"] }`))
 	must(t, b.Root.Sys().PutPolicy("paddock-compiler", `
 path "transit/sign/bundle-signing" { capabilities = ["update"] }
-path "transit/keys/bundle-signing" { capabilities = ["read"] }`))
+path "transit/keys/bundle-signing" { capabilities = ["read"] }
+path "transit/keys/command-signing" { capabilities = ["read"] }`))
+	must(t, b.Root.Sys().PutPolicy("paddock-worker", `
+path "transit/sign/command-signing" { capabilities = ["update"] }`))
 	return b
 }
 

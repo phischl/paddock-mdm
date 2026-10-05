@@ -14,14 +14,15 @@ import (
 
 // Reports consumes ingest.heartbeat and ingest.event.
 type Reports struct {
-	reports *app.DeviceReports
-	cache   *devicecache.Cache
-	pause   time.Duration
+	reports  *app.DeviceReports
+	commands *app.DeviceCommands
+	cache    *devicecache.Cache
+	pause    time.Duration
 }
 
 // NewReports creates the consumers.
-func NewReports(reports *app.DeviceReports, cache *devicecache.Cache) *Reports {
-	return &Reports{reports: reports, cache: cache, pause: RetryPause}
+func NewReports(reports *app.DeviceReports, commands *app.DeviceCommands, cache *devicecache.Cache) *Reports {
+	return &Reports{reports: reports, commands: commands, cache: cache, pause: RetryPause}
 }
 
 // HandleHeartbeats is the mq.ConsumeFunc of queue ingest.heartbeat.
@@ -38,8 +39,8 @@ func (r *Reports) HandleEvents(ctx context.Context, _ *amqp.Channel, deliveries 
 	})
 }
 
-// heartbeat quarantines a suspected clone and writes device_status at most once per device and
-// devicecache.HeartbeatInterval.
+// heartbeat quarantines a suspected clone, records the delivery of the commands the check-in carried and writes
+// device_status at most once per device and devicecache.HeartbeatInterval.
 func (r *Reports) heartbeat(ctx context.Context, messageID string, body []byte) outcome {
 	var hb ingest.Heartbeat
 	if err := decode(body, &hb); err != nil {
@@ -56,6 +57,10 @@ func (r *Reports) heartbeat(ctx context.Context, messageID string, body []byte) 
 			slog.WarnContext(ctx, "clone suspected; device quarantined", "device_id", hb.DeviceID,
 				"reported_seq", hb.ReportedSeq, "issued_seq", hb.Seq-1)
 		}
+	}
+	if err := r.commands.MarkDelivered(ctx, hb); err != nil {
+		slog.WarnContext(ctx, "recording command delivery failed; retrying", "device_id", hb.DeviceID, "error", err)
+		return retry
 	}
 	fresh, err := r.cache.ClaimHeartbeat(ctx, hb.DeviceID)
 	if err != nil {

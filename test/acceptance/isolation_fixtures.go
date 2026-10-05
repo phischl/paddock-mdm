@@ -86,7 +86,10 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	})
 	expectStatus(t, res, http.StatusCreated, "")
 	w.globexUnit = createdID(t, w.carol, "/api/v1/managed-units", res)
-	w.globexIDs = append(w.globexIDs, w.globexDeviceGroup, w.globexToken, w.globexDevice, w.globexFile, w.globexUnit)
+	res = call(t, w.carol, http.MethodPost, "/api/v1/devices/"+dev.DeviceID+"/local-admin/rotate", nil)
+	expectStatus(t, res, http.StatusAccepted, "")
+	w.globexIDs = append(w.globexIDs, w.globexDeviceGroup, w.globexToken, w.globexDevice, w.globexFile, w.globexUnit,
+		responseID(t, res).String())
 	w.globexGroups = append(w.globexGroups, w.globexDeviceGroup)
 }
 
@@ -240,6 +243,10 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/devices/{id}/suspend-logins": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/suspend-logins" }, nil),
 	"POST /api/v1/devices/{id}/resume-logins":  itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/resume-logins" }, nil),
 	"GET /api/v1/devices/{id}/effective-sudo":  itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/effective-sudo" }, nil),
+	"GET /api/v1/devices/{id}/commands":        itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/commands" }, nil),
+	"POST /api/v1/devices/{id}/local-admin/rotate": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/devices/" + w.globexDevice + "/local-admin/rotate"
+	}, nil),
 
 	"GET /api/v1/permission-profiles": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/permission-profiles?page_size=100", nil
@@ -269,6 +276,7 @@ var isolationFixtures = map[string]isolationFixture{
 var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/device-groups/{id}/devices": func(w *isolationWorld) string { return w.globexDeviceGroup },
 	"/api/v1/user-groups/{id}/members":   func(w *isolationWorld) string { return w.globexUserGroup },
+	"/api/v1/devices/{id}/commands":      func(w *isolationWorld) string { return w.globexDevice },
 }
 
 func fixtureKey(method, path string) string { return strings.ToUpper(method) + " " + path }
@@ -308,7 +316,8 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/profile-assignments":        {{"q": {"globex-iso"}}, {"subject_type": {"group"}, "page_size": {"100"}}},
 	// Upstream groups with a member of the organization only (plan M3b decision 1): the globex-only group of
 	// seedGlobexUpstream is carol's, never alice's.
-	"/api/v1/upstream-groups": {{"q": {"globex-iso"}}, {"page_size": {"100"}}},
+	"/api/v1/upstream-groups":       {{"q": {"globex-iso"}}, {"page_size": {"100"}}},
+	"/api/v1/devices/{id}/commands": {{"q": {"rotate"}}, {"type": {"rotate_admin_password"}, "status": {"pending", "delivered"}}},
 }
 
 // currentLoginSettings returns acme's login settings as an update body (unchanged values).

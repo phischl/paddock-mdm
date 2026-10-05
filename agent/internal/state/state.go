@@ -39,6 +39,18 @@ type State struct {
 	ReportedUpdateAt *time.Time `json:"reported_update_at,omitempty"`
 	// SessionsReported is the last session.login per directory user (at most one per 24 h, plan M3b decision 11).
 	SessionsReported map[string]time.Time `json:"sessions_reported,omitempty"`
+	// ExecutedCommands are the IDs of the commands this device started, with the time, kept 60 days so a command is
+	// never executed twice (plan M4a decision 3).
+	ExecutedCommands map[string]time.Time `json:"executed_commands,omitempty"`
+	// CommandResults are the results the server has not accepted yet.
+	CommandResults []CommandResult `json:"command_results,omitempty"`
+}
+
+// CommandResult is the result of an executed command, kept until the server accepted it.
+type CommandResult struct {
+	CommandID string          `json:"command_id"`
+	Status    string          `json:"status"`
+	Result    json.RawMessage `json:"result,omitempty"`
 }
 
 // Load reads state.json; a missing file is the empty state.

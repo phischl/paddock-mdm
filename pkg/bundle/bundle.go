@@ -50,6 +50,21 @@ type Bundle struct {
 	IssuedAt       time.Time  `json:"issued_at"` // not part of ContentSHA256
 	Agent          AgentCfg   `json:"agent"`
 	Resources      []Resource `json:"resources"` // sorted by ID
+	// Keys are the public keys the agent trusts for commands and encrypts escrowed secrets to (schema v2 only, plan
+	// M4a decision 5). Agents that do not know them ignore the field.
+	Keys *Keys `json:"keys,omitempty"`
+}
+
+// Keys is the top-level keys object of a schema v2 bundle (plan M4a decision 5).
+type Keys struct {
+	// CommandSigning are all active versions of the command-signing key.
+	CommandSigning []SigningKey `json:"command_signing"`
+}
+
+// SigningKey is an Ed25519 public key with its DSSE key ID, e.g. "command-signing:v1".
+type SigningKey struct {
+	KeyID     string `json:"key_id"`
+	PublicKey string `json:"public_key"` // standard base64 raw Ed25519 public key
 }
 
 // AgentCfg configures the agent itself.

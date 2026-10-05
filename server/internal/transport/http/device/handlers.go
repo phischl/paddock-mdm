@@ -3,8 +3,10 @@ package device
 import (
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -133,7 +135,8 @@ func (g *gateway) enrollStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkin issues the next sequence number, publishes the heartbeat and points to a newer bundle (plan M2a
-// decision 11). A quarantined device gets no bundle URL.
+// decision 11); it carries the device's pending commands (plan M4a decision 3). A quarantined device gets neither
+// a bundle URL nor commands.
 func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 	dev, err := g.authenticateDevice(w, r, maxBody)
 	if err != nil {
@@ -150,13 +153,29 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, err)
 		return
 	}
+	out := protocol.CheckinResponse{Seq: seq, ServerTime: g.d.Now().UTC(), NextCheckinS: g.d.CheckinDelay(), Commands: []json.RawMessage{}}
+	var delivered []uuid.UUID
+	if dev.key.Status == devicecache.KeyActive {
+		if out.Bundle, err = g.bundleRef(r, dev, req.AppliedBundleVersion); err != nil {
+			g.fail(w, r, err)
+			return
+		}
+		if out.AgentUpdate, err = g.agentUpdate(r, dev, req); err != nil {
+			g.fail(w, r, err)
+			return
+		}
+		if out.Commands, delivered, err = g.commands(r, dev); err != nil {
+			g.fail(w, r, err)
+			return
+		}
+	}
 	issued := seq - 1 // the value the device should have sent
 	hb := ingest.Heartbeat{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: g.d.Now().UTC(),
 		AppliedBundleVersion: req.AppliedBundleVersion, AgentVersion: req.AgentVersion,
 		SchemaVersions: boundedSchemaVersions(req.SchemaVersions), Health: req.Health,
 		EventSeqHigh: req.EventSeqHigh, Seq: seq, ReportedSeq: dev.headers.Seq,
-		CloneSuspected: dev.headers.Seq < issued-1,
+		CloneSuspected: dev.headers.Seq < issued-1, DeliveredCommands: delivered,
 	}
 	body, err := json.Marshal(hb)
 	if err != nil {
@@ -170,18 +189,110 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, err)
 		return
 	}
-	out := protocol.CheckinResponse{Seq: seq, ServerTime: g.d.Now().UTC(), NextCheckinS: g.d.CheckinDelay()}
-	if dev.key.Status == devicecache.KeyActive {
-		if out.Bundle, err = g.bundleRef(r, dev, req.AppliedBundleVersion); err != nil {
+	writeJSON(w, http.StatusOK, out)
+}
+
+// maxCommands bounds the commands of one check-in response; the rest follow with the next check-ins.
+const maxCommands = 20
+
+// commands returns the device's unexpired command envelopes in ID order (oldest first, UUIDv7) and their IDs.
+func (g *gateway) commands(r *http.Request, dev device) ([]json.RawMessage, []uuid.UUID, error) {
+	cmds, err := g.d.Cache.Commands(r.Context(), dev.id, g.d.Now())
+	if err != nil {
+		return nil, nil, err
+	}
+	ids := slices.SortedFunc(maps.Keys(cmds), func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	ids = ids[:min(len(ids), maxCommands)]
+	out := make([]json.RawMessage, len(ids))
+	for i, id := range ids {
+		out[i] = cmds[id].Envelope
+	}
+	return out, ids, nil
+}
+
+// commandResult accepts the result of a command that is pending for the device (plan M4a decision 3). It is
+// idempotent: the same status again is accepted, another status is a conflict. The result is published before it
+// is claimed in Valkey, so a failed publish is retried by the device and never lost.
+func (g *gateway) commandResult(w http.ResponseWriter, r *http.Request) {
+	dev, err := g.authenticateDevice(w, r, maxBody)
+	if err != nil {
+		g.fail(w, r, err)
+		return
+	}
+	id, err := uuid.Parse(r.PathValue("command_id"))
+	if err != nil {
+		g.fail(w, r, errNotFound)
+		return
+	}
+	var req protocol.CommandResult
+	if err := decodeJSON(dev.body, &req); err != nil {
+		g.fail(w, r, err)
+		return
+	}
+	if err := validateResult(req); err != nil {
+		g.fail(w, r, err)
+		return
+	}
+	ctx := r.Context()
+	owner, status, known, err := g.d.Cache.Result(ctx, id)
+	if err != nil {
+		g.fail(w, r, err)
+		return
+	}
+	if !known {
+		pending, err := g.d.Cache.HasCommand(ctx, dev.id, id)
+		if err != nil {
 			g.fail(w, r, err)
 			return
 		}
-		if out.AgentUpdate, err = g.agentUpdate(r, dev, req); err != nil {
+		if !pending {
+			g.fail(w, r, errNotFound.with("no pending command with this ID"))
+			return
+		}
+		body, err := json.Marshal(ingest.CommandResult{
+			DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, CommandID: id, Status: req.Status, Result: req.Result,
+			ReceivedAt: g.d.Now().UTC(),
+		})
+		if err != nil {
+			g.fail(w, r, err)
+			return
+		}
+		if err := g.publish(ctx, mq.ExchangeIngest, mq.Message{
+			RoutingKey: mq.IngestRoutingKey(mq.IngestCommandResult, dev.key.OrganizationID),
+			MessageID:  id.String() + ":" + req.Status, Body: body,
+		}); err != nil {
+			g.fail(w, r, err)
+			return
+		}
+		if owner, status, err = g.d.Cache.ClaimResult(ctx, dev.id, id, req.Status); err != nil {
 			g.fail(w, r, err)
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	switch {
+	case owner != dev.id:
+		g.fail(w, r, errNotFound.with("no pending command with this ID"))
+	case status != req.Status:
+		g.fail(w, r, errConflict.with("the command already has the result "+status))
+	default:
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+// validateResult checks the status and that the result is a JSON object of at most protocol.MaxCommandResult bytes.
+func validateResult(req protocol.CommandResult) error {
+	if req.Status != protocol.CommandSucceeded && req.Status != protocol.CommandFailed {
+		return errInvalidRequest.with("status must be succeeded or failed")
+	}
+	if len(req.Result) == 0 {
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if len(req.Result) > protocol.MaxCommandResult || json.Unmarshal(req.Result, &obj) != nil || obj == nil {
+		return errInvalidRequest.with("result must be a JSON object of at most 4 KiB")
+	}
+	return nil
 }
 
 // agentUpdate offers the release of the current rollout to an eligible device (plan M2b decision 21): its rollout

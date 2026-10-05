@@ -103,6 +103,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Logins:        app.NewLogins(runner, orgPool, ak),
 		LoginSettings: app.NewLoginSettings(runner, orgPool),
 		Privileges:    app.NewPrivileges(runner, orgPool),
+		Commands:      app.NewDeviceCommands(orgPool),
+		LocalAdmin:    app.NewLocalAdmin(runner, orgPool),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),

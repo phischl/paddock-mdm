@@ -1265,6 +1265,72 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/commands:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceCommands
+      tags: [devices]
+      description: "Roles: org_admin, org_operator, org_auditor. The commands issued to the device (plan M4a decision 1)."
+      x-paddock-list:
+        sort: [issued_at, expires_at, type, status]
+        default_sort: -issued_at
+        search: [type]
+        filters: [status, type]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceCommandSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/DeviceCommandStatus" }
+        - name: type
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/DeviceCommandType" }
+      responses:
+        "200":
+          description: One page of commands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceCommandPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/local-admin/rotate:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: rotateDeviceLocalAdmin
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator. Issues the command rotate_admin_password (valid 7 days) to an active device;
+        another state is 409 invalid_state.
+      x-paddock-audit: local_admin.rotation_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "202":
+          description: The issued command.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceCommand" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/effective-sudo:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -1939,6 +2005,14 @@ components:
         type: string
         enum: [unit, -unit, created_at, -created_at, updated_at, -updated_at]
         default: unit
+    DeviceCommandSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [issued_at, -issued_at, expires_at, -expires_at, type, -type, status, -status]
+        default: -issued_at
     DeviceStateFilter:
       name: state
       in: query
@@ -2419,6 +2493,41 @@ components:
           type: object
           additionalProperties: true
           description: The parameters of the event as recorded in the audit log (device.<type>).
+    DeviceCommandStatus:
+      type: string
+      enum: [pending, delivered, succeeded, failed, expired, cancelled]
+    DeviceCommandType:
+      type: string
+      enum: [rotate_admin_password]
+    DeviceCommand:
+      type: object
+      required: [id, device_id, type, status, issued_at, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        type: { $ref: "#/components/schemas/DeviceCommandType" }
+        status: { $ref: "#/components/schemas/DeviceCommandStatus" }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        not_before: { type: string, format: date-time, description: Delivered to the device only from then on. }
+        delivered_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        result:
+          type: object
+          additionalProperties: true
+          description: Outcome details reported by the device.
+    DeviceCommandPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceCommand" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     DevicePage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

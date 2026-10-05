@@ -217,7 +217,7 @@ func (f fixture) count(t *testing.T, sql string, args ...any) int {
 func TestHeartbeatsAndClones(t *testing.T) {
 	f := newFixture(t)
 	runner := app.NewActionRunner(f.pool, nil, httpx.RequestID)
-	r := NewReports(app.NewDeviceReports(runner, f.pool), f.cache)
+	r := NewReports(app.NewDeviceReports(runner, f.pool), app.NewDeviceCommands(f.pool), f.cache)
 	ctx := context.Background()
 	dev := f.device(t, "active")
 	hb := func(seq, reported int64, clone bool, at time.Time) []byte {
@@ -265,7 +265,7 @@ func TestHeartbeatsAndClones(t *testing.T) {
 func TestEventsAreRecordedOnce(t *testing.T) {
 	f := newFixture(t)
 	runner := app.NewActionRunner(f.pool, nil, httpx.RequestID)
-	r := NewReports(app.NewDeviceReports(runner, f.pool), f.cache)
+	r := NewReports(app.NewDeviceReports(runner, f.pool), app.NewDeviceCommands(f.pool), f.cache)
 	ctx := context.Background()
 	dev := f.device(t, "active")
 	body, _ := json.Marshal(ingest.Events{DeviceID: dev, OrganizationID: f.org, ReceivedAt: time.Now(), Events: []protocol.Event{

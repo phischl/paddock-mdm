@@ -1,10 +1,12 @@
 # OpenBao runbook
 
-OpenBao holds Paddock's keys (ADR 0006). In M0 it serves two things:
+OpenBao holds Paddock's keys (ADR 0006):
 
 | Path | Purpose | Used by |
 | --- | --- | --- |
 | `transit/keys/audit-chain` | Ed25519 key that signs the daily audit manifests (non-exportable) | `audit-writer` (AppRole `paddock-audit-writer`) |
+| `transit/keys/bundle-signing` | Ed25519 key that signs device bundles (non-exportable) | `compiler` (AppRole `paddock-compiler`); `api` reads the public keys |
+| `transit/keys/command-signing` | Ed25519 key that signs device commands (non-exportable); its public keys reach devices in their bundles | `worker` (AppRole `paddock-worker`, sign only); `compiler` reads the public keys |
 | `secret/paddock/session` (KV v2) | AES-256 keys `current` / `previous` of the portal session cookie | `api` (AppRole `paddock-api`) |
 
 Storage is the integrated Raft backend on the `openbao-data` volume (`deploy/compose/openbao/config.hcl`).
@@ -39,7 +41,9 @@ export BAO_TOKEN=<decrypted root token>
 bao secrets enable transit
 bao secrets enable -path=secret kv-v2
 bao auth enable approle
-bao write transit/keys/audit-chain type=ed25519 exportable=false allow_plaintext_backup=false
+for key in audit-chain bundle-signing command-signing; do
+  bao write "transit/keys/$key" type=ed25519 exportable=false allow_plaintext_backup=false
+done
 bao kv put secret/paddock/session current="$(head -c 32 /dev/urandom | base64 -w0)" \
   previous="$(head -c 32 /dev/urandom | base64 -w0)"
 ```
@@ -49,17 +53,28 @@ Policies and AppRoles (identical to the development bootstrap):
 ```sh
 bao policy write paddock-api - <<'EOF'
 path "secret/data/paddock/session" { capabilities = ["read"] }
+path "transit/keys/bundle-signing" { capabilities = ["read"] }
 EOF
 bao policy write paddock-audit-writer - <<'EOF'
 path "transit/sign/audit-chain" { capabilities = ["update"] }
 path "transit/keys/audit-chain" { capabilities = ["read"] }
 EOF
-bao write auth/approle/role/paddock-api token_policies=paddock-api token_ttl=1h token_max_ttl=4h
-bao write auth/approle/role/paddock-audit-writer token_policies=paddock-audit-writer token_ttl=1h token_max_ttl=4h
+bao policy write paddock-compiler - <<'EOF'
+path "transit/sign/bundle-signing" { capabilities = ["update"] }
+path "transit/keys/bundle-signing" { capabilities = ["read"] }
+path "transit/keys/command-signing" { capabilities = ["read"] }
+EOF
+bao policy write paddock-worker - <<'EOF'
+path "transit/sign/command-signing" { capabilities = ["update"] }
+EOF
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker; do
+  bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h
+done
 ```
 
-Deliver role ID and secret ID of each AppRole to the host of the role (control plane: `paddock-api`; audit host:
-`paddock-audit-writer`) as files referenced by `PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`:
+Deliver role ID and secret ID of each AppRole to the host of the role (control plane: `paddock-api`,
+`paddock-compiler`, `paddock-worker`; audit host: `paddock-audit-writer`) as files referenced by
+`PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`:
 
 ```sh
 bao read -field=role_id auth/approle/role/paddock-api/role-id
@@ -86,9 +101,10 @@ the stored shares.
 | Function | Effect while sealed |
 | --- | --- |
 | Portal login and sessions | `api` cannot load the session keys after its own restart; it stays not ready (`/readyz` 503) until OpenBao is unsealed. A running `api` keeps the keys it loaded and keeps working; key reloads (every 10 min) fail and are logged. |
+| Bundles and commands | The compiler cannot sign new bundles and the worker cannot sign new commands; devices keep their last bundle and receive commands once OpenBao is unsealed (commands that expired meanwhile are never delivered). |
 | Daily audit seal | The sealer cannot sign; the 00:15 UTC run fails (`paddock_audit_seal_total{result="error"}`) and catches up on the next successful run, because it seals every unsealed day up to yesterday. |
 | Audit event ingestion | Continues: the audit writer needs OpenBao only for signing and readiness. Events wait in RabbitMQ if the writer is restarted while OpenBao is sealed (it reports not ready but keeps consuming once running). |
-| Everything else in M0 | Unaffected. |
+| Everything else | Unaffected. |
 
 ## 3. Rotating an AppRole secret ID
 

@@ -83,9 +83,13 @@ func TestListContract(t *testing.T) {
 	seedListData(t, sessions[false])
 	// Collections below an item are listed for an acme parent with at least one member.
 	parentGroup := namedGroup(t, sessions[false], "list contract members")
-	activeDevice(t, sessions[false], parentGroup, "list-contract-"+uniqueSuffix())
+	member := activeDevice(t, sessions[false], parentGroup, "list-contract-"+uniqueSuffix())
+	for range 2 {
+		expectStatus(t, call(t, sessions[false], http.MethodPost, "/api/v1/devices/"+member.DeviceID+"/local-admin/rotate", nil), http.StatusAccepted, "")
+	}
 	userGroup := listContractUserGroup(t, sessions[false])
-	parents := map[string]string{"/api/v1/device-groups/{id}/devices": parentGroup, "/api/v1/user-groups/{id}/members": userGroup}
+	parents := map[string]string{"/api/v1/device-groups/{id}/devices": parentGroup, "/api/v1/user-groups/{id}/members": userGroup,
+		"/api/v1/devices/{id}/commands": member.DeviceID}
 	order := newCollation(t)
 	paths := make([]string, 0, len(lists))
 	for p := range lists {
