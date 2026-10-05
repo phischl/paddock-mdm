@@ -981,7 +981,8 @@ offline PASS, unlock FAIL; in the auth phase — unlock refused, fail safe. Henc
 to map no directory group onto a local sudo-granting group. The agent's `sudo` reconciler enforces:
 
 - `/etc/sudoers` equals the distribution default plus `@includedir /etc/sudoers.d`, checksum-protected.
-- Members of `sudo`, `admin`, `wheel` are exactly `{paddock-admin}`; any other member is removed
+- Members of `sudo`, `admin`, `wheel` are exactly the organization's break-glass accounts (`break_glass_accounts`
+  setting; from M4 the managed local admin `paddock-admin`); any other member is removed
   (drift correction, F1) and reported as `tamper.sudo_group_member` with the username.
 - `/etc/sudoers.d/` contains only `README`, Paddock-generated files, and files from packages listed
   in an allow list in the bundle; any other file is moved to `/var/lib/paddock/quarantine/` and reported.
