@@ -63,6 +63,16 @@ func TestFlavorsDifferOnlyInLectureFile(t *testing.T) {
 	if _, err := Render(restricted(), 1, Flavor("doas")); !errors.Is(err, ErrFlavor) {
 		t.Fatalf("unknown flavor: %v", err)
 	}
+	// sudo-rs handles at most 9 digits; classic sudo any UID.
+	if _, err := Render(restricted(), MaxSudoRSUID, SudoRS); err != nil {
+		t.Fatalf("9-digit UID: %v", err)
+	}
+	if _, err := Render(restricted(), MaxSudoRSUID+1, SudoRS); !errors.Is(err, ErrUIDTooLarge) || err.Error() != "uid exceeds sudo-rs limit" {
+		t.Fatalf("10-digit UID under sudo-rs: %v", err)
+	}
+	if _, err := Render(restricted(), MaxSudoRSUID+1, Classic); err != nil {
+		t.Fatalf("10-digit UID under classic sudo: %v", err)
+	}
 }
 
 func TestValidateCommand(t *testing.T) {

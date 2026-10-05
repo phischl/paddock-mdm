@@ -48,6 +48,11 @@ var himmelblauPackages = []string{"himmelblau", "pam-himmelblau", "nss-himmelbla
 // himmelblauUnits read pam_allow_groups only at start and are restarted after every configuration change.
 var himmelblauUnits = []string{"himmelblaud.service", "himmelblaud-tasks.service"}
 
+// himmelblauIDMapRange is the UID range Himmelblau derives directory UIDs from. sudo-rs 9-digit limit (sudo-rs 0.2.x
+// refuses numeric users over 999999999 in Defaults and never matches them in rules); never change: changes directory
+// UIDs of every device (plan M3b, answer to question 2).
+const himmelblauIDMapRange = "200000-999999999"
+
 // restartWait bounds the wait for himmelblaud to become active after a restart.
 const restartWait = 30 * time.Second
 
@@ -478,8 +483,8 @@ func (l *Login) writeOrRemove(path string, data []byte) error {
 	return nil
 }
 
-// renderHimmelblauConf renders himmelblau.conf as in PoC M1 (plan M3b decision 7). pam_allow_groups is always
-// written: empty denies everyone (suspension), a missing line would allow everyone.
+// renderHimmelblauConf renders himmelblau.conf as in PoC M1 (plan M3b decision 7) plus the fixed idmap_range.
+// pam_allow_groups is always written: empty denies everyone (suspension), a missing line would allow everyone.
 func renderHimmelblauConf(s bundle.LoginSpec) []byte {
 	h := s.Himmelblau
 	var b bytes.Buffer
@@ -488,6 +493,7 @@ func renderHimmelblauConf(s bundle.LoginSpec) []byte {
 	b.WriteString(strings.TrimSpace("pam_allow_groups = "+strings.Join(h.PamAllowGroups, ",")) + "\n")
 	fmt.Fprintf(&b, "allow_console_password_only = false\nenable_hello = %t\nhello_pin_min_length = %d\nlocal_groups = users\n",
 		h.EnableHello, h.HelloPinMinLength)
+	fmt.Fprintf(&b, "idmap_range = %s\n", himmelblauIDMapRange)
 	return b.Bytes()
 }
 

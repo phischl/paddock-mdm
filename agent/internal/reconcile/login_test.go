@@ -94,6 +94,7 @@ allow_console_password_only = false
 enable_hello = true
 hello_pin_min_length = 6
 local_groups = users
+idmap_range = 200000-999999999
 `
 
 func TestLoginInstallsAndConfigures(t *testing.T) {

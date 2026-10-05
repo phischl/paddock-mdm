@@ -135,6 +135,13 @@ var Flavors = []Flavor{Classic, SudoRS}
 // ErrFlavor is returned for an unknown flavor.
 var ErrFlavor = errors.New("sudoers: flavor must be classic or sudo-rs")
 
+// MaxSudoRSUID is the largest numeric user sudo-rs 0.2.x handles: longer #uid tokens are a syntax error in Defaults
+// and never match in rules. Paddock keeps directory UIDs below it (Himmelblau idmap_range).
+const MaxSudoRSUID = 999999999
+
+// ErrUIDTooLarge is returned for a UID over MaxSudoRSUID in the SudoRS flavor.
+var ErrUIDTooLarge = errors.New("uid exceeds sudo-rs limit")
+
 // Render returns the sudoers file of e for the user with the numeric uid in the given flavor. A full entry grants ALL;
 // a restricted entry lists its commands in the given order. Without require_password the commands are tagged NOPASSWD.
 // The flavors differ only in the lecture_file setting, which SudoRS leaves out.
@@ -144,6 +151,9 @@ func Render(e Entry, uid uint32, flavor Flavor) ([]byte, error) {
 	}
 	if err := Validate(e); err != nil {
 		return nil, err
+	}
+	if flavor == SudoRS && uid > MaxSudoRSUID {
+		return nil, ErrUIDTooLarge
 	}
 	user := fmt.Sprintf("#%d", uid)
 	lectureFile := ""

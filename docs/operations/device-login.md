@@ -15,7 +15,9 @@ At the first bundle with login management (agents report bundle schema 2), the a
    source is updated; apt waits up to 10 minutes for a dpkg lock held by unattended upgrades. A failure is reported as
    `device.login_apply_failed` (stage `apt`) and retried at every drift pass;
 2. writes `/etc/himmelblau/himmelblau.conf` (issuer and client of the organization's device application, the device's
-   allow list `pam_allow_groups`, Hello PIN settings, no console password login) and restarts `himmelblaud` and
+   allow list `pam_allow_groups`, Hello PIN settings, no console password login, the fixed UID range
+   `idmap_range = 200000-999999999` — sudo-rs cannot handle longer numeric users, and changing the range would give
+   every directory user a new UID) and restarts `himmelblaud` and
    `himmelblaud-tasks`, which read the allow list only at start. Local changes are reverted at the next drift pass;
 3. keeps the deny list `/etc/paddock/login-deny` of locked users (see below).
 
