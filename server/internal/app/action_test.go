@@ -24,6 +24,7 @@ func TestOutcomeOf(t *testing.T) {
 		{"forbidden", ErrForbidden, audit.OutcomeDenied, "forbidden"},
 		{"wrapped forbidden", fmt.Errorf("x: %w", problem.Forbidden.WithDetail("role")), audit.OutcomeDenied, "forbidden"},
 		{"no organization", problem.NoOrganization, audit.OutcomeDenied, "no_organization"},
+		{"step-up required", problem.StepUpRequired.WithDetail("old"), audit.OutcomeDenied, "step_up_required"},
 		{"validation", problem.InvalidRequest.WithDetail("name"), audit.OutcomeFailure, "invalid_request"},
 		{"not found", problem.NotFound, audit.OutcomeFailure, "not_found"},
 		{"conflict", problem.NameTaken, audit.OutcomeFailure, "name_taken"},
@@ -107,7 +108,7 @@ func TestAuthorize(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := authorize(c.p, c.scope, spec)
+			err := authorizeRole(c.p, c.scope, spec)
 			if (c.want == nil) != (err == nil) || (c.want != nil && !errors.Is(err, c.want)) {
 				t.Fatalf("authorize = %v, want %v", err, c.want)
 			}

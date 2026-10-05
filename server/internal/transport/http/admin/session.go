@@ -160,14 +160,21 @@ type Session struct {
 	Iat  int64     `json:"iat"`
 	Exp  int64     `json:"exp"`
 	Idle int64     `json:"idle"`
+	// StepUpAt (unix) and StepUpJTI identify the last step-up authentication of the session (plan M4a decision 6).
+	StepUpAt  int64  `json:"stepup_at,omitempty"`
+	StepUpJTI string `json:"stepup_jti,omitempty"`
 }
 
 // NewSession creates a session for p at now.
 func NewSession(p principal.Principal, locale string, now time.Time) Session {
-	return Session{
+	s := Session{
 		V: 1, Sub: p.Subject, PID: p.ID, Kind: string(p.Kind), Role: string(p.Role), Org: p.OrganizationID,
 		Disp: p.Display, Loc: locale, Iat: now.Unix(), Exp: now.Add(SessionAbsolute).Unix(), Idle: now.Unix(),
 	}
+	if !p.StepUpAt.IsZero() {
+		s.StepUpAt = p.StepUpAt.Unix()
+	}
+	return s
 }
 
 // Validate checks version, absolute expiry and idle timeout. reissue reports whether the idle mark is older than
@@ -200,10 +207,14 @@ func (s Session) Validate(now time.Time) (reissue bool, err error) {
 
 // Principal converts the session into the request principal.
 func (s Session) Principal(ip string) principal.Principal {
-	return principal.Principal{
+	p := principal.Principal{
 		Kind: principal.Kind(s.Kind), ID: s.PID, Subject: s.Sub, Display: s.Disp, Role: principal.Role(s.Role),
 		OrganizationID: s.Org, IP: ip,
 	}
+	if s.StepUpAt != 0 {
+		p.StepUpAt = time.Unix(s.StepUpAt, 0)
+	}
+	return p
 }
 
 // sessionCookie builds the Set-Cookie for a session value ("" clears it).

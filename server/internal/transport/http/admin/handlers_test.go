@@ -359,6 +359,20 @@ func (e *env) platformSession() *http.Cookie {
 	return e.cookie(p)
 }
 
+// steppedUp returns the session cookie after a step-up authentication at at (plan M4a decision 6).
+func (e *env) steppedUp(c *http.Cookie, at time.Time) *http.Cookie {
+	var sess admin.Session
+	if err := e.keys.Open(admin.SessionCookie, c.Value, &sess); err != nil {
+		e.t.Fatal(err)
+	}
+	sess.StepUpAt, sess.StepUpJTI = at.Unix(), "jti-test"
+	v, err := e.keys.Seal(admin.SessionCookie, sess)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return &http.Cookie{Name: admin.SessionCookie, Value: v}
+}
+
 func (e *env) cookie(p principal.Principal) *http.Cookie {
 	v, err := e.keys.Seal(admin.SessionCookie, admin.NewSession(p, "en", time.Now()))
 	if err != nil {

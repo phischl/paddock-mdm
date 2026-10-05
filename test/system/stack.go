@@ -50,6 +50,18 @@ func (s *Stack) Login() {
 	}
 }
 
+// StepUp runs a step-up authentication of alice's session (plan M4a decision 6), e.g. before assigning a full
+// profile.
+func (s *Stack) StepUp() {
+	s.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	final, err := s.alice.StepUp(ctx, portal.Alice, "/")
+	if err != nil || strings.Contains(final, "stepup=failed") {
+		s.t.Fatalf("step-up of alice: %v (returned to %s)", err, final)
+	}
+}
+
 // Call sends an admin API request as alice and expects status.
 func (s *Stack) Call(method, path string, body any, status int) portal.Response {
 	s.t.Helper()

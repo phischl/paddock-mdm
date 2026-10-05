@@ -3,6 +3,7 @@ package principal
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -35,6 +36,8 @@ type Principal struct {
 	Role           Role      // "" for system
 	OrganizationID uuid.UUID // uuid.Nil for platform admins and system
 	IP             string
+	// StepUpAt is the time of the last step-up authentication of the session (zero: none, plan M4a decision 6).
+	StepUpAt time.Time
 }
 
 type ctxKey struct{}

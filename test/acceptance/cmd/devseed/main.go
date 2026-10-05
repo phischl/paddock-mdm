@@ -1,14 +1,16 @@
 // Command devseed prepares the development stack (`make dev-seed`): it signs in as the platform admin, creates
 // the organizations acme and globex with their domains acme.test and globex.test through the platform API, assigns
-// the dev users to their Authentik groups and sets acme's login settings for the test VMs (break-glass account
-// paddock, sudoers.d allow list README and 90-paddock). It waits until Authentik has applied the Paddock blueprints,
-// the login flow is executable and paddock-worker has set the default brand's flows, and is idempotent.
+// the dev users to their Authentik groups, gives them TOTP authenticators with the keys of .secrets/ (step-up, plan
+// M4a decision 8) and sets acme's login settings for the test VMs (break-glass account paddock, sudoers.d allow list
+// README and 90-paddock). It waits until Authentik has applied the Paddock blueprints, the login flow is executable
+// and paddock-worker has set the default brand's flows, and is idempotent.
 package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -97,7 +99,38 @@ func run() error {
 		}
 		fmt.Printf("%s is member of %s\n", m.user, m.group)
 	}
+	if err := seedTOTP(ctx); err != nil {
+		return err
+	}
 	return seedLoginSettings(ctx)
+}
+
+// seedTOTP installs a TOTP authenticator "paddock-dev" with the key of .secrets/dev_<user>_totp_key for every dev
+// user. A blueprint cannot do it (Authentik's TOTP device serializer exposes neither user nor key), so the script runs
+// in Authentik's shell; the keys travel on stdin, never on a command line.
+func seedTOTP(ctx context.Context) error {
+	var script strings.Builder
+	script.WriteString("from authentik.core.models import User\n")
+	script.WriteString("from authentik.stages.authenticator_totp.models import TOTPDevice\n")
+	users := slices.Sorted(maps.Keys(env.TOTPKeyFiles))
+	for _, user := range users {
+		key, err := stack.Secret(env.TOTPKeyFiles[user])
+		if err != nil {
+			return fmt.Errorf("%w (run make dev-secrets)", err)
+		}
+		if len(key) != 40 || strings.Trim(key, "0123456789abcdef") != "" {
+			return fmt.Errorf("%s is not 20 bytes of lowercase hex", env.TOTPKeyFiles[user])
+		}
+		fmt.Fprintf(&script, "TOTPDevice.objects.update_or_create(user=User.objects.get(username=%q), name=\"paddock-dev\", "+
+			"defaults={\"key\": %q, \"confirmed\": True})\n", user, key)
+	}
+	script.WriteString("print(\"paddock-dev totp ok\")\n")
+	out, err := stack.ComposeInput(ctx, strings.NewReader(script.String()), "exec", "-T", "authentik-worker", "ak", "shell")
+	if err != nil || !strings.Contains(out, "paddock-dev totp ok") {
+		return fmt.Errorf("seed TOTP authenticators: %v: %s", err, out)
+	}
+	fmt.Printf("TOTP authenticators of %s ready\n", strings.Join(users, ", "))
+	return nil
 }
 
 // setDomains sets the domains of an organization found by slug.

@@ -70,6 +70,47 @@ paths:
           description: Redirect to return_to (default /) on success, or to /login-denied?reason=<code>.
           headers:
             Location: { schema: { type: string } }
+  /api/auth/stepup:
+    get:
+      operationId: stepUp
+      tags: [auth]
+      summary: Start a step-up authentication (plan M4a decision 6)
+      description: |
+        Requires a valid session. Redirects to the authorization endpoint of the OIDC application
+        paddock-portal-stepup with prompt=login, max_age=60 and the session's username as login_hint; Authentik runs
+        the flow paddock-stepup (password and MFA). Actions that need a step-up answer 403 step_up_required when the
+        session has none within the last 300 s.
+      parameters:
+        - name: return_to
+          in: query
+          required: false
+          description: Relative path to return to; must start with "/" and not with "//".
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to the Authentik authorization endpoint.
+          headers:
+            Location: { schema: { type: string } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+  /api/auth/stepup/callback:
+    get:
+      operationId: stepUpCallback
+      tags: [auth]
+      security: []
+      summary: OIDC redirect URI of the step-up
+      description: |
+        Accepts an ID token of the session's own user (same sub) with auth_time at most 60 s old and MFA (amr mfa),
+        then issues the session again with the step-up time. Any other answer leaves the session unchanged.
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string } }
+        - { name: state, in: query, required: false, schema: { type: string } }
+        - { name: error, in: query, required: false, schema: { type: string } }
+      responses:
+        "302":
+          description: Redirect to return_to, with the query parameter stepup=failed if the step-up was refused.
+          headers:
+            Location: { schema: { type: string } }
   /api/auth/logout:
     post:
       operationId: logout
@@ -1431,7 +1472,9 @@ paths:
     patch:
       operationId: updatePermissionProfile
       tags: [privileges]
-      description: "Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given."
+      description: |
+        Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given.
+        Changing the class to full needs a step-up within the last 300 s (403 step_up_required).
       x-paddock-audit: permission_profile.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -1511,7 +1554,8 @@ paths:
       tags: [privileges]
       description: |
         Roles: org_admin, org_operator. Assigns a profile globally, to a group or to a user, optionally only on the
-        devices of one device group.
+        devices of one device group. Assigning a full profile needs a step-up within the last 300 s (403
+        step_up_required).
       x-paddock-audit: profile_assignment.created
       parameters:
         - $ref: "#/components/parameters/Csrf"

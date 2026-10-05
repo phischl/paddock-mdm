@@ -36,6 +36,7 @@ type Deps struct {
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
+	StepUp        *OIDC // provider paddock-portal-stepup (plan M4a decision 6)
 	PublicURL     string
 	Static        *StaticHandler // portal build
 	Now           func() time.Time
@@ -99,7 +100,7 @@ func NewHandler(d Deps) http.Handler {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	s := &server{d: d, bff: &bff{oidc: d.OIDC, keys: d.Keys, accounts: d.Accounts, now: d.Now}}
+	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now}}
 
 	api := http.NewServeMux()
 	h := &handlers{
@@ -128,6 +129,8 @@ func NewHandler(d Deps) http.Handler {
 	root := http.NewServeMux()
 	root.HandleFunc("GET /api/auth/login", s.bff.login)
 	root.HandleFunc("GET /api/auth/callback", s.bff.callback)
+	root.HandleFunc("GET /api/auth/stepup", s.bff.stepUpStart)
+	root.HandleFunc("GET /api/auth/stepup/callback", s.bff.stepUpCallback)
 	root.Handle("/api/", noStore(authenticated))
 	root.Handle("/", d.Static)
 

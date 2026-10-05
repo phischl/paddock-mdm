@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -216,6 +217,56 @@ func TestRunTxDenied(t *testing.T) {
 		t.Fatal("fn ran for a denied principal")
 	}
 	expectOne(t, h, audit.OutcomeDenied, "forbidden")
+}
+
+// TestRunTxStepUp (plan M4a decision 7): an action that requires a step-up is denied with step_up_required without a
+// step-up or with one older than 300 s; a fresh step-up runs it and marks the actor. RequireStepUp inside the action
+// behaves alike.
+func TestRunTxStepUp(t *testing.T) {
+	spec := createSpec
+	spec.RequiresStepUp = true
+	withStepUp := func(h harness, at time.Time) context.Context {
+		p, _ := principal.From(h.admin(principal.RoleOrgAdmin))
+		p.StepUpAt = at
+		return principal.With(context.Background(), p)
+	}
+	for name, at := range map[string]time.Time{"none": {}, "301 s old": time.Now().Add(-301 * time.Second)} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			called := false
+			err := h.runner.RunTx(withStepUp(h, at), app.ScopeOrg, spec,
+				func(context.Context, *pgstore.Queries, app.Recorder) error { called = true; return nil })
+			if !errors.Is(err, problem.StepUpRequired) || called {
+				t.Fatalf("RunTx = %v (fn called: %v), want step_up_required", err, called)
+			}
+			if ev := expectOne(t, h, audit.OutcomeDenied, "step_up_required"); ev.Actor.StepUp {
+				t.Fatal("denied event marks the actor as stepped up")
+			}
+		})
+	}
+	t.Run("fresh", func(t *testing.T) {
+		h := newHarness(t)
+		if err := h.runner.RunTx(withStepUp(h, time.Now().Add(-299*time.Second)), app.ScopeOrg, spec, createGroup("stepped-up")); err != nil {
+			t.Fatal(err)
+		}
+		if ev := expectOne(t, h, audit.OutcomeSuccess, ""); !ev.Actor.StepUp {
+			t.Fatal("the actor is not marked as stepped up")
+		}
+	})
+	t.Run("required inside the action", func(t *testing.T) {
+		h := newHarness(t)
+		err := h.runner.RunTx(withStepUp(h, time.Time{}), app.ScopeOrg, createSpec,
+			func(ctx context.Context, q *pgstore.Queries, rec app.Recorder) error {
+				if err := createGroup("needs-step-up")(ctx, q, rec); err != nil {
+					return err
+				}
+				return rec.RequireStepUp()
+			})
+		if !errors.Is(err, problem.StepUpRequired) {
+			t.Fatalf("RunTx = %v, want step_up_required", err)
+		}
+		expectOne(t, h, audit.OutcomeDenied, "step_up_required")
+	})
 }
 
 func TestRunTxNoOrganizationIsRecordedInPlatform(t *testing.T) {
