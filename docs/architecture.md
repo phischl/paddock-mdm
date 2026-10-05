@@ -1046,7 +1046,10 @@ Defaults:#120034 lecture=always, lecture_file=/etc/paddock/sudo_lecture, timesta
 **sudo implementations (amended 2026-10-05, M3b):** Ubuntu 26.04 ships `sudo-rs` as `/usr/bin/sudo`; it rejects the
 `lecture_file` setting. `pkg/sudoers` therefore renders two flavors (`Classic`, `SudoRS`) that differ only in that
 line; the agent detects the active implementation on every apply and validates with its matching `visudo`. Paddock
-does not switch the distribution's sudo implementation. **Residual risk:** on `sudo-rs` devices the organization's
+does not switch the distribution's sudo implementation. `sudo-rs` 0.2.x accepts numeric user ids with at most 9
+digits; the agent therefore pins Himmelblau's `idmap_range = 200000-999999999` on every device. **This range must never
+change** (it would change directory users' UIDs and orphan their home directories). The compiler validates the Classic
+flavor only (Debian's `sudo-rs` lags behind Ubuntu's); the SudoRS flavor is Classic minus one line, proven by test. **Residual risk:** on `sudo-rs` devices the organization's
 lecture text (concept layer 2, "Notice") is not shown at `sudo` — users see the default lecture. The notice must then
 come from another channel (login banner / acceptable-use acknowledgment, planned with the device-notice work in a
 later milestone); operators record this in their ISMS until then.
