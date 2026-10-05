@@ -176,7 +176,7 @@ func newAuditWorld(t *testing.T) *auditWorld {
 
 // TestAuditExactlyOnce is gate A3 (plan M0 §8, AC3): every privileged action produces exactly one audit event
 // with the matching outcome — on success, validation failure, denial, missing resource and conflict. The cases run
-// in parallel (each identifies its event by its own request ID).
+// in parallel (each identifies its event by its own request ID), except those that share platform state.
 func TestAuditExactlyOnce(t *testing.T) {
 	doc := loadSpec(t)
 	w := newAuditWorld(t)
@@ -198,8 +198,12 @@ func TestAuditExactlyOnce(t *testing.T) {
 		if !ok {
 			cases, ok = deviceAuditCases[op]
 		}
+		// The agent release cases share the platform's rollouts (halting running ones, at most one running), so
+		// they run one after another, before the parallel cases.
+		serial := false
 		if !ok {
 			cases, ok = releaseAuditCases[op]
+			serial = ok
 		}
 		if !ok {
 			cases, ok = identityAuditCases[op]
@@ -210,9 +214,11 @@ func TestAuditExactlyOnce(t *testing.T) {
 		}
 		for _, c := range cases {
 			t.Run(op+"/"+c.name, func(t *testing.T) {
-				t.Parallel()
-				sem <- struct{}{}
-				defer func() { <-sem }()
+				if !serial {
+					t.Parallel()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+				}
 				c.run(t, w)
 			})
 		}
