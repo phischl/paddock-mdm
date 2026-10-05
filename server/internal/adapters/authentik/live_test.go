@@ -55,6 +55,9 @@ func TestLiveAuthentik(t *testing.T) {
 	if err != nil || again != refs || refs.LockedGroupPK == "" {
 		t.Fatalf("second EnsureOrganization: %+v, %v (first %+v)", again, err, refs)
 	}
+	if err := c.EnsureBrandFlows(ctx); err != nil {
+		t.Fatalf("EnsureBrandFlows: %v", err)
+	}
 	app := organization.DeviceLoginApp(slug)
 	prov := admin.first("/providers/oauth2/?name=" + app)
 	if prov["client_type"] != "public" || prov["refresh_token_validity"] != "days=30" || prov["access_token_validity"] != "minutes=10" ||

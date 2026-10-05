@@ -92,3 +92,38 @@ func TestWaitBlueprintsSucceedsOnceAllAreApplied(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// fakeBrand reports mismatching brand flows until fixed is set.
+type fakeBrand struct {
+	mu    sync.Mutex
+	fixed bool
+}
+
+func (f *fakeBrand) BrandFlowMismatches(context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fixed {
+		return nil, nil
+	}
+	return []string{`flow_recovery is "", want flow paddock-recovery ("r")`}, nil
+}
+
+func TestWaitBrandFlowsFailsWhileUnset(t *testing.T) {
+	err := waitBrandFlows(context.Background(), &fakeBrand{}, 30*time.Millisecond, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "not set by paddock-worker after 30ms: flow_recovery") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+func TestWaitBrandFlowsSucceedsOnceSet(t *testing.T) {
+	brand := &fakeBrand{}
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		brand.mu.Lock()
+		defer brand.mu.Unlock()
+		brand.fixed = true
+	}()
+	if err := waitBrandFlows(context.Background(), brand, 5*time.Second, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+}

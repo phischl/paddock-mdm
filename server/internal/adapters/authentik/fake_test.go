@@ -32,6 +32,7 @@ type fakeAuthentik struct {
 	// deactivations counts PATCHes with is_active false.
 	deactivations int
 
+	brands   []map[string]any
 	requests []string // "METHOD path" of every request
 	// failNext makes the next n requests answer with failStatus.
 	failNext   int
@@ -59,9 +60,14 @@ func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
 		objects: map[string]map[string]map[string]any{}, tokens: map[string][]int{}, sessions: map[int]int{},
 	}
 	// Objects of Authentik's defaults and of the Paddock blueprints.
-	for _, slug := range []string{"paddock-device-authentication", "paddock-device-authorization", "default-provider-invalidation-flow"} {
+	for _, slug := range []string{"paddock-device-authentication", "paddock-device-authorization", "default-provider-invalidation-flow",
+		"paddock-recovery", "paddock-device-code"} {
 		f.put("flows", map[string]any{"pk": uuid.NewString(), "slug": slug, "name": slug})
 	}
+	// The default brand as a fresh Authentik creates it: no recovery and no device-code flow.
+	brand := f.fixture("get_core_brands.json")["results"].([]any)[0].(map[string]any)
+	brand["brand_uuid"], brand["flow_recovery"], brand["flow_device_code"] = uuid.NewString(), nil, nil
+	f.brands = []map[string]any{brand}
 	f.put("certificatekeypairs", map[string]any{"pk": uuid.NewString(), "name": "authentik Self-signed Certificate"})
 	for _, scope := range []string{"openid", "email", "profile", "offline_access"} {
 		f.put("scopemappings", map[string]any{"pk": uuid.NewString(), "name": "authentik default OAuth Mapping: " + scope,
@@ -136,6 +142,7 @@ var (
 	reGroup       = regexp.MustCompile(`^/api/v3/core/groups/([^/]+)/(add_user/|remove_user/)?$`)
 	reUser        = regexp.MustCompile(`^/api/v3/core/users/([0-9]+)/(recovery/)?$`)
 	reApplication = regexp.MustCompile(`^/api/v3/core/applications/([^/]+)/$`)
+	reBrand       = regexp.MustCompile(`^/api/v3/core/brands/([^/]+)/$`)
 	reObject      = regexp.MustCompile(`^/api/v3/(providers/oauth2|propertymappings/provider/scope|policies/expression)/([^/]+)/$`)
 )
 
@@ -284,6 +291,28 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			delete(f.users, pk)
 			return http.StatusNoContent, nil
 		}
+	case p == "/api/v3/core/brands/" && r.Method == http.MethodGet:
+		var items []map[string]any
+		for _, b := range f.brands {
+			if q.Get("default") == "" || strconv.FormatBool(b["default"] == true) == q.Get("default") {
+				items = append(items, b)
+			}
+		}
+		return http.StatusOK, f.page(items)
+	case reBrand.MatchString(p) && r.Method == http.MethodPatch:
+		for _, b := range f.brands {
+			if b["brand_uuid"] == reBrand.FindStringSubmatch(p)[1] {
+				out := f.fixture("patch_core_brands_id.json")
+				for k, v := range body {
+					b[k] = v
+				}
+				for k, v := range b {
+					out[k] = v
+				}
+				return http.StatusOK, out
+			}
+		}
+		return http.StatusNotFound, f.fixture("delete_core_groups_id_404.json")
 	case reApplication.MatchString(p):
 		app, ok := f.objects["applications"][reApplication.FindStringSubmatch(p)[1]]
 		if !ok {

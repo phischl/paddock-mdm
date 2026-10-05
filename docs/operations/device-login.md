@@ -50,6 +50,30 @@ Without the deny file every login works (`onerr=succeed`): the deny list can onl
 - Users not in the device's login assignment (or not in the organization) are refused: Authentik refuses users of
   other organizations, the device refuses users outside its allow list.
 
+## Throttle of device-code logins
+
+Every device-code login (the code and QR code at the login screen) starts one device authorization at Authentik.
+Authentik limits them per client address; Authentik's own default is 20 per hour. Paddock sets the limit with
+`PADDOCK_DEVICE_LOGIN_THROTTLE` in `deploy/compose/.env` (default `600/hour`; format `<count>/<second|minute|hour|day>`),
+which Compose passes to both Authentik containers as `AUTHENTIK_THROTTLE__PROVIDERS__OAUTH2__DEVICE`. Above the limit
+Authentik refuses new device codes (`slow_down`) and the login screen shows an error until the window has passed.
+
+**NAT:** Authentik sees one client address for all devices behind the same NAT, proxy or VPN exit, and they share
+the limit. Size it for the busiest such address at its peak hour of first logins — a site rollout, a Monday morning
+after a mass lock and unlock, or new laptops for a class — not for the total number of devices. Day-to-day Hello PIN
+logins do not start device authorizations. A change takes effect when the Authentik containers are recreated:
+
+```sh
+docker compose up -d authentik-server authentik-worker
+```
+
+## Authentik brand flows
+
+`paddock-worker` sets the recovery flow (`paddock-recovery`, the one-time links of new local users) and the device-code
+flow (`paddock-device-code`, the `/device` page with mandatory MFA) of Authentik's default brand at start and every 10
+minutes, and resets them if they were changed in Authentik. Until the flows are set — on a fresh installation until
+Authentik has applied the Paddock blueprints — creating a local user fails with 502 `upstream_unavailable`.
+
 ## Locks
 
 Locking a user in Paddock (portal *Users*, `POST /api/v1/users/{id}/lock`) acts on two paths:

@@ -88,16 +88,27 @@ func ComposeInput(ctx context.Context, stdin io.Reader, args ...string) (string,
 	return compose(ctx, nil, stdin, args)
 }
 
+// ComposeProduction runs `docker compose` over the production files only (without compose.dev.yaml), e.g. to check
+// the configuration a production deployment gets.
+func ComposeProduction(ctx context.Context, env []string, args ...string) (string, error) {
+	return composeFiles(ctx, env, nil, []string{"compose.yaml", "compose.audit.yaml"}, args)
+}
+
 func compose(ctx context.Context, env []string, stdin io.Reader, args []string) (string, error) {
+	return composeFiles(ctx, env, stdin, []string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml"}, args)
+}
+
+func composeFiles(ctx context.Context, env []string, stdin io.Reader, files, args []string) (string, error) {
 	root, err := RepoRoot()
 	if err != nil {
 		return "", err
 	}
 	dir := filepath.Join(root, "deploy", "compose")
 	base := []string{"compose", "--project-directory", dir, "-p", "paddock",
-		"--env-file", filepath.Join(dir, "versions.env"), "--env-file", filepath.Join(dir, ".env"),
-		"-f", filepath.Join(dir, "compose.yaml"), "-f", filepath.Join(dir, "compose.audit.yaml"),
-		"-f", filepath.Join(dir, "compose.dev.yaml")}
+		"--env-file", filepath.Join(dir, "versions.env"), "--env-file", filepath.Join(dir, ".env")}
+	for _, f := range files {
+		base = append(base, "-f", filepath.Join(dir, f))
+	}
 	cmd := exec.CommandContext(ctx, "docker", append(base, args...)...) //nolint:gosec // test orchestration
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdin = stdin

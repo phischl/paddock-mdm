@@ -3,6 +3,10 @@ Responses recorded from Authentik 2026.8.3 (`ghcr.io/goauthentik/server:2026.8.3
 (`live_test.go`). The file name is `<method>_<path>[_<status>].json` of the first response per endpoint; the
 recorded organization slug is replaced by `fixture-org`, client secrets and link tokens are redacted.
 
+`get_core_brands.json` (paddock-service token) and `patch_core_brands_id.json` (admin token) were added on 2026-10-05
+with curl. `TestLiveAuthentik` records the PATCH only when the default brand's flows had to be set, i.e. against a
+fresh stack before `paddock-worker` set them.
+
 The in-memory fake of the unit tests (`fake_test.go`) answers with these bodies, filled with its own state.
 
 Re-record them when the pinned Authentik version changes (development stack running, `make dev-seed` done):

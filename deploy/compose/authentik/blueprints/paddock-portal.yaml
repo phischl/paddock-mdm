@@ -152,7 +152,8 @@ entries:
     identifiers:
       name: "paddock.platform.admins"
 
-  # --- Service account used by paddock-server (organization groups, users, device login providers; plan M3a) ---
+  # --- Service account used by paddock-server (organization groups, users, device login providers, the default
+  # brand's flows; plans M3a and M3.1) ---
   - model: authentik_rbac.role
     id: service-role
     identifiers:
@@ -186,6 +187,8 @@ entries:
         - authentik_policies.add_policybinding
         - authentik_policies.change_policybinding
         - authentik_flows.view_flow
+        - authentik_brands.view_brand
+        - authentik_brands.change_brand
         - authentik_crypto.view_certificatekeypair
 
   - model: authentik_core.user

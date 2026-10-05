@@ -1,0 +1,38 @@
+{
+  "pagination": {
+    "next": 0,
+    "previous": 0,
+    "count": 1,
+    "current": 1,
+    "total_pages": 1,
+    "start_index": 1,
+    "end_index": 1
+  },
+  "results": [
+    {
+      "brand_uuid": "5c4a9cab-7903-48b8-8add-e5358f79d81b",
+      "domain": "authentik-default",
+      "default": true,
+      "branding_title": "authentik",
+      "branding_logo": "/static/dist/assets/icons/icon_left_brand.svg",
+      "branding_favicon": "/static/dist/assets/icons/icon.png",
+      "branding_custom_css": "",
+      "branding_default_flow_background": "/static/dist/assets/images/flow_background.jpg",
+      "branding_map_tiles": "",
+      "flow_authentication": "74fdd350-07f0-4208-b1f7-7d27894949bf",
+      "flow_user_switch": null,
+      "flow_invalidation": "1f5e78e9-081f-4130-9965-fde5972224a0",
+      "flow_recovery": "cd404970-d408-4cf3-92af-c4a158451f4d",
+      "flow_unenrollment": null,
+      "flow_user_settings": "8521b66f-639c-4632-bfde-242f7b9009fc",
+      "flow_device_code": "8fc4dd27-10f2-477c-b3be-4a94cb349d0f",
+      "flow_lockdown": null,
+      "flow_request": "049a89a8-6d14-4982-8a9d-0716fbb95608",
+      "default_application": null,
+      "web_certificate": null,
+      "client_certificates": [],
+      "attributes": {}
+    }
+  ],
+  "autocomplete": {}
+}

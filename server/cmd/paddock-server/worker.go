@@ -59,7 +59,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	cacheSync := worker.NewCacheSync(pool, cache)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
-	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), pool, platformPool, syncEvery, reconcileEvery)
+	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), ak, pool, platformPool, syncEvery, reconcileEvery)
 	slog.InfoContext(ctx, "worker starting")
 
 	return runAll(ctx,
@@ -79,5 +79,6 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		rollouts.Run,
 		identity.RunSync,
 		identity.RunReconcile,
+		identity.RunBrandFlows,
 	)
 }

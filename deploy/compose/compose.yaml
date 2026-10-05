@@ -202,6 +202,9 @@ services:
       AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
       AUTHENTIK_DISABLE_STARTUP_ANALYTICS: "true"
       AUTHENTIK_BOOTSTRAP_EMAIL: akadmin@paddock.test
+      # Device authorizations per hour and client address (Authentik's default is 20/hour): devices behind one NAT
+      # address share it at login time (docs/operations/device-login.md, plan M3.1 decision 2).
+      AUTHENTIK_THROTTLE__PROVIDERS__OAUTH2__DEVICE: ${PADDOCK_DEVICE_LOGIN_THROTTLE:-600/hour}
       PADDOCK_PUBLIC_ADMIN_URL: ${PADDOCK_PUBLIC_ADMIN_URL:-https://admin.paddock.localhost:8443}
       # Exported from files by /paddock/entrypoint.sh so that no secret is visible in `docker inspect`.
       AUTHENTIK_BOOTSTRAP_PASSWORD_FROMFILE: /run/secrets/authentik_bootstrap_password
