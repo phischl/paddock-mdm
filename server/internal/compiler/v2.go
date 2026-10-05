@@ -3,6 +3,7 @@ package compiler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"slices"
@@ -47,16 +48,17 @@ type renderFailure struct {
 }
 
 // omittedEntry is a sudo entry left out of a bundle because a profile stored before the command check was tightened
-// contributes a command that fails it (plan M3.1 decision 1); the user gets no sudo rights on the device until the
-// profile is fixed.
+// contributes a command that fails it (plan M3.1 decision 1), or because the username is one devices must not pass
+// to a tool, e.g. a synced user whose name starts with '-' (plan M4a step 0a); the user gets no sudo rights on the
+// device until the profile or the name is fixed.
 type omittedEntry struct {
 	username string
 	reason   string
 }
 
 // renderV2 returns the login and sudo resources of a device (bundle schema v2, plan M3a decisions 15 and 16). A
-// device of an organization without a primary domain gets no login resource. A sudo entry with an invalid command is
-// omitted; every other entry is rendered with the reference renderer and the placeholder UID and checked by the
+// device of an organization without a primary domain gets no login resource. A sudo entry with an invalid command or
+// username is omitted; every other entry is rendered with the reference renderer and the placeholder UID and checked by the
 // validator, and a failure blocks the device's bundle.
 func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarget) ([]bundle.Resource, []omittedEntry, *renderFailure, error) {
 	var out []bundle.Resource
@@ -93,6 +95,10 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 			return nil, nil, nil, err
 		}
 		if !ok {
+			continue
+		}
+		if errors.Is(sudoers.Validate(entry), sudoers.ErrUsername) {
+			omitted = append(omitted, omittedEntry{username: username, reason: sudoers.ErrUsername.Error()})
 			continue
 		}
 		if bad := privilege.InvalidCommands(entry.Commands); len(bad) > 0 {

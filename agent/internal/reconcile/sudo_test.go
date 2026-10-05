@@ -293,6 +293,31 @@ func TestPrivilegedGroupsKeepOnlyBreakGlassAccounts(t *testing.T) {
 	}
 }
 
+// TestSudoRefusesOptionLikeNames: a username starting with '-' is never passed to a tool (plan M4a step 0a): gpasswd
+// would read it as an option, so such a group member is reported but not removed, and a spec with such a sudo entry
+// is refused as a whole.
+func TestSudoRefusesOptionLikeNames(t *testing.T) {
+	ctx := context.Background()
+	sys, s, events := sudoFixture(t)
+	sys.Members["sudo"] = []string{"paddock", "-x@acme.test"}
+	if res := s.Apply(ctx, sudoResource(t)); res.Status != reconcile.Error || !strings.Contains(res.Message, "starting with '-' is refused") {
+		t.Fatalf("apply %+v", res)
+	}
+	for _, c := range sys.TakeCalls() {
+		if strings.HasPrefix(c, "gpasswd") {
+			t.Fatalf("gpasswd called: %s", c)
+		}
+	}
+	want := []event{{protocol.EventTamperSudoGroupMember, `{"group":"sudo","username":"-x@acme.test","removed":false}`}}
+	if got := takeEvents(events); !slices.Equal(got, want) {
+		t.Fatalf("events %v", got)
+	}
+	if res := s.Apply(ctx, sudoResource(t, restricted("-x@acme.test", "/usr/bin/true"))); res.Status != reconcile.Error ||
+		!strings.Contains(res.Message, "-x@acme.test") {
+		t.Fatalf("apply with an option-like entry %+v", res)
+	}
+}
+
 // TestSudoRendersForTheActiveImplementation: with sudo-rs behind /usr/bin/sudo (Ubuntu 26.04) the file has no
 // lecture_file and is checked with sudo-rs's visudo; when an operator switches the alternative back to classic sudo,
 // the next apply rewrites it for classic sudo.

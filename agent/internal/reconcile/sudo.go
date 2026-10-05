@@ -96,7 +96,7 @@ func (s *Sudo) spec(r bundle.Resource) (bundle.SudoSpec, error) {
 	}
 	names := append(append(slices.Clone(spec.PrivilegedGroups), spec.SudoersDAllowlist...), spec.BreakGlassAccounts...)
 	for _, n := range names {
-		if !plainValue(n) || strings.Contains(n, "/") {
+		if !plainValue(n) || strings.Contains(n, "/") || strings.HasPrefix(n, "-") {
 			return spec, fmt.Errorf("invalid name %q in the sudo spec", n)
 		}
 	}

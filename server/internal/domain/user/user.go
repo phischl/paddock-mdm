@@ -18,7 +18,7 @@ const (
 
 // Validation errors.
 var (
-	ErrInvalidUsername    = errors.New("username must be <local-part>@<domain> with a domain of the organization, lowercase letters, digits and . _ + -")
+	ErrInvalidUsername    = errors.New("username must be <local-part>@<domain> with a domain of the organization, lowercase letters, digits and . _ + -, not starting with . or -")
 	ErrNoDomains          = errors.New("the organization has no domains; a platform administrator must add one before local users can be created")
 	ErrInvalidDisplayName = errors.New("display name must be 1 to 200 characters")
 	ErrInvalidEmail       = errors.New("email must be a plain address such as dave@example.org")
@@ -36,7 +36,8 @@ func ValidateLocalUsername(username string, domains []string) error {
 	if !ok || len(local) == 0 || len(local) > 64 || !slices.Contains(domains, domain) {
 		return ErrInvalidUsername
 	}
-	if local[0] == '.' || local[len(local)-1] == '.' || strings.Contains(local, "..") {
+	// A leading '-' would turn the name into an option of the tools devices pass it to (plan M4a step 0a).
+	if local[0] == '.' || local[0] == '-' || local[len(local)-1] == '.' || strings.Contains(local, "..") {
 		return ErrInvalidUsername
 	}
 	for _, r := range local {
