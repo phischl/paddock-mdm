@@ -58,6 +58,7 @@ h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.75rem; }
 .badge-synced { color: #1d4f7a; }
 .badge-local { color: var(--muted); }
 .badge-warning { color: #7a4b00; font-weight: 600; margin-left: 0.5rem; }
+.badge-danger { color: var(--danger); font-weight: 600; margin-left: 0.5rem; }
 .chip-link { margin-right: 0.75rem; }
 .command { display: block; font-family: ui-monospace, monospace; word-break: break-all; }
 .settings-form fieldset { border: 0; padding: 0; margin: 0 0 1rem; display: flex; flex-direction: column; gap: 0.5rem; }

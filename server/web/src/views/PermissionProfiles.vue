@@ -77,6 +77,11 @@ async function onCreate(input: ProfileInput): Promise<void> {
           v-if="item.root_equivalent"
           class="badge badge-warning"
         >{{ t('profiles.rootEquivalentBadge') }}</span>
+        <span
+          v-if="item.invalid_commands.length > 0"
+          class="badge badge-danger"
+          data-testid="profile-invalid"
+        >{{ t('profiles.invalidBadge') }}</span>
       </template>
       <template #[`item.commands`]="{ item }: { item: PermissionProfile }">
         {{ t('profiles.commandCount', { count: item.commands.length }) }}

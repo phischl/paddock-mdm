@@ -54,7 +54,7 @@ type Entry struct {
 var (
 	ErrUsername   = errors.New("sudoers: username must be a lowercase name without whitespace, control or sudoers meta characters")
 	ErrClass      = errors.New("sudoers: class must be restricted or full")
-	ErrCommand    = errors.New("sudoers: command must be an absolute path with optional arguments, without ALL, '!', '#', control or sudoers meta characters ,:=\\")
+	ErrCommand    = errors.New("sudoers: command must be an absolute path with optional arguments, without ALL, '!', '#', control or sudoers meta characters ,:=\\ or pattern characters ^$*?[]")
 	ErrNoCommands = errors.New("sudoers: a restricted entry needs at least one command")
 	ErrScalars    = errors.New("sudoers: timestamp_timeout_min must be 0–60 and lecture always, once or never")
 )
@@ -64,10 +64,18 @@ var (
 	commandPattern  = regexp.MustCompile(`^/[^\s]+( .*)?$`)
 )
 
-// ValidateCommand checks one command of a restricted profile (plan M3a decision 12): an absolute path with optional
-// arguments, no ALL, no negation and none of the characters sudoers treats as separators. '#' is refused too: after
-// whitespace it starts a comment, which would silently turn "/usr/bin/x #y" into /usr/bin/x with any arguments.
+// PatternCharacters are sudo's regular expression anchors (sudo >= 1.9.10) and glob characters. Any of them widens what
+// a command matches, e.g. "/usr/bin/systemctl ^.*$" allows every argument (plan M3.1 decision 1).
+const PatternCharacters = "^$*?[]"
+
+// ValidateCommand checks one command of a restricted profile (plan M3a decision 12, M3.1 decision 1): an absolute path
+// with optional arguments, no ALL, no negation, none of the characters sudoers treats as separators and no pattern
+// characters. '#' is refused too: after whitespace it starts a comment, which would silently turn "/usr/bin/x #y" into
+// /usr/bin/x with any arguments. A pattern character is named in the error.
 func ValidateCommand(c string) error {
+	if i := strings.IndexAny(c, PatternCharacters); i >= 0 {
+		return fmt.Errorf("%w (character %q is not allowed)", ErrCommand, c[i])
+	}
 	if len(c) > 1024 || !commandPattern.MatchString(c) || strings.ContainsAny(c, "!#,:=\\") {
 		return ErrCommand
 	}

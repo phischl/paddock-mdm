@@ -1322,7 +1322,8 @@ paths:
       tags: [privileges]
       description: |
         Roles: org_admin, org_operator. A restricted profile lists absolute command paths with optional arguments;
-        commands with ALL, "!", "#" or the sudoers separators ,:=\ are refused with 422 invalid_command.
+        commands with ALL, "!", "#", the sudoers separators ,:=\ or the pattern characters ^$*?[] are refused with 422
+        invalid_command; the detail names a refused pattern character.
       x-paddock-audit: permission_profile.created
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -2781,7 +2782,7 @@ components:
     PermissionProfile:
       type: object
       required: [id, name, class, commands, require_password, timestamp_timeout_min, lecture, root_equivalent,
-                 root_equivalent_commands, created_at, updated_at]
+                 root_equivalent_commands, invalid_commands, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -2796,6 +2797,13 @@ components:
         root_equivalent_commands:
           type: array
           items: { type: string }
+        invalid_commands:
+          type: array
+          items: { type: string }
+          description: |
+            Commands stored before the command check was tightened that it now refuses. A profile with invalid commands
+            is invalid: the sudo entries it contributes to are omitted from bundles (audit device.bundle_entry_omitted)
+            until the commands are changed.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     PermissionProfileCreate:

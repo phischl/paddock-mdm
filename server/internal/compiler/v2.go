@@ -46,10 +46,19 @@ type renderFailure struct {
 	reason   string
 }
 
+// omittedEntry is a sudo entry left out of a bundle because a profile stored before the command check was tightened
+// contributes a command that fails it (plan M3.1 decision 1); the user gets no sudo rights on the device until the
+// profile is fixed.
+type omittedEntry struct {
+	username string
+	reason   string
+}
+
 // renderV2 returns the login and sudo resources of a device (bundle schema v2, plan M3a decisions 15 and 16). A
-// device of an organization without a primary domain gets no login resource. Every sudo entry is rendered with the
-// reference renderer and the placeholder UID and checked by the validator; a failure blocks the device's bundle.
-func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarget) ([]bundle.Resource, *renderFailure, error) {
+// device of an organization without a primary domain gets no login resource. A sudo entry with an invalid command is
+// omitted; every other entry is rendered with the reference renderer and the placeholder UID and checked by the
+// validator, and a failure blocks the device's bundle.
+func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarget) ([]bundle.Resource, []omittedEntry, *renderFailure, error) {
 	var out []bundle.Resource
 	s := id.Settings
 	breakGlass := slices.Clone(s.BreakGlassAccounts)
@@ -66,12 +75,13 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 			BreakGlassAccounts: breakGlass,
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		out = append(out, login)
 	}
 	groups := id.DeviceGroups(t.id)
 	var entries []sudoers.Entry
+	var omitted []omittedEntry
 	for _, u := range id.AllowedUsers(t.id) {
 		e := id.Effective(u, groups)
 		if e.Class == privilege.ClassNone {
@@ -80,9 +90,13 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 		username := id.Users[u].Username
 		entry, ok, err := e.SudoEntry(username)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if !ok {
+			continue
+		}
+		if bad := privilege.InvalidCommands(entry.Commands); len(bad) > 0 {
+			omitted = append(omitted, omittedEntry{username: username, reason: invalidCommandReason(id, e, bad[0])})
 			continue
 		}
 		// Only the classic flavor is validated: the sudo-rs flavor is the same file without the lecture_file setting
@@ -92,7 +106,7 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 			err = c.cfg.Sudoers.Validate(ctx, rendered)
 		}
 		if err != nil {
-			return nil, &renderFailure{device: t.id, username: username, reason: err.Error()}, nil
+			return nil, nil, &renderFailure{device: t.id, username: username, reason: err.Error()}, nil
 		}
 		entries = append(entries, entry)
 	}
@@ -101,7 +115,23 @@ func (c *Compiler) renderV2(ctx context.Context, id *app.Identity, t compileTarg
 		SudoersDAllowlist: slices.Clone(s.SudoersDAllowlist), BreakGlassAccounts: breakGlass,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return append(out, sudo), nil, nil
+	return append(out, sudo), omitted, nil, nil
+}
+
+// invalidCommandReason names the invalid command, why it is invalid and the profiles it comes from.
+func invalidCommandReason(id *app.Identity, e privilege.EffectiveProfile, command string) string {
+	var names []string
+	for _, d := range e.Derivation {
+		if d.Kind != privilege.DerivedCommand || d.Item != command {
+			continue
+		}
+		for _, p := range id.Profiles {
+			if p.ID == d.ProfileID && !slices.Contains(names, p.Name) {
+				names = append(names, p.Name)
+			}
+		}
+	}
+	return fmt.Sprintf("command %q of profile %s: %v", command, strings.Join(names, ", "), sudoers.ValidateCommand(command))
 }

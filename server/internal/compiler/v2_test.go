@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -174,6 +175,63 @@ func TestRenderFailureBlocksTheBundle(t *testing.T) {
 	w.mustCompile(statechange.ScopeDevice, dev)
 	if w.version(dev) != before+1 {
 		t.Fatal("bundle not published after the entry became valid")
+	}
+}
+
+// TestInvalidCommandOmitsTheEntry: a profile stored before the command check was tightened (plan M3.1 decision 1)
+// does not block the bundle; the entries it contributes to are omitted, recorded once per bundle version.
+func TestInvalidCommandOmitsTheEntry(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1,2}")
+	dave, erin := w.user("dave", false), w.user("erin", false)
+	legacy, nginx := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	w.exec(`INSERT INTO permission_profile (id, organization_id, name, class, commands)
+		VALUES ($1, $2, 'legacy', 'restricted', '{"/usr/bin/systemctl ^.*$"}')`, legacy, w.org)
+	w.exec(`INSERT INTO permission_profile (id, organization_id, name, class, commands)
+		VALUES ($1, $2, 'nginx', 'restricted', '{"/usr/bin/systemctl restart nginx.service"}')`, nginx, w.org)
+	for _, a := range []struct{ profile, user uuid.UUID }{{legacy, dave}, {nginx, dave}, {nginx, erin}} {
+		w.exec("INSERT INTO profile_assignment (id, organization_id, profile_id, subject_type, subject_id) VALUES ($1, $2, $3, 'user', $4)",
+			uuid.Must(uuid.NewV7()), w.org, a.profile, a.user)
+	}
+	events := func() (n int, reason string) {
+		t.Helper()
+		err := w.super.QueryRow(context.Background(), `SELECT count(*), coalesce(max(params->>'reason'), '') FROM action
+			WHERE organization_id = $1 AND code = 'device.bundle_entry_omitted' AND outcome = 'success'
+			AND target->>'id' = $2 AND params->>'username' = $3`, w.org, dev.String(), w.username(dave)).Scan(&n, &reason)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n, reason
+	}
+
+	w.mustCompile(statechange.ScopeDevice, dev)
+	entries := spec[bundle.SudoSpec](t, w.fetch(dev), "sudo").Entries
+	if len(entries) != 1 || entries[0].Username != w.username(erin) {
+		t.Fatalf("sudo entries %+v, want only erin's", entries)
+	}
+	n, reason := events()
+	if n != 1 || !strings.Contains(reason, `"/usr/bin/systemctl ^.*$" of profile legacy`) || !strings.Contains(reason, "'^'") {
+		t.Fatalf("%d omission events, reason %q", n, reason)
+	}
+	// An unchanged bundle records nothing again; the next bundle version records the omission once more.
+	w.mustCompile(statechange.ScopeDevice, dev)
+	if n, _ := events(); n != 1 {
+		t.Fatalf("%d omission events after an unchanged compile", n)
+	}
+	before := w.version(dev)
+	w.exec("UPDATE permission_profile SET timestamp_timeout_min = 1 WHERE id = $1", nginx)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	if n, _ := events(); w.version(dev) != before+1 || n != 2 {
+		t.Fatalf("version %d→%d, %d omission events", before, w.version(dev), n)
+	}
+	// Fixing the profile restores dave's entry.
+	w.exec(`UPDATE permission_profile SET commands = '{"/usr/bin/systemctl status nginx.service"}' WHERE id = $1`, legacy)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	if entries := spec[bundle.SudoSpec](t, w.fetch(dev), "sudo").Entries; len(entries) != 2 {
+		t.Fatalf("sudo entries after the fix %+v", entries)
+	}
+	if n, _ := events(); n != 2 {
+		t.Fatalf("%d omission events after the fix", n)
 	}
 }
 

@@ -83,4 +83,17 @@ describe('audit texts of identity events', () => {
     const locked = { ...ev, code: 'user.locked', params: { username: 'dave@acme.test', source: 'local' } } as unknown as AuditEvent
     expect(auditText(t, te, locked)).toBe('alice@acme.test locked the user dave@acme.test')
   })
+
+  it('render an omitted sudo entry and name the refused pattern characters', () => {
+    const ev = {
+      code: 'device.bundle_entry_omitted', actor: { type: 'system', display: 'compiler' },
+      params: { username: 'dave@acme.test', reason: 'command "/usr/bin/systemctl ^.*$" of profile legacy: …' },
+      target: { type: 'device', id: 'd', display: 'laptop-1' },
+    } as unknown as AuditEvent
+    expect(auditText(t, te, ev)).toBe(
+      'The bundle of laptop-1 leaves out the sudo rights of dave@acme.test: a permission profile holds a command that is no longer allowed',
+    )
+    expect(t('problems.invalid_command')).toContain(', : = \\ ^ $ * ? [ ].')
+    expect(t('profiles.invalidProfile', { commands: '/usr/bin/systemctl ^.*$' })).toContain('allowed: /usr/bin/systemctl ^.*$.')
+  })
 })

@@ -157,6 +157,19 @@ func ValidateProfile(p Profile) error {
 	return nil
 }
 
+// InvalidCommands returns the commands that fail the command check, in their order. A profile stored before the check
+// was tightened can hold them (plan M3.1 decision 1): the portal reports such a profile as invalid, and the compiler
+// omits the sudo entries that would contain them.
+func InvalidCommands(commands []string) []string {
+	var out []string
+	for _, c := range commands {
+		if sudoers.ValidateCommand(c) != nil {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // ValidateAssignmentSubject checks the subject type and the presence of the subject.
 func ValidateAssignmentSubject(t SubjectType, id uuid.UUID) error {
 	switch t {

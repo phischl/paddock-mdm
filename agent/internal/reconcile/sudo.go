@@ -86,8 +86,11 @@ func (s *Sudo) spec(r bundle.Resource) (bundle.SudoSpec, error) {
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return spec, fmt.Errorf("invalid sudo spec: %w", err)
 	}
+	// The username is needed before an entry is rendered; any other invalid field (for example a pattern command,
+	// plan M3.1 decision 1) is refused by the renderer for that user alone, so the other entries and the hygiene
+	// checks still apply.
 	for _, e := range spec.Entries {
-		if err := sudoers.Validate(e); err != nil {
+		if err := sudoers.Validate(e); errors.Is(err, sudoers.ErrUsername) {
 			return spec, fmt.Errorf("sudo entry %s: %w", e.Username, err)
 		}
 	}
@@ -167,7 +170,7 @@ func (s *Sudo) plan(ctx context.Context, spec bundle.SudoSpec) (sudoPlan, error)
 			continue
 		}
 		content, err := sudoers.Render(e, uid, p.flavor)
-		if err != nil { // e.g. a UID sudo-rs cannot handle: reported for the user, never skipped silently
+		if err != nil { // an invalid entry or a UID sudo-rs cannot handle: reported for the user, never skipped silently
 			p.rejected[e.Username] = err
 			continue
 		}

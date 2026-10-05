@@ -96,7 +96,7 @@
     "username_taken": "This username is already taken.",
     "domain_taken": "One of these domains belongs to another organization.",
     "attribute_owned_upstream": "This is managed by the upstream directory and cannot be changed in Paddock.",
-    "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\."
+    "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\ ^ $ * ? [ ]."
   },
   "audit": {
     "title": "Audit log",
@@ -156,6 +156,7 @@
       "logins_suspended": "{actor} suspended logins on {hostname}",
       "logins_resumed": "{actor} resumed logins on {hostname}",
       "bundle_render_failed": "A new bundle of {target} was blocked: the sudo rights of {username} failed the check",
+      "bundle_entry_omitted": "The bundle of {target} leaves out the sudo rights of {username}: a permission profile holds a command that is no longer allowed",
       "login_applied": "The device {target} applied its login configuration",
       "login_apply_failed": "The device {target} could not apply its login configuration (stage {stage})",
       "user_lock_applied": "The device {target} blocked the locked user {username}",
@@ -557,6 +558,8 @@
       "never": "Never"
     },
     "rootEquivalentBadge": "root-equivalent",
+    "invalidBadge": "invalid",
+    "invalidProfile": "These commands are no longer allowed: {commands}. Users it applies to get no sudo rights on their devices until you edit or remove these commands.",
     "commandCount": "{count, plural, =0 {–} one {# command} other {# commands}}",
     "rootEquivalentProfile": "These commands hand out root, on their own or together: {commands}. Devices treat this profile like full rights.",
     "rootEquivalentEffective": "The combined commands hand out root: {commands}. This is reported as full rights.",
