@@ -1415,6 +1415,10 @@ flowchart TB
   be configured by the operator with a KMS of their choice (not bundled).
 - Every role authenticates with its own AppRole; secret IDs are delivered as Docker secrets and are
   response-wrapped at provisioning.
+- **Revocation trust anchor (decided 2026-10-05, plan M4c):** the `revocation-signing` public keys reach devices
+  only through the enrollment config and are pinned in `/etc/paddock/revoke-trust.json`; they are never taken from
+  bundles, so a compromised `bundle-signing` key cannot replace them. Rotation only via a command signed by a currently
+  trusted revocation key. Pre-M4c devices pin once from their first bundle (documented trust-on-first-use).
 - Key revocation: a key version is marked `revoked` in a signed trust-store update (part of the bundle,
   signed by a *different, still-valid* version); for `bundle-signing` compromise the recovery path is an
   agent release (offline key) that ships a new trust store.
