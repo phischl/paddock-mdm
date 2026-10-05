@@ -1,7 +1,8 @@
 # yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
 # Paddock account recovery (plan M3a decision 18): the one-time links paddock-server creates for new local users
 # (POST /api/v3/core/users/<pk>/recovery/, valid 24 h) open this flow with the user already identified by the link
-# token; the user sets a password of at least 12 characters.
+# token; the user sets a password of at least 12 characters. paddock-server's worker makes it the default brand's
+# recovery flow (plan M3.1 decision 5).
 version: 1
 metadata:
   name: Paddock - Recovery
@@ -114,11 +115,3 @@ entries:
       policy: !KeyOf link-token
       target: !KeyOf user-write-binding
       order: 0
-
-  - model: authentik_brands.brand
-    identifiers:
-      default: true
-    conditions:
-      - !Find [authentik_brands.brand, [default, true]]
-    attrs:
-      flow_recovery: !KeyOf flow

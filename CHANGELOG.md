@@ -95,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Authentik accepts 600 device-code logins per hour and client address (Authentik's default is 20), configurable with `PADDOCK_DEVICE_LOGIN_THROTTLE` in `.env`; devices behind one NAT address share the limit, so size it for the busiest address — see `docs/operations/device-login.md` (M3.1 step 2).
+- The Authentik service account `paddock-service` may now also view and change brands, to keep the default brand's recovery and device-code flows; the portal blueprint applies the permission automatically (M3.1 step 2).
 - Devices derive directory UIDs from the fixed Himmelblau range `idmap_range = 200000-999999999` (Himmelblau's default reaches 2 000 200 000): sudo-rs, the default sudo of Ubuntu 26.04, cannot handle numeric users over 9 digits. The range is fixed and must never change, because a change gives every directory user a new UID on every device; a UID above it still gets no sudo-rs rights and is reported as `device.sudo_apply_failed` "uid exceeds sudo-rs limit" (M3b, answer to question 2).
 - **BREAKING:** Agents of this release enforce the login settings of their organization: before updating devices, list every local administrator account in *Login & privileges → break-glass accounts* and every sudoers file it needs (for example `90-<admin>`) in the sudoers.d allow list — other members of `sudo`, `admin` and `wheel` are removed and other files in `/etc/sudoers.d` are quarantined at the first apply (M3b decisions 13 and 15).
 - `make acceptance` runs the cases of the exactly-once gate in parallel (`PADDOCK_ACCEPTANCE_PARALLEL`, default 8) and allows 30 minutes again (M3b decision 2).
@@ -115,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Creating a local user on a fresh installation no longer fails with 502 because Authentik's default brand has no recovery flow: `paddock-worker` sets the brand's recovery and device-code flows at start and every 10 minutes instead of the blueprints, whose brand condition raced with the creation of the default brand, and `make dev-seed` fails if they are not set within 120 s (M3.1 step 2).
 - Sudo rights apply on Ubuntu 26.04, whose default sudo is sudo-rs: the agent detects the implementation behind `/usr/bin/sudo` at every apply, writes the sudoers files in its flavor (sudo-rs does not know the setting `lecture_file`) and checks them with that implementation's `visudo`; the device detail shows the device's sudo implementation (M3b, answer to question 1).
 - The agent no longer passes the supervisor's `NOTIFY_SOCKET` to the tools it runs, so systemd stops logging "Got notification message from PID …, but reception only permitted for main PID" for every `systemctl` or `loginctl` call (M3b step 5).
 - Auto-stop now also protects the current release: a completed agent rollout halts (audit `agent_rollout.halted` by the worker) when the devices that reported `agent.update_failed` or `agent.rolled_back` within the last 7 days reach the rollout's threshold over the devices that checked in during those 7 days; resuming it makes it the current release again. The migration runs automatically (M2.1 step 1).

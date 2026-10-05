@@ -1,8 +1,8 @@
 // Command devseed prepares the development stack (`make dev-seed`): it signs in as the platform admin, creates
 // the organizations acme and globex with their domains acme.test and globex.test through the platform API, assigns
 // the dev users to their Authentik groups and sets acme's login settings for the test VMs (break-glass account
-// paddock, sudoers.d allow list README and 90-paddock). It waits until Authentik has applied the Paddock blueprints
-// and the login flow is executable, and is idempotent.
+// paddock, sudoers.d allow list README and 90-paddock). It waits until Authentik has applied the Paddock blueprints,
+// the login flow is executable and paddock-worker has set the default brand's flows, and is idempotent.
 package main
 
 import (
@@ -56,6 +56,10 @@ func run() error {
 		return err
 	}
 	if err := authflow.WaitReady(ctx, probe, stack.AuthURL(), "paddock-admin-login", 180*time.Second, 3*time.Second); err != nil {
+		return err
+	}
+	// Local users need the brand's recovery flow, which the worker sets once the blueprints are applied.
+	if err := waitBrandFlows(ctx, ak, 120*time.Second, 3*time.Second); err != nil {
 		return err
 	}
 
@@ -185,6 +189,41 @@ func waitBlueprints(ctx context.Context, ak blueprintSource, timeout, interval t
 		select {
 		case <-ctx.Done():
 			msg := fmt.Sprintf("authentik blueprints not applied after %s: %s", timeout, strings.Join(pending, "; "))
+			if lastErr != nil {
+				return fmt.Errorf("%s (last API error: %w)", msg, lastErr)
+			}
+			return errors.New(msg)
+		case <-time.After(interval):
+		}
+	}
+}
+
+// brandSource is the part of the Authentik API the brand wait reads (env.Authentik).
+type brandSource interface {
+	BrandFlowMismatches(ctx context.Context) ([]string, error)
+}
+
+// waitBrandFlows waits until the default brand uses Paddock's recovery and device-code flows (plan M3.1 decision 5),
+// polling every interval until timeout.
+func waitBrandFlows(ctx context.Context, ak brandSource, timeout, interval time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var mismatches []string
+	var lastErr error
+	for {
+		current, err := ak.BrandFlowMismatches(ctx)
+		if err == nil && len(current) == 0 {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			mismatches = current
+		}
+		select {
+		case <-ctx.Done():
+			msg := fmt.Sprintf("authentik default brand flows not set by paddock-worker after %s: %s", timeout,
+				strings.Join(mismatches, "; "))
 			if lastErr != nil {
 				return fmt.Errorf("%s (last API error: %w)", msg, lastErr)
 			}
