@@ -98,7 +98,8 @@
     "attribute_owned_upstream": "This is managed by the upstream directory and cannot be changed in Paddock.",
     "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\ ^ $ * ? [ ].",
     "setting_locked": "This setting cannot change any more: devices already use it.",
-    "step_up_required": "Confirm your identity to continue."
+    "step_up_required": "Confirm your identity to continue.",
+    "step_up_failed": "The identity confirmation failed. Try again with your own account."
   },
   "audit": {
     "title": "Audit log",
@@ -407,6 +408,45 @@
     "sudoFlavors": {
       "classic": "sudo",
       "sudo-rs": "sudo-rs"
+    },
+    "localAdmin": {
+      "title": "Local administrator",
+      "account": "Account",
+      "active": "Active password",
+      "pending": "Waiting for the device",
+      "none": "none yet",
+      "lastRotated": "Last rotation",
+      "nextRotation": "Next rotation",
+      "overdue": "The rotation is overdue: the device has not reached the server since it was due.",
+      "lastError": "Rotation to password {generation, number} failed {at}: {reason}",
+      "errors": {
+        "escrow_timeout": "the server did not store the new password in time; the previous one is still valid",
+        "escrow_failed": "the server refused to store the new password; the previous one is still valid",
+        "apply_failed": "the device could not set the new password; the previous one is still valid"
+      },
+      "reveal": {
+        "label": "Reveal password",
+        "title": "Reveal the local administrator password",
+        "confirm": "The password of {hostname} is shown and the reveal is recorded in the audit log."
+      },
+      "revealed": {
+        "title": "Password of {username}",
+        "hint": "The password is hidden in {seconds, number} seconds.",
+        "generation": "Password {generation, number} ({state})",
+        "states": {
+          "active": "active",
+          "pending": "not yet confirmed by the device"
+        },
+        "copy": "Copy",
+        "copied": "Copied",
+        "close": "Hide"
+      },
+      "rotate": {
+        "label": "Rotate now",
+        "title": "Rotate the local administrator password",
+        "confirm": "{hostname} sets a new password the next time it reaches the server; the current password stops working then.",
+        "requested": "The device rotates the password with its next check-in."
+      }
     }
   },
   "tokens": {
@@ -639,5 +679,23 @@
     "rotateAfterReveal": "Rotate … hours after a reveal",
     "rotateAfterRevealHint": "Leave empty to keep a revealed password until the next regular rotation.",
     "saved": "Login settings saved."
+  },
+  "commands": {
+    "title": "Commands",
+    "type": "Command",
+    "status": "Status",
+    "issuedAt": "Issued",
+    "expiresAt": "Expires",
+    "types": {
+      "rotate_admin_password": "Rotate the local administrator password"
+    },
+    "statuses": {
+      "pending": "Pending",
+      "delivered": "Delivered",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "expired": "Expired",
+      "cancelled": "Cancelled"
+    }
   }
 }

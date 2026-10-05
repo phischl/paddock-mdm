@@ -12,8 +12,9 @@ import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import {
   createAssignment, deleteAssignment, deleteProfile, getProfile, listAssignments, subjectTypeFilter, subjectTypes,
-  updateProfile, type ProfileInput,
+  updateProfile, type AssignmentInput, type ProfileInput,
 } from '../lib/profiles'
+import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { allUserGroups } from '../lib/userGroups'
 import { allUsers } from '../lib/users'
 import { useSessionStore } from '../stores/session'
@@ -68,7 +69,27 @@ onMounted(async () => {
   users.value = u
   groups.value = g
   deviceGroups.value = d
+  await resumeFull()
 })
+
+/**
+ * Full rights need a step-up (plan M4a decision 7): a change or an assignment the server refused with
+ * step_up_required is repeated once after the step-up, with the input the administrator confirmed before.
+ */
+async function resumeFull(): Promise<void> {
+  const edit = resumeStepUp<ProfileInput>('profile-edit', id.value)
+  const assignment = resumeStepUp<AssignmentInput>('profile-assign', id.value)
+  if (!edit && !assignment) return
+  await router.replace(withoutStepUpParam())
+  if (edit) {
+    problem.value = edit.failed ? 'step_up_failed' : (await updateProfile(id.value, edit.payload)) ?? ''
+    await load()
+  }
+  if (assignment) {
+    assignProblem.value = assignment.failed ? 'step_up_failed' : (await createAssignment(id.value, assignment.payload)) ?? ''
+    void list.value?.reload()
+  }
+}
 
 function subjectName(a: ProfileAssignment): string {
   if (a.subject_type === 'global') return t('profiles.everyone')
@@ -96,6 +117,10 @@ async function onEdit(input: ProfileInput): Promise<void> {
     return
   }
   editProblem.value = (await updateProfile(id.value, input)) ?? ''
+  if (editProblem.value === stepUpRequired) {
+    startStepUp('profile-edit', id.value, input)
+    return
+  }
   if (!editProblem.value) {
     editOpen.value = false
     await load()
@@ -124,9 +149,12 @@ async function assign(): Promise<void> {
     !(await confirmFull(t('profiles.assignFullConfirm', { name: profile.value.name }), t('profiles.assign')))) {
     return
   }
-  assignProblem.value = (await createAssignment(id.value, {
-    subjectType: subjectType.value, subjectID: subjectID.value, deviceGroupID: deviceGroupID.value,
-  })) ?? ''
+  const input: AssignmentInput = { subjectType: subjectType.value, subjectID: subjectID.value, deviceGroupID: deviceGroupID.value }
+  assignProblem.value = (await createAssignment(id.value, input)) ?? ''
+  if (assignProblem.value === stepUpRequired) {
+    startStepUp('profile-assign', id.value, input)
+    return
+  }
   if (!assignProblem.value) {
     subjectID.value = null
     void list.value?.reload()
