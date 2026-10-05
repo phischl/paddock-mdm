@@ -232,6 +232,33 @@ func (l *Login) checkPAM(id string) (Result, bool) {
 	return l.fail(id, protocol.LoginStagePAM, fmt.Errorf("the paddock-deny PAM profile is not in effect in %s; run dpkg-reconfigure paddock-agent", file)), false
 }
 
+// DenyListID is the plan and report ID of the deny list on a device without a login resource (plan M4a step 0c).
+const DenyListID = "login:deny_list"
+
+// DenyListMissing reports whether the deny-list PAM profile is enabled (either of its lines is present) while
+// /etc/paddock/login-deny does not exist.
+func (l *Login) DenyListMissing() bool {
+	enabled := slices.Contains(pamLines(l.read(commonAuth)), DenyAuthLine) || slices.Contains(pamLines(l.read(commonAccount)), DenyAccountLine)
+	if !enabled {
+		return false
+	}
+	_, _, err := l.Sys.ReadFile(DenyList)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// EnsureDenyList writes an empty deny list if DenyListMissing; it is used on devices without a login resource, where
+// pam_listfile would otherwise log at every authentication (plan M4a step 0c). An existing list stays as it is:
+// without a login resource the agent does not know who is locked.
+func (l *Login) EnsureDenyList() (bool, error) {
+	if !l.DenyListMissing() {
+		return false, nil
+	}
+	if err := l.Sys.WriteFileAtomic(DenyList, []byte{}, 0o644, 0, 0); err != nil {
+		return false, fmt.Errorf("write %s: %w", DenyList, err)
+	}
+	return true, nil
+}
+
 // pamProblem returns the PAM file that lacks its deny line ("" if both are in place): common-account must contain
 // DenyAccountLine, common-auth DenyAuthLine before any pam_himmelblau line.
 func (l *Login) pamProblem() string {
