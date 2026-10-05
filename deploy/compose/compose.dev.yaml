@@ -35,6 +35,9 @@ services:
       DEV_ALICE_PASSWORD_FROMFILE: /run/secrets/dev_alice_password
       DEV_BOB_PASSWORD_FROMFILE: /run/secrets/dev_bob_password
       DEV_CAROL_PASSWORD_FROMFILE: /run/secrets/dev_carol_password
+      # Authentik allows 20 device authorizations per hour and client address. In the development stack every test VM
+      # and every acceptance gate reaches Authentik from the same Docker gateway address (plan M3b system gates).
+      AUTHENTIK_THROTTLE__PROVIDERS__OAUTH2__DEVICE: 1000/hour
     secrets:
       - dev_platform_admin_password
       - dev_alice_password

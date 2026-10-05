@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -140,9 +141,14 @@ func (d *Device) State() map[string]any {
 	return st
 }
 
-// Checkin asks the agent for an immediate check-in (SIGHUP; at most one per minute, plan M2b decision 8).
+// Checkin asks the agent for an immediate check-in (SIGHUP; at most one per minute, plan M2b decision 8). It is best
+// effort: an SSH failure (e.g. while sshd restarts during a package installation) is only logged.
 func (d *Device) Checkin() {
-	d.Must("sudo pkill -HUP -f '^/opt/paddock/agent/current/paddockd run' || true")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if out, err := d.SSH(ctx, nil, "sudo pkill -HUP -f '^/opt/paddock/agent/current/paddockd run' || true"); err != nil {
+		d.t.Logf("%s: check-in trigger: %v: %s", d.Name, err, out)
+	}
 }
 
 // AgentVersion is the version of the agent the supervisor runs.
