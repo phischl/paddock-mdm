@@ -52,6 +52,12 @@ export type ProfileAssignment = components['schemas']['ProfileAssignment']
 export type ProfileAssignmentSort = components['parameters']['ProfileAssignmentSort']
 export type UserEffectiveProfile = components['schemas']['UserEffectiveProfile']
 export type EffectiveSudo = components['schemas']['EffectiveSudo']
+export type DeviceCommand = components['schemas']['DeviceCommand']
+export type DeviceCommandSort = components['parameters']['DeviceCommandSort']
+export type DeviceCommandStatus = components['schemas']['DeviceCommandStatus']
+export type DeviceCommandType = components['schemas']['DeviceCommandType']
+export type LocalAdmin = components['schemas']['LocalAdmin']
+export type LocalAdminRevealed = components['schemas']['LocalAdminRevealed']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

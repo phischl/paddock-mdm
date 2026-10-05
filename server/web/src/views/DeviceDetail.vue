@@ -1,8 +1,13 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import DataList from '../components/DataList.vue'
+import LocalAdminCard from '../components/LocalAdminCard.vue'
+import type { DeviceCommand } from '../api/client'
 import { useDeviceDetailPage } from '../lib/deviceDetailPage'
+import type { ListColumn } from '../lib/listQuery'
+import { commandFilters, listCommands } from '../lib/localAdmin'
 import { reportText } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
@@ -20,6 +25,15 @@ onMounted(async () => {
   await load()
   await loadSubjects()
 })
+
+const commandList = ref<{ reload: () => Promise<void> } | null>(null)
+const fetchCommands = computed(() => listCommands(String(route.params.id)))
+const commandColumns: ListColumn[] = [
+  { key: 'type', title: 'commands.type', sortable: true },
+  { key: 'status', title: 'commands.status', sortable: true },
+  { key: 'issued_at', title: 'commands.issuedAt', sortable: true },
+  { key: 'expires_at', title: 'commands.expiresAt', sortable: true },
+]
 
 function groupName(id: string | null | undefined): string {
   if (!id) return t('managed.allDevices')
@@ -134,6 +148,37 @@ function groupName(id: string | null | undefined): string {
           </tr>
         </tbody>
       </v-table>
+
+      <LocalAdminCard
+        :device-id="device.id"
+        :hostname="device.hostname"
+        :active="device.state === 'active'"
+        @changed="commandList?.reload()"
+      />
+
+      <h2>{{ t('commands.title') }}</h2>
+      <DataList
+        ref="commandList"
+        :columns="commandColumns"
+        :fetch="fetchCommands"
+        :filters="commandFilters"
+        default-sort="-issued_at"
+        item-value="id"
+        data-testid="command-list"
+      >
+        <template #[`item.type`]="{ item }: { item: DeviceCommand }">
+          {{ t('commands.types.' + item.type) }}
+        </template>
+        <template #[`item.status`]="{ item }: { item: DeviceCommand }">
+          {{ t('commands.statuses.' + item.status) }}
+        </template>
+        <template #[`item.issued_at`]="{ item }: { item: DeviceCommand }">
+          {{ formatDateTime(item.issued_at, locale) }}
+        </template>
+        <template #[`item.expires_at`]="{ item }: { item: DeviceCommand }">
+          {{ formatDateTime(item.expires_at, locale) }}
+        </template>
+      </DataList>
 
       <h2>{{ t('devices.groups') }}</h2>
       <form
