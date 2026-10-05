@@ -4,9 +4,12 @@ package portal
 
 import (
 	"context"
+	"net/url"
+	"path/filepath"
 
 	"github.com/google/uuid"
 
+	"github.com/paddock-mdm/paddock/test/acceptance/internal/authflow"
 	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
 	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
 )
@@ -43,3 +46,36 @@ func SecretsDir() (string, error) { return stack.SecretsDir() }
 
 // RepoRoot is the repository root.
 func RepoRoot() (string, error) { return stack.RepoRoot() }
+
+// Authentik is the Authentik admin API with the bootstrap token.
+type Authentik = env.Authentik
+
+// NewAuthentik creates the Authentik admin client.
+func NewAuthentik() (*Authentik, error) { return env.NewAuthentik() }
+
+// RootGroup is the Authentik group of an organization's users: paddock.<slug>.
+func RootGroup(slug string) string { return env.RootGroup(slug) }
+
+// TOTP generates the codes of a user's TOTP authenticator; the zero value enrolls one at the first approval.
+type TOTP = authflow.TOTP
+
+// ErrAccessDenied is the refusal of a device approval by the application's policy.
+var ErrAccessDenied = authflow.ErrAccessDenied
+
+// ApproveDeviceCode approves the user code a device shows (greeter or PAM conversation) like the user on a second
+// device: the verification URL with the code, password and MFA (plan M3b gate L1). It returns the flow stages passed.
+func ApproveDeviceCode(ctx context.Context, userCode, username, password string, totp *TOTP) ([]string, error) {
+	dir, err := stack.SecretsDir()
+	if err != nil {
+		return nil, err
+	}
+	da := authflow.DeviceAuthorization{
+		UserCode: userCode, VerificationURIComplete: stack.AuthURL() + "/device?" + url.Values{"code": {userCode}}.Encode(),
+	}
+	return authflow.ApproveDevice(ctx, filepath.Join(dir, "caddy-root.crt"), da, username, password, totp)
+}
+
+// Compose runs `docker compose` for the development stack and returns the combined output.
+func Compose(ctx context.Context, args ...string) (string, error) {
+	return stack.Compose(ctx, nil, args...)
+}

@@ -87,12 +87,17 @@ func (v *VM) Start(ctx context.Context) error {
 	return nil
 }
 
-// Fresh restores base-installed, boots, and restores base-installed again (powered off) when the test ends.
+// Fresh restores base-installed, boots, and restores base-installed again (powered off) when the test ends. With
+// PADDOCK_SYSTEM_KEEP set, a failed test leaves the VM running as it is, for inspection.
 func (v *VM) Fresh() {
 	v.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	v.t.Cleanup(func() {
+		if v.t.Failed() && os.Getenv("PADDOCK_SYSTEM_KEEP") != "" {
+			v.t.Logf("PADDOCK_SYSTEM_KEEP: %s left running; restore %s yourself", v.Name, Snapshot)
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		if err := v.Restore(ctx); err != nil {

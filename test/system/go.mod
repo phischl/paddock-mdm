@@ -7,10 +7,12 @@ toolchain go1.27.1
 require (
 	aead.dev/minisign v0.3.0
 	github.com/google/uuid v1.6.0
+	github.com/paddock-mdm/paddock/pkg v0.0.0
 	github.com/paddock-mdm/paddock/test/acceptance v0.0.0
 )
 
 require (
+	github.com/gowebpki/jcs v1.0.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.11.0 // indirect
