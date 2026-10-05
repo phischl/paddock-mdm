@@ -117,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The audit log's event filter in the portal offers every audit code; the list is generated from the server's code registry by `make gen`, and `npm run lint` fails when a code has no English message (M4a step 0b).
 - The agent always writes `/etc/paddock/login-deny`, empty when nobody is locked, so `pam_listfile` no longer logs "Couldn't open /etc/paddock/login-deny" at every authentication; without the file every login still works (M3.1 step 3).
 - If installing Himmelblau fails on a dependency because the device's other package lists are stale, the agent runs one `apt-get update` of every source and tries again, instead of failing until someone updates the device by hand (M3.1 step 3).
 - Creating a local user on a fresh installation no longer fails with 502 because Authentik's default brand has no recovery flow: `paddock-worker` sets the brand's recovery and device-code flows at start and every 10 minutes instead of the blueprints, whose brand condition raced with the creation of the default brand, and `make dev-seed` fails if they are not set within 120 s (M3.1 step 2).
