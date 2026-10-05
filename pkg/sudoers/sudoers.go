@@ -52,7 +52,7 @@ type Entry struct {
 
 // Validation errors.
 var (
-	ErrUsername   = errors.New("sudoers: username must be a lowercase name without whitespace, control or sudoers meta characters")
+	ErrUsername   = errors.New("sudoers: username must be a lowercase name without whitespace, control or sudoers meta characters that does not start with '-'")
 	ErrClass      = errors.New("sudoers: class must be restricted or full")
 	ErrCommand    = errors.New("sudoers: command must be an absolute path with optional arguments, without ALL, '!', '#', control or sudoers meta characters ,:=\\ or pattern characters ^$*?[]")
 	ErrNoCommands = errors.New("sudoers: a restricted entry needs at least one command")
@@ -60,7 +60,8 @@ var (
 )
 
 var (
-	usernamePattern = regexp.MustCompile(`^[a-z0-9._@+-]{1,256}$`)
+	// A leading '-' would turn the name into an option of the tools the agent passes it to (plan M4a step 0a).
+	usernamePattern = regexp.MustCompile(`^[a-z0-9._@+][a-z0-9._@+-]{0,255}$`)
 	commandPattern  = regexp.MustCompile(`^/[^\s]+( .*)?$`)
 )
 

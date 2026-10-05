@@ -161,12 +161,12 @@ func (o OS) Loginctl(ctx context.Context, args ...string) (string, int, error) {
 	return command(ctx, "loginctl", args...)
 }
 
-// Getent implements System.
+// Getent implements System. "--" keeps a key that starts with '-' from being read as an option (plan M4a step 0a).
 func (o OS) Getent(ctx context.Context, database, key string) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return command(ctx, "getent", database, key)
+	return command(ctx, "getent", database, "--", key)
 }
 
 // Visudo implements System.

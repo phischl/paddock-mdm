@@ -37,15 +37,24 @@ func (s *Sudo) groupMembers(ctx context.Context, spec bundle.SudoSpec) (map[stri
 }
 
 // cleanGroups removes the members (`gpasswd -d`) and reports each as tamper.sudo_group_member; removed is false for a
-// member gpasswd could not remove (e.g. one that another NSS source provides).
+// member gpasswd could not remove (e.g. one that another NSS source provides) or that it must not be given: gpasswd
+// reads "--" after -d as the user, so a name starting with '-' cannot be passed safely and is refused (plan M4a step
+// 0a).
 func (s *Sudo) cleanGroups(ctx context.Context, members map[string][]string) (bool, error) {
 	removed := false
 	var errs []error
 	for _, g := range sortedKeys(members) {
 		for _, m := range members[g] {
-			out, exit, err := s.Sys.Gpasswd(ctx, "-d", m, g)
-			if err == nil && exit != 0 {
-				err = fmt.Errorf("gpasswd -d %s %s: exit %d: %s", m, g, exit, lastLine(out))
+			var err error
+			if strings.HasPrefix(m, "-") {
+				err = fmt.Errorf("gpasswd -d %q %s: a name starting with '-' is refused", m, g)
+			} else {
+				var out string
+				var exit int
+				out, exit, err = s.Sys.Gpasswd(ctx, "-d", m, g)
+				if err == nil && exit != 0 {
+					err = fmt.Errorf("gpasswd -d %s %s: exit %d: %s", m, g, exit, lastLine(out))
+				}
 			}
 			s.Events.emit(protocol.EventTamperSudoGroupMember, protocol.TamperSudoGroupMember{Group: g, Username: m, Removed: err == nil})
 			if err != nil {

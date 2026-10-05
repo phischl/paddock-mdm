@@ -134,6 +134,7 @@ func TestValidate(t *testing.T) {
 		"username with space":     {func(e *Entry) { e.Username = "dave smith" }, ErrUsername},
 		"username with newline":   {func(e *Entry) { e.Username = "dave\nALL ALL=(ALL) ALL" }, ErrUsername},
 		"uppercase username":      {func(e *Entry) { e.Username = "Dave@acme.test" }, ErrUsername},
+		"username like an option": {func(e *Entry) { e.Username = "-x@acme.test" }, ErrUsername},
 		"class none":              {func(e *Entry) { e.Class = "none" }, ErrClass},
 		"restricted without cmds": {func(e *Entry) { e.Commands = nil }, ErrNoCommands},
 		"bad command":             {func(e *Entry) { e.Commands = []string{"/usr/bin/x, /bin/sh"} }, ErrCommand},

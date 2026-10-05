@@ -235,6 +235,32 @@ func TestInvalidCommandOmitsTheEntry(t *testing.T) {
 	}
 }
 
+// TestOptionLikeUsernameOmitsTheEntry: a synced user whose name starts with '-' (plan M4a step 0a) gets no sudo entry
+// and does not block the bundle.
+func TestOptionLikeUsernameOmitsTheEntry(t *testing.T) {
+	w := newWorld(t)
+	dev := w.v2Device("{1,2}")
+	dave := w.user("dave", false)
+	bad := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO app_user (id, organization_id, authentik_pk, username, source) VALUES ($1, $2, $3, '-x@acme.test', 'synced')",
+		bad, w.org, "pk-"+bad.String())
+	profile := uuid.Must(uuid.NewV7())
+	w.exec("INSERT INTO permission_profile (id, organization_id, name, class) VALUES ($1, $2, 'root', 'full')", profile, w.org)
+	w.exec("INSERT INTO profile_assignment (id, organization_id, profile_id, subject_type, subject_id) VALUES ($1, $2, $3, 'global', NULL)",
+		uuid.Must(uuid.NewV7()), w.org, profile)
+	w.mustCompile(statechange.ScopeDevice, dev)
+	entries := spec[bundle.SudoSpec](t, w.fetch(dev), "sudo").Entries
+	if len(entries) != 1 || entries[0].Username != w.username(dave) {
+		t.Fatalf("sudo entries %+v, want only dave's", entries)
+	}
+	var n int
+	_ = w.super.QueryRow(context.Background(), `SELECT count(*) FROM action WHERE organization_id = $1
+		AND code = 'device.bundle_entry_omitted' AND params->>'username' = '-x@acme.test'`, w.org).Scan(&n)
+	if n != 1 {
+		t.Fatalf("%d omission events, want 1", n)
+	}
+}
+
 // TestReconcileRecompilesOutdatedSchemas: an agent that starts reporting schema 2 gets a v2 bundle from the reconcile
 // loop, without any other change.
 func TestReconcileRecompilesOutdatedSchemas(t *testing.T) {
