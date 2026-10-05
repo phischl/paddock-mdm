@@ -287,7 +287,7 @@ func lastDeviceTokenID(t *testing.T) int {
 func (v *VM) guestScript(script, secret, log string, delay time.Duration) {
 	v.t.Helper()
 	v.MustIn([]byte(script), "sudo tee /root/systest.sh >/dev/null && sudo chmod 700 /root/systest.sh")
-	v.MustIn([]byte(secret), "sudo install -m 600 /dev/stdin /root/systest-secret")
+	v.MustIn([]byte(secret), "sudo tee /root/systest-secret >/dev/null && sudo chmod 600 /root/systest-secret")
 	v.Must(fmt.Sprintf("sudo rm -f %s; sudo systemd-run --quiet --unit systest-%d --on-active=%d /bin/bash -c '/root/systest.sh >%s 2>&1; rm -f /root/systest-secret'",
 		log, time.Now().UnixNano(), int(delay.Seconds()), log))
 }
