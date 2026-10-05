@@ -44,6 +44,7 @@ var (
 	Forbidden           = &Error{Code: "forbidden", Status: http.StatusForbidden}
 	NoOrganization      = &Error{Code: "no_organization", Status: http.StatusForbidden}
 	CSRFMissing         = &Error{Code: "csrf_missing", Status: http.StatusForbidden}
+	StepUpRequired      = &Error{Code: "step_up_required", Status: http.StatusForbidden}
 	NotFound            = &Error{Code: "not_found", Status: http.StatusNotFound}
 	NameTaken           = &Error{Code: "name_taken", Status: http.StatusConflict}
 	SlugTaken           = &Error{Code: "slug_taken", Status: http.StatusConflict}

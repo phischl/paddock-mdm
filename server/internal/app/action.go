@@ -43,7 +43,13 @@ type ActionSpec struct {
 	Params       map[string]any   // MUST NOT contain secrets
 	// Actor overrides the actor derived from the principal (rejected logins record an anonymous actor).
 	Actor *audit.Actor
+	// RequiresStepUp refuses the action (denied, step_up_required) unless the administrator completed a step-up
+	// within StepUpValidity (plan M4a decision 7).
+	RequiresStepUp bool
 }
+
+// StepUpValidity is how long a step-up authentication satisfies RequiresStepUp (plan M4a decision 6).
+const StepUpValidity = 300 * time.Second
 
 // Recorder lets the use case complete the audit event.
 type Recorder interface {
@@ -60,6 +66,9 @@ type Recorder interface {
 	// CommandIssued queues the command.issued message of a device command inserted by the action; like a state
 	// change it is written to the outbox only when the action succeeds (plan M4a decision 2).
 	CommandIssued(id uuid.UUID)
+	// RequireStepUp is RequiresStepUp for actions that need a step-up only for some inputs (e.g. assigning a full
+	// profile): it returns problem.StepUpRequired, recorded as denied, unless the step-up is fresh.
+	RequireStepUp() error
 }
 
 // CorrelationIDFunc extracts the request ID from ctx (set by the httpx middleware).
@@ -106,6 +115,7 @@ type recorder struct {
 	startedAt  time.Time
 	changes    []statechange.Event
 	commands   []uuid.UUID
+	stepUp     func() error
 }
 
 func (r *recorder) SetTarget(t audit.Target) { r.target = &t }
@@ -126,6 +136,8 @@ func (r *recorder) PriorityStateChanged(scope string, id uuid.UUID) {
 }
 
 func (r *recorder) CommandIssued(id uuid.UUID) { r.commands = append(r.commands, id) }
+
+func (r *recorder) RequireStepUp() error { return r.stepUp() }
 
 var secretParamWords = []string{"password", "secret", "token"}
 
@@ -170,7 +182,27 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 	} else {
 		rec.actor = actorOf(p)
 	}
+	rec.stepUp = func() error {
+		if err := r.checkStepUp(p); err != nil {
+			return err
+		}
+		rec.actor.StepUp = true
+		return nil
+	}
 	return rec
+}
+
+// checkStepUp reports problem.StepUpRequired unless an administrator's step-up is at most StepUpValidity old.
+// System principals never step up.
+func (r *ActionRunner) checkStepUp(p principal.Principal) error {
+	if p.Kind == principal.KindSystem {
+		return nil
+	}
+	age := r.now().Sub(p.StepUpAt)
+	if p.StepUpAt.IsZero() || age > StepUpValidity || age < -time.Minute {
+		return problem.StepUpRequired.WithDetail("this action needs a step-up authentication within the last 5 minutes")
+	}
+	return nil
 }
 
 func actorOf(p principal.Principal) audit.Actor {
@@ -189,8 +221,19 @@ func actorOf(p principal.Principal) audit.Actor {
 	return a
 }
 
-// authorize checks the principal against the scope and the allowed roles.
-func authorize(p principal.Principal, scope Scope, spec ActionSpec) error {
+// authorize checks the principal against the scope and the allowed roles, then the step-up of RequiresStepUp.
+func (r *ActionRunner) authorize(p principal.Principal, scope Scope, spec ActionSpec, rec *recorder) error {
+	if err := authorizeRole(p, scope, spec); err != nil {
+		return err
+	}
+	if spec.RequiresStepUp {
+		return rec.stepUp()
+	}
+	return nil
+}
+
+// authorizeRole checks the principal against the scope and the allowed roles.
+func authorizeRole(p principal.Principal, scope Scope, spec ActionSpec) error {
 	if scope == ScopeOrg && p.OrganizationID == uuid.Nil {
 		return problem.NoOrganization
 	}
@@ -209,7 +252,8 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 		return audit.OutcomeSuccess, ""
 	}
 	p := problem.From(err)
-	if errors.Is(err, problem.Forbidden) || errors.Is(err, problem.NoOrganization) || errors.Is(err, problem.CSRFMissing) {
+	if errors.Is(err, problem.Forbidden) || errors.Is(err, problem.NoOrganization) || errors.Is(err, problem.CSRFMissing) ||
+		errors.Is(err, problem.StepUpRequired) {
 		return audit.OutcomeDenied, p.Code
 	}
 	return audit.OutcomeFailure, p.Code
@@ -227,7 +271,7 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 		return problem.Unauthenticated
 	}
 	rec := r.newRecorder(ctx, p, scope, spec)
-	if err := authorize(p, scope, spec); err != nil {
+	if err := r.authorize(p, scope, spec, rec); err != nil {
 		r.recordFinal(ctx, p, scope, rec, err)
 		return err
 	}
@@ -302,7 +346,7 @@ func (r *ActionRunner) RunExternal(ctx context.Context, scope Scope, spec Action
 		return problem.Unauthenticated
 	}
 	rec := r.newRecorder(ctx, p, scope, spec)
-	if err := authorize(p, scope, spec); err != nil {
+	if err := r.authorize(p, scope, spec, rec); err != nil {
 		r.recordFinal(ctx, p, scope, rec, err)
 		return err
 	}

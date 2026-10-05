@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -314,7 +315,15 @@ func TestGroupsProfilesAndEffectiveProfile(t *testing.T) {
 	if res := e.do(call{method: "DELETE", path: "/api/v1/permission-profiles/" + runHelper.Id.String(), cookie: alice}); res.status != http.StatusConflict {
 		t.Fatalf("delete assigned profile: %d", res.status)
 	}
-	toFull := e.do(call{method: "PATCH", path: "/api/v1/permission-profiles/" + runHelper.Id.String(), cookie: alice, body: map[string]any{"class": "full"}})
+	// Changing the class to full needs a fresh step-up (plan M4a decision 7).
+	for _, cookie := range []*http.Cookie{alice, e.steppedUp(alice, time.Now().Add(-301*time.Second))} {
+		res := e.do(call{method: "PATCH", path: "/api/v1/permission-profiles/" + runHelper.Id.String(), cookie: cookie, body: map[string]any{"class": "full"}})
+		if res.status != http.StatusForbidden || res.problemCode(t) != "step_up_required" {
+			t.Fatalf("class change without fresh step-up: %d %s", res.status, res.body)
+		}
+		e.expectEvent(res, "permission_profile.updated:denied:step_up_required")
+	}
+	toFull := e.do(call{method: "PATCH", path: "/api/v1/permission-profiles/" + runHelper.Id.String(), cookie: e.steppedUp(alice, time.Now()), body: map[string]any{"class": "full"}})
 	var full adminapi.PermissionProfile
 	toFull.decode(t, &full)
 	if toFull.status != http.StatusOK || full.Class != "full" || len(full.Commands) != 0 {
@@ -322,6 +331,17 @@ func TestGroupsProfilesAndEffectiveProfile(t *testing.T) {
 	}
 	if e.actionParam(toFull, "old_class") != "restricted" {
 		t.Fatal("old class not audited")
+	}
+	// Assigning a full profile needs a fresh step-up as well.
+	fullAssignment := map[string]any{"profile_id": runHelper.Id, "subject_type": "user", "subject_id": dave.User.Id}
+	denied := e.do(call{method: "POST", path: "/api/v1/profile-assignments", cookie: alice, body: fullAssignment})
+	if denied.status != http.StatusForbidden || denied.problemCode(t) != "step_up_required" {
+		t.Fatalf("full assignment without step-up: %d %s", denied.status, denied.body)
+	}
+	e.expectEvent(denied, "profile_assignment.created:denied:step_up_required")
+	granted := e.assign(e.steppedUp(alice, time.Now()), fullAssignment)
+	if res := e.do(call{method: "DELETE", path: "/api/v1/profile-assignments/" + granted.Id.String(), cookie: alice}); res.status != http.StatusNoContent {
+		t.Fatalf("delete full assignment: %d", res.status)
 	}
 
 	// Removing the member and the group.

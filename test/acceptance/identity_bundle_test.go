@@ -195,6 +195,7 @@ func TestEffectiveProfileGate(t *testing.T) {
 	full := createLocalUser(t, alice, "p1-full")
 	restricted := profile(t, alice, "restricted", "/usr/bin/systemctl restart nginx.service", "/usr/bin/journalctl -u nginx.service")
 	root := profile(t, alice, "full")
+	stepUp(t, alice, env.Alice, true) // assigning a full profile (plan M4a decision 7)
 	for _, x := range []map[string]any{
 		{"profile_id": restricted, "subject_type": "user", "subject_id": user.ID, "device_group_id": group},
 		{"profile_id": root, "subject_type": "user", "subject_id": full.ID, "device_group_id": group},

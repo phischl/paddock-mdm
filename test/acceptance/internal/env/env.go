@@ -5,6 +5,8 @@ package env
 import (
 	"bytes"
 	"context"
+	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/paddock-mdm/paddock/test/acceptance/internal/authflow"
 	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
@@ -30,6 +33,64 @@ var passwordFiles = map[string]string{
 	Alice:         "dev_alice_password",
 	Bob:           "dev_bob_password",
 	Carol:         "dev_carol_password",
+}
+
+// TOTPKeyFiles are the .secrets/ files with the hex keys of the dev users' TOTP authenticators, which `make
+// dev-seed` installs (plan M4a decision 8).
+var TOTPKeyFiles = map[string]string{
+	PlatformAdmin: "dev_platform_admin_totp_key",
+	Alice:         "dev_alice_totp_key",
+	Bob:           "dev_bob_totp_key",
+	Carol:         "dev_carol_totp_key",
+}
+
+var (
+	totpMu sync.Mutex
+	totps  = map[string]*authflow.TOTP{}
+)
+
+// TOTP returns the TOTP generator of a dev user, shared by every caller of this process so that no code is used
+// twice (Authentik refuses a replayed code).
+func TOTP(user string) (*authflow.TOTP, error) {
+	totpMu.Lock()
+	defer totpMu.Unlock()
+	if t, ok := totps[user]; ok {
+		return t, nil
+	}
+	f, ok := TOTPKeyFiles[user]
+	if !ok {
+		return nil, fmt.Errorf("env: unknown dev user %s", user)
+	}
+	key, err := stack.Secret(f)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := hex.DecodeString(strings.TrimSpace(key))
+	if err != nil {
+		return nil, fmt.Errorf("env: %s: %w", f, err)
+	}
+	t := &authflow.TOTP{Secret: base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw)}
+	totps[user] = t
+	return t, nil
+}
+
+// StepUp runs a step-up authentication of the portal session as the dev user and returns the portal URL it returned
+// to; it contains stepup=failed when Paddock refused the step-up. For another user than the session's own, the login
+// hint is removed from the authorization request (authflow.StepUp).
+func (p *Portal) StepUp(ctx context.Context, user, returnTo string) (string, error) {
+	password, err := Password(user)
+	if err != nil {
+		return "", err
+	}
+	totp, err := TOTP(user)
+	if err != nil {
+		return "", err
+	}
+	res, err := authflow.StepUp(ctx, p.Client, stack.AdminURL(), returnTo, user, password, totp, user != p.User)
+	if err != nil {
+		return "", err
+	}
+	return res.Final, nil
 }
 
 // RootGroup returns the Authentik root group of an organization (architecture §9.2). The gates spell the names
@@ -73,11 +134,12 @@ func Login(ctx context.Context, user, password string) (*Portal, error) {
 	if res == nil {
 		return nil, err
 	}
-	return &Portal{Client: res.Client, Final: res.Final, LoginRequestID: res.CallbackRequestID}, err
+	return &Portal{User: user, Client: res.Client, Final: res.Final, LoginRequestID: res.CallbackRequestID}, err
 }
 
 // Portal is a signed-in portal session.
 type Portal struct {
+	User   string // the username that signed in
 	Client *http.Client
 	Final  string
 	// LoginRequestID is the correlation ID of the admin.login event of this sign-in.

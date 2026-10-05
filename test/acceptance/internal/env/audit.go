@@ -26,6 +26,7 @@ type AuditEvent struct {
 	Actor         struct {
 		Type    string `json:"type"`
 		Display string `json:"display"`
+		StepUp  bool   `json:"step_up"`
 	} `json:"actor"`
 	Target *struct {
 		Type string `json:"type"`

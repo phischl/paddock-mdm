@@ -273,6 +273,7 @@ services:
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_api_secret_id
       PADDOCK_OIDC_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal/
       PADDOCK_OIDC_CLIENT_ID: paddock-portal
+      PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
       PADDOCK_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_AUTHENTIK_TOKEN_FILE: /run/secrets/authentik_service_token

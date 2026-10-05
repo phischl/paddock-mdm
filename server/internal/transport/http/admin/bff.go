@@ -25,6 +25,8 @@ type OIDCConfig struct {
 	ClientID     string
 	ClientSecret string
 	PublicURL    string // https://admin.<domain>[:port]
+	// RedirectPath is the path of the redirect URI below PublicURL; default /api/auth/callback.
+	RedirectPath string
 }
 
 // OIDC holds the discovered provider. Discovery is retried in the background until Authentik answers.
@@ -79,12 +81,19 @@ func (o *OIDC) discoverOnce(ctx context.Context) error {
 	defer o.mu.Unlock()
 	o.oauth = &oauth2.Config{
 		ClientID: o.cfg.ClientID, ClientSecret: o.cfg.ClientSecret, Endpoint: provider.Endpoint(),
-		RedirectURL: o.cfg.PublicURL + "/api/auth/callback",
+		RedirectURL: o.cfg.PublicURL + o.redirectPath(),
 		Scopes:      []string{oidc.ScopeOpenID, "profile", "email", "groups"},
 	}
 	o.verifier = provider.Verifier(&oidc.Config{ClientID: o.cfg.ClientID})
 	o.endSession = claims.EndSession
 	return nil
+}
+
+func (o *OIDC) redirectPath() string {
+	if o.cfg.RedirectPath == "" {
+		return "/api/auth/callback"
+	}
+	return o.cfg.RedirectPath
 }
 
 func (o *OIDC) snapshot() (*oauth2.Config, *oidc.IDTokenVerifier, string) {
@@ -105,6 +114,7 @@ type loginState struct {
 // bff implements /api/auth/*.
 type bff struct {
 	oidc     *OIDC
+	stepUp   *OIDC // provider paddock-portal-stepup (plan M4a decision 6)
 	keys     *Keyring
 	accounts *app.Accounts
 	now      func() time.Time

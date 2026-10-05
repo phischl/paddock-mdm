@@ -42,6 +42,11 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		ClientSecret: l.SecretFile("PADDOCK_OIDC_CLIENT_SECRET_FILE"),
 		PublicURL:    publicURL,
 	}
+	// Step-up (plan M4a decision 6): the provider paddock-portal-stepup shares the portal's client secret.
+	stepUpCfg := oidcCfg
+	stepUpCfg.Issuer = l.Required("PADDOCK_OIDC_STEPUP_ISSUER")
+	stepUpCfg.ClientID = l.String("PADDOCK_OIDC_STEPUP_CLIENT_ID", "paddock-portal-stepup")
+	stepUpCfg.RedirectPath = "/api/auth/stepup/callback"
 	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
 	authentikToken := l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")
 	releaseKey := l.SecretFile("PADDOCK_RELEASE_PUBLIC_KEY_FILE")
@@ -90,6 +95,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
+	stepUp := admin.NewOIDC(stepUpCfg)
 	bundleKeys := func(ctx context.Context) ([]protocol.BundleKey, error) { return bundlesign.PublicKeys(ctx, baoClient) }
 	ak := authentik.New(authentikURL, authentikToken)
 	handler := admin.NewHandler(admin.Deps{
@@ -111,6 +117,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Runner:        runner,
 		Keys:          keys,
 		OIDC:          oidc,
+		StepUp:        stepUp,
 		PublicURL:     publicURL,
 		Static:        static,
 	})
@@ -131,8 +138,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 				if !keys.Ready() {
 					notReady = errors.New("session keys not loaded")
 				}
-				if !oidc.Ready() {
-					notReady = errors.Join(notReady, errors.New("oidc provider not discovered"))
+				if !oidc.Ready() || !stepUp.Ready() {
+					notReady = errors.Join(notReady, errors.New("oidc providers not discovered"))
 				}
 				return errors.Join(orgPool.Ping(ctx), platformPool.Ping(ctx), auditReader.Ping(ctx), notReady)
 			})
@@ -144,6 +151,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 			return nil
 		},
 		func(ctx context.Context) error { oidc.Discover(ctx); <-ctx.Done(); return nil },
+		func(ctx context.Context) error { stepUp.Discover(ctx); <-ctx.Done(); return nil },
 		func(ctx context.Context) error { return listenAndServe(ctx, srv) },
 	)
 }

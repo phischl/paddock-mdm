@@ -38,6 +38,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/stepup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start a step-up authentication (plan M4a decision 6)
+         * @description Requires a valid session. Redirects to the authorization endpoint of the OIDC application
+         *     paddock-portal-stepup with prompt=login, max_age=60 and the session's username as login_hint; Authentik runs
+         *     the flow paddock-stepup (password and MFA). Actions that need a step-up answer 403 step_up_required when the
+         *     session has none within the last 300 s.
+         */
+        get: operations["stepUp"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/stepup/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * OIDC redirect URI of the step-up
+         * @description Accepts an ID token of the session's own user (same sub) with auth_time at most 60 s old and MFA (amr mfa),
+         *     then issues the session again with the step-up time. Any other answer leaves the session unchanged.
+         */
+        get: operations["stepUpCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/logout": {
         parameters: {
             query?: never;
@@ -828,7 +872,10 @@ export interface paths {
         delete: operations["deletePermissionProfile"];
         options?: never;
         head?: never;
-        /** @description Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given. */
+        /**
+         * @description Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given.
+         *     Changing the class to full needs a step-up within the last 300 s (403 step_up_required).
+         */
         patch: operations["updatePermissionProfile"];
         trace?: never;
     };
@@ -844,7 +891,8 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, org_operator. Assigns a profile globally, to a group or to a user, optionally only on the
-         *     devices of one device group.
+         *     devices of one device group. Assigning a full profile needs a step-up within the last 300 s (403
+         *     step_up_required).
          */
         post: operations["createProfileAssignment"];
         delete?: never;
@@ -2022,6 +2070,53 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Redirect to return_to (default /) on success, or to /login-denied?reason=<code>. */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    stepUp: {
+        parameters: {
+            query?: {
+                /** @description Relative path to return to; must start with "/" and not with "//". */
+                return_to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the Authentik authorization endpoint. */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+        };
+    };
+    stepUpCallback: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to return_to, with the query parameter stepup=failed if the step-up was refused. */
             302: {
                 headers: {
                     Location?: string;

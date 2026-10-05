@@ -169,6 +169,7 @@ func newIdentityWorld(t *testing.T, s *Stack, d *Device) *identityWorld {
 		"name": "systest full " + d.run, "class": "full",
 	}, http.StatusCreated))
 	s.DeleteOnCleanup("/api/v1/permission-profiles/" + w.fullID)
+	s.StepUp() // assigning a full profile (plan M4a decision 7)
 	for _, a := range []struct{ profile, user string }{{w.restrictedID, w.dave.id}, {w.fullID, w.fred.id}} {
 		id := s.ID(s.Call(http.MethodPost, "/api/v1/profile-assignments", map[string]any{
 			"profile_id": a.profile, "subject_type": "user", "subject_id": a.user, "device_group_id": d.Group,

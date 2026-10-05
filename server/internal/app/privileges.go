@@ -151,6 +151,7 @@ func (pp ProfilePatch) apply(p privilege.Profile) privilege.Profile {
 }
 
 // UpdateProfile changes a permission profile (audited: permission_profile.updated) and recompiles the organization.
+// Changing the class to full requires a step-up (plan M4a decision 7).
 func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch ProfilePatch) (pgstore.PermissionProfile, error) {
 	spec := SpecProfileUpdate
 	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
@@ -166,6 +167,11 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 		rec.SetTarget(audit.Target{Type: "permission_profile", ID: id.String(), Display: in.Name})
 		if err != nil {
 			return err
+		}
+		if in.Class == privilege.ClassFull && cur.Class != string(privilege.ClassFull) {
+			if err := rec.RequireStepUp(); err != nil {
+				return err
+			}
 		}
 		out, err = q.UpdatePermissionProfile(ctx, pgstore.UpdatePermissionProfileParams{
 			ID: id, Name: in.Name, Class: string(in.Class), Commands: in.Commands, RequirePassword: in.RequirePassword,
@@ -265,6 +271,7 @@ type NewAssignment struct {
 }
 
 // CreateAssignment assigns a profile (audited: profile_assignment.created) and recompiles the organization.
+// Assigning a full profile requires a step-up (plan M4a decision 7).
 func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pgstore.ProfileAssignment, error) {
 	var out pgstore.ProfileAssignment
 	err := p.runner.RunTx(ctx, ScopeOrg, SpecAssignmentCreate, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
@@ -280,6 +287,11 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 			return problem.InvalidRequest.WithDetail("unknown permission profile")
 		}
 		assignmentProfileParams(rec, profile)
+		if profile.Class == string(privilege.ClassFull) {
+			if err := rec.RequireStepUp(); err != nil {
+				return err
+			}
+		}
 		if err := privilege.ValidateAssignmentSubject(in.SubjectType, subject); err != nil {
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}

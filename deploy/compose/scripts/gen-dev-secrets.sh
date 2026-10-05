@@ -95,9 +95,11 @@ if [[ "$definitions" != "$(cat "$SECRETS_DIR/rabbitmq/definitions.json" 2>/dev/n
   echo "wrote .secrets/rabbitmq/definitions.json"
 fi
 
-# Development test users (Authentik)
+# Development test users (Authentik) and the keys of their TOTP authenticators (hex, 20 bytes), which `make dev-seed`
+# installs so that the acceptance gates can complete step-up authentications (plan M4a decision 8).
 for user in platform_admin alice bob carol; do
   secret "dev_${user}_password"
+  secret "dev_${user}_totp_key" "$(head -c 20 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 done
 
 # Placeholder for the Caddy root certificate; the caddy-ca-export service overwrites it.
