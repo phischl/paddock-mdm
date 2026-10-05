@@ -108,9 +108,10 @@ type sudoPlan struct {
 	write      map[string][]byte // file name → content
 	users      map[string]string // file name → username
 	unresolved []string
-	remove     []string // stale paddock-u-* files
-	quarantine []string // foreign files
-	sudoersSum string   // current SHA-256 of /etc/sudoers if it differs from the recorded one
+	rejected   map[string]error // username → why its file cannot be rendered
+	remove     []string         // stale paddock-u-* files
+	quarantine []string         // foreign files
+	sudoersSum string           // current SHA-256 of /etc/sudoers if it differs from the recorded one
 	members    map[string][]string
 }
 
@@ -124,6 +125,9 @@ func (p sudoPlan) changes() []string {
 	}
 	for _, u := range p.unresolved {
 		out = append(out, "resolve "+u)
+	}
+	for u := range p.rejected {
+		out = append(out, "render "+u)
 	}
 	for _, name := range p.remove {
 		out = append(out, "remove "+name)
@@ -144,7 +148,7 @@ func (p sudoPlan) changes() []string {
 }
 
 func (s *Sudo) plan(ctx context.Context, spec bundle.SudoSpec) (sudoPlan, error) {
-	p := sudoPlan{write: map[string][]byte{}, users: map[string]string{}, members: map[string][]string{}}
+	p := sudoPlan{write: map[string][]byte{}, users: map[string]string{}, members: map[string][]string{}, rejected: map[string]error{}}
 	var err error
 	if p.flavor, p.visudo, err = SudoFlavor(ctx, s.Sys); err != nil {
 		return p, err
@@ -163,8 +167,9 @@ func (s *Sudo) plan(ctx context.Context, spec bundle.SudoSpec) (sudoPlan, error)
 			continue
 		}
 		content, err := sudoers.Render(e, uid, p.flavor)
-		if err != nil {
-			return p, err
+		if err != nil { // e.g. a UID sudo-rs cannot handle: reported for the user, never skipped silently
+			p.rejected[e.Username] = err
+			continue
 		}
 		if !fileHas(s.Sys, SudoersDir+"/"+name, content, 0o440) {
 			p.write[name], p.users[name] = content, e.Username
@@ -237,6 +242,10 @@ func (s *Sudo) Apply(ctx context.Context, r bundle.Resource) Result {
 		errs = append(errs, err)
 	}
 	s.reportUnresolved(p.unresolved)
+	for _, username := range sortedKeys(p.rejected) {
+		s.reportFailure(username, p.rejected[username])
+		errs = append(errs, fmt.Errorf("%s: %w", username, p.rejected[username]))
+	}
 	for _, name := range sortedKeys(p.write) {
 		username := p.users[name]
 		if err := s.install(ctx, p.visudo, name, p.write[name]); err != nil {

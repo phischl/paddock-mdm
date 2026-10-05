@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -337,6 +338,10 @@ func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int, new
 func gateL1(t *testing.T, w *identityWorld) {
 	session := w.gdmLogin(t, w.dave, 1, true)
 	t.Logf("%s logged in at GDM: session %+v", w.dave.name, session)
+	// The fixed idmap_range keeps directory UIDs within the 9 digits sudo-rs handles.
+	if uid, err := strconv.Atoi(w.Must("id -u " + w.dave.name)); err != nil || uid < 200000 || uid > 999999999 {
+		t.Errorf("UID of %s: %d %v, want 200000–999999999", w.dave.name, uid, err)
+	}
 	if session.Type != "wayland" && session.Type != "x11" {
 		t.Errorf("session type %s, want a graphical session", session.Type)
 	}

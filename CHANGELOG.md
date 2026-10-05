@@ -95,6 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Devices derive directory UIDs from the fixed Himmelblau range `idmap_range = 200000-999999999` (Himmelblau's default reaches 2 000 200 000): sudo-rs, the default sudo of Ubuntu 26.04, cannot handle numeric users over 9 digits. The range is fixed and must never change, because a change gives every directory user a new UID on every device; a UID above it still gets no sudo-rs rights and is reported as `device.sudo_apply_failed` "uid exceeds sudo-rs limit" (M3b, answer to question 2).
 - **BREAKING:** Agents of this release enforce the login settings of their organization: before updating devices, list every local administrator account in *Login & privileges → break-glass accounts* and every sudoers file it needs (for example `90-<admin>`) in the sudoers.d allow list — other members of `sudo`, `admin` and `wheel` are removed and other files in `/etc/sudoers.d` are quarantined at the first apply (M3b decisions 13 and 15).
 - `make acceptance` runs the cases of the exactly-once gate in parallel (`PADDOCK_ACCEPTANCE_PARALLEL`, default 8) and allows 30 minutes again (M3b decision 2).
 - **BREAKING:** `paddock-compiler` runs from its own image (Dockerfile target `compiler`, Compose image `paddock-compiler:dev`, base `COMPILER_RUNTIME_IMAGE` = Debian 13 slim with the `sudo` package for `visudo`) and requires `PADDOCK_AUTHENTIK_URL` (Authentik's public URL, the authority of device logins); `PADDOCK_VISUDO` overrides the path `/usr/sbin/visudo`; the database migration `00008` records each bundle's schema version and runs automatically; why and how the image is hardened: `docs/operations/compiler-image.md`. Development stacks: `make up` (M3a step 4).
@@ -130,7 +131,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Known limitations
 
 - On devices with sudo-rs (Ubuntu 26.04 by default) the organization's custom sudo lecture text has no effect; users see sudo-rs's default lecture. The device detail shows a note for such devices (M3b).
-- On devices with sudo-rs, sudo rights of users whose UID has 10 digits (1 000 000 000 or more; Himmelblau assigns UIDs up to 2 000 200 000) are not applied: sudo-rs refuses a numeric user of that length in the per-user `Defaults` line, the agent keeps the previous state and reports `device.sudo_apply_failed` (M3b, open question).
 
 ### Security
 

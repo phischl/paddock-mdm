@@ -306,3 +306,25 @@ func TestSudoRendersForTheActiveImplementation(t *testing.T) {
 		t.Fatalf("classic file after the switch\n%s", got)
 	}
 }
+
+// TestSudoRSRefusesTenDigitUIDs: under sudo-rs a UID over 999999999 is reported as sudo.apply_failed "uid exceeds
+// sudo-rs limit" (once), never skipped silently; the other users get their files.
+func TestSudoRSRefusesTenDigitUIDs(t *testing.T) {
+	ctx := context.Background()
+	sys, s, events := sudoFixture(t)
+	sys.Links = map[string]string{"/usr/bin/sudo": "/usr/lib/cargo/bin/sudo", "/usr/sbin/visudo": "/usr/lib/cargo/bin/visudo"}
+	sys.SudoVersions = map[string]string{"/usr/lib/cargo/bin/sudo": "sudo-rs 0.2.13-0ubuntu1.2\n"}
+	sys.Passwd["dave@acme.test"] = 1413228688
+	r := sudoResource(t, restricted("dave@acme.test", "/usr/bin/true"), restricted("erin@acme.test", "/usr/bin/true"))
+	for range 2 {
+		if res := s.Apply(ctx, r); res.Status != reconcile.Error || !strings.Contains(res.Message, "uid exceeds sudo-rs limit") {
+			t.Fatalf("apply %+v", res)
+		}
+	}
+	if got := takeEvents(events); !slices.Equal(got, []event{{protocol.EventSudoApplyFailed, `{"username":"dave@acme.test","message":"uid exceeds sudo-rs limit"}`}}) {
+		t.Fatalf("events %v", got)
+	}
+	if sys.Files["/etc/sudoers.d/"+sudoers.FileName("dave@acme.test")] != nil || sys.Files["/etc/sudoers.d/"+sudoers.FileName("erin@acme.test")] == nil {
+		t.Fatal("wrong files written")
+	}
+}
