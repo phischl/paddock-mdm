@@ -55,7 +55,9 @@ func TestDeviceSecurity(t *testing.T) {
 			expectDeviceProblem(t, res, err, http.StatusUnauthorized, c.code)
 		})
 	}
-	for _, skew := range []time.Duration{-301 * time.Second, 301 * time.Second} {
+	// 10 s outside the ±300 s window, robust against second truncation and latency; the boundary itself is covered by
+	// the gateway unit test (plan M4a step 0d).
+	for _, skew := range []time.Duration{-310 * time.Second, 310 * time.Second} {
 		t.Run("timestamp "+skew.String(), func(t *testing.T) {
 			skewed := dev.Clone()
 			skewed.ClockOffset = skew
