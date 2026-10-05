@@ -763,13 +763,13 @@ func (w *identityWorld) forgeBundle(t *testing.T, change func(*bundle.SudoSpec))
 	tf.BundleKeys = append(tf.BundleKeys, protocol.BundleKey{KeyID: "systest:forged", PublicKey: base64.StdEncoding.EncodeToString(pub)})
 	trustJSON, _ := json.Marshal(tf)
 	w.Must("sudo systemctl stop paddock-supervisor")
-	w.MustIn(signed, "sudo install -m 0600 /dev/stdin "+cache)
-	w.MustIn(trustJSON, "sudo install -m 0644 /dev/stdin "+trust)
+	w.MustIn(signed, "sudo tee "+cache+" >/dev/null && sudo chmod 0600 "+cache)
+	w.MustIn(trustJSON, "sudo tee "+trust+" >/dev/null && sudo chmod 0644 "+trust)
 	w.Must("sudo systemctl start paddock-supervisor")
 	return func() {
 		w.Must("sudo systemctl stop paddock-supervisor")
-		w.MustIn([]byte(origBundle), "sudo install -m 0600 /dev/stdin "+cache)
-		w.MustIn([]byte(origTrust), "sudo install -m 0644 /dev/stdin "+trust)
+		w.MustIn([]byte(origBundle), "sudo tee "+cache+" >/dev/null && sudo chmod 0600 "+cache)
+		w.MustIn([]byte(origTrust), "sudo tee "+trust+" >/dev/null && sudo chmod 0644 "+trust)
 		w.Must("sudo systemctl start paddock-supervisor")
 	}
 }
