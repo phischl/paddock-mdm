@@ -1,0 +1,7 @@
+# gitleaks configuration: the default rules plus allowlists for generated content that changes with every API change.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "oapi-codegen embeds the OpenAPI spec as gzip+base64 chunks; they are generated, not secrets"
+paths = ['''server/internal/transport/http/admin/adminapi/adminapi\.gen\.go''']
