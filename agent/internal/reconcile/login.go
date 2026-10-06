@@ -173,9 +173,29 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	}
 	var changed []string
 	var aptErr error
+	wasSuspended := suspendedConf(l.read(HimmelblauConf))
+	confWritten := false
 	if !l.installed(s.Himmelblau.PackageVersion) {
-		if aptErr = l.install(ctx, s.Himmelblau.PackageVersion); aptErr == nil {
+		// The configuration comes first: the packages start himmelblaud, and himmelblau-sshd-config restarts sshd,
+		// which himmelblaud orders after itself (Before=sshd.service). Without its configuration himmelblaud fails in
+		// a restart loop, sshd's start waits behind it, and the installation waits for sshd: SSH stays down and the
+		// installation never ends (plan M4b.1 step 6). dpkg keeps the file (--force-confold); a failed installation
+		// takes it back, so there is no configuration without the package.
+		previous, _, readErr := l.Sys.ReadFile(HimmelblauConf)
+		if !l.fileIs(HimmelblauConf, st.wantConf) {
+			if err := l.Sys.WriteFileAtomic(HimmelblauConf, st.wantConf, 0o644, 0, 0); err != nil {
+				return l.fail(r.ID, protocol.LoginStageConfig, err)
+			}
+			confWritten = true
+		}
+		aptErr = l.install(ctx, s.Himmelblau.PackageVersion)
+		switch {
+		case aptErr == nil:
 			changed = append(changed, "package")
+		case confWritten && readErr == nil:
+			aptErr = errors.Join(aptErr, l.Sys.WriteFileAtomic(HimmelblauConf, previous, 0o644, 0, 0))
+		case confWritten:
+			aptErr = errors.Join(aptErr, l.Sys.Remove(HimmelblauConf))
 		}
 	}
 	wasDenied := denied(l.read(DenyList))
@@ -185,8 +205,7 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 		}
 		changed = append(changed, "deny_list")
 	}
-	wasSuspended := suspendedConf(l.read(HimmelblauConf))
-	if aptErr == nil && !l.fileIs(HimmelblauConf, st.wantConf) {
+	if aptErr == nil && (confWritten || !l.fileIs(HimmelblauConf, st.wantConf)) {
 		if err := l.Sys.WriteFileAtomic(HimmelblauConf, st.wantConf, 0o644, 0, 0); err != nil {
 			return l.fail(r.ID, protocol.LoginStageConfig, err)
 		}

@@ -8,10 +8,14 @@ organization's Authentik application `paddock-device-<slug>`; local accounts sig
 
 At the first bundle with login management (agents report bundle schema 2), the agent:
 
-1. installs Himmelblau `PADDOCK_HIMMELBLAU_VERSION` (setting of `paddock-compiler`, default `4.0.4`) from the
-   official repository `https://packages.himmelblau-idm.org/stable/<version>/deb/ubuntu<release>/`. The repository
-   signing key is built into the agent (fingerprint `E87F D8D4 63A5 E481 4B9C DBA9 0CC0 D400 2C42 5E03`) and written
-   to `/etc/apt/keyrings/himmelblau.gpg`; the source is `/etc/apt/sources.list.d/paddock-himmelblau.list`. Only this
+1. writes `/etc/himmelblau/himmelblau.conf` (step 2) before it installs the packages: their installation starts
+   `himmelblaud`, and `himmelblau-sshd-config` restarts sshd, which `himmelblaud` orders after itself; without its
+   configuration `himmelblaud` fails in a restart loop that keeps sshd down and the installation waiting. The file is
+   removed again if the installation fails. It then installs Himmelblau `PADDOCK_HIMMELBLAU_VERSION` (setting of
+   `paddock-compiler`, default `4.0.4`) from the official repository
+   `https://packages.himmelblau-idm.org/stable/<version>/deb/ubuntu<release>/`. The repository signing key is built
+   into the agent (fingerprint `E87F D8D4 63A5 E481 4B9C DBA9 0CC0 D400 2C42 5E03`) and written to
+   `/etc/apt/keyrings/himmelblau.gpg`; the source is `/etc/apt/sources.list.d/paddock-himmelblau.list`. Only this
    source is updated; if the installation then fails on a dependency (stale package lists of the other sources), the
    agent runs one `apt-get update` of every source and tries once more. apt waits up to 10 minutes for a dpkg lock
    held by unattended upgrades. A failure is reported as `device.login_apply_failed` (stage `apt`) and retried at

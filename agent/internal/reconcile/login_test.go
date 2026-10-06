@@ -110,6 +110,8 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 	}
 	calls := sys.TakeCalls()
 	want := []string{
+		// The configuration precedes the packages, whose installation starts himmelblaud (plan M4b.1 step 6).
+		"write /etc/himmelblau/himmelblau.conf",
 		"write /etc/apt/keyrings/himmelblau.gpg", "write /etc/apt/sources.list.d/paddock-himmelblau.list", "apt-get update",
 		"apt-get install himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config",
 		"write /etc/paddock/login-deny", "write /etc/himmelblau/himmelblau.conf",
@@ -321,6 +323,21 @@ func TestLoginAptFailureIsReportedOnceAndLocksStillApply(t *testing.T) {
 	sys.FailCmd = ""
 	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
 		t.Fatalf("after the lock was released: %+v", res)
+	}
+}
+
+// A configuration left from an earlier installation is restored when the installation fails, so the configuration
+// written before the packages (plan M4b.1 step 6) never outlives a failed installation.
+func TestLoginAptFailureRestoresTheConfiguration(t *testing.T) {
+	ctx := context.Background()
+	sys, l, _ := loginFixture(t)
+	sys.FailCmd = "apt-get install"
+	sys.Files["/etc/himmelblau/himmelblau.conf"] = &fakesys.File{Data: []byte("[global]\n"), Mode: 0o644}
+	if res := l.Apply(ctx, loginResource(t, loginSpec())); res.Status != reconcile.Error {
+		t.Fatalf("apply %+v", res)
+	}
+	if f := sys.Files["/etc/himmelblau/himmelblau.conf"]; f == nil || string(f.Data) != "[global]\n" {
+		t.Fatalf("configuration after the failed installation: %+v", f)
 	}
 }
 

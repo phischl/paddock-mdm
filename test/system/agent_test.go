@@ -140,21 +140,20 @@ func gateS2(t *testing.T, d *Device) {
 		return slices.Contains(ids, any("file:"+a))
 	})
 
-	// Remove both file resources; b is changed locally while the agent is stopped, so that the drift loop cannot
-	// restore it before the new bundle arrives (the agent checks in at start, before its first drift pass).
-	versionBefore := d.State()["applied_bundle_version"].(float64)
-	for _, p := range []string{a, b} {
-		d.s.Call(http.MethodDelete, "/api/v1/managed-files/"+d.Files[p], nil, http.StatusNoContent)
-		delete(d.Files, p)
+	// Remove both file resources: a while the agent runs; b only after it was changed locally while the agent is
+	// stopped, so that neither the drift loop nor a bundle compiled before b's removal can restore it (the agent checks
+	// in at start, before its first drift pass). The waits follow the versions the server compiles, not the version the
+	// agent applied: an agent still busy with an earlier bundle (e.g. installing Himmelblau) lags behind the server.
+	remove := func(path string) {
+		before := d.bundleVersion()
+		d.s.Call(http.MethodDelete, "/api/v1/managed-files/"+d.Files[path], nil, http.StatusNoContent)
+		delete(d.Files, path)
+		Until(t, "bundle without "+path+" compiled", time.Minute, 2*time.Second, nil, func() bool { return d.bundleVersion() > before })
 	}
-	Until(t, "new bundle compiled", time.Minute, 2*time.Second, nil, func() bool {
-		var dev struct {
-			BundleVersion float64 `json:"bundle_version"`
-		}
-		_ = json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev)
-		return dev.BundleVersion > versionBefore
-	})
-	d.Must("sudo systemctl stop paddock-supervisor && echo local | sudo tee -a " + b + " >/dev/null && sudo systemctl start paddock-supervisor")
+	remove(a)
+	d.Must("sudo systemctl stop paddock-supervisor && echo local | sudo tee -a " + b + " >/dev/null")
+	remove(b)
+	d.Must("sudo systemctl start paddock-supervisor")
 	d.WaitEvent(t, "device.bundle_applied", 3*time.Minute, func(p map[string]any) bool {
 		errs, _ := p["errors"].([]any)
 		for _, e := range errs {
