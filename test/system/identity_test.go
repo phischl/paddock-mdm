@@ -569,10 +569,11 @@ func gateL3(t *testing.T, w *identityWorld) {
 	if exit := w.pamLogin(t, w.dave, false, 2*time.Minute); exit == 0 {
 		t.Errorf("%s logged in while logins are suspended", w.dave.name)
 	}
-	// Break-glass at the console: GDM lists paddock and dave; "Not listed?" and the password.
+	// Break-glass at the console: GDM lists paddock, dave and the local administrator (M4a); "Not listed?" and the
+	// password.
 	time.Sleep(5 * time.Second)
 	w.Shot(t, "20-greeter-suspended")
-	for range 2 {
+	for range 3 {
 		w.Key(keyTab...)
 		time.Sleep(time.Second)
 	}
@@ -707,8 +708,8 @@ func gateP4(t *testing.T, w *identityWorld) {
 	if out := w.Must("test -e /etc/sudoers.d/evil && echo present || echo gone; sudo ls /var/lib/paddock/quarantine/sudoers.d/ | grep -c '^evil\\.'"); out != "gone\n1" {
 		t.Errorf("quarantine: %q", out)
 	}
-	if members := w.Must("getent group sudo | cut -d: -f4"); members != "paddock" {
-		t.Errorf("sudo members %q, want only the break-glass account", members)
+	if members := w.Must("getent group sudo | cut -d: -f4"); members != "paddock,"+localAdmin {
+		t.Errorf("sudo members %q, want only the break-glass accounts (paddock and the local administrator)", members)
 	}
 	if after := w.Must("sudo sha256sum /etc/sudoers.d/90-paddock"); after != before {
 		t.Errorf("90-paddock changed: %s → %s", before, after)
