@@ -123,6 +123,29 @@ func Run(ctx context.Context, o Options) (int, error) {
 	return code, nil
 }
 
+// Autoinstalled enrolls the device with the enrollment configuration the Paddock autoinstall left at
+// o.ConfigPath (plan M4b decision 7) and removes it once the enrollment is active or pending; the agent runs this
+// at its start, before anything else. It reports false while the configuration is there and the enrollment could
+// not be sent or decided (the caller tries again later), true otherwise — also without a configuration and for a
+// rejected enrollment.
+func Autoinstalled(ctx context.Context, o Options) bool {
+	if _, err := os.Stat(o.ConfigPath); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	o.RemoveConfig, o.NoWait = true, true
+	code, err := Run(ctx, o)
+	switch code {
+	case ExitActive, ExitPending:
+		slog.InfoContext(ctx, "device enrolled with the configuration of the autoinstall", "pending", code == ExitPending)
+		return true
+	case ExitRejected:
+		slog.WarnContext(ctx, "the enrollment of this device was rejected", "error", err)
+		return true
+	}
+	slog.WarnContext(ctx, "enrollment with the configuration of the autoinstall failed; retrying", "error", err)
+	return false
+}
+
 // requestEnrollment sends the enrollment request and retries invalid_token answers.
 func requestEnrollment(ctx context.Context, o Options, c *client.Client, req protocol.EnrollRequest) (string, error) {
 	for attempt := 0; ; attempt++ {

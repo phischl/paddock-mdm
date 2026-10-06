@@ -2,7 +2,8 @@
 # paddockd in /usr/lib/paddock; its postinst installs it into slot A only on a device without an agent. Later
 # versions arrive as signed releases through paddock-supervisor, so a package upgrade never touches a slot.
 # The pam-auth-update profile paddock-deny puts the deny list of locked users (pam_listfile) before every other
-# primary auth and account module (plan M3b decisions 9 and 16).
+# primary auth and account module (plan M3b decisions 9 and 16). paddock-disk-setup.service asks for the boot PIN
+# at the first boot of a device installed with the Paddock autoinstall (plan M4b decision 5).
 name: paddock-agent
 arch: ${ARCH}
 platform: linux
@@ -22,6 +23,8 @@ depends:
   - paddock-supervisor
   - libpam-modules
   - sudo
+  - cryptsetup
+  - tpm2-tools
 contents:
   - src: bin/deb/stage/paddockd
     dst: /usr/lib/paddock/paddockd
@@ -29,6 +32,9 @@ contents:
   - src: /opt/paddock/agent/current/paddockd
     dst: /usr/bin/paddockd
     type: symlink
+  - src: packaging/systemd/paddock-disk-setup.service
+    dst: /usr/lib/systemd/system/paddock-disk-setup.service
+    file_info: { mode: 0644 }
   - src: packaging/pam-configs/paddock-deny
     dst: /usr/share/pam-configs/paddock-deny
     file_info: { mode: 0644 }

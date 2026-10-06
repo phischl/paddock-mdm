@@ -203,3 +203,39 @@ func TestEnrollRetriesNewToken(t *testing.T) {
 		t.Fatalf("state %+v after a refused token", st)
 	}
 }
+
+func TestAutoinstalled(t *testing.T) {
+	f := newFixture(t)
+	o := f.options(f.layout.EnrollConfig())
+	if !enroll.Autoinstalled(context.Background(), o) || len(f.g.Enrolls) != 0 {
+		t.Fatal("without a configuration there is nothing to do")
+	}
+	data, err := os.ReadFile(f.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(o.ConfigPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(o.ConfigPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The server refuses the request: the configuration stays for the next attempt.
+	f.g.EnrollFail = enroll.TokenRetries + 1
+	if enroll.Autoinstalled(context.Background(), o) {
+		t.Fatal("a failed enrollment reported done")
+	}
+	if _, err := os.Stat(o.ConfigPath); err != nil {
+		t.Fatalf("configuration removed after a failure: %v", err)
+	}
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
+	if !enroll.Autoinstalled(context.Background(), o) {
+		t.Fatal("enrollment not done")
+	}
+	if _, err := os.Stat(o.ConfigPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("configuration kept after the enrollment: %v", err)
+	}
+	if st, _ := state.Load(f.layout.State()); st.Status != state.StatusActive {
+		t.Fatalf("state %+v", st)
+	}
+}

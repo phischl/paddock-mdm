@@ -1,6 +1,6 @@
 // Command paddockd is the Paddock agent (plan M2b §3.1). `paddockd run` is started only by paddock-supervisor;
 // `paddockd enroll` is run once by an operator; `paddockd self-test` is run by the supervisor before it switches to
-// a new version.
+// a new version; `paddockd disk-setup` is run once at the first boot by paddock-disk-setup.service (plan M4b).
 package main
 
 import (
@@ -12,13 +12,16 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/agent"
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/disksetup"
 	"github.com/phischl/paddock-mdm/agent/internal/enroll"
+	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/selftest"
 	"github.com/phischl/paddock-mdm/agent/internal/triggers"
@@ -32,6 +35,7 @@ commands:
   run            run the agent (started by paddock-supervisor)
   self-test      check this binary against the device's configuration; JSON report, exit 0 or 1
   plan           show what applying the last applied bundle again would change (read-only); JSON report
+  disk-setup     ask for the boot PIN on the console and enroll TPM2+PIN (first boot, paddock-disk-setup.service)
   version        print the version
 `
 
@@ -62,6 +66,8 @@ func run(args []string, stdout io.Writer) int {
 		return runAgent(ctx, layout)
 	case "plan":
 		return runPlan(ctx, layout, stdout)
+	case "disk-setup":
+		return runDiskSetup(ctx, layout)
 	case "self-test":
 		r := selftest.Run(ctx, layout)
 		enc := json.NewEncoder(stdout)
@@ -99,8 +105,9 @@ func runEnroll(ctx context.Context, layout paths.Layout, args []string) int {
 	return code
 }
 
-// runAgent waits until the configuration is readable (fail safe: a device that is not enrolled yet, or whose
-// configuration is broken, keeps working and the supervisor does not restart in a loop), then runs the agent.
+// runAgent enrolls a device installed with the Paddock autoinstall (plan M4b decision 7) and waits until the
+// configuration is readable (fail safe: a device that is not enrolled yet, or whose configuration is broken, keeps
+// working and the supervisor does not restart in a loop), then runs the agent.
 func runAgent(ctx context.Context, layout paths.Layout) int {
 	if buildinfo.BrokenProbation {
 		go func() {
@@ -112,7 +119,8 @@ func runAgent(ctx context.Context, layout paths.Layout) int {
 	var deps agent.Deps
 	for logged := false; ; {
 		var err error
-		if deps, err = agent.Load(layout); err == nil {
+		enrolled := enroll.Autoinstalled(ctx, enroll.Options{Layout: layout, ConfigPath: layout.EnrollConfig()})
+		if deps, err = agent.Load(layout); err == nil && enrolled {
 			break
 		}
 		if !logged {
@@ -158,6 +166,31 @@ func runPlan(ctx context.Context, layout paths.Layout, stdout io.Writer) int {
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(map[string]any{"bundle_version": version, "changes": changes, "resources": plan})
 	return 0
+}
+
+// runDiskSetup runs the first-boot disk setup on the console (stdin and stdout are the TTY of the unit). It always
+// exits 0 unless the console is unusable, so the boot continues (fail safe).
+func runDiskSetup(ctx context.Context, layout paths.Layout) int {
+	if layout.Root == "/" && os.Geteuid() != 0 {
+		slog.Error("paddockd disk-setup must run as root")
+		return 1
+	}
+	err := disksetup.Run(ctx, disksetup.Options{Layout: layout, Tools: luks.OS{}, In: os.Stdin, Out: os.Stdout, Echo: ttyEcho})
+	if err != nil {
+		slog.ErrorContext(ctx, "disk setup failed", "error", err)
+		return 1
+	}
+	return 0
+}
+
+// ttyEcho turns the echo of the terminal on stdin on or off.
+func ttyEcho(on bool) error {
+	cmd := exec.Command("stty", "-echo")
+	if on {
+		cmd = exec.Command("stty", "echo")
+	}
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
 }
 
 // forwardHangup turns SIGHUP (sent by the supervisor after an update result) into an immediate check-in.
