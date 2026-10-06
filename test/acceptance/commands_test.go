@@ -208,11 +208,11 @@ func TestCommands(t *testing.T) {
 	})
 }
 
-// m3bCommit is the last commit of M3.1 (agent of bundle schema 2 without the keys object).
-const m3bCommit = "99937ad"
+// m3bTag is the annotated tag on the last commit of M3.1 (agent of bundle schema 2 without the keys object).
+const m3bTag = "baseline/m3b-agent"
 
 // TestM3bAgentAcceptsBundleKeys (plan M4a decision 5): the bundle verification of an M3b-built agent — pkg/bundle at
-// m3bCommit — accepts a v2 bundle of this release, which carries the top-level keys object.
+// m3bTag — accepts a v2 bundle of this release, which carries the top-level keys object.
 func TestM3bAgentAcceptsBundleKeys(t *testing.T) {
 	alice := login(t, "alice@acme.test")
 	d := v2Device(t, alice, "", 1, 2)
@@ -237,10 +237,16 @@ func TestM3bAgentAcceptsBundleKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolve := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--verify", "--quiet", m3bTag+"^{commit}")
+	commit, err := resolve.Output()
+	if err != nil {
+		t.Fatalf("tag %s not found (%v); fetch tags: git fetch --tags", m3bTag, err)
+	}
+	m3bCommit := strings.TrimSpace(string(commit))
 	dir := t.TempDir()
 	archive := exec.CommandContext(ctx, "sh", "-c", "git -C '"+root+"' archive "+m3bCommit+" pkg | tar -x -C '"+dir+"'")
 	if out, err := archive.CombinedOutput(); err != nil {
-		t.Fatalf("extract pkg at %s: %v: %s", m3bCommit, err, out)
+		t.Fatalf("extract pkg at %s (%s): %v: %s", m3bTag, m3bCommit, err, out)
 	}
 	// The verifier imports pkg under the module path of the extracted commit.
 	gomod, err := os.ReadFile(filepath.Join(dir, "pkg", "go.mod"))
@@ -250,7 +256,7 @@ func TestM3bAgentAcceptsBundleKeys(t *testing.T) {
 	first, _, _ := strings.Cut(string(gomod), "\n")
 	module, ok := strings.CutPrefix(first, "module ")
 	if !ok {
-		t.Fatalf("pkg/go.mod at %s starts with %q", m3bCommit, first)
+		t.Fatalf("pkg/go.mod at %s starts with %q", m3bTag, first)
 	}
 	verify := strings.ReplaceAll(m3bVerify, "{{module}}", module)
 	trust, _ := json.Marshal(d.Config.BundleKeys)
