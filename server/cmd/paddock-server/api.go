@@ -68,6 +68,10 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 			runnerOpts = append(runnerOpts, app.WithExternalDelay(d))
 		}
 	}
+	devStepUp := config.LoadDevStepUp(l, common)
+	if devStepUp.Window > 0 {
+		runnerOpts = append(runnerOpts, app.WithStepUpWindow(devStepUp.Window))
+	}
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -138,6 +142,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		StepUp:        stepUp,
 		PublicURL:     publicURL,
 		Static:        static,
+		// Development only: LoadDevStepUp refuses the variables in production.
+		StepUpMaxAuthAge: devStepUp.MaxAuthAge,
+		ExposeStepUp:     common.Development(),
 	})
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	slog.InfoContext(ctx, "api starting", "addr", httpAddr, "public_url", publicURL)

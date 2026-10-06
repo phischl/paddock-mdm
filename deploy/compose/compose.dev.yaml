@@ -57,6 +57,10 @@ services:
       PADDOCK_ENV: development
       # Test hooks of the acceptance gate A3 (honoured only with PADDOCK_ENV=development); empty = off.
       PADDOCK_TEST_EXTERNAL_DELAY: ${PADDOCK_TEST_EXTERNAL_DELAY:-}
+      # Shorter step-up timing so that the step-up gate does not wait 6 minutes (development only; refused in
+      # production).
+      PADDOCK_STEPUP_WINDOW: ${PADDOCK_STEPUP_WINDOW:-30s}
+      PADDOCK_STEPUP_MAX_AUTH_AGE: ${PADDOCK_STEPUP_MAX_AUTH_AGE:-15s}
 
   paddock-outbox-relay:
     environment:

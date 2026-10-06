@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -91,9 +92,16 @@ type stepUpWorld struct {
 	keys    *admin.Keyring
 	handler http.Handler
 	session admin.Session
+	maxAge  string // max_age the authorization request must carry
 }
 
 func newStepUpWorld(t *testing.T) *stepUpWorld {
+	t.Helper()
+	return newStepUpWorldWith(t, 0)
+}
+
+// newStepUpWorldWith is newStepUpWorld with Deps.StepUpMaxAuthAge (0: the production value).
+func newStepUpWorldWith(t *testing.T, maxAuthAge time.Duration) *stepUpWorld {
 	t.Helper()
 	idp := newFakeStepUpIdP(t)
 	key := make([]byte, 32)
@@ -116,9 +124,13 @@ func newStepUpWorld(t *testing.T) *stepUpWorld {
 	}
 	p := principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Subject: "sub-alice",
 		Display: "alice@acme.test", Role: principal.RoleOrgAdmin, OrganizationID: uuid.Must(uuid.NewV7())}
-	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "en", time.Now()),
+	maxAge := "60"
+	if maxAuthAge > 0 {
+		maxAge = strconv.Itoa(int(maxAuthAge.Seconds()))
+	}
+	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "en", time.Now()), maxAge: maxAge,
 		handler: admin.NewHandler(admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
-			PublicURL: "https://admin.test"})}
+			PublicURL: "https://admin.test", StepUpMaxAuthAge: maxAuthAge})}
 }
 
 func (w *stepUpWorld) serve(path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -153,7 +165,7 @@ func (w *stepUpWorld) stepUp(claims map[string]any) *httptest.ResponseRecorder {
 	}
 	loc, _ := url.Parse(start.Header().Get("Location"))
 	q := loc.Query()
-	if !strings.HasPrefix(loc.String(), w.idp.URL+"/authorize") || q.Get("prompt") != "login" || q.Get("max_age") != "60" ||
+	if !strings.HasPrefix(loc.String(), w.idp.URL+"/authorize") || q.Get("prompt") != "login" || q.Get("max_age") != w.maxAge ||
 		q.Get("login_hint") != "alice@acme.test" || q.Get("client_id") != "paddock-portal-stepup" ||
 		q.Get("redirect_uri") != "https://admin.test/api/auth/stepup/callback" || q.Get("code_challenge_method") != "S256" {
 		w.t.Fatalf("authorization request %s", loc)
@@ -216,6 +228,14 @@ func TestStepUp(t *testing.T) {
 			}
 		})
 	}
+	t.Run("shortened maximum auth age", func(t *testing.T) {
+		if res := newStepUpWorldWith(t, 15*time.Second).stepUp(with("auth_time", now-16)); res.Header().Get("Location") != "/devices/x?stepup=failed" {
+			t.Fatalf("16 s old login with max_age 15: %s", res.Header().Get("Location"))
+		}
+		if res := newStepUpWorldWith(t, 15*time.Second).stepUp(good); res.Header().Get("Location") != "/devices/x" {
+			t.Fatalf("5 s old login with max_age 15: %s", res.Header().Get("Location"))
+		}
+	})
 	t.Run("without session", func(t *testing.T) {
 		w := newStepUpWorld(t)
 		if res := w.serve("/api/auth/stepup?return_to=%2F"); res.Code != http.StatusUnauthorized {

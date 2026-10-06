@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestMissingVariablesAreReportedTogether(t *testing.T) {
@@ -41,5 +43,33 @@ func TestInvalidEnv(t *testing.T) {
 	LoadCommon(l)
 	if l.Err() == nil {
 		t.Fatal("PADDOCK_ENV=staging accepted")
+	}
+}
+
+// TestDevStepUp: the step-up timing can be shortened in development only; in production setting either variable
+// fails the start.
+func TestDevStepUp(t *testing.T) {
+	both := map[string]string{"PADDOCK_STEPUP_WINDOW": "30s", "PADDOCK_STEPUP_MAX_AUTH_AGE": "15s"}
+
+	l := NewLoaderFrom(both)
+	if d := LoadDevStepUp(l, Common{Env: "development"}); d != (DevStepUp{Window: 30 * time.Second, MaxAuthAge: 15 * time.Second}) || l.Err() != nil {
+		t.Fatalf("development: %+v, %v", d, l.Err())
+	}
+	l = NewLoaderFrom(nil)
+	if d := LoadDevStepUp(l, Common{Env: "development"}); d != (DevStepUp{}) || l.Err() != nil {
+		t.Fatalf("unset: %+v, %v", d, l.Err())
+	}
+	for name := range both {
+		l = NewLoaderFrom(map[string]string{name: "30s"})
+		if d := LoadDevStepUp(l, Common{Env: "production"}); d != (DevStepUp{}) || l.Err() == nil ||
+			!strings.Contains(l.Err().Error(), name+": only allowed with PADDOCK_ENV=development") {
+			t.Fatalf("production with %s: %+v, %v", name, d, l.Err())
+		}
+	}
+	for _, v := range []string{"0s", "-5s", "soon"} {
+		l = NewLoaderFrom(map[string]string{"PADDOCK_STEPUP_WINDOW": v})
+		if d := LoadDevStepUp(l, Common{Env: "development"}); d.Window != 0 || l.Err() == nil {
+			t.Fatalf("window %q: %+v, %v", v, d, l.Err())
+		}
 	}
 }

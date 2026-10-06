@@ -40,6 +40,11 @@ type Deps struct {
 	PublicURL     string
 	Static        *StaticHandler // portal build
 	Now           func() time.Time
+	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
+	StepUpMaxAuthAge time.Duration
+	// ExposeStepUp adds the session's step-up time and the step-up timing to GET /api/v1/me (development only, for
+	// the acceptance gates).
+	ExposeStepUp bool
 }
 
 // privileged maps route patterns of privileged actions to their audit spec, so that requests rejected before
@@ -101,7 +106,11 @@ func NewHandler(d Deps) http.Handler {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now}}
+	if d.StepUpMaxAuthAge == 0 {
+		d.StepUpMaxAuthAge = StepUpMaxAuthAge
+	}
+	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now,
+		maxAuthAge: d.StepUpMaxAuthAge}}
 
 	api := http.NewServeMux()
 	h := &handlers{
@@ -109,6 +118,9 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, now: d.Now,
+	}
+	if d.ExposeStepUp {
+		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}
 	}
 	strict := adminapi.NewStrictHandlerWithOptions(h, nil,
 		adminapi.StrictHTTPServerOptions{

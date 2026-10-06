@@ -30,6 +30,12 @@ type harness struct {
 
 func newHarness(t *testing.T) harness {
 	t.Helper()
+	return newHarnessWith(t)
+}
+
+// newHarnessWith is newHarness with runner options.
+func newHarnessWith(t *testing.T, opts ...app.RunnerOption) harness {
+	t.Helper()
 	env := pgtest.SharedPaddock(t)
 	commitTrigger.Do(func() {
 		// Injected commit failure: a deferred constraint trigger raises at COMMIT for a magic group name.
@@ -68,7 +74,7 @@ func newHarness(t *testing.T) harness {
 	t.Cleanup(func() { _ = super.Close(ctx) })
 
 	h := harness{
-		runner: app.NewActionRunner(orgPool, platformPool, func(context.Context) string { return "corr-" + t.Name() }),
+		runner: app.NewActionRunner(orgPool, platformPool, func(context.Context) string { return "corr-" + t.Name() }, opts...),
 		super:  super,
 		org:    uuid.Must(uuid.NewV7()),
 	}
@@ -251,6 +257,21 @@ func TestRunTxStepUp(t *testing.T) {
 		}
 		if ev := expectOne(t, h, audit.OutcomeSuccess, ""); !ev.Actor.StepUp {
 			t.Fatal("the actor is not marked as stepped up")
+		}
+	})
+	t.Run("shortened window", func(t *testing.T) {
+		h := newHarnessWith(t, app.WithStepUpWindow(30*time.Second))
+		if h.runner.StepUpWindow() != 30*time.Second {
+			t.Fatalf("window %s", h.runner.StepUpWindow())
+		}
+		err := h.runner.RunTx(withStepUp(h, time.Now().Add(-31*time.Second)), app.ScopeOrg, spec, createGroup("too-old"))
+		if !errors.Is(err, problem.StepUpRequired) {
+			t.Fatalf("31 s old with a 30 s window: %v", err)
+		}
+		expectOne(t, h, audit.OutcomeDenied, "step_up_required")
+		h = newHarnessWith(t, app.WithStepUpWindow(30*time.Second))
+		if err := h.runner.RunTx(withStepUp(h, time.Now().Add(-29*time.Second)), app.ScopeOrg, spec, createGroup("in-window")); err != nil {
+			t.Fatalf("29 s old with a 30 s window: %v", err)
 		}
 	})
 	t.Run("required inside the action", func(t *testing.T) {

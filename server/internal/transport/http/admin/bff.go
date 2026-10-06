@@ -118,6 +118,8 @@ type bff struct {
 	keys     *Keyring
 	accounts *app.Accounts
 	now      func() time.Time
+	// maxAuthAge is the oldest login a step-up callback accepts.
+	maxAuthAge time.Duration
 }
 
 func randomToken() string {

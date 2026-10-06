@@ -1197,6 +1197,19 @@ export interface components {
             organization: components["schemas"]["MeOrganization"] | null;
             /** @enum {string} */
             locale: "en";
+            step_up?: components["schemas"]["MeStepUp"];
+        };
+        /** @description Development only (PADDOCK_ENV=development; absent in production): the session's last step-up and the step-up timing the server applies, for the acceptance gates. */
+        MeStepUp: {
+            /**
+             * Format: date-time
+             * @description Time of the session's last step-up (whole seconds), null without one.
+             */
+            at?: string | null;
+            /** @description How long a step-up satisfies a privileged action. */
+            window_seconds: number;
+            /** @description The oldest login a step-up callback accepts (max_age). */
+            max_auth_age_seconds: number;
         };
         MeUpdate: {
             /** @enum {string} */

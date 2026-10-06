@@ -82,6 +82,7 @@ type ActionRunner struct {
 	now           func() time.Time
 	// externalDelay is the development-only test hook PADDOCK_TEST_EXTERNAL_DELAY (plan M0 §8, A3).
 	externalDelay time.Duration
+	stepUpWindow  time.Duration
 }
 
 // RunnerOption configures an ActionRunner.
@@ -92,12 +93,21 @@ func WithExternalDelay(d time.Duration) RunnerOption {
 	return func(r *ActionRunner) { r.externalDelay = d }
 }
 
+// WithStepUpWindow replaces StepUpValidity (development-only PADDOCK_STEPUP_WINDOW; callers must check
+// PADDOCK_ENV).
+func WithStepUpWindow(d time.Duration) RunnerOption {
+	return func(r *ActionRunner) { r.stepUpWindow = d }
+}
+
+// StepUpWindow is how long a step-up satisfies RequiresStepUp.
+func (r *ActionRunner) StepUpWindow() time.Duration { return r.stepUpWindow }
+
 // WithClock replaces time.Now (tests).
 func WithClock(now func() time.Time) RunnerOption { return func(r *ActionRunner) { r.now = now } }
 
 // NewActionRunner creates a runner.
 func NewActionRunner(org *db.OrgPool, platform *db.PlatformPool, correlationID CorrelationIDFunc, opts ...RunnerOption) *ActionRunner {
-	r := &ActionRunner{org: org, platform: platform, correlationID: correlationID, now: time.Now}
+	r := &ActionRunner{org: org, platform: platform, correlationID: correlationID, now: time.Now, stepUpWindow: StepUpValidity}
 	for _, o := range opts {
 		o(r)
 	}
@@ -192,14 +202,14 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 	return rec
 }
 
-// checkStepUp reports problem.StepUpRequired unless an administrator's step-up is at most StepUpValidity old.
+// checkStepUp reports problem.StepUpRequired unless an administrator's step-up is at most the step-up window old.
 // System principals never step up.
 func (r *ActionRunner) checkStepUp(p principal.Principal) error {
 	if p.Kind == principal.KindSystem {
 		return nil
 	}
 	age := r.now().Sub(p.StepUpAt)
-	if p.StepUpAt.IsZero() || age > StepUpValidity || age < -time.Minute {
+	if p.StepUpAt.IsZero() || age > r.stepUpWindow || age < -time.Minute {
 		return problem.StepUpRequired.WithDetail("this action needs a step-up authentication within the last 5 minutes")
 	}
 	return nil

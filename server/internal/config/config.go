@@ -142,6 +142,36 @@ func LoadCommon(l *Loader) Common {
 	return c
 }
 
+// DevStepUp shortens the step-up timing for the acceptance gates (PADDOCK_STEPUP_WINDOW: how long a step-up
+// satisfies a privileged action; PADDOCK_STEPUP_MAX_AUTH_AGE: the oldest login a step-up callback accepts, sent as
+// max_age). Zero keeps the production value. Either variable outside PADDOCK_ENV=development is a configuration
+// error, so production never runs with a shortened step-up.
+type DevStepUp struct {
+	Window     time.Duration
+	MaxAuthAge time.Duration
+}
+
+// LoadDevStepUp reads PADDOCK_STEPUP_WINDOW and PADDOCK_STEPUP_MAX_AUTH_AGE.
+func LoadDevStepUp(l *Loader, c Common) DevStepUp {
+	var d DevStepUp
+	for name, dst := range map[string]*time.Duration{"PADDOCK_STEPUP_WINDOW": &d.Window, "PADDOCK_STEPUP_MAX_AUTH_AGE": &d.MaxAuthAge} {
+		v, ok := l.get(name)
+		if !ok {
+			continue
+		}
+		if !c.Development() {
+			l.Invalid(name, "only allowed with PADDOCK_ENV=development")
+			continue
+		}
+		if parsed, err := time.ParseDuration(v); err != nil || parsed <= 0 {
+			l.Invalid(name, fmt.Sprintf("not a positive duration: %q", v))
+		} else {
+			*dst = parsed
+		}
+	}
+	return d
+}
+
 // AMQP is the RabbitMQ connection of relay, audit-writer and provision.
 type AMQP struct {
 	URL      string
