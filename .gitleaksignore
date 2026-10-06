@@ -15,3 +15,4 @@ c0041c2303806f451fe03b9dbc71887d459c4d96:server/internal/adapters/authentik/test
 cd79352d0880491ef0df8b5f1f7e68465f7411ba:pkg/protocol/protocol_test.go:generic-api-key:54
 f845233af3483783a990afdfc77f48d9e8db3011:server/internal/adapters/authentik/testdata/get_core_brands.json:generic-api-key:22
 f845233af3483783a990afdfc77f48d9e8db3011:server/internal/adapters/authentik/testdata/patch_core_brands_id.json:generic-api-key:11
+30b07b67f89e712b0d527511ef1d0a088176414e:test/system/autoinstall.go:generic-api-key:33
