@@ -1531,8 +1531,13 @@ type Inventory interface {
 - **Isolation:** Fleet has no organization concept in the free edition. Paddock never exposes Fleet's UI
   or API to organization admins. The adapter writes Fleet data into Paddock tables under the device's
   organization; all reads go through RLS.
-- **fleetd enrollment:** one global Fleet enroll secret, delivered encrypted in the device bundle as a
-  secret; fleetd package installed by the agent from the Paddock apt repository.
+- **fleetd enrollment:** one global Fleet enroll secret, delivered in the signed device bundle (plain text: it
+  only allows enrolling a host into Fleet, and unmapped hosts are ignored; HPKE encryption of bundle secrets is a later
+  improvement). The fleetd package is built per agent release with `fleetctl package` (no enroll secret, Fleet's own
+  auto-update and scripts disabled) and installed by the agent from Paddock's package store. *(Amended 2026-10-07,
+  plan M5a.)*
+- **Data minimization:** host-user collection off, no scheduled or live queries; Paddock uses pass/fail **policies**
+  only — a policy may read the process table (e.g. "paddockd running") but returns a boolean, never rows.
 - **Policies** (osquery SQL) are defined in Paddock (`server/internal/inventory/policies/*.sql`) and pushed
   through the API; they are global, organization-specific thresholds are evaluated in Paddock.
 - Replacing Fleet means implementing the port with another adapter; no Fleet IDs appear outside the adapter
