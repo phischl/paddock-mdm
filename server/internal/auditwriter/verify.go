@@ -15,8 +15,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/gowebpki/jcs"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/auditpg/auditstore"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
 // PublicKeys returns the audit-chain public keys by version.

@@ -23,8 +23,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // Polling bounds of the audit checks (plan M0 §8, A3).

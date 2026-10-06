@@ -6,14 +6,14 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/policy"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
-	"github.com/paddock-mdm/paddock/server/internal/domain/managedconfig"
-	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/managedconfig"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // ManagedConfig are the use cases of managed files and systemd units (plan M2a decisions 7 and 8).

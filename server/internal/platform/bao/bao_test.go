@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/pkg/escrow"
-	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/baotest"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/baotest"
 )
 
 // TestBundleSigning checks the M2a stop condition: OpenBao batch-signs with an Ed25519 Transit key, the compiler

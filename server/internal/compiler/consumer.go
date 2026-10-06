@@ -9,7 +9,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 )
 
 // Batching of state changes: the compiler waits until a partition has been quiet for Debounce (at most MaxWait), so

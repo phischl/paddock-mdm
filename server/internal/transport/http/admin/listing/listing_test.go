@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/server/internal/problem"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/listing"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
 
 var spec = listing.Spec{Sort: []string{"name", "created_at"}, DefaultSort: "name"}

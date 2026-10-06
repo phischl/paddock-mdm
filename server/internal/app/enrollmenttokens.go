@@ -7,13 +7,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
-	"github.com/paddock-mdm/paddock/server/internal/domain/enrollment"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // BundleKeySource returns the public bundle-signing keys devices must trust (bundlesign.PublicKeys).

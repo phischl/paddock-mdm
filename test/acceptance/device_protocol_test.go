@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // TestDeviceProtocol is gate D1 (plan M2a §8, AC1, AC2): a device enrolls with an auto-approve token and becomes

@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // AuditEvent is an event as the admin API returns it.

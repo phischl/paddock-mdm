@@ -10,8 +10,8 @@ import (
 	"io/fs"
 	"strconv"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/policy"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 )
 
 // File reconciles file resources: content, mode, owner and group.

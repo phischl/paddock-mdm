@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/policy"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 )
 
 // Settings are the login settings of one organization.

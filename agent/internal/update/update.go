@@ -20,10 +20,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/client"
-	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
-	"github.com/paddock-mdm/paddock/agent/internal/paths"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/client"
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Outcomes of an update attempt (update-result.json).

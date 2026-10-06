@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 func TestOutcomeOf(t *testing.T) {

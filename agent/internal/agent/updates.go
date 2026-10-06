@@ -4,9 +4,9 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
-	"github.com/paddock-mdm/paddock/agent/internal/update"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/update"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // reportUpdate turns the supervisor's update result into an event, once (plan M2b decision 16). A version that

@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/canonicaljson"
-	"github.com/paddock-mdm/paddock/pkg/dsse"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
 )
 
 // PayloadType is the DSSE payload type of commands.

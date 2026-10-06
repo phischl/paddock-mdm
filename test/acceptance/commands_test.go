@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/pkg/dsse"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/test/acceptance/devicesim"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // deviceCommand is the part of the admin API's device command the gates read.
@@ -209,7 +209,7 @@ func TestCommands(t *testing.T) {
 }
 
 // m3bCommit is the last commit of M3.1 (agent of bundle schema 2 without the keys object).
-const m3bCommit = "222cef3"
+const m3bCommit = "99937ad"
 
 // TestM3bAgentAcceptsBundleKeys (plan M4a decision 5): the bundle verification of an M3b-built agent — pkg/bundle at
 // m3bCommit — accepts a v2 bundle of this release, which carries the top-level keys object.
@@ -242,8 +242,19 @@ func TestM3bAgentAcceptsBundleKeys(t *testing.T) {
 	if out, err := archive.CombinedOutput(); err != nil {
 		t.Fatalf("extract pkg at %s: %v: %s", m3bCommit, err, out)
 	}
+	// The verifier imports pkg under the module path of the extracted commit.
+	gomod, err := os.ReadFile(filepath.Join(dir, "pkg", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(gomod), "\n")
+	module, ok := strings.CutPrefix(first, "module ")
+	if !ok {
+		t.Fatalf("pkg/go.mod at %s starts with %q", m3bCommit, first)
+	}
+	verify := strings.ReplaceAll(m3bVerify, "{{module}}", module)
 	trust, _ := json.Marshal(d.Config.BundleKeys)
-	for name, data := range map[string][]byte{"envelope.json": envelope, "trust.json": trust, "pkg/cmd/m3bverify/main.go": []byte(m3bVerify)} {
+	for name, data := range map[string][]byte{"envelope.json": envelope, "trust.json": trust, "pkg/cmd/m3bverify/main.go": []byte(verify)} {
 		path := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -262,7 +273,8 @@ func TestM3bAgentAcceptsBundleKeys(t *testing.T) {
 	}
 }
 
-// m3bVerify verifies a bundle with the pkg/bundle of the extracted commit, as the M3b agent does.
+// m3bVerify verifies a bundle with the pkg/bundle of the extracted commit, as the M3b agent does; {{module}} is the
+// module path of pkg at that commit.
 const m3bVerify = `package main
 
 import (
@@ -270,8 +282,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"{{module}}/bundle"
+	"{{module}}/protocol"
 )
 
 func main() {

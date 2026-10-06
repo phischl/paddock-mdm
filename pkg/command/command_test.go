@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/dsse"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
 )
 
 const (

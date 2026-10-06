@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
-	"github.com/paddock-mdm/paddock/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 )
 
 // Attributes Paddock sets on the users it creates; users without paddock_managed are synced from upstream.

@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
 // Cookie names and lifetimes (plan M0 §6.7).

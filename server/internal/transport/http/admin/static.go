@@ -11,8 +11,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // cspNoncePlaceholder is the literal in index.html (<meta name="csp-nonce">) replaced by the per-response nonce.

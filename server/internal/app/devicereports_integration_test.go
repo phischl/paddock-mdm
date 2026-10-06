@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // TestLoginStateRecordsTheLatestReport: login.* and sudo.* events are audited and the latest one per area is kept in

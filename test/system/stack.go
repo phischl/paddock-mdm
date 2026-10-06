@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/portal"
+	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
 
 // guestHosts are the stack's hostnames, which the guest reaches on the host as 10.0.2.2.
@@ -193,7 +193,7 @@ func (s *Stack) BuildAgent(version string, tags []string) string {
 	s.t.Helper()
 	bin := filepath.Join(s.t.TempDir(), "paddockd-"+version)
 	cmd := exec.Command("go", "build", "-trimpath", "-tags", strings.Join(append([]string{"paddock_dev"}, tags...), ","),
-		"-ldflags", "-s -w -X github.com/paddock-mdm/paddock/agent/internal/buildinfo.Version="+version,
+		"-ldflags", "-s -w -X github.com/phischl/paddock-mdm/agent/internal/buildinfo.Version="+version,
 		"-o", bin, "./agent/cmd/paddockd")
 	cmd.Dir = s.root
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")

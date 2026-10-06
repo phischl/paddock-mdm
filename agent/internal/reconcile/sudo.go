@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/sudoers"
 )
 
 // Files of the sudo reconciler (architecture §10.3).

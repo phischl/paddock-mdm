@@ -26,14 +26,14 @@ import (
 	"github.com/getkin/kin-openapi/routers/legacy"
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/server/internal/devicecache"
-	"github.com/paddock-mdm/paddock/server/internal/domain/agentrelease"
-	"github.com/paddock-mdm/paddock/server/internal/domain/enrollment"
-	"github.com/paddock-mdm/paddock/server/internal/ingest"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/valkeytest"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/device"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
+	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/device"
 )
 
 // fakePublisher records published messages; nack makes the broker refuse them.

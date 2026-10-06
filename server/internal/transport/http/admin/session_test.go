@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
 func newKey(t *testing.T) string {

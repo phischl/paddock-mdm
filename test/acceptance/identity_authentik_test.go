@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/authflow"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/authflow"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // deviceUser is an Authentik user that signs in like Himmelblau: device code, password, TOTP.

@@ -13,14 +13,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/ports"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/pgtest"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
 // directory is an in-memory identity provider (organization users, groups and members).

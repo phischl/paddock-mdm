@@ -15,13 +15,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
-	"github.com/paddock-mdm/paddock/server/internal/domain/devicecommand"
-	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicecommand"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // ErrForbidden is returned when the principal's role is not allowed; the attempt is recorded as denied.

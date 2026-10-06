@@ -17,10 +17,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/canonicaljson"
-	"github.com/paddock-mdm/paddock/pkg/dsse"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/sudoers"
 )
 
 // SchemaVersion is the schema version the agent of this release accepts (Verify) and reports in its check-in.

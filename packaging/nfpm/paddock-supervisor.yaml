@@ -12,7 +12,7 @@ description: |-
   releases, installs them into the inactive A/B slot, self-tests, switches
   with one symlink flip and rolls back automatically.
 vendor: Paddock
-homepage: https://github.com/paddock-mdm/paddock
+homepage: https://github.com/phischl/paddock-mdm
 license: MIT
 contents:
   - src: bin/deb/stage/paddock-supervisor

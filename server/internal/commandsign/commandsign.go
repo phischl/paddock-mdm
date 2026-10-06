@@ -9,10 +9,10 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/pkg/dsse"
-	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 )
 
 // KeyName is the Transit key that signs commands.

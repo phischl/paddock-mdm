@@ -1,4 +1,4 @@
-module github.com/paddock-mdm/paddock/test/acceptance
+module github.com/phischl/paddock-mdm/test/acceptance
 
 go 1.27.0
 
@@ -13,7 +13,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/klauspost/compress v1.20.1
-	github.com/paddock-mdm/paddock/pkg v0.0.0
+	github.com/phischl/paddock-mdm/pkg v0.0.0
 )
 
 require (
@@ -42,4 +42,4 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 )
 
-replace github.com/paddock-mdm/paddock/pkg => ../../pkg
+replace github.com/phischl/paddock-mdm/pkg => ../../pkg

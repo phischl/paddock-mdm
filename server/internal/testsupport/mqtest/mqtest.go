@@ -10,8 +10,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/pgtest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
 // Broker is a running RabbitMQ.

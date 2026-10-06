@@ -8,8 +8,8 @@ import (
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/mqtest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/mqtest"
 )
 
 func TestStatePartition(t *testing.T) {

@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/sessions"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/sessions"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Files of the login reconciler.

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // isolationWorld holds the sessions and the globex resources of the isolation gate.

@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/identity"
-	"github.com/paddock-mdm/paddock/pkg/escrow"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/identity"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Timeouts of device API requests and downloads.

@@ -8,15 +8,15 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/commandsign"
-	"github.com/paddock-mdm/paddock/server/internal/domain/devicecommand"
-	"github.com/paddock-mdm/paddock/server/internal/ingest"
-	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/baotest"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/pgtest"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/commandsign"
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicecommand"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/baotest"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
 // commandWorld is a worker with a signing AppRole, a device and the trust of the device.

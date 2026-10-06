@@ -4,12 +4,12 @@ import (
 	"context"
 	"slices"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
-	"github.com/paddock-mdm/paddock/server/internal/domain/loginsettings"
-	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/loginsettings"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // LoginSettings are the use cases of the organization's login settings (plan M3a decision 8).

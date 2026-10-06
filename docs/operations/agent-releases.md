@@ -36,7 +36,7 @@ minisign -S -s paddock-release.key -m paddockd -t "paddockd <version> <arch>"
 ## Releasing
 
 1. Build `paddockd` for each architecture with the version injected
-   (`-ldflags "-X github.com/paddock-mdm/paddock/agent/internal/buildinfo.Version=<version>"`, `CGO_ENABLED=0`).
+   (`-ldflags "-X github.com/phischl/paddock-mdm/agent/internal/buildinfo.Version=<version>"`, `CGO_ENABLED=0`).
 2. Sign it (above).
 3. Create the release and upload each artifact through the platform API as a platform administrator:
    `POST /api/platform/v1/agent-releases {"version"}`, then

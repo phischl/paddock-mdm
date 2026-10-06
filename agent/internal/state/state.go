@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 )
 
 // Enrollment states.

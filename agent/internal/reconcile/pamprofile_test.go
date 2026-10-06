@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 )
 
 // TestPAMProfileMatchesTheVerifiedLines: the pam-auth-update profile of the paddock-agent package produces exactly

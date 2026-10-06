@@ -7,11 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/domain/enrollment"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/listing"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
 
 // List definitions of the M2a collection endpoints; TestListSpecsMatchContract keeps them equal to x-paddock-list.

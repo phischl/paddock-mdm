@@ -7,11 +7,11 @@ import (
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/auditpg/auditstore"
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/listing"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
 
 // handlers implements the generated strict server. Errors are returned as *problem.Error and rendered by the

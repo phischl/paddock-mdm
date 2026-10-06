@@ -12,10 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/auditwriter"
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/mqtest"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/mqtest"
 )
 
 func utcDay(t time.Time) time.Time { return t.UTC().Truncate(24 * time.Hour) }

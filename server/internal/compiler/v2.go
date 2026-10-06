@@ -11,11 +11,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/sudoers"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
-	"github.com/paddock-mdm/paddock/server/internal/domain/privilege"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/domain/privilege"
 )
 
 // PrivilegedGroups are the local groups whose membership the agent reconciles (architecture §10.1).

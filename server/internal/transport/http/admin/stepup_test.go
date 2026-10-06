@@ -20,8 +20,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/principal"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 )
 
 // fakeStepUpIdP is an OIDC provider that issues one ID token per code with the claims the test sets.

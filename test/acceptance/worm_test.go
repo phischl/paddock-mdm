@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // TestWORM is the audit gate A1 (plan M0 §8): an object in the WORM bucket cannot be deleted or have its

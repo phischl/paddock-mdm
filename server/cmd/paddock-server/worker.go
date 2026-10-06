@@ -6,17 +6,17 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/authentik"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/config"
-	"github.com/paddock-mdm/paddock/server/internal/devicecache"
-	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/platform/ops"
-	"github.com/paddock-mdm/paddock/server/internal/platform/valkey"
-	"github.com/paddock-mdm/paddock/server/internal/worker"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/config"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
+	"github.com/phischl/paddock-mdm/server/internal/worker"
 )
 
 func serveWorker(ctx context.Context, l *config.Loader, common config.Common) error {

@@ -5,7 +5,7 @@ package commands_test
 import (
 	"testing"
 
-	"github.com/paddock-mdm/paddock/agent/internal/commands"
+	"github.com/phischl/paddock-mdm/agent/internal/commands"
 )
 
 // TestReleaseBuildsHaveNoNoop: the noop command exists only in development builds.

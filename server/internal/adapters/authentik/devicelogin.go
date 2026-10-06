@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 )
 
 // Platform-wide objects of blueprint paddock-device.yaml and of Authentik's defaults the device providers use. The

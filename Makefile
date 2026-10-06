@@ -125,7 +125,7 @@ dev-release-key: ## Generate the password-less development agent release key pai
 VERSION                 ?= 0.0.0-dev
 TAGS                    ?=
 RELEASE_PUBLIC_KEY_FILE ?= $(RELEASE_KEY_DIR)/minisign.pub
-AGENT_LDFLAGS            = -s -w -X github.com/paddock-mdm/paddock/agent/internal/buildinfo.Version=$(VERSION)
+AGENT_LDFLAGS            = -s -w -X github.com/phischl/paddock-mdm/agent/internal/buildinfo.Version=$(VERSION)
 AGENT_BUILD              = CGO_ENABLED=0 go build -trimpath -tags '$(TAGS)'
 
 .PHONY: agent

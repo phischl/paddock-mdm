@@ -7,7 +7,7 @@ import (
 
 	"github.com/valkey-io/valkey-go"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/agentrelease"
+	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 )
 
 // offerKey is ar:current, the agent rollout devices are offered (plan M2b decision 21). The worker rewrites it every

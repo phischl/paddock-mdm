@@ -17,10 +17,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/state"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/escrow"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Timing of a rotation (architecture §12.2).

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // stepUp runs a step-up of p as user and fails the test unless the outcome matches ok.

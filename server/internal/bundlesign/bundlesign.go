@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // KeyName is the Transit key that signs bundles.

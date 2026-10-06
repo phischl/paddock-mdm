@@ -7,9 +7,9 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/devicecache"
-	"github.com/paddock-mdm/paddock/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
 )
 
 // Escrow consumes ingest.escrow: it stores each upload and publishes its status to esc:<escrow_id> (plan M4a

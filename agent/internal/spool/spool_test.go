@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 func newSpool(t *testing.T, capBytes int64) (*Spool, *int64) {

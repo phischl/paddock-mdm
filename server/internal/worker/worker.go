@@ -14,9 +14,9 @@ import (
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // Prefetch is the consumer prefetch of every ingest queue (architecture §8.1).

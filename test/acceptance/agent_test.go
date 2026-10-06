@@ -13,15 +13,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // paddockd builds the agent once per test into a temporary directory.
 func paddockd(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "paddockd")
-	out, err := exec.Command("go", "build", "-o", bin, "github.com/paddock-mdm/paddock/agent/cmd/paddockd").CombinedOutput()
+	out, err := exec.Command("go", "build", "-o", bin, "github.com/phischl/paddock-mdm/agent/cmd/paddockd").CombinedOutput()
 	if err != nil {
 		t.Fatalf("build paddockd: %v\n%s", err, out)
 	}

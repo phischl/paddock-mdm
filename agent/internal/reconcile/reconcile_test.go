@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile/fakesys"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 func fileRes(t *testing.T, path, mode, owner, group, content string) bundle.Resource {

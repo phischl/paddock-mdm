@@ -11,10 +11,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/devicecache"
-	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
 // ReconcileInterval is how often the bundle pointers are rewritten from PostgreSQL (plan M2a decision 13, risk R2).

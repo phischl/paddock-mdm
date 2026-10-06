@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Enroll is an accepted enrollment request (routing key ingest.enroll.<org>, message_id = EnrollmentID). The

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 )
 
 func main() {

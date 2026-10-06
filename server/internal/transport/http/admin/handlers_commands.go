@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/listing"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
 
 // deviceCommandList is the list definition of GET /api/v1/devices/{id}/commands (plan M4a decision 1).

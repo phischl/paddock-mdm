@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/portal"
+	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
 
 // Login helpers of the identity gates (plan M3b §6). They reproduce the techniques of PoC M1 (test/poc/m1): pamtester

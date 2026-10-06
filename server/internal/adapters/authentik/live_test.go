@@ -19,9 +19,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/authentik"
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
-	"github.com/paddock-mdm/paddock/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 )
 
 // TestLiveAuthentik runs the adapter against a real Authentik (the development stack) with the paddock-service token,

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // TestAuthentikBrandFlows is gate I-recovery (plan M3.1 decision 5, AC2): paddock-worker has set the default brand's

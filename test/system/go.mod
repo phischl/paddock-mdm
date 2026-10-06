@@ -1,4 +1,4 @@
-module github.com/paddock-mdm/paddock/test/system
+module github.com/phischl/paddock-mdm/test/system
 
 go 1.27.0
 
@@ -7,8 +7,8 @@ toolchain go1.27.1
 require (
 	aead.dev/minisign v0.3.0
 	github.com/google/uuid v1.6.0
-	github.com/paddock-mdm/paddock/pkg v0.0.0
-	github.com/paddock-mdm/paddock/test/acceptance v0.0.0
+	github.com/phischl/paddock-mdm/pkg v0.0.0
+	github.com/phischl/paddock-mdm/test/acceptance v0.0.0
 )
 
 require (
@@ -24,6 +24,6 @@ require (
 )
 
 replace (
-	github.com/paddock-mdm/paddock/pkg => ../../pkg
-	github.com/paddock-mdm/paddock/test/acceptance => ../acceptance
+	github.com/phischl/paddock-mdm/pkg => ../../pkg
+	github.com/phischl/paddock-mdm/test/acceptance => ../acceptance
 )

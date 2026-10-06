@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 // Time reconciles the time resource: a running NTP client (plan M2b decision 10).

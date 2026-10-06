@@ -1,4 +1,4 @@
-module github.com/paddock-mdm/paddock/agent
+module github.com/phischl/paddock-mdm/agent
 
 go 1.27.0
 
@@ -7,7 +7,7 @@ toolchain go1.27.1
 require (
 	aead.dev/minisign v0.3.0
 	github.com/godbus/dbus/v5 v5.2.2
-	github.com/paddock-mdm/paddock/pkg v0.0.0
+	github.com/phischl/paddock-mdm/pkg v0.0.0
 )
 
 require (
@@ -16,4 +16,4 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 )
 
-replace github.com/paddock-mdm/paddock/pkg => ../pkg
+replace github.com/phischl/paddock-mdm/pkg => ../pkg

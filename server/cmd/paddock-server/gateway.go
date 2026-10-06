@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/server/internal/config"
-	"github.com/paddock-mdm/paddock/server/internal/devicecache"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/platform/objectstore"
-	"github.com/paddock-mdm/paddock/server/internal/platform/ops"
-	"github.com/paddock-mdm/paddock/server/internal/platform/valkey"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/device"
+	"github.com/phischl/paddock-mdm/server/internal/config"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/device"
 )
 
 // serveGateway runs the device API. The gateway has no database credentials (plan M2a decision 1).

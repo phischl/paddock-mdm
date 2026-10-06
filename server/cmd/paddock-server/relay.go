@@ -6,11 +6,11 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/paddock-mdm/paddock/server/internal/config"
-	"github.com/paddock-mdm/paddock/server/internal/outbox"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/config"
+	"github.com/phischl/paddock-mdm/server/internal/outbox"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 )
 
 func serveOutboxRelay(ctx context.Context, l *config.Loader, common config.Common) error {

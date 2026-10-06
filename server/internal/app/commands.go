@@ -8,12 +8,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/domain/devicecommand"
-	"github.com/paddock-mdm/paddock/server/internal/ingest"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicecommand"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
 // DeviceCommands are the use cases of device commands (plan M4a decisions 1–3): the command list of a device for

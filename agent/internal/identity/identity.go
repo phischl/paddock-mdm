@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Key is the device identity.

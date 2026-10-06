@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/escrow"
-	"github.com/paddock-mdm/paddock/server/internal/ingest"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
 )
 
 // escrowUpload accepts an encrypted secret (plan M4a decision 12) and publishes it to ingest.escrow; the worker

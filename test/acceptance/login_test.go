@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/authflow"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/authflow"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // platformOrg is the platform pseudo-organization of the audit log.

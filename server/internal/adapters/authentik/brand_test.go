@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 func (f *fakeAuthentik) flowPK(slug string) string {

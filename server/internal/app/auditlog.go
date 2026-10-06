@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/auditpg/auditstore"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // AuditLog reads the audit index of the caller's organization (read-only role, RLS).

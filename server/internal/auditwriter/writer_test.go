@@ -13,16 +13,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/paddock-mdm/paddock/server/internal/auditwriter"
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
-	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/platform/objectstore"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/baotest"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/mqtest"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/pgtest"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/s3test"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/baotest"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/mqtest"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/s3test"
 )
 
 type stack struct {

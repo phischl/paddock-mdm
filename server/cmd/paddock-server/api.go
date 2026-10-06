@@ -11,19 +11,19 @@ import (
 
 	"aead.dev/minisign"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/server/internal/adapters/authentik"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/bundlesign"
-	"github.com/paddock-mdm/paddock/server/internal/config"
-	"github.com/paddock-mdm/paddock/server/internal/escrowreader"
-	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
-	"github.com/paddock-mdm/paddock/server/internal/platform/objectstore"
-	"github.com/paddock-mdm/paddock/server/internal/platform/ops"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin"
-	"github.com/paddock-mdm/paddock/server/web"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/bundlesign"
+	"github.com/phischl/paddock-mdm/server/internal/config"
+	"github.com/phischl/paddock-mdm/server/internal/escrowreader"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
+	"github.com/phischl/paddock-mdm/server/web"
 )
 
 // sessionKeyPath is the KV v2 secret holding the session cookie keys (fields current and previous).

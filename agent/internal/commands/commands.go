@@ -11,9 +11,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Retention is how long executed command IDs are kept (architecture §11.4).

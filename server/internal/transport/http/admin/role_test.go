@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
 var (
