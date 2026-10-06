@@ -265,6 +265,7 @@ services:
       PADDOCK_HTTP_ADDR: ":8080"
       PADDOCK_PUBLIC_ADMIN_URL: ${PADDOCK_PUBLIC_ADMIN_URL:-https://admin.paddock.localhost:8443}
       PADDOCK_PUBLIC_DEVICE_URL: ${PADDOCK_PUBLIC_DEVICE_URL:-https://device.paddock.localhost:8443}
+      PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_DB_URL_FILE: /run/secrets/db_paddock_api_url
       PADDOCK_DB_PLATFORM_URL_FILE: /run/secrets/db_paddock_platform_url
       PADDOCK_AUDIT_DB_READER_URL_FILE: /run/secrets/db_paddock_audit_reader_url

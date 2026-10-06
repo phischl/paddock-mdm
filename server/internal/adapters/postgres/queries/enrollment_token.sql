@@ -46,3 +46,7 @@ UPDATE enrollment_token SET uses = uses + 1 WHERE id = @id;
 -- Worker cache sync: every token of the organization that has not expired yet.
 -- name: ListLiveEnrollmentTokens :many
 SELECT * FROM enrollment_token WHERE expires_at > now() ORDER BY id;
+
+-- Paddock autoinstall (plan M4b decision 2): the token of an enrollment configuration, within the organization.
+-- name: GetEnrollmentTokenBySecret :one
+SELECT * FROM enrollment_token WHERE secret_sha256 = @secret_sha256;

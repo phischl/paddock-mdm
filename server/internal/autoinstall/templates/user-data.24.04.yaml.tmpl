@@ -1,0 +1,10 @@
+{{- /*
+Ubuntu 24.04: initramfs-tools cannot unlock TPM2 tokens; dracut replaces it with the configuration of PoC M1 C7
+(hostonly, so that /etc/crypttab is in the initramfs; no Plymouth, which dracut 060 cannot install on 24.04, so the
+PIN prompt is the text console).
+*/ -}}
+{{template "head" .}}
+{{- template "paddock" .}}
+    - ["curtin", "in-target", "--target=/target", "--", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "dracut"]
+    - ["sh", "-c", "printf '%s\\n' \"$@\" > /target/etc/dracut.conf.d/90-paddock-tpm2.conf", "sh", "# Paddock: unlock LUKS with systemd-cryptsetup and TPM2+PIN (plan M4b)", "hostonly=\"yes\"", "add_dracutmodules+=\" systemd crypt tpm2-tss lvm \""]
+{{- template "tail" .}}

@@ -23,6 +23,7 @@ const localAdmin = ref('')
 const rotationDays = ref('30')
 const revealHours = ref('')
 const notice = ref('')
+const bootPinLength = ref('8')
 const updatedAt = ref('')
 const problem = ref('')
 const saved = ref(false)
@@ -38,6 +39,7 @@ function apply(s: Exclude<Awaited<ReturnType<typeof getLoginSettings>>, string>)
   rotationDays.value = String(s.local_admin_rotation_days)
   revealHours.value = s.rotate_after_reveal_hours === null ? '' : String(s.rotate_after_reveal_hours)
   notice.value = s.notice_text
+  bootPinLength.value = String(s.boot_pin_min_length)
   updatedAt.value = s.updated_at
   loaded.value = true
 }
@@ -57,7 +59,7 @@ async function save(): Promise<void> {
     sudoers_d_allowlist: lines(allowlist.value), sudo_lecture_text: lecture.value.trim(),
     local_admin_username: localAdmin.value.trim(), local_admin_rotation_days: Number(rotationDays.value),
     rotate_after_reveal_hours: revealHours.value.trim() === '' ? null : Number(revealHours.value),
-    notice_text: notice.value.trim(),
+    notice_text: notice.value.trim(), boot_pin_min_length: Number(bootPinLength.value),
   })
   if (typeof res === 'string') {
     problem.value = res
@@ -172,6 +174,19 @@ async function save(): Promise<void> {
           type="number"
           min="1"
           max="168"
+        />
+      </fieldset>
+      <fieldset :disabled="!session.canDelete">
+        <legend>{{ t('loginSettings.diskEncryption') }}</legend>
+        <v-text-field
+          id="settings-boot-pin"
+          v-model="bootPinLength"
+          :label="t('loginSettings.bootPinLength')"
+          :hint="t('loginSettings.bootPinLengthHint')"
+          persistent-hint
+          type="number"
+          min="6"
+          max="32"
         />
       </fieldset>
       <p

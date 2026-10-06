@@ -434,6 +434,39 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/autoinstall:
+    post:
+      operationId: generateAutoinstall
+      tags: [enrollment-tokens]
+      description: |
+        Roles: org_admin, org_operator. Generates the Ubuntu autoinstall user-data that installs one device with
+        Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of
+        the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the
+        enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. The
+        enrollment configuration must be one of this organization (404 not_found otherwise, also for another
+        organization's) whose token can still enroll a device (422 token_revoked, token_expired or token_exhausted).
+        Nothing is stored; the response contains the passphrase and the token and is never cached.
+      x-paddock-audit: autoinstall.generated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AutoinstallRequest" }
+      responses:
+        "200":
+          description: The user-data (cloud-config with the autoinstall section).
+          content:
+            text/yaml:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
   /api/v1/devices:
     get:
       operationId: listDevices
@@ -641,6 +674,7 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
   /api/v1/managed-files/{id}:
@@ -747,6 +781,7 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
   /api/v1/managed-units/{id}:
@@ -1501,6 +1536,7 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
   /api/v1/permission-profiles/{id}:
@@ -2557,6 +2593,17 @@ components:
         bundle_keys:
           type: array
           items: { $ref: "#/components/schemas/BundleKey" }
+    AutoinstallRequest:
+      type: object
+      required: [enrollment_config, release, hostname, locale, keyboard_layout, timezone]
+      additionalProperties: false
+      properties:
+        enrollment_config: { $ref: "#/components/schemas/EnrollmentConfig" }
+        release: { type: string, enum: ["24.04", "26.04"], description: Ubuntu release of the installation medium. }
+        hostname: { type: string, maxLength: 63, description: "Host name label: lowercase letters, digits and hyphens." }
+        locale: { type: string, maxLength: 32, description: "For example en_US.UTF-8." }
+        keyboard_layout: { type: string, maxLength: 8, description: "XKB layout, for example us or de." }
+        timezone: { type: string, maxLength: 64, description: "IANA time zone, for example Europe/Berlin." }
     BundleKey:
       type: object
       required: [key_id, public_key]
@@ -3035,7 +3082,7 @@ components:
       type: object
       required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
                  sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days,
-                 notice_text]
+                 notice_text, boot_pin_min_length]
       additionalProperties: false
       properties:
         hello_enabled: { type: boolean }
@@ -3071,11 +3118,19 @@ components:
           description: |
             Login notice of every device (plan M4a decision 19): plain text with line breaks, shown at the login
             screen (GDM banner), on text consoles (/etc/issue.d) and before SSH logins. Empty removes it.
+        boot_pin_min_length:
+          type: integer
+          minimum: 6
+          maximum: 32
+          description: |
+            Shortest boot PIN (TPM2+PIN disk unlock) the first-boot disk setup of a device installed with the Paddock
+            autoinstall accepts (plan M4b decision 4). It is embedded in autoinstalls generated afterwards; installed
+            devices keep the value they were installed with.
     LoginSettings:
       type: object
       required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
                  sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days,
-                 rotate_after_reveal_hours, notice_text, updated_at]
+                 rotate_after_reveal_hours, notice_text, boot_pin_min_length, updated_at]
       properties:
         hello_enabled: { type: boolean }
         hello_pin_min_length: { type: integer }
@@ -3091,6 +3146,7 @@ components:
         local_admin_rotation_days: { type: integer }
         rotate_after_reveal_hours: { type: integer, nullable: true }
         notice_text: { type: string }
+        boot_pin_min_length: { type: integer }
         updated_at: { type: string, format: date-time }
     LoginAssignmentUpdate:
       type: object

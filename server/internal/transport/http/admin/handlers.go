@@ -33,8 +33,9 @@ type handlers struct {
 	loginSettings *app.LoginSettings
 	privileges    *app.Privileges
 
-	commands   *app.DeviceCommands
-	localAdmin *app.LocalAdmin
+	commands    *app.DeviceCommands
+	localAdmin  *app.LocalAdmin
+	autoinstall *app.Autoinstall
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).

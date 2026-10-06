@@ -248,6 +248,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/autoinstall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Generates the Ubuntu autoinstall user-data that installs one device with
+         *     Paddock (plan M4b decisions 2–4): LVM inside LUKS2 under a random temporary passphrase, the Debian packages of
+         *     the newest published agent release that has both (pinned by SHA-256; 409 invalid_state if there is none), the
+         *     enrollment configuration, and the first-boot disk setup with the organization's boot_pin_min_length. The
+         *     enrollment configuration must be one of this organization (404 not_found otherwise, also for another
+         *     organization's) whose token can still enroll a device (422 token_revoked, token_expired or token_exhausted).
+         *     Nothing is stored; the response contains the passphrase and the token and is never cached.
+         */
+        post: operations["generateAutoinstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices": {
         parameters: {
             query?: never;
@@ -1498,6 +1523,22 @@ export interface components {
             token: string;
             bundle_keys: components["schemas"]["BundleKey"][];
         };
+        AutoinstallRequest: {
+            enrollment_config: components["schemas"]["EnrollmentConfig"];
+            /**
+             * @description Ubuntu release of the installation medium.
+             * @enum {string}
+             */
+            release: "24.04" | "26.04";
+            /** @description Host name label: lowercase letters, digits and hyphens. */
+            hostname: string;
+            /** @description For example en_US.UTF-8. */
+            locale: string;
+            /** @description XKB layout, for example us or de. */
+            keyboard_layout: string;
+            /** @description IANA time zone, for example Europe/Berlin. */
+            timezone: string;
+        };
         BundleKey: {
             /** @description e.g. "bundle-signing:v1" */
             key_id: string;
@@ -1944,6 +1985,12 @@ export interface components {
              *     screen (GDM banner), on text consoles (/etc/issue.d) and before SSH logins. Empty removes it.
              */
             notice_text: string;
+            /**
+             * @description Shortest boot PIN (TPM2+PIN disk unlock) the first-boot disk setup of a device installed with the Paddock
+             *     autoinstall accepts (plan M4b decision 4). It is embedded in autoinstalls generated afterwards; installed
+             *     devices keep the value they were installed with.
+             */
+            boot_pin_min_length: number;
         };
         LoginSettings: {
             hello_enabled: boolean;
@@ -1956,6 +2003,7 @@ export interface components {
             local_admin_rotation_days: number;
             rotate_after_reveal_hours: number | null;
             notice_text: string;
+            boot_pin_min_length: number;
             /** Format: date-time */
             updated_at: string;
         };
@@ -2692,6 +2740,38 @@ export interface operations {
             404: components["responses"]["Problem"];
         };
     };
+    generateAutoinstall: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoinstallRequest"];
+            };
+        };
+        responses: {
+            /** @description The user-data (cloud-config with the autoinstall section). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/yaml": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
     listDevices: {
         parameters: {
             query?: {
@@ -2956,6 +3036,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
         };
@@ -3107,6 +3188,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
         };
@@ -4075,6 +4157,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
         };

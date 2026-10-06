@@ -33,6 +33,7 @@ type Deps struct {
 	Privileges    *app.Privileges
 	Commands      *app.DeviceCommands
 	LocalAdmin    *app.LocalAdmin
+	Autoinstall   *app.Autoinstall
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -100,6 +101,7 @@ var privileged = map[string]struct {
 	"DELETE /api/v1/profile-assignments/{id}":                              {app.ScopeOrg, app.SpecAssignmentDelete},
 	"POST /api/v1/devices/{id}/local-admin/rotate":                         {app.ScopeOrg, app.SpecLocalAdminRotate},
 	"POST /api/v1/devices/{id}/local-admin/reveal":                         {app.ScopeOrg, app.SpecLocalAdminReveal},
+	"POST /api/v1/autoinstall":                                             {app.ScopeOrg, app.SpecAutoinstallGenerate},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -118,7 +120,7 @@ func NewHandler(d Deps) http.Handler {
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
-		localAdmin: d.LocalAdmin, now: d.Now,
+		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

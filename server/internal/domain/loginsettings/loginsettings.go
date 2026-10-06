@@ -1,6 +1,6 @@
 // Package loginsettings holds the rules of an organization's login settings (plan M3a decision 8): Hello PIN,
 // the session action of a user lock, break-glass accounts, the sudoers.d allow list, the sudo lecture text and the
-// managed local administrator (plan M4a decision 13).
+// managed local administrator (plan M4a decision 13) and the shortest boot PIN (plan M4b decision 4).
 package loginsettings
 
 import (
@@ -30,6 +30,9 @@ type Settings struct {
 	RotateAfterRevealHours *int
 	// NoticeText is the login notice of the devices (plan M4a decision 19); "" shows none.
 	NoticeText string
+	// BootPinMinLength is the shortest boot PIN the first-boot disk setup accepts (plan M4b decision 4); it reaches
+	// devices only through the Paddock autoinstall.
+	BootPinMinLength int
 }
 
 // Bounds of the settings.
@@ -44,6 +47,7 @@ const (
 	MaxRotationDays               = 365
 	MaxRotateAfterRevealHours     = 168
 	MaxNoticeChars                = 2000
+	DefaultBootPinMinLength       = 8
 )
 
 // Validation errors.
@@ -57,6 +61,7 @@ var (
 	ErrRotationDays  = errors.New("local_admin_rotation_days must be 1 to 365")
 	ErrRevealHours   = errors.New("rotate_after_reveal_hours must be empty or 1 to 168")
 	ErrNotice        = errors.New("notice_text must be plain text of at most 2000 characters (line breaks and tabs allowed)")
+	ErrBootPinLength = errors.New("boot_pin_min_length must be 6 to 32")
 )
 
 // allowlistPattern matches the file names sudo reads from an includedir (no "." and no trailing "~").
@@ -84,6 +89,9 @@ func trimAll(in []string) []string {
 func Validate(s Settings) error {
 	if s.HelloPinMinLength < MinPinLength || s.HelloPinMinLength > MaxPinLength {
 		return ErrPinLength
+	}
+	if s.BootPinMinLength < MinPinLength || s.BootPinMinLength > MaxPinLength {
+		return ErrBootPinLength
 	}
 	if s.UserLockSessionAction != bundle.SessionActionLockScreen && s.UserLockSessionAction != bundle.SessionActionTerminate {
 		return ErrSessionAction
