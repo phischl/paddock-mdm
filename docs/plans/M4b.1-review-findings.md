@@ -1,6 +1,6 @@
 # Implementierungsplan: M4b.1 — Findings from the trusted-core review
 
-Status: Ready for implementation (after M4b) · 2026-10-06 · Author: architect
+Status: Ready for implementation · 2026-10-06 · Author: architect
 Basis: review page "Paddock Review-Paket" (2026-10-06), product-owner decision 2026-10-06: implement all four
 recommendations; architecture v1.7 §9.2 (lock), §12.2/§12.4 (escrow), §11.2 (supervisor), §13 (keys); ADR 0007, 0014
 
@@ -88,7 +88,12 @@ Other changes to lock semantics, LUKS policy, escrow kinds or rollout logic; M4c
    gate concurrently on both VMs (`t.Parallel` per VM, one VM never shared by two tests at a time; shared server-side
    fixtures get per-VM names). `make system-test VM=all` wall time roughly halves; document it in `test/system` README.
    Commit `test(system): run both VMs in parallel`.
-6. Regression from reset: acceptance, e2e, `system-test VM=all T='TestAgentGates|TestLocalAdminGates|TestDiskGates'`.
+6. **SSH banner timeouts on the 24.04 test VM** (M3.1, M4a and M4b reports; makes gate S2 fail on 24.04 even with the
+   pre-M4b agent): find the root cause (guest CPU/IO during Himmelblau/apt installs, sshd restarts by
+   `himmelblau-sshd-config`, `MaxStartups`, DNS in sshd, entropy) with evidence from the guest journal, and fix it in the
+   harness or VM preparation (never by weakening S2). S2 MUST pass three times in a row on both VMs. Commit
+   `test(system): stable SSH to the 24.04 guest`.
+7. Regression from reset: acceptance, e2e, `system-test VM=all T='TestAgentGates|TestLocalAdminGates|TestDiskGates'`.
 
 ## 6. Acceptance criteria
 | # | Given / When / Then | Observed by |
