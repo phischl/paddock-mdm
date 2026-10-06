@@ -48,8 +48,8 @@ func TestOrganizationIsolation(t *testing.T) {
 		w.globexIDs = append(w.globexIDs, e.EventID)
 	}
 
-	// Actions that need a step-up must still answer 404 for globex resources, not step_up_required.
-	stepUp(t, w.alice, env.Alice, true)
+	// Actions that need a step-up must still answer 404 for globex resources, not step_up_required; the step-up is
+	// renewed before each operation when the (development) window runs out.
 	var ops []string
 	for path, item := range doc.Paths.Map() {
 		if !strings.HasPrefix(path, "/api/v1/") {
@@ -71,6 +71,7 @@ func TestOrganizationIsolation(t *testing.T) {
 			}
 			method := strings.SplitN(op, " ", 2)[0]
 			path, body := fx.request(t, w)
+			freshStepUp(t, w.alice, env.Alice)
 			res := call(t, w.alice, method, path, body)
 			if method == http.MethodPost && res.Status == http.StatusCreated {
 				removeCreated(t, w.alice, path, res)
