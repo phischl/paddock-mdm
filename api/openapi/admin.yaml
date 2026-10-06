@@ -2218,6 +2218,22 @@ components:
             - $ref: "#/components/schemas/MeOrganization"
           nullable: true
         locale: { type: string, enum: [en] }
+        step_up:
+          $ref: "#/components/schemas/MeStepUp"
+    MeStepUp:
+      type: object
+      description: >-
+        Development only (PADDOCK_ENV=development; absent in production): the session's last step-up and the step-up
+        timing the server applies, for the acceptance gates.
+      required: [window_seconds, max_auth_age_seconds]
+      properties:
+        at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Time of the session's last step-up (whole seconds), null without one.
+        window_seconds: { type: integer, description: How long a step-up satisfies a privileged action. }
+        max_auth_age_seconds: { type: integer, description: The oldest login a step-up callback accepts (max_age). }
     MeUpdate:
       type: object
       required: [locale]

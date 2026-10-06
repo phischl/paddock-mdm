@@ -24,7 +24,8 @@ import (
 const (
 	StepUpCookie   = "paddock_stepup"
 	StepUpLifetime = 10 * time.Minute
-	// StepUpMaxAuthAge is the oldest auth_time the callback accepts.
+	// StepUpMaxAuthAge is the oldest auth_time the callback accepts (Deps.StepUpMaxAuthAge may shorten it in
+	// development).
 	StepUpMaxAuthAge = 60 * time.Second
 )
 
@@ -60,7 +61,7 @@ func (b *bff) currentSession(r *http.Request) (Session, bool) {
 // stepUpStart starts the step-up authorization for the current session: PKCE, state and nonce as in login,
 // prompt=login and max_age force a fresh authentication, login_hint pre-fills the session's username.
 //
-// max_age is StepUpMaxAuthAge, not 0: Authentik ignores max_age=0, and it honours prompt=login only once per
+// max_age is the maximum auth age (StepUpMaxAuthAge), not 0: Authentik ignores max_age=0, and it honours prompt=login only once per
 // login (it remembers the login it forced away, not the one that followed), so a second step-up would get a token
 // of the first one. max_age re-authenticates every login older than the callback accepts.
 func (b *bff) stepUpStart(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +95,7 @@ func (b *bff) stepUpStart(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, stepUpCookie(value, int(StepUpLifetime.Seconds())))
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier),
-		oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", strconv.Itoa(int(StepUpMaxAuthAge.Seconds()))),
+		oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", strconv.Itoa(int(b.maxAuthAge.Seconds()))),
 		oauth2.SetAuthURLParam("login_hint", sess.Disp)), http.StatusFound)
 }
 
@@ -106,7 +107,7 @@ type stepUpClaims struct {
 }
 
 // stepUpCallback completes a step-up: state, code exchange with PKCE, ID token (issuer, audience, nonce, expiry),
-// the same subject as the session, auth_time at most StepUpMaxAuthAge old and MFA in amr. On success the session
+// the same subject as the session, auth_time at most the maximum auth age old and MFA in amr. On success the session
 // is issued again with stepup_at and stepup_jti; any failure leaves the session as it was and returns to return_to
 // with stepup=failed.
 func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +136,7 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, err := b.stepUpToken(r, st)
 	if err == nil {
-		err = checkStepUp(claims, st.Session, now)
+		err = checkStepUp(claims, st.Session, now, b.maxAuthAge)
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "step-up rejected", "error", err, "account_id", st.Session.PID)
@@ -184,12 +185,12 @@ func (b *bff) stepUpToken(r *http.Request, st stepUpState) (stepUpClaims, error)
 }
 
 // checkStepUp checks that the step-up authenticated the session's own user just now, with MFA.
-func checkStepUp(c stepUpClaims, sess Session, now time.Time) error {
+func checkStepUp(c stepUpClaims, sess Session, now time.Time, maxAuthAge time.Duration) error {
 	if c.Subject == "" || c.Subject != sess.Sub {
 		return errors.New("the step-up authenticated another user")
 	}
 	age := now.Sub(time.Unix(c.AuthTime, 0))
-	if c.AuthTime == 0 || age > StepUpMaxAuthAge || age < -StepUpMaxAuthAge {
+	if c.AuthTime == 0 || age > maxAuthAge || age < -maxAuthAge {
 		return errors.New("auth_time missing or not fresh")
 	}
 	if !slices.Contains(c.AMR, "mfa") {

@@ -10,6 +10,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
@@ -36,7 +37,12 @@ type handlers struct {
 	localAdmin *app.LocalAdmin
 
 	now func() time.Time
+	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).
+	stepUpTiming *stepUpTiming
 }
+
+// stepUpTiming is the step-up window of the action runner and the maximum auth age of the step-up callback.
+type stepUpTiming struct{ window, maxAuthAge time.Duration }
 
 var _ adminapi.StrictServerInterface = (*handlers)(nil)
 
@@ -45,7 +51,19 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.GetMe200JSONResponse(toMe(me)), nil
+	out := toMe(me)
+	if h.stepUpTiming != nil {
+		p, _ := principal.From(ctx)
+		out.StepUp = &adminapi.MeStepUp{
+			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
+			MaxAuthAgeSeconds: int(h.stepUpTiming.maxAuthAge.Seconds()),
+		}
+		if !p.StepUpAt.IsZero() {
+			at := p.StepUpAt.UTC()
+			out.StepUp.At = &at
+		}
+	}
+	return adminapi.GetMe200JSONResponse(out), nil
 }
 
 func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObject) (adminapi.UpdateMeResponseObject, error) {

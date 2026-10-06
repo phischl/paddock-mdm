@@ -236,6 +236,12 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	return newEnvWith(t, nil)
+}
+
+// newEnvWith is newEnv with runner options and a change of the handler's dependencies (nil: none).
+func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) *env {
+	t.Helper()
 	ctx := context.Background()
 	pg := pgtest.SharedPaddock(t)
 	ag := pgtest.SharedAudit(t)
@@ -271,7 +277,7 @@ func newEnv(t *testing.T) *env {
 	if err := keys.SetKeys(base64.StdEncoding.EncodeToString(key), ""); err != nil {
 		t.Fatal(err)
 	}
-	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID)
+	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, opts...)
 	idp := newFakeIdP()
 	static, err := admin.NewStaticHandler(fstest.MapFS{"index.html": {Data: []byte(testIndex)}})
 	if err != nil {
@@ -289,7 +295,7 @@ func newEnv(t *testing.T) *env {
 		}
 		return []protocol.BundleKey{{KeyID: "bundle-signing:v1", PublicKey: testBundleKey}}, nil
 	}
-	handler := admin.NewHandler(admin.Deps{
+	d := admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
 		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, nil, "https://device.test"),
 		Devices:       app.NewDevices(runner, orgPool),
@@ -310,7 +316,11 @@ func newEnv(t *testing.T) *env {
 		OIDC:          admin.NewOIDC(admin.OIDCConfig{}),
 		PublicURL:     "https://admin.test",
 		Static:        static,
-	})
+	}
+	if deps != nil {
+		deps(&d)
+	}
+	handler := admin.NewHandler(d)
 
 	spec, err := adminapi.GetSpec()
 	if err != nil {
@@ -656,6 +666,30 @@ func TestRoleBoundaries(t *testing.T) {
 	unknown := e.do(call{method: "GET", path: "/api/v1/me", cookie: &http.Cookie{Name: admin.SessionCookie, Value: "forged"}})
 	if unknown.status != http.StatusUnauthorized {
 		t.Fatalf("forged cookie: %d", unknown.status)
+	}
+}
+
+// TestMeStepUpIsDevelopmentOnly: GET /api/v1/me carries the session's step-up time and the step-up timing only when
+// the handler exposes them (PADDOCK_ENV=development); the shortened window is the one the runner enforces.
+func TestMeStepUpIsDevelopmentOnly(t *testing.T) {
+	at := time.Now().Add(-10 * time.Second).Truncate(time.Second)
+
+	e := newEnv(t)
+	alice := e.steppedUp(e.session(e.acme, principal.RoleOrgAdmin), at)
+	if me := e.do(call{method: "GET", path: "/api/v1/me", cookie: alice}); me.status != http.StatusOK || strings.Contains(string(me.body), "step_up") {
+		t.Fatalf("production /me: %d %s", me.status, me.body)
+	}
+
+	e = newEnvWith(t, func(d *admin.Deps) { d.ExposeStepUp, d.StepUpMaxAuthAge = true, 15*time.Second }, app.WithStepUpWindow(30*time.Second))
+	plain := e.session(e.acme, principal.RoleOrgAdmin)
+	var m adminapi.Me
+	e.do(call{method: "GET", path: "/api/v1/me", cookie: plain}).decode(t, &m)
+	if m.StepUp == nil || m.StepUp.At != nil || m.StepUp.WindowSeconds != 30 || m.StepUp.MaxAuthAgeSeconds != 15 {
+		t.Fatalf("development /me without a step-up: %+v", m.StepUp)
+	}
+	e.do(call{method: "GET", path: "/api/v1/me", cookie: e.steppedUp(plain, at)}).decode(t, &m)
+	if m.StepUp == nil || m.StepUp.At == nil || !m.StepUp.At.Equal(at) {
+		t.Fatalf("development /me after a step-up at %s: %+v", at, m.StepUp)
 	}
 }
 
