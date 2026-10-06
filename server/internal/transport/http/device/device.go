@@ -52,6 +52,9 @@ const BundleURLTTL = 120 * time.Second
 // ArtifactURLTTL is the validity of presigned agent artifact URLs; a download only has to start within it.
 const ArtifactURLTTL = 5 * time.Minute
 
+// HeaderUploadTTL is the validity of the presigned PUT of an escrowed LUKS header (plan M4b decision 10).
+const HeaderUploadTTL = 10 * time.Minute
+
 // Publisher publishes with publisher confirms (mq.Publisher).
 type Publisher interface {
 	PublishBatch(ctx context.Context, exchange string, msgs []mq.Message) ([]error, error)
@@ -62,13 +65,20 @@ type Presigner interface {
 	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
 }
 
+// UploadPresigner computes presigned PUT URLs (objectstore.Presigner of the escrow bucket).
+type UploadPresigner interface {
+	PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error)
+}
+
 // Deps are the dependencies of the device API.
 type Deps struct {
 	Cache     *devicecache.Cache
 	Publisher Publisher
 	Presigner Presigner
 	// Artifacts presigns agent artifacts in paddock-agent-artifacts; nil disables agent updates.
-	Artifacts    Presigner
+	Artifacts Presigner
+	// Escrow presigns header uploads to paddock-escrow; nil refuses header escrows.
+	Escrow       UploadPresigner
 	PerKeyLimit  int
 	PerIPLimit   int
 	Now          func() time.Time

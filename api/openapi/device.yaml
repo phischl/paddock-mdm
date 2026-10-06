@@ -146,12 +146,18 @@ paths:
   /v1/escrow:
     post:
       operationId: postEscrow
-      summary: Upload an escrowed secret (plan M4a decision 12)
+      summary: Upload an escrowed secret or a LUKS header (plan M4a decision 12, M4b decision 10)
       description: |
-        The secret (M4a: the local administrator password) is encrypted on the device with RSA-OAEP and SHA-256 to
-        the escrow-wrap public key of the bundle (keys.escrow_wrap). The worker stores it; poll
-        GET /v1/escrow/{escrow_id} until stored before using the secret. A generation that is not above the active
-        one fails.
+        A secret (admin_password, luks_recovery_key) is encrypted on the device with RSA-OAEP and SHA-256 to the
+        escrow-wrap public key of the bundle (keys.escrow_wrap) and sent as ciphertext. The worker stores it; poll
+        GET /v1/escrow/{escrow_id} until stored before relying on it. A generation that is not above the active
+        administrator password, or not above the last stored generation of a LUKS kind, fails.
+
+        A LUKS header (luks_header) is sealed on the device — gzip, AES-256-GCM with a random key and the escrow ID
+        as additional data, the key RSA-OAEP-wrapped to escrow-wrap — and announced with wrapped_dek, nonce, sha256
+        and size of the sealed object instead of a ciphertext. The answer carries upload_url, a presigned PUT of the
+        object key the server chose (org/<org>/devices/<device>/luks-header/<generation>.bin, valid 10 minutes);
+        the device uploads the object there, and the worker marks it stored once size and SHA-256 match.
       parameters:
         - $ref: "#/components/parameters/Device"
         - $ref: "#/components/parameters/KeyId"
@@ -175,6 +181,7 @@ paths:
                 required: [escrow_id]
                 properties:
                   escrow_id: { type: string, format: uuid }
+                  upload_url: { type: string, description: "luks_header only: presigned PUT URL of the sealed header, valid 10 minutes." }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
@@ -404,13 +411,17 @@ components:
               sig: { type: string, description: Standard base64 Ed25519 signature over the DSSE PAE. }
     EscrowRequest:
       type: object
-      required: [escrow_id, kind, generation, key_version, ciphertext]
+      required: [escrow_id, kind, generation, key_version]
       properties:
         escrow_id: { type: string, format: uuid, description: Chosen by the device; idempotency key. }
-        kind: { type: string, enum: [admin_password] }
+        kind: { type: string, enum: [admin_password, luks_recovery_key, luks_header] }
         generation: { type: integer, minimum: 1 }
-        key_version: { type: integer, minimum: 1, description: Version of escrow-wrap the secret is encrypted to. }
-        ciphertext: { type: string, description: "Standard base64 RSA-OAEP-SHA256 ciphertext, at most 4096 bytes." }
+        key_version: { type: integer, minimum: 1, description: Version of escrow-wrap the secret or the header key is encrypted to. }
+        ciphertext: { type: string, description: "Secrets only (required): standard base64 RSA-OAEP-SHA256 ciphertext, at most 4096 bytes." }
+        wrapped_dek: { type: string, description: "luks_header only (required): standard base64 RSA-OAEP-SHA256 ciphertext of the 32-byte header key." }
+        nonce: { type: string, description: "luks_header only (required): standard base64 of the 12-byte AES-GCM nonce." }
+        sha256: { type: string, description: "luks_header only (required): hex SHA-256 of the sealed object." }
+        size: { type: integer, format: int64, description: "luks_header only (required): bytes of the sealed object, at most 32 MiB." }
     CommandResult:
       type: object
       required: [status]
@@ -441,7 +452,7 @@ components:
                  user.lock_applied, logins.suspension_applied, sudo.apply_failed, sudo.user_unresolved,
                  tamper.sudo_group_member, tamper.sudoers_d_file, tamper.sudoers_changed,
                  tamper.protected_file_changed, local_admin.rotated, local_admin.rotation_failed, local_admin.login,
-                 tamper.local_admin_changed]
+                 tamper.local_admin_changed, tamper.keyslot_changed]
         occurred_at: { type: string, format: date-time }
         data:
           type: object

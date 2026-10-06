@@ -231,6 +231,11 @@ type EscrowSecret struct {
 	KeyVersion     int32
 	CreatedAt      time.Time
 	ActivatedAt    *time.Time
+	ObjectKey      *string
+	WrappedDek     []byte
+	Nonce          []byte
+	Sha256         *string
+	Size           *int64
 }
 
 type ManagedFile struct {

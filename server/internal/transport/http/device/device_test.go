@@ -77,6 +77,10 @@ func (fakePresigner) PresignGet(_ context.Context, key string, ttl time.Duration
 	return "https://bundles.test/paddock-bundles/" + key + "?X-Amz-Expires=" + strconv.Itoa(int(ttl.Seconds())), nil
 }
 
+func (fakePresigner) PresignPut(_ context.Context, key string, ttl time.Duration) (string, error) {
+	return "https://bundles.test/paddock-escrow/" + key + "?X-Amz-Expires=" + strconv.Itoa(int(ttl.Seconds())), nil
+}
+
 type env struct {
 	t       *testing.T
 	handler http.Handler
@@ -92,7 +96,8 @@ func newEnv(t *testing.T, perKey, perIP int) *env {
 	e := &env{t: t, cache: devicecache.New(valkeytest.Start(t).Client(t)), pub: &fakePublisher{},
 		now: time.Now().Truncate(time.Second), org: uuid.New()}
 	e.handler = device.NewHandler(device.Deps{
-		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, PerKeyLimit: perKey, PerIPLimit: perIP,
+		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, Escrow: fakePresigner{},
+		PerKeyLimit: perKey, PerIPLimit: perIP,
 		Now: func() time.Time { return e.now }, CheckinDelay: func() int { return 300 },
 	})
 	_, file, _, _ := runtime.Caller(0)
@@ -648,7 +653,9 @@ func TestEscrow(t *testing.T) {
 	e.expectProblem(status(other, otherID), http.StatusNotFound, "not_found")
 
 	for name, mutate := range map[string]func(map[string]any){
-		"kind":       func(b map[string]any) { b["kind"] = "luks_header" },
+		"kind":       func(b map[string]any) { b["kind"] = "luks_keyfile" },
+		"header":     func(b map[string]any) { b["kind"] = "luks_header" },
+		"extra":      func(b map[string]any) { b["sha256"] = strings.Repeat("a", 64) },
 		"generation": func(b map[string]any) { b["generation"] = 0 },
 		"escrow_id":  func(b map[string]any) { b["escrow_id"] = "x" },
 		"ciphertext": func(b map[string]any) { b["ciphertext"] = base64.StdEncoding.EncodeToString(make([]byte, 4097)) },
@@ -778,4 +785,50 @@ func TestBackpressureAndRateLimits(t *testing.T) {
 		t.Fatalf("other key, same address: %d %s", r.status, r.body)
 	}
 	e.expectProblem(checkin(d, did), http.StatusTooManyRequests, "rate_limited")
+}
+
+// TestEscrowHeader: a header escrow is answered with a presigned PUT of the key the gateway chose for the device's
+// organization and generation, and published with the facts of the sealed object (plan M4b decision 10).
+func TestEscrowHeader(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	escrowID := uuid.Must(uuid.NewV7())
+	body := map[string]any{"escrow_id": escrowID.String(), "kind": "luks_header", "generation": 3, "key_version": 2,
+		"wrapped_dek": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 512)),
+		"nonce":       base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 12)),
+		"sha256":      strings.Repeat("ab", 32), "size": 1234567}
+	r := e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: body})
+	key := "org/" + e.org.String() + "/devices/" + id.String() + "/luks-header/3.bin"
+	var accepted struct {
+		EscrowID  string `json:"escrow_id"`
+		UploadURL string `json:"upload_url"`
+	}
+	if err := json.Unmarshal(r.body, &accepted); err != nil || r.status != http.StatusAccepted || accepted.EscrowID != escrowID.String() ||
+		accepted.UploadURL != "https://bundles.test/paddock-escrow/"+key+"?X-Amz-Expires=600" {
+		t.Fatalf("header: %d %s", r.status, r.body)
+	}
+	var in ingest.Escrow
+	if err := json.Unmarshal(e.pub.last(t).Body, &in); err != nil || in.ObjectKey != key || in.Kind != "luks_header" || len(in.WrappedDEK) != 512 ||
+		len(in.Nonce) != 12 || in.SHA256 != strings.Repeat("ab", 32) || in.Size != 1234567 || in.Ciphertext != nil || in.Generation != 3 {
+		t.Fatalf("published %+v", in)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"ciphertext":  func(b map[string]any) { b["ciphertext"] = base64.StdEncoding.EncodeToString([]byte("x")) },
+		"nonce":       func(b map[string]any) { b["nonce"] = base64.StdEncoding.EncodeToString(make([]byte, 16)) },
+		"sha256":      func(b map[string]any) { b["sha256"] = strings.Repeat("AB", 32) },
+		"size":        func(b map[string]any) { b["size"] = 32<<20 + 1 },
+		"no size":     func(b map[string]any) { delete(b, "size") },
+		"wrapped_dek": func(b map[string]any) { b["wrapped_dek"] = "%%%" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := map[string]any{}
+			for k, v := range body {
+				bad[k] = v
+			}
+			mutate(bad)
+			r := e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: bad, skipReqCheck: true})
+			e.expectProblem(r, http.StatusBadRequest, "invalid_request")
+		})
+	}
 }

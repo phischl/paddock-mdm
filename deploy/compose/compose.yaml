@@ -286,6 +286,11 @@ services:
       PADDOCK_ARTIFACTS_S3_BUCKET: paddock-agent-artifacts
       PADDOCK_ARTIFACTS_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_artifacts_api_access_key
       PADDOCK_ARTIFACTS_S3_SECRET_KEY_FILE: /run/secrets/rustfs_artifacts_api_secret_key
+      # Reads escrowed LUKS headers for a recovery (plan M4b decision 14).
+      PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
+      PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_api_access_key
+      PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_api_secret_key
       # Publishes new and revoked enrollment tokens to the gateway's cache at once.
       PADDOCK_VALKEY_ADDR: valkey:6379
       PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
@@ -295,6 +300,8 @@ services:
       - release_public_key
       - rustfs_artifacts_api_access_key
       - rustfs_artifacts_api_secret_key
+      - rustfs_escrow_api_access_key
+      - rustfs_escrow_api_secret_key
       - db_paddock_api_url
       - db_paddock_platform_url
       - db_paddock_audit_reader_url
@@ -346,6 +353,8 @@ services:
       PADDOCK_BUNDLES_PUBLIC_URL: https://bundles.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
       PADDOCK_ARTIFACTS_S3_BUCKET: paddock-agent-artifacts
+      # Header uploads are presigned PUTs below org/*/devices/*/luks-header/ (plan M4b decision 10).
+      PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
       PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_gateway_access_key
       PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_gateway_secret_key
     secrets:
@@ -429,8 +438,15 @@ services:
       # Identity synchronization and reconcile (plan M3a decisions 2, 3, 5, 9).
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_AUTHENTIK_TOKEN_FILE: /run/secrets/authentik_service_token
+      # Verifies uploaded LUKS headers (plan M4b decision 10).
+      PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
+      PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_worker_access_key
+      PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_worker_secret_key
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
+      - rustfs_escrow_worker_access_key
+      - rustfs_escrow_worker_secret_key
       - db_paddock_worker_url
       - db_paddock_platform_url
       - rabbitmq_worker_password
@@ -496,6 +512,10 @@ secrets:
   rustfs_bundles_gateway_secret_key: { file: ./.secrets/rustfs_bundles_gateway_secret_key }
   rustfs_artifacts_api_access_key: { file: ./.secrets/rustfs_artifacts_api_access_key }
   rustfs_artifacts_api_secret_key: { file: ./.secrets/rustfs_artifacts_api_secret_key }
+  rustfs_escrow_worker_access_key: { file: ./.secrets/rustfs_escrow_worker_access_key }
+  rustfs_escrow_worker_secret_key: { file: ./.secrets/rustfs_escrow_worker_secret_key }
+  rustfs_escrow_api_access_key: { file: ./.secrets/rustfs_escrow_api_access_key }
+  rustfs_escrow_api_secret_key: { file: ./.secrets/rustfs_escrow_api_secret_key }
   release_public_key: { file: ./.secrets/release/minisign.pub }
   authentik_postgres_password: { file: ./.secrets/authentik_postgres_password }
   authentik_secret_key: { file: ./.secrets/authentik_secret_key }

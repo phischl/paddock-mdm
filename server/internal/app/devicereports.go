@@ -98,6 +98,8 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventLocalAdminRotationFailed: audit.CodeLocalAdminRotationFailed,
 	protocol.EventLocalAdminLogin:          audit.CodeLocalAdminLogin,
 	protocol.EventTamperLocalAdminChanged:  audit.CodeDeviceTamperLocalAdminChanged,
+
+	protocol.EventTamperKeyslotChanged: audit.CodeDeviceTamperKeyslotChanged,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -239,6 +241,11 @@ func eventParams(ev protocol.Event) map[string]any {
 	}
 	if ids, ok := data["resource_ids"].([]any); ok {
 		params["resource_ids"] = boundedStrings(ids)
+	}
+	for _, key := range []string{"before", "after"} { // tamper.keyslot_changed: keyslot kinds
+		if kinds, ok := data[key].([]any); ok {
+			params[key] = boundedStrings(kinds)
+		}
 	}
 	if errs, ok := data["errors"].([]any); ok {
 		out := []map[string]string{}

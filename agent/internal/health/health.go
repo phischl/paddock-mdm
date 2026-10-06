@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Status values.
@@ -31,6 +33,8 @@ type Report struct {
 	LastError         string     `json:"last_error"`
 	// SudoFlavor is the active sudo implementation, classic or sudo-rs (empty until detected).
 	SudoFlavor string `json:"sudo_flavor,omitempty"`
+	// Disk is the disk encryption of the device (nil until the first inventory).
+	Disk *protocol.DiskHealth `json:"disk,omitempty"`
 }
 
 // State is the current health, shared between the run loop (writer) and the socket server (reader).

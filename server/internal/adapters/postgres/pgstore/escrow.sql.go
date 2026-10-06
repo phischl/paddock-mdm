@@ -61,9 +61,26 @@ func (q *Queries) ActiveEscrowGeneration(ctx context.Context, arg ActiveEscrowGe
 	return column_1, err
 }
 
+const finishEscrowHeader = `-- name: FinishEscrowHeader :execrows
+UPDATE escrow_secret SET status = $1 WHERE id = $2 AND status = 'pending'
+`
+
+type FinishEscrowHeaderParams struct {
+	Status string
+	ID     uuid.UUID
+}
+
+func (q *Queries) FinishEscrowHeader(ctx context.Context, arg FinishEscrowHeaderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishEscrowHeader, arg.Status, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getEscrowSecret = `-- name: GetEscrowSecret :one
 
-SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at FROM escrow_secret WHERE id = $1
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret WHERE id = $1
 `
 
 // Escrowed secrets (plan M4a decisions 11 and 12).
@@ -81,8 +98,56 @@ func (q *Queries) GetEscrowSecret(ctx context.Context, id uuid.UUID) (EscrowSecr
 		&i.KeyVersion,
 		&i.CreatedAt,
 		&i.ActivatedAt,
+		&i.ObjectKey,
+		&i.WrappedDek,
+		&i.Nonce,
+		&i.Sha256,
+		&i.Size,
 	)
 	return i, err
+}
+
+const insertEscrowHeader = `-- name: InsertEscrowHeader :execrows
+INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
+                           nonce, sha256, size, created_at)
+VALUES ($1, $2, $3, 'luks_header', $4, 'pending', $5, $6, $7,
+        $8, $9, $10, $11)
+ON CONFLICT DO NOTHING
+`
+
+type InsertEscrowHeaderParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Generation     int32
+	KeyVersion     int32
+	ObjectKey      *string
+	WrappedDek     []byte
+	Nonce          []byte
+	Sha256         *string
+	Size           *int64
+	CreatedAt      time.Time
+}
+
+// A header generation waits as pending until the worker found its object.
+func (q *Queries) InsertEscrowHeader(ctx context.Context, arg InsertEscrowHeaderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertEscrowHeader,
+		arg.ID,
+		arg.OrganizationID,
+		arg.DeviceID,
+		arg.Generation,
+		arg.KeyVersion,
+		arg.ObjectKey,
+		arg.WrappedDek,
+		arg.Nonce,
+		arg.Sha256,
+		arg.Size,
+		arg.CreatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertEscrowSecret = `-- name: InsertEscrowSecret :execrows
@@ -120,8 +185,71 @@ func (q *Queries) InsertEscrowSecret(ctx context.Context, arg InsertEscrowSecret
 	return result.RowsAffected(), nil
 }
 
+const latestEscrowGeneration = `-- name: LatestEscrowGeneration :one
+
+SELECT coalesce(max(generation), 0)::int FROM escrow_secret
+WHERE device_id = $1 AND kind = $2 AND status <> 'failed'
+`
+
+type LatestEscrowGenerationParams struct {
+	DeviceID uuid.UUID
+	Kind     string
+}
+
+// Disk encryption escrow (plan M4b decisions 10 and 13).
+// The highest generation of a kind that did not fail: a new LUKS generation must be above it.
+func (q *Queries) LatestEscrowGeneration(ctx context.Context, arg LatestEscrowGenerationParams) (int32, error) {
+	row := q.db.QueryRow(ctx, latestEscrowGeneration, arg.DeviceID, arg.Kind)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const listDiskEscrows = `-- name: ListDiskEscrows :many
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret
+WHERE device_id = $1 AND kind IN ('luks_recovery_key', 'luks_header')
+ORDER BY kind, generation DESC
+`
+
+// The LUKS generations of a device, newest first.
+func (q *Queries) ListDiskEscrows(ctx context.Context, deviceID uuid.UUID) ([]EscrowSecret, error) {
+	rows, err := q.db.Query(ctx, listDiskEscrows, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EscrowSecret{}
+	for rows.Next() {
+		var i EscrowSecret
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.DeviceID,
+			&i.Kind,
+			&i.Generation,
+			&i.Status,
+			&i.Ciphertext,
+			&i.KeyVersion,
+			&i.CreatedAt,
+			&i.ActivatedAt,
+			&i.ObjectKey,
+			&i.WrappedDek,
+			&i.Nonce,
+			&i.Sha256,
+			&i.Size,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLocalAdminSecrets = `-- name: ListLocalAdminSecrets :many
-SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at FROM escrow_secret
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret
 WHERE device_id = $1::uuid AND kind = 'admin_password'
   AND (status = 'active' OR (status = 'stored' AND generation > (
     SELECT coalesce(max(generation), 0) FROM escrow_secret a
@@ -150,6 +278,51 @@ func (q *Queries) ListLocalAdminSecrets(ctx context.Context, deviceID uuid.UUID)
 			&i.KeyVersion,
 			&i.CreatedAt,
 			&i.ActivatedAt,
+			&i.ObjectKey,
+			&i.WrappedDek,
+			&i.Nonce,
+			&i.Sha256,
+			&i.Size,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingEscrowHeaders = `-- name: ListPendingEscrowHeaders :many
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret WHERE status = 'pending' ORDER BY created_at, id LIMIT 100
+`
+
+func (q *Queries) ListPendingEscrowHeaders(ctx context.Context) ([]EscrowSecret, error) {
+	rows, err := q.db.Query(ctx, listPendingEscrowHeaders)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EscrowSecret{}
+	for rows.Next() {
+		var i EscrowSecret
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.DeviceID,
+			&i.Kind,
+			&i.Generation,
+			&i.Status,
+			&i.Ciphertext,
+			&i.KeyVersion,
+			&i.CreatedAt,
+			&i.ActivatedAt,
+			&i.ObjectKey,
+			&i.WrappedDek,
+			&i.Nonce,
+			&i.Sha256,
+			&i.Size,
 		); err != nil {
 			return nil, err
 		}

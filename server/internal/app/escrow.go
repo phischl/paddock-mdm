@@ -2,7 +2,13 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -10,51 +16,162 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
 
-// Escrow stores the secrets devices escrow (worker, plan M4a decisions 11 and 12). The caller's context carries a
-// system principal of the device's organization.
-type Escrow struct {
-	org *db.OrgPool
+// HeaderObjects reads sealed LUKS headers from the escrow bucket paddock-escrow (objectstore.Store); found is false
+// when the object does not exist.
+type HeaderObjects interface {
+	GetIfExists(ctx context.Context, key string) (data []byte, found bool, err error)
 }
 
-// NewEscrow creates the use case.
-func NewEscrow(org *db.OrgPool) *Escrow { return &Escrow{org: org} }
+// HeaderUploadWindow is how long a header may stay pending: the device has the 10 minutes of its presigned PUT, and
+// the rest is slack for a slow upload.
+const HeaderUploadWindow = 15 * time.Minute
 
-// Store records an upload as generation stored and returns the status the device polls: stored, or failed for a
-// generation that is not above the active one or exists already. A repeated message reports the recorded status.
+// Escrow stores the secrets and LUKS headers devices escrow (worker, plan M4a decisions 11 and 12, M4b decisions 10
+// and 13). The caller's context carries a system principal of the device's organization.
+type Escrow struct {
+	org     *db.OrgPool
+	headers HeaderObjects
+	now     func() time.Time
+}
+
+// NewEscrow creates the use case; headers may be nil where no header is verified.
+func NewEscrow(org *db.OrgPool, headers HeaderObjects) *Escrow {
+	return &Escrow{org: org, headers: headers, now: time.Now}
+}
+
+// Store records an upload and returns the status the device polls: stored, pending for a header until its object is
+// verified, or failed for a generation that is not above the active administrator password or the last generation
+// of a LUKS kind. A repeated message reports the recorded status.
 func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 	status := escrow.StatusFailed
 	err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		if cur, err := q.GetEscrowSecret(ctx, m.EscrowID); err == nil {
 			if cur.DeviceID == m.DeviceID && cur.Status != escrow.StatusFailed {
-				status = escrow.StatusStored
+				status = cur.Status
+				if status == escrowActive || status == "superseded" {
+					status = escrow.StatusStored
+				}
 			}
 			return nil
 		} else if !db.IsNoRows(err) {
 			return err
 		}
-		active, err := q.ActiveEscrowGeneration(ctx, pgstore.ActiveEscrowGenerationParams{DeviceID: m.DeviceID, Kind: m.Kind})
+		floor, err := e.generationFloor(ctx, q, m)
 		if err != nil {
-			return fmt.Errorf("active generation: %w", err)
+			return err
 		}
-		if m.Generation <= int64(active) || m.Generation > 1<<31-1 {
+		if m.Generation <= int64(floor) || m.Generation > 1<<31-1 {
 			return nil
 		}
 		org, err := orgOf(ctx)
 		if err != nil {
 			return err
 		}
-		n, err := q.InsertEscrowSecret(ctx, pgstore.InsertEscrowSecretParams{
-			ID: m.EscrowID, OrganizationID: org, DeviceID: m.DeviceID, Kind: m.Kind,
-			Generation: int32(m.Generation), Ciphertext: m.Ciphertext, KeyVersion: int32(m.KeyVersion), //nolint:gosec // bounded above and by the gateway
-			CreatedAt: m.ReceivedAt,
-		})
+		n, inserted := int64(0), escrow.StatusStored
+		if m.Kind == escrow.KindLUKSHeader {
+			inserted = statusPending
+			n, err = q.InsertEscrowHeader(ctx, pgstore.InsertEscrowHeaderParams{
+				ID: m.EscrowID, OrganizationID: org, DeviceID: m.DeviceID, Generation: int32(m.Generation), //nolint:gosec // bounded above
+				KeyVersion: int32(m.KeyVersion), ObjectKey: &m.ObjectKey, WrappedDek: m.WrappedDEK, Nonce: m.Nonce, //nolint:gosec // bounded by the gateway
+				Sha256: &m.SHA256, Size: &m.Size, CreatedAt: m.ReceivedAt,
+			})
+		} else {
+			n, err = q.InsertEscrowSecret(ctx, pgstore.InsertEscrowSecretParams{
+				ID: m.EscrowID, OrganizationID: org, DeviceID: m.DeviceID, Kind: m.Kind,
+				Generation: int32(m.Generation), Ciphertext: m.Ciphertext, KeyVersion: int32(m.KeyVersion), //nolint:gosec // bounded above and by the gateway
+				CreatedAt: m.ReceivedAt,
+			})
+		}
 		if err != nil {
-			return fmt.Errorf("insert escrow secret: %w", err)
+			return fmt.Errorf("insert escrow %s: %w", m.Kind, err)
 		}
 		if n == 1 {
-			status = escrow.StatusStored
+			status = inserted
 		}
 		return nil
 	})
 	return status, err
+}
+
+// statusPending is a header whose object the worker has not verified yet; devices see pending too.
+const statusPending = escrow.StatusPending
+
+// generationFloor is the generation a new upload must exceed: the active administrator password, or the last
+// generation of a LUKS kind that did not fail.
+func (e *Escrow) generationFloor(ctx context.Context, q *pgstore.Queries, m ingest.Escrow) (int32, error) {
+	if m.Kind == escrow.KindAdminPassword {
+		active, err := q.ActiveEscrowGeneration(ctx, pgstore.ActiveEscrowGenerationParams{DeviceID: m.DeviceID, Kind: m.Kind})
+		if err != nil {
+			return 0, fmt.Errorf("active generation: %w", err)
+		}
+		return active, nil
+	}
+	latest, err := q.LatestEscrowGeneration(ctx, pgstore.LatestEscrowGenerationParams{DeviceID: m.DeviceID, Kind: m.Kind})
+	if err != nil {
+		return 0, fmt.Errorf("latest generation: %w", err)
+	}
+	return latest, nil
+}
+
+// HeaderOutcome is a header whose verification finished.
+type HeaderOutcome struct {
+	EscrowID, DeviceID uuid.UUID
+	Status             string // stored or failed
+}
+
+// VerifyHeaders checks the pending headers of the caller's organization: a header whose object exists with the
+// announced size and SHA-256 is stored, a mismatching object or one that did not arrive within HeaderUploadWindow
+// fails; the others stay pending. It returns the finished headers.
+func (e *Escrow) VerifyHeaders(ctx context.Context) ([]HeaderOutcome, error) {
+	var pending []pgstore.EscrowSecret
+	if err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		pending, err = q.ListPendingEscrowHeaders(ctx)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	var out []HeaderOutcome
+	for _, h := range pending {
+		status, err := e.check(ctx, h)
+		if err != nil {
+			return out, fmt.Errorf("header %s: %w", h.ID, err)
+		}
+		if status == statusPending {
+			continue
+		}
+		var n int64
+		if err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+			n, err = q.FinishEscrowHeader(ctx, pgstore.FinishEscrowHeaderParams{ID: h.ID, Status: status})
+			return err
+		}); err != nil {
+			return out, err
+		}
+		if n == 1 {
+			slog.InfoContext(ctx, "escrowed LUKS header verified", "device_id", h.DeviceID, "escrow_id", h.ID, "generation", h.Generation, "status", status)
+			out = append(out, HeaderOutcome{EscrowID: h.ID, DeviceID: h.DeviceID, Status: status})
+		}
+	}
+	return out, nil
+}
+
+// check returns the status of one pending header.
+func (e *Escrow) check(ctx context.Context, h pgstore.EscrowSecret) (string, error) {
+	if h.ObjectKey == nil || h.Sha256 == nil || h.Size == nil {
+		return escrow.StatusFailed, nil
+	}
+	data, found, err := e.headers.GetIfExists(ctx, *h.ObjectKey)
+	switch {
+	case err != nil:
+		return "", err
+	case !found && e.now().Sub(h.CreatedAt) > HeaderUploadWindow:
+		return escrow.StatusFailed, nil
+	case !found:
+		return statusPending, nil
+	}
+	sum := sha256.Sum256(data)
+	if int64(len(data)) != *h.Size || hex.EncodeToString(sum[:]) != *h.Sha256 {
+		return escrow.StatusFailed, nil
+	}
+	return escrow.StatusStored, nil
 }

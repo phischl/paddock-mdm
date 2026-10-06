@@ -2,14 +2,20 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
 // TestEscrowStore (plan M4a decisions 11 and 12): an upload is stored and reported stored, a repeated message keeps
@@ -21,7 +27,7 @@ func TestEscrowStore(t *testing.T) {
 	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-esc', 'active')", device, f.org); err != nil {
 		t.Fatal(err)
 	}
-	e := NewEscrow(app.NewEscrow(f.pool), f.cache)
+	e := NewEscrow(app.NewEscrow(f.pool, nil), f.cache, f.pool, nil)
 	upload := func(id uuid.UUID, generation int64) (outcome, string) {
 		t.Helper()
 		body, _ := json.Marshal(ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: id, Kind: "admin_password",
@@ -57,5 +63,118 @@ func TestEscrowStore(t *testing.T) {
 	}
 	if o := e.process(ctx, "x", []byte(`{"escrow":1}`)); o != poison {
 		t.Fatalf("malformed message: %v", o)
+	}
+}
+
+// fakeObjects is the escrow bucket.
+type fakeObjects struct {
+	mu      sync.Mutex
+	objects map[string][]byte
+}
+
+func (f *fakeObjects) GetIfExists(_ context.Context, key string) ([]byte, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.objects[key]
+	return data, ok, nil
+}
+
+func (f *fakeObjects) put(key string, data []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.objects[key] = data
+}
+
+// TestEscrowLUKS (plan M4b decisions 10 and 13): a recovery key is stored like a secret, but every new generation
+// must exceed the last one that did not fail; a header stays pending until the round finds its object with the
+// announced size and SHA-256, fails on a mismatch or when it does not arrive in time.
+func TestEscrowLUKS(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	device := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-luks', 'active')", device, f.org); err != nil {
+		t.Fatal(err)
+	}
+	objects := &fakeObjects{objects: map[string][]byte{}}
+	e := NewEscrow(app.NewEscrow(f.pool, objects), f.cache, f.pool, platform)
+	status := func(id uuid.UUID) string {
+		t.Helper()
+		_, s, ok, err := f.cache.EscrowStatus(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			return escrow.StatusPending
+		}
+		return s
+	}
+	send := func(m ingest.Escrow) uuid.UUID {
+		t.Helper()
+		m.DeviceID, m.OrganizationID, m.EscrowID = device, f.org, uuid.Must(uuid.NewV7())
+		if m.ReceivedAt.IsZero() {
+			m.ReceivedAt = time.Now()
+		}
+		body, _ := json.Marshal(m)
+		if o := e.process(ctx, m.EscrowID.String(), body); o != ack {
+			t.Fatalf("process %s: %v", m.Kind, o)
+		}
+		return m.EscrowID
+	}
+	recovery := func(g int64) ingest.Escrow {
+		return ingest.Escrow{Kind: escrow.KindLUKSRecoveryKey, Generation: g, KeyVersion: 1, Ciphertext: []byte{9}}
+	}
+	if id := send(recovery(1)); status(id) != escrow.StatusStored {
+		t.Fatalf("recovery key 1: %s", status(id))
+	}
+	if id := send(recovery(1)); status(id) != escrow.StatusFailed {
+		t.Fatalf("recovery key 1 again: %s", status(id))
+	}
+	if id := send(recovery(2)); status(id) != escrow.StatusStored {
+		t.Fatalf("recovery key 2: %s", status(id))
+	}
+
+	object := []byte("sealed header")
+	sum := sha256.Sum256(object)
+	header := func(g int64, size int64, receivedAt time.Time) ingest.Escrow {
+		key := escrow.HeaderObjectKey(f.org.String(), device.String(), g)
+		return ingest.Escrow{Kind: escrow.KindLUKSHeader, Generation: g, KeyVersion: 1, ObjectKey: key, WrappedDEK: []byte{1},
+			Nonce: make([]byte, 12), SHA256: hex.EncodeToString(sum[:]), Size: size, ReceivedAt: receivedAt}
+	}
+	ok := send(header(1, int64(len(object)), time.Time{}))
+	mismatch := send(header(2, int64(len(object))+1, time.Time{}))
+	late := send(header(3, int64(len(object)), time.Now().Add(-app.HeaderUploadWindow-time.Minute)))
+	waiting := send(header(4, int64(len(object)), time.Time{}))
+	for _, id := range []uuid.UUID{ok, mismatch, late, waiting} {
+		if status(id) != escrow.StatusPending {
+			t.Fatalf("header %s before the round: %s", id, status(id))
+		}
+	}
+	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), 1), object)
+	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), 2), object)
+	if err := e.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[uuid.UUID]string{ok: escrow.StatusStored, mismatch: escrow.StatusFailed, late: escrow.StatusFailed, waiting: escrow.StatusPending} {
+		if got := status(id); got != want {
+			t.Errorf("header %s: %s, want %s", id, got, want)
+		}
+	}
+	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), 4), object)
+	if err := e.Round(ctx); err != nil || status(waiting) != escrow.StatusStored {
+		t.Fatalf("late upload within the window: %v %s", err, status(waiting))
+	}
+	// A repeated message reports the recorded status; a generation at or below a header that did not fail fails.
+	body, _ := json.Marshal(ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: ok, Kind: escrow.KindLUKSHeader, Generation: 1,
+		KeyVersion: 1, ObjectKey: "x", WrappedDEK: []byte{1}, Nonce: make([]byte, 12), SHA256: hex.EncodeToString(sum[:]), Size: 1, ReceivedAt: time.Now()})
+	if o := e.process(ctx, ok.String(), body); o != ack || status(ok) != escrow.StatusStored {
+		t.Fatalf("repeated header message: %v %s", o, status(ok))
+	}
+	if id := send(header(4, int64(len(object)), time.Time{})); status(id) != escrow.StatusFailed {
+		t.Fatalf("header generation 4 again: %s", status(id))
 	}
 }

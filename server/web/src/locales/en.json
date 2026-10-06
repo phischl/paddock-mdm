@@ -170,7 +170,8 @@
       "tamper_sudoers_d_file": "The device {target} quarantined the unexpected sudoers file {file}",
       "tamper_sudoers_changed": "The device {target} found /etc/sudoers changed",
       "tamper_protected_file_changed": "The device {target} found the protected file {file} changed",
-      "tamper_local_admin_changed": "The device {target} found its local administrator account changed ({field})"
+      "tamper_local_admin_changed": "The device {target} found its local administrator account changed ({field})",
+      "tamper_keyslot_changed": "The device {target} found the keyslots of its disk changed"
     },
     "autoinstall": {
       "generated": "{actor} generated a Paddock autoinstall for Ubuntu {release} with agent {agent_version}"
