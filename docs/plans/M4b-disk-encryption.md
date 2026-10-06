@@ -1,6 +1,6 @@
 # Implementierungsplan: M4b — Disk encryption: Paddock autoinstall, TPM2+PIN, recovery key, header escrow
 
-Status: Ready for implementation (after M4a) · 2026-10-05 · Author: architect
+Status: Ready for implementation · 2026-10-05 · Author: architect
 Basis: architecture v1.7 §12.4 (decided: boot PIN set at installation), §11.5 keyslot inventory, §13 keys; concept
 "Disk encryption", "Keyslot policy", C5; PoC M1 C7–C9 (`docs/poc/M1-report.md`, `test/poc/m1/tpm/*`); M4a (escrow
 endpoints, `escrow-wrap` key, step-up, commands)

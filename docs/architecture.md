@@ -744,7 +744,7 @@ is a drop-in target.
 | `tt:<org>` | string (signed time ticket) | compiler | gateway | 30 min |
 | `ar:<org>` | string (rollout state) | worker | gateway | none |
 | `seq:<device_id>` | string counter | worker | gateway | none |
-| `et:<token_hash>` | hash (enrollment token: org, status, uses) | worker | gateway | token expiry |
+| `et:<token_hash>` | hash (enrollment token: org, status, uses) | api (right after commit, best effort) + worker (NOTIFY/reconcile) | gateway | token expiry |
 | `lock:compile:<device_id>`, `lock:<job>` | string | compiler, scheduler | – | 30 s |
 
 Deployment: one primary + one replica with Sentinel in production; AOF `everysec`. Loss of Valkey
