@@ -1,6 +1,7 @@
 // Package devicecache owns the Valkey keys of the device control plane (architecture §8.3): their names, record
-// formats and TTLs. The worker and the compiler write them from PostgreSQL; the gateway reads them, so the device
-// path never touches the database. Everything except nonces can be rebuilt from PostgreSQL.
+// formats and TTLs. The worker and the compiler write them from PostgreSQL (the api also writes a token right after
+// creating or revoking it); the gateway reads them, so the device path never touches the database. Everything except
+// nonces can be rebuilt from PostgreSQL.
 package devicecache
 
 import (
