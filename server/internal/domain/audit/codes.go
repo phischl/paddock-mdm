@@ -232,10 +232,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceAgentUpdateFailed: {
 		Code: CodeDeviceAgentUpdateFailed, Emitted: true,
-		Description: "A device's supervisor refused an agent release before switching: invalid signature or failed self-test (actor: the device).",
+		Description: "A device's supervisor refused an agent release before switching: invalid signature, not newer than the active version, or failed self-test (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "outcome is signature_invalid or self_test_failed.",
+		Note:        "outcome is signature_invalid (also a signed comment that does not name the version and architecture), downgrade_refused or self_test_failed.",
 	},
 	CodeDeviceAgentRolledBack: {
 		Code: CodeDeviceAgentRolledBack, Emitted: true,

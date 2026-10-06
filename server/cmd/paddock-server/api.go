@@ -85,7 +85,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	if err := releasePub.UnmarshalText([]byte(releaseKey)); err != nil {
 		return fmt.Errorf("PADDOCK_RELEASE_PUBLIC_KEY_FILE: %w", err)
 	}
-	verifyRelease := func(binary, sig []byte) bool { return minisign.Verify(releasePub, binary, sig) }
+	verifyRelease := app.NewReleaseVerifier(releasePub)
 
 	orgPool, err := db.NewOrgPool(ctx, orgDSN, db.Options{ApplicationName: "paddock-api"})
 	if err != nil {

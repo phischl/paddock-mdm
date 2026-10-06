@@ -27,6 +27,7 @@ import (
 
 	"aead.dev/minisign"
 
+	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
@@ -110,7 +111,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		sig := minisign.SignWithComments(priv, bin, fmt.Sprintf("paddockd %s %s", *version, arch), "paddock agent release")
+		sig := minisign.SignWithComments(priv, bin, releasesig.Comment(*version, arch), "paddock agent release")
 		if res, err := upload(ctx, p, base+"/artifacts/"+arch, bin, sig); err != nil || res.Status != http.StatusOK {
 			return fail("upload "+arch, res, err)
 		}

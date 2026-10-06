@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -75,7 +76,7 @@ func newReleaseHarness(t *testing.T, development bool) releaseHarness {
 	}
 	store := &fakeArtifactStore{puts: map[string][]byte{}}
 	runner := app.NewActionRunner(worker, platform, httpx.RequestID)
-	verify := func(bin, sig []byte) bool { return minisign.Verify(pub, bin, sig) }
+	verify := app.NewReleaseVerifier(pub)
 	return releaseHarness{
 		releases: app.NewAgentReleases(runner, platform, store, verify, development),
 		reports:  app.NewDeviceReports(runner, worker), store: store, priv: priv, super: super,
@@ -96,6 +97,11 @@ func systemCtx(org uuid.UUID) context.Context {
 func uniqueVersion() string { return "1.0.0-t" + uuid.NewString()[:8] }
 
 // published creates, uploads (amd64) and publishes a release.
+// signBinary signs an agent binary as make agent-release does: the trusted comment names version and arch.
+func (h releaseHarness) signBinary(bin []byte, version, arch string) string {
+	return base64.StdEncoding.EncodeToString(minisign.SignWithComments(h.priv, bin, releasesig.Comment(version, arch), ""))
+}
+
 func (h releaseHarness) published(t *testing.T) string {
 	t.Helper()
 	ctx := platformAdmin()
@@ -104,7 +110,7 @@ func (h releaseHarness) published(t *testing.T) string {
 		t.Fatal(err)
 	}
 	bin := []byte("paddockd " + v)
-	if _, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin))); err != nil {
+	if _, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.releases.Publish(ctx, v); err != nil {
@@ -148,10 +154,16 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 	expectProblem(t, err, problem.InvalidRequest)
 	_, err = h.releases.UploadArtifact(ctx, v, "amd64", bin, "%%%")
 	expectProblem(t, err, problem.InvalidRequest)
+	// Signed, but the trusted comment binds the binary to another version or architecture, or is missing.
+	for _, sig := range []string{h.signBinary(bin, "9.9.9", "amd64"), h.signBinary(bin, v, "arm64"),
+		base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin))} {
+		_, err = h.releases.UploadArtifact(ctx, v, "amd64", bin, sig)
+		expectProblem(t, err, problem.ReleaseSignatureMismatch)
+	}
 	if len(h.store.puts) != 0 {
 		t.Fatal("a binary with an invalid signature was stored")
 	}
-	art, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin)))
+	art, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
 	if err != nil || art.Size != 6 || art.ObjectKey != agentrelease.ObjectKey(v, "amd64") || string(h.store.puts[art.ObjectKey]) != "binary" {
 		t.Fatalf("upload: %+v, %v", art, err)
 	}
@@ -170,7 +182,7 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 	if r, err := h.releases.Publish(ctx, v); err != nil || r.Status != agentrelease.StatusPublished {
 		t.Fatalf("publish: %+v, %v", r, err)
 	}
-	_, err = h.releases.UploadArtifact(ctx, v, "amd64", bin, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin)))
+	_, err = h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
 	expectProblem(t, err, problem.InvalidState)
 	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "amd64", deb, debSig)
 	expectProblem(t, err, problem.InvalidState)

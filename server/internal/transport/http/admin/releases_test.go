@@ -9,6 +9,7 @@ import (
 	"aead.dev/minisign"
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
@@ -26,13 +27,26 @@ func TestAgentReleasesAPI(t *testing.T) {
 		t.Fatalf("create: %d %s %s", created.status, created.header.Get("Location"), created.body)
 	}
 	bin := []byte("\x7fELF paddockd")
-	sig := base64.StdEncoding.EncodeToString(minisign.Sign(e.release, bin))
+	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(e.release, bin, releasesig.Comment(v, "amd64"), ""))
 	upload := func(sig string) result {
 		return e.do(call{method: "PUT", path: base + "/artifacts/amd64", rawBody: string(bin), contentType: "application/octet-stream",
 			headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root})
 	}
 	if r := upload(base64.StdEncoding.EncodeToString([]byte("forged"))); r.status != http.StatusBadRequest {
 		t.Fatalf("forged signature: %d %s", r.status, r.body)
+	}
+	// A valid signature whose trusted comment does not bind the binary to this version and architecture (plan M4b.1
+	// decision 12), or has no such comment at all.
+	for _, comment := range []string{releasesig.Comment("1.0.0", "amd64"), releasesig.Comment(v, "arm64"), ""} {
+		other := minisign.Sign(e.release, bin)
+		if comment != "" {
+			other = minisign.SignWithComments(e.release, bin, comment, "")
+		}
+		r := upload(base64.StdEncoding.EncodeToString(other))
+		if r.status != http.StatusUnprocessableEntity || r.problemCode(t) != "release_signature_mismatch" {
+			t.Fatalf("signed comment %q: %d %s", comment, r.status, r.body)
+		}
+		e.expectEvent(r, "agent_release.artifact_uploaded:failure:release_signature_mismatch")
 	}
 	var art struct {
 		Arch   string `json:"arch"`

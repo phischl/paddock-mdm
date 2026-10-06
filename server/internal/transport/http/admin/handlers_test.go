@@ -313,7 +313,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
 		stepUps: newStepUpProofs()}
 	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
-	verifyRelease := func(bin, sig []byte) bool { return minisign.Verify(releasePub, bin, sig) }
+	verifyRelease := app.NewReleaseVerifier(releasePub)
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
 		if e.keysDown {
 			return nil, problem.UpstreamUnavailable

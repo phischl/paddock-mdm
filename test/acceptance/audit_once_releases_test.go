@@ -11,6 +11,7 @@ import (
 	"aead.dev/minisign"
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
@@ -66,7 +67,7 @@ func gateRelease(t *testing.T, root *env.Portal, artifact, publish bool) string 
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases", map[string]string{"version": v}), http.StatusCreated, "")
 	if artifact {
 		bin := []byte("gate binary " + v)
-		expectStatus(t, uploadArtifact(t, root, v, bin, minisign.Sign(releaseKey(t), bin)), http.StatusOK, "")
+		expectStatus(t, uploadArtifact(t, root, v, bin, signBinary(t, bin, v)), http.StatusOK, "")
 	}
 	if publish {
 		expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/publish", nil), http.StatusOK, "")
@@ -145,9 +146,14 @@ var (
 	}
 )
 
+// signBinary signs an amd64 agent binary of version v as make agent-release does (plan M4b.1 decision 10).
+func signBinary(t *testing.T, bin []byte, v string) []byte {
+	return minisign.SignWithComments(releaseKey(t), bin, releasesig.Comment(v, "amd64"), "")
+}
+
 func signedUpload(t *testing.T, p *env.Portal, v string) env.Response {
 	bin := []byte("gate binary " + v)
-	return uploadArtifact(t, p, v, bin, minisign.Sign(releaseKey(t), bin))
+	return uploadArtifact(t, p, v, bin, signBinary(t, bin, v))
 }
 
 func signedPackage(t *testing.T, p *env.Portal, v string) env.Response {
@@ -176,6 +182,11 @@ var releaseAuditCases = map[string][]auditCase{
 		platformCase("validation failure", "agent_release.artifact_uploaded", "failure", http.StatusBadRequest, "invalid_request", draftRelease,
 			func(t *testing.T, p *env.Portal, v string) env.Response {
 				return uploadArtifact(t, p, v, []byte("forged"), minisign.Sign(releaseKey(t), []byte("something else")))
+			}, false),
+		platformCase("signed for another version", "agent_release.artifact_uploaded", "failure", http.StatusUnprocessableEntity,
+			"release_signature_mismatch", draftRelease, func(t *testing.T, p *env.Portal, v string) env.Response {
+				bin := []byte("gate binary " + v)
+				return uploadArtifact(t, p, v, bin, signBinary(t, bin, "0.0.1-other"))
 			}, false),
 		platformCase("wrong role", "agent_release.artifact_uploaded", "denied", http.StatusForbidden, "forbidden", draftRelease, signedUpload, true),
 		platformCase("not found", "agent_release.artifact_uploaded", "failure", http.StatusNotFound, "not_found", unknownRelease, signedUpload, false),
