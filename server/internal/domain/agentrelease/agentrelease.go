@@ -85,6 +85,32 @@ func ObjectKey(version, arch string) string {
 	return fmt.Sprintf("releases/%s/%s/paddockd", version, arch)
 }
 
+// Debian packages of a release (plan M4b decision 1).
+const (
+	PackageAgent      = "paddock-agent"
+	PackageSupervisor = "paddock-supervisor"
+)
+
+// Packages are the Debian packages a release can carry; the Paddock autoinstall needs both.
+var Packages = []string{PackageAgent, PackageSupervisor}
+
+// ErrInvalidPackage rejects an unknown package name.
+var ErrInvalidPackage = errors.New("name must be paddock-agent or paddock-supervisor")
+
+// ValidatePackage checks a package name.
+func ValidatePackage(name string) error {
+	if !slices.Contains(Packages, name) {
+		return ErrInvalidPackage
+	}
+	return nil
+}
+
+// PackageObjectKey is the object of a Debian package in the bucket paddock-agent-artifacts. Objects below packages/
+// are public-read: packages carry no secrets, and the autoinstall pins their SHA-256.
+func PackageObjectKey(version, name, arch string) string {
+	return fmt.Sprintf("packages/%s/%s_%s_%s.deb", version, name, version, arch)
+}
+
 // Bucket is the rollout bucket of a device: FNV-1a (32 bit) of the canonical UUID text modulo 100. The SQL function
 // paddock_rollout_bucket computes the same value.
 func Bucket(device uuid.UUID) int {

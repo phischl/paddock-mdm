@@ -1902,6 +1902,52 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/agent-releases/{version}/packages/{name}/{arch}:
+    parameters:
+      - $ref: "#/components/parameters/Version"
+      - name: name
+        in: path
+        required: true
+        schema: { type: string, enum: [paddock-agent, paddock-supervisor] }
+      - name: arch
+        in: path
+        required: true
+        schema: { type: string, enum: [amd64, arm64] }
+    put:
+      operationId: uploadAgentPackage
+      tags: [platform]
+      description: |
+        Roles: platform_admin. Uploads a Debian package of a draft release (at most 128 MiB), signed like the
+        binary: the server verifies the minisign signature with the configured release public key (400 otherwise).
+        Packages are stored below packages/ in the artifact bucket and served without authentication at
+        https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
+        SHA-256 (plan M4b decision 1). Uploading again replaces the package while the release is a draft. Audited as
+        an artifact upload with kind deb.
+      x-paddock-audit: agent_release.artifact_uploaded
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - name: X-Paddock-Minisig
+          in: header
+          required: true
+          description: Standard base64 of the .minisig signature file of the package.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: The stored package.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentPackage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases/{version}/publish:
     parameters:
       - $ref: "#/components/parameters/Version"
@@ -2317,6 +2363,16 @@ components:
         sha256: { type: string, description: Hex SHA-256 of the binary. }
         size: { type: integer, format: int64 }
         created_at: { type: string, format: date-time }
+    AgentPackage:
+      type: object
+      required: [name, arch, sha256, size, url_path, created_at]
+      properties:
+        name: { type: string, enum: [paddock-agent, paddock-supervisor] }
+        arch: { type: string, enum: [amd64, arm64] }
+        sha256: { type: string, description: Hex SHA-256 of the package. }
+        size: { type: integer, format: int64 }
+        url_path: { type: string, description: "Path of the package below the public bundles host, e.g. /packages/1.2.0/paddock-agent_1.2.0_amd64.deb." }
+        created_at: { type: string, format: date-time }
     AgentRolloutStart:
       type: object
       additionalProperties: false
@@ -2355,12 +2411,16 @@ components:
         failed: { type: integer, format: int64, description: "Devices that reported agent.update_failed or agent.rolled_back for this version." }
     AgentReleaseDetail:
       type: object
-      required: [release, artifacts]
+      required: [release, artifacts, packages]
       properties:
         release: { $ref: "#/components/schemas/AgentRelease" }
         artifacts:
           type: array
           items: { $ref: "#/components/schemas/AgentArtifact" }
+        packages:
+          type: array
+          description: The Debian packages of the release (plan M4b decision 1).
+          items: { $ref: "#/components/schemas/AgentPackage" }
         rollout: { $ref: "#/components/schemas/AgentRollout" }
         counts: { $ref: "#/components/schemas/AgentRolloutCounts" }
     Organization:

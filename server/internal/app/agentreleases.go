@@ -77,10 +77,11 @@ func (a *AgentReleases) List(ctx context.Context, page ListPage, statuses []stri
 	return out, err
 }
 
-// ReleaseDetail is a release with its artifacts and rollout.
+// ReleaseDetail is a release with its artifacts, packages and rollout.
 type ReleaseDetail struct {
 	Release   pgstore.AgentRelease
 	Artifacts []pgstore.AgentArtifact
+	Packages  []pgstore.AgentPackage
 	Rollout   *pgstore.AgentRollout
 	Stats     pgstore.AgentRolloutStatsRow // devices in the current wave; failed and updated devices
 }
@@ -97,6 +98,9 @@ func (a *AgentReleases) Get(ctx context.Context, version string) (ReleaseDetail,
 			return notFound(err)
 		}
 		if d.Artifacts, err = q.ListAgentArtifacts(ctx, version); err != nil {
+			return err
+		}
+		if d.Packages, err = q.ListAgentPackages(ctx, version); err != nil {
 			return err
 		}
 		r, err := q.GetAgentRollout(ctx, version)
@@ -143,30 +147,13 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 		ObjectKey: agentrelease.ObjectKey(version, arch),
 	}
 	spec := SpecAgentReleaseUpload
-	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": art.Sha256, "size": art.Size}
+	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": art.Sha256, "size": art.Size, "kind": "binary"}
 	t := releaseTarget(version)
 	spec.Target = &t
 	var out pgstore.AgentArtifact
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
-			if err := agentrelease.ValidateArch(arch); err != nil {
-				return problem.InvalidRequest.WithDetail(err.Error())
-			}
-			if len(binary) == 0 || len(binary) > agentrelease.MaxArtifactBytes {
-				return problem.InvalidRequest.WithDetail("the binary must have 1 byte to 128 MiB")
-			}
-			sig, err := base64.StdEncoding.DecodeString(minisigB64)
-			if err != nil || a.verify == nil || !a.verify(binary, sig) {
-				return problem.InvalidRequest.WithDetail("X-Paddock-Minisig does not verify with the release public key")
-			}
-			r, err := q.GetAgentRelease(ctx, version)
-			if err != nil {
-				return notFound(err)
-			}
-			if r.Status != agentrelease.StatusDraft {
-				return problem.InvalidState.WithDetail("artifacts of a published release cannot change")
-			}
-			return nil
+			return a.checkUpload(ctx, q, version, arch, binary, minisigB64)
 		},
 		func(ctx context.Context) error {
 			return a.store.Put(ctx, art.ObjectKey, "application/octet-stream", "no-store", binary)
@@ -184,6 +171,67 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 		return out, problem.UpstreamUnavailable.WithDetail("the artifact store is unavailable")
 	}
 	return out, err
+}
+
+// UploadPackage verifies the minisign signature of a Debian package (paddock-agent or paddock-supervisor) with the
+// release public key and stores it below packages/, from where the Paddock autoinstall downloads it (plan M4b
+// decision 1). It is audited as an artifact of kind deb. Published releases are immutable.
+func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, arch string, deb []byte, minisigB64 string) (pgstore.AgentPackage, error) {
+	sum := sha256.Sum256(deb)
+	pkg := pgstore.UpsertAgentPackageParams{
+		Version: version, Name: name, Arch: arch, Sha256: hex.EncodeToString(sum[:]), Size: int64(len(deb)),
+		Minisig: minisigB64, ObjectKey: agentrelease.PackageObjectKey(version, name, arch),
+	}
+	spec := SpecAgentReleaseUpload
+	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": pkg.Sha256, "size": pkg.Size, "kind": "deb", "name": name}
+	t := releaseTarget(version)
+	spec.Target = &t
+	var out pgstore.AgentPackage
+	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
+		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
+			if err := agentrelease.ValidatePackage(name); err != nil {
+				return problem.InvalidRequest.WithDetail(err.Error())
+			}
+			return a.checkUpload(ctx, q, version, arch, deb, minisigB64)
+		},
+		func(ctx context.Context) error {
+			return a.store.Put(ctx, pkg.ObjectKey, "application/vnd.debian.binary-package", "no-store", deb)
+		},
+		func(ctx context.Context, q *pgstore.Queries, _ Recorder, externalErr error) error {
+			if externalErr != nil {
+				return nil
+			}
+			var err error
+			out, err = q.UpsertAgentPackage(ctx, pkg)
+			return err
+		})
+	if err != nil && problem.From(err) == problem.Internal {
+		slog.ErrorContext(ctx, "storing an agent package failed", "version", version, "name", name, "arch", arch, "error", err)
+		return out, problem.UpstreamUnavailable.WithDetail("the artifact store is unavailable")
+	}
+	return out, err
+}
+
+// checkUpload validates an upload of a release file: architecture, size, signature, and a draft release.
+func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, version, arch string, body []byte, minisigB64 string) error {
+	if err := agentrelease.ValidateArch(arch); err != nil {
+		return problem.InvalidRequest.WithDetail(err.Error())
+	}
+	if len(body) == 0 || len(body) > agentrelease.MaxArtifactBytes {
+		return problem.InvalidRequest.WithDetail("the file must have 1 byte to 128 MiB")
+	}
+	sig, err := base64.StdEncoding.DecodeString(minisigB64)
+	if err != nil || a.verify == nil || !a.verify(body, sig) {
+		return problem.InvalidRequest.WithDetail("X-Paddock-Minisig does not verify with the release public key")
+	}
+	r, err := q.GetAgentRelease(ctx, version)
+	if err != nil {
+		return notFound(err)
+	}
+	if r.Status != agentrelease.StatusDraft {
+		return problem.InvalidState.WithDetail("artifacts of a published release cannot change")
+	}
+	return nil
 }
 
 // Publish makes a draft release with at least one artifact available for rollouts.

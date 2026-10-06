@@ -9,7 +9,7 @@ The portal renders them through the message key `audit.<code>`.
 | --- | --- | --- | --- |
 | `action.finalized_unknown` | Metric label of the reaper. The reaper finalizes a stuck action with outcome unknown under the original action code; this code is never emitted as an event. | – | – (never emitted) |
 | `admin.login` | An administrator signed in to the portal, or a sign-in was rejected. Platform administrators and rejected sign-ins without a resolvable organization are recorded in the platform pseudo-organization. | `role`, `organization_slug`, `reason` | success, failure, denied |
-| `agent_release.artifact_uploaded` | A platform administrator uploaded the signed agent binary of a release for one architecture; the server verified its signature with the release public key. | `version`, `arch`, `sha256`, `size` | success, failure, denied |
+| `agent_release.artifact_uploaded` | A platform administrator uploaded the signed agent binary or a signed Debian package of a release for one architecture; the server verified its signature with the release public key. kind is binary (paddockd) or deb (a Debian package, with name paddock-agent or paddock-supervisor); events before M4b have no kind. | `version`, `arch`, `sha256`, `size`, `kind`, `name` | success, failure, denied |
 | `agent_release.created` | A platform administrator created an agent release (draft). | `version` | success, failure, denied |
 | `agent_release.published` | A platform administrator published an agent release; it can now be rolled out. | `version`, `arches` | success, failure, denied |
 | `agent_rollout.advanced` | The worker moved a rollout to its next wave (actor: system). | `version`, `wave`, `percent`, `eligible`, `failed` | success, failure |

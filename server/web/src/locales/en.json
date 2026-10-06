@@ -174,7 +174,7 @@
     },
     "agent_release": {
       "created": "{actor} created the agent release {version}",
-      "artifact_uploaded": "{actor} uploaded the {arch} binary of agent release {version}",
+      "artifact_uploaded": "{kind, select, deb {{actor} uploaded the {arch} package {name} of agent release {version}} other {{actor} uploaded the {arch} binary of agent release {version}}}",
       "published": "{actor} published the agent release {version}"
     },
     "agent_rollout": {
@@ -264,6 +264,9 @@
     },
     "noRollout": "Not rolled out",
     "artifacts": "Artifacts",
+    "packages": "Debian packages",
+    "noPackages": "No Debian packages; devices cannot be installed with the Paddock autoinstall from this release.",
+    "package": "Package",
     "createdBy": "Created",
     "createdFacts": "{at} by {by}",
     "publishedAt": "Published",

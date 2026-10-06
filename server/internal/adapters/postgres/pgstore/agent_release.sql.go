@@ -334,6 +334,39 @@ func (q *Queries) ListAgentArtifacts(ctx context.Context, version string) ([]Age
 	return items, nil
 }
 
+const listAgentPackages = `-- name: ListAgentPackages :many
+SELECT version, name, arch, sha256, size, minisig, object_key, created_at FROM agent_package WHERE version = $1 ORDER BY name, arch
+`
+
+func (q *Queries) ListAgentPackages(ctx context.Context, version string) ([]AgentPackage, error) {
+	rows, err := q.db.Query(ctx, listAgentPackages, version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AgentPackage{}
+	for rows.Next() {
+		var i AgentPackage
+		if err := rows.Scan(
+			&i.Version,
+			&i.Name,
+			&i.Arch,
+			&i.Sha256,
+			&i.Size,
+			&i.Minisig,
+			&i.ObjectKey,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentReleases = `-- name: ListAgentReleases :many
 
 SELECT agent_release.version, agent_release.status, agent_release.created_by, agent_release.created_at, agent_release.published_at,
@@ -585,6 +618,51 @@ func (q *Queries) UpsertAgentArtifact(ctx context.Context, arg UpsertAgentArtifa
 	var i AgentArtifact
 	err := row.Scan(
 		&i.Version,
+		&i.Arch,
+		&i.Sha256,
+		&i.Size,
+		&i.Minisig,
+		&i.ObjectKey,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const upsertAgentPackage = `-- name: UpsertAgentPackage :one
+
+INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (version, name, arch) DO UPDATE
+  SET sha256 = EXCLUDED.sha256, size = EXCLUDED.size, minisig = EXCLUDED.minisig, object_key = EXCLUDED.object_key,
+      created_at = now()
+RETURNING version, name, arch, sha256, size, minisig, object_key, created_at
+`
+
+type UpsertAgentPackageParams struct {
+	Version   string
+	Name      string
+	Arch      string
+	Sha256    string
+	Size      int64
+	Minisig   string
+	ObjectKey string
+}
+
+// Debian packages of a release (plan M4b decision 1).
+func (q *Queries) UpsertAgentPackage(ctx context.Context, arg UpsertAgentPackageParams) (AgentPackage, error) {
+	row := q.db.QueryRow(ctx, upsertAgentPackage,
+		arg.Version,
+		arg.Name,
+		arg.Arch,
+		arg.Sha256,
+		arg.Size,
+		arg.Minisig,
+		arg.ObjectKey,
+	)
+	var i AgentPackage
+	err := row.Scan(
+		&i.Version,
+		&i.Name,
 		&i.Arch,
 		&i.Sha256,
 		&i.Size,

@@ -1076,6 +1076,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/agent-releases/{version}/packages/{name}/{arch}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+                name: "paddock-agent" | "paddock-supervisor";
+                arch: "amd64" | "arm64";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * @description Roles: platform_admin. Uploads a Debian package of a draft release (at most 128 MiB), signed like the
+         *     binary: the server verifies the minisign signature with the configured release public key (400 otherwise).
+         *     Packages are stored below packages/ in the artifact bucket and served without authentication at
+         *     https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
+         *     SHA-256 (plan M4b decision 1). Uploading again replaces the package while the release is a draft. Audited as
+         *     an artifact upload with kind deb.
+         */
+        put: operations["uploadAgentPackage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases/{version}/publish": {
         parameters: {
             query?: never;
@@ -1283,6 +1312,20 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        AgentPackage: {
+            /** @enum {string} */
+            name: "paddock-agent" | "paddock-supervisor";
+            /** @enum {string} */
+            arch: "amd64" | "arm64";
+            /** @description Hex SHA-256 of the package. */
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+            /** @description Path of the package below the public bundles host, e.g. /packages/1.2.0/paddock-agent_1.2.0_amd64.deb. */
+            url_path: string;
+            /** Format: date-time */
+            created_at: string;
+        };
         AgentRolloutStart: {
             /** @description Percentages of devices per wave, strictly increasing, ending with 100. Default [1, 10, 50, 100]. */
             waves?: number[];
@@ -1328,6 +1371,8 @@ export interface components {
         AgentReleaseDetail: {
             release: components["schemas"]["AgentRelease"];
             artifacts: components["schemas"]["AgentArtifact"][];
+            /** @description The Debian packages of the release (plan M4b decision 1). */
+            packages: components["schemas"]["AgentPackage"][];
             rollout?: components["schemas"]["AgentRollout"];
             counts?: components["schemas"]["AgentRolloutCounts"];
         };
@@ -4526,6 +4571,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentArtifact"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    uploadAgentPackage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+                /** @description Standard base64 of the .minisig signature file of the package. */
+                "X-Paddock-Minisig": string;
+            };
+            path: {
+                /** @description Semantic version of an agent release. */
+                version: components["parameters"]["Version"];
+                name: "paddock-agent" | "paddock-supervisor";
+                arch: "amd64" | "arm64";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The stored package. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentPackage"];
                 };
             };
             400: components["responses"]["Problem"];

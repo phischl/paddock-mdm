@@ -44,6 +44,26 @@ func TestAgentReleasesAPI(t *testing.T) {
 	if r.status != http.StatusOK || art.Arch != "amd64" || art.Size != int64(len(bin)) || len(art.Sha256) != 64 {
 		t.Fatalf("upload: %d %s", r.status, r.body)
 	}
+	deb := []byte("!<arch>\ndebian-binary")
+	uploadDeb := func(name, sig string) result {
+		return e.do(call{method: "PUT", path: base + "/packages/" + name + "/amd64", rawBody: string(deb), contentType: "application/octet-stream",
+			headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root})
+	}
+	debSig := base64.StdEncoding.EncodeToString(minisign.Sign(e.release, deb))
+	if r := uploadDeb("paddock-agent", sig); r.status != http.StatusBadRequest {
+		t.Fatalf("package with the binary's signature: %d %s", r.status, r.body)
+	}
+	var pkg struct {
+		Name    string `json:"name"`
+		Size    int64  `json:"size"`
+		URLPath string `json:"url_path"`
+	}
+	r = uploadDeb("paddock-agent", debSig)
+	r.decode(t, &pkg)
+	if r.status != http.StatusOK || pkg.Name != "paddock-agent" || pkg.Size != int64(len(deb)) ||
+		pkg.URLPath != "/packages/"+v+"/paddock-agent_"+v+"_amd64.deb" {
+		t.Fatalf("package upload: %d %s", r.status, r.body)
+	}
 	if r := e.do(call{method: "POST", path: base + "/publish", cookie: root}); r.status != http.StatusOK || !strings.Contains(string(r.body), `"published"`) {
 		t.Fatalf("publish: %d %s", r.status, r.body)
 	}
@@ -57,11 +77,15 @@ func TestAgentReleasesAPI(t *testing.T) {
 			RolloutStatus string `json:"rollout_status"`
 			ArtifactCount int    `json:"artifact_count"`
 		} `json:"release"`
-		Counts *struct{ Failed int64 } `json:"counts"`
+		Counts   *struct{ Failed int64 } `json:"counts"`
+		Packages []struct {
+			Name string `json:"name"`
+		} `json:"packages"`
 	}
 	d := e.do(call{method: "GET", path: base, cookie: root})
 	d.decode(t, &detail)
-	if detail.Release.RolloutStatus != "running" || detail.Release.ArtifactCount != 1 || detail.Counts == nil {
+	if detail.Release.RolloutStatus != "running" || detail.Release.ArtifactCount != 1 || detail.Counts == nil ||
+		len(detail.Packages) != 1 || detail.Packages[0].Name != "paddock-agent" {
 		t.Fatalf("detail %s", d.body)
 	}
 	list := e.do(call{method: "GET", path: "/api/platform/v1/agent-releases?sort=-version&q=" + v, cookie: root})

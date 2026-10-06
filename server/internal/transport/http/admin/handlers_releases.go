@@ -74,6 +74,18 @@ func (h *handlers) UploadAgentArtifact(ctx context.Context, req adminapi.UploadA
 	return adminapi.UploadAgentArtifact200JSONResponse(toAgentArtifact(a)), nil
 }
 
+func (h *handlers) UploadAgentPackage(ctx context.Context, req adminapi.UploadAgentPackageRequestObject) (adminapi.UploadAgentPackageResponseObject, error) {
+	body, err := io.ReadAll(io.LimitReader(req.Body, agentrelease.MaxArtifactBytes+1))
+	if err != nil {
+		return nil, problem.InvalidRequest.WithDetail("unreadable body")
+	}
+	p, err := h.releases.UploadPackage(ctx, req.Version, string(req.Name), string(req.Arch), body, req.Params.XPaddockMinisig)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UploadAgentPackage200JSONResponse(toAgentPackage(p)), nil
+}
+
 func (h *handlers) PublishAgentRelease(ctx context.Context, req adminapi.PublishAgentReleaseRequestObject) (adminapi.PublishAgentReleaseResponseObject, error) {
 	if _, err := h.releases.Publish(ctx, req.Version); err != nil {
 		return nil, err
@@ -132,6 +144,13 @@ func toAgentArtifact(a pgstore.AgentArtifact) adminapi.AgentArtifact {
 	return adminapi.AgentArtifact{Arch: adminapi.AgentArtifactArch(a.Arch), Sha256: a.Sha256, Size: a.Size, CreatedAt: a.CreatedAt.UTC()}
 }
 
+func toAgentPackage(p pgstore.AgentPackage) adminapi.AgentPackage {
+	return adminapi.AgentPackage{
+		Name: adminapi.AgentPackageName(p.Name), Arch: adminapi.AgentPackageArch(p.Arch), Sha256: p.Sha256, Size: p.Size,
+		UrlPath: "/" + p.ObjectKey, CreatedAt: p.CreatedAt.UTC(),
+	}
+}
+
 func toAgentRollout(r pgstore.AgentRollout) adminapi.AgentRollout {
 	waves := make([]int, len(r.Waves))
 	for i, w := range r.Waves {
@@ -155,6 +174,10 @@ func toAgentReleaseDetail(d app.ReleaseDetail) adminapi.AgentReleaseDetail {
 	}
 	for i, a := range d.Artifacts {
 		out.Artifacts[i] = toAgentArtifact(a)
+	}
+	out.Packages = make([]adminapi.AgentPackage, len(d.Packages))
+	for i, p := range d.Packages {
+		out.Packages[i] = toAgentPackage(p)
 	}
 	if d.Rollout != nil {
 		r := toAgentRollout(*d.Rollout)
