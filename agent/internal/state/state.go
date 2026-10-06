@@ -46,6 +46,25 @@ type State struct {
 	CommandResults []CommandResult `json:"command_results,omitempty"`
 	// LocalAdmin is the managed local administrator (plan M4a decision 15).
 	LocalAdmin LocalAdmin `json:"local_admin"`
+	// LUKS is the disk encryption of the root volume (plan M4b decisions 8–12).
+	LUKS LUKS `json:"luks"`
+}
+
+// LUKS is the persistent state of the luks reconciler. Secrets — the recovery key, the install passphrase — are
+// never stored here.
+type LUKS struct {
+	// Keyslots are the keyslot kinds the agent recorded last (sorted); any other set is reported as tampering.
+	Keyslots []string `json:"keyslots,omitempty"`
+	// RecoveryAttempted is the highest recovery key generation the agent enrolled, RecoveryStored the highest one the
+	// server stored. A recovery keyslot with RecoveryAttempted > RecoveryStored whose key is no longer in memory is
+	// replaced.
+	RecoveryAttempted int64 `json:"recovery_attempted,omitempty"`
+	RecoveryStored    int64 `json:"recovery_stored,omitempty"`
+	// HeaderAttempted is the highest header generation uploaded; HeaderStored the highest one stored, and
+	// HeaderDigest the hex SHA-256 of the LUKS2 metadata it was taken from.
+	HeaderAttempted int64  `json:"header_attempted,omitempty"`
+	HeaderStored    int64  `json:"header_stored,omitempty"`
+	HeaderDigest    string `json:"header_digest,omitempty"`
 }
 
 // LocalAdmin is the persistent state of the managed local administrator. The password itself is never stored.

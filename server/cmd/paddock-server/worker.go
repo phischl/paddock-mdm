@@ -14,6 +14,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/worker"
@@ -29,6 +30,9 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	authentikToken := l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")
 	syncEvery := l.Duration("PADDOCK_IDENTITY_SYNC_INTERVAL", worker.DefaultIdentitySyncInterval)
 	reconcileEvery := l.Duration("PADDOCK_IDENTITY_RECONCILE_INTERVAL", worker.DefaultReconcileInterval)
+	// Verifies uploaded LUKS headers with a read-only credential of paddock-escrow (plan M4b decision 13).
+	escrowObjects := objectstore.New(l.Required("PADDOCK_ESCROW_S3_ENDPOINT"), l.SecretFile("PADDOCK_ESCROW_S3_ACCESS_KEY_FILE"),
+		l.SecretFile("PADDOCK_ESCROW_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ESCROW_S3_BUCKET", "paddock-escrow"))
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -69,7 +73,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	deviceCommands := app.NewDeviceCommands(pool)
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache)
 	commands := worker.NewCommands(deviceCommands, pool, platformPool, cache, signer)
-	escrowStore := worker.NewEscrow(app.NewEscrow(pool), cache)
+	escrowStore := worker.NewEscrow(app.NewEscrow(pool, escrowObjects), cache, pool, platformPool)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
@@ -95,6 +99,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		func(ctx context.Context) error { return resultQueue.Run(ctx, commands.HandleResults) },
 		func(ctx context.Context) error { return escrowQueue.Run(ctx, escrowStore.Handle) },
 		commands.Run,
+		escrowStore.Run,
 		cacheSync.Run,
 		rollouts.Run,
 		identity.RunSync,

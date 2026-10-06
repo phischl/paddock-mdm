@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"slices"
 
@@ -20,7 +21,20 @@ import (
 type escrowClient struct{ a *Agent }
 
 func (e escrowClient) Upload(ctx context.Context, req escrow.Request) error {
-	return e.a.d.Client.EscrowUpload(ctx, e.a.st.DeviceID, e.a.st.Seq, req)
+	_, err := e.a.d.Client.EscrowUpload(ctx, e.a.st.DeviceID, e.a.st.Seq, req)
+	return err
+}
+
+// UploadHeader announces a sealed LUKS header and PUTs it to the presigned URL of the answer.
+func (e escrowClient) UploadHeader(ctx context.Context, req escrow.Request, object []byte) error {
+	accepted, err := e.a.d.Client.EscrowUpload(ctx, e.a.st.DeviceID, e.a.st.Seq, req)
+	if err != nil {
+		return err
+	}
+	if accepted.UploadURL == "" {
+		return errors.New("the server answered the header escrow without an upload URL")
+	}
+	return e.a.d.Client.Upload(ctx, accepted.UploadURL, object)
 }
 
 func (e escrowClient) Status(ctx context.Context, escrowID string) (string, error) {
@@ -55,11 +69,15 @@ func (a *Agent) tickLocalAdmin(ctx context.Context) {
 	if a.d.Accounts == nil || a.st.DeviceID == "" {
 		return
 	}
-	var keys *bundle.Keys
-	if a.current != nil {
-		keys = a.current.Keys
+	a.localAdmin.Tick(ctx, a.localAdminSpec(), a.bundleKeys())
+}
+
+// bundleKeys are the keys of the applied bundle (nil without one).
+func (a *Agent) bundleKeys() *bundle.Keys {
+	if a.current == nil {
+		return nil
 	}
-	a.localAdmin.Tick(ctx, a.localAdminSpec(), keys)
+	return a.current.Keys
 }
 
 // localAdminLogin reports a session of the local administrator (plan M4a decision 16): the PAM service and the time

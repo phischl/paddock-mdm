@@ -70,6 +70,12 @@ done
 # Agent artifacts (plan M2b decision 19): the api uploads; the gateway presigns with its bundles credential.
 secret rustfs_artifacts_api_access_key
 secret rustfs_artifacts_api_secret_key
+# Disk escrow (plan M4b decision 13): the worker verifies uploaded headers, the api reads them for a recovery; the
+# gateway presigns header uploads with its bundles credential.
+for role in worker api; do
+  secret "rustfs_escrow_${role}_access_key"
+  secret "rustfs_escrow_${role}_secret_key"
+done
 
 # Valkey: one password; the server reads it through an included config file.
 secret valkey_password

@@ -91,7 +91,8 @@ const (
 	CodeLocalAdminLogin               Code = "local_admin.login"
 	CodeDeviceTamperLocalAdminChanged Code = "device.tamper_local_admin_changed"
 
-	CodeAutoinstallGenerated Code = "autoinstall.generated"
+	CodeAutoinstallGenerated       Code = "autoinstall.generated"
+	CodeDeviceTamperKeyslotChanged Code = "device.tamper_keyslot_changed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -113,7 +114,7 @@ var deviceEventParams = []string{
 	"event_seq", "occurred_at", "bundle_version", "reason", "resource", "version", "changed", "errors", "resource_ids",
 	"from_version", "outcome", "count", "from_seq", "to_seq", "stage", "message", "username", "sessions_locked",
 	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
-	"generation", "service", "at", "field",
+	"generation", "service", "at", "field", "before", "after",
 }
 
 var registry = map[Code]Definition{
@@ -588,6 +589,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "field is password, shell, group, locked or missing.",
+	},
+	CodeDeviceTamperKeyslotChanged: {
+		Code: CodeDeviceTamperKeyslotChanged, Emitted: true,
+		Description: "A device found the keyslots of its encrypted root volume changed outside Paddock; it escrows the header again (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "before and after list the kind of every keyslot (tpm2+pin, tpm2, recovery, password, or another token type).",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

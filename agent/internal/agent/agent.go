@@ -24,6 +24,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/health"
 	"github.com/phischl/paddock-mdm/agent/internal/identity"
 	"github.com/phischl/paddock-mdm/agent/internal/localadmin"
+	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/spool"
@@ -51,6 +52,8 @@ type Deps struct {
 	Sys reconcile.System
 	// Accounts is the device for the managed local administrator (plan M4a decision 15); nil disables it.
 	Accounts localadmin.System
+	// LUKS runs the LUKS tools of the root volume (plan M4b decision 8); nil disables the luks reconciler.
+	LUKS luks.Tools
 	// FollowLogins sends the PAM session openings of the device until ctx ends (journal); nil: none.
 	FollowLogins func(ctx context.Context, out chan<- localadmin.Login)
 	Spool        *spool.Spool    // nil: the agent's own spool below Layout
@@ -70,6 +73,7 @@ type Agent struct {
 	failures    int
 	lastAttempt time.Time
 	localAdmin  *localadmin.Manager
+	luks        *reconcile.LUKS
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -102,6 +106,7 @@ func Load(l paths.Layout) (Deps, error) {
 	}
 	if l.Root == "" || l.Root == "/" {
 		d.FollowLogins = localadmin.FollowJournal
+		d.LUKS = luks.OS{}
 	}
 	return d, nil
 }
@@ -125,6 +130,10 @@ func New(d Deps) (*Agent, error) {
 	a := &Agent{d: d, st: st}
 	a.localAdmin = &localadmin.Manager{Sys: d.Accounts, Escrow: escrowClient{a}, State: &a.st.LocalAdmin, Save: a.persist,
 		Emit: a.event, Result: a.commandResult, Now: d.Now}
+	if d.LUKS != nil {
+		a.luks = &reconcile.LUKS{Tools: d.LUKS, Layout: d.Layout, Escrow: escrowClient{a}, State: &a.st.LUKS, Save: a.persist,
+			Emit: a.event, Now: d.Now, TPM2Present: func() bool { return luks.TPM2Present(d.Layout.Root) }}
+	}
 	if a.d.Commands == nil {
 		a.d.Commands = commands.New(commands.Handlers(map[string]commands.Handler{
 			command.TypeRotateAdminPassword: a.rotateCommand,
@@ -190,10 +199,12 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			return nil
 		case <-drift.C:
 			a.drift(ctx)
+			a.tickLUKS(ctx, true)
 		case <-sessionPoll.C:
 			a.trackSessions(ctx)
 		case <-localAdmin.C:
 			a.tickLocalAdmin(ctx)
+			a.tickLUKS(ctx, false)
 		case l := <-logins:
 			a.localAdminLogin(l)
 		case <-a.d.Triggers:
@@ -206,6 +217,7 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			nextAt = a.d.Now().Add(d)
 			next.Reset(d)
 			a.tickLocalAdmin(ctx)
+			a.tickLUKS(ctx, true)
 		}
 	}
 }

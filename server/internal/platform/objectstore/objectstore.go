@@ -101,7 +101,16 @@ func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
-// Presigner computes presigned GET URLs locally (no network call) for a public endpoint, e.g.
+// GetIfExists reads the current version of an object; found is false if it does not exist.
+func (s *Store) GetIfExists(ctx context.Context, key string) (data []byte, found bool, err error) {
+	data, err = s.Get(ctx, key)
+	if errors.Is(err, ErrNotFound) {
+		return nil, false, nil
+	}
+	return data, err == nil, err
+}
+
+// Presigner computes presigned GET and PUT URLs locally (no network call) for a public endpoint, e.g.
 // https://bundles.<domain>, through which the object store is reachable (architecture §7.3).
 type Presigner struct {
 	client *s3.PresignClient
@@ -116,6 +125,16 @@ func NewPresigner(publicEndpoint, accessKey, secretKey, bucket string) *Presigne
 // PresignGet returns a GET URL for key that is valid for ttl.
 func (p *Presigner) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
 	req, err := p.client.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &p.bucket, Key: &key}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
+}
+
+// PresignPut returns a PUT URL for key that is valid for ttl (escrowed LUKS headers, plan M4b decision 10). The
+// signature covers the bucket and the key, so the URL cannot write anywhere else.
+func (p *Presigner) PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	req, err := p.client.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &p.bucket, Key: &key}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", err
 	}

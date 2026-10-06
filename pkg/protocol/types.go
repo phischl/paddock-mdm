@@ -157,6 +157,8 @@ const (
 	EventLocalAdminRotationFailed = "local_admin.rotation_failed"
 	EventLocalAdminLogin          = "local_admin.login"
 	EventTamperLocalAdminChanged  = "tamper.local_admin_changed"
+	// Disk encryption (plan M4b decision 12).
+	EventTamperKeyslotChanged = "tamper.keyslot_changed"
 )
 
 // EventTypes is the closed set of event types.
@@ -167,6 +169,36 @@ var EventTypes = []string{
 	EventSudoUserUnresolved, EventTamperSudoGroupMember, EventTamperSudoersDFile, EventTamperSudoersChanged,
 	EventTamperProtectedFileChanged,
 	EventLocalAdminRotated, EventLocalAdminRotationFailed, EventLocalAdminLogin, EventTamperLocalAdminChanged,
+	EventTamperKeyslotChanged,
+}
+
+// Disk states of DiskHealth (plan M4b decision 8), from the least to the most complete.
+const (
+	DiskNotEncrypted  = "not_encrypted"   // the root file system is not on LUKS
+	DiskUnmanaged     = "unmanaged"       // encrypted, but not installed with the Paddock autoinstall
+	DiskTPMMissing    = "tpm_missing"     // no TPM 2.0: the disk keeps its passphrase
+	DiskTPMPINMissing = "tpm_pin_missing" // the boot PIN was skipped: the disk keeps its passphrase
+	DiskEscrowPending = "escrow_pending"  // recovery key, header or keyslot set not yet as required
+	DiskCompliant     = "compliant"       // TPM2+PIN and recovery key only, both escrowed with the current header
+)
+
+// DiskStates are the states in DiskHealth.
+var DiskStates = []string{DiskNotEncrypted, DiskUnmanaged, DiskTPMMissing, DiskTPMPINMissing, DiskEscrowPending, DiskCompliant}
+
+// DiskHealth is the disk encryption of the device in the check-in health (health.disk, plan M4b decision 8).
+type DiskHealth struct {
+	State       string   `json:"state"`
+	LUKSVersion int      `json:"luks_version,omitempty"`
+	Tokens      []string `json:"tokens,omitempty"` // kind of every keyslot, sorted: tpm2+pin, recovery, password, …
+	Keyslots    int      `json:"keyslots"`
+}
+
+// TamperKeyslotChanged is the data of tamper.keyslot_changed: the keyslots of the root volume differ from those the
+// agent recorded (plan M4b decision 12). Before and After list the kind of every keyslot (tpm2+pin, recovery,
+// password, …), sorted.
+type TamperKeyslotChanged struct {
+	Before []string `json:"before"`
+	After  []string `json:"after"`
 }
 
 // The data of the managed local administrator's events (plan M4a decision 18). They never carry passwords,

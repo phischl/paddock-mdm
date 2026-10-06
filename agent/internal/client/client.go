@@ -158,8 +158,30 @@ func (c *Client) CommandResult(ctx context.Context, deviceID string, seq int64, 
 }
 
 // EscrowUpload uploads an escrowed secret; nil means 202.
-func (c *Client) EscrowUpload(ctx context.Context, deviceID string, seq int64, req escrow.Request) error {
-	return c.do(ctx, http.MethodPost, "/v1/escrow", deviceID, seq, req, nil)
+func (c *Client) EscrowUpload(ctx context.Context, deviceID string, seq int64, req escrow.Request) (escrow.Accepted, error) {
+	var out escrow.Accepted
+	err := c.do(ctx, http.MethodPost, "/v1/escrow", deviceID, seq, req, &out)
+	return out, err
+}
+
+// Upload PUTs body to a presigned URL (an escrowed LUKS header, plan M4b decision 10).
+func (c *Client) Upload(ctx context.Context, rawURL string, body []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, rawURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	res, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("upload: HTTP %d", res.StatusCode)
+	}
+	return nil
 }
 
 // EscrowStatus returns the storage status of an escrow upload (pending, stored or failed).

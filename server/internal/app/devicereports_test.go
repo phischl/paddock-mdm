@@ -32,6 +32,8 @@ func TestEventParams(t *testing.T) {
 		{"sudoers.d file", `{"file":"evil","quarantined_as":"/var/lib/paddock/quarantine/sudoers.d/evil.1759600000"}`,
 			map[string]any{"file": "evil", "quarantined_as": "/var/lib/paddock/quarantine/sudoers.d/evil.1759600000"}},
 		{"sudoers changed", `{"sha256_before":"aa","sha256_after":"bb"}`, map[string]any{"sha256_before": "aa", "sha256_after": "bb"}},
+		{"keyslot changed", `{"before":["recovery","tpm2+pin"],"after":["password","recovery","tpm2+pin",1]}`,
+			map[string]any{"before": []string{"recovery", "tpm2+pin"}, "after": []string{"password", "recovery", "tpm2+pin"}}},
 		{"oversized strings", `{"reason":"` + long + `","version":"` + long + `"}`, map[string]any{}},
 		{"not an object", `[1]`, map[string]any{}},
 	}

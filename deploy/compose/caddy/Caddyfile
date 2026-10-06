@@ -41,6 +41,14 @@ bundles.{$PADDOCK_DOMAIN} {
 	handle @read {
 		reverse_proxy rustfs:9000
 	}
+	# Devices upload escrowed LUKS headers with presigned PUTs (plan M4b decision 10); the signature fixes the key.
+	@escrow {
+		method PUT
+		path /paddock-escrow/org/*
+	}
+	handle @escrow {
+		reverse_proxy rustfs:9000
+	}
 	handle {
 		respond 403
 	}

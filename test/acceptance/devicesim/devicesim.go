@@ -242,6 +242,21 @@ func (d *Device) Download(ctx context.Context, url string) ([]byte, int, error) 
 	return body, res.StatusCode, err
 }
 
+// Upload PUTs body to a presigned URL (an escrowed LUKS header) and returns the HTTP status.
+func (d *Device) Upload(ctx context.Context, url string, body []byte) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	res, err := d.HTTP.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	_ = res.Body.Close()
+	return res.StatusCode, nil
+}
+
 // SendEvents posts a batch of events.
 func (d *Device) SendEvents(ctx context.Context, events []protocol.Event) (Response, error) {
 	return d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/events", Body: protocol.EventsRequest{Events: events}})

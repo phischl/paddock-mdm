@@ -37,3 +37,30 @@ WITH activated AS (
 UPDATE escrow_secret SET status = 'superseded'
 WHERE device_id = @device_id::uuid AND kind = @kind::text AND generation < @generation::int AND status IN ('stored','active')
   AND EXISTS (SELECT 1 FROM activated);
+
+-- Disk encryption escrow (plan M4b decisions 10 and 13).
+
+-- name: LatestEscrowGeneration :one
+-- The highest generation of a kind that did not fail: a new LUKS generation must be above it.
+SELECT coalesce(max(generation), 0)::int FROM escrow_secret
+WHERE device_id = @device_id AND kind = @kind AND status <> 'failed';
+
+-- name: InsertEscrowHeader :execrows
+-- A header generation waits as pending until the worker found its object.
+INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
+                           nonce, sha256, size, created_at)
+VALUES (@id, @organization_id, @device_id, 'luks_header', @generation, 'pending', @key_version, @object_key, @wrapped_dek,
+        @nonce, @sha256, @size, @created_at)
+ON CONFLICT DO NOTHING;
+
+-- name: ListPendingEscrowHeaders :many
+SELECT * FROM escrow_secret WHERE status = 'pending' ORDER BY created_at, id LIMIT 100;
+
+-- name: FinishEscrowHeader :execrows
+UPDATE escrow_secret SET status = @status WHERE id = @id AND status = 'pending';
+
+-- name: ListDiskEscrows :many
+-- The LUKS generations of a device, newest first.
+SELECT * FROM escrow_secret
+WHERE device_id = @device_id AND kind IN ('luks_recovery_key', 'luks_header')
+ORDER BY kind, generation DESC;

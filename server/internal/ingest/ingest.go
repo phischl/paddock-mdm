@@ -56,7 +56,9 @@ type Events struct {
 }
 
 // Escrow is an escrowed secret uploaded by a device (routing key ingest.escrow.<org>, message_id = EscrowID, plan M4a
-// decision 12). Ciphertext is the RSA-OAEP ciphertext; only OpenBao can decrypt it.
+// decision 12). Ciphertext is the RSA-OAEP ciphertext; only OpenBao can decrypt it. A LUKS header (plan M4b decision
+// 10) has no ciphertext but the object key the gateway chose and the facts of the sealed object the device uploads
+// there.
 type Escrow struct {
 	DeviceID       uuid.UUID `json:"device_id"`
 	OrganizationID uuid.UUID `json:"organization_id"`
@@ -65,6 +67,11 @@ type Escrow struct {
 	Generation     int64     `json:"generation"`
 	KeyVersion     int       `json:"key_version"`
 	Ciphertext     []byte    `json:"ciphertext"`
+	ObjectKey      string    `json:"object_key,omitempty"`
+	WrappedDEK     []byte    `json:"wrapped_dek,omitempty"`
+	Nonce          []byte    `json:"nonce,omitempty"`
+	SHA256         string    `json:"sha256,omitempty"`
+	Size           int64     `json:"size,omitempty"`
 	ReceivedAt     time.Time `json:"received_at"`
 }
 
