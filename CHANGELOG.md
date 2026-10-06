@@ -114,6 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The portal shows the Paddock symbol in the app bar and the Paddock favicons (light and dark tile by colour scheme, small icon as fallback); the build copies them from `docs/assets/logo/` (M4c step 0b).
 - **BREAKING:** `paddock-api` needs the Valkey connection (`PADDOCK_VALKEY_ADDR`, `PADDOCK_VALKEY_PASSWORD_FILE`, as for gateway and worker) to publish enrollment tokens to the device cache; add both to the api role's configuration.
 - GDM no longer lists the managed local administrator: the agent writes `/var/lib/AccountsService/users/<local_admin_username>` with `SystemAccount=true` before it creates the account and restores the file (restarting AccountsService) when it is removed or changed; the account still signs in through "Not listed?", on text consoles and over SSH (M4a.1 step 2).
 - **BREAKING:** Go module path is `github.com/phischl/paddock-mdm/…` (`pkg`, `server`, `agent`, `test/acceptance`, `test/system`) instead of `github.com/paddock-mdm/paddock/…`; code importing the modules and builds that set `-X github.com/paddock-mdm/paddock/agent/internal/buildinfo.Version` must use the new path (M4a.1 step 1).

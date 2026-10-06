@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { useTheme } from 'vuetify'
 import { useSessionStore } from './stores/session'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { pendingConfirm, settleConfirm } from './composables/useConfirm'
@@ -11,6 +12,9 @@ const route = useRoute()
 const session = useSessionStore()
 const showChrome = computed(() => !route.meta.public && session.me !== null)
 const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : ''))
+// The symbol variant follows the theme (plan M4c step 0b); the files are copied from docs/assets/logo/ at build time.
+const theme = useTheme()
+const logo = computed(() => (theme.current.value.dark ? '/paddock-symbol-dark.svg' : '/paddock-symbol-light.svg'))
 
 // While a dialog is open the page behind it is inert, as aria-modal promises: no focus, no screen reader access.
 // Vuetify teleports dialogs to the body, outside the elements made inert here.
@@ -35,6 +39,16 @@ onBeforeUnmount(() => observer.disconnect())
       color="primary"
       flat
     >
+      <template #prepend>
+        <img
+          :src="logo"
+          alt=""
+          width="32"
+          height="32"
+          class="ms-2"
+          data-testid="app-logo"
+        >
+      </template>
       <v-app-bar-title class="brand">
         {{ t('app.name') }}
       </v-app-bar-title>

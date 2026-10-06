@@ -7,6 +7,8 @@ deploy/compose/.env
 /bin/
 server/web/dist/*
 !server/web/dist/.gitkeep
+# Logos copied from docs/assets/logo/ at build time
+server/web/public/paddock-*.svg
 node_modules/
 *.out
 coverage.*

@@ -10,6 +10,7 @@ WORKDIR /src/server/web
 COPY server/web/package.json server/web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY server/web/ ./
+COPY docs/assets/logo/ /src/docs/assets/logo/
 RUN npm run build
 
 FROM ${GO_BUILD_IMAGE} AS build
