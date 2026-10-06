@@ -242,3 +242,37 @@ func unique() string { return uuid.NewString()[:8] }
 func version(minor int, label string) string {
 	return fmt.Sprintf("0.%d.%d-%s", minor, time.Now().Unix(), label)
 }
+
+// InstallRelease builds the packages and paddockd of this tree as a new release (paddock_dev), uploads both and
+// rolls the release out to all devices, so that the Paddock autoinstall installs it and no other release replaces
+// it; it returns the version. Running rollouts are halted first, and this one when the test ends; bin/deb is rebuilt
+// as version 0.1.0 for the other system tests.
+func (s *Stack) InstallRelease(t *testing.T) string {
+	t.Helper()
+	v := version(9, "ai")
+	s.Make("deb", "VERSION="+v, "TAGS=paddock_dev")
+	t.Cleanup(func() { s.Make("deb", "VERSION=0.1.0", "TAGS=paddock_dev") })
+	debs, err := filepath.Glob(filepath.Join(s.root, "bin", "deb", "*.deb"))
+	if err != nil || len(debs) != 2 {
+		t.Fatalf("packages %v: %v", debs, err)
+	}
+	args := []string{"--version", v, "--artifact", "amd64=" + filepath.Join(s.root, "bin", "agent", "amd64", "paddockd"),
+		"--deb", debs[0], "--deb", debs[1], "--rollout", "--halt-running", "--waves", "100", "--min-wave-minutes", "1"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, agentRelease(s.root), args...)
+	cmd.Dir = s.root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("agentrelease %s: %v\n%s", v, err, out)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		halt := exec.CommandContext(ctx, agentRelease(s.root), "--version", v, "--halt-running")
+		halt.Dir = s.root
+		if out, err := halt.CombinedOutput(); err != nil {
+			t.Errorf("halt the rollout of %s: %v\n%s", v, err, out)
+		}
+	})
+	return v
+}
