@@ -1,6 +1,6 @@
 # Implementierungsplan: M4c — Revocation: Lock, Destroy, mass-revocation protection, dead man's switch
 
-Status: Ready for implementation (after M4b) · 2026-10-05 · Author: architect
+Status: Ready for implementation · 2026-10-05 · Author: architect
 Basis: architecture v1.7 §12.3 (revocation sequence), §12.6 (dead man's switch), §13 (keys); ADR 0006, 0014; concept
 "Data revocation", "Two revocation actions: Lock and Destroy", "Optional dead man's switch", design contract 7, 8, 10;
 M4a (commands, step-up), M4b (escrowed recovery key and header)
@@ -165,6 +165,16 @@ a verified token, the 24 h limit, the test-target build tag excluded from releas
 off does the architect plan enabling the flag.
 
 ## 8. Steps
+0. **Follow-ups (one commit each):**
+   a) Every apt/dpkg invocation of the agent runs with a hard 15 min context timeout that kills the whole process group;
+      on timeout the agent reports `login.apply_failed {stage:"apt", reason:"timeout"}` and retries with back-off at a
+      later drift pass (M4b.1 review: the Himmelblau livelock showed that a hanging package operation blocks the
+      reconcile loop). Unit test with a fake `apt-get` that never exits. CHANGELOG `Fixed`.
+   b) Portal favicon and app-bar logo from `docs/assets/logo/` (product-owner assets 2026-10-06): favicons
+      `paddock-favicon-light-tile-light.svg` / `-dark-tile-dark.svg` via `<link rel="icon" media="(prefers-color-scheme: …)">`,
+      `paddock-favicon-small.svg` as fallback; the app bar shows `paddock-symbol-light|dark.svg` per Vuetify theme. Copy
+      the files into `server/web/public/` at build time (no duplicate sources in the repo). e2e: favicon and logo load,
+      no CSP violation.
 1. Keys, trust anchor (enrollment config + agent pinning), packaging `paddock-revoke`, CODEOWNERS.
 2. Server requests/approvals/issuer/limits/Destroy shredding + R2, R3, R5 (acceptance).
 3. `paddock-revoke` + `paddockd` hand-off + R4 (unit + VM).
