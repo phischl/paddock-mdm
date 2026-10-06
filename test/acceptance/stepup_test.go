@@ -65,8 +65,8 @@ const expirySlack = 2 * time.Second
 // TestStepUp is gate U1 of plan M4a: revealing the local administrator password, assigning a full profile and
 // changing a profile to class full need a step-up of the session's own user within the step-up window (300 s; the
 // development stack shortens it, GET /api/v1/me reports it); every refusal is one denied audit event with error code
-// step_up_required, the permitted action's event marks the actor as stepped up. The wait for the window is measured
-// from the server's step-up time.
+// step_up_required, the permitted action's event marks the actor as stepped up. The waits for Authentik's max_age
+// and for the window are measured from the server's step-up time; the audit event checks run during them.
 func TestStepUp(t *testing.T) {
 	alice := login(t, env.Alice)
 	device, password := escrowedDevice(t, alice)
@@ -94,11 +94,22 @@ func TestStepUp(t *testing.T) {
 		expectStatus(t, res, status, code)
 		return res
 	}
-	denied := func(res env.Response, code string) {
-		t.Helper()
-		if ev := expectOneEvent(t, alice, res.RequestID, code, "denied"); ev.ErrorCode != "step_up_required" || ev.Actor.StepUp {
-			t.Fatalf("event %+v", ev)
+	// The audit event checks (each waits for delivery and 5 s more) are collected and run during the next wait.
+	var checks []func()
+	later := func(check func()) { checks = append(checks, check) }
+	waitUntil := func(deadline time.Time) {
+		for _, check := range checks {
+			check()
 		}
+		checks = nil
+		time.Sleep(time.Until(deadline))
+	}
+	denied := func(res env.Response, code string) {
+		later(func() {
+			if ev := expectOneEvent(t, alice, res.RequestID, code, "denied"); ev.ErrorCode != "step_up_required" || ev.Actor.StepUp {
+				t.Fatalf("event %+v", ev)
+			}
+		})
 	}
 
 	denied(assign(http.StatusForbidden, "step_up_required"), "profile_assignment.created")
@@ -117,7 +128,7 @@ func TestStepUp(t *testing.T) {
 		t.Fatalf("carol's step-up gave alice's session a step-up at %s", timing.At)
 	}
 	denied(assign(http.StatusForbidden, "step_up_required"), "profile_assignment.created")
-	time.Sleep(time.Until(carolDone.Add(timing.MaxAuthAge + expirySlack)))
+	waitUntil(carolDone.Add(timing.MaxAuthAge + expirySlack))
 
 	stepUp(t, alice, env.Alice, true)
 	steppedUp := serverStepUp(t, alice).At
@@ -136,25 +147,30 @@ func TestStepUp(t *testing.T) {
 		out.Passwords[0].State != "active" || revealed.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("reveal %s %v (%v)", revealed.Body, revealed.Header, err)
 	}
-	if ev := expectOneEvent(t, alice, revealed.RequestID, "local_admin.revealed", "success"); !ev.Actor.StepUp ||
-		strings.Contains(fmt.Sprint(ev.Params), password) {
-		t.Fatalf("reveal event %+v", ev)
-	}
+	later(func() {
+		if ev := expectOneEvent(t, alice, revealed.RequestID, "local_admin.revealed", "success"); !ev.Actor.StepUp ||
+			strings.Contains(fmt.Sprint(ev.Params), password) {
+			t.Fatalf("reveal event %+v", ev)
+		}
+	})
 	res := assign(http.StatusCreated, "")
-	if ev := expectOneEvent(t, alice, res.RequestID, "profile_assignment.created", "success"); !ev.Actor.StepUp {
-		t.Fatalf("event %+v does not mark the step-up", ev)
-	}
+	later(func() {
+		if ev := expectOneEvent(t, alice, res.RequestID, "profile_assignment.created", "success"); !ev.Actor.StepUp {
+			t.Fatalf("event %+v does not mark the step-up", ev)
+		}
+	})
 	toFull = call(t, alice, http.MethodPatch, "/api/v1/permission-profiles/"+restricted, map[string]any{"class": "full"})
 	expectStatus(t, toFull, http.StatusOK, "")
 
 	// After the window the step-up no longer counts; a second step-up of the same Authentik session authenticates
 	// again.
-	time.Sleep(time.Until(steppedUp.Add(timing.Window + expirySlack)))
+	waitUntil(steppedUp.Add(timing.Window + expirySlack))
 	expectStatus(t, call(t, alice, http.MethodDelete, "/api/v1/profile-assignments/"+responseID(t, res).String(), nil), http.StatusNoContent, "")
 	denied(assign(http.StatusForbidden, "step_up_required"), "profile_assignment.created")
 	denied(reveal(http.StatusForbidden, "step_up_required"), "local_admin.revealed")
 	stepUp(t, alice, env.Alice, true)
 	assign(http.StatusCreated, "")
+	waitUntil(time.Now())
 }
 
 func expectCreated(t *testing.T, res env.Response) env.Response {
