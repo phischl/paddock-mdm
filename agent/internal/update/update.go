@@ -32,6 +32,7 @@ const (
 	OutcomeSelfTestFailed   = "self_test_failed"
 	OutcomeRolledBack       = "rolled_back"
 	OutcomeSignatureInvalid = "signature_invalid"
+	OutcomeDowngradeRefused = "downgrade_refused"
 )
 
 // MaxBinary bounds an agent release download.

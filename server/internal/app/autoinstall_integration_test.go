@@ -22,7 +22,7 @@ func (h releaseHarness) withPackages(t *testing.T, names ...string) string {
 		t.Fatal(err)
 	}
 	bin := []byte("paddockd " + v)
-	if _, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin))); err != nil {
+	if _, err := h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64")); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range names {

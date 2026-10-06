@@ -27,10 +27,13 @@ Generate once on an offline machine with a passphrase, store the secret key and 
 minisign -G -p paddock-release.pub -s paddock-release.key   # offline; choose a strong passphrase
 ```
 
-Sign each binary offline and copy only the binary and its `.minisig` back:
+Sign each binary offline and copy only the binary and its `.minisig` back. The trusted comment is part of the
+signature and must be exactly `paddock-agent version=<version> arch=<arch>` (`amd64` or `arm64`): the server refuses
+other comments at upload (422 `release_signature_mismatch`), and the supervisor installs a binary only as the
+version and architecture its comment names (plan M4b.1 decision 10):
 
 ```sh
-minisign -S -s paddock-release.key -m paddockd -t "paddockd <version> <arch>"
+minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<version> arch=<arch>"
 ```
 
 ## Releasing
@@ -88,11 +91,14 @@ Only one rollout runs at a time.
 ## On the device
 
 The agent downloads an offered release into `/var/lib/paddock/staging/<version>/`, checks size and SHA-256 and
-signals `paddock-supervisor`. The supervisor verifies the signature, installs into the inactive slot
+signals `paddock-supervisor`. The supervisor verifies the signature and its trusted comment (the requested version
+and its own architecture), refuses a version that is not newer than the active one (semantic version precedence;
+any version may replace an active agent that cannot report its version), installs into the inactive slot
 (`/opt/paddock/agent/A` or `B`), runs `paddockd self-test`, flips `/opt/paddock/agent/current`, and watches a
 probation of 10 minutes: the new agent must keep running and check in. Three crashes or no check-in by the end of
 the probation flip back. The outcome is reported as `device.agent_updated`, `device.agent_update_failed`
-(`signature_invalid`, `self_test_failed`) or `device.agent_rolled_back`; a version that failed is not tried again on
+(`signature_invalid`, `downgrade_refused`, `self_test_failed`) or `device.agent_rolled_back`; a version that failed is
+not tried again on
 that device.
 
 Troubleshooting on a device: `journalctl -u paddock-supervisor`, `readlink /opt/paddock/agent/current`,

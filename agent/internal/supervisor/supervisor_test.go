@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"aead.dev/minisign"
+
+	"github.com/phischl/paddock-mdm/pkg/releasesig"
 )
 
 // fake is a supervisor on temporary directories whose agent binaries are shell scripts.
@@ -109,17 +112,28 @@ func (f *fake) stop() {
 	}
 }
 
-// stage puts a release into staging as the agent does and sends SIGUSR1; signer nil signs with the release key.
+// stage puts a release into staging as the agent does and sends SIGUSR1; signer nil signs with the release key, the
+// trusted comment names version and this architecture.
 func (f *fake) stage(version string, bin []byte, signer *minisign.PrivateKey) {
+	f.t.Helper()
+	f.stageSigned(version, bin, signer, releasesig.Comment(version, runtime.GOARCH))
+}
+
+// stageSigned is stage with the trusted comment comment ("": minisign's default timestamp comment).
+func (f *fake) stageSigned(version string, bin []byte, signer *minisign.PrivateKey, comment string) {
 	f.t.Helper()
 	key := f.priv
 	if signer != nil {
 		key = *signer
 	}
+	sig := minisign.Sign(key, bin)
+	if comment != "" {
+		sig = minisign.SignWithComments(key, bin, comment, "paddock agent release")
+	}
 	dir := filepath.Join(f.cfg.Staging, version)
 	_ = os.MkdirAll(dir, 0o700)
 	f.writeExec(filepath.Join(dir, "paddockd"), bin)
-	if err := os.WriteFile(filepath.Join(dir, "paddockd.minisig"), minisign.Sign(key, bin), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "paddockd.minisig"), sig, 0o600); err != nil {
 		f.t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(f.cfg.Staging, "request.json"), []byte(`{"version":"`+version+`"}`), 0o600); err != nil {
@@ -258,6 +272,72 @@ func TestUpdateRefused(t *testing.T) {
 			f.expectStagingClean()
 		})
 	}
+}
+
+// TestReleaseBinding (plan M4b.1 decision 11): the signed trusted comment must name the requested version and this
+// architecture, and a release not newer than the active agent is refused, unless the active agent has failed.
+func TestReleaseBinding(t *testing.T) {
+	tests := []struct {
+		name, version, comment, outcome string
+	}{
+		{"missing comment", "1.1.0", "", outcomeSignatureInvalid},
+		{"other version in comment", "1.1.0", releasesig.Comment("1.0.5", runtime.GOARCH), outcomeSignatureInvalid},
+		{"other architecture", "1.1.0", releasesig.Comment("1.1.0", "riscv64"), outcomeSignatureInvalid},
+		{"older release", "0.9.0", releasesig.Comment("0.9.0", runtime.GOARCH), outcomeDowngradeRefused},
+		{"same release", "1.0.0", releasesig.Comment("1.0.0", runtime.GOARCH), outcomeDowngradeRefused},
+		{"pre-release of the active", "1.0.0-rc.1", releasesig.Comment("1.0.0-rc.1", runtime.GOARCH), outcomeDowngradeRefused},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFake(t)
+			f.start()
+			f.stageSigned(tt.version, script(tt.version, 0, f.good()), nil, tt.comment)
+			if r := f.waitResult(10 * time.Second); r.Outcome != tt.outcome || r.FromVersion != "1.0.0" || r.Version != tt.version {
+				t.Fatalf("result %+v", r)
+			}
+			if f.active() != "A" {
+				t.Fatalf("switched to %s", f.active())
+			}
+			f.expectStagingClean()
+		})
+	}
+	t.Run("older release replaces a failed agent", func(t *testing.T) {
+		f := newFake(t)
+		// The active agent runs but cannot report its version.
+		f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), []byte("#!/bin/sh\n[ \"$1\" = run ] || exit 1\n"+f.good()+"\n"))
+		f.start()
+		f.stageAfterCheckin("0.9.0", script("0.9.0", 0, f.good()))
+		f.waitFor("the new agent checked in", f.checkedIn)
+		if r := f.endProbation("B"); r.Outcome != outcomeUpdated || r.Version != "0.9.0" {
+			t.Fatalf("result %+v", r)
+		}
+	})
+}
+
+func TestCompareVersions(t *testing.T) {
+	// Ascending by SemVer 2.0.0 precedence (its own example list, plus build metadata and wide numbers).
+	ordered := []string{"0.0.0-dev", "0.9.0", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta",
+		"1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.2.0", "1.10.0", "2.0.0", "10.0.0"}
+	for i, a := range ordered {
+		for j, b := range ordered {
+			if got, want := compareVersions(a, b), cmpIndex(i, j); got != want {
+				t.Errorf("compare(%s, %s) = %d, want %d", a, b, got, want)
+			}
+		}
+	}
+	if compareVersions("1.0.0+build.1", "1.0.0+build.2") != 0 || compareVersions("0.2.1700000000-good", "0.1.0") != 1 {
+		t.Error("build metadata or system test versions ordered wrongly")
+	}
+}
+
+func cmpIndex(i, j int) int {
+	switch {
+	case i < j:
+		return -1
+	case i > j:
+		return 1
+	}
+	return 0
 }
 
 func TestUpdateWithoutReleaseKeyIsRefused(t *testing.T) {

@@ -46,7 +46,7 @@ func TestAgentPackagesPublic(t *testing.T) {
 		t.Errorf("missing package: HTTP %d", status)
 	}
 	bin := []byte("gate binary " + v)
-	expectStatus(t, uploadArtifact(t, root, v, bin, minisign.Sign(releaseKey(t), bin)), http.StatusOK, "")
+	expectStatus(t, uploadArtifact(t, root, v, bin, signBinary(t, bin, v)), http.StatusOK, "")
 	for _, path := range []string{"/paddock-agent-artifacts/releases/" + v + "/amd64/paddockd", "/paddock-agent-artifacts/?list-type=2",
 		"/paddock-agent-artifacts/?list-type=2&prefix=packages/", "/packages/"} {
 		if status, _ := get(path); status != http.StatusForbidden {

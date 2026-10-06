@@ -9,6 +9,9 @@ import (
 	"log/slog"
 	"time"
 
+	"aead.dev/minisign"
+
+	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -22,8 +25,20 @@ type ArtifactStore interface {
 	Put(ctx context.Context, key, contentType, cacheControl string, body []byte) error
 }
 
-// VerifyRelease checks a minisign signature file over a binary with the configured release public key.
-type VerifyRelease func(binary, minisig []byte) bool
+// VerifyRelease checks a minisign signature file over a binary with the configured release public key and returns
+// its trusted comment, which the signature covers.
+type VerifyRelease func(binary, minisig []byte) (trustedComment string, ok bool)
+
+// NewReleaseVerifier verifies with the release public key pub.
+func NewReleaseVerifier(pub minisign.PublicKey) VerifyRelease {
+	return func(binary, minisig []byte) (string, bool) {
+		var sig minisign.Signature
+		if !minisign.Verify(pub, binary, minisig) || sig.UnmarshalText(minisig) != nil {
+			return "", false
+		}
+		return sig.TrustedComment, true
+	}
+}
 
 // AgentReleases are the platform use cases of agent releases and staged rollouts (plan M2b decisions 19–22).
 type AgentReleases struct {
@@ -138,8 +153,9 @@ func (a *AgentReleases) Create(ctx context.Context, version string) (pgstore.Age
 	return out, err
 }
 
-// UploadArtifact verifies the binary's minisign signature with the release public key and stores it as the
-// artifact of arch. Published releases are immutable.
+// UploadArtifact verifies the binary's minisign signature with the release public key, requires its trusted comment
+// to name the release and arch (plan M4b.1 decision 12), and stores it as the artifact of arch. Published releases
+// are immutable.
 func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string, binary []byte, minisigB64 string) (pgstore.AgentArtifact, error) {
 	sum := sha256.Sum256(binary)
 	art := pgstore.UpsertAgentArtifactParams{
@@ -153,7 +169,14 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 	var out pgstore.AgentArtifact
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
-			return a.checkUpload(ctx, q, version, arch, binary, minisigB64)
+			comment, err := a.checkUpload(ctx, q, version, arch, binary, minisigB64)
+			if err != nil {
+				return err
+			}
+			if v, signedArch, ok := releasesig.Parse(comment); !ok || v != version || signedArch != arch {
+				return problem.ReleaseSignatureMismatch.WithDetail(fmt.Sprintf("the signed comment must be %q", releasesig.Comment(version, arch)))
+			}
+			return nil
 		},
 		func(ctx context.Context) error {
 			return a.store.Put(ctx, art.ObjectKey, "application/octet-stream", "no-store", binary)
@@ -192,7 +215,8 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, arch s
 			if err := agentrelease.ValidatePackage(name); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
-			return a.checkUpload(ctx, q, version, arch, deb, minisigB64)
+			_, err := a.checkUpload(ctx, q, version, arch, deb, minisigB64)
+			return err
 		},
 		func(ctx context.Context) error {
 			return a.store.Put(ctx, pkg.ObjectKey, "application/vnd.debian.binary-package", "no-store", deb)
@@ -212,26 +236,32 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, arch s
 	return out, err
 }
 
-// checkUpload validates an upload of a release file: architecture, size, signature, and a draft release.
-func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, version, arch string, body []byte, minisigB64 string) error {
+// checkUpload validates an upload of a release file — architecture, size, signature, and a draft release — and
+// returns the signature's trusted comment.
+func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, version, arch string, body []byte, minisigB64 string) (string, error) {
 	if err := agentrelease.ValidateArch(arch); err != nil {
-		return problem.InvalidRequest.WithDetail(err.Error())
+		return "", problem.InvalidRequest.WithDetail(err.Error())
 	}
 	if len(body) == 0 || len(body) > agentrelease.MaxArtifactBytes {
-		return problem.InvalidRequest.WithDetail("the file must have 1 byte to 128 MiB")
+		return "", problem.InvalidRequest.WithDetail("the file must have 1 byte to 128 MiB")
 	}
 	sig, err := base64.StdEncoding.DecodeString(minisigB64)
-	if err != nil || a.verify == nil || !a.verify(body, sig) {
-		return problem.InvalidRequest.WithDetail("X-Paddock-Minisig does not verify with the release public key")
+	var comment string
+	ok := false
+	if err == nil && a.verify != nil {
+		comment, ok = a.verify(body, sig)
+	}
+	if !ok {
+		return "", problem.InvalidRequest.WithDetail("X-Paddock-Minisig does not verify with the release public key")
 	}
 	r, err := q.GetAgentRelease(ctx, version)
 	if err != nil {
-		return notFound(err)
+		return "", notFound(err)
 	}
 	if r.Status != agentrelease.StatusDraft {
-		return problem.InvalidState.WithDetail("artifacts of a published release cannot change")
+		return "", problem.InvalidState.WithDetail("artifacts of a published release cannot change")
 	}
-	return nil
+	return comment, nil
 }
 
 // Publish makes a draft release with at least one artifact available for rollouts.

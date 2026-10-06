@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"aead.dev/minisign"
+
+	"github.com/phischl/paddock-mdm/pkg/releasesig"
 )
 
 // vms are the VMs of this run: PADDOCK_SYSTEM_VMS, comma-separated or "all" (make system-test VM=…).
@@ -281,8 +283,42 @@ func release(t *testing.T, d *Device, gate string, minor int, label string, tags
 	})
 }
 
+// stage puts a release into the device's staging directory exactly as the agent stages a download, and signals the
+// supervisor.
+func (d *Device) stage(t *testing.T, v string, bin, sig []byte) {
+	t.Helper()
+	dir := "/var/lib/paddock/staging/" + v
+	d.Must("sudo install -d -m 0700 " + dir)
+	d.MustIn(bin, "sudo tee "+dir+"/paddockd >/dev/null && sudo chmod 0700 "+dir+"/paddockd")
+	d.MustIn(sig, "sudo tee "+dir+"/paddockd.minisig >/dev/null")
+	d.MustIn([]byte(fmt.Sprintf(`{"version":%q}`, v)), "sudo tee /var/lib/paddock/staging/request.json >/dev/null")
+	d.Must("sudo kill -USR1 $(pidof paddock-supervisor)")
+}
+
+// releaseKey is the development release key (make dev-release-key, password-less).
+func releaseKey(t *testing.T, s *Stack) minisign.PrivateKey {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(s.root, "deploy", "compose", ".secrets", "release", "minisign.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minisign.IsEncrypted(data) {
+		k, err := minisign.DecryptKey("", data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	var k minisign.PrivateKey
+	if err := k.UnmarshalText(data); err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
 // gateS4: a good release is installed and reported; a release that crashes in probation is rolled back; one that
-// fails its self-test is never switched to; a binary with a bad signature is refused. VMs in parallel share the
+// fails its self-test is never switched to; a signed older release (plan M4b.1 AC4) and a binary with a bad signature
+// are refused. VMs in parallel share the
 // releases.
 func gateS4(t *testing.T, d *Device) {
 	t.Run("good release", func(t *testing.T) {
@@ -313,6 +349,23 @@ func gateS4(t *testing.T, d *Device) {
 		}
 	})
 
+	t.Run("downgrade", func(t *testing.T) {
+		// AC4 of plan M4b.1: a correctly signed release older than the active one is refused, staged on the device
+		// directly as the agent would stage it (the server offers only newer releases).
+		v := version(1, "downgrade")
+		data, err := os.ReadFile(d.s.BuildAgent(v, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.stage(t, v, data, minisign.SignWithComments(releaseKey(t, d.s), data, releasesig.Comment(v, "amd64"), ""))
+		d.WaitEvent(t, "device.agent_update_failed", 6*time.Minute, func(p map[string]any) bool {
+			return p["version"] == v && p["outcome"] == "downgrade_refused"
+		})
+		if d.AgentVersion() != good || d.Slot() != slot {
+			t.Fatalf("installed the older release: %s in %s", d.AgentVersion(), d.Slot())
+		}
+	})
+
 	t.Run("bad signature", func(t *testing.T) {
 		// The server refuses binaries that do not verify, so the forged release is staged on the device directly,
 		// exactly as the agent would stage a downloaded one, signed with a key the supervisor does not trust.
@@ -326,12 +379,7 @@ func gateS4(t *testing.T, d *Device) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dir := "/var/lib/paddock/staging/" + v
-		d.Must("sudo install -d -m 0700 " + dir)
-		d.MustIn(data, "sudo tee "+dir+"/paddockd >/dev/null && sudo chmod 0700 "+dir+"/paddockd")
-		d.MustIn(minisign.Sign(forger, data), "sudo tee "+dir+"/paddockd.minisig >/dev/null")
-		d.MustIn([]byte(fmt.Sprintf(`{"version":%q}`, v)), "sudo tee /var/lib/paddock/staging/request.json >/dev/null")
-		d.Must("sudo kill -USR1 $(pidof paddock-supervisor)")
+		d.stage(t, v, data, minisign.Sign(forger, data))
 		d.WaitEvent(t, "device.agent_update_failed", 6*time.Minute, func(p map[string]any) bool {
 			return p["version"] == v && p["outcome"] == "signature_invalid"
 		})

@@ -1162,7 +1162,9 @@ export interface paths {
         /**
          * @description Roles: platform_admin. Uploads the paddockd binary of a draft release for one architecture (at most 128 MiB).
          *     The server verifies the minisign signature with the configured release public key before it accepts the
-         *     binary (400 otherwise). Uploading again replaces the artifact while the release is a draft.
+         *     binary (400 otherwise); the signed trusted comment must be `paddock-agent version=<version> arch=<arch>`
+         *     for this release and architecture (422 release_signature_mismatch otherwise), so that the supervisor can bind
+         *     the binary to its version. Uploading again replaces the artifact while the release is a draft.
          */
         put: operations["uploadAgentArtifact"];
         post?: never;
@@ -4879,6 +4881,7 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
         };
     };

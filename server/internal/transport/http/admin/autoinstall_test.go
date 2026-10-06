@@ -12,6 +12,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/releasesig"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
@@ -37,7 +38,7 @@ func (e *env) installRelease(t *testing.T) string {
 		}
 	}
 	bin := []byte("paddockd " + v)
-	sig := base64.StdEncoding.EncodeToString(minisign.Sign(e.release, bin))
+	sig := base64.StdEncoding.EncodeToString(minisign.SignWithComments(e.release, bin, releasesig.Comment(v, "amd64"), ""))
 	if r := e.do(call{method: "PUT", path: base + "/artifacts/amd64", rawBody: string(bin), contentType: "application/octet-stream",
 		headers: map[string]string{"X-Paddock-Minisig": sig}, cookie: root}); r.status != http.StatusOK {
 		t.Fatalf("upload binary: %d %s", r.status, r.body)
