@@ -64,8 +64,8 @@ func TestSchemaNegotiation(t *testing.T) {
 	old := w.device("active") // never checked in
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	for _, d := range []uuid.UUID{v1, old} {
-		if b := w.fetch(d); b.SchemaVersion != bundle.SchemaVersion || resourceIDs(b) != "time" || b.Keys != nil {
-			t.Fatalf("v1 device got schema %d with %s, keys %+v", b.SchemaVersion, resourceIDs(b), b.Keys)
+		if b := w.fetch(d); b.SchemaVersion != bundle.SchemaVersion || resourceIDs(b) != "time" || b.Keys != nil || b.Revocation != nil {
+			t.Fatalf("v1 device got schema %d with %s, keys %+v, revocation %+v", b.SchemaVersion, resourceIDs(b), b.Keys, b.Revocation)
 		}
 	}
 	b := w.fetch(v2)
@@ -79,6 +79,10 @@ func TestSchemaNegotiation(t *testing.T) {
 	}
 	if _, err := escrow.ParsePublicKey(b.Keys.EscrowWrap.PublicKeyPEM); err != nil {
 		t.Fatalf("escrow-wrap key: %v", err)
+	}
+	// Plan M4c decisions 1 and 3: the revocation section carries the flag (off by default) and revocation-signing.
+	if r := b.Revocation; r == nil || r.Enabled || len(r.Keys) != 1 || r.Keys[0].KeyID != "revocation-signing:v1" || len(r.Keys[0].PublicKey) != 44 {
+		t.Fatalf("revocation %+v", b.Revocation)
 	}
 	login := spec[bundle.LoginSpec](t, b, "login")
 	slug := "c" + w.org.String()[24:]
@@ -335,5 +339,15 @@ func TestVisudo(t *testing.T) {
 	}
 	if err := v.Validate(context.Background(), []byte("#4294967294 ALL=(root) /usr/bin/a, b\n")); err == nil {
 		t.Fatal("invalid file accepted")
+	}
+}
+
+// TestRevocationFlag: PADDOCK_REVOCATION_ENABLED reaches v2 bundles as revocation.enabled (plan M4c decision 1).
+func TestRevocationFlag(t *testing.T) {
+	w := newWorldConfig(t, func(c *compiler.Config) { c.RevocationEnabled = true })
+	d := w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if r := w.fetch(d).Revocation; r == nil || !r.Enabled || len(r.Keys) != 1 {
+		t.Fatalf("revocation %+v", r)
 	}
 }

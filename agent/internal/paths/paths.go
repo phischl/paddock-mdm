@@ -71,3 +71,11 @@ func (l Layout) HeaderBackupDir() string { return l.Join("/run/paddock") }
 
 // Slots holds the A/B slots and the current symlink.
 func (l Layout) Slots() string { return l.Join("/opt/paddock/agent") }
+
+// RevokeTrust is /etc/paddock/revoke-trust.json, the revocation-signing keys pinned at enrollment (plan M4c
+// decision 3); never replaced from a bundle.
+func (l Layout) RevokeTrust() string { return l.Join("/etc/paddock/revoke-trust.json") }
+
+// RevokeEnabled is the marker the agent keeps while the bundle says revocation.enabled (plan M4c decision 1);
+// paddock-revoke refuses to run without it.
+func (l Layout) RevokeEnabled() string { return l.Join("/etc/paddock/revoke-enabled") }

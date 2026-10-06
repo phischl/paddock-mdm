@@ -1588,13 +1588,15 @@ export interface components {
             secret: string;
             enrollment_config: components["schemas"]["EnrollmentConfig"];
         };
-        /** @description The document a device needs to enroll; it pins the bundle-signing keys as trust anchor. */
+        /** @description The document a device needs to enroll; it pins the bundle-signing keys as trust anchor and the revocation-signing keys as trust anchor of paddock-revoke. Configurations created before revocation existed have no revocation_keys. */
         EnrollmentConfig: {
             server_url: string;
             /** Format: uuid */
             organization_id: string;
             token: string;
             bundle_keys: components["schemas"]["BundleKey"][];
+            /** @description The revocation-signing public keys, e.g. key_id "revocation-signing:v1". */
+            revocation_keys?: components["schemas"]["BundleKey"][];
         };
         AutoinstallRequest: {
             enrollment_config: components["schemas"]["EnrollmentConfig"];

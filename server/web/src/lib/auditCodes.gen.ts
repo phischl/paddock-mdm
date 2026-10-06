@@ -34,6 +34,7 @@ export const auditCodes = [
   'device.quarantine_released',
   'device.rejected',
   'device.retired',
+  'device.revocation_trust_pinned_tofu',
   'device.sudo_apply_failed',
   'device.sudo_user_unresolved',
   'device.tamper_keyslot_changed',

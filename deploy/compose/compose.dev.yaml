@@ -86,6 +86,9 @@ services:
   paddock-compiler:
     environment:
       PADDOCK_ENV: development
+      # The revocation path is enabled in development and test stacks only (plan M4c decision 1); gate R5 runs with
+      # PADDOCK_REVOCATION_ENABLED=false.
+      PADDOCK_REVOCATION_ENABLED: ${PADDOCK_REVOCATION_ENABLED:-true}
 
   paddock-audit-migrate:
     environment:

@@ -74,6 +74,12 @@ func (f *fakeValidator) Validate(_ context.Context, content []byte) error {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newWorldConfig(t, nil)
+}
+
+// newWorldConfig is newWorld with a change of the compiler configuration.
+func newWorldConfig(t *testing.T, change func(*compiler.Config)) *world {
+	t.Helper()
 	ctx := context.Background()
 	env := pgtest.SharedPaddock(t)
 	pool, err := db.NewOrgPool(ctx, env.Compiler, db.Options{})
@@ -105,11 +111,15 @@ func newWorld(t *testing.T) *world {
 		org:   uuid.Must(uuid.NewV7()), g1: uuid.Must(uuid.NewV7()), g2: uuid.Must(uuid.NewV7()),
 	}
 	w.validator = &fakeValidator{}
-	w.comp = compiler.New(pool, signer, w.store, w.cache, compiler.Config{
+	cfg := compiler.Config{
 		AuthentikURL: "https://auth.test/", HimmelblauVersion: "4.0.4", Sudoers: w.validator,
 		Runner: app.NewActionRunner(pool, nil, func(context.Context) string { return "compiler-test" }),
 		Keys:   signer,
-	})
+	}
+	if change != nil {
+		change(&cfg)
+	}
+	w.comp = compiler.New(pool, signer, w.store, w.cache, cfg)
 	w.exec("INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'C', 'active')", w.org, "c"+w.org.String()[24:])
 	w.exec("INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'g1'), ($3, $2, 'g2')", w.g1, w.org, w.g2)
 	return w

@@ -63,7 +63,7 @@ func TestEnrollmentTokensPublishToTheDeviceCache(t *testing.T) {
 	}
 	keys := func(context.Context) ([]protocol.BundleKey, error) { return []protocol.BundleKey{{KeyID: "k1"}}, nil }
 	cache := &fakeTokenCache{}
-	tokens := app.NewEnrollmentTokens(app.NewActionRunner(pool, nil, httpx.RequestID), pool, keys, cache, "https://device.test")
+	tokens := app.NewEnrollmentTokens(app.NewActionRunner(pool, nil, httpx.RequestID), pool, keys, keys, cache, "https://device.test")
 	in := app.TokenInput{Name: "laptops", MaxUses: 5, ExpiresAt: time.Now().Add(time.Hour)}
 
 	created, err := tokens.Create(admin(), in)

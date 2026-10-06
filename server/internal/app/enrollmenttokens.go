@@ -18,7 +18,8 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
-// BundleKeySource returns the public bundle-signing keys devices must trust (bundlesign.PublicKeys).
+// BundleKeySource returns the public bundle-signing keys devices must trust (bundlesign.PublicKeys), or the public
+// revocation-signing keys paddock-revoke must trust (revocationsign.PublicKeys, plan M4c decision 3).
 type BundleKeySource func(ctx context.Context) ([]protocol.BundleKey, error)
 
 // TokenCache is the gateway's enrollment token cache (devicecache.Cache).
@@ -31,16 +32,17 @@ type EnrollmentTokens struct {
 	runner    *ActionRunner
 	org       *db.OrgPool
 	keys      BundleKeySource
+	revoke    BundleKeySource
 	cache     TokenCache
 	deviceURL string
 	now       func() time.Time
 }
 
-// NewEnrollmentTokens creates the use cases. deviceURL is the public device API URL put into enrollment
-// configurations, e.g. https://device.example.org. cache may be nil (the worker's cache sync alone then publishes
-// tokens).
-func NewEnrollmentTokens(runner *ActionRunner, org *db.OrgPool, keys BundleKeySource, cache TokenCache, deviceURL string) *EnrollmentTokens {
-	return &EnrollmentTokens{runner: runner, org: org, keys: keys, cache: cache, deviceURL: deviceURL, now: time.Now}
+// NewEnrollmentTokens creates the use cases. keys and revoke are the bundle and revocation trust anchors of
+// enrollment configurations. deviceURL is the public device API URL put into enrollment configurations, e.g.
+// https://device.example.org. cache may be nil (the worker's cache sync alone then publishes tokens).
+func NewEnrollmentTokens(runner *ActionRunner, org *db.OrgPool, keys, revoke BundleKeySource, cache TokenCache, deviceURL string) *EnrollmentTokens {
+	return &EnrollmentTokens{runner: runner, org: org, keys: keys, revoke: revoke, cache: cache, deviceURL: deviceURL, now: time.Now}
 }
 
 // publish writes a created or revoked token to the gateway's cache right after the commit, so a device can enroll
@@ -137,6 +139,10 @@ func (e *EnrollmentTokens) Create(ctx context.Context, in TokenInput) (CreatedTo
 		if err != nil {
 			return problem.UpstreamUnavailable.WithDetail("bundle-signing keys are not available")
 		}
+		revocationKeys, err := e.revoke(ctx)
+		if err != nil {
+			return problem.UpstreamUnavailable.WithDetail("revocation-signing keys are not available")
+		}
 		secret, hash, err := enrollment.NewSecret()
 		if err != nil {
 			return err
@@ -154,6 +160,7 @@ func (e *EnrollmentTokens) Create(ctx context.Context, in TokenInput) (CreatedTo
 		out.Secret = secret
 		out.Config = protocol.EnrollmentConfig{
 			ServerURL: e.deviceURL, OrganizationID: p.OrganizationID.String(), Token: secret, BundleKeys: keys,
+			RevocationKeys: revocationKeys,
 		}
 		return nil
 	})

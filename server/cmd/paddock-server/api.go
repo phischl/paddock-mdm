@@ -24,6 +24,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
+	"github.com/phischl/paddock-mdm/server/internal/revocationsign"
 	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/web"
@@ -123,10 +124,18 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	oidc := admin.NewOIDC(oidcCfg)
 	stepUp := admin.NewOIDC(stepUpCfg)
 	bundleKeys := func(ctx context.Context) ([]protocol.BundleKey, error) { return bundlesign.PublicKeys(ctx, baoClient) }
+	revocationKeys := func(ctx context.Context) ([]protocol.BundleKey, error) {
+		keys, err := revocationsign.PublicKeys(ctx, baoClient)
+		out := make([]protocol.BundleKey, len(keys))
+		for i, k := range keys {
+			out[i] = protocol.BundleKey{KeyID: k.KeyID, PublicKey: k.PublicKey}
+		}
+		return out, err
+	}
 	ak := authentik.New(authentikURL, authentikToken)
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
-		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, devicecache.New(vk), deviceURL),
+		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
 		Devices:       app.NewDevices(runner, orgPool),
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, ak),

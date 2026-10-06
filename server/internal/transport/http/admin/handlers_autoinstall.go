@@ -11,14 +11,15 @@ import (
 
 func (h *handlers) GenerateAutoinstall(ctx context.Context, req adminapi.GenerateAutoinstallRequestObject) (adminapi.GenerateAutoinstallResponseObject, error) {
 	b := req.Body
-	keys := make([]protocol.BundleKey, len(b.EnrollmentConfig.BundleKeys))
-	for i, k := range b.EnrollmentConfig.BundleKeys {
-		keys[i] = protocol.BundleKey{KeyID: k.KeyId, PublicKey: k.PublicKey}
+	keys := fromAPIKeys(b.EnrollmentConfig.BundleKeys)
+	var revocationKeys []protocol.BundleKey
+	if b.EnrollmentConfig.RevocationKeys != nil {
+		revocationKeys = fromAPIKeys(*b.EnrollmentConfig.RevocationKeys)
 	}
 	out, err := h.autoinstall.Generate(ctx, app.AutoinstallRequest{
 		EnrollmentConfig: protocol.EnrollmentConfig{
 			ServerURL: b.EnrollmentConfig.ServerUrl, OrganizationID: b.EnrollmentConfig.OrganizationId.String(),
-			Token: b.EnrollmentConfig.Token, BundleKeys: keys,
+			Token: b.EnrollmentConfig.Token, BundleKeys: keys, RevocationKeys: revocationKeys,
 		},
 		Release: string(b.Release), Hostname: b.Hostname, Locale: b.Locale, KeyboardLayout: b.KeyboardLayout, Timezone: b.Timezone,
 	})
@@ -26,4 +27,12 @@ func (h *handlers) GenerateAutoinstall(ctx context.Context, req adminapi.Generat
 		return nil, err
 	}
 	return adminapi.GenerateAutoinstall200TextyamlResponse{Body: bytes.NewReader(out), ContentLength: int64(len(out))}, nil
+}
+
+func fromAPIKeys(in []adminapi.BundleKey) []protocol.BundleKey {
+	out := make([]protocol.BundleKey, len(in))
+	for i, k := range in {
+		out[i] = protocol.BundleKey{KeyID: k.KeyId, PublicKey: k.PublicKey}
+	}
+	return out
 }

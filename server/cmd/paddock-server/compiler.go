@@ -33,6 +33,7 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
 	visudo := l.String("PADDOCK_VISUDO", "/usr/sbin/visudo")
 	himmelblau := l.String("PADDOCK_HIMMELBLAU_VERSION", "4.0.4")
+	revocationEnabled := config.RevocationEnabled(l)
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -62,8 +63,9 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	comp := compiler.New(pool, signer, store, devicecache.New(vk), compiler.Config{
 		AuthentikURL: authentikURL, HimmelblauVersion: himmelblau, Sudoers: compiler.Visudo{Path: visudo},
 		// The compiler records only organization events (device.bundle_render_failed): no platform pool.
-		Runner: app.NewActionRunner(pool, nil, httpx.RequestID),
-		Keys:   signer,
+		Runner:            app.NewActionRunner(pool, nil, httpx.RequestID),
+		Keys:              signer,
+		RevocationEnabled: revocationEnabled,
 	})
 
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
@@ -91,6 +93,6 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 			return errors.Join(pool.Ping(ctx), valkey.Ping(ctx, vk), signer.Ping(ctx), store.Ping(ctx), notConnected)
 		})
 	})
-	slog.InfoContext(ctx, "compiler starting", "bucket", bucket, "partitions", len(consumers))
+	slog.InfoContext(ctx, "compiler starting", "bucket", bucket, "partitions", len(consumers), "revocation_enabled", revocationEnabled)
 	return runAll(ctx, fns...)
 }

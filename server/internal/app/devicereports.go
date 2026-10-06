@@ -100,6 +100,8 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventTamperLocalAdminChanged:  audit.CodeDeviceTamperLocalAdminChanged,
 
 	protocol.EventTamperKeyslotChanged: audit.CodeDeviceTamperKeyslotChanged,
+
+	protocol.EventRevocationTrustPinnedTOFU: audit.CodeDeviceRevocationTrustPinnedTOFU,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).

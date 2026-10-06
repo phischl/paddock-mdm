@@ -36,6 +36,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/revocationsign"
 )
 
 var (
@@ -72,8 +73,10 @@ type Config struct {
 	// Runner records device.bundle_render_failed.
 	Runner *app.ActionRunner
 	// Keys reads the public keys of command-signing and escrow-wrap for the keys object of v2 bundles (plan M4a
-	// decision 5).
+	// decision 5) and of revocation-signing for their revocation section (plan M4c decision 3).
 	Keys KeyReader
+	// RevocationEnabled is PADDOCK_REVOCATION_ENABLED, the revocation.enabled of v2 bundles (plan M4c decision 1).
+	RevocationEnabled bool
 }
 
 // KeyReader reads public keys of Transit keys (bao.Client).
@@ -90,7 +93,8 @@ type Compiler struct {
 	cache  *devicecache.Cache
 	cfg    Config
 	now    func() time.Time
-	// keysDigest is the digest of the keys object the last complete reconcile saw (owned by RunReconcile).
+	// keysDigest is the digest of the keys object and the revocation section the last complete reconcile saw (owned
+	// by RunReconcile).
 	keysDigest [32]byte
 }
 
@@ -300,7 +304,7 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event,
 // M3a decision 14a). A sudo entry that fails the server-side check blocks the device's bundle (failure); one with an
 // invalid command is omitted and recorded once the bundle is published.
 func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID, t compileTarget,
-	defs app.ManagedDefinitions, identity *identityLoader, keys *bundle.Keys) (rendered, bool, *renderFailure, error) {
+	defs app.ManagedDefinitions, identity *identityLoader, keys v2Trust) (rendered, bool, *renderFailure, error) {
 	if !device.Compiled(t.state) {
 		return rendered{}, false, nil, nil
 	}
@@ -314,9 +318,9 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	}
 	schema := bundle.SchemaVersion
 	var omitted []omittedEntry
-	var v2Keys *bundle.Keys
+	var v2 v2Trust
 	if t.v2 {
-		v2Keys = keys
+		v2 = keys
 		id, err := identity.get(ctx)
 		if err != nil {
 			return rendered{}, false, nil, err
@@ -333,7 +337,8 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	b := bundle.Bundle{
 		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
-		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources, Keys: v2Keys,
+		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources, Keys: v2.Keys,
+		Revocation: v2.Revocation,
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -354,18 +359,36 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted}, true, nil, nil
 }
 
-// keys returns the keys object of v2 bundles: every version of command-signing and the latest of escrow-wrap (plan
-// M4a decision 5).
-func (c *Compiler) keys(ctx context.Context) (*bundle.Keys, error) {
+// v2Trust are the key material and the revocation section of v2 bundles.
+type v2Trust struct {
+	Keys       *bundle.Keys       `json:"keys"`
+	Revocation *bundle.Revocation `json:"revocation"`
+}
+
+// keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap
+// (plan M4a decision 5) — and their revocation section: the feature flag and every version of revocation-signing
+// (plan M4c decisions 1 and 3).
+func (c *Compiler) keys(ctx context.Context) (v2Trust, error) {
 	commandKeys, err := commandsign.PublicKeys(ctx, c.cfg.Keys)
 	if err != nil {
-		return nil, err
+		return v2Trust{}, err
 	}
 	version, pem, err := c.cfg.Keys.LatestPublicKeyPEM(ctx, escrow.KeyName)
 	if err != nil {
-		return nil, fmt.Errorf("escrow-wrap public key: %w", err)
+		return v2Trust{}, fmt.Errorf("escrow-wrap public key: %w", err)
 	}
-	return &bundle.Keys{CommandSigning: commandKeys, EscrowWrap: &bundle.EncryptionKey{KeyID: escrow.KeyID(version), PublicKeyPEM: pem}}, nil
+	revocationKeys, err := revocationsign.PublicKeys(ctx, c.cfg.Keys)
+	if err != nil {
+		return v2Trust{}, err
+	}
+	rev := &bundle.Revocation{Enabled: c.cfg.RevocationEnabled, Keys: make([]bundle.SigningKey, len(revocationKeys))}
+	for i, k := range revocationKeys {
+		rev.Keys[i] = bundle.SigningKey{KeyID: k.KeyID, PublicKey: k.PublicKey}
+	}
+	return v2Trust{
+		Keys:       &bundle.Keys{CommandSigning: commandKeys, EscrowWrap: &bundle.EncryptionKey{KeyID: escrow.KeyID(version), PublicKeyPEM: pem}},
+		Revocation: rev,
+	}, nil
 }
 
 // publish signs all bundles in one batch, then per device increments bundle_seq, records the bundle row and uploads

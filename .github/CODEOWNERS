@@ -1,0 +1,6 @@
+# Code owners (plan M4c decision 4). The revocation path is under the two-person rule (design contract 10): every
+# change needs the review of the revocation reviewers, and the branch protection of main requires two approving
+# reviews from code owners for these paths. @paddock-mdm/revocation-reviewers is a placeholder team; replace it with
+# the real team when the repository moves to its organization.
+/agent/internal/revoke/     @paddock-mdm/revocation-reviewers
+/agent/cmd/paddock-revoke/  @paddock-mdm/revocation-reviewers

@@ -2679,7 +2679,10 @@ components:
         enrollment_config: { $ref: "#/components/schemas/EnrollmentConfig" }
     EnrollmentConfig:
       type: object
-      description: The document a device needs to enroll; it pins the bundle-signing keys as trust anchor.
+      description: >-
+        The document a device needs to enroll; it pins the bundle-signing keys as trust anchor and the
+        revocation-signing keys as trust anchor of paddock-revoke. Configurations created before revocation existed
+        have no revocation_keys.
       required: [server_url, organization_id, token, bundle_keys]
       properties:
         server_url: { type: string }
@@ -2687,6 +2690,10 @@ components:
         token: { type: string }
         bundle_keys:
           type: array
+          items: { $ref: "#/components/schemas/BundleKey" }
+        revocation_keys:
+          type: array
+          description: 'The revocation-signing public keys, e.g. key_id "revocation-signing:v1".'
           items: { $ref: "#/components/schemas/BundleKey" }
     AutoinstallRequest:
       type: object

@@ -274,6 +274,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // TrustKey is the bundle-signing key the fake trusts (seeded, so tests can sign bundles).
 var TrustKey = ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 
+// RevocationKey is the revocation-signing key of the fake's enrollment configuration (seeded).
+var RevocationKey = ed25519.NewKeyFromSeed([]byte("paddock-testgw-revocation-key-32"))
+
 // OrgID and DeviceID of the fake enrollment.
 const (
 	OrgID    = "0190f000-0000-7000-8000-00000000000a"
@@ -285,6 +288,8 @@ func (g *Gateway) EnrollmentConfig() protocol.EnrollmentConfig {
 	return protocol.EnrollmentConfig{
 		ServerURL: g.URL, OrganizationID: OrgID, Token: "secret-token",
 		BundleKeys: []protocol.BundleKey{{KeyID: "bundle-signing:v1", PublicKey: base64.StdEncoding.EncodeToString(TrustKey.Public().(ed25519.PublicKey))}},
+		RevocationKeys: []protocol.BundleKey{{KeyID: "revocation-signing:v1",
+			PublicKey: base64.StdEncoding.EncodeToString(RevocationKey.Public().(ed25519.PublicKey))}},
 	}
 }
 
