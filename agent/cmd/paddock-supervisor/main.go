@@ -13,9 +13,9 @@ import (
 
 	"aead.dev/minisign"
 
-	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
-	"github.com/paddock-mdm/paddock/agent/internal/paths"
-	"github.com/paddock-mdm/paddock/agent/internal/supervisor"
+	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/supervisor"
 )
 
 // releasePublicKey is the minisign public key of agent releases, set at build time with

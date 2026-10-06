@@ -18,16 +18,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/client"
-	"github.com/paddock-mdm/paddock/agent/internal/config"
-	"github.com/paddock-mdm/paddock/agent/internal/identity"
-	"github.com/paddock-mdm/paddock/agent/internal/paths"
-	"github.com/paddock-mdm/paddock/agent/internal/state"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/pkg/dsse"
-	"github.com/paddock-mdm/paddock/pkg/escrow"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/client"
+	"github.com/phischl/paddock-mdm/agent/internal/config"
+	"github.com/phischl/paddock-mdm/agent/internal/identity"
+	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Gateway is the fake. Lock Mu when changing the programmable fields while requests may run.

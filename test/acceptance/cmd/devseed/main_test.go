@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // fakeAuthentik answers blueprint lookups from a table; paths without an entry are not discovered yet.

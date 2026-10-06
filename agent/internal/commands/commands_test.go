@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/commands"
-	"github.com/paddock-mdm/paddock/agent/internal/testgw"
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/commands"
+	"github.com/phischl/paddock-mdm/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 func TestRunMarksBeforeExecutingAndPrunes(t *testing.T) {

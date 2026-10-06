@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // groupMembers returns, per privileged group that exists on the device, the members that are no break-glass account

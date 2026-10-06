@@ -6,8 +6,8 @@ package escrowreader
 import (
 	"context"
 
-	"github.com/paddock-mdm/paddock/pkg/escrow"
-	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 )
 
 // Reader decrypts escrowed secrets.

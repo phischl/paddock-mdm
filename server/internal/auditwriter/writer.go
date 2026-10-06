@@ -18,10 +18,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/auditpg/auditstore"
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/platform/objectstore"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/auditpg/auditstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 )
 
 // MinRetentionDays is the default retention of the audit bucket (rustfs-audit-bootstrap.sh). Shorter per-object

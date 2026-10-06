@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/paddock-mdm/paddock/server/internal/config"
-	"github.com/paddock-mdm/paddock/server/internal/platform/migrate"
+	"github.com/phischl/paddock-mdm/server/internal/config"
+	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"
 )
 
 const usage = `usage: paddock-server <command> [arguments] [+ <command> [arguments] ...]

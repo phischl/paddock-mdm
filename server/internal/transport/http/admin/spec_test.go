@@ -9,7 +9,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 )
 
 func loadSpec(t *testing.T) *openapi3.T {

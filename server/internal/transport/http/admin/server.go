@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/platform/httpx"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
 // Deps are the dependencies of the admin HTTP surface.

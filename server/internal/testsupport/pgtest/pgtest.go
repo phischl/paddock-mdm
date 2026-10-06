@@ -15,7 +15,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/paddock-mdm/paddock/server/internal/platform/migrate"
+	"github.com/phischl/paddock-mdm/server/internal/platform/migrate"
 )
 
 const superPassword = "test-superuser"

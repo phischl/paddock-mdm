@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 func TestEventParams(t *testing.T) {

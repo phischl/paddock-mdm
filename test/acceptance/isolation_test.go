@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // TestOrganizationIsolation is gate A2 (plan M0 §8, AC2): every /api/v1 operation called by an acme admin with

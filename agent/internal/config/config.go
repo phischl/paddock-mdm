@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
-	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Drift interval bounds (plan M2b decision 11).

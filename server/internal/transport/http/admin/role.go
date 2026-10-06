@@ -3,8 +3,8 @@ package admin
 import (
 	"slices"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
-	"github.com/paddock-mdm/paddock/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
 // RoleResolution is the result of mapping the groups claim to a portal role (plan M0 §6.7).

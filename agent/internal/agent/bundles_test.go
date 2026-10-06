@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/apply"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile/fakesys"
-	"github.com/paddock-mdm/paddock/agent/internal/state"
-	"github.com/paddock-mdm/paddock/agent/internal/testgw"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/apply"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // withSystem gives the agent an applier on a fake system with timesyncd running.

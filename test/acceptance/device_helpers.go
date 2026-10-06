@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/test/acceptance/devicesim"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // createdToken is the answer of POST /api/v1/enrollment-tokens.

@@ -11,8 +11,8 @@ import (
 	"aead.dev/minisign"
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // releaseKey is the development release key (make dev-release-key).

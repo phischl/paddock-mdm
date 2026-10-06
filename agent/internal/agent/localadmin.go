@@ -6,14 +6,14 @@ import (
 	"log/slog"
 	"slices"
 
-	"github.com/paddock-mdm/paddock/agent/internal/commands"
-	"github.com/paddock-mdm/paddock/agent/internal/localadmin"
-	"github.com/paddock-mdm/paddock/agent/internal/state"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/pkg/escrow"
-	"github.com/paddock-mdm/paddock/pkg/policy"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/commands"
+	"github.com/phischl/paddock-mdm/agent/internal/localadmin"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/policy"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // escrowClient binds the escrow endpoints of the device API to this device.

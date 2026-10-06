@@ -10,11 +10,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/escrow"
-	"github.com/paddock-mdm/paddock/pkg/sudoers"
-	"github.com/paddock-mdm/paddock/server/internal/compiler"
-	"github.com/paddock-mdm/paddock/server/internal/domain/statechange"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/server/internal/compiler"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 )
 
 // v2Device is an active device whose agent reports schema_versions.

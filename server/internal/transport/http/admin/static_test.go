@@ -8,7 +8,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 )
 
 const (

@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
-	"github.com/paddock-mdm/paddock/agent/internal/testgw"
-	"github.com/paddock-mdm/paddock/agent/internal/update"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/agent/internal/update"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 func offer(g *testgw.Gateway, version string, bin []byte) {

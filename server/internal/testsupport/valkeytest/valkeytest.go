@@ -10,8 +10,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 	vk "github.com/valkey-io/valkey-go"
 
-	"github.com/paddock-mdm/paddock/server/internal/platform/valkey"
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/pgtest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
 // Password is the password of the test server.

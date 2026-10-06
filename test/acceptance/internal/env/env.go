@@ -16,8 +16,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/authflow"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/authflow"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // Dev users of authentik/dev/paddock-dev.yaml and their password files in .secrets/.

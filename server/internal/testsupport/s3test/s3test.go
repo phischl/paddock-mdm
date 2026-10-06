@@ -15,7 +15,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/paddock-mdm/paddock/server/internal/testsupport/pgtest"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
 // Root credentials of the throwaway test RustFS.

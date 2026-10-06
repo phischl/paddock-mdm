@@ -11,13 +11,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/auditwriter"
-	"github.com/paddock-mdm/paddock/server/internal/config"
-	"github.com/paddock-mdm/paddock/server/internal/platform/bao"
-	"github.com/paddock-mdm/paddock/server/internal/platform/db"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
-	"github.com/paddock-mdm/paddock/server/internal/platform/objectstore"
-	"github.com/paddock-mdm/paddock/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
+	"github.com/phischl/paddock-mdm/server/internal/config"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
+	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 )
 
 // auditDeps are the dependencies shared by serve audit-writer, audit seal and audit verify.

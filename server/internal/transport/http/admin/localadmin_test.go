@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/principal"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
 // fakeDecrypter "decrypts" a ciphertext into "pw-" plus the ciphertext; "broken" fails like a sealed OpenBao.

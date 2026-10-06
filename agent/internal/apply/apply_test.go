@@ -6,10 +6,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/agent/internal/apply"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile/fakesys"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/phischl/paddock-mdm/agent/internal/apply"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 func newBundle(t *testing.T, version int64, files map[string]string, units ...bundle.UnitSpec) *bundle.Bundle {

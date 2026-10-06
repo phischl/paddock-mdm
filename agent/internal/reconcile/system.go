@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 )
 
 // commandTimeout bounds every call of systemctl, timedatectl, loginctl, getent, sudo, visudo, gpasswd and dpkg-query.

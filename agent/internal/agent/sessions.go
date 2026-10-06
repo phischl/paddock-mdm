@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/sessions"
-	"github.com/paddock-mdm/paddock/agent/internal/state"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/sessions"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // SessionPoll is the interval at which the agent reads the logind sessions for session.login (plan M3b decision

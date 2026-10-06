@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/pkg/sudoers"
 )
 
 // Class is the privilege class of a profile: none < restricted < full.

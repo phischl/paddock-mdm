@@ -6,8 +6,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/agent/internal/commands"
-	"github.com/paddock-mdm/paddock/pkg/command"
+	"github.com/phischl/paddock-mdm/agent/internal/commands"
+	"github.com/phischl/paddock-mdm/pkg/command"
 )
 
 // TestNoopInDevelopmentBuilds: development builds (TAGS=paddock_dev) know the noop command; release builds do not.

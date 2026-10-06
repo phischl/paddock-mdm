@@ -13,7 +13,7 @@ import (
 // TestImportAllowList enforces plan M2a decision 5: code in pkg depends only on the standard library, other pkg
 // packages and github.com/gowebpki/jcs, and never on server code.
 func TestImportAllowList(t *testing.T) {
-	const self = "github.com/paddock-mdm/paddock/pkg"
+	const self = "github.com/phischl/paddock-mdm/pkg"
 	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
 			return err

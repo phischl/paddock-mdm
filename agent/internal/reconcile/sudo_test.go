@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile/fakesys"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/sudoers"
 )
 
 const sudoersFile = "Defaults env_reset\nroot ALL=(ALL:ALL) ALL\n@includedir /etc/sudoers.d\n"

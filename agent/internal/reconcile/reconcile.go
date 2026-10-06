@@ -7,7 +7,7 @@ import (
 	"context"
 	"io/fs"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 // Status is the outcome of Apply for one resource.

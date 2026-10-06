@@ -16,7 +16,7 @@ description: |-
   signed device configuration and corrects drift. Run
   `paddockd enroll --config <file>` once after installation.
 vendor: Paddock
-homepage: https://github.com/paddock-mdm/paddock
+homepage: https://github.com/phischl/paddock-mdm
 license: MIT
 depends:
   - paddock-supervisor

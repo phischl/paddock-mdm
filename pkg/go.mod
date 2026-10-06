@@ -1,4 +1,4 @@
-module github.com/paddock-mdm/paddock/pkg
+module github.com/phischl/paddock-mdm/pkg
 
 go 1.27.0
 

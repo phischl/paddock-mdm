@@ -1,4 +1,4 @@
-module github.com/paddock-mdm/paddock/server
+module github.com/phischl/paddock-mdm/server
 
 go 1.27.0
 
@@ -17,7 +17,7 @@ require (
 	github.com/klauspost/compress v1.20.1
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/openbao/openbao/api/v2 v2.7.1
-	github.com/paddock-mdm/paddock/pkg v0.0.0
+	github.com/phischl/paddock-mdm/pkg v0.0.0
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rabbitmq/amqp091-go v1.15.0
@@ -170,4 +170,4 @@ tool (
 	golang.org/x/vuln/cmd/govulncheck
 )
 
-replace github.com/paddock-mdm/paddock/pkg => ../pkg
+replace github.com/phischl/paddock-mdm/pkg => ../pkg

@@ -5,12 +5,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/domain/loginsettings"
-	"github.com/paddock-mdm/paddock/server/internal/domain/privilege"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/listing"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/loginsettings"
+	"github.com/phischl/paddock-mdm/server/internal/domain/privilege"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
 
 // List definitions of the M3a collection endpoints; TestListSpecsMatchContract keeps them equal to x-paddock-list.

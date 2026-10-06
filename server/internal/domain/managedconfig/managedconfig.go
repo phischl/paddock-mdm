@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 // MaxContentBytes bounds the content of a managed file.

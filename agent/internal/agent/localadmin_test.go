@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/localadmin"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile/fakesys"
-	"github.com/paddock-mdm/paddock/agent/internal/testgw"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/localadmin"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // localAdminBundle is an applied bundle with a login resource that manages paddock-admin and the escrow and command

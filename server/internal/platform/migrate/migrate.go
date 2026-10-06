@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"github.com/paddock-mdm/paddock/server/migrations"
+	"github.com/phischl/paddock-mdm/server/migrations"
 )
 
 // Paddock migrates database paddock. dsn must belong to paddock_owner.

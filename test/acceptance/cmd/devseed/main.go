@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/authflow"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/authflow"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // blueprintDirs maps the Paddock blueprint directories of the repository to their mount points below /blueprints in

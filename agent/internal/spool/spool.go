@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // DefaultCap is the spool size limit.

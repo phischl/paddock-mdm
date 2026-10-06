@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // account is the local administrator as the device has it.

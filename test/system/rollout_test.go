@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/portal"
+	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
 
 // TestRolloutAutoStop is gate S5 of plan M2b §8: a broken release rolled out to all devices with

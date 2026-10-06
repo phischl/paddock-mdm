@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // TestLoginNotice (plan M4a decision 19): the notice reaches GDM (dconf keyfile and dconf update), the text

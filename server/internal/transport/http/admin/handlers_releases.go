@@ -5,12 +5,12 @@ import (
 	"io"
 	"net/url"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/app"
-	"github.com/paddock-mdm/paddock/server/internal/domain/agentrelease"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/adminapi"
-	"github.com/paddock-mdm/paddock/server/internal/transport/http/admin/listing"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
 
 // agentReleaseList is the list definition of GET /api/platform/v1/agent-releases (plan M2b decision 20).

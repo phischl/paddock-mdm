@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/client"
-	"github.com/paddock-mdm/paddock/agent/internal/state"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/client"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // handleCommands executes the commands of a check-in with the command keys of the applied bundle (plan M4a

@@ -13,7 +13,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/pkg/canonicaljson"
+	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
 )
 
 // Classes of an entry. Entries exist only for users with a class other than none.

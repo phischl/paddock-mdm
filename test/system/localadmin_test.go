@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/portal"
+	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
 
 // localAdmin is the managed local administrator account of the dev organization acme (its default name).

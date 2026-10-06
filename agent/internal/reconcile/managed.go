@@ -7,7 +7,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/paddock-mdm/paddock/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 )
 
 // Managed is managed.json: every file Paddock wrote, with the hex SHA-256 of the content it wrote (plan M2b

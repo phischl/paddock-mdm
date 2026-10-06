@@ -107,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** Go module path is `github.com/phischl/paddock-mdm/…` (`pkg`, `server`, `agent`, `test/acceptance`, `test/system`) instead of `github.com/paddock-mdm/paddock/…`; code importing the modules and builds that set `-X github.com/paddock-mdm/paddock/agent/internal/buildinfo.Version` must use the new path (M4a.1 step 1).
 - **BREAKING:** `PUT /api/v1/settings/login` requires `notice_text` (M4a step 5).
 - **BREAKING:** `paddock-api` requires the credential of the OpenBao AppRole `paddock-escrow-reader` (`PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE`, `PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE`), used only to decrypt for a reveal; `PUT /api/v1/settings/login` requires `local_admin_username` and `local_admin_rotation_days` (M4a step 4).
 - **BREAKING:** OpenBao needs the Transit key `escrow-wrap` (`type=rsa-4096 exportable=false`), the `paddock-compiler` policy `read` on `transit/keys/escrow-wrap`, and the AppRole `paddock-escrow-reader` (`update` on `transit/decrypt/escrow-wrap`); the RabbitMQ worker user must also read `ingest.escrow`. Production: follow `docs/operations/openbao.md`; development: `make dev-secrets && make up` and restart RabbitMQ (M4a step 3).

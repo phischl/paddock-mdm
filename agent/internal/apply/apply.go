@@ -11,8 +11,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 // SchemaVersions are the bundle schema versions this agent verifies and applies, reported in every check-in and used

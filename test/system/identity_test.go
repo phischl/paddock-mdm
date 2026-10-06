@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/dsse"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/pkg/sudoers"
-	"github.com/paddock-mdm/paddock/test/acceptance/portal"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
 
 // directoryUser is an Authentik user of the identity gates with password and TOTP (enrolled at the first approval).

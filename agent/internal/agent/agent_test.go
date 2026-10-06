@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/apply"
-	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
-	"github.com/paddock-mdm/paddock/agent/internal/config"
-	"github.com/paddock-mdm/paddock/agent/internal/health"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile"
-	"github.com/paddock-mdm/paddock/agent/internal/reconcile/fakesys"
-	"github.com/paddock-mdm/paddock/agent/internal/state"
-	"github.com/paddock-mdm/paddock/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/agent/internal/apply"
+	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/config"
+	"github.com/phischl/paddock-mdm/agent/internal/health"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 )
 
 func newAgent(t *testing.T, g *testgw.Gateway) *Agent {

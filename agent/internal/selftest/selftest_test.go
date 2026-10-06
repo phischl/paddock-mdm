@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/paths"
-	"github.com/paddock-mdm/paddock/agent/internal/testgw"
-	"github.com/paddock-mdm/paddock/pkg/bundle"
+	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 func result(r Report, name string) string {

@@ -10,12 +10,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/server/internal/devicecache"
-	domaindevice "github.com/paddock-mdm/paddock/server/internal/domain/device"
-	"github.com/paddock-mdm/paddock/server/internal/domain/enrollment"
-	"github.com/paddock-mdm/paddock/server/internal/ingest"
-	"github.com/paddock-mdm/paddock/server/internal/platform/mq"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	domaindevice "github.com/phischl/paddock-mdm/server/internal/domain/device"
+	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
+	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
 )
 
 // enroll accepts an enrollment request: proof of possession of the new key, token lookup in et:, enr: written as

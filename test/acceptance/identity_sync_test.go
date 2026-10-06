@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // syncRound bounds the wait for one identity sync round of the worker (60 s in the development stack) plus the

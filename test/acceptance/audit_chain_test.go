@@ -10,8 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/stack"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 var objectKeyPattern = regexp.MustCompile(`^org/([0-9a-f-]{36})/(\d{4}/\d{2}/\d{2}/\d{2}-[0-9a-f-]{36}\.jsonl\.zst|manifests/\d{4}-\d{2}-\d{2}\.json)$`)

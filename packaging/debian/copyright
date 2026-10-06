@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: paddock
-Source: https://github.com/paddock-mdm/paddock
+Source: https://github.com/phischl/paddock-mdm
 
 Files: *
 Copyright: 2026 Paddock contributors

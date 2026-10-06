@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"pgregory.net/rapid"
 
-	"github.com/paddock-mdm/paddock/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/pkg/sudoers"
 )
 
 var (

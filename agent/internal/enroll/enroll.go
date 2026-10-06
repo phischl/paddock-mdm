@@ -15,13 +15,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/agent/internal/buildinfo"
-	"github.com/paddock-mdm/paddock/agent/internal/client"
-	"github.com/paddock-mdm/paddock/agent/internal/config"
-	"github.com/paddock-mdm/paddock/agent/internal/identity"
-	"github.com/paddock-mdm/paddock/agent/internal/paths"
-	"github.com/paddock-mdm/paddock/agent/internal/state"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/client"
+	"github.com/phischl/paddock-mdm/agent/internal/config"
+	"github.com/phischl/paddock-mdm/agent/internal/identity"
+	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // Exit codes of `paddockd enroll`.

@@ -7,8 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/paddock-mdm/paddock/pkg/bundle"
-	"github.com/paddock-mdm/paddock/pkg/policy"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 )
 
 // Unit reconciles systemd unit resources: enabled and active state.

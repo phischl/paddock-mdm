@@ -9,10 +9,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/adapters/postgres/pgstore"
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
-	"github.com/paddock-mdm/paddock/server/internal/domain/privilege"
-	"github.com/paddock-mdm/paddock/server/internal/domain/usergroup"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/domain/privilege"
+	"github.com/phischl/paddock-mdm/server/internal/domain/usergroup"
 )
 
 // Identity is everything of one organization that effective profiles and login allow lists depend on: users, groups

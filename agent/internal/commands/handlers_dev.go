@@ -5,8 +5,8 @@ package commands
 import (
 	"context"
 
-	"github.com/paddock-mdm/paddock/pkg/command"
-	"github.com/paddock-mdm/paddock/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 // TypeNoop is a command that does nothing; it exists only in development builds (TAGS=paddock_dev) to exercise the

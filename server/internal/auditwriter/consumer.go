@@ -9,7 +9,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 )
 
 // Batching parameters (plan M0 step 6).

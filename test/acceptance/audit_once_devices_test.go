@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/pkg/protocol"
-	"github.com/paddock-mdm/paddock/test/acceptance/devicesim"
-	"github.com/paddock-mdm/paddock/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
 // pendingDevice enrolls a device with a manual-approval token and returns its ID.

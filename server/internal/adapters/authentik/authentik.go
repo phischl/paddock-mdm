@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paddock-mdm/paddock/server/internal/domain/organization"
-	"github.com/paddock-mdm/paddock/server/internal/ports"
-	"github.com/paddock-mdm/paddock/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // Client talks to Authentik with the paddock-service API token.

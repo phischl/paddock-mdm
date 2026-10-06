@@ -9,7 +9,7 @@ import (
 	"aead.dev/minisign"
 	"github.com/google/uuid"
 
-	"github.com/paddock-mdm/paddock/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
 func TestAgentReleasesAPI(t *testing.T) {
