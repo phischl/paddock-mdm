@@ -41,8 +41,9 @@ type LUKSEscrow interface {
 
 // LUKS is the luks reconciler (plan M4b decisions 8–12) of a device installed with the Paddock autoinstall: once the
 // first-boot disk setup is done it enrolls a recovery key, escrows it and the LUKS header, removes the install
-// passphrase and then watches the keyslots. Each pass does at most one change; it never wipes a keyslot it did not
-// create, except the install passphrase. It is used by one goroutine (the agent's run loop).
+// passphrase and then watches the keyslots. Each pass does at most one change. It removes only the keyslots it
+// recorded — the install passphrase's, found before the first change, and the one its recovery key was enrolled in —
+// never another keyslot of the same kind (plan M4b.1 decision 3). It is used by one goroutine (the agent's run loop).
 type LUKS struct {
 	Tools  luks.Tools
 	Layout paths.Layout
@@ -142,29 +143,65 @@ func (m *LUKS) watch(kinds []string) {
 }
 
 // step takes the next step: replace a recovery key that was lost before the server stored it, enroll and escrow a
-// recovery key, escrow the current header, or remove the install passphrase.
+// recovery key, escrow the current header, or remove the install passphrase. The install passphrase's keyslot is
+// recorded first.
 func (m *LUKS) step(ctx context.Context, device string, md luks.Metadata, passphrase bool, keys *bundle.Keys) error {
 	keyFile := m.Layout.InstallPassphrase()
+	if passphrase && m.State.PassphraseSlot == nil {
+		if err := m.recordPassphraseSlot(ctx, device, keyFile, md); err != nil {
+			return err
+		}
+	}
+	own := m.State.RecoverySlot != nil && md.Kind(*m.State.RecoverySlot) == luks.KindRecovery
 	switch {
-	case md.Has(luks.KindRecovery) && m.State.RecoveryAttempted > m.State.RecoveryStored && passphrase:
+	case own && m.State.RecoveryAttempted > m.State.RecoveryStored && passphrase:
 		// Enrolled by this agent, but the key was lost (restart, failed escrow) before the server stored it.
-		slog.WarnContext(ctx, "replacing a recovery key the server never stored", "generation", m.State.RecoveryAttempted)
-		return m.change(ctx, device, func() error { return luks.Wipe(ctx, m.Tools, device, keyFile, luks.KindRecovery) })
-	case !md.Has(luks.KindRecovery) && passphrase:
-		return m.escrowRecovery(ctx, device, keyFile, keys)
+		slog.WarnContext(ctx, "replacing a recovery key the server never stored", "generation", m.State.RecoveryAttempted,
+			"keyslot", *m.State.RecoverySlot)
+		return m.change(ctx, device, func() error {
+			if err := m.wipe(ctx, device, keyFile, md, *m.State.RecoverySlot, luks.KindRecovery); err != nil {
+				return err
+			}
+			m.State.RecoverySlot = nil
+			return nil
+		})
+	case !own && passphrase:
+		return m.escrowRecovery(ctx, device, keyFile, md, keys)
 	case m.State.RecoveryStored == 0:
 		return nil // a recovery keyslot this agent did not create: nothing to escrow
 	case digest(md) != m.State.HeaderDigest:
 		return m.escrowHeader(ctx, device, md, keys)
 	case passphrase && md.Has(luks.KindTPM2PIN):
-		return m.removePassphrase(ctx, device, keyFile)
+		return m.removePassphrase(ctx, device, keyFile, md)
 	}
 	return nil
 }
 
-// escrowRecovery enrolls a recovery key and uploads it encrypted to escrow-wrap; the key stays in memory until the
-// server stored it.
-func (m *LUKS) escrowRecovery(ctx context.Context, device, keyFile string, keys *bundle.Keys) error {
+// recordPassphraseSlot records the keyslot the install passphrase opens.
+func (m *LUKS) recordPassphraseSlot(ctx context.Context, device, keyFile string, md luks.Metadata) error {
+	slot, err := luks.KeySlot(ctx, m.Tools, device, keyFile)
+	if err != nil {
+		return fmt.Errorf("find the keyslot of the install passphrase: %w", err)
+	}
+	if kind := md.Kind(slot); kind != luks.KindPassword {
+		return fmt.Errorf("the install passphrase opens keyslot %d of kind %q, not a passphrase keyslot", slot, kind)
+	}
+	m.State.PassphraseSlot = &slot
+	slog.InfoContext(ctx, "install passphrase keyslot recorded", "keyslot", slot)
+	return m.Save()
+}
+
+// wipe removes the recorded keyslot slot if it still is of kind.
+func (m *LUKS) wipe(ctx context.Context, device, keyFile string, md luks.Metadata, slot int, kind string) error {
+	if got := md.Kind(slot); got != kind {
+		return fmt.Errorf("keyslot %d is %q, not the recorded %s keyslot; it is not removed", slot, got, kind)
+	}
+	return luks.WipeSlot(ctx, m.Tools, device, keyFile, slot)
+}
+
+// escrowRecovery enrolls a recovery key, records its keyslot (the recovery keyslot that was not there before) and
+// uploads the key encrypted to escrow-wrap; the key stays in memory until the server stored it.
+func (m *LUKS) escrowRecovery(ctx context.Context, device, keyFile string, before luks.Metadata, keys *bundle.Keys) error {
 	pub, version, err := escrowKey(keys)
 	if err != nil {
 		return err
@@ -179,6 +216,10 @@ func (m *LUKS) escrowRecovery(ctx context.Context, device, keyFile string, keys 
 		key, err = luks.EnrollRecovery(ctx, m.Tools, device, keyFile)
 		return err
 	}); err != nil {
+		return err
+	}
+	if err := m.recordRecoverySlot(ctx, device, before); err != nil {
+		clear(key)
 		return err
 	}
 	ct, err := escrow.Encrypt(pub, key)
@@ -200,6 +241,25 @@ func (m *LUKS) escrowRecovery(ctx context.Context, device, keyFile string, keys 
 	slog.InfoContext(ctx, "recovery key enrolled and uploaded for escrow", "generation", generation)
 	m.start(luksEscrow{kind: escrow.KindLUKSRecoveryKey, escrowID: id, generation: generation, key: key})
 	return nil
+}
+
+// recordRecoverySlot records the one recovery keyslot that the enrollment added to before.
+func (m *LUKS) recordRecoverySlot(ctx context.Context, device string, before luks.Metadata) error {
+	after, err := luks.Dump(ctx, m.Tools, device)
+	if err != nil {
+		return err
+	}
+	var added []int
+	for _, slot := range after.Slots(luks.KindRecovery) {
+		if before.Kind(slot) != luks.KindRecovery {
+			added = append(added, slot)
+		}
+	}
+	if len(added) != 1 {
+		return fmt.Errorf("the recovery key enrollment added the recovery keyslots %v, not exactly one", added)
+	}
+	m.State.RecoverySlot = &added[0]
+	return m.Save()
 }
 
 // escrowHeader backs the header up to tmpfs, seals it to escrow-wrap and uploads it; the backup file is removed at
@@ -247,23 +307,29 @@ func (m *LUKS) escrowHeader(ctx context.Context, device string, md luks.Metadata
 	return nil
 }
 
-// removePassphrase wipes the install passphrase keyslot and, once exactly TPM2+PIN and the recovery key remain,
-// deletes the passphrase file (plan M4b decision 11).
-func (m *LUKS) removePassphrase(ctx context.Context, device, keyFile string) error {
-	if err := m.change(ctx, device, func() error { return luks.Wipe(ctx, m.Tools, device, keyFile, luks.KindPassword) }); err != nil {
+// removePassphrase wipes the install passphrase's keyslot and, once it is gone and TPM2+PIN and the agent's recovery
+// key remain, deletes the passphrase file (plan M4b decision 11). Other keyslots stay; if the result is not exactly
+// TPM2+PIN and the recovery key, the extra keyslots are reported as tamper.keyslot_changed (plan M4b.1 decision 3).
+func (m *LUKS) removePassphrase(ctx context.Context, device, keyFile string, before luks.Metadata) error {
+	slot := *m.State.PassphraseSlot
+	if err := m.change(ctx, device, func() error { return m.wipe(ctx, device, keyFile, before, slot, luks.KindPassword) }); err != nil {
 		return err
 	}
 	md, err := luks.Dump(ctx, m.Tools, device)
 	if err != nil {
 		return err
 	}
-	if !slices.Equal(md.Kinds(), compliantKeyslots) {
-		return fmt.Errorf("after removing the install passphrase the keyslots are %v, not %v", md.Kinds(), compliantKeyslots)
+	if md.Kind(slot) != "" || !md.Has(luks.KindTPM2PIN) || m.State.RecoverySlot == nil || md.Kind(*m.State.RecoverySlot) != luks.KindRecovery {
+		return fmt.Errorf("after removing the install passphrase (keyslot %d) the keyslots are %v", slot, md.Kinds())
 	}
 	if err := shred(keyFile); err != nil {
 		return fmt.Errorf("delete the install passphrase: %w", err)
 	}
-	slog.InfoContext(ctx, "install passphrase removed; the disk unlocks with TPM2+PIN or the recovery key")
+	slog.InfoContext(ctx, "install passphrase removed; the disk unlocks with TPM2+PIN or the recovery key", "keyslot", slot)
+	if kinds := md.Kinds(); !slices.Equal(kinds, compliantKeyslots) {
+		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Before: compliantKeyslots, After: kinds})
+		slog.WarnContext(ctx, "LUKS keyslots not created by Paddock are kept", "expected", compliantKeyslots, "keyslots", kinds)
+	}
 	return nil
 }
 

@@ -138,27 +138,52 @@ func Version(ctx context.Context, t Tools, device string) (int, error) {
 func (m Metadata) Kinds() []string {
 	kinds := make([]string, 0, len(m.Keyslots))
 	for slot := range m.Keyslots {
-		kind := KindPassword
-		for _, tok := range m.Tokens {
-			if !slices.Contains(tok.Keyslots, slot) {
-				continue
-			}
-			switch tok.Type {
-			case "systemd-tpm2":
-				kind = KindTPM2
-				if tok.TPM2PIN {
-					kind = KindTPM2PIN
-				}
-			case "systemd-recovery":
-				kind = KindRecovery
-			default:
-				kind = strings.TrimPrefix(tok.Type, "systemd-")
-			}
-		}
-		kinds = append(kinds, kind)
+		kinds = append(kinds, m.kind(slot))
 	}
 	sort.Strings(kinds)
 	return kinds
+}
+
+// Kind returns the kind of keyslot slot, "" if the slot is not in use.
+func (m Metadata) Kind(slot int) string {
+	key := strconv.Itoa(slot)
+	if _, ok := m.Keyslots[key]; !ok {
+		return ""
+	}
+	return m.kind(key)
+}
+
+// Slots returns the numbers of the keyslots of kind, sorted.
+func (m Metadata) Slots(kind string) []int {
+	var slots []int
+	for key := range m.Keyslots {
+		if n, err := strconv.Atoi(key); err == nil && m.kind(key) == kind {
+			slots = append(slots, n)
+		}
+	}
+	sort.Ints(slots)
+	return slots
+}
+
+func (m Metadata) kind(slot string) string {
+	kind := KindPassword
+	for _, tok := range m.Tokens {
+		if !slices.Contains(tok.Keyslots, slot) {
+			continue
+		}
+		switch tok.Type {
+		case "systemd-tpm2":
+			kind = KindTPM2
+			if tok.TPM2PIN {
+				kind = KindTPM2PIN
+			}
+		case "systemd-recovery":
+			kind = KindRecovery
+		default:
+			kind = strings.TrimPrefix(tok.Type, "systemd-")
+		}
+	}
+	return kind
 }
 
 // Has reports whether one of the keyslots is of kind.
@@ -195,13 +220,32 @@ func EnrollRecovery(ctx context.Context, t Tools, device, keyFile string) ([]byt
 	return key, nil
 }
 
-// Wipe removes every keyslot of kind ("password" or "recovery", systemd-cryptenroll --wipe-slot), unlocking with the
-// key file.
-func Wipe(ctx context.Context, t Tools, device, keyFile, kind string) error {
-	if kind != KindPassword && kind != KindRecovery {
-		return fmt.Errorf("luks: wiping %s keyslots is not supported", kind)
+// unlockedSlot is cryptsetup's verbose report of the keyslot a key opened.
+var unlockedSlot = regexp.MustCompile(`(?m)^Key slot (\d+) unlocked\.$`)
+
+// KeySlot returns the keyslot the key file opens (cryptsetup open --test-passphrase --verbose). Token plugins are not
+// loaded, so a TPM2+PIN token never asks for its PIN.
+func KeySlot(ctx context.Context, t Tools, device, keyFile string) (int, error) {
+	out, err := run(ctx, t, nil, "cryptsetup", "open", "--test-passphrase", "--verbose", "--disable-external-tokens",
+		"--key-file", keyFile, device)
+	if err != nil {
+		return 0, err
 	}
-	_, err := run(ctx, t, nil, "systemd-cryptenroll", "--wipe-slot="+kind, "--unlock-key-file="+keyFile, device)
+	m := unlockedSlot.FindStringSubmatch(out)
+	if m == nil {
+		return 0, fmt.Errorf("luks: cryptsetup reported no keyslot for the key file on %s", device)
+	}
+	return strconv.Atoi(m[1])
+}
+
+// WipeSlot removes exactly the keyslot slot, unlocking with the key file (plan M4b.1 decision 3). It names the slot by
+// number (systemd-cryptenroll --wipe-slot=<n>), never by type, which would remove every keyslot of that type;
+// cryptsetup luksKillSlot is not used because it refuses a key file that opens only the slot to be removed.
+func WipeSlot(ctx context.Context, t Tools, device, keyFile string, slot int) error {
+	if slot < 0 {
+		return fmt.Errorf("luks: invalid keyslot %d", slot)
+	}
+	_, err := run(ctx, t, nil, "systemd-cryptenroll", "--wipe-slot="+strconv.Itoa(slot), "--unlock-key-file="+keyFile, device)
 	return err
 }
 
