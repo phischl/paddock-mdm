@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
@@ -338,6 +339,64 @@ func TestLoginAptFailureRestoresTheConfiguration(t *testing.T) {
 	}
 	if f := sys.Files["/etc/himmelblau/himmelblau.conf"]; f == nil || string(f.Data) != "[global]\n" {
 		t.Fatalf("configuration after the failed installation: %+v", f)
+	}
+}
+
+// An installation killed at its timeout (plan M4b.1 step 6) is reported once as login.apply_failed with reason
+// timeout, locks still apply, the configuration stays for the half-configured packages, and the installation waits
+// for its back-off; the next attempt lets dpkg finish the interrupted run first.
+func TestLoginAptTimeoutBacksOff(t *testing.T) {
+	ctx := context.Background()
+	sys, l, events := loginFixture(t)
+	now := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	l.Now = func() time.Time { return now }
+	sys.AptTimeout = true
+	s := loginSpec()
+	s.LockedUsers = []string{"erin@acme.test"}
+	r := loginResource(t, s)
+	if res := l.Apply(ctx, r); res.Status != reconcile.Error || !strings.Contains(res.Message, "deadline exceeded") {
+		t.Fatalf("apply %+v", res)
+	}
+	if !strings.Contains(string(sys.Files["/etc/paddock/login-deny"].Data), "erin@acme.test") {
+		t.Fatal("the timeout kept the deny list from being written")
+	}
+	if f := sys.Files["/etc/himmelblau/himmelblau.conf"]; f == nil || string(f.Data) != wantConf {
+		t.Fatal("the configuration was taken back after a timeout")
+	}
+	var failed []event
+	for _, e := range takeEvents(events) {
+		if e.typ == protocol.EventLoginApplyFailed {
+			failed = append(failed, e)
+		}
+	}
+	if len(failed) != 1 || !strings.Contains(failed[0].data, `"stage":"apt"`) || !strings.Contains(failed[0].data, `"reason":"timeout"`) {
+		t.Fatalf("login.apply_failed events %v", failed)
+	}
+
+	// Within the back-off nothing runs and nothing is reported again.
+	sys.AptTimeout = false
+	sys.TakeCalls()
+	now = now.Add(reconcile.PackageTimeout - time.Minute)
+	if res := l.Apply(ctx, r); res.Status != reconcile.Error {
+		t.Fatalf("apply within the back-off %+v", res)
+	}
+	for _, c := range sys.TakeCalls() {
+		if strings.HasPrefix(c, "apt-get") || strings.HasPrefix(c, "dpkg") {
+			t.Fatalf("package operation within the back-off: %s", c)
+		}
+	}
+	if got := takeEvents(events); len(got) != 0 {
+		t.Fatalf("reported again within the back-off: %v", got)
+	}
+
+	// After it, dpkg finishes the interrupted installation and the packages are installed.
+	now = now.Add(2 * time.Minute)
+	if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("apply after the back-off %+v", res)
+	}
+	calls := strings.Join(sys.TakeCalls(), "\n")
+	if !strings.Contains(calls, "dpkg --configure -a") || !sys.Packages["himmelblau"] {
+		t.Fatalf("calls after the back-off:\n%s", calls)
 	}
 }
 
