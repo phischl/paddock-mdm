@@ -27,6 +27,8 @@ type VM struct {
 	port string
 	dir  string // test/vms/virtualbox
 	t    *testing.T
+	// group coordinates this VM with the other VMs of a parallel test (nil: the test drives its VMs itself).
+	group *vmGroup
 }
 
 func newVM(t *testing.T, root, name string) *VM {
@@ -188,4 +190,13 @@ func (v *VM) SetLink(on bool) {
 	if out, err := run(context.Background(), "VBoxManage", "controlvm", v.Name, "setlinkstate1", state); err != nil {
 		v.t.Fatalf("setlinkstate1 %s: %v: %s", state, err, out)
 	}
+}
+
+// Gate marks t as gate of this VM for the rendezvous of the VMs running in parallel (vmGroup.Gate).
+func (v *VM) Gate(t *testing.T, gate string) { v.group.Gate(t, v.Name, gate) }
+
+// Together runs fn once for all VMs running in parallel when each of them arrived at step of gate (vmGroup.Together).
+func (v *VM) Together(t *testing.T, gate, step string, fn func() string) string {
+	t.Helper()
+	return v.group.Together(t, v.Name, gate, step, fn)
 }

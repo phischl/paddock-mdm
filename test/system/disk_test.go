@@ -10,31 +10,27 @@ import (
 
 // TestDiskGates runs the disk encryption gates of plan M4b §6 on each VM, from base-installed with the Paddock
 // autoinstall simulated (PrepareDisk): the LUKS flow (gate D-24 on 24.04, the same flow on 26.04), D-ESC and D-TAMP
-// on that device, then D-SKIP from a second fresh base-installed.
+// on that device, then D-SKIP from a second fresh base-installed. The VMs run in parallel.
 func TestDiskGates(t *testing.T) {
-	for _, name := range vms(t) {
-		t.Run(name, func(t *testing.T) {
-			s := newStack(t)
-			vm := newVM(t, s.root, name)
-			t.Run("LUKS flow", func(t *testing.T) {
-				vm.Fresh()
-				d := Install(t, s, vm, debDir(s))
-				w := &diskWorld{Device: d, pin: randomDigits(t, 8)}
-				if !t.Run("D-24 TPM2+PIN and escrow", func(t *testing.T) { gateDiskFlow(t, w) }) {
-					t.FailNow()
-				}
-				var key string
-				if !t.Run("D-ESC escrow and recovery", func(t *testing.T) { key = gateDESC(t, w) }) {
-					t.FailNow()
-				}
-				t.Run("D-TAMP keyslot tamper", func(t *testing.T) { gateDTAMP(t, w, key) })
-			})
-			t.Run("D-SKIP skip the PIN", func(t *testing.T) {
-				vm.Fresh()
-				gateDSKIP(t, Install(t, s, vm, debDir(s)))
-			})
+	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
+		t.Run("LUKS flow", func(t *testing.T) {
+			vm.Fresh()
+			d := Install(t, s, vm, debDir(s))
+			w := &diskWorld{Device: d, pin: randomDigits(t, 8)}
+			if !t.Run("D-24 TPM2+PIN and escrow", func(t *testing.T) { gateDiskFlow(t, w) }) {
+				t.FailNow()
+			}
+			var key string
+			if !t.Run("D-ESC escrow and recovery", func(t *testing.T) { key = gateDESC(t, w) }) {
+				t.FailNow()
+			}
+			t.Run("D-TAMP keyslot tamper", func(t *testing.T) { gateDTAMP(t, w, key) })
 		})
-	}
+		t.Run("D-SKIP skip the PIN", func(t *testing.T) {
+			vm.Fresh()
+			gateDSKIP(t, Install(t, s, vm, debDir(s)))
+		})
+	})
 }
 
 type diskWorld struct {

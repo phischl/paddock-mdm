@@ -134,22 +134,18 @@ func newLAWorld(t *testing.T, d *Device) *laWorld {
 	return w
 }
 
-// TestLocalAdminGates runs gates LA1 and LA2 of plan M4a and LA3 of plan M4a.1 on each VM, each from a fresh
-// base-installed.
+// TestLocalAdminGates runs gates LA1 and LA2 of plan M4a and LA3 of plan M4a.1 on the VMs in parallel, each from a
+// fresh base-installed; the stopped worker of LA1 is shared.
 func TestLocalAdminGates(t *testing.T) {
-	for _, name := range vms(t) {
-		t.Run(name, func(t *testing.T) {
-			s := newStack(t)
-			vm := newVM(t, s.root, name)
-			vm.Fresh()
-			w := newLAWorld(t, Install(t, s, vm, debDir(s)))
-			if !t.Run("LA1 local administrator", func(t *testing.T) { gateLA1(t, w) }) {
-				t.FailNow()
-			}
-			t.Run("LA2 tamper", func(t *testing.T) { gateLA2(t, w) })
-			t.Run("LA3 hidden from the login screen", func(t *testing.T) { gateLA3(t, w) })
-		})
-	}
+	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
+		vm.Fresh()
+		w := newLAWorld(t, Install(t, s, vm, debDir(s)))
+		if !t.Run("LA1 local administrator", func(t *testing.T) { gateLA1(t, w) }) {
+			t.FailNow()
+		}
+		t.Run("LA2 tamper", func(t *testing.T) { gateLA2(t, w) })
+		t.Run("LA3 hidden from the login screen", func(t *testing.T) { gateLA3(t, w) })
+	})
 }
 
 // gateLA1: the account exists after enrollment with a rotated, escrowed password; the revealed password works at
@@ -158,6 +154,7 @@ func TestLocalAdminGates(t *testing.T) {
 // (rotation_failed after 15 minutes); once the worker is back the next rotation succeeds. Every reveal is exactly
 // one audit event.
 func gateLA1(t *testing.T, w *laWorld) {
+	w.Gate(t, "LA1")
 	if out := w.Must("getent passwd " + localAdmin + " | cut -d: -f7; sudo stat -c %a /home/" + localAdmin + "; id -nG " + localAdmin); !strings.HasPrefix(out, "/bin/bash\n700\n") ||
 		!slices.Contains(strings.Fields(out), "sudo") {
 		t.Fatalf("account: %q", out)
@@ -184,16 +181,20 @@ func gateLA1(t *testing.T, w *laWorld) {
 		t.Fatalf("after Rotate now: generation %d, old password still works or new one does not", pw2.Generation)
 	}
 
-	// Confirmation failure: the worker is stopped after it signed the command, before the device uploads.
+	// Confirmation failure: the worker is stopped after it signed the command, before the device uploads. VMs running
+	// in parallel request their rotations together and share the stopped worker.
+	w.Together(t, "LA1", "rotate", func() string { return "" })
 	since := w.Must("date -u +'%Y-%m-%d %H:%M:%S'")
 	w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/rotate", nil, http.StatusAccepted)
 	time.Sleep(5 * time.Second)
-	if out, err := compose(t, "stop", "paddock-worker"); err != nil {
-		t.Fatalf("stop worker: %v: %s", err, out)
-	}
-	workerStopped := true
+	w.Together(t, "LA1", "stop worker", func() string {
+		if out, err := compose(t, "stop", "paddock-worker"); err != nil {
+			t.Fatalf("stop worker: %v: %s", err, out)
+		}
+		return ""
+	})
 	defer func() {
-		if workerStopped {
+		if t.Failed() {
 			_, _ = portal.Compose(context.Background(), "start", "paddock-worker")
 		}
 	}()
@@ -215,10 +216,12 @@ func gateLA1(t *testing.T, w *laWorld) {
 	if !w.login(t, pw2.Password) {
 		t.Fatal("the old password stopped working after the failed rotation")
 	}
-	if out, err := compose(t, "start", "paddock-worker"); err != nil {
-		t.Fatalf("start worker: %v: %s", err, out)
-	}
-	workerStopped = false
+	w.Together(t, "LA1", "start worker", func() string {
+		if out, err := compose(t, "start", "paddock-worker"); err != nil {
+			t.Fatalf("start worker: %v: %s", err, out)
+		}
+		return ""
+	})
 	w.s.Login() // the worker restart does not end the session, but the step-up is older than 5 minutes anyway
 	w.WaitEvent(t, "local_admin.rotation_failed", 5*time.Minute, func(p map[string]any) bool { return p["reason"] == "escrow_timeout" })
 	if p := active(t, w.reveal(t)); p.Generation != 2 || p.Password != pw2.Password {
