@@ -2,9 +2,7 @@ package app
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,22 +22,17 @@ var (
 	SpecLocalAdminReveal = ActionSpec{Code: audit.CodeLocalAdminRevealed, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 )
 
-// Decrypter decrypts escrowed secrets (escrowreader.Reader).
-type Decrypter interface {
-	Decrypt(ctx context.Context, version int, ciphertext string) ([]byte, error)
-}
-
 // LocalAdmin holds the use cases of the managed local administrator account (plan M4a decision 17).
 type LocalAdmin struct {
-	runner    *ActionRunner
-	org       *db.OrgPool
-	decrypter Decrypter
-	now       func() time.Time
+	runner *ActionRunner
+	org    *db.OrgPool
+	escrow *EscrowAccess
+	now    func() time.Time
 }
 
-// NewLocalAdmin creates the use cases; decrypter is used by Reveal only.
-func NewLocalAdmin(runner *ActionRunner, org *db.OrgPool, decrypter Decrypter) *LocalAdmin {
-	return &LocalAdmin{runner: runner, org: org, decrypter: decrypter, now: time.Now}
+// NewLocalAdmin creates the use cases; escrow is used by Reveal only.
+func NewLocalAdmin(runner *ActionRunner, org *db.OrgPool, escrow *EscrowAccess) *LocalAdmin {
+	return &LocalAdmin{runner: runner, org: org, escrow: escrow, now: time.Now}
 }
 
 // RotationError is the last failed rotation of a device, newer than its last successful one.
@@ -153,19 +146,22 @@ func (l *LocalAdmin) Reveal(ctx context.Context, deviceID uuid.UUID, confirmHost
 		if len(secrets) == 0 {
 			return problem.InvalidState.WithDetail("the device has no escrowed local administrator password yet")
 		}
+		ids := make([]uuid.UUID, 0, len(secrets))
+		for _, s := range secrets {
+			ids = append(ids, s.ID)
+		}
+		plain, err := l.escrow.decrypt(ctx, deviceID, ids, PurposeLocalAdminReveal)
+		if err != nil {
+			return err
+		}
 		generations := make([]int, 0, len(secrets))
 		for _, s := range secrets {
-			plain, err := l.decrypter.Decrypt(ctx, int(s.KeyVersion), base64.StdEncoding.EncodeToString(s.Ciphertext))
-			if err != nil {
-				slog.ErrorContext(ctx, "decrypting an escrowed password failed", "device_id", deviceID, "generation", s.Generation, "error", err)
-				return problem.UpstreamUnavailable.WithDetail("the key service could not decrypt the password")
-			}
 			state := "pending"
 			if s.Status == escrowActive {
 				state = "active"
 			}
-			out = append(out, RevealedPassword{Generation: int(s.Generation), State: state, Password: string(plain)})
-			clear(plain)
+			out = append(out, RevealedPassword{Generation: int(s.Generation), State: state, Password: string(plain[s.ID])})
+			clear(plain[s.ID])
 			generations = append(generations, int(s.Generation))
 		}
 		rec.SetParam("generations", generations)

@@ -187,3 +187,34 @@ func ReleaseKey(path string) (minisign.PrivateKey, error) {
 	var k minisign.PrivateKey
 	return k, k.UnmarshalText(data)
 }
+
+// Image returns a pinned image reference of deploy/compose/versions.env, e.g. GO_BUILD_IMAGE.
+func Image(name string) (string, error) {
+	root, err := RepoRoot()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "versions.env")) //nolint:gosec // repository file
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if v, ok := strings.CutPrefix(line, name+"="); ok {
+			return strings.TrimSpace(v), nil
+		}
+	}
+	return "", fmt.Errorf("stack: %s not in versions.env", name)
+}
+
+// Docker runs docker with stdin and returns its standard output; standard error is part of a failure only.
+func Docker(ctx context.Context, stdin io.Reader, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...) //nolint:gosec // test orchestration
+	cmd.Stdin = stdin
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return string(out), fmt.Errorf("docker %s: %w: %s", args[0], err, stderr.String())
+	}
+	return string(out), nil
+}

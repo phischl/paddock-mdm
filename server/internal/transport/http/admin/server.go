@@ -39,9 +39,11 @@ type Deps struct {
 	Keys          *Keyring
 	OIDC          *OIDC
 	StepUp        *OIDC // provider paddock-portal-stepup (plan M4a decision 6)
-	PublicURL     string
-	Static        *StaticHandler // portal build
-	Now           func() time.Time
+	// StepUpTokens keeps the raw ID token of every step-up for the escrow-reader (plan M4b.1 decision 7).
+	StepUpTokens StepUpTokenStore
+	PublicURL    string
+	Static       *StaticHandler // portal build
+	Now          func() time.Time
 	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
 	StepUpMaxAuthAge time.Duration
 	// ExposeStepUp adds the session's step-up time and the step-up timing to GET /api/v1/me (development only, for
@@ -115,8 +117,12 @@ func NewHandler(d Deps) http.Handler {
 	if d.StepUpMaxAuthAge == 0 {
 		d.StepUpMaxAuthAge = StepUpMaxAuthAge
 	}
+	tokenTTL := app.StepUpValidity
+	if d.Runner != nil {
+		tokenTTL = d.Runner.StepUpWindow()
+	}
 	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now,
-		maxAuthAge: d.StepUpMaxAuthAge}}
+		maxAuthAge: d.StepUpMaxAuthAge, tokens: d.StepUpTokens, tokenTTL: tokenTTL}}
 
 	api := http.NewServeMux()
 	h := &handlers{

@@ -89,6 +89,7 @@ func (f *fakeStepUpIdP) sign(t *testing.T, claims map[string]any) string {
 type stepUpWorld struct {
 	t       *testing.T
 	idp     *fakeStepUpIdP
+	tokens  *stepUpProofs
 	keys    *admin.Keyring
 	handler http.Handler
 	session admin.Session
@@ -128,9 +129,10 @@ func newStepUpWorldWith(t *testing.T, maxAuthAge time.Duration) *stepUpWorld {
 	if maxAuthAge > 0 {
 		maxAge = strconv.Itoa(int(maxAuthAge.Seconds()))
 	}
-	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "en", time.Now()), maxAge: maxAge,
+	tokens := newStepUpProofs()
+	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "en", time.Now()), maxAge: maxAge, tokens: tokens,
 		handler: admin.NewHandler(admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
-			PublicURL: "https://admin.test", StepUpMaxAuthAge: maxAuthAge})}
+			StepUpTokens: tokens, PublicURL: "https://admin.test", StepUpMaxAuthAge: maxAuthAge})}
 }
 
 func (w *stepUpWorld) serve(path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -207,8 +209,12 @@ func TestStepUp(t *testing.T) {
 			t.Fatal(err)
 		}
 		if sess.PID != w.session.PID || sess.StepUpJTI != "jti-1" || time.Since(time.Unix(sess.StepUpAt, 0)) > 5*time.Second ||
-			sess.Principal("").StepUpAt.IsZero() {
+			sess.Principal("").StepUpAt.IsZero() || sess.Principal("").StepUpJTI != "jti-1" {
 			t.Fatalf("session %+v", sess)
+		}
+		// The raw ID token is kept for the escrow-reader under its jti (plan M4b.1 decision 7).
+		if raw, ok, _ := w.tokens.Get(context.Background(), "jti-1"); !ok || strings.Count(raw, ".") != 2 {
+			t.Fatalf("kept step-up token %q, %v", raw, ok)
 		}
 	})
 	for name, claims := range map[string]map[string]any{
@@ -216,6 +222,7 @@ func TestStepUp(t *testing.T) {
 		"old authentication": with("auth_time", now-61),
 		"no auth_time":       with("auth_time", 0),
 		"without MFA":        with("amr", []string{"pwd"}),
+		"without jti":        with("jti", ""),
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newStepUpWorld(t)

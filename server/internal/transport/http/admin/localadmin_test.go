@@ -2,8 +2,6 @@ package admin_test
 
 import (
 	"context"
-	"encoding/base64"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -12,19 +10,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
-
-// fakeDecrypter "decrypts" a ciphertext into "pw-" plus the ciphertext; "broken" fails like a sealed OpenBao.
-type fakeDecrypter struct{}
-
-func (fakeDecrypter) Decrypt(_ context.Context, version int, ciphertext string) ([]byte, error) {
-	raw, err := base64.StdEncoding.DecodeString(ciphertext)
-	if err != nil || version != 1 || string(raw) == "broken" {
-		return nil, errors.New("decrypt failed")
-	}
-	return []byte("pw-" + string(raw)), nil
-}
 
 func (e *env) escrowSecret(org, device uuid.UUID, generation int, status, ciphertext string) {
 	e.t.Helper()
@@ -130,4 +118,36 @@ func TestLocalAdminReveal(t *testing.T) {
 	if res := e.do(call{method: "GET", path: path, cookie: carol}); res.status != http.StatusNotFound {
 		t.Fatalf("other organization state: %d", res.status)
 	}
+}
+
+// TestRevealStepUpProof (plan M4b.1 decisions 6 and 7): the escrow-reader decrypts only with the session's own step-up
+// token, at most five times per token; a refusal or an expired token is step_up_required, audited as denied.
+func TestRevealStepUpProof(t *testing.T) {
+	e := newEnv(t)
+	device := e.insertDevice(e.acme, "lt-proof", "active")
+	e.escrowSecret(e.acme, device, 1, "active", "one")
+	path := "/api/v1/devices/" + device.String() + "/local-admin/reveal"
+	body := map[string]any{"confirm_hostname": "lt-proof"}
+	fresh := e.steppedUp(e.session(e.acme, principal.RoleOrgAdmin), time.Now())
+	for i := range stepupproof.MaxUses {
+		if res := e.do(call{method: "POST", path: path, cookie: fresh, body: body}); res.status != http.StatusOK {
+			t.Fatalf("reveal %d: %d %s", i+1, res.status, res.body)
+		}
+	}
+	res := e.do(call{method: "POST", path: path, cookie: fresh, body: body})
+	if res.status != http.StatusForbidden || res.problemCode(t) != "step_up_required" || strings.Contains(string(res.body), "pw-") {
+		t.Fatalf("reveal beyond the token's uses: %d %s", res.status, res.body)
+	}
+	e.expectEvent(res, "local_admin.revealed:denied:step_up_required")
+
+	// The token of the session is gone (its Valkey TTL ended before the api's step-up window).
+	gone := e.steppedUp(e.session(e.acme, principal.RoleOrgAdmin), time.Now())
+	e.stepUps.mu.Lock()
+	clear(e.stepUps.tokens)
+	e.stepUps.mu.Unlock()
+	res = e.do(call{method: "POST", path: path, cookie: gone, body: body})
+	if res.status != http.StatusForbidden || res.problemCode(t) != "step_up_required" {
+		t.Fatalf("reveal without the kept token: %d %s", res.status, res.body)
+	}
+	e.expectEvent(res, "local_admin.revealed:denied:step_up_required")
 }

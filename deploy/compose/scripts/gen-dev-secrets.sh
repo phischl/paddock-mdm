@@ -34,7 +34,7 @@ fi
 
 # Control-plane PostgreSQL
 secret postgres_superuser_password
-for role in paddock_owner paddock_api paddock_platform paddock_relay paddock_worker paddock_compiler; do
+for role in paddock_owner paddock_api paddock_platform paddock_relay paddock_worker paddock_compiler paddock_escrow_reader; do
   secret "db_${role}_password"
   secret "db_${role}_url" "postgres://${role}:$(read_secret "db_${role}_password")@postgres:5432/paddock?sslmode=disable"
 done
@@ -76,6 +76,10 @@ for role in worker api; do
   secret "rustfs_escrow_${role}_access_key"
   secret "rustfs_escrow_${role}_secret_key"
 done
+
+# Bearer secret between paddock-api and paddock-escrow-reader (plan M4b.1 decision 6); delete the file and run
+# make dev-secrets up to rotate it.
+secret escrow_reader_token
 
 # Valkey: one password; the server reads it through an included config file.
 secret valkey_password

@@ -36,8 +36,10 @@ type Principal struct {
 	Role           Role      // "" for system
 	OrganizationID uuid.UUID // uuid.Nil for platform admins and system
 	IP             string
-	// StepUpAt is the time of the last step-up authentication of the session (zero: none, plan M4a decision 6).
-	StepUpAt time.Time
+	// StepUpAt is the time of the last step-up authentication of the session (zero: none, plan M4a decision 6) and
+	// StepUpJTI the jti of its ID token, under which the api keeps the token for the escrow-reader (plan M4b.1).
+	StepUpAt  time.Time
+	StepUpJTI string
 }
 
 type ctxKey struct{}

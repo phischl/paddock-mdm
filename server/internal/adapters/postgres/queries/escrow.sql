@@ -72,3 +72,7 @@ WHERE device_id = @device_id AND kind = @kind AND status = 'stored'
   AND (@generation::int = 0 OR generation = @generation::int)
 ORDER BY generation DESC
 LIMIT 1;
+
+-- name: GetEscrowSecrets :many
+-- The escrows of one decryption of the escrow-reader, which checks their device and kind (plan M4b.1 decision 6).
+SELECT * FROM escrow_secret WHERE id = ANY(@ids::uuid[]);

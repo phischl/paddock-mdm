@@ -80,6 +80,7 @@ services:
       PADDOCK_RELAY_PASSWORD_FILE: /run/secrets/db_paddock_relay_password
       PADDOCK_WORKER_PASSWORD_FILE: /run/secrets/db_paddock_worker_password
       PADDOCK_COMPILER_PASSWORD_FILE: /run/secrets/db_paddock_compiler_password
+      PADDOCK_ESCROW_READER_PASSWORD_FILE: /run/secrets/db_paddock_escrow_reader_password
     secrets:
       - postgres_superuser_password
       - db_paddock_owner_password
@@ -88,6 +89,7 @@ services:
       - db_paddock_relay_password
       - db_paddock_worker_password
       - db_paddock_compiler_password
+      - db_paddock_escrow_reader_password
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
       - postgres-data:/var/lib/postgresql/data
@@ -272,9 +274,9 @@ services:
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_api_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_api_secret_id
-      # Decrypts escrowed secrets for the reveal only (plan M4a decision 9).
-      PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE: /run/secrets/approle_escrow_reader_role_id
-      PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE: /run/secrets/approle_escrow_reader_secret_id
+      # Escrowed secrets are decrypted by paddock-escrow-reader only (plan M4b.1 decision 5).
+      PADDOCK_ESCROW_READER_URL: http://escrow-reader:8080
+      PADDOCK_ESCROW_READER_TOKEN_FILE: /run/secrets/escrow_reader_token
       PADDOCK_OIDC_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal/
       PADDOCK_OIDC_CLIENT_ID: paddock-portal
       PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
@@ -307,12 +309,51 @@ services:
       - db_paddock_audit_reader_url
       - approle_api_role_id
       - approle_api_secret_id
-      - approle_escrow_reader_role_id
-      - approle_escrow_reader_secret_id
+      - escrow_reader_token
       - oidc_client_secret
       - authentik_service_token
       - caddy_root_crt
-    networks: [cp, audit-index]
+    networks: [cp, audit-index, escrow]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+      caddy-ca-export:
+        condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+
+  # The only holder of the AppRole paddock-escrow-reader (plan M4b.1 decision 5). Its HTTP port listens on the
+  # address of the alias escrow-reader, which exists on network escrow only: the api reaches it, no other role and no
+  # published port does. It verifies the step-up proof itself, so code execution in the api decrypts nothing without
+  # a fresh step-up of an administrator.
+  paddock-escrow-reader:
+    <<: *paddock
+    command: ["serve", "escrow-reader"]
+    environment:
+      <<: *paddock-env
+      PADDOCK_HTTP_ADDR: escrow-reader:8080
+      PADDOCK_ESCROW_READER_TOKEN_FILE: /run/secrets/escrow_reader_token
+      PADDOCK_DB_URL_FILE: /run/secrets/db_paddock_escrow_reader_url
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_escrow_reader_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_escrow_reader_secret_id
+      PADDOCK_VALKEY_ADDR: valkey:6379
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
+      SSL_CERT_FILE: /run/secrets/caddy_root_crt
+    secrets:
+      - escrow_reader_token
+      - db_paddock_escrow_reader_url
+      - approle_escrow_reader_role_id
+      - approle_escrow_reader_secret_id
+      - valkey_password
+      - caddy_root_crt
+    networks:
+      cp: {}
+      escrow:
+        aliases: [escrow-reader]
     depends_on:
       paddock-migrate:
         condition: service_completed_successfully
@@ -469,6 +510,9 @@ services:
 networks:
   cp: {}
   audit-index: {}
+  # api ↔ escrow-reader only (plan M4b.1 decision 5).
+  escrow:
+    internal: true
 
 volumes:
   caddy-data: {}
@@ -489,12 +533,14 @@ secrets:
   db_paddock_relay_password: { file: ./.secrets/db_paddock_relay_password }
   db_paddock_worker_password: { file: ./.secrets/db_paddock_worker_password }
   db_paddock_compiler_password: { file: ./.secrets/db_paddock_compiler_password }
+  db_paddock_escrow_reader_password: { file: ./.secrets/db_paddock_escrow_reader_password }
   db_paddock_owner_url: { file: ./.secrets/db_paddock_owner_url }
   db_paddock_api_url: { file: ./.secrets/db_paddock_api_url }
   db_paddock_platform_url: { file: ./.secrets/db_paddock_platform_url }
   db_paddock_relay_url: { file: ./.secrets/db_paddock_relay_url }
   db_paddock_worker_url: { file: ./.secrets/db_paddock_worker_url }
   db_paddock_compiler_url: { file: ./.secrets/db_paddock_compiler_url }
+  db_paddock_escrow_reader_url: { file: ./.secrets/db_paddock_escrow_reader_url }
   db_paddock_audit_reader_url: { file: ./.secrets/db_paddock_audit_reader_url }
   rabbitmq_definitions: { file: ./.secrets/rabbitmq/definitions.json }
   rabbitmq_provisioner_password: { file: ./.secrets/rabbitmq_provisioner_password }
@@ -531,4 +577,5 @@ secrets:
   approle_api_secret_id: { file: ./.secrets/approle/paddock-api/secret_id }
   approle_escrow_reader_role_id: { file: ./.secrets/approle/paddock-escrow-reader/role_id }
   approle_escrow_reader_secret_id: { file: ./.secrets/approle/paddock-escrow-reader/secret_id }
+  escrow_reader_token: { file: ./.secrets/escrow_reader_token }
   caddy_root_crt: { file: ./.secrets/caddy-root.crt }

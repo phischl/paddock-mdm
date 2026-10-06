@@ -253,6 +253,8 @@ type env struct {
 	globex   uuid.UUID
 	// disk is the escrow-wrap key and the escrow bucket of the disk recovery (plan M4b decision 14).
 	disk *diskEscrow
+	// stepUps are the step-up ID tokens, kept as Valkey would and verified as the escrow-reader would.
+	stepUps *stepUpProofs
 }
 
 func newEnv(t *testing.T) *env {
@@ -308,7 +310,9 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t)}
+	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
+		stepUps: newStepUpProofs()}
+	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
 	verifyRelease := func(bin, sig []byte) bool { return minisign.Verify(releasePub, bin, sig) }
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
 		if e.keysDown {
@@ -330,13 +334,14 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		LoginSettings: app.NewLoginSettings(runner, orgPool),
 		Privileges:    app.NewPrivileges(runner, orgPool),
 		Commands:      app.NewDeviceCommands(orgPool),
-		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, fakeDecrypter{}),
+		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:   app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
-		Disk:          app.NewDisk(runner, orgPool, e.disk, e.disk),
+		Disk:          app.NewDisk(runner, orgPool, escrowAccess, e.disk),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,
 		OIDC:          admin.NewOIDC(admin.OIDCConfig{}),
+		StepUpTokens:  e.stepUps,
 		PublicURL:     "https://admin.test",
 		Static:        static,
 	}
@@ -400,7 +405,7 @@ func (e *env) steppedUp(c *http.Cookie, at time.Time) *http.Cookie {
 	if err := e.keys.Open(admin.SessionCookie, c.Value, &sess); err != nil {
 		e.t.Fatal(err)
 	}
-	sess.StepUpAt, sess.StepUpJTI = at.Unix(), "jti-test"
+	sess.StepUpAt, sess.StepUpJTI = at.Unix(), e.stepUps.issue(sess.Sub, at)
 	v, err := e.keys.Seal(admin.SessionCookie, sess)
 	if err != nil {
 		e.t.Fatal(err)
