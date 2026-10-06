@@ -569,11 +569,11 @@ func gateL3(t *testing.T, w *identityWorld) {
 	if exit := w.pamLogin(t, w.dave, false, 2*time.Minute); exit == 0 {
 		t.Errorf("%s logged in while logins are suspended", w.dave.name)
 	}
-	// Break-glass at the console: GDM lists paddock, dave and the local administrator (M4a); "Not listed?" and the
-	// password.
+	// Break-glass at the console: GDM lists paddock and dave, not the local administrator (M4a.1 decision 4); "Not
+	// listed?" and the password.
 	time.Sleep(5 * time.Second)
 	w.Shot(t, "20-greeter-suspended")
-	for range 3 {
+	for range 2 {
 		w.Key(keyTab...)
 		time.Sleep(time.Second)
 	}

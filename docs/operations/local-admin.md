@@ -42,6 +42,12 @@ hash, a locked or expired account, another shell or a missing group membership a
 expiry are repaired at once; a changed or locked password triggers a rotation, which restores a password Paddock
 knows. A deleted account is created again.
 
+**Login screen:** GDM does not list the account. The agent writes `/var/lib/AccountsService/users/<username>` with
+`[User]` `SystemAccount=true` (mode 0600) before it creates the account, so AccountsService treats it as a system
+account; if the file is removed or `SystemAccount=true` is gone, the agent restores it within 30 s and restarts
+`accounts-daemon` so the change takes effect. Keys AccountsService adds itself are kept. To sign in at GDM, choose
+*Not listed?* and type the account name; text consoles and SSH work as usual.
+
 **Logins** with the account (`pam_unix` session openings in the journal) are reported as `local_admin.login` with
 the PAM service (`sshd`, `login`, `gdm-password`, …) and the time — no terminal, no remote host.
 

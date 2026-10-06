@@ -107,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- GDM no longer lists the managed local administrator: the agent writes `/var/lib/AccountsService/users/<local_admin_username>` with `SystemAccount=true` before it creates the account and restores the file (restarting AccountsService) when it is removed or changed; the account still signs in through "Not listed?", on text consoles and over SSH (M4a.1 step 2).
 - **BREAKING:** Go module path is `github.com/phischl/paddock-mdm/…` (`pkg`, `server`, `agent`, `test/acceptance`, `test/system`) instead of `github.com/paddock-mdm/paddock/…`; code importing the modules and builds that set `-X github.com/paddock-mdm/paddock/agent/internal/buildinfo.Version` must use the new path (M4a.1 step 1).
 - **BREAKING:** `PUT /api/v1/settings/login` requires `notice_text` (M4a step 5).
 - **BREAKING:** `paddock-api` requires the credential of the OpenBao AppRole `paddock-escrow-reader` (`PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE`, `PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE`), used only to decrypt for a reveal; `PUT /api/v1/settings/login` requires `local_admin_username` and `local_admin_rotation_days` (M4a step 4).
