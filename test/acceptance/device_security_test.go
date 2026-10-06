@@ -3,6 +3,7 @@ package acceptance
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -283,4 +284,29 @@ func TestNoSynchronousDatabasePath(t *testing.T) {
 		return err == nil && !at.Before(outage.Add(-time.Second))
 	})
 	t.Logf("last contact %s recorded after the outage", *after.LastContactAt)
+}
+
+// TestEnrollRightAfterTokenCreation: a device that enrolls within 100 ms of the token's creation is accepted, 10
+// times in a row; the api publishes a new token to the gateway's cache before it answers.
+func TestEnrollRightAfterTokenCreation(t *testing.T) {
+	alice := login(t, env.Alice)
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10 {
+		tok := createToken(t, alice, tokenOptions{})
+		created := time.Now()
+		d, err := devicesim.New(tok.EnrollmentConfig, client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if late := time.Since(created); late > 100*time.Millisecond {
+			t.Fatalf("attempt %d: the enrollment request was ready only %s after the token's creation", i, late)
+		}
+		res, err := d.Enroll(testContext(t, time.Minute), fmt.Sprintf("d2-immediate-%d", i))
+		if err != nil || res.Status != http.StatusAccepted {
+			t.Fatalf("attempt %d: enrollment %s after the token's creation: %v HTTP %d %s", i, time.Since(created), err, res.Status, res.Body)
+		}
+	}
 }

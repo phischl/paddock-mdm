@@ -291,7 +291,7 @@ func newEnv(t *testing.T) *env {
 	}
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
-		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, "https://device.test"),
+		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, nil, "https://device.test"),
 		Devices:       app.NewDevices(runner, orgPool),
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, idp),
