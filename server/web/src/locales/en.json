@@ -173,6 +173,10 @@
       "tamper_local_admin_changed": "The device {target} found its local administrator account changed ({field})",
       "tamper_keyslot_changed": "The device {target} found the keyslots of its disk changed"
     },
+    "disk": {
+      "recovery_key_revealed": "{actor} revealed the disk recovery key of {hostname}",
+      "header_downloaded": "{actor} downloaded the LUKS header of {hostname}"
+    },
     "autoinstall": {
       "generated": "{actor} generated a Paddock autoinstall for Ubuntu {release} with agent {agent_version}"
     },
@@ -453,6 +457,52 @@
         "title": "Rotate the local administrator password",
         "confirm": "{hostname} sets a new password the next time it reaches the server; the current password stops working then.",
         "requested": "The device rotates the password with its next check-in."
+      }
+    },
+    "disk": {
+      "title": "Disk encryption",
+      "state": "Disk encryption",
+      "states": {
+        "not_encrypted": "Not encrypted",
+        "unmanaged": "Encrypted, not managed",
+        "tpm_missing": "No TPM: passphrase only",
+        "tpm_pin_missing": "Boot PIN skipped",
+        "escrow_pending": "Being set up",
+        "compliant": "Compliant"
+      },
+      "notReported": "Not reported yet",
+      "keyslots": "Keyslots",
+      "keyslotFacts": "{count, plural, one {# keyslot} other {# keyslots}} ({kinds}), LUKS {version, number}",
+      "reportedAt": "Reported",
+      "recoveryKeyRow": "Recovery key",
+      "headers": "Header backups",
+      "none": "none yet",
+      "escrowFacts": "Generation {generation, number}, escrowed {at}",
+      "headerFacts": "Generation {generation, number}: {status}, {at}",
+      "escrowStatuses": {
+        "pending": "waiting for the upload",
+        "stored": "escrowed",
+        "failed": "failed"
+      },
+      "keyslotChange": "The keyslots changed outside Paddock {at}: {before} became {after}. The header was escrowed again.",
+      "recoveryKey": {
+        "label": "Show recovery key",
+        "title": "Show the disk recovery key",
+        "confirm": "The recovery key of {hostname} is shown and recorded in the audit log. Anyone with it can unlock the disk."
+      },
+      "header": {
+        "label": "Download header backup",
+        "title": "Download the LUKS header backup",
+        "confirm": "The newest header backup of {hostname} is downloaded and the download is recorded in the audit log."
+      },
+      "revealed": {
+        "title": "Recovery key of {hostname}",
+        "hint": "The key is hidden in {seconds, number} seconds.",
+        "usage": "At the boot PIN prompt, type the recovery key instead of the PIN; repeat it until the disk unlocks (the device first uses up its PIN attempts).",
+        "generation": "Recovery key {generation, number}",
+        "copy": "Copy",
+        "copied": "Copied",
+        "close": "Hide"
       }
     }
   },

@@ -36,6 +36,7 @@ type handlers struct {
 	commands    *app.DeviceCommands
 	localAdmin  *app.LocalAdmin
 	autoinstall *app.Autoinstall
+	disk        *app.Disk
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).

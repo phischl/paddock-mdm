@@ -476,7 +476,7 @@ paths:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
         search: [hostname, hardware_uuid]
-        filters: [state, device_group_id]
+        filters: [state, device_group_id, disk_state]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -487,6 +487,14 @@ paths:
           in: query
           description: Only members of this device group.
           schema: { type: string, format: uuid }
+        - name: disk_state
+          in: query
+          description: Repeatable. Disk encryption state of the last check-in (plan M4b decision 14).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/DiskState" }
       responses:
         "200":
           description: One page of devices.
@@ -1458,6 +1466,90 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/disk:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDeviceDisk
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The disk encryption of the device (plan M4b decision 14): the state,
+        LUKS version and keyslot kinds of its last check-in, its escrowed recovery key and header generations (newest
+        first) and its last keyslot change.
+      responses:
+        "200":
+          description: The disk encryption.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiskEncryption" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/disk/recovery-key:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: revealDeviceRecoveryKey
+      tags: [devices]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns the newest stored
+        recovery key of the device; confirm_hostname must equal the device's hostname. 409 invalid_state when none is
+        stored. Type it at the boot PIN prompt once the PIN attempts are used up (docs/operations/disk-recovery.md).
+        Responses are never cached.
+      x-paddock-audit: disk.recovery_key_revealed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LocalAdminRevealRequest" }
+      responses:
+        "200":
+          description: The recovery key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiskRecoveryKey" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/disk/header:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: downloadDeviceHeader
+      tags: [devices]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns a stored LUKS header
+        backup of the device, decrypted (the newest generation unless generation is given), as the file
+        <hostname>-luks-header-<generation>.img for cryptsetup luksHeaderRestore; confirm_hostname must equal the
+        device's hostname. 409 invalid_state when no such generation is stored.
+      x-paddock-audit: disk.header_downloaded
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DiskHeaderRequest" }
+      responses:
+        "200":
+          description: The header backup.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/effective-sudo:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -2645,6 +2737,7 @@ components:
         last_contact_at: { type: string, format: date-time, nullable: true }
         applied_bundle_version: { type: integer, format: int64, nullable: true }
         agent_version: { type: string, nullable: true }
+        disk_state: { $ref: "#/components/schemas/DiskState" }
     DeviceGroupRef:
       type: object
       required: [id, name]
@@ -2732,6 +2825,62 @@ components:
             reason: { type: string, enum: [escrow_failed, escrow_timeout, apply_failed] }
             generation: { type: integer }
             at: { type: string, format: date-time }
+    DiskState:
+      type: string
+      description: |
+        Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
+        with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
+        header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, both escrowed).
+      enum: [not_encrypted, unmanaged, tpm_missing, tpm_pin_missing, escrow_pending, compliant]
+    DiskEscrow:
+      type: object
+      required: [generation, status, created_at]
+      properties:
+        generation: { type: integer }
+        status: { type: string, enum: [pending, stored, failed] }
+        size: { type: integer, format: int64, description: "Headers: bytes of the sealed object." }
+        created_at: { type: string, format: date-time }
+    DiskEncryption:
+      type: object
+      required: [state, tokens, keyslots, recovery_keys, headers]
+      properties:
+        state:
+          allOf: [{ $ref: "#/components/schemas/DiskState" }]
+          nullable: true
+          description: Null until the device reports its disk.
+        luks_version: { type: integer }
+        tokens:
+          type: array
+          description: Kind of every keyslot, sorted (tpm2+pin, tpm2, recovery, password, or another token type).
+          items: { type: string }
+        keyslots: { type: integer }
+        reported_at: { type: string, format: date-time, description: Check-in the state is from. }
+        recovery_keys:
+          type: array
+          items: { $ref: "#/components/schemas/DiskEscrow" }
+        headers:
+          type: array
+          items: { $ref: "#/components/schemas/DiskEscrow" }
+        last_keyslot_change:
+          type: object
+          required: [at, before, after]
+          properties:
+            at: { type: string, format: date-time }
+            before: { type: array, items: { type: string } }
+            after: { type: array, items: { type: string } }
+    DiskRecoveryKey:
+      type: object
+      required: [generation, recovery_key]
+      properties:
+        generation: { type: integer }
+        recovery_key: { type: string }
+    DiskHeaderRequest:
+      type: object
+      required: [confirm_hostname]
+      additionalProperties: false
+      properties:
+        confirm_hostname: { type: string, maxLength: 253 }
+        generation: { type: integer, minimum: 1, description: Header generation; the newest stored one if absent. }
     LocalAdminRevealRequest:
       type: object
       required: [confirm_hostname]

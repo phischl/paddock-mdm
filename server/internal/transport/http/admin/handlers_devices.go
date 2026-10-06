@@ -102,7 +102,12 @@ func (h *handlers) ListDevices(ctx context.Context, req adminapi.ListDevicesRequ
 	if err != nil {
 		return nil, err
 	}
-	res, err := h.devices.List(ctx, app.DeviceQuery{Page: params.ListPage(), States: states, GroupID: req.Params.DeviceGroupId})
+	diskStates, err := listing.Enum("disk_state", req.Params.DiskState)
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.devices.List(ctx, app.DeviceQuery{Page: params.ListPage(), States: states, GroupID: req.Params.DeviceGroupId,
+		DiskStates: diskStates})
 	if err != nil {
 		return nil, err
 	}
@@ -133,6 +138,9 @@ func toDeviceRows(rows []pgstore.ListDevicesRow) []adminapi.Device {
 		items[i] = toDevice(r.Device, &pgstore.DeviceStatus{
 			LastContactAt: r.LastContactAt, AppliedBundleVersion: r.AppliedBundleVersion, AgentVersion: r.AgentVersion,
 		})
+		if s := adminapi.DiskState(r.DiskState); s.Valid() {
+			items[i].DiskState = &s
+		}
 	}
 	return items
 }

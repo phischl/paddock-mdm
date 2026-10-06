@@ -205,6 +205,44 @@ func (q *Queries) LatestEscrowGeneration(ctx context.Context, arg LatestEscrowGe
 	return column_1, err
 }
 
+const latestStoredEscrow = `-- name: LatestStoredEscrow :one
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret
+WHERE device_id = $1 AND kind = $2 AND status = 'stored'
+  AND ($3::int = 0 OR generation = $3::int)
+ORDER BY generation DESC
+LIMIT 1
+`
+
+type LatestStoredEscrowParams struct {
+	DeviceID   uuid.UUID
+	Kind       string
+	Generation int32
+}
+
+// The newest stored generation of a LUKS kind, or the requested one (generation 0: the newest).
+func (q *Queries) LatestStoredEscrow(ctx context.Context, arg LatestStoredEscrowParams) (EscrowSecret, error) {
+	row := q.db.QueryRow(ctx, latestStoredEscrow, arg.DeviceID, arg.Kind, arg.Generation)
+	var i EscrowSecret
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.DeviceID,
+		&i.Kind,
+		&i.Generation,
+		&i.Status,
+		&i.Ciphertext,
+		&i.KeyVersion,
+		&i.CreatedAt,
+		&i.ActivatedAt,
+		&i.ObjectKey,
+		&i.WrappedDek,
+		&i.Nonce,
+		&i.Sha256,
+		&i.Size,
+	)
+	return i, err
+}
+
 const listDiskEscrows = `-- name: ListDiskEscrows :many
 SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret
 WHERE device_id = $1 AND kind IN ('luks_recovery_key', 'luks_header')

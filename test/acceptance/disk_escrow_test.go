@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -134,4 +135,133 @@ func TestDiskEscrow(t *testing.T) {
 	if status := waitEscrow(t, d, id, time.Minute); status != escrow.StatusFailed {
 		t.Fatalf("header generation 1 again: %s", status)
 	}
+}
+
+// diskDevice enrolls a v2 device of alice's organization that escrowed recovery key generation 1 and header
+// generation 1, as the luks reconciler does, and returns it with the key and the header.
+func diskDevice(t *testing.T, alice *env.Portal) (*devicesim.Device, string, []byte) {
+	t.Helper()
+	d := v2Device(t, alice, "", 1, 2)
+	b := latestBundle(t, d, time.Minute, func(b *bundle.Bundle) bool { return b.Keys != nil && b.Keys.EscrowWrap != nil })
+	pub, version := escrowWrap(t, b)
+	key := "recovery-" + uniqueSuffix()
+	ct, err := escrow.Encrypt(pub, []byte(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.Must(uuid.NewV7()).String()
+	res, err := d.Escrow(testContext(t, time.Minute), escrow.Request{EscrowID: id, Kind: escrow.KindLUKSRecoveryKey, Generation: 1,
+		KeyVersion: version, Ciphertext: ct})
+	if err != nil || res.Status != http.StatusAccepted || waitEscrow(t, d, id, 30*time.Second) != escrow.StatusStored {
+		t.Fatalf("recovery key escrow: %v HTTP %d", err, res.Status)
+	}
+	header := testHeader(t)
+	id, _, status := escrowHeader(t, d, b, 1, header, nil)
+	if status != http.StatusOK || waitEscrow(t, d, id, time.Minute) != escrow.StatusStored {
+		t.Fatalf("header escrow: HTTP %d", status)
+	}
+	return d, key, header
+}
+
+// TestDiskRecovery is gate D-ESC at the API (plan M4b decision 14, AC2): with a fresh step-up and the typed hostname
+// an organization administrator gets the escrowed recovery key and the decrypted header, each reveal and download is
+// audited exactly once, without step-up the request is refused and audited as denied, auditors see the state only.
+func TestDiskRecovery(t *testing.T) {
+	alice, bob := login(t, env.Alice), login(t, env.Bob)
+	d, key, header := diskDevice(t, alice)
+	hostname := getDevice(t, alice, d.DeviceID).Hostname
+	path := "/api/v1/devices/" + d.DeviceID + "/disk"
+
+	var disk struct {
+		RecoveryKeys []struct {
+			Generation int    `json:"generation"`
+			Status     string `json:"status"`
+		} `json:"recovery_keys"`
+		Headers []struct {
+			Generation int    `json:"generation"`
+			Status     string `json:"status"`
+		} `json:"headers"`
+	}
+	if err := call(t, bob, http.MethodGet, path, nil).JSON(&disk); err != nil || len(disk.RecoveryKeys) != 1 || len(disk.Headers) != 1 ||
+		disk.Headers[0].Status != "stored" {
+		t.Fatalf("disk state %+v %v", disk, err)
+	}
+	body := map[string]any{"confirm_hostname": hostname}
+	res := call(t, alice, http.MethodPost, path+"/recovery-key", body)
+	expectStatus(t, res, http.StatusForbidden, "step_up_required")
+	expectOneEvent(t, alice, res.RequestID, "disk.recovery_key_revealed", "denied")
+
+	stepUp(t, alice, env.Alice, true)
+	res = call(t, alice, http.MethodPost, path+"/recovery-key", body)
+	expectStatus(t, res, http.StatusOK, "")
+	var revealed struct {
+		Generation  int    `json:"generation"`
+		RecoveryKey string `json:"recovery_key"`
+	}
+	if err := res.JSON(&revealed); err != nil || revealed.RecoveryKey != key || revealed.Generation != 1 {
+		t.Fatalf("revealed generation %d (%v), key matches: %v", revealed.Generation, err, revealed.RecoveryKey == key)
+	}
+	ev := expectOneEvent(t, alice, res.RequestID, "disk.recovery_key_revealed", "success")
+	if raw, _ := json.Marshal(ev); strings.Contains(string(raw), key) {
+		t.Fatal("the audit event contains the recovery key")
+	}
+
+	res = call(t, alice, http.MethodPost, path+"/header", body)
+	expectStatus(t, res, http.StatusOK, "")
+	if !bytes.Equal(res.Body, header) || res.Header.Get("Content-Disposition") != "attachment; filename="+hostname+"-luks-header-1.img" {
+		t.Fatalf("header: %d bytes, Content-Disposition %q", len(res.Body), res.Header.Get("Content-Disposition"))
+	}
+	expectOneEvent(t, alice, res.RequestID, "disk.header_downloaded", "success")
+
+	res = call(t, bob, http.MethodPost, path+"/header", body)
+	expectStatus(t, res, http.StatusForbidden, "forbidden")
+}
+
+// diskAuditCases are the A3 cases of the disk recovery (plan M4b decision 14); each case that needs a step-up signs
+// in on its own, as a step-up changes the session it runs in.
+func diskAuditCases(verb, code string) []auditCase {
+	target := func(id string) string { return "/api/v1/devices/" + id + "/disk/" + verb }
+	return []auditCase{
+		{"success", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			d, _, _ := diskDevice(t, alice)
+			stepUp(t, alice, env.Alice, true)
+			res := call(t, alice, http.MethodPost, target(d.DeviceID), map[string]any{"confirm_hostname": getDevice(t, alice, d.DeviceID).Hostname})
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, code, "success")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodPost, target(activeID(t, w)), map[string]any{"confirm_hostname": "x"})
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, code, "denied")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPost, target(activeID(t, w)), map[string]any{"confirm_hostname": "x"})
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, code, "denied")
+		}},
+		{"validation failure and not found", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			stepUp(t, alice, env.Alice, true)
+			res := call(t, alice, http.MethodPost, target(activeID(t, w)), map[string]any{"confirm_hostname": "not-the-hostname"})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
+			res = call(t, alice, http.MethodPost, target(uuid.NewString()), map[string]any{"confirm_hostname": "x"})
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
+		}},
+		{"conflict", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			id := activeID(t, w)
+			stepUp(t, alice, env.Alice, true)
+			res := call(t, alice, http.MethodPost, target(id), map[string]any{"confirm_hostname": getDevice(t, alice, id).Hostname})
+			expectStatus(t, res, http.StatusConflict, "invalid_state")
+			expectOneEvent(t, w.alice, res.RequestID, code, "failure")
+		}},
+	}
+}
+
+func init() {
+	deviceAuditCases["POST /api/v1/devices/{id}/disk/recovery-key"] = diskAuditCases("recovery-key", "disk.recovery_key_revealed")
+	deviceAuditCases["POST /api/v1/devices/{id}/disk/header"] = diskAuditCases("header", "disk.header_downloaded")
 }

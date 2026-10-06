@@ -171,11 +171,14 @@ func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UU
 }
 
 // loginStateArea is the area of device_status.login_state an event updates: "login" for login.*, "sudo" for
-// sudo.* (plan M3b decision 17), "local_admin" for the outcome of a rotation (plan M4a decision 17), "" for every
-// other event.
+// sudo.* (plan M3b decision 17), "local_admin" for the outcome of a rotation (plan M4a decision 17), "disk" for a
+// keyslot change (plan M4b decision 14), "" for every other event.
 func loginStateArea(typ string) string {
 	if typ == protocol.EventLocalAdminRotated || typ == protocol.EventLocalAdminRotationFailed {
 		return "local_admin"
+	}
+	if typ == protocol.EventTamperKeyslotChanged {
+		return "disk" // the last keyslot change, shown with the disk encryption (plan M4b decision 14)
 	}
 	area, _, _ := strings.Cut(typ, ".")
 	if area == "login" || area == "sudo" {

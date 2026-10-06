@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
+import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
 import type { DeviceCommand } from '../api/client'
 import { useDeviceDetailPage } from '../lib/deviceDetailPage'
 import type { ListColumn } from '../lib/listQuery'
@@ -154,6 +155,11 @@ function groupName(id: string | null | undefined): string {
         :hostname="device.hostname"
         :active="device.state === 'active'"
         @changed="commandList?.reload()"
+      />
+
+      <DiskEncryptionCard
+        :device-id="device.id"
+        :hostname="device.hostname"
       />
 
       <h2>{{ t('commands.title') }}</h2>

@@ -882,6 +882,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/disk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The disk encryption of the device (plan M4b decision 14): the state,
+         *     LUKS version and keyslot kinds of its last check-in, its escrowed recovery key and header generations (newest
+         *     first) and its last keyslot change.
+         */
+        get: operations["getDeviceDisk"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/disk/recovery-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns the newest stored
+         *     recovery key of the device; confirm_hostname must equal the device's hostname. 409 invalid_state when none is
+         *     stored. Type it at the boot PIN prompt once the PIN attempts are used up (docs/operations/disk-recovery.md).
+         *     Responses are never cached.
+         */
+        post: operations["revealDeviceRecoveryKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/disk/header": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns a stored LUKS header
+         *     backup of the device, decrypted (the newest generation unless generation is given), as the file
+         *     <hostname>-luks-header-<generation>.img for cryptsetup luksHeaderRestore; confirm_hostname must equal the
+         *     device's hostname. 409 invalid_state when no such generation is stored.
+         */
+        post: operations["downloadDeviceHeader"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/effective-sudo": {
         parameters: {
             query?: never;
@@ -1584,6 +1655,7 @@ export interface components {
             /** Format: int64 */
             applied_bundle_version: number | null;
             agent_version: string | null;
+            disk_state?: components["schemas"]["DiskState"];
         };
         DeviceGroupRef: {
             /** Format: uuid */
@@ -1652,6 +1724,55 @@ export interface components {
                 /** Format: date-time */
                 at: string;
             } | null;
+        };
+        /**
+         * @description Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
+         *     with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
+         *     header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, both escrowed).
+         * @enum {string}
+         */
+        DiskState: "not_encrypted" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "escrow_pending" | "compliant";
+        DiskEscrow: {
+            generation: number;
+            /** @enum {string} */
+            status: "pending" | "stored" | "failed";
+            /**
+             * Format: int64
+             * @description Headers: bytes of the sealed object.
+             */
+            size?: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        DiskEncryption: {
+            /** @description Null until the device reports its disk. */
+            state: components["schemas"]["DiskState"] | null;
+            luks_version?: number;
+            /** @description Kind of every keyslot, sorted (tpm2+pin, tpm2, recovery, password, or another token type). */
+            tokens: string[];
+            keyslots: number;
+            /**
+             * Format: date-time
+             * @description Check-in the state is from.
+             */
+            reported_at?: string;
+            recovery_keys: components["schemas"]["DiskEscrow"][];
+            headers: components["schemas"]["DiskEscrow"][];
+            last_keyslot_change?: {
+                /** Format: date-time */
+                at: string;
+                before: string[];
+                after: string[];
+            };
+        };
+        DiskRecoveryKey: {
+            generation: number;
+            recovery_key: string;
+        };
+        DiskHeaderRequest: {
+            confirm_hostname: string;
+            /** @description Header generation; the newest stored one if absent. */
+            generation?: number;
         };
         LocalAdminRevealRequest: {
             confirm_hostname: string;
@@ -2786,6 +2907,8 @@ export interface operations {
                 state?: components["parameters"]["DeviceStateFilter"];
                 /** @description Only members of this device group. */
                 device_group_id?: string;
+                /** @description Repeatable. Disk encryption state of the last check-in (plan M4b decision 14). */
+                disk_state?: components["schemas"]["DiskState"][];
             };
             header?: never;
             path?: never;
@@ -4068,6 +4191,101 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    getDeviceDisk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The disk encryption. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiskEncryption"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    revealDeviceRecoveryKey: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LocalAdminRevealRequest"];
+            };
+        };
+        responses: {
+            /** @description The recovery key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiskRecoveryKey"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    downloadDeviceHeader: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiskHeaderRequest"];
+            };
+        };
+        responses: {
+            /** @description The header backup. */
+            200: {
+                headers: {
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     getDeviceEffectiveSudo: {

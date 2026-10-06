@@ -63,6 +63,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	releaseKey := l.SecretFile("PADDOCK_RELEASE_PUBLIC_KEY_FILE")
 	artifacts := objectstore.New(l.Required("PADDOCK_ARTIFACTS_S3_ENDPOINT"), l.SecretFile("PADDOCK_ARTIFACTS_S3_ACCESS_KEY_FILE"),
 		l.SecretFile("PADDOCK_ARTIFACTS_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ARTIFACTS_S3_BUCKET", "paddock-agent-artifacts"))
+	// Escrowed LUKS headers, read for a recovery only (plan M4b decision 14).
+	escrowObjects := objectstore.New(l.Required("PADDOCK_ESCROW_S3_ENDPOINT"), l.SecretFile("PADDOCK_ESCROW_S3_ACCESS_KEY_FILE"),
+		l.SecretFile("PADDOCK_ESCROW_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ESCROW_S3_BUCKET", "paddock-escrow"))
 	var runnerOpts []app.RunnerOption
 	if common.Development() {
 		// Development-only test hook for the reaper acceptance test (plan M0 §8, A3).
@@ -136,6 +139,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Commands:      app.NewDeviceCommands(orgPool),
 		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowReader),
 		Autoinstall:   app.NewAutoinstall(runner, orgPool, bundlesURL),
+		Disk:          app.NewDisk(runner, orgPool, escrowReader, escrowObjects),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),

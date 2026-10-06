@@ -41,9 +41,10 @@ var (
 
 // DeviceQuery selects a page of devices.
 type DeviceQuery struct {
-	Page    ListPage
-	States  []string
-	GroupID *uuid.UUID
+	Page       ListPage
+	States     []string
+	GroupID    *uuid.UUID
+	DiskStates []string // disk encryption states of the last check-in (plan M4b decision 14)
 }
 
 // List returns one page of devices with their status.
@@ -77,15 +78,15 @@ func (d *Devices) ListGroupMembers(ctx context.Context, groupID uuid.UUID, query
 func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out *Listed[pgstore.ListDevicesRow]) error {
 	group := nullID(query.GroupID)
 	n, err := q.CountDevices(ctx, pgstore.CountDevicesParams{
-		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, CountLimit: countLimit,
+		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, CountLimit: countLimit,
 	})
 	if err != nil {
 		return fmt.Errorf("count devices: %w", err)
 	}
 	out.Count = int(n)
 	out.Items, err = q.ListDevices(ctx, pgstore.ListDevicesParams{
-		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, Sort: query.Page.Sort,
-		SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
+		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates,
+		Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
 	})
 	if err != nil {
 		return fmt.Errorf("list devices: %w", err)

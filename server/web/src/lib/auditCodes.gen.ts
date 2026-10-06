@@ -46,6 +46,8 @@ export const auditCodes = [
   'device_group.created',
   'device_group.deleted',
   'device_group.updated',
+  'disk.header_downloaded',
+  'disk.recovery_key_revealed',
   'enrollment_token.created',
   'enrollment_token.revoked',
   'local_admin.login',

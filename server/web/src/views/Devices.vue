@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import type { Device } from '../api/client'
 import { allGroups, groupFilter, listDevices, stateFilter } from '../lib/devices'
+import { diskStateFilter } from '../lib/disk'
 import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 
@@ -13,13 +14,14 @@ onMounted(async () => {
   groups.value = await allGroups()
 })
 
-const filters = computed(() => [stateFilter, groupFilter(groups.value)])
+const filters = computed(() => [stateFilter, groupFilter(groups.value), diskStateFilter])
 const columns: ListColumn[] = [
   { key: 'hostname', title: 'devices.hostname', sortable: true },
   { key: 'state', title: 'devices.state', sortable: true },
   { key: 'last_contact_at', title: 'devices.lastContact', sortable: true },
   { key: 'bundle_version', title: 'devices.bundleVersion' },
   { key: 'agent_version', title: 'devices.agentVersion' },
+  { key: 'disk_state', title: 'devices.disk.state' },
   { key: 'enrolled_at', title: 'devices.enrolledAt', sortable: true },
 ]
 </script>
@@ -52,6 +54,9 @@ const columns: ListColumn[] = [
       </template>
       <template #[`item.agent_version`]="{ item }: { item: Device }">
         {{ item.agent_version ?? '–' }}
+      </template>
+      <template #[`item.disk_state`]="{ item }: { item: Device }">
+        {{ item.disk_state ? t('devices.disk.states.' + item.disk_state) : '–' }}
       </template>
       <template #[`item.enrolled_at`]="{ item }: { item: Device }">
         {{ formatDateTime(item.enrolled_at, locale) }}

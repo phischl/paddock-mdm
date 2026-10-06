@@ -1,0 +1,213 @@
+package app
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"slices"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
+)
+
+// Specs of the disk recovery actions (plan M4b decision 14).
+var (
+	SpecDiskRecoveryKeyReveal = ActionSpec{Code: audit.CodeDiskRecoveryKeyRevealed, AllowedRoles: RolesAdmin, RequiresStepUp: true}
+	SpecDiskHeaderDownload    = ActionSpec{Code: audit.CodeDiskHeaderDownloaded, AllowedRoles: RolesAdmin, RequiresStepUp: true}
+)
+
+// Disk holds the use cases of a device's disk encryption: its state, and the recovery of the recovery key and the
+// LUKS header for an organization administrator.
+type Disk struct {
+	runner    *ActionRunner
+	org       *db.OrgPool
+	decrypter Decrypter
+	headers   HeaderObjects
+}
+
+// NewDisk creates the use cases; decrypter and headers are used by the recovery only.
+func NewDisk(runner *ActionRunner, org *db.OrgPool, decrypter Decrypter, headers HeaderObjects) *Disk {
+	return &Disk{runner: runner, org: org, decrypter: decrypter, headers: headers}
+}
+
+// KeyslotChange is the last tamper.keyslot_changed of a device.
+type KeyslotChange struct {
+	At            time.Time
+	Before, After []string
+}
+
+// DiskState is the disk encryption of a device: the health of its last check-in, its escrowed LUKS generations
+// (newest first) and its last keyslot change.
+type DiskState struct {
+	Health            *protocol.DiskHealth
+	ReportedAt        *time.Time
+	Escrows           []pgstore.EscrowSecret
+	LastKeyslotChange *KeyslotChange
+}
+
+// Get returns the disk encryption of a device; an unknown or foreign device is not_found.
+func (d *Disk) Get(ctx context.Context, deviceID uuid.UUID) (DiskState, error) {
+	var out DiskState
+	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+		return out, err
+	}
+	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if _, err := q.GetDevice(ctx, deviceID); err != nil {
+			return notFound(err)
+		}
+		status, err := q.GetDeviceStatus(ctx, deviceID)
+		switch {
+		case err == nil:
+			out.ReportedAt = status.LastContactAt
+			out.Health = diskHealth(status.Health)
+			out.LastKeyslotChange = lastKeyslotChange(status.LoginState)
+		case !db.IsNoRows(err):
+			return err
+		}
+		out.Escrows, err = q.ListDiskEscrows(ctx, deviceID)
+		return err
+	})
+	return out, err
+}
+
+// diskHealth reads health.disk of a check-in; nil when the device reports none or an unknown state.
+func diskHealth(health json.RawMessage) *protocol.DiskHealth {
+	var h struct {
+		Disk *protocol.DiskHealth `json:"disk"`
+	}
+	if json.Unmarshal(health, &h) != nil || h.Disk == nil || !slices.Contains(protocol.DiskStates, h.Disk.State) {
+		return nil
+	}
+	return h.Disk
+}
+
+// lastKeyslotChange reads the "disk" area of device_status.login_state.
+func lastKeyslotChange(state json.RawMessage) *KeyslotChange {
+	var areas map[string]struct {
+		OccurredAt time.Time `json:"occurred_at"`
+		Params     struct {
+			Before []string `json:"before"`
+			After  []string `json:"after"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(state, &areas) != nil {
+		return nil
+	}
+	last, ok := areas["disk"]
+	if !ok {
+		return nil
+	}
+	return &KeyslotChange{At: last.OccurredAt, Before: last.Params.Before, After: last.Params.After}
+}
+
+// RevealRecoveryKey decrypts the newest stored recovery key of a device: organization administrators only, with a
+// fresh step-up and the device's hostname typed as confirmation (audited: disk.recovery_key_revealed with the
+// generation, never the key).
+func (d *Disk) RevealRecoveryKey(ctx context.Context, deviceID uuid.UUID, confirmHostname string) (int, string, error) {
+	spec := SpecDiskRecoveryKeyReveal
+	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
+	var generation int
+	var key string
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		s, err := d.confirmedEscrow(ctx, q, rec, deviceID, confirmHostname, escrow.KindLUKSRecoveryKey, 0)
+		if err != nil {
+			return err
+		}
+		plain, err := d.decrypter.Decrypt(ctx, int(s.KeyVersion), base64.StdEncoding.EncodeToString(s.Ciphertext))
+		if err != nil {
+			slog.ErrorContext(ctx, "decrypting an escrowed recovery key failed", "device_id", deviceID, "generation", s.Generation, "error", err)
+			return problem.UpstreamUnavailable.WithDetail("the key service could not decrypt the recovery key")
+		}
+		generation, key = int(s.Generation), string(plain)
+		clear(plain)
+		return nil
+	})
+	if err != nil {
+		return 0, "", err
+	}
+	return generation, key, nil
+}
+
+// Header is a decrypted LUKS header backup of a device.
+type Header struct {
+	Hostname   string
+	Generation int
+	Data       []byte
+}
+
+// DownloadHeader decrypts a stored header generation of a device (0: the newest) under the same guards as the
+// recovery key (audited: disk.header_downloaded with the generation).
+func (d *Disk) DownloadHeader(ctx context.Context, deviceID uuid.UUID, confirmHostname string, generation int) (Header, error) {
+	spec := SpecDiskHeaderDownload
+	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
+	var out Header
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		s, err := d.confirmedEscrow(ctx, q, rec, deviceID, confirmHostname, escrow.KindLUKSHeader, generation)
+		if err != nil {
+			return err
+		}
+		out.Hostname, out.Generation = confirmHostname, int(s.Generation)
+		out.Data, err = d.openHeader(ctx, s)
+		return err
+	})
+	return out, err
+}
+
+// confirmedEscrow loads the device, records it as target, checks the typed hostname and returns the stored escrow
+// of kind (generation 0: the newest).
+func (d *Disk) confirmedEscrow(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceID uuid.UUID, confirmHostname, kind string,
+	generation int) (pgstore.EscrowSecret, error) {
+	dev, err := q.GetDevice(ctx, deviceID)
+	if err != nil {
+		return pgstore.EscrowSecret{}, notFound(err)
+	}
+	rec.SetTarget(audit.Target{Type: "device", ID: deviceID.String(), Display: dev.Hostname})
+	rec.SetParam("hostname", dev.Hostname)
+	if confirmHostname != dev.Hostname {
+		return pgstore.EscrowSecret{}, problem.InvalidRequest.WithDetail("confirm_hostname does not match the device's hostname")
+	}
+	if generation < 0 || generation > 1<<31-1 {
+		return pgstore.EscrowSecret{}, problem.InvalidRequest.WithDetail("generation must be positive")
+	}
+	s, err := q.LatestStoredEscrow(ctx, pgstore.LatestStoredEscrowParams{DeviceID: deviceID, Kind: kind, Generation: int32(generation)}) //nolint:gosec // bounded above
+	if db.IsNoRows(err) {
+		return s, problem.InvalidState.WithDetail("the device has no stored escrow of this kind and generation")
+	}
+	if err != nil {
+		return s, err
+	}
+	rec.SetParam("generation", s.Generation)
+	return s, nil
+}
+
+// openHeader reads the sealed object of a header generation, unwraps its key with escrow-wrap and decrypts it.
+func (d *Disk) openHeader(ctx context.Context, s pgstore.EscrowSecret) ([]byte, error) {
+	if s.ObjectKey == nil {
+		return nil, fmt.Errorf("header %s without object", s.ID)
+	}
+	object, found, err := d.headers.GetIfExists(ctx, *s.ObjectKey)
+	if err != nil || !found {
+		slog.ErrorContext(ctx, "reading an escrowed header failed", "device_id", s.DeviceID, "generation", s.Generation, "found", found, "error", err)
+		return nil, problem.UpstreamUnavailable.WithDetail("the escrow bucket does not answer with the header")
+	}
+	dek, err := d.decrypter.Decrypt(ctx, int(s.KeyVersion), base64.StdEncoding.EncodeToString(s.WrappedDek))
+	if err != nil {
+		slog.ErrorContext(ctx, "unwrapping an escrowed header key failed", "device_id", s.DeviceID, "generation", s.Generation, "error", err)
+		return nil, problem.UpstreamUnavailable.WithDetail("the key service could not decrypt the header key")
+	}
+	defer clear(dek)
+	header, err := escrow.OpenHeader(dek, s.Nonce, s.ID.String(), object)
+	if err != nil {
+		return nil, fmt.Errorf("open header %s: %w", s.ID, err)
+	}
+	return header, nil
+}

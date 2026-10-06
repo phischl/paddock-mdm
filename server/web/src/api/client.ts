@@ -58,6 +58,10 @@ export type DeviceCommandStatus = components['schemas']['DeviceCommandStatus']
 export type DeviceCommandType = components['schemas']['DeviceCommandType']
 export type LocalAdmin = components['schemas']['LocalAdmin']
 export type LocalAdminRevealed = components['schemas']['LocalAdminRevealed']
+export type DiskEncryption = components['schemas']['DiskEncryption']
+export type DiskEscrow = components['schemas']['DiskEscrow']
+export type DiskRecoveryKey = components['schemas']['DiskRecoveryKey']
+export type DiskState = components['schemas']['DiskState']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

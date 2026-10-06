@@ -1,5 +1,6 @@
 import {
-  api, listPage, problemCode, type Device, type DeviceDetail, type DeviceReport, type DeviceSort, type DeviceState, type EffectiveConfig,
+  api, listPage, problemCode, type Device, type DeviceDetail, type DeviceReport, type DeviceSort, type DeviceState, type DiskState,
+  type EffectiveConfig,
 } from '../api/client'
 import { maxListDepth, type ListFilter, type ListParams, type Page } from './listQuery'
 
@@ -23,7 +24,7 @@ export async function listDevices(p: ListParams): Promise<Page<Device>> {
       params: {
         query: {
           page: p.page, page_size: p.page_size, sort: p.sort as DeviceSort, q: p.q, state: p.state as DeviceState[],
-          device_group_id: ((p.device_group_id as string[] | undefined) ?? [])[0],
+          device_group_id: ((p.device_group_id as string[] | undefined) ?? [])[0], disk_state: p.disk_state as DiskState[],
         },
       },
     }),
