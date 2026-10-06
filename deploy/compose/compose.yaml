@@ -285,8 +285,12 @@ services:
       PADDOCK_ARTIFACTS_S3_BUCKET: paddock-agent-artifacts
       PADDOCK_ARTIFACTS_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_artifacts_api_access_key
       PADDOCK_ARTIFACTS_S3_SECRET_KEY_FILE: /run/secrets/rustfs_artifacts_api_secret_key
+      # Publishes new and revoked enrollment tokens to the gateway's cache at once.
+      PADDOCK_VALKEY_ADDR: valkey:6379
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
+      - valkey_password
       - release_public_key
       - rustfs_artifacts_api_access_key
       - rustfs_artifacts_api_secret_key
@@ -307,6 +311,8 @@ services:
       caddy-ca-export:
         condition: service_completed_successfully
       openbao:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
 
   paddock-outbox-relay:

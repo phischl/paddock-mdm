@@ -174,3 +174,32 @@ func TestEnrollErrors(t *testing.T) {
 		t.Fatalf("unknown enrollment: %d, %v", code, err)
 	}
 }
+
+// TestEnrollRetriesNewToken: a token the gateway does not know yet (invalid_token) is retried TokenRetries times,
+// TokenRetryDelay apart; after that the enrollment fails.
+func TestEnrollRetriesNewToken(t *testing.T) {
+	f := newFixture(t)
+	f.g.EnrollFail = enroll.TokenRetries
+	f.setStatus(protocol.EnrollStatus{Status: protocol.EnrollActive, DeviceID: testgw.DeviceID})
+	if code, err := enroll.Run(context.Background(), f.options(f.cfgPath)); code != enroll.ExitActive || err != nil {
+		t.Fatalf("%d, %v", code, err)
+	}
+	if len(f.g.Enrolls) != 1 || len(f.sleeps) < enroll.TokenRetries {
+		t.Fatalf("enrolls %d, sleeps %v", len(f.g.Enrolls), f.sleeps)
+	}
+	for _, d := range f.sleeps[:enroll.TokenRetries] {
+		if d != enroll.TokenRetryDelay {
+			t.Fatalf("sleeps %v", f.sleeps)
+		}
+	}
+
+	f = newFixture(t)
+	f.g.EnrollFail = enroll.TokenRetries + 1
+	code, err := enroll.Run(context.Background(), f.options(f.cfgPath))
+	if code != enroll.ExitError || client.Code(err) != protocol.CodeInvalidToken || len(f.sleeps) != enroll.TokenRetries {
+		t.Fatalf("%d, %v, sleeps %v", code, err, f.sleeps)
+	}
+	if st, _ := state.Load(f.layout.State()); st.EnrollmentID != "" {
+		t.Fatalf("state %+v after a refused token", st)
+	}
+}

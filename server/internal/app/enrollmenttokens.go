@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -19,19 +21,40 @@ import (
 // BundleKeySource returns the public bundle-signing keys devices must trust (bundlesign.PublicKeys).
 type BundleKeySource func(ctx context.Context) ([]protocol.BundleKey, error)
 
+// TokenCache is the gateway's enrollment token cache (devicecache.Cache).
+type TokenCache interface {
+	PutToken(ctx context.Context, secretSHA256 []byte, t devicecache.Token, now time.Time) error
+}
+
 // EnrollmentTokens are the enrollment token use cases (plan M2a decision 9).
 type EnrollmentTokens struct {
 	runner    *ActionRunner
 	org       *db.OrgPool
 	keys      BundleKeySource
+	cache     TokenCache
 	deviceURL string
 	now       func() time.Time
 }
 
 // NewEnrollmentTokens creates the use cases. deviceURL is the public device API URL put into enrollment
-// configurations, e.g. https://device.example.org.
-func NewEnrollmentTokens(runner *ActionRunner, org *db.OrgPool, keys BundleKeySource, deviceURL string) *EnrollmentTokens {
-	return &EnrollmentTokens{runner: runner, org: org, keys: keys, deviceURL: deviceURL, now: time.Now}
+// configurations, e.g. https://device.example.org. cache may be nil (the worker's cache sync alone then publishes
+// tokens).
+func NewEnrollmentTokens(runner *ActionRunner, org *db.OrgPool, keys BundleKeySource, cache TokenCache, deviceURL string) *EnrollmentTokens {
+	return &EnrollmentTokens{runner: runner, org: org, keys: keys, cache: cache, deviceURL: deviceURL, now: time.Now}
+}
+
+// publish writes a created or revoked token to the gateway's cache right after the commit, so a device can enroll
+// with a new token at once and a revoked one is refused at once. It is best effort: the worker's cache sync
+// (notification and reconcile) remains the authority and repairs a failed write.
+func (e *EnrollmentTokens) publish(ctx context.Context, tok pgstore.EnrollmentToken) {
+	if e.cache == nil {
+		return
+	}
+	t := devicecache.Token{OrganizationID: tok.OrganizationID, Revoked: tok.RevokedAt != nil, ExpiresAt: tok.ExpiresAt}
+	if err := e.cache.PutToken(ctx, tok.SecretSha256, t, e.now()); err != nil {
+		slog.WarnContext(ctx, "publishing the enrollment token to the device cache failed; the worker repairs it",
+			"token_id", tok.ID, "error", err)
+	}
 }
 
 // Specs of the privileged enrollment token actions.
@@ -134,6 +157,9 @@ func (e *EnrollmentTokens) Create(ctx context.Context, in TokenInput) (CreatedTo
 		}
 		return nil
 	})
+	if err == nil {
+		e.publish(ctx, out.Token)
+	}
 	return out, err
 }
 
@@ -152,6 +178,9 @@ func (e *EnrollmentTokens) Revoke(ctx context.Context, id uuid.UUID) (pgstore.En
 		rec.SetParam("name", tok.Name)
 		return nil
 	})
+	if err == nil {
+		e.publish(ctx, tok)
+	}
 	return tok, err
 }
 

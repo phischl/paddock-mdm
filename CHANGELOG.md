@@ -107,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `paddock-api` needs the Valkey connection (`PADDOCK_VALKEY_ADDR`, `PADDOCK_VALKEY_PASSWORD_FILE`, as for gateway and worker) to publish enrollment tokens to the device cache; add both to the api role's configuration.
 - GDM no longer lists the managed local administrator: the agent writes `/var/lib/AccountsService/users/<local_admin_username>` with `SystemAccount=true` before it creates the account and restores the file (restarting AccountsService) when it is removed or changed; the account still signs in through "Not listed?", on text consoles and over SSH (M4a.1 step 2).
 - **BREAKING:** Go module path is `github.com/phischl/paddock-mdm/…` (`pkg`, `server`, `agent`, `test/acceptance`, `test/system`) instead of `github.com/paddock-mdm/paddock/…`; code importing the modules and builds that set `-X github.com/paddock-mdm/paddock/agent/internal/buildinfo.Version` must use the new path (M4a.1 step 1).
 - **BREAKING:** `PUT /api/v1/settings/login` requires `notice_text` (M4a step 5).
@@ -137,6 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A device enrolling right after its enrollment token was created no longer gets `401 invalid_token`: `paddock-api` publishes new and revoked tokens to the gateway's cache as soon as they are committed (the worker's cache sync remains the safety net), and `paddockd enroll` retries `invalid_token` three times over 30 s.
 - The agent also creates an empty `/etc/paddock/login-deny` on devices without a login resource while the `paddock-deny` PAM profile is enabled, so `pam_listfile` no longer logs at every authentication there; an existing list is left unchanged (M4a step 0c).
 - The audit log's event filter in the portal offers every audit code; the list is generated from the server's code registry by `make gen`, and `npm run lint` fails when a code has no English message (M4a step 0b).
 - The agent always writes `/etc/paddock/login-deny`, empty when nobody is locked, so `pam_listfile` no longer logs "Couldn't open /etc/paddock/login-deny" at every authentication; without the file every login still works (M3.1 step 3).

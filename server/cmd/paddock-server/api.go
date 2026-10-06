@@ -16,12 +16,14 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/bundlesign"
 	"github.com/phischl/paddock-mdm/server/internal/config"
+	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/escrowreader"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
+	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/web"
 )
@@ -37,6 +39,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")
 	auditDSN := l.SecretFile("PADDOCK_AUDIT_DB_READER_URL_FILE")
 	baoCfg := config.LoadOpenBao(l)
+	// New and revoked enrollment tokens are published to the gateway's cache at once (the worker's cache sync stays
+	// the authority).
+	vkCfg := config.LoadValkey(l)
 	// The reveal's own AppRole paddock-escrow-reader (plan M4a decision 9).
 	escrowRoleID := l.SecretFile("PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE")
 	escrowSecretID := l.SecretFile("PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE")
@@ -91,6 +96,11 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	if err != nil {
 		return err
 	}
+	vk, err := valkey.New(valkey.Config{Addr: vkCfg.Addr, Password: vkCfg.Password})
+	if err != nil {
+		return err
+	}
+	defer vk.Close()
 
 	static, err := admin.NewStaticHandler(web.Dist())
 	if err != nil {
@@ -108,7 +118,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	ak := authentik.New(authentikURL, authentikToken)
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
-		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, deviceURL),
+		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, devicecache.New(vk), deviceURL),
 		Devices:       app.NewDevices(runner, orgPool),
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, ak),

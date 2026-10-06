@@ -37,6 +37,7 @@ type Gateway struct {
 
 	Mu           sync.Mutex
 	EnrollStatus protocol.EnrollStatus // answer of GET /v1/enroll/{id}
+	EnrollFail   int                   // the next enrollment requests answered 401 invalid_token
 	CheckinFail  int                   // HTTP status of the next check-ins (0 = success)
 	Checkin      protocol.CheckinResponse
 	EventsFail   int
@@ -119,6 +120,12 @@ func (g *Gateway) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.Mu.Lock()
+	if g.EnrollFail > 0 {
+		g.EnrollFail--
+		g.Mu.Unlock()
+		problem(w, http.StatusUnauthorized, protocol.CodeInvalidToken)
+		return
+	}
 	g.keys[h.KeyID] = pub
 	g.Enrolls = append(g.Enrolls, req)
 	g.Mu.Unlock()

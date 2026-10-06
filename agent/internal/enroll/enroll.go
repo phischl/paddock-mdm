@@ -39,6 +39,13 @@ const (
 	MaxWait   = 24 * time.Hour
 )
 
+// A brand-new token may not have reached the gateway yet, which then answers invalid_token: the request is retried
+// TokenRetries times, TokenRetryDelay apart (30 s in total).
+const (
+	TokenRetries    = 3
+	TokenRetryDelay = 10 * time.Second
+)
+
 // Options of one enrollment run.
 type Options struct {
 	Layout paths.Layout
@@ -96,7 +103,7 @@ func Run(ctx context.Context, o Options) (int, error) {
 		return ExitError, err
 	}
 	if st.EnrollmentID == "" {
-		id, err := c.Enroll(ctx, Request(l, token, key))
+		id, err := requestEnrollment(ctx, o, c, Request(l, token, key))
 		if err != nil {
 			return ExitError, fmt.Errorf("enrollment request: %w", err)
 		}
@@ -114,6 +121,20 @@ func Run(ctx context.Context, o Options) (int, error) {
 		return code, removeConfig(o)
 	}
 	return code, nil
+}
+
+// requestEnrollment sends the enrollment request and retries invalid_token answers.
+func requestEnrollment(ctx context.Context, o Options, c *client.Client, req protocol.EnrollRequest) (string, error) {
+	for attempt := 0; ; attempt++ {
+		id, err := c.Enroll(ctx, req)
+		if err == nil || client.Code(err) != protocol.CodeInvalidToken || attempt == TokenRetries {
+			return id, err
+		}
+		slog.WarnContext(ctx, "enrollment token not accepted yet; retrying", "retry_in", TokenRetryDelay)
+		if err := o.Sleep(ctx, TokenRetryDelay); err != nil {
+			return "", err
+		}
+	}
 }
 
 // storeConfig validates the enrollment configuration and writes agent.yml and trust.json. It returns the token.
