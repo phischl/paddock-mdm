@@ -280,6 +280,7 @@ type OrganizationLoginSetting struct {
 	LocalAdminRotationDays int32
 	RotateAfterRevealHours *int32
 	NoticeText             string
+	BootPinMinLength       int32
 }
 
 type Outbox struct {

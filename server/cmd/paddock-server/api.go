@@ -35,6 +35,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	httpAddr := l.String("PADDOCK_HTTP_ADDR", ":8080")
 	publicURL := strings.TrimRight(l.Required("PADDOCK_PUBLIC_ADMIN_URL"), "/")
 	deviceURL := strings.TrimRight(l.Required("PADDOCK_PUBLIC_DEVICE_URL"), "/")
+	// The Paddock autoinstall downloads the agent packages from the public bundles host (plan M4b decision 1).
+	bundlesURL := strings.TrimRight(l.Required("PADDOCK_BUNDLES_PUBLIC_URL"), "/")
 	orgDSN := l.SecretFile("PADDOCK_DB_URL_FILE")
 	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")
 	auditDSN := l.SecretFile("PADDOCK_AUDIT_DB_READER_URL_FILE")
@@ -133,6 +135,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Privileges:    app.NewPrivileges(runner, orgPool),
 		Commands:      app.NewDeviceCommands(orgPool),
 		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowReader),
+		Autoinstall:   app.NewAutoinstall(runner, orgPool, bundlesURL),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),

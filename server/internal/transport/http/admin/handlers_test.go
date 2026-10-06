@@ -310,6 +310,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Privileges:    app.NewPrivileges(runner, orgPool),
 		Commands:      app.NewDeviceCommands(orgPool),
 		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, fakeDecrypter{}),
+		Autoinstall:   app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,

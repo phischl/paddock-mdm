@@ -11,6 +11,7 @@ func valid() Settings {
 		HelloEnabled: true, HelloPinMinLength: 6, UserLockSessionAction: "lock_screen",
 		BreakGlassAccounts: []string{"paddock"}, SudoersDAllowlist: []string{"README", "90-paddock"},
 		SudoLectureText: "Be careful.", LocalAdminUsername: "paddock-admin", LocalAdminRotationDays: 30,
+		BootPinMinLength: DefaultBootPinMinLength,
 	}
 }
 
@@ -26,6 +27,8 @@ func TestValidate(t *testing.T) {
 	}{
 		"pin too short":        {func(s *Settings) { s.HelloPinMinLength = 5 }, ErrPinLength},
 		"pin too long":         {func(s *Settings) { s.HelloPinMinLength = 33 }, ErrPinLength},
+		"boot pin too short":   {func(s *Settings) { s.BootPinMinLength = 5 }, ErrBootPinLength},
+		"boot pin too long":    {func(s *Settings) { s.BootPinMinLength = 33 }, ErrBootPinLength},
 		"unknown action":       {func(s *Settings) { s.UserLockSessionAction = "logout" }, ErrSessionAction},
 		"break-glass upper":    {func(s *Settings) { s.BreakGlassAccounts = []string{"Admin"} }, ErrBreakGlass},
 		"break-glass with @":   {func(s *Settings) { s.BreakGlassAccounts = []string{"dave@acme.test"} }, ErrBreakGlass},

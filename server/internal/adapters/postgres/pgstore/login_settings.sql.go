@@ -11,7 +11,7 @@ import (
 
 const getLoginSettings = `-- name: GetLoginSettings :one
 
-SELECT organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text FROM organization_login_settings
+SELECT organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length FROM organization_login_settings
 `
 
 // Login settings (plan M3a decision 8): one row per organization, created with the defaults by a trigger.
@@ -31,6 +31,7 @@ func (q *Queries) GetLoginSettings(ctx context.Context) (OrganizationLoginSettin
 		&i.LocalAdminRotationDays,
 		&i.RotateAfterRevealHours,
 		&i.NoticeText,
+		&i.BootPinMinLength,
 	)
 	return i, err
 }
@@ -41,8 +42,9 @@ SET hello_enabled = $1, hello_pin_min_length = $2,
     user_lock_session_action = $3, break_glass_accounts = $4,
     sudoers_d_allowlist = $5, sudo_lecture_text = $6,
     local_admin_username = $7, local_admin_rotation_days = $8,
-    rotate_after_reveal_hours = $9, notice_text = $10, updated_at = now()
-RETURNING organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text
+    rotate_after_reveal_hours = $9, notice_text = $10,
+    boot_pin_min_length = $11, updated_at = now()
+RETURNING organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length
 `
 
 type UpdateLoginSettingsParams struct {
@@ -56,6 +58,7 @@ type UpdateLoginSettingsParams struct {
 	LocalAdminRotationDays int32
 	RotateAfterRevealHours *int32
 	NoticeText             string
+	BootPinMinLength       int32
 }
 
 func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettingsParams) (OrganizationLoginSetting, error) {
@@ -70,6 +73,7 @@ func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettin
 		arg.LocalAdminRotationDays,
 		arg.RotateAfterRevealHours,
 		arg.NoticeText,
+		arg.BootPinMinLength,
 	)
 	var i OrganizationLoginSetting
 	err := row.Scan(
@@ -85,6 +89,7 @@ func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettin
 		&i.LocalAdminRotationDays,
 		&i.RotateAfterRevealHours,
 		&i.NoticeText,
+		&i.BootPinMinLength,
 	)
 	return i, err
 }

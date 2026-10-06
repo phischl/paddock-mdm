@@ -28,6 +28,12 @@ type tokenOptions struct {
 	validFor    time.Duration
 }
 
+// autoinstallBody is a request of POST /api/v1/autoinstall for one gate device (plan M4b decision 2).
+func autoinstallBody(cfg protocol.EnrollmentConfig, release string) map[string]any {
+	return map[string]any{"enrollment_config": cfg, "release": release, "hostname": "gate-laptop", "locale": "en_US.UTF-8",
+		"keyboard_layout": "us", "timezone": "Europe/Berlin"}
+}
+
 func createToken(t *testing.T, p *env.Portal, o tokenOptions) createdToken {
 	t.Helper()
 	if o.maxUses == 0 {

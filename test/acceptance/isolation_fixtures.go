@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -19,6 +20,8 @@ type isolationWorld struct {
 	globexGroups []string
 	// Globex device control plane resources (seedGlobexDevices).
 	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
+	// globexEnrollment is the enrollment configuration of globexToken.
+	globexEnrollment protocol.EnrollmentConfig
 	// Globex identity resources (seedGlobexIdentity).
 	globexUser, globexUserGroup, globexProfile, globexAssignment string
 	// globexUpstream is the Authentik pk of an upstream group whose only member is a globex user (seedGlobexUpstream).
@@ -68,7 +71,7 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	t.Helper()
 	w.globexDeviceGroup = namedGroup(t, w.carol, "globex isolation devices")
 	tok := createToken(t, w.carol, tokenOptions{name: uniqueName("globex isolation token"), autoApprove: true})
-	w.globexToken = tok.Token.ID
+	w.globexToken, w.globexEnrollment = tok.Token.ID, tok.EnrollmentConfig
 	dev, s := enroll(t, tok.EnrollmentConfig, "globex-iso-"+uniqueSuffix())
 	if s.Status != "active" {
 		t.Fatalf("globex device enrollment %+v", s)
@@ -236,6 +239,10 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"PUT /api/v1/settings/login": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/settings/login", currentLoginSettings(t, w.alice)
+	}},
+
+	"POST /api/v1/autoinstall": {kind: isoItem, request: func(_ *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/autoinstall", autoinstallBody(w.globexEnrollment, "26.04")
 	}},
 
 	"PUT /api/v1/devices/{id}/login-assignment": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/login-assignment" },

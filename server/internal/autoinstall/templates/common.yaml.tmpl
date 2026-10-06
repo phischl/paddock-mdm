@@ -1,0 +1,67 @@
+{{- /*
+Shared parts of the Paddock autoinstall (plan M4b decision 3). Every value is rendered with q (a JSON string, which
+is a valid YAML double-quoted scalar); commands are argument lists, so no value passes through a shell parser except
+as a positional parameter ("$1").
+*/ -}}
+
+{{- define "head" -}}
+#cloud-config
+# Paddock autoinstall for Ubuntu {{.Release}} (plan M4b), generated {{.GeneratedAt}}.
+# This file contains a one-time disk passphrase and an enrollment token: keep it secret and delete it once the
+# device is installed. At the first boot, type the passphrase from storage.layout.password at the disk prompt; the
+# device then asks for its boot PIN.
+autoinstall:
+  version: 1
+  locale: {{q .Locale}}
+  keyboard:
+    layout: {{q .KeyboardLayout}}
+  timezone: {{q .Timezone}}
+  source:
+    id: ubuntu-desktop-minimal
+  # The installer requires an account; its password is locked ("!" and passwd -l below). The managed local
+  # administrator of Paddock is the device's only local administrator.
+  identity:
+    hostname: {{q .Hostname}}
+    realname: Paddock installer
+    username: {{q .InstallUser}}
+    password: "!"
+  # LVM inside LUKS2 with a random temporary passphrase; the agent removes it once the recovery key and the header
+  # are escrowed.
+  storage:
+    layout:
+      name: lvm
+      password: {{q .Passphrase}}
+  updates: security
+  codecs:
+    install: false
+  drivers:
+    install: false
+  packages:
+    - cryptsetup
+    - tpm2-tools
+  late-commands:
+{{- end}}
+
+{{- define "paddock" }}
+    # Paddock packages of agent release {{.AgentVersion}}, refused unless their SHA-256 matches.
+{{- range .Packages}}
+    - ["curtin", "in-target", "--target=/target", "--", "python3", "-c", {{q $.FetchScript}}, {{q .URL}}, {{q .SHA256}}, {{q .Path}}]
+{{- end}}
+    - ["curtin", "in-target", "--target=/target", "--", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", {{list .PackagePaths}}]
+    - ["curtin", "in-target", "--target=/target", "--", "rm", "-f", {{list .PackagePaths}}]
+    # Enrollment at the first start of the agent, disk setup at the first boot.
+    - ["sh", "-c", "umask 077 && printf %s \"$1\" | base64 -d > /target/etc/paddock/enroll.json", "sh", {{q .EnrollmentConfigBase64}}]
+    - ["sh", "-c", "umask 077 && mkdir -p /target/var/lib/paddock && printf %s \"$1\" > /target/var/lib/paddock/install-passphrase", "sh", {{q .Passphrase}}]
+    - ["sh", "-c", "printf '%s\\n' \"$1\" > /target/etc/paddock/disk-setup.json", "sh", {{q .DiskSetup}}]
+    - ["touch", "/target/var/lib/paddock/disk-setup-pending"]
+    # The root volume is unlocked with TPM2+PIN once the PIN is enrolled.
+    - ["curtin", "in-target", "--target=/target", "--", "sed", "-i", "-E", {{q .CrypttabScript}}, "/etc/crypttab"]
+{{- end}}
+
+{{- define "tail" }}
+    - ["curtin", "in-target", "--target=/target", "--", "dracut", "-f", "--regenerate-all"]
+    # Lock the installer account (it may also be created only at the first boot) and keep it off the login screen.
+    - ["curtin", "in-target", "--target=/target", "--", "sh", "-c", "! id -- \"$1\" >/dev/null 2>&1 || passwd -l -- \"$1\"", "sh", {{q .InstallUser}}]
+    - ["sh", "-c", "mkdir -p /target/var/lib/AccountsService/users && printf '[User]\\nSystemAccount=true\\n' > \"/target/var/lib/AccountsService/users/$1\" && chmod 0600 \"/target/var/lib/AccountsService/users/$1\"", "sh", {{q .InstallUser}}]
+  shutdown: poweroff
+{{end}}

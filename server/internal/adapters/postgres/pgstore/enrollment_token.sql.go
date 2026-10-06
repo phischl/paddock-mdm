@@ -65,6 +65,31 @@ func (q *Queries) GetEnrollmentToken(ctx context.Context, id uuid.UUID) (Enrollm
 	return i, err
 }
 
+const getEnrollmentTokenBySecret = `-- name: GetEnrollmentTokenBySecret :one
+SELECT id, organization_id, name, secret_sha256, device_group_id, auto_approve, max_uses, uses, expires_at, revoked_at, created_by, created_at FROM enrollment_token WHERE secret_sha256 = $1
+`
+
+// Paddock autoinstall (plan M4b decision 2): the token of an enrollment configuration, within the organization.
+func (q *Queries) GetEnrollmentTokenBySecret(ctx context.Context, secretSha256 []byte) (EnrollmentToken, error) {
+	row := q.db.QueryRow(ctx, getEnrollmentTokenBySecret, secretSha256)
+	var i EnrollmentToken
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Name,
+		&i.SecretSha256,
+		&i.DeviceGroupID,
+		&i.AutoApprove,
+		&i.MaxUses,
+		&i.Uses,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertEnrollmentToken = `-- name: InsertEnrollmentToken :one
 INSERT INTO enrollment_token (id, organization_id, name, secret_sha256, device_group_id, auto_approve, max_uses,
                               expires_at, created_by)

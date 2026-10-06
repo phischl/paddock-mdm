@@ -302,6 +302,43 @@ func (q *Queries) InsertAgentUpdateReport(ctx context.Context, arg InsertAgentUp
 	return err
 }
 
+const installPackages = `-- name: InstallPackages :many
+SELECT version::text, name::text, sha256::text, object_key::text FROM paddock_install_packages($1::text)
+`
+
+type InstallPackagesRow struct {
+	Version   string
+	Name      string
+	Sha256    string
+	ObjectKey string
+}
+
+// The packages of the release new devices install (plan M4b decision 2); paddock-supervisor first.
+func (q *Queries) InstallPackages(ctx context.Context, arch string) ([]InstallPackagesRow, error) {
+	rows, err := q.db.Query(ctx, installPackages, arch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InstallPackagesRow{}
+	for rows.Next() {
+		var i InstallPackagesRow
+		if err := rows.Scan(
+			&i.Version,
+			&i.Name,
+			&i.Sha256,
+			&i.ObjectKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentArtifacts = `-- name: ListAgentArtifacts :many
 SELECT version, arch, sha256, size, minisig, object_key, created_at FROM agent_artifact WHERE version = $1 ORDER BY arch
 `

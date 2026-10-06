@@ -120,3 +120,7 @@ RETURNING *;
 
 -- name: ListAgentPackages :many
 SELECT * FROM agent_package WHERE version = @version ORDER BY name, arch;
+
+-- The packages of the release new devices install (plan M4b decision 2); paddock-supervisor first.
+-- name: InstallPackages :many
+SELECT version::text, name::text, sha256::text, object_key::text FROM paddock_install_packages(@arch::text);

@@ -11,6 +11,7 @@ export const auditCodes = [
   'agent_rollout.halted',
   'agent_rollout.resumed',
   'agent_rollout.started',
+  'autoinstall.generated',
   'device.agent_events_dropped',
   'device.agent_rolled_back',
   'device.agent_update_failed',

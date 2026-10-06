@@ -439,14 +439,14 @@ func TestLoginSettingsAssignmentAndSuspension(t *testing.T) {
 
 	var s adminapi.LoginSettings
 	e.do(call{method: "GET", path: "/api/v1/settings/login", cookie: operator}).decode(t, &s)
-	if !s.HelloEnabled || s.HelloPinMinLength != 6 || len(s.SudoersDAllowlist) != 1 {
+	if !s.HelloEnabled || s.HelloPinMinLength != 6 || len(s.SudoersDAllowlist) != 1 || s.BootPinMinLength != 8 {
 		t.Fatalf("defaults %+v", s)
 	}
 	put := map[string]any{
 		"hello_enabled": true, "hello_pin_min_length": 8, "user_lock_session_action": "terminate",
 		"break_glass_accounts": []string{"paddock"}, "sudoers_d_allowlist": []string{"README", "90-paddock"},
 		"sudo_lecture_text": "Be careful.", "local_admin_username": "paddock-admin", "local_admin_rotation_days": 30,
-		"notice_text": "Managed device.\r\nBe nice.",
+		"notice_text": "Managed device.\r\nBe nice.", "boot_pin_min_length": 12,
 	}
 	if s.LocalAdminUsername != "paddock-admin" || s.LocalAdminRotationDays != 30 || s.RotateAfterRevealHours != nil {
 		t.Fatalf("local admin defaults %+v", s)
@@ -461,8 +461,8 @@ func TestLoginSettingsAssignmentAndSuspension(t *testing.T) {
 	e.expectEvent(res, "settings.login_changed:success:")
 	var saved adminapi.LoginSettings
 	res.decode(t, &saved)
-	if saved.NoticeText != "Managed device.\nBe nice." {
-		t.Fatalf("notice %q", saved.NoticeText)
+	if saved.NoticeText != "Managed device.\nBe nice." || saved.BootPinMinLength != 12 {
+		t.Fatalf("notice %q, boot PIN length %d", saved.NoticeText, saved.BootPinMinLength)
 	}
 	put["sudoers_d_allowlist"] = []string{"paddock-u-0123456789abcdef"}
 	if res := e.do(call{method: "PUT", path: "/api/v1/settings/login", cookie: alice, body: put}); res.status != http.StatusBadRequest {

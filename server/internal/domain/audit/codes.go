@@ -90,6 +90,8 @@ const (
 	CodeLocalAdminRotationFailed      Code = "local_admin.rotation_failed"
 	CodeLocalAdminLogin               Code = "local_admin.login"
 	CodeDeviceTamperLocalAdminChanged Code = "device.tamper_local_admin_changed"
+
+	CodeAutoinstallGenerated Code = "autoinstall.generated"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -586,6 +588,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "field is password, shell, group, locked or missing.",
+	},
+	CodeAutoinstallGenerated: {
+		Code: CodeAutoinstallGenerated, Emitted: true,
+		Description: "An administrator or operator generated a Paddock autoinstall for one device from an enrollment configuration; the disk passphrase and the token in it are never recorded.",
+		Params:      []string{"release", "agent_version"},
+		Outcomes:    adminOutcomes,
+		Note:        "release is the Ubuntu release (24.04 or 26.04); agent_version is the release whose packages the device installs.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,
