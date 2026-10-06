@@ -47,6 +47,17 @@ type AgentArtifact struct {
 	CreatedAt time.Time
 }
 
+type AgentPackage struct {
+	Version   string
+	Name      string
+	Arch      string
+	Sha256    string
+	Size      int64
+	Minisig   string
+	ObjectKey string
+	CreatedAt time.Time
+}
+
 type AgentRelease struct {
 	Version     string
 	Status      string

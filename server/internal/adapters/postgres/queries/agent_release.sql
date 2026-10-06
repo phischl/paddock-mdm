@@ -107,3 +107,16 @@ SELECT offered::bigint, failed::bigint FROM paddock_agent_current_release_stats(
 INSERT INTO agent_update_report (device_id, organization_id, version, outcome)
 VALUES (@device_id, @organization_id, @version, @outcome)
 ON CONFLICT DO NOTHING;
+
+-- Debian packages of a release (plan M4b decision 1).
+
+-- name: UpsertAgentPackage :one
+INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key)
+VALUES (@version, @name, @arch, @sha256, @size, @minisig, @object_key)
+ON CONFLICT (version, name, arch) DO UPDATE
+  SET sha256 = EXCLUDED.sha256, size = EXCLUDED.size, minisig = EXCLUDED.minisig, object_key = EXCLUDED.object_key,
+      created_at = now()
+RETURNING *;
+
+-- name: ListAgentPackages :many
+SELECT * FROM agent_package WHERE version = @version ORDER BY name, arch;

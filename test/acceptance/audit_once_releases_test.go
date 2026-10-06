@@ -30,8 +30,20 @@ func gateVersion() string { return "0.0.1-gate" + uuid.NewString()[:8] }
 // uploadArtifact sends a signed (or, with sig set, any) binary as the amd64 artifact of version.
 func uploadArtifact(t *testing.T, p *env.Portal, version string, bin, sig []byte) env.Response {
 	t.Helper()
+	return uploadRelease(t, p, version, "/artifacts/amd64", bin, sig)
+}
+
+// uploadPackage sends a Debian package as the amd64 package name of version (plan M4b decision 1).
+func uploadPackage(t *testing.T, p *env.Portal, version, name string, deb, sig []byte) env.Response {
+	t.Helper()
+	return uploadRelease(t, p, version, "/packages/"+name+"/amd64", deb, sig)
+}
+
+// uploadRelease PUTs a file below a release with its minisign signature.
+func uploadRelease(t *testing.T, p *env.Portal, version, path string, body, sig []byte) env.Response {
+	t.Helper()
 	ctx := testContext(t, time.Minute)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, stack.AdminURL()+"/api/platform/v1/agent-releases/"+version+"/artifacts/amd64", bytes.NewReader(bin))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, stack.AdminURL()+"/api/platform/v1/agent-releases/"+version+path, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +55,8 @@ func uploadArtifact(t *testing.T, p *env.Portal, version string, bin, sig []byte
 		t.Fatal(err)
 	}
 	defer func() { _ = res.Body.Close() }()
-	body, _ := io.ReadAll(res.Body)
-	return env.Response{Status: res.StatusCode, Header: res.Header, Body: body, RequestID: res.Header.Get("X-Request-Id")}
+	data, _ := io.ReadAll(res.Body)
+	return env.Response{Status: res.StatusCode, Header: res.Header, Body: data, RequestID: res.Header.Get("X-Request-Id")}
 }
 
 // gateRelease creates a release as root; with artifact it uploads a signed binary, with publish it publishes.
@@ -138,6 +150,11 @@ func signedUpload(t *testing.T, p *env.Portal, v string) env.Response {
 	return uploadArtifact(t, p, v, bin, minisign.Sign(releaseKey(t), bin))
 }
 
+func signedPackage(t *testing.T, p *env.Portal, v string) env.Response {
+	deb := []byte("gate package " + v)
+	return uploadPackage(t, p, v, "paddock-agent", deb, minisign.Sign(releaseKey(t), deb))
+}
+
 // releaseAuditCases are the A3 cases of the agent release operations (plan M2b decision 20).
 var releaseAuditCases = map[string][]auditCase{
 	"POST /api/platform/v1/agent-releases": {
@@ -163,6 +180,16 @@ var releaseAuditCases = map[string][]auditCase{
 		platformCase("wrong role", "agent_release.artifact_uploaded", "denied", http.StatusForbidden, "forbidden", draftRelease, signedUpload, true),
 		platformCase("not found", "agent_release.artifact_uploaded", "failure", http.StatusNotFound, "not_found", unknownRelease, signedUpload, false),
 		platformCase("conflict", "agent_release.artifact_uploaded", "failure", http.StatusConflict, "invalid_state", publishedRel, signedUpload, false),
+	},
+	"PUT /api/platform/v1/agent-releases/{version}/packages/{name}/{arch}": {
+		platformCase("success", "agent_release.artifact_uploaded", "success", http.StatusOK, "", draftRelease, signedPackage, false),
+		platformCase("validation failure", "agent_release.artifact_uploaded", "failure", http.StatusBadRequest, "invalid_request", draftRelease,
+			func(t *testing.T, p *env.Portal, v string) env.Response {
+				return uploadPackage(t, p, v, "paddock-agent", []byte("forged"), minisign.Sign(releaseKey(t), []byte("something else")))
+			}, false),
+		platformCase("wrong role", "agent_release.artifact_uploaded", "denied", http.StatusForbidden, "forbidden", draftRelease, signedPackage, true),
+		platformCase("not found", "agent_release.artifact_uploaded", "failure", http.StatusNotFound, "not_found", unknownRelease, signedPackage, false),
+		platformCase("conflict", "agent_release.artifact_uploaded", "failure", http.StatusConflict, "invalid_state", publishedRel, signedPackage, false),
 	},
 	"POST /api/platform/v1/agent-releases/{version}/publish": {
 		platformCase("success", "agent_release.published", "success", http.StatusOK, "", draftArtifact, post("/publish"), false),

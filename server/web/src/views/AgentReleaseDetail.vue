@@ -96,6 +96,40 @@ onMounted(load)
         </tbody>
       </v-table>
 
+      <h2>{{ t('agentReleases.packages') }}</h2>
+      <p v-if="detail.packages.length === 0">
+        {{ t('agentReleases.noPackages') }}
+      </p>
+      <v-table
+        v-else
+        class="table"
+        data-testid="release-packages"
+      >
+        <thead>
+          <tr>
+            <th>{{ t('agentReleases.package') }}</th>
+            <th>{{ t('agentReleases.arch') }}</th>
+            <th>{{ t('agentReleases.sha256') }}</th>
+            <th>{{ t('agentReleases.size') }}</th>
+            <th>{{ t('agentReleases.uploadedAt') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="p in detail.packages"
+            :key="p.name + p.arch"
+          >
+            <td>{{ p.name }}</td>
+            <td>{{ p.arch }}</td>
+            <td class="mono">
+              {{ p.sha256 }}
+            </td>
+            <td>{{ t('agentReleases.bytes', { size: p.size }) }}</td>
+            <td>{{ formatDateTime(p.created_at, locale) }}</td>
+          </tr>
+        </tbody>
+      </v-table>
+
       <h2>{{ t('agentReleases.rollout') }}</h2>
       <p v-if="!detail.rollout">
         {{ t('agentReleases.noRollout') }}

@@ -22,8 +22,18 @@ device.{$PADDOCK_DOMAIN} {
 }
 
 # Bundles are served only through presigned GET URLs (architecture §7.3); everything else is refused at the edge.
+# Agent packages are public (plan M4b decision 1): /packages/… maps to the anonymously readable packages/ prefix of
+# paddock-agent-artifacts.
 bundles.{$PADDOCK_DOMAIN} {
 	tls internal
+	@packages {
+		method GET HEAD
+		path /packages/*
+	}
+	handle @packages {
+		rewrite * /paddock-agent-artifacts{path}
+		reverse_proxy rustfs:9000
+	}
 	@read {
 		method GET HEAD
 		path /paddock-bundles/* /paddock-agent-artifacts/*

@@ -351,9 +351,10 @@ var registry = map[Code]Definition{
 	},
 	CodeAgentReleaseArtifactUploaded: {
 		Code: CodeAgentReleaseArtifactUploaded, Emitted: true,
-		Description: "A platform administrator uploaded the signed agent binary of a release for one architecture; the server verified its signature with the release public key.",
-		Params:      []string{"version", "arch", "sha256", "size"},
+		Description: "A platform administrator uploaded the signed agent binary or a signed Debian package of a release for one architecture; the server verified its signature with the release public key.",
+		Params:      []string{"version", "arch", "sha256", "size", "kind", "name"},
 		Outcomes:    adminOutcomes,
+		Note:        "kind is binary (paddockd) or deb (a Debian package, with name paddock-agent or paddock-supervisor); events before M4b have no kind.",
 	},
 	CodeAgentReleasePublished: {
 		Code: CodeAgentReleasePublished, Emitted: true,

@@ -155,10 +155,24 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 	if err != nil || art.Size != 6 || art.ObjectKey != agentrelease.ObjectKey(v, "amd64") || string(h.store.puts[art.ObjectKey]) != "binary" {
 		t.Fatalf("upload: %+v, %v", art, err)
 	}
+	deb := []byte("debian package")
+	debSig := base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb))
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "amd64", deb, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin)))
+	expectProblem(t, err, problem.InvalidRequest)
+	_, err = h.releases.UploadPackage(ctx, v, "../paddockd", "amd64", deb, debSig)
+	expectProblem(t, err, problem.InvalidRequest)
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "386", deb, debSig)
+	expectProblem(t, err, problem.InvalidRequest)
+	pkg, err := h.releases.UploadPackage(ctx, v, "paddock-agent", "amd64", deb, debSig)
+	if err != nil || pkg.ObjectKey != agentrelease.PackageObjectKey(v, "paddock-agent", "amd64") || string(h.store.puts[pkg.ObjectKey]) != "debian package" {
+		t.Fatalf("package upload: %+v, %v", pkg, err)
+	}
 	if r, err := h.releases.Publish(ctx, v); err != nil || r.Status != agentrelease.StatusPublished {
 		t.Fatalf("publish: %+v, %v", r, err)
 	}
 	_, err = h.releases.UploadArtifact(ctx, v, "amd64", bin, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin)))
+	expectProblem(t, err, problem.InvalidState)
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "amd64", deb, debSig)
 	expectProblem(t, err, problem.InvalidState)
 
 	short := 5
@@ -185,7 +199,7 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 		t.Fatalf("resume: %+v, %v", r, err)
 	}
 	d, err := h.releases.Get(ctx, v)
-	if err != nil || d.Rollout == nil || len(d.Artifacts) != 1 {
+	if err != nil || d.Rollout == nil || len(d.Artifacts) != 1 || len(d.Packages) != 1 {
 		t.Fatalf("detail %+v, %v", d, err)
 	}
 	h.haltAll(t)

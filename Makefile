@@ -151,11 +151,12 @@ deb: agent ## Build the paddock-supervisor and paddock-agent Debian packages for
 	@ls -1 bin/deb/*.deb
 
 .PHONY: agent-release
-agent-release: ## Build paddockd VERSION (TAGS), sign it with the development release key and upload and publish it
+agent-release: ## Build paddockd and the Debian packages VERSION (TAGS), sign them with the development release key and upload and publish them
 	@test -n "$(filter-out 0.0.0-dev,$(VERSION))" || { echo "usage: make agent-release VERSION=x.y.z [TAGS=...]"; exit 1; }
-	$(MAKE) --no-print-directory agent VERSION=$(VERSION) TAGS='$(TAGS)'
+	$(MAKE) --no-print-directory deb VERSION=$(VERSION) TAGS='$(TAGS)'
 	go run ./test/acceptance/cmd/agentrelease --version $(VERSION) --publish \
-		--artifact amd64=bin/agent/amd64/paddockd --artifact arm64=bin/agent/arm64/paddockd
+		--artifact amd64=bin/agent/amd64/paddockd --artifact arm64=bin/agent/arm64/paddockd \
+		$$(for f in bin/deb/*.deb; do printf -- '--deb %s ' "$$f"; done)
 
 .PHONY: up
 up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy

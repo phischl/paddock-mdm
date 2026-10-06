@@ -2,8 +2,12 @@
 // through the platform API, signed in as the development platform administrator (plan M2b decision 24; used by
 // `make agent-release`, the portal end-to-end test and the system tests):
 //
-//	agentrelease --version 1.2.0 --artifact amd64=bin/paddockd [--publish] [--rollout [--waves 100]
-//	    [--min-wave-minutes 1] [--failure-threshold-min 1] [--failure-threshold-percent 2]] [--halt-running]
+//	agentrelease --version 1.2.0 --artifact amd64=bin/paddockd [--deb bin/deb/paddock-agent_1.2.0_amd64.deb …]
+//	    [--publish] [--rollout [--waves 100] [--min-wave-minutes 1] [--failure-threshold-min 1]
+//	    [--failure-threshold-percent 2]] [--halt-running]
+//
+// Debian packages (plan M4b decision 1) are named <name>_<version>_<arch>.deb, as `make deb` builds them; they are
+// stored under the release version.
 //
 // It prints the release detail as JSON.
 package main
@@ -16,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +34,16 @@ import (
 type artifacts map[string]string
 
 func (a artifacts) String() string { return fmt.Sprint(map[string]string(a)) }
+
+// debs are the paths of Debian packages to upload.
+type debs []string
+
+func (d *debs) String() string { return strings.Join(*d, ",") }
+
+func (d *debs) Set(v string) error {
+	*d = append(*d, v)
+	return nil
+}
 
 func (a artifacts) Set(v string) error {
 	arch, path, ok := strings.Cut(v, "=")
@@ -51,6 +66,8 @@ func run(args []string) error {
 	version := fs.String("version", "", "release version (semantic version)")
 	arts := artifacts{}
 	fs.Var(arts, "artifact", "<arch>=<path of paddockd>, repeatable")
+	var packages debs
+	fs.Var(&packages, "deb", "path of a Debian package <name>_<version>_<arch>.deb, repeatable")
 	key := fs.String("key", "", "minisign secret key (default: the development key in deploy/compose/.secrets/release)")
 	publish := fs.Bool("publish", false, "publish the release")
 	rollout := fs.Bool("rollout", false, "start the rollout (implies --publish)")
@@ -98,6 +115,20 @@ func run(args []string) error {
 			return fail("upload "+arch, res, err)
 		}
 	}
+	for _, path := range packages {
+		name, arch, err := debName(filepath.Base(path), *version)
+		if err != nil {
+			return err
+		}
+		deb, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sig := minisign.SignWithComments(priv, deb, fmt.Sprintf("%s %s %s", name, *version, arch), "paddock agent package")
+		if res, err := upload(ctx, p, base+"/packages/"+name+"/"+arch, deb, sig); err != nil || res.Status != http.StatusOK {
+			return fail("upload "+name+" "+arch, res, err)
+		}
+	}
 	if *publish || *rollout {
 		if res, err := p.Do(ctx, http.MethodPost, base+"/publish", nil); err != nil || (res.Status != http.StatusOK && res.ProblemCode() != "invalid_state") {
 			return fail("publish", res, err)
@@ -131,6 +162,16 @@ func run(args []string) error {
 	}
 	_, err = os.Stdout.Write(append(res.Body, '\n'))
 	return err
+}
+
+// debName splits <name>_<version>_<arch>.deb and checks the version; nfpm writes a pre-release version such as
+// 1.2.0-rc.1 as 1.2.0~rc.1 (Debian ordering).
+func debName(file, version string) (name, arch string, err error) {
+	parts := strings.Split(strings.TrimSuffix(file, ".deb"), "_")
+	if len(parts) != 3 || !strings.HasSuffix(file, ".deb") || (parts[1] != version && parts[1] != strings.Replace(version, "-", "~", 1)) {
+		return "", "", fmt.Errorf("--deb %s: want <name>_%s_<arch>.deb", file, version)
+	}
+	return parts[0], parts[2], nil
 }
 
 func upload(ctx context.Context, p *env.Portal, path string, bin, sig []byte) (env.Response, error) {

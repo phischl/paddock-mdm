@@ -75,6 +75,11 @@ func AuditBucket() string { return Env("PADDOCK_TEST_AUDIT_S3_BUCKET", "paddock-
 // AdminURL is the portal URL (PADDOCK_TEST_ADMIN_URL overrides).
 func AdminURL() string { return Env("PADDOCK_TEST_ADMIN_URL", "https://admin.paddock.localhost:8443") }
 
+// BundlesURL is the public bundles host (PADDOCK_TEST_BUNDLES_URL overrides).
+func BundlesURL() string {
+	return Env("PADDOCK_TEST_BUNDLES_URL", "https://bundles.paddock.localhost:8443")
+}
+
 // AuthURL is the Authentik URL (PADDOCK_TEST_AUTH_URL overrides).
 func AuthURL() string { return Env("PADDOCK_TEST_AUTH_URL", "https://auth.paddock.localhost:8443") }
 

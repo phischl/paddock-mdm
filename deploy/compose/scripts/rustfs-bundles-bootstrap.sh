@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Development bootstrap of the control-plane buckets: paddock-bundles (plan M2a decision 3) and
-# paddock-agent-artifacts (plan M2b decision 19), both without versioning and without Object Lock; a user for the
-# compiler with read/write on bundles, a user for the api with read/write on artifacts, and a user for the gateway
-# with read-only access to both (the gateway only computes presigned GET URLs with it). Idempotent.
+# paddock-agent-artifacts (plan M2b decision 19; public-read below packages/, plan M4b decision 1), both without
+# versioning and without Object Lock; a user for the compiler with read/write on bundles, a user for the api with
+# read/write on artifacts, and a user for the gateway with read-only access to both (the gateway only computes
+# presigned GET URLs with it). Idempotent.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,6 +77,12 @@ policy paddock-bundles-gateway "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$BUCKET/*\",\"arn:aws:s3:::$ARTIFACTS_BUCKET/*\"]}]"
 policy paddock-artifacts-api "[
   {\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\",\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::$ARTIFACTS_BUCKET/*\"]}]"
+# Agent packages are public-read (plan M4b decision 1): anonymous GetObject below packages/ only; listing and every
+# other prefix still need credentials or a presigned URL.
+printf '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":["*"]},"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::%s/packages/*"]}]}' \
+  "$ARTIFACTS_BUCKET" | aws s3api put-bucket-policy --bucket "$ARTIFACTS_BUCKET" --policy file:///dev/stdin
+echo "packages/ of $ARTIFACTS_BUCKET is public-read"
+
 user COMPILER_ACCESS_KEY paddock-bundles-compiler
 user GATEWAY_ACCESS_KEY paddock-bundles-gateway
 user ARTIFACTS_ACCESS_KEY paddock-artifacts-api

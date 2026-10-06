@@ -21,6 +21,12 @@ func TestValidate(t *testing.T) {
 	if ValidateArch("amd64") != nil || ValidateArch("arm64") != nil || ValidateArch("386") == nil {
 		t.Error("arch validation")
 	}
+	if ValidatePackage("paddock-agent") != nil || ValidatePackage("paddock-supervisor") != nil || ValidatePackage("../x") == nil {
+		t.Error("package validation")
+	}
+	if k := PackageObjectKey("1.2.0", "paddock-agent", "amd64"); k != "packages/1.2.0/paddock-agent_1.2.0_amd64.deb" {
+		t.Errorf("package object key %s", k)
+	}
 	for _, w := range [][]int{{100}, {1, 10, 50, 100}, {5, 100}} {
 		if ValidateWaves(w) != nil {
 			t.Errorf("waves %v rejected", w)

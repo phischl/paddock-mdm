@@ -43,9 +43,28 @@ minisign -S -s paddock-release.key -m paddockd -t "paddockd <version> <arch>"
    `PUT /api/platform/v1/agent-releases/<version>/artifacts/<arch>` with the binary as body and
    `X-Paddock-Minisig: <base64 of the .minisig file>`. The server stores it in `paddock-agent-artifacts` under
    `releases/<version>/<arch>/paddockd`.
-4. Publish: `POST …/<version>/publish`. Published releases are immutable.
+4. Upload the Debian packages `paddock-agent` and `paddock-supervisor` of the release (built by `make deb`), each
+   signed like the binary: `PUT /api/platform/v1/agent-releases/<version>/packages/<name>/<arch>` with the package
+   as body and `X-Paddock-Minisig`. The server stores them under
+   `packages/<version>/<name>_<version>_<arch>.deb`; the Paddock autoinstall installs new devices from them.
+5. Publish: `POST …/<version>/publish`. Published releases are immutable.
 
 In development, `make agent-release VERSION=x.y.z` does all of this with the development key.
+
+### Public packages
+
+Objects below `packages/` in `paddock-agent-artifacts` are **public-read** (plan M4b decision 1): packages contain
+no secrets, and the generated autoinstall pins the SHA-256 of each package, so the installer refuses anything
+else. The edge serves them at `https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb`; listing
+the bucket and every other prefix still need credentials or a presigned URL. The bucket policy that allows this is
+
+```json
+{"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": {"AWS": ["*"]},
+  "Action": ["s3:GetObject"], "Resource": ["arn:aws:s3:::paddock-agent-artifacts/packages/*"]}]}
+```
+
+(`aws s3api put-bucket-policy --bucket paddock-agent-artifacts --policy file://policy.json`; the development
+bootstrap `deploy/compose/scripts/rustfs-bundles-bootstrap.sh` sets it).
 
 ## Rolling out
 
