@@ -53,14 +53,22 @@ func (v *VM) lib(ctx context.Context, script string) (string, error) {
 	return run(ctx, "bash", "-c", "set -euo pipefail; source "+filepath.Join(v.dir, "lib.sh")+"; "+script)
 }
 
+// state returns the VM's state. VBoxManage now and then answers nothing while the other VM of a parallel test is
+// changed (snapshot restore, start), so an empty answer is asked again.
 func (v *VM) state(ctx context.Context) string {
-	out, _ := v.lib(ctx, "vm_state "+v.Name)
-	return strings.TrimSpace(out)
+	for range 5 {
+		out, _ := v.lib(ctx, "vm_state "+v.Name)
+		if s := strings.TrimSpace(out); s != "" {
+			return s
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return ""
 }
 
 // PowerOff stops the VM and waits until VirtualBox has written its NVRAM (README: NVRAM pitfall).
 func (v *VM) PowerOff(ctx context.Context) error {
-	if v.state(ctx) != "poweroff" && v.state(ctx) != "saved" && v.state(ctx) != "aborted" {
+	if s := v.state(ctx); s != "poweroff" && s != "saved" && s != "aborted" {
 		if out, err := run(ctx, "VBoxManage", "controlvm", v.Name, "poweroff"); err != nil {
 			return fmt.Errorf("poweroff %s: %v: %s", v.Name, err, out)
 		}

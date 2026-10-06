@@ -50,15 +50,28 @@ func (s *Stack) Login() {
 	}
 }
 
+// stepUpRetryAfter is longer than the development stack's maximum auth age of a step-up (PADDOCK_STEPUP_MAX_AUTH_AGE,
+// 15 s).
+const stepUpRetryAfter = 20 * time.Second
+
 // StepUp runs a step-up authentication of alice's session (plan M4a decision 6), e.g. before assigning a full
-// profile.
+// profile. Authentik re-authenticates only a login older than the maximum auth age: a step-up within that age of the
+// previous one gets the previous login's auth_time, which the server may find a second too old by the time of the
+// callback. A refused step-up is therefore repeated once, after that age.
 func (s *Stack) StepUp() {
 	s.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	final, err := s.alice.StepUp(ctx, portal.Alice, "/")
-	if err != nil || strings.Contains(final, "stepup=failed") {
-		s.t.Fatalf("step-up of alice: %v (returned to %s)", err, final)
+	for attempt := 1; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		final, err := s.alice.StepUp(ctx, portal.Alice, "/")
+		cancel()
+		if err == nil && !strings.Contains(final, "stepup=failed") {
+			return
+		}
+		if attempt == 2 {
+			s.t.Fatalf("step-up of alice: %v (returned to %s)", err, final)
+		}
+		s.t.Logf("step-up of alice refused (%v, returned to %s); repeating after %s", err, final, stepUpRetryAfter)
+		time.Sleep(stepUpRetryAfter)
 	}
 }
 
