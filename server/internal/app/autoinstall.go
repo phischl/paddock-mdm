@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,7 +69,11 @@ func (a *Autoinstall) Generate(ctx context.Context, req AutoinstallRequest) ([]b
 		if err != nil {
 			return fmt.Errorf("install packages: %w", err)
 		}
-		if len(rows) != len(agentrelease.Packages) {
+		names := make([]string, len(rows))
+		for i, r := range rows {
+			names[i] = r.Name
+		}
+		if !slices.Contains(names, agentrelease.PackageAgent) || !slices.Contains(names, agentrelease.PackageSupervisor) {
 			return problem.InvalidState.WithDetail("no published agent release has both Debian packages for " + installArch)
 		}
 		packages := make([]autoinstall.Package, len(rows))

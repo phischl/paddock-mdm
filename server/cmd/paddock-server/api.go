@@ -64,6 +64,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
 	authentikToken := l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")
 	releaseKey := l.SecretFile("PADDOCK_RELEASE_PUBLIC_KEY_FILE")
+	// The paddock-revoke package is signed with a key of its own (architecture §12.3, plan M4c decision 4).
+	revokeReleaseKey := l.SecretFile("PADDOCK_REVOKE_RELEASE_PUBLIC_KEY_FILE")
 	artifacts := objectstore.New(l.Required("PADDOCK_ARTIFACTS_S3_ENDPOINT"), l.SecretFile("PADDOCK_ARTIFACTS_S3_ACCESS_KEY_FILE"),
 		l.SecretFile("PADDOCK_ARTIFACTS_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ARTIFACTS_S3_BUCKET", "paddock-agent-artifacts"))
 	// Escrowed LUKS headers, read for a recovery only (plan M4b decision 14).
@@ -88,6 +90,11 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		return fmt.Errorf("PADDOCK_RELEASE_PUBLIC_KEY_FILE: %w", err)
 	}
 	verifyRelease := app.NewReleaseVerifier(releasePub)
+	var revokeReleasePub minisign.PublicKey
+	if err := revokeReleasePub.UnmarshalText([]byte(revokeReleaseKey)); err != nil {
+		return fmt.Errorf("PADDOCK_REVOKE_RELEASE_PUBLIC_KEY_FILE: %w", err)
+	}
+	verifyRevokeRelease := app.NewReleaseVerifier(revokeReleasePub)
 
 	orgPool, err := db.NewOrgPool(ctx, orgDSN, db.Options{ApplicationName: "paddock-api"})
 	if err != nil {
@@ -151,7 +158,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Disk:          app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
 		Revocations:   app.NewRevocations(runner, orgPool, stepUpTokens, revocationEnabled),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
-		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
+		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),
 		Runner:        runner,
 		Keys:          keys,

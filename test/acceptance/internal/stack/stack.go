@@ -185,12 +185,22 @@ func PaddockOwnerDSN() (string, error) {
 // ReleaseKey loads a minisign secret key; empty path is the development release key (make dev-release-key), which
 // is stored without a password.
 func ReleaseKey(path string) (minisign.PrivateKey, error) {
+	return releaseKey(path, "minisign.key")
+}
+
+// RevokeReleaseKey loads the minisign secret key of paddock-revoke packages; empty path is the development
+// revocation release key (plan M4c decision 4).
+func RevokeReleaseKey(path string) (minisign.PrivateKey, error) {
+	return releaseKey(path, "revoke-minisign.key")
+}
+
+func releaseKey(path, devFile string) (minisign.PrivateKey, error) {
 	if path == "" {
 		dir, err := SecretsDir()
 		if err != nil {
 			return minisign.PrivateKey{}, err
 		}
-		path = filepath.Join(dir, "release", "minisign.key")
+		path = filepath.Join(dir, "release", devFile)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

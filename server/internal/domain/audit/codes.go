@@ -106,6 +106,7 @@ const (
 	CodeRevocationLimitExceeded         Code = "revocation.limit_exceeded"
 	CodeDeviceEscrowDestroyed           Code = "device.escrow_destroyed"
 	CodeDeviceRevocationConfirmed       Code = "device.revocation_confirmed"
+	CodeDeviceRevocationRefused         Code = "device.revocation_refused"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -686,6 +687,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "status"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "status failed means the device reported that the erasure did not complete.",
+	},
+	CodeDeviceRevocationRefused: {
+		Code: CodeDeviceRevocationRefused, Emitted: true,
+		Description: "paddock-revoke on a device refused a revocation token; no session and no keyslot was touched (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "reason is disabled, trust_missing, signature, malformed, wrong_device, expired, not_yet_valid, already_executed, rate_limited, period_not_reached, test_target_present, not_encrypted, not_enrolled, not_installed or internal_error.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

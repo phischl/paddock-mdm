@@ -76,6 +76,9 @@ func (l Layout) Slots() string { return l.Join("/opt/paddock/agent") }
 // decision 3); never replaced from a bundle.
 func (l Layout) RevokeTrust() string { return l.Join("/etc/paddock/revoke-trust.json") }
 
+// RevokeBinary is paddock-revoke, installed by its own package and never by the agent update (plan M4c decision 4).
+func (l Layout) RevokeBinary() string { return l.Join("/opt/paddock/revoke/paddock-revoke") }
+
 // RevokeEnabled is the marker the agent keeps while the bundle says revocation.enabled (plan M4c decision 1);
 // paddock-revoke refuses to run without it.
 func (l Layout) RevokeEnabled() string { return l.Join("/etc/paddock/revoke-enabled") }

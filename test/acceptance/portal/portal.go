@@ -4,8 +4,13 @@ package portal
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base32"
+	"encoding/hex"
+	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -78,4 +83,37 @@ func ApproveDeviceCode(ctx context.Context, userCode, username, password string,
 // Compose runs `docker compose` for the development stack and returns the combined output.
 func Compose(ctx context.Context, args ...string) (string, error) {
 	return stack.Compose(ctx, nil, args...)
+}
+
+// LoginAs signs in any user with its password.
+func LoginAs(ctx context.Context, user, password string) (*Session, error) { return env.Login(ctx, user, password) }
+
+// RoleGroup is an organization's Authentik role group; role is admins, operators or auditors.
+func RoleGroup(slug, role string) string { return env.RoleGroup(slug, role) }
+
+// AddTOTP gives user a TOTP authenticator with a random key, installed in Authentik's shell like `make dev-seed`
+// does (the key travels on stdin), and returns its generator.
+func AddTOTP(ctx context.Context, user string) (*TOTP, error) {
+	key := make([]byte, 20)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	script := fmt.Sprintf("from authentik.core.models import User\nfrom authentik.stages.authenticator_totp.models import TOTPDevice\n"+
+		"TOTPDevice.objects.create(user=User.objects.get(username=%q), name=\"paddock-systest\", key=%q, confirmed=True)\n"+
+		"print(\"systest totp ok\")\n", user, hex.EncodeToString(key))
+	out, err := stack.ComposeInput(ctx, strings.NewReader(script), "exec", "-T", "authentik-worker", "ak", "shell")
+	if err != nil || !strings.Contains(out, "systest totp ok") {
+		return nil, fmt.Errorf("TOTP authenticator of %s: %v %s", user, err, out)
+	}
+	return &TOTP{Secret: base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)}, nil
+}
+
+// StepUpAs runs a step-up of s as user with its password and TOTP and returns the portal URL it returned to; it
+// contains stepup=failed when Paddock refused the step-up.
+func StepUpAs(ctx context.Context, s *Session, user, password string, totp *TOTP) (string, error) {
+	res, err := authflow.StepUp(ctx, s.Client, stack.AdminURL(), "/", user, password, totp, false)
+	if err != nil {
+		return "", err
+	}
+	return res.Final, nil
 }

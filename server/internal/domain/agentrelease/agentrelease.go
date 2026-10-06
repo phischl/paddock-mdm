@@ -85,17 +85,23 @@ func ObjectKey(version, arch string) string {
 	return fmt.Sprintf("releases/%s/%s/paddockd", version, arch)
 }
 
-// Debian packages of a release (plan M4b decision 1).
+// Debian packages of a release (plan M4b decision 1, plan M4c decision 4).
 const (
 	PackageAgent      = "paddock-agent"
 	PackageSupervisor = "paddock-supervisor"
+	// PackageRevoke is signed with the revocation release key and reaches devices only as a package: the Paddock
+	// autoinstall installs it, the agent update never delivers it.
+	PackageRevoke = "paddock-revoke"
 )
 
-// Packages are the Debian packages a release can carry; the Paddock autoinstall needs both.
-var Packages = []string{PackageAgent, PackageSupervisor}
+// Packages are the Debian packages a release can carry; the Paddock autoinstall needs RequiredPackages.
+var Packages = []string{PackageAgent, PackageSupervisor, PackageRevoke}
+
+// RequiredPackages are the packages without which the Paddock autoinstall does not install a release.
+var RequiredPackages = []string{PackageAgent, PackageSupervisor}
 
 // ErrInvalidPackage rejects an unknown package name.
-var ErrInvalidPackage = errors.New("name must be paddock-agent or paddock-supervisor")
+var ErrInvalidPackage = errors.New("name must be paddock-agent, paddock-supervisor or paddock-revoke")
 
 // ValidatePackage checks a package name.
 func ValidatePackage(name string) error {

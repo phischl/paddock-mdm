@@ -17,6 +17,7 @@ import (
 // handleCommands executes the commands of a check-in with the command keys of the applied bundle (plan M4a
 // decision 3) and keeps their results until the server accepted them.
 func (a *Agent) handleCommands(ctx context.Context, envelopes []json.RawMessage) {
+	envelopes = a.handRevocations(ctx, envelopes)
 	if a.st.ExecutedCommands == nil {
 		a.st.ExecutedCommands = map[string]time.Time{}
 	}

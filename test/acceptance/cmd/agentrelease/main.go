@@ -70,6 +70,7 @@ func run(args []string) error {
 	var packages debs
 	fs.Var(&packages, "deb", "path of a Debian package <name>_<version>_<arch>.deb, repeatable")
 	key := fs.String("key", "", "minisign secret key (default: the development key in deploy/compose/.secrets/release)")
+	revokeKey := fs.String("revoke-key", "", "minisign secret key of paddock-revoke packages (default: the development revocation release key)")
 	publish := fs.Bool("publish", false, "publish the release")
 	rollout := fs.Bool("rollout", false, "start the rollout (implies --publish)")
 	waves := fs.String("waves", "", "comma-separated wave percentages, e.g. 100")
@@ -101,6 +102,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	revokePriv, err := stack.RevokeReleaseKey(*revokeKey)
+	if err != nil {
+		return err
+	}
 	base := "/api/platform/v1/agent-releases/" + *version
 	res, err := p.Do(ctx, http.MethodPost, "/api/platform/v1/agent-releases", map[string]string{"version": *version})
 	if err != nil || (res.Status != http.StatusCreated && res.ProblemCode() != "already_exists") {
@@ -125,7 +130,11 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		sig := minisign.SignWithComments(priv, deb, fmt.Sprintf("%s %s %s", name, *version, arch), "paddock agent package")
+		signer := priv
+		if name == "paddock-revoke" { // signed with the revocation release key (plan M4c decision 4)
+			signer = revokePriv
+		}
+		sig := minisign.SignWithComments(signer, deb, fmt.Sprintf("%s %s %s", name, *version, arch), "paddock agent package")
 		if res, err := upload(ctx, p, base+"/packages/"+name+"/"+arch, deb, sig); err != nil || res.Status != http.StatusOK {
 			return fail("upload "+name+" "+arch, res, err)
 		}

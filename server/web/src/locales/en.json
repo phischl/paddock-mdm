@@ -174,7 +174,8 @@
       "tamper_keyslot_changed": "The device {target} found the keyslots of its disk changed",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
-      "revocation_confirmed": "The device {target} confirmed that its disk keyslots are erased"
+      "revocation_confirmed": "The device {target} confirmed that its disk keyslots are erased",
+      "revocation_refused": "The device {target} refused a revocation ({reason})"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",

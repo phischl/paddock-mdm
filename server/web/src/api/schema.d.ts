@@ -1331,7 +1331,7 @@ export interface paths {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke";
                 arch: "amd64" | "arm64";
             };
             cookie?: never;
@@ -1339,7 +1339,8 @@ export interface paths {
         get?: never;
         /**
          * @description Roles: platform_admin. Uploads a Debian package of a draft release (at most 128 MiB), signed like the
-         *     binary: the server verifies the minisign signature with the configured release public key (400 otherwise).
+         *     binary: the server verifies the minisign signature with the configured release public key, paddock-revoke with
+         *     the revocation release public key (400 otherwise).
          *     Packages are stored below packages/ in the artifact bucket and served without authentication at
          *     https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
          *     SHA-256 (plan M4b decision 1). Uploading again replaces the package while the release is a draft. Audited as
@@ -1562,7 +1563,7 @@ export interface components {
         };
         AgentPackage: {
             /** @enum {string} */
-            name: "paddock-agent" | "paddock-supervisor";
+            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke";
             /** @enum {string} */
             arch: "amd64" | "arm64";
             /** @description Hex SHA-256 of the package. */
@@ -5331,7 +5332,7 @@ export interface operations {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke";
                 arch: "amd64" | "arm64";
             };
             cookie?: never;
