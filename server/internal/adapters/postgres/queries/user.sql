@@ -64,11 +64,17 @@ UPDATE app_user SET username = @username, display_name = @display_name, email = 
 WHERE id = @id AND source = 'synced';
 
 -- name: SetAppUserLocked :one
--- A lock is incomplete until Authentik confirmed it (CompleteAppUserLock); an unlock clears both.
+-- A lock is incomplete until Authentik confirmed it (CompleteAppUserLock); an unlock clears both. lock_reactivate
+-- survives only the retry of an incomplete lock: the retry cannot read it again, the interrupted lock deactivated the
+-- user (plan M4b.1 decision 1).
 UPDATE app_user SET locked = @locked, locked_at = CASE WHEN @locked::boolean THEN coalesce(locked_at, now()) END,
-  lock_incomplete = @locked, updated_at = now()
+  lock_incomplete = @locked,
+  lock_reactivate = CASE WHEN @locked::boolean AND lock_incomplete THEN lock_reactivate END, updated_at = now()
 WHERE id = @id
 RETURNING *;
+
+-- name: SetAppUserLockReactivate :exec
+UPDATE app_user SET lock_reactivate = @lock_reactivate, updated_at = now() WHERE id = @id;
 
 -- name: CompleteAppUserLock :one
 UPDATE app_user SET lock_incomplete = false, updated_at = now() WHERE id = @id RETURNING *;

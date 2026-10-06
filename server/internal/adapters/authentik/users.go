@@ -90,12 +90,24 @@ func (c *Client) RecoveryLink(ctx context.Context, pk string) (string, error) {
 	return res.Link, nil
 }
 
+// UserActive reports the user's is_active.
+func (c *Client) UserActive(ctx context.Context, pk string) (bool, error) {
+	var u struct {
+		IsActive bool `json:"is_active"`
+	}
+	if err := c.do(ctx, http.MethodGet, userPath(pk), nil, &u); err != nil {
+		return false, upstream(err)
+	}
+	return u.IsActive, nil
+}
+
 // LockUser adds the user to paddock.<slug>.locked and revokes the user's refresh tokens, access tokens and sessions.
 // The group alone does not stop Hello PIN logins: the refresh grant does not evaluate application policies (PoC M1
 // C2). Authentik lists other users' tokens only to superusers, so the revocation uses its deactivation cleanup: the
-// user is deactivated (Authentik deletes all of the user's tokens and sessions) and activated again at once — the
-// lock itself stays the group membership, which survives upstream attribute syncs (architecture §9.2).
-func (c *Client) LockUser(ctx context.Context, slug, pk string) error {
+// user is deactivated (Authentik deletes all of the user's tokens and sessions) and, if reactivate is set, activated
+// again at once — the lock itself stays the group membership, which survives upstream attribute syncs (architecture
+// §9.2). Without reactivate a user deactivated elsewhere stays inactive (plan M4b.1 decision 1).
+func (c *Client) LockUser(ctx context.Context, slug, pk string, reactivate bool) error {
 	lockedPK, err := c.EnsureGroup(ctx, slug, organization.LockedGroup(slug))
 	if err != nil {
 		return err
@@ -106,18 +118,24 @@ func (c *Client) LockUser(ctx context.Context, slug, pk string) error {
 	if err := c.setActive(ctx, pk, false); err != nil {
 		return err
 	}
+	if !reactivate {
+		return nil
+	}
 	return c.setActive(ctx, pk, true)
 }
 
-// UnlockUser removes the user from paddock.<slug>.locked (and activates it, should a lock have stopped between
-// deactivation and activation); the user then signs in with the device code flow again.
-func (c *Client) UnlockUser(ctx context.Context, slug, pk string) error {
+// UnlockUser removes the user from paddock.<slug>.locked; with activate it first activates the user again, which
+// completes a lock that stopped between deactivation and reactivation. The user then signs in with the device code
+// flow again.
+func (c *Client) UnlockUser(ctx context.Context, slug, pk string, activate bool) error {
 	lockedPK, err := c.EnsureGroup(ctx, slug, organization.LockedGroup(slug))
 	if err != nil {
 		return err
 	}
-	if err := c.setActive(ctx, pk, true); err != nil {
-		return err
+	if activate {
+		if err := c.setActive(ctx, pk, true); err != nil {
+			return err
+		}
 	}
 	return c.RemoveMember(ctx, lockedPK, pk)
 }

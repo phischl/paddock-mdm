@@ -7,6 +7,9 @@ recorded organization slug is replaced by `fixture-org`, client secrets and link
 with curl. `TestLiveAuthentik` records the PATCH only when the default brand's flows had to be set, i.e. against a
 fresh stack before `paddock-worker` set them.
 
+`get_core_users_id.json` was added on 2026-10-06 by `TestLiveAuthentik` (Authentik 2026.8.3); the other fixtures of
+that run were discarded unchanged.
+
 The in-memory fake of the unit tests (`fake_test.go`) answers with these bodies, filled with its own state.
 
 Re-record them when the pinned Authentik version changes (development stack running, `make dev-seed` done):

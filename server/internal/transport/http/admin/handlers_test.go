@@ -47,6 +47,9 @@ type fakeIdP struct {
 	groups  map[string]string                // pk → name
 	members map[string][]string              // group pk → user pks
 	locked  map[string]bool                  // user pk → locked (and tokens revoked)
+	// inactive are the deactivated users; failReactivation makes a lock fail after its deactivation.
+	inactive         map[string]bool
+	failReactivation bool
 }
 
 // fakePKs numbers the users of every fake identity provider of the test binary.
@@ -54,7 +57,7 @@ var fakePKs atomic.Int64
 
 func newFakeIdP() *fakeIdP {
 	return &fakeIdP{users: map[string]ports.NewIdentityUser{}, groups: map[string]string{}, members: map[string][]string{},
-		locked: map[string]bool{}}
+		locked: map[string]bool{}, inactive: map[string]bool{}}
 }
 
 func (f *fakeIdP) err() error {
@@ -110,21 +113,37 @@ func (f *fakeIdP) RecoveryLink(_ context.Context, pk string) (string, error) {
 	return "https://auth.test/if/flow/paddock-recovery/?flow_token=" + pk, f.err()
 }
 
-func (f *fakeIdP) LockUser(_ context.Context, _, pk string) error {
+func (f *fakeIdP) UserActive(_ context.Context, pk string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.inactive[pk], f.err()
+}
+
+func (f *fakeIdP) LockUser(_ context.Context, _, pk string, reactivate bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.err(); err != nil {
 		return err
 	}
-	f.locked[pk] = true
+	f.locked[pk], f.inactive[pk] = true, true
+	if !reactivate {
+		return nil
+	}
+	if f.failReactivation {
+		return problem.UpstreamUnavailable
+	}
+	delete(f.inactive, pk)
 	return nil
 }
 
-func (f *fakeIdP) UnlockUser(_ context.Context, _, pk string) error {
+func (f *fakeIdP) UnlockUser(_ context.Context, _, pk string, activate bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.err(); err != nil {
 		return err
+	}
+	if activate {
+		delete(f.inactive, pk)
 	}
 	delete(f.locked, pk)
 	return nil

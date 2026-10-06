@@ -226,7 +226,10 @@ func TestLockRevokesTokensAndSessions(t *testing.T) {
 	f.tokens["refresh_tokens"] = []int{n, 77, n}
 	f.tokens["access_tokens"] = []int{n}
 	f.sessions[n], f.sessions[77] = 2, 1
-	if err := c.LockUser(ctx, "acme", pk); err != nil {
+	if active, err := c.UserActive(ctx, pk); err != nil || !active {
+		t.Fatalf("UserActive: %v, %v", active, err)
+	}
+	if err := c.LockUser(ctx, "acme", pk, true); err != nil {
 		t.Fatal(err)
 	}
 	locked := f.groupByName("paddock.acme.locked").pk
@@ -242,11 +245,47 @@ func TestLockRevokesTokensAndSessions(t *testing.T) {
 	if f.deactivations != 1 || f.users[n].inactive {
 		t.Fatalf("the user must be deactivated once and active again (%d, inactive %v)", f.deactivations, f.users[n].inactive)
 	}
-	if err := c.UnlockUser(ctx, "acme", pk); err != nil {
+	if err := c.UnlockUser(ctx, "acme", pk, false); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(f.users[n].groups, locked) {
-		t.Fatal("user still locked")
+	if slices.Contains(f.users[n].groups, locked) || f.users[n].inactive {
+		t.Fatalf("after the unlock: groups %v, inactive %v", f.users[n].groups, f.users[n].inactive)
+	}
+}
+
+// A lock of a user deactivated elsewhere revokes but does not reactivate; an unlock without activation keeps the user
+// inactive, one with activation (completing an interrupted lock) activates it (plan M4b.1 decision 1).
+func TestLockKeepsInactiveUserInactive(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	pk, err := c.CreateUser(ctx, "acme", ports.NewIdentityUser{Username: "bob@acme.test", Name: "Bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := mustAtoi(t, pk)
+	f.users[n].inactive = true
+	if active, err := c.UserActive(ctx, pk); err != nil || active {
+		t.Fatalf("UserActive of a deactivated user: %v, %v", active, err)
+	}
+	if err := c.LockUser(ctx, "acme", pk, false); err != nil {
+		t.Fatal(err)
+	}
+	locked := f.groupByName("paddock.acme.locked").pk
+	if !slices.Contains(f.users[n].groups, locked) || !f.users[n].inactive {
+		t.Fatalf("after the lock: groups %v, inactive %v", f.users[n].groups, f.users[n].inactive)
+	}
+	if err := c.UnlockUser(ctx, "acme", pk, false); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.users[n].groups, locked) || !f.users[n].inactive {
+		t.Fatalf("after the unlock: groups %v, inactive %v", f.users[n].groups, f.users[n].inactive)
+	}
+	if err := c.UnlockUser(ctx, "acme", pk, true); err != nil || f.users[n].inactive {
+		t.Fatalf("unlock with activation: %v, inactive %v", err, f.users[n].inactive)
 	}
 }
 
@@ -266,7 +305,7 @@ func TestLockInterruptedAfterDeactivation(t *testing.T) {
 	n := mustAtoi(t, pk)
 	f.tokens["refresh_tokens"] = []int{n}
 	f.failReactivation = true
-	if err := c.LockUser(ctx, "acme", pk); err == nil {
+	if err := c.LockUser(ctx, "acme", pk, true); err == nil {
 		t.Fatal("a lock interrupted after the deactivation succeeded")
 	}
 	locked := f.groupByName("paddock.acme.locked").pk
@@ -274,7 +313,7 @@ func TestLockInterruptedAfterDeactivation(t *testing.T) {
 		t.Fatalf("interrupted lock: groups %v, deactivations %d, tokens %v", f.users[n].groups, f.deactivations, f.tokens)
 	}
 	f.failReactivation = false
-	if err := c.LockUser(ctx, "acme", pk); err != nil {
+	if err := c.LockUser(ctx, "acme", pk, true); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if !slices.Contains(f.users[n].groups, locked) || f.users[n].inactive || f.deactivations != 2 {

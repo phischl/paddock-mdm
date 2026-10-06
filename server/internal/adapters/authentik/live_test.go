@@ -116,17 +116,36 @@ func TestLiveAuthentik(t *testing.T) {
 		t.Fatalf("members after removal: %v", members)
 	}
 
-	if err := c.LockUser(ctx, slug, pk); err != nil {
+	if active, err := c.UserActive(ctx, pk); err != nil || !active {
+		t.Fatalf("UserActive before the lock: %v, %v", active, err)
+	}
+	if err := c.LockUser(ctx, slug, pk, true); err != nil {
 		t.Fatalf("LockUser: %v", err)
 	}
 	if members, _ := c.GroupMembers(ctx, refs.LockedGroupPK); !slices.Equal(members, []string{pk}) {
 		t.Fatalf("locked group members after lock: %v", members)
 	}
-	if err := c.UnlockUser(ctx, slug, pk); err != nil {
+	if active, err := c.UserActive(ctx, pk); err != nil || !active {
+		t.Fatalf("UserActive after the lock: %v, %v", active, err)
+	}
+	if err := c.UnlockUser(ctx, slug, pk, false); err != nil {
 		t.Fatalf("UnlockUser: %v", err)
 	}
 	if members, _ := c.GroupMembers(ctx, refs.LockedGroupPK); len(members) != 0 {
 		t.Fatalf("locked group members after unlock: %v", members)
+	}
+	// A lock without reactivation leaves the user inactive, an unlock with activation activates it.
+	if err := c.LockUser(ctx, slug, pk, false); err != nil {
+		t.Fatalf("LockUser without reactivation: %v", err)
+	}
+	if active, err := c.UserActive(ctx, pk); err != nil || active {
+		t.Fatalf("UserActive after a lock without reactivation: %v, %v", active, err)
+	}
+	if err := c.UnlockUser(ctx, slug, pk, true); err != nil {
+		t.Fatalf("UnlockUser with activation: %v", err)
+	}
+	if active, err := c.UserActive(ctx, pk); err != nil || !active {
+		t.Fatalf("UserActive after an unlock with activation: %v, %v", active, err)
 	}
 
 	upstream, err := c.UpstreamGroups(ctx, slug)
