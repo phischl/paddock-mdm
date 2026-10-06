@@ -84,7 +84,11 @@ Other changes to lock semantics, LUKS policy, escrow kinds or rollout logic; M4c
 2. Finding 2 + tests (fake cryptsetup) + system gate D-24/D-TAMP rerun on paddock-u2604 with an extra user passphrase slot. Commit `fix(agent): remove only the keyslots the agent created`.
 3. Finding 3: role, network, interface, step-up token retention, `stepupproof`, api changes, acceptance: reveal works; a forged/stale/foreign-org step-up token is refused by the escrow-reader even if the api is bypassed (test calls the internal endpoint directly from a container on the `escrow` network); the api container has no escrow-reader secret (`docker compose config`). Commit `feat(escrow): decryption in a separate escrow-reader role`.
 4. Finding 4 + supervisor unit tests (downgrade, wrong version/arch in comment, missing comment) + gate S4 rerun on one VM. Commit `fix(agent): version-bound releases, no downgrades`.
-5. Regression from reset: acceptance, e2e, `system-test VM=all T='TestAgentGates|TestLocalAdminGates|TestDiskGates'`.
+5. **Parallel VM system tests** (product-owner decision 2026-10-06): `test/system` runs the per-VM subtests of every
+   gate concurrently on both VMs (`t.Parallel` per VM, one VM never shared by two tests at a time; shared server-side
+   fixtures get per-VM names). `make system-test VM=all` wall time roughly halves; document it in `test/system` README.
+   Commit `test(system): run both VMs in parallel`.
+6. Regression from reset: acceptance, e2e, `system-test VM=all T='TestAgentGates|TestLocalAdminGates|TestDiskGates'`.
 
 ## 6. Acceptance criteria
 | # | Given / When / Then | Observed by |
