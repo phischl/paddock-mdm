@@ -58,6 +58,9 @@ type Deps struct {
 	FollowLogins func(ctx context.Context, out chan<- localadmin.Login)
 	Spool        *spool.Spool    // nil: the agent's own spool below Layout
 	Triggers     <-chan struct{} // immediate check-in requests (network up, resume, SIGHUP)
+	// Revoke hands a revocation envelope to paddock-revoke and returns its refusal reason ("" when it executed);
+	// nil runs the installed paddock-revoke (plan M4c decision 11).
+	Revoke func(ctx context.Context, envelope []byte) (refused string, err error)
 	// Supervisor returns the PID of paddock-supervisor and Signal sends it SIGUSR1 (tests replace both).
 	Supervisor func() (int, error)
 	Signal     func(pid int) error
@@ -144,6 +147,11 @@ func New(d Deps) (*Agent, error) {
 	}
 	if a.d.Events != nil {
 		a.d.Events.Emit = a.event
+	}
+	if a.d.Revoke == nil {
+		a.d.Revoke = func(ctx context.Context, envelope []byte) (string, error) {
+			return runRevoke(ctx, a.d.Layout.RevokeBinary(), envelope)
+		}
 	}
 	if a.d.Supervisor == nil {
 		a.d.Supervisor = func() (int, error) { return update.SupervisorPID(a.d.Layout) }

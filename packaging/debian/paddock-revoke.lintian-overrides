@@ -1,0 +1,5 @@
+# The revocation module lives next to the agent below /opt/paddock (plan M4c decision 4).
+paddock-revoke: dir-or-file-in-opt
+# Static binary without runtime dependencies (design contract 9).
+paddock-revoke: statically-linked-binary
+paddock-revoke: no-manual-page

@@ -330,7 +330,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, idp),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
-		Releases:      app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, true),
+		Releases:      app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
 		Users:         app.NewUsers(runner, orgPool, idp),
 		UserGroups:    app.NewUserGroups(runner, orgPool, idp),
 		Logins:        app.NewLogins(runner, orgPool, idp),

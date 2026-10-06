@@ -8,6 +8,8 @@ How agent releases are signed, uploaded and rolled out (plan M2b §3.2–3.3, de
 | --- | --- | --- |
 | Release key (minisign, Ed25519) | **offline**; the secret key never touches CI, the control plane or a device | release manager, to sign `paddockd` |
 | Release public key | compiled into `paddock-supervisor` (`-ldflags -X main.releasePublicKey=…`) and given to the api role (`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) | supervisor (verifies before installing), api (refuses uploads that do not verify) |
+| Revocation release key (minisign, Ed25519) | **offline**, two holders (architecture §13.1) | release managers, to sign the `paddock-revoke` package |
+| Revocation release public key | given to the api role (`PADDOCK_REVOKE_RELEASE_PUBLIC_KEY_FILE`) | api (refuses a `paddock-revoke` package that does not verify with it, and any other package signed with it) |
 
 The supervisor is the only component that decides whether a release is installed; the server check only keeps
 unsigned or mis-signed binaries out of the artifact bucket. Rotating the release key therefore means shipping a new
@@ -15,8 +17,9 @@ unsigned or mis-signed binaries out of the artifact bucket. Rotating the release
 
 ### Development key
 
-`make dev-release-key` (run by `make dev-secrets`) creates a password-less pair in
-`deploy/compose/.secrets/release/` (`minisign.pub`, `minisign.key`). It is for development stacks only.
+`make dev-release-key` (run by `make dev-secrets`) creates password-less pairs in
+`deploy/compose/.secrets/release/` (`minisign.pub`, `minisign.key`, and `revoke-minisign.pub`, `revoke-minisign.key`
+for `paddock-revoke`). They are for development stacks only.
 
 ### Production key
 
@@ -46,8 +49,10 @@ minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<versio
    `PUT /api/platform/v1/agent-releases/<version>/artifacts/<arch>` with the binary as body and
    `X-Paddock-Minisig: <base64 of the .minisig file>`. The server stores it in `paddock-agent-artifacts` under
    `releases/<version>/<arch>/paddockd`.
-4. Upload the Debian packages `paddock-agent` and `paddock-supervisor` of the release (built by `make deb`), each
-   signed like the binary: `PUT /api/platform/v1/agent-releases/<version>/packages/<name>/<arch>` with the package
+4. Upload the Debian packages `paddock-agent`, `paddock-supervisor` and `paddock-revoke` of the release (built by
+   `make deb`), each signed like the binary — `paddock-revoke` with the revocation release key, never with the agent
+   release key, and never built with `REVOKE_TAGS` (the test build tag `paddock_revoke_testtarget`; `make
+   agent-release` refuses it): `PUT /api/platform/v1/agent-releases/<version>/packages/<name>/<arch>` with the package
    as body and `X-Paddock-Minisig`. The server stores them under
    `packages/<version>/<name>_<version>_<arch>.deb`; the Paddock autoinstall installs new devices from them.
 5. Publish: `POST …/<version>/publish`. Published releases are immutable.

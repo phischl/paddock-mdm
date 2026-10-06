@@ -78,7 +78,7 @@ func newReleaseHarness(t *testing.T, development bool) releaseHarness {
 	runner := app.NewActionRunner(worker, platform, httpx.RequestID)
 	verify := app.NewReleaseVerifier(pub)
 	return releaseHarness{
-		releases: app.NewAgentReleases(runner, platform, store, verify, development),
+		releases: app.NewAgentReleases(runner, platform, store, verify, verify, development),
 		reports:  app.NewDeviceReports(runner, worker), store: store, priv: priv, super: super,
 	}
 }

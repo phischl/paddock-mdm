@@ -46,8 +46,8 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 	vm.Must("sudo install -m 0644 /tmp/paddock-dev-caddy-root.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates >/dev/null" +
 		" && echo '" + guestHosts + "' | sudo tee -a /etc/hosts >/dev/null && getent hosts device.paddock.localhost")
 	debs, err := filepath.Glob(filepath.Join(debDir, "*.deb"))
-	if err != nil || len(debs) != 2 {
-		t.Fatalf("want the two packages in %s (make deb), got %v", debDir, debs)
+	if err != nil || len(debs) != 3 {
+		t.Fatalf("want the three packages in %s (make deb), got %v", debDir, debs)
 	}
 	var remote []string
 	for _, deb := range debs {

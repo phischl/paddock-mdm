@@ -1,0 +1,35 @@
+# nfpm configuration of the paddock-revoke package (plan M4c decision 4); built by `make deb`. paddock-revoke reaches
+# devices only as this package — installed by the Paddock autoinstall, updated by package installation, never by the
+# agent update channel (design contract 7) — and is signed with the revocation release key. It has no dependencies:
+# paddockd hands it revocation tokens, and it uses cryptsetup and systemd of the base system.
+name: paddock-revoke
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Paddock <paddock@paddock-mdm.invalid>
+description: |-
+  Paddock revocation module
+  Verifies device-bound revocation tokens (Lock, Destroy, dead man's switch)
+  against the trust anchor pinned at enrollment and, only then, erases every
+  keyslot of the encrypted root volume, confirms the erasure and reboots.
+vendor: Paddock
+homepage: https://github.com/phischl/paddock-mdm
+license: MIT
+contents:
+  - src: bin/deb/stage/paddock-revoke
+    dst: /opt/paddock/revoke/paddock-revoke
+    file_info: { mode: 0755 }
+  - dst: /var/lib/paddock/revoke
+    type: dir
+    file_info: { mode: 0700 }
+  - src: packaging/debian/copyright
+    dst: /usr/share/doc/paddock-revoke/copyright
+    file_info: { mode: 0644 }
+  - src: bin/deb/stage/paddock-revoke.changelog.gz
+    dst: /usr/share/doc/paddock-revoke/changelog.gz
+    file_info: { mode: 0644 }
+  - src: packaging/debian/paddock-revoke.lintian-overrides
+    dst: /usr/share/lintian/overrides/paddock-revoke
+    file_info: { mode: 0644 }

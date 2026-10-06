@@ -263,14 +263,17 @@ func version(minor int, label string) string {
 func (s *Stack) InstallRelease(t *testing.T) string {
 	t.Helper()
 	v := version(9, "ai")
-	s.Make("deb", "VERSION="+v, "TAGS=paddock_dev")
-	t.Cleanup(func() { s.Make("deb", "VERSION=0.1.0", "TAGS=paddock_dev") })
+	s.Make("deb", "VERSION="+v, "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget")
+	t.Cleanup(func() { s.Make("deb", "VERSION=0.1.0", "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget") })
 	debs, err := filepath.Glob(filepath.Join(s.root, "bin", "deb", "*.deb"))
-	if err != nil || len(debs) != 2 {
+	if err != nil || len(debs) != 3 {
 		t.Fatalf("packages %v: %v", debs, err)
 	}
 	args := []string{"--version", v, "--artifact", "amd64=" + filepath.Join(s.root, "bin", "agent", "amd64", "paddockd"),
-		"--deb", debs[0], "--deb", debs[1], "--rollout", "--halt-running", "--waves", "100", "--min-wave-minutes", "1"}
+		"--rollout", "--halt-running", "--waves", "100", "--min-wave-minutes", "1"}
+	for _, deb := range debs {
+		args = append(args, "--deb", deb)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, agentRelease(s.root), args...)

@@ -162,6 +162,8 @@ const (
 	// Revocation (plan M4c decision 3): a device enrolled before M4c pinned the revocation keys of its first bundle
 	// that carried them (trust on first use).
 	EventRevocationTrustPinnedTOFU = "revocation.trust_pinned_tofu"
+	// paddock-revoke refused a revocation token; nothing changed on the device (plan M4c decision 11).
+	EventRevocationRefused = "revocation.refused"
 )
 
 // EventTypes is the closed set of event types.
@@ -173,7 +175,7 @@ var EventTypes = []string{
 	EventTamperProtectedFileChanged,
 	EventLocalAdminRotated, EventLocalAdminRotationFailed, EventLocalAdminLogin, EventTamperLocalAdminChanged,
 	EventTamperKeyslotChanged,
-	EventRevocationTrustPinnedTOFU,
+	EventRevocationTrustPinnedTOFU, EventRevocationRefused,
 }
 
 // Disk states of DiskHealth (plan M4b decision 8), from the least to the most complete.

@@ -4,12 +4,17 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/commands"
 	"github.com/phischl/paddock-mdm/agent/internal/config"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/dsse"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/revocation"
 )
@@ -114,5 +119,58 @@ func TestRevocationAnchorFromEnrollment(t *testing.T) {
 	}
 	if ev := eventsOf(g, protocol.EventRevocationTrustPinnedTOFU); len(ev) != 0 {
 		t.Fatalf("tofu events %+v", ev)
+	}
+}
+
+// revocationEnvelope is a DSSE envelope with the revocation payload type; paddockd never looks inside.
+func revocationEnvelope(t *testing.T, payload string) json.RawMessage {
+	t.Helper()
+	env, err := dsse.New(revocation.PayloadType, []byte(payload), dsse.Signature{KeyID: "revocation-signing:v1", Sig: "c2ln"}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+// TestRevocationHandoff (plan M4c decision 11): paddockd hands every revocation envelope to paddock-revoke exactly
+// once, without verifying it, keeps it away from the command executor and reports a refusal.
+func TestRevocationHandoff(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	var handed [][]byte
+	refuse := "rate_limited"
+	a.d.Revoke = func(_ context.Context, env []byte) (string, error) {
+		handed = append(handed, env)
+		return refuse, nil
+	}
+	a.d.Commands = commands.New(map[string]commands.Handler{}, time.Now)
+	a.current = &bundle.Bundle{Keys: testgw.CommandKeys()}
+	first, second := revocationEnvelope(t, `{"a":1}`), revocationEnvelope(t, `{"a":2}`)
+	g.Mu.Lock()
+	g.Checkin.Commands = []json.RawMessage{first}
+	g.Mu.Unlock()
+	a.Cycle(context.Background())
+	a.Cycle(context.Background())
+	if len(handed) != 1 || string(handed[0]) != string(first) {
+		t.Fatalf("handed %d envelopes", len(handed))
+	}
+	if ev := eventsOf(g, protocol.EventRevocationRefused); len(ev) != 1 || string(ev[0].Data) != `{"reason":"rate_limited"}` {
+		t.Fatalf("refused events %+v", ev)
+	}
+	if st, _ := state.Load(a.d.Layout.State()); len(st.HandedRevocations) != 1 || len(st.ExecutedCommands) != 0 || len(st.CommandResults) != 0 {
+		t.Fatalf("state %+v", st)
+	}
+
+	// An executed token reports nothing; a missing paddock-revoke is reported as not_installed.
+	refuse = ""
+	g.Mu.Lock()
+	g.Checkin.Commands = []json.RawMessage{first, second}
+	g.Mu.Unlock()
+	a.Cycle(context.Background())
+	if len(handed) != 2 || len(eventsOf(g, protocol.EventRevocationRefused)) != 1 {
+		t.Fatalf("handed %d, events %+v", len(handed), eventsOf(g, protocol.EventRevocationRefused))
+	}
+	if refused, err := runRevoke(context.Background(), a.d.Layout.RevokeBinary(), first); refused != "" || revokeReason(err) != "not_installed" {
+		t.Fatalf("missing paddock-revoke: %q %v", refused, err)
 	}
 }

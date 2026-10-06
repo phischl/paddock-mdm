@@ -45,6 +45,16 @@ func TestAgentPackagesPublic(t *testing.T) {
 	if status, _ := get("/packages/" + v + "/paddock-agent_" + v + "_amd64.deb"); status != http.StatusNotFound && status != http.StatusForbidden {
 		t.Errorf("missing package: HTTP %d", status)
 	}
+	// paddock-revoke is signed with the revocation release key: the agent release key does not do (plan M4c
+	// decision 4).
+	revoke := []byte("!<arch>\ngate revoke " + v)
+	expectStatus(t, uploadPackage(t, root, v, "paddock-revoke", revoke, minisign.Sign(releaseKey(t), revoke)), http.StatusBadRequest, "invalid_request")
+	revokeKey, err := stack.RevokeReleaseKey("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectStatus(t, uploadPackage(t, root, v, "paddock-revoke", revoke, minisign.Sign(revokeKey, revoke)), http.StatusOK, "")
+	expectStatus(t, uploadPackage(t, root, v, "paddock-supervisor", deb, minisign.Sign(revokeKey, deb)), http.StatusBadRequest, "invalid_request")
 	bin := []byte("gate binary " + v)
 	expectStatus(t, uploadArtifact(t, root, v, bin, signBinary(t, bin, v)), http.StatusOK, "")
 	for _, path := range []string{"/paddock-agent-artifacts/releases/" + v + "/amd64/paddockd", "/paddock-agent-artifacts/?list-type=2",

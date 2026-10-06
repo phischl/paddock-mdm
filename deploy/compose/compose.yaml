@@ -288,6 +288,7 @@ services:
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
       PADDOCK_AUTHENTIK_TOKEN_FILE: /run/secrets/authentik_service_token
       PADDOCK_RELEASE_PUBLIC_KEY_FILE: /run/secrets/release_public_key
+      PADDOCK_REVOKE_RELEASE_PUBLIC_KEY_FILE: /run/secrets/revoke_release_public_key
       PADDOCK_ARTIFACTS_S3_ENDPOINT: http://rustfs:9000
       PADDOCK_ARTIFACTS_S3_BUCKET: paddock-agent-artifacts
       PADDOCK_ARTIFACTS_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_artifacts_api_access_key
@@ -304,6 +305,7 @@ services:
     secrets:
       - valkey_password
       - release_public_key
+      - revoke_release_public_key
       - rustfs_artifacts_api_access_key
       - rustfs_artifacts_api_secret_key
       - rustfs_escrow_api_access_key
@@ -619,6 +621,7 @@ secrets:
   rustfs_escrow_revocation_access_key: { file: ./.secrets/rustfs_escrow_revocation_access_key }
   rustfs_escrow_revocation_secret_key: { file: ./.secrets/rustfs_escrow_revocation_secret_key }
   release_public_key: { file: ./.secrets/release/minisign.pub }
+  revoke_release_public_key: { file: ./.secrets/release/revoke-minisign.pub }
   authentik_postgres_password: { file: ./.secrets/authentik_postgres_password }
   authentik_secret_key: { file: ./.secrets/authentik_secret_key }
   authentik_bootstrap_password: { file: ./.secrets/authentik_bootstrap_password }

@@ -42,6 +42,9 @@ type State struct {
 	// ExecutedCommands are the IDs of the commands this device started, with the time, kept 60 days so a command is
 	// never executed twice (plan M4a decision 3).
 	ExecutedCommands map[string]time.Time `json:"executed_commands,omitempty"`
+	// HandedRevocations are the SHA-256 (hex) of the revocation envelopes handed to paddock-revoke, with the time,
+	// so each is handed once (plan M4c decision 11); kept 31 days, longer than a token lives.
+	HandedRevocations map[string]time.Time `json:"handed_revocations,omitempty"`
 	// CommandResults are the results the server has not accepted yet.
 	CommandResults []CommandResult `json:"command_results,omitempty"`
 	// LocalAdmin is the managed local administrator (plan M4a decision 15).

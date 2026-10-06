@@ -36,6 +36,7 @@ export const auditCodes = [
   'device.rejected',
   'device.retired',
   'device.revocation_confirmed',
+  'device.revocation_refused',
   'device.revocation_trust_pinned_tofu',
   'device.sudo_apply_failed',
   'device.sudo_user_unresolved',

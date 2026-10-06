@@ -18,8 +18,8 @@ import (
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
-// installRelease publishes a gate release with both Debian packages, so that autoinstalls generated afterwards use
-// it (plan M4b decisions 1 and 2).
+// installRelease publishes a gate release with the three Debian packages, so that autoinstalls generated afterwards
+// use it (plan M4b decisions 1 and 2, plan M4c decision 4).
 func installRelease(t *testing.T, root *env.Portal) string {
 	t.Helper()
 	v := gateRelease(t, root, true, false)
@@ -27,6 +27,13 @@ func installRelease(t *testing.T, root *env.Portal) string {
 		deb := []byte("!<arch>\n" + name + " " + v)
 		expectStatus(t, uploadPackage(t, root, v, name, deb, minisign.Sign(releaseKey(t), deb)), http.StatusOK, "")
 	}
+	// paddock-revoke is installed by the autoinstall, signed with the revocation release key (plan M4c decision 4).
+	revokeKey, err := stack.RevokeReleaseKey("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deb := []byte("!<arch>\npaddock-revoke " + v)
+	expectStatus(t, uploadPackage(t, root, v, "paddock-revoke", deb, minisign.Sign(revokeKey, deb)), http.StatusOK, "")
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/publish", nil), http.StatusOK, "")
 	return v
 }
@@ -107,8 +114,8 @@ func TestAutoinstallGenerator(t *testing.T) {
 				}
 			}
 		}
-		if downloads != 2 {
-			t.Errorf("%s: %d package downloads of release %s, want 2", release, downloads, v)
+		if downloads != 3 {
+			t.Errorf("%s: %d package downloads of release %s, want 3 (agent, supervisor, revoke)", release, downloads, v)
 		}
 	}
 

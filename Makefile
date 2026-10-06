@@ -80,6 +80,7 @@ lint-web:
 .PHONY: test
 test: ## Unit and integration tests (requires Docker)
 	go test -count=1 $(UNIT_PACKAGES)
+	go test -count=1 -tags paddock_revoke_testtarget ./agent/internal/revoke/
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
 
 .PHONY: fuzz
@@ -112,37 +113,43 @@ RELEASE_KEY_DIR := $(SECRETS_DIR)/release
 MINISIGN        := cd agent && go run aead.dev/minisign/cmd/minisign
 
 .PHONY: dev-release-key
-dev-release-key: ## Generate the password-less development agent release key pair (idempotent; never for production)
-	@if [ -f $(RELEASE_KEY_DIR)/minisign.pub ]; then echo "release key exists: $(RELEASE_KEY_DIR)"; else \
-		mkdir -p $(RELEASE_KEY_DIR) && chmod 700 $(RELEASE_KEY_DIR) && \
-		($(MINISIGN) -G -W -p $(CURDIR)/$(RELEASE_KEY_DIR)/minisign.pub -s $(CURDIR)/$(RELEASE_KEY_DIR)/minisign.key </dev/null >/dev/null) && \
-		chmod 644 $(RELEASE_KEY_DIR)/minisign.pub && chmod 600 $(RELEASE_KEY_DIR)/minisign.key && \
-		echo "created development release key $(RELEASE_KEY_DIR)/minisign.pub"; fi
+dev-release-key: ## Generate the password-less development agent and revocation release key pairs (idempotent; never for production)
+	@mkdir -p $(RELEASE_KEY_DIR) && chmod 700 $(RELEASE_KEY_DIR)
+	@for key in minisign revoke-minisign; do \
+		if [ -f $(RELEASE_KEY_DIR)/$$key.pub ]; then echo "release key exists: $(RELEASE_KEY_DIR)/$$key.pub"; else \
+			($(MINISIGN) -G -W -p $(CURDIR)/$(RELEASE_KEY_DIR)/$$key.pub -s $(CURDIR)/$(RELEASE_KEY_DIR)/$$key.key </dev/null >/dev/null) && \
+			chmod 644 $(RELEASE_KEY_DIR)/$$key.pub && chmod 600 $(RELEASE_KEY_DIR)/$$key.key && \
+			echo "created development release key $(RELEASE_KEY_DIR)/$$key.pub" || exit 1; fi; \
+	done
 
 # Agent builds (plan M2b decisions 5, 17, 18, 25). VERSION is the agent version; TAGS adds build tags, e.g.
 # TAGS=paddock_dev for the development probation and drift interval (system tests). The supervisor gets the release
-# public key compiled in (default: the development key).
+# public key compiled in (default: the development key). REVOKE_TAGS are the build tags of paddock-revoke (plan M4c
+# decision 13): paddock_revoke_testtarget for the system tests only, never in a release (agent-release refuses it).
 VERSION                 ?= 0.0.0-dev
 TAGS                    ?=
+REVOKE_TAGS             ?=
 RELEASE_PUBLIC_KEY_FILE ?= $(RELEASE_KEY_DIR)/minisign.pub
 AGENT_LDFLAGS            = -s -w -X github.com/phischl/paddock-mdm/agent/internal/buildinfo.Version=$(VERSION)
 AGENT_BUILD              = CGO_ENABLED=0 go build -trimpath -tags '$(TAGS)'
 
 .PHONY: agent
-agent: ## Build paddockd and paddock-supervisor for amd64 and arm64 into bin/agent/<arch>/ (VERSION, TAGS)
+agent: ## Build paddockd, paddock-supervisor and paddock-revoke for amd64 and arm64 into bin/agent/<arch>/ (VERSION, TAGS, REVOKE_TAGS)
 	@test -s $(RELEASE_PUBLIC_KEY_FILE) || { echo "missing $(RELEASE_PUBLIC_KEY_FILE): run make dev-release-key"; exit 1; }
 	@for arch in amd64 arm64; do \
 		GOOS=linux GOARCH=$$arch $(AGENT_BUILD) -ldflags '$(AGENT_LDFLAGS)' -o bin/agent/$$arch/paddockd ./agent/cmd/paddockd && \
 		GOOS=linux GOARCH=$$arch $(AGENT_BUILD) -ldflags '$(AGENT_LDFLAGS) -X main.releasePublicKey=$(shell sed -n 2p $(RELEASE_PUBLIC_KEY_FILE))' \
-			-o bin/agent/$$arch/paddock-supervisor ./agent/cmd/paddock-supervisor || exit 1; \
+			-o bin/agent/$$arch/paddock-supervisor ./agent/cmd/paddock-supervisor && \
+		GOOS=linux GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -tags '$(REVOKE_TAGS)' -ldflags '$(AGENT_LDFLAGS)' \
+			-o bin/agent/$$arch/paddock-revoke ./agent/cmd/paddock-revoke || exit 1; \
 	done
-	@echo "built bin/agent/{amd64,arm64}/{paddockd,paddock-supervisor} $(VERSION) $(TAGS)"
+	@echo "built bin/agent/{amd64,arm64}/{paddockd,paddock-supervisor,paddock-revoke} $(VERSION) $(TAGS) $(REVOKE_TAGS)"
 
 .PHONY: deb
-deb: agent ## Build the paddock-supervisor and paddock-agent Debian packages for amd64 into bin/deb/ (VERSION, TAGS)
+deb: agent ## Build the paddock-supervisor, paddock-agent and paddock-revoke Debian packages for amd64 into bin/deb/ (VERSION, TAGS, REVOKE_TAGS)
 	rm -f bin/deb/*.deb && mkdir -p bin/deb/stage
-	cp bin/agent/amd64/paddockd bin/agent/amd64/paddock-supervisor bin/deb/stage/
-	for pkg in paddock-supervisor paddock-agent; do \
+	cp bin/agent/amd64/paddockd bin/agent/amd64/paddock-supervisor bin/agent/amd64/paddock-revoke bin/deb/stage/
+	for pkg in paddock-supervisor paddock-agent paddock-revoke; do \
 		printf '%s (%s) unstable; urgency=medium\n\n  * Release %s; see CHANGELOG.md.\n\n -- Paddock <paddock@paddock-mdm.invalid>  %s\n' \
 			$$pkg $(VERSION) $(VERSION) "$$(date -R -u)" | gzip -9n >bin/deb/stage/$$pkg.changelog.gz && \
 		docker run --rm -u $(UID):$(GID) -v $(CURDIR):/src -w /src -e ARCH=amd64 -e VERSION=$(VERSION) $(NFPM_IMAGE) \
@@ -153,6 +160,7 @@ deb: agent ## Build the paddock-supervisor and paddock-agent Debian packages for
 .PHONY: agent-release
 agent-release: ## Build paddockd and the Debian packages VERSION (TAGS), sign them with the development release key and upload and publish them
 	@test -n "$(filter-out 0.0.0-dev,$(VERSION))" || { echo "usage: make agent-release VERSION=x.y.z [TAGS=...]"; exit 1; }
+	@test -z "$(REVOKE_TAGS)" || { echo "agent-release never builds paddock-revoke with REVOKE_TAGS ($(REVOKE_TAGS))"; exit 1; }
 	$(MAKE) --no-print-directory deb VERSION=$(VERSION) TAGS='$(TAGS)'
 	go run ./test/acceptance/cmd/agentrelease --version $(VERSION) --publish \
 		--artifact amd64=bin/agent/amd64/paddockd --artifact arm64=bin/agent/arm64/paddockd \
@@ -204,7 +212,8 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 .PHONY: system-test
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
 	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex>]"; exit 1; }
-	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev
+	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev REVOKE_TAGS=paddock_revoke_testtarget
+	CGO_ENABLED=0 go build -trimpath -o bin/revoke-release/paddock-revoke ./agent/cmd/paddock-revoke
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... $(if $(T),-run '$(T)',) -v
 

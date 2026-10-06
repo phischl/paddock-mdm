@@ -46,13 +46,19 @@ type AgentReleases struct {
 	platform *db.PlatformPool
 	store    ArtifactStore
 	verify   VerifyRelease
+	// verifyRevoke checks the paddock-revoke package with the revocation release key (architecture §12.3).
+	verifyRevoke VerifyRelease
 	// development allows waves shorter than agentrelease.MinWaveMinutesProduction (PADDOCK_ENV=development).
 	development bool
 }
 
-// NewAgentReleases creates the use cases. store and verify may be nil in roles that do not upload (worker).
-func NewAgentReleases(runner *ActionRunner, platform *db.PlatformPool, store ArtifactStore, verify VerifyRelease, development bool) *AgentReleases {
-	return &AgentReleases{runner: runner, platform: platform, store: store, verify: verify, development: development}
+// NewAgentReleases creates the use cases. verify checks with the agent release key, verifyRevoke the paddock-revoke
+// package with the revocation release key; store, verify and verifyRevoke may be nil in roles that do not upload
+// (worker).
+func NewAgentReleases(runner *ActionRunner, platform *db.PlatformPool, store ArtifactStore, verify, verifyRevoke VerifyRelease,
+	development bool) *AgentReleases {
+	return &AgentReleases{runner: runner, platform: platform, store: store, verify: verify, verifyRevoke: verifyRevoke,
+		development: development}
 }
 
 // Privileged actions of agent releases.
@@ -169,7 +175,7 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 	var out pgstore.AgentArtifact
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
-			comment, err := a.checkUpload(ctx, q, version, arch, binary, minisigB64)
+			comment, err := a.checkUpload(ctx, q, a.verify, version, arch, binary, minisigB64)
 			if err != nil {
 				return err
 			}
@@ -196,8 +202,8 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 	return out, err
 }
 
-// UploadPackage verifies the minisign signature of a Debian package (paddock-agent or paddock-supervisor) with the
-// release public key and stores it below packages/, from where the Paddock autoinstall downloads it (plan M4b
+// UploadPackage verifies the minisign signature of a Debian package with the release public key — paddock-revoke with
+// the revocation release key (plan M4c decision 4) — and stores it below packages/, from where the Paddock autoinstall downloads it (plan M4b
 // decision 1). It is audited as an artifact of kind deb. Published releases are immutable.
 func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, arch string, deb []byte, minisigB64 string) (pgstore.AgentPackage, error) {
 	sum := sha256.Sum256(deb)
@@ -215,7 +221,11 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, arch s
 			if err := agentrelease.ValidatePackage(name); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
-			_, err := a.checkUpload(ctx, q, version, arch, deb, minisigB64)
+			verify := a.verify
+			if name == agentrelease.PackageRevoke {
+				verify = a.verifyRevoke
+			}
+			_, err := a.checkUpload(ctx, q, verify, version, arch, deb, minisigB64)
 			return err
 		},
 		func(ctx context.Context) error {
@@ -238,7 +248,8 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, arch s
 
 // checkUpload validates an upload of a release file — architecture, size, signature, and a draft release — and
 // returns the signature's trusted comment.
-func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, version, arch string, body []byte, minisigB64 string) (string, error) {
+func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, verify VerifyRelease, version, arch string, body []byte,
+	minisigB64 string) (string, error) {
 	if err := agentrelease.ValidateArch(arch); err != nil {
 		return "", problem.InvalidRequest.WithDetail(err.Error())
 	}
@@ -248,11 +259,11 @@ func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, ver
 	sig, err := base64.StdEncoding.DecodeString(minisigB64)
 	var comment string
 	ok := false
-	if err == nil && a.verify != nil {
-		comment, ok = a.verify(body, sig)
+	if err == nil && verify != nil {
+		comment, ok = verify(body, sig)
 	}
 	if !ok {
-		return "", problem.InvalidRequest.WithDetail("X-Paddock-Minisig does not verify with the release public key")
+		return "", problem.InvalidRequest.WithDetail("X-Paddock-Minisig does not verify with the release public key of the file")
 	}
 	r, err := q.GetAgentRelease(ctx, version)
 	if err != nil {
