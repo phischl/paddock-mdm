@@ -93,6 +93,8 @@ const (
 
 	CodeAutoinstallGenerated       Code = "autoinstall.generated"
 	CodeDeviceTamperKeyslotChanged Code = "device.tamper_keyslot_changed"
+	CodeDiskRecoveryKeyRevealed    Code = "disk.recovery_key_revealed"
+	CodeDiskHeaderDownloaded       Code = "disk.header_downloaded"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -596,6 +598,18 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "before and after list the kind of every keyslot (tpm2+pin, tpm2, recovery, password, or another token type).",
+	},
+	CodeDiskRecoveryKeyRevealed: {
+		Code: CodeDiskRecoveryKeyRevealed, Emitted: true,
+		Description: "An organization administrator revealed the disk recovery key of a device after a step-up; the key is never recorded.",
+		Params:      []string{"hostname", "generation"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDiskHeaderDownloaded: {
+		Code: CodeDiskHeaderDownloaded, Emitted: true,
+		Description: "An organization administrator downloaded an escrowed LUKS header of a device after a step-up.",
+		Params:      []string{"hostname", "generation"},
+		Outcomes:    adminOutcomes,
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

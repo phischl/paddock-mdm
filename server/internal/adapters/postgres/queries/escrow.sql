@@ -64,3 +64,11 @@ UPDATE escrow_secret SET status = @status WHERE id = @id AND status = 'pending';
 SELECT * FROM escrow_secret
 WHERE device_id = @device_id AND kind IN ('luks_recovery_key', 'luks_header')
 ORDER BY kind, generation DESC;
+
+-- name: LatestStoredEscrow :one
+-- The newest stored generation of a LUKS kind, or the requested one (generation 0: the newest).
+SELECT * FROM escrow_secret
+WHERE device_id = @device_id AND kind = @kind AND status = 'stored'
+  AND (@generation::int = 0 OR generation = @generation::int)
+ORDER BY generation DESC
+LIMIT 1;

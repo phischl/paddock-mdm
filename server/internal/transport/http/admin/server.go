@@ -34,6 +34,7 @@ type Deps struct {
 	Commands      *app.DeviceCommands
 	LocalAdmin    *app.LocalAdmin
 	Autoinstall   *app.Autoinstall
+	Disk          *app.Disk
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -102,6 +103,8 @@ var privileged = map[string]struct {
 	"POST /api/v1/devices/{id}/local-admin/rotate":                         {app.ScopeOrg, app.SpecLocalAdminRotate},
 	"POST /api/v1/devices/{id}/local-admin/reveal":                         {app.ScopeOrg, app.SpecLocalAdminReveal},
 	"POST /api/v1/autoinstall":                                             {app.ScopeOrg, app.SpecAutoinstallGenerate},
+	"POST /api/v1/devices/{id}/disk/recovery-key":                          {app.ScopeOrg, app.SpecDiskRecoveryKeyReveal},
+	"POST /api/v1/devices/{id}/disk/header":                                {app.ScopeOrg, app.SpecDiskHeaderDownload},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -120,7 +123,7 @@ func NewHandler(d Deps) http.Handler {
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
-		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, now: d.Now,
+		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

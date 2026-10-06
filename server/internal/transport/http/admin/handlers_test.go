@@ -232,6 +232,8 @@ type env struct {
 	release  minisign.PrivateKey // signs agent releases the server accepts
 	acme     uuid.UUID
 	globex   uuid.UUID
+	// disk is the escrow-wrap key and the escrow bucket of the disk recovery (plan M4b decision 14).
+	disk *diskEscrow
 }
 
 func newEnv(t *testing.T) *env {
@@ -287,7 +289,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey}
+	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t)}
 	verifyRelease := func(bin, sig []byte) bool { return minisign.Verify(releasePub, bin, sig) }
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
 		if e.keysDown {
@@ -311,6 +313,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Commands:      app.NewDeviceCommands(orgPool),
 		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, fakeDecrypter{}),
 		Autoinstall:   app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
+		Disk:          app.NewDisk(runner, orgPool, e.disk, e.disk),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,

@@ -15,21 +15,23 @@ import (
 
 const countDevices = `-- name: CountDevices :one
 SELECT count(*) FROM (
-  SELECT 1 FROM device
+  SELECT 1 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
   WHERE ($1::text IS NULL
          OR hostname ILIKE $1::text ESCAPE '\'
          OR hardware_uuid ILIKE $1::text ESCAPE '\')
     AND ($2::text[] IS NULL OR state = ANY($2::text[]))
-    AND ($3::uuid IS NULL OR EXISTS (
+    AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
+    AND ($4::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_group_member m
-          WHERE m.device_id = device.id AND m.device_group_id = $3::uuid))
-  LIMIT $4
+          WHERE m.device_id = device.id AND m.device_group_id = $4::uuid))
+  LIMIT $5
 ) matching
 `
 
 type CountDevicesParams struct {
 	QPattern      *string
 	States        []string
+	DiskStates    []string
 	DeviceGroupID uuid.NullUUID
 	CountLimit    int32
 }
@@ -38,6 +40,7 @@ func (q *Queries) CountDevices(ctx context.Context, arg CountDevicesParams) (int
 	row := q.db.QueryRow(ctx, countDevices,
 		arg.QPattern,
 		arg.States,
+		arg.DiskStates,
 		arg.DeviceGroupID,
 		arg.CountLimit,
 	)
@@ -365,31 +368,33 @@ func (q *Queries) ListDeviceIdentityKeys(ctx context.Context, deviceID uuid.UUID
 const listDevices = `-- name: ListDevices :many
 
 SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device_status.last_contact_at, device_status.applied_bundle_version,
-       device_status.agent_version
+       device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state -- '' = none
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 WHERE ($1::text IS NULL
        OR hostname ILIKE $1::text ESCAPE '\'
        OR hardware_uuid ILIKE $1::text ESCAPE '\')
   AND ($2::text[] IS NULL OR state = ANY($2::text[]))
-  AND ($3::uuid IS NULL OR EXISTS (
+  AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
+  AND ($4::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m
-        WHERE m.device_id = device.id AND m.device_group_id = $3::uuid))
+        WHERE m.device_id = device.id AND m.device_group_id = $4::uuid))
 ORDER BY
-  CASE WHEN $4::text = 'hostname' THEN hostname END ASC,
-  CASE WHEN $4::text = '-hostname' THEN hostname END DESC,
-  CASE WHEN $4::text = 'last_contact_at' THEN last_contact_at END ASC,
-  CASE WHEN $4::text = '-last_contact_at' THEN last_contact_at END DESC,
-  CASE WHEN $4::text = 'enrolled_at' THEN enrolled_at END ASC,
-  CASE WHEN $4::text = '-enrolled_at' THEN enrolled_at END DESC,
-  CASE WHEN $4::text = 'state' THEN state END ASC,
-  CASE WHEN $4::text = '-state' THEN state END DESC,
+  CASE WHEN $5::text = 'hostname' THEN hostname END ASC,
+  CASE WHEN $5::text = '-hostname' THEN hostname END DESC,
+  CASE WHEN $5::text = 'last_contact_at' THEN last_contact_at END ASC,
+  CASE WHEN $5::text = '-last_contact_at' THEN last_contact_at END DESC,
+  CASE WHEN $5::text = 'enrolled_at' THEN enrolled_at END ASC,
+  CASE WHEN $5::text = '-enrolled_at' THEN enrolled_at END DESC,
+  CASE WHEN $5::text = 'state' THEN state END ASC,
+  CASE WHEN $5::text = '-state' THEN state END DESC,
   id
-LIMIT $6 OFFSET $5
+LIMIT $7 OFFSET $6
 `
 
 type ListDevicesParams struct {
 	QPattern      *string
 	States        []string
+	DiskStates    []string
 	DeviceGroupID uuid.NullUUID
 	Sort          string
 	SkipRows      int32
@@ -401,6 +406,7 @@ type ListDevicesRow struct {
 	LastContactAt        *time.Time
 	AppliedBundleVersion *int64
 	AgentVersion         *string
+	DiskState            string
 }
 
 // List queries (ADR 0018): see device_group.sql. Sort and search columns are unambiguous across the join.
@@ -408,6 +414,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 	rows, err := q.db.Query(ctx, listDevices,
 		arg.QPattern,
 		arg.States,
+		arg.DiskStates,
 		arg.DeviceGroupID,
 		arg.Sort,
 		arg.SkipRows,
@@ -436,6 +443,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.LastContactAt,
 			&i.AppliedBundleVersion,
 			&i.AgentVersion,
+			&i.DiskState,
 		); err != nil {
 			return nil, err
 		}

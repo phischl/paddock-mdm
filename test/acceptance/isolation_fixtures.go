@@ -241,6 +241,12 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/settings/login", currentLoginSettings(t, w.alice)
 	}},
 
+	"GET /api/v1/devices/{id}/disk": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/disk" }, nil),
+	"POST /api/v1/devices/{id}/disk/recovery-key": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/devices/" + w.globexDevice + "/disk/recovery-key"
+	}, map[string]any{"confirm_hostname": "x"}),
+	"POST /api/v1/devices/{id}/disk/header": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/disk/header" },
+		map[string]any{"confirm_hostname": "x"}),
 	"POST /api/v1/autoinstall": {kind: isoItem, request: func(_ *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/autoinstall", autoinstallBody(w.globexEnrollment, "26.04")
 	}},

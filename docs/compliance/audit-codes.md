@@ -52,6 +52,8 @@ The portal renders them through the message key `audit.<code>`.
 | `device_group.created` | A device group was created. | `name` | success, failure, denied |
 | `device_group.deleted` | A device group was deleted. | `name` | success, failure, denied |
 | `device_group.updated` | A device group was renamed or its description changed. | `name`, `old_name`, `description_changed` | success, failure, denied |
+| `disk.header_downloaded` | An organization administrator downloaded an escrowed LUKS header of a device after a step-up. | `hostname`, `generation` | success, failure, denied |
+| `disk.recovery_key_revealed` | An organization administrator revealed the disk recovery key of a device after a step-up; the key is never recorded. | `hostname`, `generation` | success, failure, denied |
 | `enrollment_token.created` | An enrollment token was created. The token secret is never recorded. | `name`, `expires_at`, `max_uses`, `auto_approve`, `device_group_id` | success, failure, denied |
 | `enrollment_token.revoked` | An enrollment token was revoked. | `name` | success, failure, denied |
 | `local_admin.login` | A session of the local administrator account was opened on a device (actor: the device). service is the PAM service, e.g. sshd or login; no terminal or remote host is recorded. | `event_seq`, `occurred_at`, `bundle_version`, `reason`, `resource`, `version`, `changed`, `errors`, `resource_ids`, `from_version`, `outcome`, `count`, `from_seq`, `to_seq`, `stage`, `message`, `username`, `sessions_locked`, `sessions_terminated`, `group`, `removed`, `file`, `quarantined_as`, `sha256_before`, `sha256_after`, `generation`, `service`, `at`, `field`, `before`, `after` | success |
