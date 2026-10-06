@@ -426,6 +426,20 @@ func (a *Authentik) SetPassword(ctx context.Context, pk int, password string) er
 	return a.do(ctx, http.MethodPost, fmt.Sprintf("/core/users/%d/set_password/", pk), map[string]any{"password": password}, nil)
 }
 
+// SetActive sets is_active of a user.
+func (a *Authentik) SetActive(ctx context.Context, pk int, active bool) error {
+	return a.do(ctx, http.MethodPatch, fmt.Sprintf("/core/users/%d/", pk), map[string]any{"is_active": active}, nil)
+}
+
+// UserActive reports is_active of a user.
+func (a *Authentik) UserActive(ctx context.Context, pk int) (bool, error) {
+	var u struct {
+		IsActive bool `json:"is_active"`
+	}
+	err := a.do(ctx, http.MethodGet, fmt.Sprintf("/core/users/%d/", pk), nil, &u)
+	return u.IsActive, err
+}
+
 // DeleteUser deletes a user.
 func (a *Authentik) DeleteUser(ctx context.Context, pk int) error {
 	return a.do(ctx, http.MethodDelete, fmt.Sprintf("/core/users/%d/", pk), nil, nil)

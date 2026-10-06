@@ -125,6 +125,7 @@ func (f *fakeAuthentik) groupJSON(g *fakeGroup) map[string]any {
 func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any {
 	j := f.fixture("post_core_users.json")
 	j["pk"], j["username"], j["name"], j["email"], j["attributes"], j["groups"] = u.pk, u.username, u.name, u.email, u.attributes, u.groups
+	j["is_active"] = !u.inactive
 	j["groups_obj"] = nil
 	if includeGroups {
 		objs := []map[string]any{}
@@ -265,6 +266,12 @@ func (f *fakeAuthentik) route(r *http.Request, body map[string]any) (int, any) {
 			link := f.fixture("post_core_users_id_recovery.json")
 			link["link"] = "https://auth.example.org/if/flow/paddock-recovery/?flow_token=t" + m[1] + "&d=" + key(body["token_duration"])
 			return http.StatusOK, link
+		case r.Method == http.MethodGet:
+			j := f.fixture("get_core_users_id.json")
+			for k, v := range f.userJSON(u, true) {
+				j[k] = v
+			}
+			return http.StatusOK, j
 		case r.Method == http.MethodPatch:
 			if active, ok := body["is_active"].(bool); ok {
 				if active && f.failReactivation {

@@ -294,12 +294,16 @@ func (u *Users) localUser(ctx context.Context, q *pgstore.Queries, rec Recorder,
 // Lock locks a user (plan M3a decision 7, audited: user.locked). The user is marked locked and the affected devices
 // are recompiled on the priority lane before Authentik is called, so the device path never waits for Authentik;
 // then the user joins paddock.<slug>.locked and loses its tokens and sessions. The lock stays incomplete until
-// Authentik succeeded; locking a locked user repeats the Authentik part (ADR 0007 amendment).
+// Authentik succeeded; locking a locked user repeats the Authentik part (ADR 0007 amendment). The lock reactivates
+// the user only if it was active before (plan M4b.1 decision 1); the retry of an incomplete lock uses the state read by
+// the interrupted attempt, which may have deactivated the user already.
 func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error) {
 	spec := SpecUserLock
 	spec.Target = &audit.Target{Type: "user", ID: id.String()}
 	var out pgstore.AppUser
 	var slug string
+	var reactivate *bool
+	read := false
 	err := u.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 			cur, s, err := u.lockable(ctx, q, rec, id)
@@ -307,6 +311,9 @@ func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error)
 				return err
 			}
 			slug = s
+			if cur.Locked && cur.LockIncomplete {
+				reactivate = cur.LockReactivate
+			}
 			if out, err = q.SetAppUserLocked(ctx, pgstore.SetAppUserLockedParams{ID: id, Locked: true}); err != nil {
 				return err
 			}
@@ -314,8 +321,24 @@ func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error)
 			rec.PriorityStateChanged(statechange.ScopeUser, id)
 			return nil
 		},
-		func(ctx context.Context) error { return u.dir.LockUser(ctx, slug, out.AuthentikPk) },
+		func(ctx context.Context) error {
+			if reactivate == nil {
+				active, err := u.dir.UserActive(ctx, out.AuthentikPk)
+				if err != nil {
+					return err
+				}
+				reactivate, read = &active, true
+			}
+			return u.dir.LockUser(ctx, slug, out.AuthentikPk, *reactivate)
+		},
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder, externalErr error) error {
+			// Stored even if the lock failed afterwards: its retry must not read the state the lock left behind.
+			if read {
+				err := q.SetAppUserLockReactivate(ctx, pgstore.SetAppUserLockReactivateParams{ID: id, LockReactivate: reactivate})
+				if err != nil {
+					return err
+				}
+			}
 			if externalErr != nil {
 				return nil
 			}
@@ -327,7 +350,8 @@ func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error)
 }
 
 // Unlock removes the user from paddock.<slug>.locked and, once that succeeded, marks it unlocked and recompiles its
-// devices on the priority lane (audited: user.unlocked).
+// devices on the priority lane (audited: user.unlocked). It activates the user only to complete an interrupted lock of
+// a user that was active before; a user deactivated elsewhere stays inactive (plan M4b.1 decision 2).
 func (u *Users) Unlock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error) {
 	spec := SpecUserUnlock
 	spec.Target = &audit.Target{Type: "user", ID: id.String()}
@@ -339,7 +363,10 @@ func (u *Users) Unlock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, erro
 			out, slug = cur, s
 			return err
 		},
-		func(ctx context.Context) error { return u.dir.UnlockUser(ctx, slug, out.AuthentikPk) },
+		func(ctx context.Context) error {
+			activate := out.LockIncomplete && out.LockReactivate != nil && *out.LockReactivate
+			return u.dir.UnlockUser(ctx, slug, out.AuthentikPk, activate)
+		},
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error {
 			if externalErr != nil {
 				return nil

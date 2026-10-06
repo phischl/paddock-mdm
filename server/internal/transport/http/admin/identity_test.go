@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -193,6 +194,74 @@ func TestUserLifecycleAndLock(t *testing.T) {
 		t.Fatalf("delete: %d, idp users %v", del.status, e.idp.users)
 	}
 	e.expectEvent(del, "user.deleted:success:")
+}
+
+// TestLockKeepsActivationState: a lock reactivates only a user that was active before it, also when the lock was
+// interrupted after the deactivation and completed by a retry or by the unlock (plan M4b.1 decision 1, finding 1).
+func TestLockKeepsActivationState(t *testing.T) {
+	e := newEnv(t)
+	domain := "a" + e.acme.String()[:8] + ".test"
+	if res := e.domains(e.acme, domain); res.status != http.StatusOK {
+		t.Fatalf("domains: %d", res.status)
+	}
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	for i, tc := range []struct {
+		name               string
+		activeBefore       bool
+		interrupted, retry bool
+	}{
+		{name: "active, complete", activeBefore: true},
+		{name: "inactive, complete"},
+		{name: "active, interrupted, unlock", activeBefore: true, interrupted: true},
+		// The lock of an inactive user has no reactivation that could be interrupted; it completes.
+		{name: "inactive, interrupted, unlock", interrupted: true},
+		{name: "active, interrupted, retry", activeBefore: true, interrupted: true, retry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			created := e.do(call{method: "POST", path: "/api/v1/users", cookie: alice, body: map[string]any{
+				"username": "lock" + strconv.Itoa(i) + "@" + domain, "display_name": "Lock " + strconv.Itoa(i),
+			}})
+			if created.status != http.StatusCreated {
+				t.Fatalf("create: %d %s", created.status, created.body)
+			}
+			var c adminapi.UserCreated
+			created.decode(t, &c)
+			path := "/api/v1/users/" + c.User.Id.String()
+			pk := e.authentikPK(c.User.Id)
+			e.idp.inactive[pk] = !tc.activeBefore
+
+			e.idp.failReactivation = tc.interrupted
+			locked := e.do(call{method: "POST", path: path + "/lock", cookie: alice})
+			e.idp.failReactivation = false
+			wantStatus := http.StatusOK
+			if tc.interrupted && tc.activeBefore {
+				wantStatus = http.StatusBadGateway
+			}
+			if locked.status != wantStatus {
+				t.Fatalf("lock: %d %s", locked.status, locked.body)
+			}
+			// Only a complete lock of an active user ends active; an interrupted one stops after the deactivation.
+			wantInactive := !tc.activeBefore || tc.interrupted
+			if !e.idp.locked[pk] || e.idp.inactive[pk] != wantInactive {
+				t.Fatalf("after the lock: locked %v, inactive %v", e.idp.locked[pk], e.idp.inactive[pk])
+			}
+			if tc.retry {
+				// The interrupted lock left the user inactive; the retry must still reactivate it.
+				if res := e.do(call{method: "POST", path: path + "/lock", cookie: alice}); res.status != http.StatusOK {
+					t.Fatalf("retry: %d %s", res.status, res.body)
+				}
+				if e.idp.inactive[pk] {
+					t.Fatal("the retry of an interrupted lock left a previously active user inactive")
+				}
+			}
+			if res := e.do(call{method: "POST", path: path + "/unlock", cookie: alice}); res.status != http.StatusOK {
+				t.Fatalf("unlock: %d %s", res.status, res.body)
+			}
+			if e.idp.locked[pk] || e.idp.inactive[pk] == tc.activeBefore {
+				t.Fatalf("after the unlock: locked %v, inactive %v, active before %v", e.idp.locked[pk], e.idp.inactive[pk], tc.activeBefore)
+			}
+		})
+	}
 }
 
 func TestSyncedUserIsReadOnly(t *testing.T) {

@@ -207,7 +207,7 @@ func TestIdentityAuthentikProvisioning(t *testing.T) {
 
 // TestIdentityLockAuthentik is gate I2 (plan M3a §6): locking a user adds it to paddock.<slug>.locked and deletes its
 // refresh tokens and sessions, so the refresh grant with the old token fails; unlocking removes the membership;
-// each produces exactly one audit event.
+// each produces exactly one audit event. Lock and unlock keep the user's activation state (plan M4b.1 AC1).
 func TestIdentityLockAuthentik(t *testing.T) {
 	alice := login(t, env.Alice)
 	ak, err := env.NewAuthentik()
@@ -255,6 +255,22 @@ func TestIdentityLockAuthentik(t *testing.T) {
 	expectOneEvent(t, alice, res.RequestID, "user.unlocked", "success")
 	if members, err := ak.GroupMembers(ctx, env.RootGroup("acme")+".locked"); err != nil || slices.Contains(members, u.name) {
 		t.Fatalf("locked group members after the unlock %v (%v)", members, err)
+	}
+	if active, err := ak.UserActive(ctx, u.pk); err != nil || !active {
+		t.Fatalf("an active user is inactive after lock and unlock (%v)", err)
+	}
+
+	// AC1 of plan M4b.1: a user deactivated in Authentik stays deactivated through lock and unlock.
+	if err := ak.SetActive(ctx, u.pk, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range []string{"lock", "unlock"} {
+		res = call(t, alice, http.MethodPost, "/api/v1/users/"+user.ID+"/"+verb, nil)
+		expectStatus(t, res, http.StatusOK, "")
+		expectOneEvent(t, alice, res.RequestID, "user."+verb+"ed", "success")
+		if active, err := ak.UserActive(ctx, u.pk); err != nil || active {
+			t.Fatalf("a deactivated user is active after the %s (%v)", verb, err)
+		}
 	}
 }
 

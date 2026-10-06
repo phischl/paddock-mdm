@@ -1,0 +1,35 @@
+{
+  "pk": 71,
+  "username": "live-b74428af@fixture-org.test",
+  "name": "Live Test Renamed",
+  "is_active": true,
+  "last_login": null,
+  "date_joined": "2026-10-06T16:16:33.209704Z",
+  "is_superuser": false,
+  "groups": [
+    "8805b0c7-88d8-4cf1-9964-cca1d40ce7a3"
+  ],
+  "groups_obj": [
+    {
+      "pk": "8805b0c7-88d8-4cf1-9964-cca1d40ce7a3",
+      "num_pk": 18080,
+      "name": "paddock.fixture-org",
+      "is_superuser": false,
+      "attributes": {}
+    }
+  ],
+  "roles": [],
+  "roles_obj": [],
+  "email": "live-b74428af@fixture-org.test",
+  "avatar": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NHB4IiBoZWlnaHQ9IjY0cHgiIHZpZXdCb3g9IjAgMCA2NCA2NCIgdmVyc2lvbj0iMS4xIj48cmVjdCBmaWxsPSIjMzdjOGM4IiBjeD0iMzIiIGN5PSIzMiIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByPSIzMiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBzdHlsZT0iY29sb3I6ICNmZmY7IGxpbmUtaGVpZ2h0OiAxOyBmb250LWZhbWlseTogJ1JlZEhhdFRleHQnLCdPdmVycGFzcycsb3ZlcnBhc3MsaGVsdmV0aWNhLGFyaWFsLHNhbnMtc2VyaWY7ICIgZmlsbD0iI2ZmZiIgYWxpZ25tZW50LWJhc2VsaW5lPSJtaWRkbGUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjgiIGZvbnQtd2VpZ2h0PSI0MDAiIGR5PSIuMWVtIj5MUjwvdGV4dD48L3N2Zz4=",
+  "attributes": {
+    "paddock_org": "fixture-org",
+    "paddock_managed": true
+  },
+  "uid": "9c939ce131613392620b46bdf7b1e2f9e798c42c489125b05b275332ce1791cb",
+  "path": "paddock/fixture-org",
+  "type": "internal",
+  "uuid": "54913d18-dad8-4c1a-8e90-77f42bf94ff3",
+  "password_change_date": "2026-10-06T16:16:33.210206Z",
+  "last_updated": "2026-10-06T16:16:33.958966Z"
+}

@@ -12,7 +12,7 @@ import (
 )
 
 const completeAppUserLock = `-- name: CompleteAppUserLock :one
-UPDATE app_user SET lock_incomplete = false, updated_at = now() WHERE id = $1 RETURNING id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete
+UPDATE app_user SET lock_incomplete = false, updated_at = now() WHERE id = $1 RETURNING id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete, lock_reactivate
 `
 
 func (q *Queries) CompleteAppUserLock(ctx context.Context, id uuid.UUID) (AppUser, error) {
@@ -31,6 +31,7 @@ func (q *Queries) CompleteAppUserLock(ctx context.Context, id uuid.UUID) (AppUse
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LockIncomplete,
+		&i.LockReactivate,
 	)
 	return i, err
 }
@@ -137,7 +138,7 @@ func (q *Queries) DeleteUserGroupMember(ctx context.Context, arg DeleteUserGroup
 }
 
 const getAppUser = `-- name: GetAppUser :one
-SELECT id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete FROM app_user WHERE id = $1
+SELECT id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete, lock_reactivate FROM app_user WHERE id = $1
 `
 
 func (q *Queries) GetAppUser(ctx context.Context, id uuid.UUID) (AppUser, error) {
@@ -156,6 +157,7 @@ func (q *Queries) GetAppUser(ctx context.Context, id uuid.UUID) (AppUser, error)
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LockIncomplete,
+		&i.LockReactivate,
 	)
 	return i, err
 }
@@ -185,7 +187,7 @@ const insertAppUser = `-- name: InsertAppUser :one
 
 INSERT INTO app_user (id, organization_id, authentik_pk, username, display_name, email, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete
+RETURNING id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete, lock_reactivate
 `
 
 type InsertAppUserParams struct {
@@ -223,6 +225,7 @@ func (q *Queries) InsertAppUser(ctx context.Context, arg InsertAppUserParams) (A
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LockIncomplete,
+		&i.LockReactivate,
 	)
 	return i, err
 }
@@ -287,7 +290,7 @@ func (q *Queries) InsertUserGroupMember(ctx context.Context, arg InsertUserGroup
 }
 
 const listAllAppUsers = `-- name: ListAllAppUsers :many
-SELECT id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete FROM app_user ORDER BY id
+SELECT id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete, lock_reactivate FROM app_user ORDER BY id
 `
 
 func (q *Queries) ListAllAppUsers(ctx context.Context) ([]AppUser, error) {
@@ -312,6 +315,7 @@ func (q *Queries) ListAllAppUsers(ctx context.Context) ([]AppUser, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.LockIncomplete,
+			&i.LockReactivate,
 		); err != nil {
 			return nil, err
 		}
@@ -388,7 +392,7 @@ func (q *Queries) ListAllUserGroups(ctx context.Context) ([]UserGroup, error) {
 
 const listAppUsers = `-- name: ListAppUsers :many
 
-SELECT id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete FROM app_user
+SELECT id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete, lock_reactivate FROM app_user
 WHERE ($1::text IS NULL
        OR username ILIKE $1::text ESCAPE '\'
        OR display_name ILIKE $1::text ESCAPE '\'
@@ -449,6 +453,7 @@ func (q *Queries) ListAppUsers(ctx context.Context, arg ListAppUsersParams) ([]A
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.LockIncomplete,
+			&i.LockReactivate,
 		); err != nil {
 			return nil, err
 		}
@@ -582,7 +587,7 @@ func (q *Queries) ListUserGroups(ctx context.Context, arg ListUserGroupsParams) 
 }
 
 const lockAppUser = `-- name: LockAppUser :one
-SELECT id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete FROM app_user WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete, lock_reactivate FROM app_user WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockAppUser(ctx context.Context, id uuid.UUID) (AppUser, error) {
@@ -601,6 +606,7 @@ func (q *Queries) LockAppUser(ctx context.Context, id uuid.UUID) (AppUser, error
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LockIncomplete,
+		&i.LockReactivate,
 	)
 	return i, err
 }
@@ -619,11 +625,26 @@ func (q *Queries) SetAppUserAuthentikPK(ctx context.Context, arg SetAppUserAuthe
 	return err
 }
 
+const setAppUserLockReactivate = `-- name: SetAppUserLockReactivate :exec
+UPDATE app_user SET lock_reactivate = $1, updated_at = now() WHERE id = $2
+`
+
+type SetAppUserLockReactivateParams struct {
+	LockReactivate *bool
+	ID             uuid.UUID
+}
+
+func (q *Queries) SetAppUserLockReactivate(ctx context.Context, arg SetAppUserLockReactivateParams) error {
+	_, err := q.db.Exec(ctx, setAppUserLockReactivate, arg.LockReactivate, arg.ID)
+	return err
+}
+
 const setAppUserLocked = `-- name: SetAppUserLocked :one
 UPDATE app_user SET locked = $1, locked_at = CASE WHEN $1::boolean THEN coalesce(locked_at, now()) END,
-  lock_incomplete = $1, updated_at = now()
+  lock_incomplete = $1,
+  lock_reactivate = CASE WHEN $1::boolean AND lock_incomplete THEN lock_reactivate END, updated_at = now()
 WHERE id = $2
-RETURNING id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete
+RETURNING id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete, lock_reactivate
 `
 
 type SetAppUserLockedParams struct {
@@ -631,7 +652,9 @@ type SetAppUserLockedParams struct {
 	ID     uuid.UUID
 }
 
-// A lock is incomplete until Authentik confirmed it (CompleteAppUserLock); an unlock clears both.
+// A lock is incomplete until Authentik confirmed it (CompleteAppUserLock); an unlock clears both. lock_reactivate
+// survives only the retry of an incomplete lock: the retry cannot read it again, the interrupted lock deactivated the
+// user (plan M4b.1 decision 1).
 func (q *Queries) SetAppUserLocked(ctx context.Context, arg SetAppUserLockedParams) (AppUser, error) {
 	row := q.db.QueryRow(ctx, setAppUserLocked, arg.Locked, arg.ID)
 	var i AppUser
@@ -648,6 +671,7 @@ func (q *Queries) SetAppUserLocked(ctx context.Context, arg SetAppUserLockedPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LockIncomplete,
+		&i.LockReactivate,
 	)
 	return i, err
 }
@@ -669,7 +693,7 @@ func (q *Queries) SetUserGroupAuthentikPK(ctx context.Context, arg SetUserGroupA
 const updateAppUser = `-- name: UpdateAppUser :one
 UPDATE app_user SET display_name = $1, email = $2, updated_at = now()
 WHERE id = $3
-RETURNING id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete
+RETURNING id, organization_id, authentik_pk, username, display_name, email, source, locked, locked_at, created_at, updated_at, lock_incomplete, lock_reactivate
 `
 
 type UpdateAppUserParams struct {
@@ -694,6 +718,7 @@ func (q *Queries) UpdateAppUser(ctx context.Context, arg UpdateAppUserParams) (A
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LockIncomplete,
+		&i.LockReactivate,
 	)
 	return i, err
 }

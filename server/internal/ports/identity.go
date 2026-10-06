@@ -46,10 +46,14 @@ type UserDirectory interface {
 	DeleteUser(ctx context.Context, pk string) error
 	// RecoveryLink creates a one-time link (valid 24 h) with which the user sets a password.
 	RecoveryLink(ctx context.Context, pk string) (string, error)
+	// UserActive reports whether the user is active (not deactivated) in the identity provider.
+	UserActive(ctx context.Context, pk string) (bool, error)
 	// LockUser adds the user to the organization's locked group and deletes the user's refresh tokens, access tokens
-	// and authenticated sessions; both are required (PoC M1 C2). UnlockUser removes the membership only.
-	LockUser(ctx context.Context, slug, pk string) error
-	UnlockUser(ctx context.Context, slug, pk string) error
+	// and authenticated sessions; both are required (PoC M1 C2). The revocation deactivates the user; reactivate
+	// activates it again afterwards, so a user that was inactive before the lock stays inactive (plan M4b.1).
+	LockUser(ctx context.Context, slug, pk string, reactivate bool) error
+	// UnlockUser removes the membership; activate also activates the user (completing an interrupted lock).
+	UnlockUser(ctx context.Context, slug, pk string, activate bool) error
 	// OrganizationUsers lists the direct members of the organization's root group.
 	OrganizationUsers(ctx context.Context, slug string) ([]IdentityUser, error)
 }

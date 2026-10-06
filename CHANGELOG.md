@@ -145,6 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Locking a user no longer reactivates a user deactivated in Authentik or by its upstream directory: the lock reads the user's activation state first and activates it again only if it was active, and an unlock activates the user only to complete an interrupted lock of a previously active user. The database migration `00018` runs automatically (M4b.1 step 1).
 - A device enrolling right after its enrollment token was created no longer gets `401 invalid_token`: `paddock-api` publishes new and revoked tokens to the gateway's cache as soon as they are committed (the worker's cache sync remains the safety net), and `paddockd enroll` retries `invalid_token` three times over 30 s.
 - The agent also creates an empty `/etc/paddock/login-deny` on devices without a login resource while the `paddock-deny` PAM profile is enabled, so `pam_listfile` no longer logs at every authentication there; an existing list is left unchanged (M4a step 0c).
 - The audit log's event filter in the portal offers every audit code; the list is generated from the server's code registry by `make gen`, and `npm run lint` fails when a code has no English message (M4a step 0b).
