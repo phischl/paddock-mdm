@@ -191,11 +191,14 @@ bundles-bootstrap: ## Create the bundles bucket and the compiler and gateway cre
 dev-seed: ## Create organizations acme and globex and assign the dev users
 	go run ./test/acceptance/cmd/devseed
 
+# Slower machines (CI runners) raise ACCEPTANCE_TIMEOUT.
+ACCEPTANCE_TIMEOUT ?= 30m
+
 .PHONY: acceptance
 # The exactly-once gate checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check); they run in
 # parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8).
-acceptance: ## Run acceptance gates against the running stack (optional T=<regex>, PADDOCK_ACCEPTANCE_PARALLEL)
-	go test -count=1 -timeout 30m ./test/acceptance/... $(if $(T),-run '$(T)',) -v
+acceptance: ## Run acceptance gates against the running stack (optional T=<regex>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT)
+	go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... $(if $(T),-run '$(T)',) -v
 
 .PHONY: system-test
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
