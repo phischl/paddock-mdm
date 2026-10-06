@@ -167,6 +167,21 @@ func AuditIndexDSN() (string, error) {
 	return u.String(), nil
 }
 
+// PaddockOwnerDSN is the paddock_owner DSN with the host rewritten to the development port mapping: the gates that
+// play a compromised database (plan M4c gate R3) write with it.
+func PaddockOwnerDSN() (string, error) {
+	raw, err := Secret("db_paddock_owner_url")
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	u.Host = Env("PADDOCK_TEST_DB_HOST", "127.0.0.1:5432")
+	return u.String(), nil
+}
+
 // ReleaseKey loads a minisign secret key; empty path is the development release key (make dev-release-key), which
 // is stored without a password.
 func ReleaseKey(path string) (minisign.PrivateKey, error) {

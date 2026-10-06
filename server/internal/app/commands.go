@@ -159,13 +159,18 @@ func (d *DeviceCommands) Expire(ctx context.Context, now time.Time) ([]pgstore.E
 	return out, err
 }
 
-// MarkDelivered records that a check-in response carried the commands (worker).
+// MarkDelivered records that a check-in response carried the commands and revocation tokens (worker).
 func (d *DeviceCommands) MarkDelivered(ctx context.Context, hb ingest.Heartbeat) error {
 	if len(hb.DeliveredCommands) == 0 {
 		return nil
 	}
 	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		_, err := q.MarkDeviceCommandsDelivered(ctx, pgstore.MarkDeviceCommandsDeliveredParams{
+		if _, err := q.MarkDeviceCommandsDelivered(ctx, pgstore.MarkDeviceCommandsDeliveredParams{
+			DeviceID: hb.DeviceID, Ids: hb.DeliveredCommands, DeliveredAt: hb.ReceivedAt,
+		}); err != nil {
+			return err
+		}
+		_, err := q.MarkRevocationsDelivered(ctx, pgstore.MarkRevocationsDeliveredParams{
 			DeviceID: hb.DeviceID, Ids: hb.DeliveredCommands, DeliveredAt: hb.ReceivedAt,
 		})
 		return err

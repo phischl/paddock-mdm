@@ -72,7 +72,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	enroll := worker.NewEnrollment(app.NewEnrollments(runner, pool), cache)
 	deviceCommands := app.NewDeviceCommands(pool)
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache)
-	commands := worker.NewCommands(deviceCommands, pool, platformPool, cache, signer)
+	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
 	escrowStore := worker.NewEscrow(app.NewEscrow(pool, escrowObjects), cache, pool, platformPool)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, common.Development()), platformPool, cache)

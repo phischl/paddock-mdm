@@ -15,6 +15,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/devicecommand"
+	"github.com/phischl/paddock-mdm/server/internal/domain/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
@@ -229,7 +230,8 @@ func (r *Relay) gauge(ctx context.Context) {
 // route maps an outbox subject to exchange and routing key: audit.<organization_id>.<source> goes to paddock.audit
 // as audit.<source>.<organization_id>; state.<organization_id> goes to paddock.state on the organization's
 // partition (architecture §7.1), state.priority.<organization_id> to the priority lane (§9.5);
-// command.<organization_id> goes to paddock.command as issued (plan M4a decision 2).
+// command.<organization_id> goes to paddock.command as issued (plan M4a decision 2), revocation.<organization_id> to
+// paddock.revocation as approved (plan M4c decision 8).
 func route(subject string) (string, string, error) {
 	if org, priority, ok := statechange.ParseSubject(subject); ok {
 		if priority {
@@ -239,6 +241,9 @@ func route(subject string) (string, string, error) {
 	}
 	if _, ok := devicecommand.ParseSubject(subject); ok {
 		return mq.ExchangeCommand, mq.CommandIssuedKey, nil
+	}
+	if _, ok := revocation.ParseSubject(subject); ok {
+		return mq.ExchangeRevocation, mq.RevocationApprovedKey, nil
 	}
 	parts := strings.Split(subject, ".")
 	if len(parts) != 3 || parts[0] != "audit" {

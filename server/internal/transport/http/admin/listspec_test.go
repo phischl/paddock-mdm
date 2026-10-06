@@ -35,6 +35,8 @@ var lists = map[string]struct {
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
 
+	"listRevocationRequests": {revocationRequestList, "postgres/queries/revocation.sql", "ListRevocationRequests", `revocation_request\.id`},
+
 	"listUsers":              {userList, "postgres/queries/user.sql", "ListAppUsers", "id"},
 	"listUserGroupMembers":   {userList, "postgres/queries/user.sql", "ListAppUsers", "id"},
 	"listUserGroups":         {userGroupList, "postgres/queries/user.sql", "ListUserGroups", "id"},

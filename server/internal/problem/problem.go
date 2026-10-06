@@ -63,6 +63,13 @@ var (
 	// ReleaseSignatureMismatch: the signed trusted comment of an agent binary names another version or architecture
 	// (plan M4b.1 decision 12).
 	ReleaseSignatureMismatch = &Error{Code: "release_signature_mismatch", Status: http.StatusUnprocessableEntity}
+	// Revocation (plan M4c): the feature flag PADDOCK_REVOCATION_ENABLED is off (decision 1), or the administrator's
+	// revocations are frozen after a limit was exceeded (ADR 0014). Both are recorded as denied.
+	RevocationDisabled = &Error{Code: "revocation_disabled", Status: http.StatusForbidden}
+	RevocationFrozen   = &Error{Code: "revocation_frozen", Status: http.StatusForbidden}
+	// RevocationRejected is the error code of a request the revocation-issuer refused (recorded as denied); never
+	// sent over HTTP.
+	RevocationRejected = &Error{Code: "revocation_rejected", Status: http.StatusForbidden}
 	// RenderFailed is the error code of device.bundle_render_failed (compiler); never sent over HTTP.
 	RenderFailed = &Error{Code: "render_failed", Status: http.StatusInternalServerError}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.

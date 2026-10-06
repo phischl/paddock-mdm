@@ -26,11 +26,14 @@ const (
 	Alice         = "alice@acme.test"
 	Bob           = "bob@acme.test"
 	Carol         = "carol@globex.test"
+	// Dave is the second acme administrator (a Destroy needs two, plan M4c decision 7).
+	Dave = "dave@acme.test"
 )
 
 var passwordFiles = map[string]string{
 	PlatformAdmin: "dev_platform_admin_password",
 	Alice:         "dev_alice_password",
+	Dave:          "dev_dave_password",
 	Bob:           "dev_bob_password",
 	Carol:         "dev_carol_password",
 }
@@ -40,6 +43,7 @@ var passwordFiles = map[string]string{
 var TOTPKeyFiles = map[string]string{
 	PlatformAdmin: "dev_platform_admin_totp_key",
 	Alice:         "dev_alice_totp_key",
+	Dave:          "dev_dave_totp_key",
 	Bob:           "dev_bob_totp_key",
 	Carol:         "dev_carol_totp_key",
 }

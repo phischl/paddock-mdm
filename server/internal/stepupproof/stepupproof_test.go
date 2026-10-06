@@ -119,6 +119,44 @@ func TestVerify(t *testing.T) {
 	}
 }
 
+// TestVerifyApproval (plan M4c decision 8): the token of a revocation approval is checked against the approval time,
+// not the token's expiry; forged, stale and reused-elsewhere tokens fail as in Verify.
+func TestVerifyApproval(t *testing.T) {
+	is := newIssuer(t)
+	v := stepupproof.NewVerifier(is.URL, "paddock-portal-stepup", 300*time.Second, time.Now)
+	ctx := context.Background()
+	discoverCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	v.Discover(discoverCtx)
+	now := time.Now()
+	authTime := now.Add(-2 * time.Hour)
+	expired := is.token(t, is.key, map[string]any{"auth_time": authTime.Unix(), "exp": authTime.Add(5 * time.Minute).Unix()})
+	if c, err := v.VerifyApproval(ctx, expired, authTime.Add(time.Minute)); err != nil || c.Subject != "alice-sub" {
+		t.Fatalf("approval verified after the token expired: %+v %v", c, err)
+	}
+	forger, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-stepupproof.MaxApprovalAge - time.Hour)
+	for name, c := range map[string]struct {
+		token string
+		at    time.Time
+	}{
+		"forged signature":       {is.token(t, forger, nil), now},
+		"stale auth_time":        {expired, authTime.Add(301 * time.Second)},
+		"approved before auth":   {expired, authTime.Add(-2 * time.Minute)},
+		"approved in the future": {is.token(t, is.key, nil), now.Add(10 * time.Minute)},
+		"authenticated too long ago": {is.token(t, is.key, map[string]any{"auth_time": old.Unix(), "exp": old.Add(5 * time.Minute).Unix()}),
+			old.Add(time.Minute)},
+		"no MFA": {is.token(t, is.key, map[string]any{"amr": []string{"pwd"}}), now},
+	} {
+		if _, err := v.VerifyApproval(ctx, c.token, c.at); !errors.Is(err, stepupproof.ErrInvalid) {
+			t.Errorf("%s: %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
 func TestStore(t *testing.T) {
 	srv := valkeytest.Start(t)
 	c, err := valkey.New(srv.Config)

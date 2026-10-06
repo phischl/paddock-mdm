@@ -53,6 +53,16 @@ entries:
       type: internal
       password: !Env DEV_ALICE_PASSWORD
 
+  # The second acme administrator: a Destroy needs two (plan M4c decision 7).
+  - model: authentik_core.user
+    identifiers:
+      username: dave@acme.test
+    attrs:
+      name: Dave (acme admin)
+      email: dave@acme.test
+      type: internal
+      password: !Env DEV_DAVE_PASSWORD
+
   - model: authentik_core.user
     identifiers:
       username: bob@acme.test

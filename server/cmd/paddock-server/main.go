@@ -20,7 +20,7 @@ import (
 const usage = `usage: paddock-server <command> [arguments] [+ <command> [arguments] ...]
 
 commands:
-  serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader
+  serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer
   migrate paddock|audit
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
@@ -117,6 +117,8 @@ func runServe(ctx context.Context, l *config.Loader, common config.Common, args 
 		return serveCompiler(ctx, l, common)
 	case "escrow-reader":
 		return serveEscrowReader(ctx, l, common)
+	case "revocation-issuer":
+		return serveRevocationIssuer(ctx, l, common)
 	default:
 		return errUsage
 	}

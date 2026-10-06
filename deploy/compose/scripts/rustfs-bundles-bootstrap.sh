@@ -4,8 +4,8 @@
 # versioning and without Object Lock, and paddock-escrow (plan M4b decision 13, versioning on, no Object Lock); a
 # user for the compiler with read/write on bundles, a user for the api with read/write on artifacts and read on
 # escrow, a user for the worker with read on escrow, and a user for the gateway with read-only access to bundles and
-# artifacts and write access to escrowed headers only (the gateway only computes presigned URLs with it).
-# Idempotent.
+# artifacts and write access to escrowed headers only (the gateway only computes presigned URLs with it), and a user
+# for the revocation-issuer that may list and delete header versions only (plan M4c decision 9). Idempotent.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,9 +32,11 @@ ESCROW_WORKER_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_worker_access_key")"
 ESCROW_WORKER_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_worker_secret_key")"
 ESCROW_API_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_api_access_key")"
 ESCROW_API_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_api_secret_key")"
+ESCROW_REVOCATION_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_access_key")"
+ESCROW_REVOCATION_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_secret_key")"
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY COMPILER_ACCESS_KEY COMPILER_SECRET_KEY GATEWAY_ACCESS_KEY GATEWAY_SECRET_KEY \
   ARTIFACTS_ACCESS_KEY ARTIFACTS_SECRET_KEY ESCROW_WORKER_ACCESS_KEY ESCROW_WORKER_SECRET_KEY ESCROW_API_ACCESS_KEY \
-  ESCROW_API_SECRET_KEY
+  ESCROW_API_SECRET_KEY ESCROW_REVOCATION_ACCESS_KEY ESCROW_REVOCATION_SECRET_KEY
 
 # Credentials travel as inherited environment variables, never as command-line arguments.
 aws() {
@@ -45,7 +47,7 @@ rc() {
   docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
     -e COMPILER_ACCESS_KEY -e COMPILER_SECRET_KEY -e GATEWAY_ACCESS_KEY -e GATEWAY_SECRET_KEY \
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
-    -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY \
+    -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
     --entrypoint sh "$RC_IMAGE" -c \
     "rc alias set bundles $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
 }
@@ -105,4 +107,9 @@ policy paddock-escrow-read "[
 user ARTIFACTS_ACCESS_KEY paddock-artifacts-api
 user ESCROW_WORKER_ACCESS_KEY paddock-escrow-read
 user ESCROW_API_ACCESS_KEY paddock-escrow-read
+# The revocation-issuer deletes every version of the headers of a destroyed device (plan M4c decision 9).
+policy paddock-escrow-destroy "[
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:ListBucketVersions\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET\"]},
+  {\"Effect\":\"Allow\",\"Action\":[\"s3:DeleteObject\",\"s3:DeleteObjectVersion\"],\"Resource\":[\"arn:aws:s3:::$ESCROW_BUCKET/org/*/devices/*/luks-header/*\"]}]"
+user ESCROW_REVOCATION_ACCESS_KEY paddock-escrow-destroy
 echo "bundles, agent artifacts and escrow bucket bootstrap complete"

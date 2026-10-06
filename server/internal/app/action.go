@@ -18,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/devicecommand"
+	"github.com/phischl/paddock-mdm/server/internal/domain/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -66,6 +67,10 @@ type Recorder interface {
 	// CommandIssued queues the command.issued message of a device command inserted by the action; like a state
 	// change it is written to the outbox only when the action succeeds (plan M4a decision 2).
 	CommandIssued(id uuid.UUID)
+	// RevocationApproved queues the revocation.approved message of an approved revocation request for the
+	// revocation-issuer; like a state change it is written to the outbox only when the action succeeds (plan M4c
+	// decision 7).
+	RevocationApproved(id uuid.UUID)
 	// RequireStepUp is RequiresStepUp for actions that need a step-up only for some inputs (e.g. assigning a full
 	// profile): it returns problem.StepUpRequired, recorded as denied, unless the step-up is fresh.
 	RequireStepUp() error
@@ -125,6 +130,7 @@ type recorder struct {
 	startedAt  time.Time
 	changes    []statechange.Event
 	commands   []uuid.UUID
+	approved   []uuid.UUID
 	stepUp     func() error
 }
 
@@ -146,6 +152,8 @@ func (r *recorder) PriorityStateChanged(scope string, id uuid.UUID) {
 }
 
 func (r *recorder) CommandIssued(id uuid.UUID) { r.commands = append(r.commands, id) }
+
+func (r *recorder) RevocationApproved(id uuid.UUID) { r.approved = append(r.approved, id) }
 
 func (r *recorder) RequireStepUp() error { return r.stepUp() }
 
@@ -263,7 +271,8 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 	}
 	p := problem.From(err)
 	if errors.Is(err, problem.Forbidden) || errors.Is(err, problem.NoOrganization) || errors.Is(err, problem.CSRFMissing) ||
-		errors.Is(err, problem.StepUpRequired) {
+		errors.Is(err, problem.StepUpRequired) || errors.Is(err, problem.RevocationDisabled) ||
+		errors.Is(err, problem.RevocationFrozen) || errors.Is(err, problem.RevocationRejected) {
 		return audit.OutcomeDenied, p.Code
 	}
 	return audit.OutcomeFailure, p.Code
@@ -297,6 +306,34 @@ func (r *ActionRunner) RunTx(ctx context.Context, scope Scope, spec ActionSpec,
 		return err
 	}
 	return nil
+}
+
+// RunTxRefusal records an action that was refused, with the outcome of refusal (denied or failure), in the same
+// transaction as the changes fn makes because of the refusal, e.g. a revocation request the issuer rejects together
+// with its rejected state (plan M4c decision 8). fn's own error rolls everything back and is recorded instead.
+func (r *ActionRunner) RunTxRefusal(ctx context.Context, scope Scope, spec ActionSpec, refusal error,
+	fn func(ctx context.Context, q *pgstore.Queries, rec Recorder) error) error {
+	p, ok := principal.From(ctx)
+	if !ok {
+		return problem.Unauthenticated
+	}
+	rec := r.newRecorder(ctx, p, scope, spec)
+	if err := r.authorize(p, scope, spec, rec); err != nil {
+		r.recordFinal(ctx, p, scope, rec, err)
+		return err
+	}
+	defer r.recordPanic(ctx, p, scope, rec)
+	err := r.inScope(ctx, p, scope, func(ctx context.Context, q *pgstore.Queries) error {
+		if err := fn(ctx, q, rec); err != nil {
+			return err
+		}
+		return r.insertFinished(ctx, q, rec, refusal)
+	})
+	if err != nil {
+		r.recordFinal(ctx, p, scope, rec, err)
+		return err
+	}
+	return refusal
 }
 
 // RecordOnce records a successful event reported by a device exactly once per natural key: claim runs first in the
@@ -461,7 +498,7 @@ func (r *ActionRunner) insertStarted(ctx context.Context, q *pgstore.Queries, re
 	if err := insertStateChanges(ctx, q, rec); err != nil {
 		return err
 	}
-	rec.changes, rec.commands = nil, nil
+	rec.changes, rec.commands, rec.approved = nil, nil, nil
 	return nil
 }
 
@@ -488,8 +525,8 @@ func (r *ActionRunner) insertFinished(ctx context.Context, q *pgstore.Queries, r
 	return insertOutbox(ctx, q, rec, outcome, code, finished)
 }
 
-// insertStateChanges writes the queued state changes and command.issued messages of a successful action to the
-// outbox.
+// insertStateChanges writes the queued state changes, command.issued and revocation.approved messages of a
+// successful action to the outbox.
 func insertStateChanges(ctx context.Context, q *pgstore.Queries, rec *recorder) error {
 	for _, ev := range rec.changes {
 		payload, err := json.Marshal(ev)
@@ -510,6 +547,17 @@ func insertStateChanges(ctx context.Context, q *pgstore.Queries, rec *recorder) 
 		}
 		if err := q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
 			OrganizationID: rec.org, Subject: devicecommand.Subject(rec.org), MsgID: id.String(), Payload: payload,
+		}); err != nil {
+			return err
+		}
+	}
+	for _, id := range rec.approved {
+		payload, err := json.Marshal(revocation.Approved{OrganizationID: rec.org, RequestID: id})
+		if err != nil {
+			return err
+		}
+		if err := q.InsertOutbox(ctx, pgstore.InsertOutboxParams{
+			OrganizationID: rec.org, Subject: revocation.Subject(rec.org), MsgID: "revocation:" + id.String(), Payload: payload,
 		}); err != nil {
 			return err
 		}

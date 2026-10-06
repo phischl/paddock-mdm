@@ -81,6 +81,7 @@ services:
       PADDOCK_WORKER_PASSWORD_FILE: /run/secrets/db_paddock_worker_password
       PADDOCK_COMPILER_PASSWORD_FILE: /run/secrets/db_paddock_compiler_password
       PADDOCK_ESCROW_READER_PASSWORD_FILE: /run/secrets/db_paddock_escrow_reader_password
+      PADDOCK_REVOCATION_PASSWORD_FILE: /run/secrets/db_paddock_revocation_password
     secrets:
       - postgres_superuser_password
       - db_paddock_owner_password
@@ -90,6 +91,7 @@ services:
       - db_paddock_worker_password
       - db_paddock_compiler_password
       - db_paddock_escrow_reader_password
+      - db_paddock_revocation_password
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
       - postgres-data:/var/lib/postgresql/data
@@ -277,6 +279,8 @@ services:
       # Escrowed secrets are decrypted by paddock-escrow-reader only (plan M4b.1 decision 5).
       PADDOCK_ESCROW_READER_URL: http://escrow-reader:8080
       PADDOCK_ESCROW_READER_TOKEN_FILE: /run/secrets/escrow_reader_token
+      # Lock and Destroy (plan M4c decision 1): off unless enabled; the development override enables it.
+      PADDOCK_REVOCATION_ENABLED: ${PADDOCK_REVOCATION_ENABLED:-false}
       PADDOCK_OIDC_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal/
       PADDOCK_OIDC_CLIENT_ID: paddock-portal
       PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
@@ -364,6 +368,51 @@ services:
       valkey:
         condition: service_healthy
 
+  # The revocation-issuer (plan M4c decision 8): single active consumer of revocation.approved and the only holder
+  # of the AppRole paddock-revocation-issuer, the only one that can sign with revocation-signing. It verifies the
+  # step-up proofs itself and enforces the limits of ADR 0014; no port, no other role reaches it.
+  paddock-revocation-issuer:
+    <<: *paddock
+    command: ["serve", "revocation-issuer"]
+    environment:
+      <<: *paddock-env
+      PADDOCK_DB_URL_FILE: /run/secrets/db_paddock_revocation_url
+      PADDOCK_AMQP_URL: amqp://rabbitmq:5672/paddock
+      PADDOCK_AMQP_USER: revocation_issuer
+      PADDOCK_AMQP_PASSWORD_FILE: /run/secrets/rabbitmq_revocation_issuer_password
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_revocation_issuer_role_id
+      PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_revocation_issuer_secret_id
+      PADDOCK_VALKEY_ADDR: valkey:6379
+      PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      PADDOCK_OIDC_STEPUP_ISSUER: https://auth.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}/application/o/paddock-portal-stepup/
+      # Deletes every header version of a destroyed device (plan M4c decision 9).
+      PADDOCK_ESCROW_S3_ENDPOINT: http://rustfs:9000
+      PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
+      PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_revocation_access_key
+      PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_revocation_secret_key
+      PADDOCK_REVOCATION_ENABLED: ${PADDOCK_REVOCATION_ENABLED:-false}
+      SSL_CERT_FILE: /run/secrets/caddy_root_crt
+    secrets:
+      - db_paddock_revocation_url
+      - rabbitmq_revocation_issuer_password
+      - approle_revocation_issuer_role_id
+      - approle_revocation_issuer_secret_id
+      - valkey_password
+      - rustfs_escrow_revocation_access_key
+      - rustfs_escrow_revocation_secret_key
+      - caddy_root_crt
+    networks: [cp]
+    depends_on:
+      paddock-migrate:
+        condition: service_completed_successfully
+      caddy-ca-export:
+        condition: service_completed_successfully
+      openbao:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+
   paddock-outbox-relay:
     <<: *paddock
     command: ["serve", "outbox-relay"]
@@ -437,6 +486,8 @@ services:
       PADDOCK_OPENBAO_ADDR: http://openbao:8200
       PADDOCK_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_compiler_role_id
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_compiler_secret_id
+      # revocation.enabled of v2 bundles (plan M4c decision 1).
+      PADDOCK_REVOCATION_ENABLED: ${PADDOCK_REVOCATION_ENABLED:-false}
       PADDOCK_BUNDLES_S3_ENDPOINT: http://rustfs:9000
       PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
       PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_compiler_access_key
@@ -534,6 +585,7 @@ secrets:
   db_paddock_worker_password: { file: ./.secrets/db_paddock_worker_password }
   db_paddock_compiler_password: { file: ./.secrets/db_paddock_compiler_password }
   db_paddock_escrow_reader_password: { file: ./.secrets/db_paddock_escrow_reader_password }
+  db_paddock_revocation_password: { file: ./.secrets/db_paddock_revocation_password }
   db_paddock_owner_url: { file: ./.secrets/db_paddock_owner_url }
   db_paddock_api_url: { file: ./.secrets/db_paddock_api_url }
   db_paddock_platform_url: { file: ./.secrets/db_paddock_platform_url }
@@ -541,6 +593,7 @@ secrets:
   db_paddock_worker_url: { file: ./.secrets/db_paddock_worker_url }
   db_paddock_compiler_url: { file: ./.secrets/db_paddock_compiler_url }
   db_paddock_escrow_reader_url: { file: ./.secrets/db_paddock_escrow_reader_url }
+  db_paddock_revocation_url: { file: ./.secrets/db_paddock_revocation_url }
   db_paddock_audit_reader_url: { file: ./.secrets/db_paddock_audit_reader_url }
   rabbitmq_definitions: { file: ./.secrets/rabbitmq/definitions.json }
   rabbitmq_provisioner_password: { file: ./.secrets/rabbitmq_provisioner_password }
@@ -548,6 +601,7 @@ secrets:
   rabbitmq_worker_password: { file: ./.secrets/rabbitmq_worker_password }
   rabbitmq_gateway_password: { file: ./.secrets/rabbitmq_gateway_password }
   rabbitmq_compiler_password: { file: ./.secrets/rabbitmq_compiler_password }
+  rabbitmq_revocation_issuer_password: { file: ./.secrets/rabbitmq_revocation_issuer_password }
   rustfs_bundles_compiler_access_key: { file: ./.secrets/rustfs_bundles_compiler_access_key }
   rustfs_bundles_compiler_secret_key: { file: ./.secrets/rustfs_bundles_compiler_secret_key }
   approle_compiler_role_id: { file: ./.secrets/approle/paddock-compiler/role_id }
@@ -562,6 +616,8 @@ secrets:
   rustfs_escrow_worker_secret_key: { file: ./.secrets/rustfs_escrow_worker_secret_key }
   rustfs_escrow_api_access_key: { file: ./.secrets/rustfs_escrow_api_access_key }
   rustfs_escrow_api_secret_key: { file: ./.secrets/rustfs_escrow_api_secret_key }
+  rustfs_escrow_revocation_access_key: { file: ./.secrets/rustfs_escrow_revocation_access_key }
+  rustfs_escrow_revocation_secret_key: { file: ./.secrets/rustfs_escrow_revocation_secret_key }
   release_public_key: { file: ./.secrets/release/minisign.pub }
   authentik_postgres_password: { file: ./.secrets/authentik_postgres_password }
   authentik_secret_key: { file: ./.secrets/authentik_secret_key }
@@ -577,5 +633,7 @@ secrets:
   approle_api_secret_id: { file: ./.secrets/approle/paddock-api/secret_id }
   approle_escrow_reader_role_id: { file: ./.secrets/approle/paddock-escrow-reader/role_id }
   approle_escrow_reader_secret_id: { file: ./.secrets/approle/paddock-escrow-reader/secret_id }
+  approle_revocation_issuer_role_id: { file: ./.secrets/approle/paddock-revocation-issuer/role_id }
+  approle_revocation_issuer_secret_id: { file: ./.secrets/approle/paddock-revocation-issuer/secret_id }
   escrow_reader_token: { file: ./.secrets/escrow_reader_token }
   caddy_root_crt: { file: ./.secrets/caddy-root.crt }

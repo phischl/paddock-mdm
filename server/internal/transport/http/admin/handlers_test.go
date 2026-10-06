@@ -340,6 +340,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:   app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
 		Disk:          app.NewDisk(runner, orgPool, escrowAccess, e.disk),
+		Revocations:   app.NewRevocations(runner, orgPool, e.stepUps, true),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,

@@ -814,6 +814,155 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+         *     needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+         *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+         *     Requests a Lock: every keyslot of the device's encrypted root volume is erased and the device reboots; it
+         *     stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
+         *     the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
+         *     administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
+         *     open Lock, 409 invalid_state unless the device is active or quarantined.
+         */
+        post: operations["lockDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/destroy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+         *     needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+         *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+         *     Requests a Destroy: a Lock whose escrowed header and recovery key are deleted before the token is issued, so
+         *     the device's data is unrecoverable. It waits for a second administrator (another account and another identity)
+         *     to approve it (two-person rule).
+         */
+        post: operations["destroyDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/revocation-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin. The organization's Lock, Destroy and self-lock requests with their approvals (never the
+         *     step-up tokens). An issued request that the device has not confirmed yet is pending; issued_at tells for how
+         *     long.
+         */
+        get: operations["listRevocationRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/revocation-requests/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+         *     needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+         *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+         *     The second approval of a Destroy; the caller must be another administrator than the requester, with another
+         *     identity (403 forbidden otherwise). 409 invalid_state unless the request waits for its approval.
+         */
+        post: operations["approveRevocationRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/revocation-requests/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+         *     needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+         *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+         *     Rejects a request that waits for its second approval. 409 invalid_state otherwise.
+         */
+        post: operations["rejectRevocationRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/revocation-requests/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+         *     needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+         *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+         *     The requester cancels a request before it is issued (403 forbidden for anyone else). 409 invalid_state once
+         *     it was issued or closed.
+         */
+        post: operations["cancelRevocationRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/local-admin": {
         parameters: {
             query?: never;
@@ -919,7 +1068,7 @@ export interface paths {
         /**
          * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns the newest stored
          *     recovery key of the device; confirm_hostname must equal the device's hostname. 409 invalid_state when none is
-         *     stored. Type it at the boot PIN prompt once the PIN attempts are used up (docs/operations/disk-recovery.md).
+         *     stored, 404 not_found once a Destroy of the device was issued. Type it at the boot PIN prompt once the PIN attempts are used up (docs/operations/disk-recovery.md).
          *     Responses are never cached.
          */
         post: operations["revealDeviceRecoveryKey"];
@@ -944,7 +1093,8 @@ export interface paths {
          * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns a stored LUKS header
          *     backup of the device, decrypted (the newest generation unless generation is given), as the file
          *     <hostname>-luks-header-<generation>.img for cryptsetup luksHeaderRestore; confirm_hostname must equal the
-         *     device's hostname. 409 invalid_state when no such generation is stored.
+         *     device's hostname. 409 invalid_state when no such generation is stored, 404 not_found once a Destroy of the
+         *     device was issued.
          */
         post: operations["downloadDeviceHeader"];
         delete?: never;
@@ -1818,6 +1968,81 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** @enum {string} */
+        RevocationAction: "lock" | "destroy" | "self_lock";
+        /** @enum {string} */
+        RevocationStatus: "requested" | "approved" | "issued" | "delivered" | "confirmed" | "failed" | "rejected" | "cancelled" | "expired";
+        RevocationCreate: {
+            confirm_hostname: string;
+            /** @description Why the device is revoked (shown to administrators). */
+            reason?: string;
+        };
+        RevocationConfirm: {
+            confirm_hostname: string;
+        };
+        RevocationApproval: {
+            /** @enum {string} */
+            role: "requester" | "approver";
+            /** Format: uuid */
+            admin_id: string;
+            username: string;
+            /** Format: date-time */
+            approved_at: string;
+        };
+        RevocationRequest: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            action: components["schemas"]["RevocationAction"];
+            status: components["schemas"]["RevocationStatus"];
+            /**
+             * Format: uuid
+             * @description The requesting administrator; absent for a self-lock.
+             */
+            requested_by?: string;
+            requested_by_username?: string;
+            /** Format: date-time */
+            requested_at: string;
+            reason: string;
+            /** Format: date-time */
+            approved_at?: string;
+            /** Format: date-time */
+            issued_at?: string;
+            /**
+             * Format: date-time
+             * @description The device refuses the token afterwards.
+             */
+            expires_at?: string;
+            /** Format: date-time */
+            delivered_at?: string;
+            /**
+             * Format: date-time
+             * @description When the device confirmed the erasure.
+             */
+            confirmed_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+            /** @description Why the revocation-issuer rejected or failed it, e.g. limit_admin_hour. */
+            rejection?: string;
+            /** @description The device's confirmation, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
+            result?: {
+                [key: string]: unknown;
+            };
+            approvals: components["schemas"]["RevocationApproval"][];
+        };
+        RevocationRequestPage: {
+            items: components["schemas"]["RevocationRequest"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         DeviceCommandPage: {
             items: components["schemas"]["DeviceCommand"][];
             page: number;
@@ -2335,6 +2560,8 @@ export interface components {
         ManagedUnitSort: "unit" | "-unit" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         DeviceCommandSort: "issued_at" | "-issued_at" | "expires_at" | "-expires_at" | "type" | "-type" | "status" | "-status";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        RevocationRequestSort: "requested_at" | "-requested_at" | "status" | "-status" | "action" | "-action" | "hostname" | "-hostname";
         /** @description Repeatable. */
         DeviceStateFilter: components["schemas"]["DeviceState"][];
         /** @description Only definitions scoped to this device group. */
@@ -4106,6 +4333,212 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    lockDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevocationCreate"];
+            };
+        };
+        responses: {
+            /** @description The request. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevocationRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    destroyDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevocationCreate"];
+            };
+        };
+        responses: {
+            /** @description The request. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevocationRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    listRevocationRequests: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["RevocationRequestSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["RevocationStatus"][];
+                /** @description Repeatable. */
+                action?: components["schemas"]["RevocationAction"][];
+                device_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of revocation requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevocationRequestPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    approveRevocationRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevocationConfirm"];
+            };
+        };
+        responses: {
+            /** @description The approved request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevocationRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    rejectRevocationRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevocationConfirm"];
+            };
+        };
+        responses: {
+            /** @description The rejected request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevocationRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
+        };
+    };
+    cancelRevocationRequest: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevocationConfirm"];
+            };
+        };
+        responses: {
+            /** @description The cancelled request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevocationRequest"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
         };
     };
     getDeviceLocalAdmin: {

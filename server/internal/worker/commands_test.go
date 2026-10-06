@@ -3,10 +3,12 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -15,6 +17,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/baotest"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
@@ -55,7 +58,8 @@ func newCommandWorld(t *testing.T) commandWorld {
 		t.Fatal(err)
 	}
 	w := commandWorld{fixture: f, trust: trust, device: uuid.Must(uuid.NewV7()),
-		c: NewCommands(app.NewDeviceCommands(f.pool), f.pool, platform, f.cache, signer)}
+		c: NewCommands(app.NewDeviceCommands(f.pool), app.NewRevocationReports(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool),
+			f.pool, platform, f.cache, signer)}
 	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-cmd', 'active')",
 		w.device, f.org); err != nil {
 		t.Fatal(err)
@@ -181,5 +185,69 @@ func TestCommandRound(t *testing.T) {
 	}
 	if present, _ := w.cache.HasCommand(ctx, w.device, lost); present {
 		t.Fatal("expired command left in Valkey")
+	}
+}
+
+// TestRevocationDeliveryAndConfirmation (plan M4c decision 10): an issued revocation token travels like a command:
+// the heartbeat records its delivery, the device's result confirms it once (audited device.revocation_confirmed with
+// the device as actor), and an unconfirmed token expires with its lifetime.
+func TestRevocationDeliveryAndConfirmation(t *testing.T) {
+	w := newCommandWorld(t)
+	ctx := context.Background()
+	admin := uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(ctx, `INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role)
+		VALUES ($1, $2, $3, 'alice', 'alice', 'org_admin')`, admin, w.org, admin.String()); err != nil {
+		t.Fatal(err)
+	}
+	revoke := func(expires time.Duration) uuid.UUID {
+		id := uuid.Must(uuid.NewV7())
+		if _, err := w.super.Exec(ctx, `INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by,
+			issued_at, expires_at, envelope) VALUES ($1, $2, $3, 'lock', 'issued', $4, now(), now() + $5::interval, '\x7b7d')`,
+			id, w.org, w.device, admin, fmt.Sprintf("%d seconds", int(expires.Seconds()))); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	status := func(id uuid.UUID) string {
+		var s string
+		if err := w.super.QueryRow(ctx, "SELECT status FROM revocation_request WHERE id = $1", id).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	id := revoke(time.Hour)
+	r := NewReports(app.NewDeviceReports(app.NewActionRunner(w.pool, nil, func(context.Context) string { return "t" }), w.pool),
+		app.NewDeviceCommands(w.pool), w.cache)
+	hb, _ := json.Marshal(ingest.Heartbeat{DeviceID: w.device, OrganizationID: w.org, ReceivedAt: time.Now(), Seq: 1,
+		DeliveredCommands: []uuid.UUID{id}})
+	if o := r.heartbeat(ctx, "hb", hb); o != ack || status(id) != "delivered" {
+		t.Fatalf("heartbeat: outcome %v, status %s", o, status(id))
+	}
+	result := func(id uuid.UUID, s string) outcome {
+		body, _ := json.Marshal(ingest.CommandResult{DeviceID: w.device, OrganizationID: w.org, CommandID: id, Status: s,
+			Result: json.RawMessage(`{"erased":true,"slots_before":2,"slots_after":0}`), ReceivedAt: time.Now()})
+		return w.c.result(ctx, id.String()+":"+s, body)
+	}
+	if o := result(id, "succeeded"); o != ack || status(id) != "confirmed" {
+		t.Fatalf("confirmation: outcome %v, status %s", o, status(id))
+	}
+	if o := result(id, "failed"); o != ack || status(id) != "confirmed" {
+		t.Fatalf("second result: outcome %v, status %s", o, status(id))
+	}
+	var events []string
+	rows, _ := w.super.Query(ctx, `SELECT code || ':' || (actor ->> 'type') || ':' || (params ->> 'slots_before') FROM action
+		WHERE params ->> 'request_id' = $1`, id.String())
+	events, _ = pgx.CollectRows(rows, pgx.RowTo[string])
+	if len(events) != 1 || events[0] != "device.revocation_confirmed:device:2" {
+		t.Fatalf("events %v", events)
+	}
+
+	expired := revoke(time.Second)
+	time.Sleep(1500 * time.Millisecond)
+	if err := w.c.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status(expired) != "expired" {
+		t.Fatalf("after its lifetime: %s", status(expired))
 	}
 }

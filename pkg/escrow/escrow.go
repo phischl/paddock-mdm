@@ -126,7 +126,12 @@ func Encrypt(pub *rsa.PublicKey, secret []byte) (string, error) {
 // HeaderObjectKey is the object of a header generation in the escrow bucket (architecture §12.4); the server
 // chooses it, the device only uploads to its presigned URL.
 func HeaderObjectKey(org, device string, generation int64) string {
-	return fmt.Sprintf("org/%s/devices/%s/luks-header/%d.bin", org, device, generation)
+	return HeaderObjectPrefix(org, device) + fmt.Sprintf("%d.bin", generation)
+}
+
+// HeaderObjectPrefix is the prefix of every header generation of a device in the escrow bucket.
+func HeaderObjectPrefix(org, device string) string {
+	return fmt.Sprintf("org/%s/devices/%s/luks-header/", org, device)
 }
 
 // SealedHeader is a LUKS header backup sealed for escrow: Object is gzip(header) encrypted with AES-256-GCM under a
