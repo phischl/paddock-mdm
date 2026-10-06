@@ -1,10 +1,17 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo/paddock-horizontal-dark.svg">
+    <img src="docs/assets/logo/paddock-horizontal-light.svg" alt="Paddock — Linux MDM" width="420">
+  </picture>
+</p>
+
 # Paddock
 
 Open-source management for Linux workstations that keeps local administrator rights with their users.
 
-Status: milestone M2a (device control plane): control plane, audit domain, admin portal with organizations, device
-groups, audit log, devices, enrollment tokens and managed files and units; device API (enrollment, check-in, signed
-bundles) proven by the reference client `test/acceptance/devicesim`. The device agent follows in M2b. Architecture: `docs/architecture.md`, decisions: `docs/adr/`, plans: `docs/plans/`, binding rules for
+Status: milestones M0–M4b done (control plane, audit, portal, device agent with A/B updates, identity and sudo
+management via Authentik and Himmelblau, managed local administrator, Paddock autoinstall with TPM2+PIN disk
+encryption and escrow); revocation (Lock/Destroy) is in development and disabled until its hardware acceptance. Architecture: `docs/architecture.md`, decisions: `docs/adr/`, plans: `docs/plans/`, binding rules for
 contributors and AI agents: `CLAUDE.md`.
 
 ## Quick start (local development)
