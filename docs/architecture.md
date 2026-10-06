@@ -239,11 +239,12 @@ flowchart TB
 
 | Role | Responsibility | Scales by | Keys it may use |
 | --- | --- | --- | --- |
-| `api` | Portal BFF (OIDC session), admin REST API, `paddockctl` API; writes configuration and commands in one DB transaction with an outbox record | replicas behind proxy | none (escrow reveal via `escrow-reader` policy, see §13) |
+| `api` | Portal BFF (OIDC session), admin REST API, `paddockctl` API; writes configuration and commands in one DB transaction with an outbox record | replicas behind proxy | none (escrow reveal is delegated to the `escrow-reader` role) |
 | `gateway` | Device endpoints: enroll, check-in, events, results, escrow upload; verifies device signatures; reads only from Valkey; writes only to RabbitMQ (and nonces to Valkey) | replicas | none |
 | `worker` | Consumes ingest queues, materializes device status and the Valkey cache, inventory sync with Fleet, staleness evaluation, Authentik sync | competing consumers on quorum queues | `command-signing` |
 | `compiler` | Recomputes effective state on input change, renders and signs bundles | consumer replicas, partitioned by organization | `bundle-signing`, `time-ticket` |
 | `revocation-issuer` | Validates approvals, enforces rate limits, signs revocation tokens | exactly 1 active replica (leader lease) | `revocation-signing` |
+| `escrow-reader` | Decrypts escrowed secrets only for requests that carry a fresh, verified step-up ID token of an org admin of the owning organization; reachable only from `api` on an internal network *(added 2026-10-06, plan M4b.1)* | replicas | `escrow-wrap` (decrypt) |
 | `audit-writer` | Writes audit index and WORM objects; daily signed hash chain | consumer replicas; chain sealing by leader | `audit-chain` |
 | `outbox-relay` | Moves outbox rows from PostgreSQL to RabbitMQ (publisher confirms) | 1–2 replicas (row locking) | none |
 
