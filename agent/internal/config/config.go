@@ -1,5 +1,6 @@
-// Package config reads and writes the agent configuration: /etc/paddock/agent.yml, /etc/paddock/trust.json and the
-// enrollment configuration an administrator downloads from the portal (plan M2b decisions 6 and 7).
+// Package config reads and writes the agent configuration: /etc/paddock/agent.yml, /etc/paddock/trust.json,
+// /etc/paddock/revoke-trust.json and the enrollment configuration an administrator downloads from the portal (plan
+// M2b decisions 6 and 7, plan M4c decision 3).
 package config
 
 import (
@@ -19,6 +20,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/revocation"
 )
 
 // Drift interval bounds (plan M2b decision 11).
@@ -170,6 +172,23 @@ func SaveTrust(path string, keys []protocol.BundleKey) error {
 	return fsutil.WriteFile(path, append(data, '\n'), 0o644, 0o755)
 }
 
+// SaveRevokeTrust writes revoke-trust.json atomically (0644; public keys only): the revocation-signing keys
+// paddock-revoke trusts (plan M4c decision 3). keys must be valid.
+func SaveRevokeTrust(path string, keys []protocol.BundleKey) error {
+	f := revocation.TrustFile{RevocationKeys: make([]revocation.Key, len(keys))}
+	for i, k := range keys {
+		f.RevocationKeys[i] = revocation.Key{KeyID: k.KeyID, PublicKey: k.PublicKey}
+	}
+	if _, err := revocation.TrustFromKeys(f.RevocationKeys); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fsutil.WriteFile(path, append(data, '\n'), 0o644, 0o755)
+}
+
 // ErrEnrollmentConfig marks an invalid enrollment configuration.
 var ErrEnrollmentConfig = errors.New("invalid enrollment configuration")
 
@@ -189,6 +208,11 @@ func ParseEnrollment(data []byte) (protocol.EnrollmentConfig, error) {
 	}
 	if _, err := bundle.TrustFromKeys(c.BundleKeys); err != nil {
 		return c, fmt.Errorf("%w: %v", ErrEnrollmentConfig, err)
+	}
+	for _, k := range c.RevocationKeys { // optional: configurations created before M4c have none
+		if _, err := revocation.TrustFromKeys([]revocation.Key{{KeyID: k.KeyID, PublicKey: k.PublicKey}}); err != nil {
+			return c, fmt.Errorf("%w: %v", ErrEnrollmentConfig, err)
+		}
 	}
 	return c, nil
 }

@@ -7,6 +7,7 @@ OpenBao holds Paddock's keys (ADR 0006):
 | `transit/keys/audit-chain` | Ed25519 key that signs the daily audit manifests (non-exportable) | `audit-writer` (AppRole `paddock-audit-writer`) |
 | `transit/keys/bundle-signing` | Ed25519 key that signs device bundles (non-exportable) | `compiler` (AppRole `paddock-compiler`); `api` reads the public keys |
 | `transit/keys/command-signing` | Ed25519 key that signs device commands (non-exportable); its public keys reach devices in their bundles | `worker` (AppRole `paddock-worker`, sign only); `compiler` reads the public keys |
+| `transit/keys/revocation-signing` | Ed25519 key that signs revocation tokens (Lock, Destroy, self-lock; non-exportable); its public keys reach devices only in their enrollment configuration (`revocation_keys`, pinned in `/etc/paddock/revoke-trust.json`), never through bundles except once for devices enrolled before it existed | the `revocation-issuer` role only (AppRole `paddock-revocation-issuer`, sign and read); `api` and `compiler` read the public keys |
 | `transit/keys/escrow-wrap` | RSA-4096 key (non-exportable) devices encrypt escrowed secrets to (RSA-OAEP with SHA-256); its latest public key reaches devices in their bundles | encrypt: devices; decrypt: the `escrow-reader` role only (AppRole `paddock-escrow-reader`, `docs/operations/escrow-reader.md`); `compiler` reads the public key |
 | `secret/paddock/session` (KV v2) | AES-256 keys `current` / `previous` of the portal session cookie | `api` (AppRole `paddock-api`) |
 
@@ -42,7 +43,7 @@ export BAO_TOKEN=<decrypted root token>
 bao secrets enable transit
 bao secrets enable -path=secret kv-v2
 bao auth enable approle
-for key in audit-chain bundle-signing command-signing; do
+for key in audit-chain bundle-signing command-signing revocation-signing; do
   bao write "transit/keys/$key" type=ed25519 exportable=false allow_plaintext_backup=false
 done
 bao write transit/keys/escrow-wrap type=rsa-4096 exportable=false allow_plaintext_backup=false
@@ -56,6 +57,7 @@ Policies and AppRoles (identical to the development bootstrap):
 bao policy write paddock-api - <<'EOF'
 path "secret/data/paddock/session" { capabilities = ["read"] }
 path "transit/keys/bundle-signing" { capabilities = ["read"] }
+path "transit/keys/revocation-signing" { capabilities = ["read"] }
 EOF
 bao policy write paddock-audit-writer - <<'EOF'
 path "transit/sign/audit-chain" { capabilities = ["update"] }
@@ -65,6 +67,7 @@ bao policy write paddock-compiler - <<'EOF'
 path "transit/sign/bundle-signing" { capabilities = ["update"] }
 path "transit/keys/bundle-signing" { capabilities = ["read"] }
 path "transit/keys/command-signing" { capabilities = ["read"] }
+path "transit/keys/revocation-signing" { capabilities = ["read"] }
 path "transit/keys/escrow-wrap" { capabilities = ["read"] }
 EOF
 bao policy write paddock-worker - <<'EOF'
@@ -73,14 +76,20 @@ EOF
 bao policy write paddock-escrow-reader - <<'EOF'
 path "transit/decrypt/escrow-wrap" { capabilities = ["update"] }
 EOF
-for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader; do
+# The only role that can sign revocations (plan M4c decision 2).
+bao policy write paddock-revocation-issuer - <<'EOF'
+path "transit/sign/revocation-signing" { capabilities = ["update"] }
+path "transit/keys/revocation-signing" { capabilities = ["read"] }
+EOF
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader \
+  paddock-revocation-issuer; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h
 done
 ```
 
 Deliver role ID and secret ID of each AppRole to the host of the role (control plane: `paddock-api`,
-`paddock-compiler`, `paddock-worker`, `paddock-escrow-reader` to the escrow-reader and never to the api; audit
-host: `paddock-audit-writer`) as files referenced by
+`paddock-compiler`, `paddock-worker`, `paddock-escrow-reader` to the escrow-reader and never to the api,
+`paddock-revocation-issuer` to the revocation-issuer and to no other role; audit host: `paddock-audit-writer`) as files referenced by
 `PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`:
 
 ```sh

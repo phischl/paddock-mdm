@@ -159,6 +159,9 @@ const (
 	EventTamperLocalAdminChanged  = "tamper.local_admin_changed"
 	// Disk encryption (plan M4b decision 12).
 	EventTamperKeyslotChanged = "tamper.keyslot_changed"
+	// Revocation (plan M4c decision 3): a device enrolled before M4c pinned the revocation keys of its first bundle
+	// that carried them (trust on first use).
+	EventRevocationTrustPinnedTOFU = "revocation.trust_pinned_tofu"
 )
 
 // EventTypes is the closed set of event types.
@@ -170,6 +173,7 @@ var EventTypes = []string{
 	EventTamperProtectedFileChanged,
 	EventLocalAdminRotated, EventLocalAdminRotationFailed, EventLocalAdminLogin, EventTamperLocalAdminChanged,
 	EventTamperKeyslotChanged,
+	EventRevocationTrustPinnedTOFU,
 }
 
 // Disk states of DiskHealth (plan M4b decision 8), from the least to the most complete.
@@ -341,10 +345,12 @@ type BundleKey struct {
 }
 
 // EnrollmentConfig is the document an administrator receives once when creating an enrollment token; the device
-// pins BundleKeys as its trust anchor.
+// pins BundleKeys as its trust anchor, and RevocationKeys (the revocation-signing public keys, same shape) as the
+// trust anchor of paddock-revoke (plan M4c decision 3). Configurations created before M4c have no RevocationKeys.
 type EnrollmentConfig struct {
 	ServerURL      string      `json:"server_url"`
 	OrganizationID string      `json:"organization_id"`
 	Token          string      `json:"token"`
 	BundleKeys     []BundleKey `json:"bundle_keys"`
+	RevocationKeys []BundleKey `json:"revocation_keys,omitempty"`
 }

@@ -160,7 +160,8 @@ func requestEnrollment(ctx context.Context, o Options, c *client.Client, req pro
 	}
 }
 
-// storeConfig validates the enrollment configuration and writes agent.yml and trust.json. It returns the token.
+// storeConfig validates the enrollment configuration and writes agent.yml, trust.json and revoke-trust.json. It
+// returns the token.
 func storeConfig(o Options) (string, error) {
 	data, err := os.ReadFile(o.ConfigPath)
 	if err != nil {
@@ -182,6 +183,13 @@ func storeConfig(o Options) (string, error) {
 	}
 	if err := config.SaveTrust(o.Layout.Trust(), ec.BundleKeys); err != nil {
 		return "", err
+	}
+	// The revocation trust anchor comes only from here, never from a bundle; a re-enrollment replaces a key pinned
+	// on first use (plan M4c decision 3). A configuration created before M4c has none.
+	if len(ec.RevocationKeys) > 0 {
+		if err := config.SaveRevokeTrust(o.Layout.RevokeTrust(), ec.RevocationKeys); err != nil {
+			return "", err
+		}
 	}
 	return ec.Token, nil
 }

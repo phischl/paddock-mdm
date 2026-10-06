@@ -95,6 +95,8 @@ const (
 	CodeDeviceTamperKeyslotChanged Code = "device.tamper_keyslot_changed"
 	CodeDiskRecoveryKeyRevealed    Code = "disk.recovery_key_revealed"
 	CodeDiskHeaderDownloaded       Code = "disk.header_downloaded"
+
+	CodeDeviceRevocationTrustPinnedTOFU Code = "device.revocation_trust_pinned_tofu"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -610,6 +612,12 @@ var registry = map[Code]Definition{
 		Description: "An organization administrator downloaded an escrowed LUKS header of a device after a step-up.",
 		Params:      []string{"hostname", "generation"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceRevocationTrustPinnedTOFU: {
+		Code: CodeDeviceRevocationTrustPinnedTOFU, Emitted: true,
+		Description: "A device enrolled before revocation existed pinned the revocation-signing keys of the first bundle that carried them (trust on first use); re-enrolling the device replaces them with the keys of its enrollment configuration (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

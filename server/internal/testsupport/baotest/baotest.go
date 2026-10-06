@@ -1,5 +1,5 @@
-// Package baotest starts OpenBao in dev mode with the transit keys audit-chain, bundle-signing, command-signing and
-// escrow-wrap, the session KV secret and AppRoles equivalent to deploy/compose/scripts/openbao-bootstrap.sh.
+// Package baotest starts OpenBao in dev mode with the transit keys audit-chain, bundle-signing, command-signing,
+// revocation-signing and escrow-wrap, the session KV secret and AppRoles equivalent to deploy/compose/scripts/openbao-bootstrap.sh.
 package baotest
 
 import (
@@ -24,8 +24,9 @@ type Bao struct {
 // AppRole holds AppRole credentials.
 type AppRole struct{ RoleID, SecretID string }
 
-// Start starts OpenBao and creates transit/keys/audit-chain, transit/keys/bundle-signing and
-// transit/keys/command-signing (ed25519, non-exportable) and secret/paddock/session.
+// Start starts OpenBao and creates transit/keys/audit-chain, transit/keys/bundle-signing,
+// transit/keys/command-signing and transit/keys/revocation-signing (ed25519, non-exportable), transit/keys/escrow-wrap
+// and secret/paddock/session.
 func Start(t testing.TB) *Bao {
 	t.Helper()
 	ctx := context.Background()
@@ -60,7 +61,7 @@ func Start(t testing.TB) *Bao {
 		"type": "ed25519", "exportable": false, "allow_plaintext_backup": false,
 	})
 	must(t, err)
-	for _, key := range []string{"bundle-signing", "command-signing"} {
+	for _, key := range []string{"bundle-signing", "command-signing", "revocation-signing"} {
 		_, err = b.Root.Logical().Write("transit/keys/"+key, map[string]any{
 			"type": "ed25519", "exportable": false, "allow_plaintext_backup": false,
 		})
@@ -80,16 +81,21 @@ path "transit/sign/audit-chain" { capabilities = ["update"] }
 path "transit/keys/audit-chain" { capabilities = ["read"] }`))
 	must(t, b.Root.Sys().PutPolicy("paddock-api", `
 path "secret/data/paddock/session" { capabilities = ["read"] }
-path "transit/keys/bundle-signing" { capabilities = ["read"] }`))
+path "transit/keys/bundle-signing" { capabilities = ["read"] }
+path "transit/keys/revocation-signing" { capabilities = ["read"] }`))
 	must(t, b.Root.Sys().PutPolicy("paddock-compiler", `
 path "transit/sign/bundle-signing" { capabilities = ["update"] }
 path "transit/keys/bundle-signing" { capabilities = ["read"] }
 path "transit/keys/command-signing" { capabilities = ["read"] }
+path "transit/keys/revocation-signing" { capabilities = ["read"] }
 path "transit/keys/escrow-wrap" { capabilities = ["read"] }`))
 	must(t, b.Root.Sys().PutPolicy("paddock-escrow-reader", `
 path "transit/decrypt/escrow-wrap" { capabilities = ["update"] }`))
 	must(t, b.Root.Sys().PutPolicy("paddock-worker", `
 path "transit/sign/command-signing" { capabilities = ["update"] }`))
+	must(t, b.Root.Sys().PutPolicy("paddock-revocation-issuer", `
+path "transit/sign/revocation-signing" { capabilities = ["update"] }
+path "transit/keys/revocation-signing" { capabilities = ["read"] }`))
 	return b
 }
 

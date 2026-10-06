@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Development bootstrap of OpenBao (plan M0 §6.8, M2a decision 15, M4a decision 2): init (5 shares, threshold 3),
-# unseal, transit keys audit-chain, bundle-signing, command-signing and escrow-wrap (M4a decision 9), KV
+# unseal, transit keys audit-chain, bundle-signing, command-signing, revocation-signing (M4c decision 2) and
+# escrow-wrap (M4a decision 9), KV
 # secret/paddock/session, policies and AppRoles. Idempotent. `openbao-bootstrap.sh unseal` only unseals.
 # Production: refuses to run; follow docs/operations/openbao.md.
 set -euo pipefail
@@ -82,7 +83,7 @@ if ! bao read transit/keys/audit-chain >/dev/null 2>&1; then
   echo "created transit key audit-chain"
 fi
 
-for key in bundle-signing command-signing; do
+for key in bundle-signing command-signing revocation-signing; do
   if ! bao read "transit/keys/$key" >/dev/null 2>&1; then
     bao write "transit/keys/$key" type=ed25519 exportable=false allow_plaintext_backup=false >/dev/null
     echo "created transit key $key"
@@ -108,6 +109,9 @@ path "secret/data/paddock/session" {
 path "transit/keys/bundle-signing" {
   capabilities = ["read"]
 }
+path "transit/keys/revocation-signing" {
+  capabilities = ["read"]
+}
 EOF
 
 bao policy write paddock-compiler - >/dev/null <<'EOF'
@@ -118,6 +122,9 @@ path "transit/keys/bundle-signing" {
   capabilities = ["read"]
 }
 path "transit/keys/command-signing" {
+  capabilities = ["read"]
+}
+path "transit/keys/revocation-signing" {
   capabilities = ["read"]
 }
 path "transit/keys/escrow-wrap" {
@@ -138,6 +145,16 @@ path "transit/sign/command-signing" {
 }
 EOF
 
+# The only role that can sign revocations (plan M4c decision 2); the api and the compiler read the public keys only.
+bao policy write paddock-revocation-issuer - >/dev/null <<'EOF'
+path "transit/sign/revocation-signing" {
+  capabilities = ["update"]
+}
+path "transit/keys/revocation-signing" {
+  capabilities = ["read"]
+}
+EOF
+
 bao policy write paddock-audit-writer - >/dev/null <<'EOF'
 path "transit/sign/audit-chain" {
   capabilities = ["update"]
@@ -147,7 +164,7 @@ path "transit/keys/audit-chain" {
 }
 EOF
 
-for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader; do
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h \
     secret_id_ttl=0 token_no_default_policy=false >/dev/null
   dir="$SECRETS_DIR/approle/$role"

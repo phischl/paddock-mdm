@@ -17,6 +17,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/revocation"
 )
 
 type fixture struct {
@@ -87,6 +88,11 @@ func TestEnrollPendingThenResume(t *testing.T) {
 	}
 	if _, err := config.LoadTrust(f.layout.Trust()); err != nil {
 		t.Fatalf("trust.json: %v", err)
+	}
+	if data, err := os.ReadFile(f.layout.RevokeTrust()); err != nil {
+		t.Fatalf("revoke-trust.json: %v", err)
+	} else if tr, err := revocation.ParseTrust(data); err != nil || tr.Keys["revocation-signing:v1"] == nil {
+		t.Fatalf("revoke-trust.json: %v %v", tr, err)
 	}
 	req := f.g.Enrolls[0]
 	if req.Token != "secret-token" || req.KeyProtection != protocol.KeyProtectionFile || req.Hostname == "" {

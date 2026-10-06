@@ -73,3 +73,25 @@ func TestDevStepUp(t *testing.T) {
 		}
 	}
 }
+
+// TestRevocationEnabled: the revocation feature flag is off unless set to true; anything but true or false fails the
+// start (plan M4c decision 1).
+func TestRevocationEnabled(t *testing.T) {
+	cases := map[string]struct {
+		env     map[string]string
+		want    bool
+		invalid bool
+	}{
+		"unset": {env: nil, want: false},
+		"true":  {env: map[string]string{"PADDOCK_REVOCATION_ENABLED": "true"}, want: true},
+		"false": {env: map[string]string{"PADDOCK_REVOCATION_ENABLED": "false"}, want: false},
+		"1":     {env: map[string]string{"PADDOCK_REVOCATION_ENABLED": "1"}, invalid: true},
+		"yes":   {env: map[string]string{"PADDOCK_REVOCATION_ENABLED": "yes"}, invalid: true},
+	}
+	for name, c := range cases {
+		l := NewLoaderFrom(c.env)
+		if got := RevocationEnabled(l); got != c.want || (l.Err() != nil) != c.invalid {
+			t.Errorf("%s: %v, %v", name, got, l.Err())
+		}
+	}
+}

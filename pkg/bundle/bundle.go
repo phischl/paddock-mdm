@@ -53,6 +53,19 @@ type Bundle struct {
 	// Keys are the public keys the agent trusts for commands and encrypts escrowed secrets to (schema v2 only, plan
 	// M4a decision 5). Agents that do not know them ignore the field.
 	Keys *Keys `json:"keys,omitempty"`
+	// Revocation is the revocation section (schema v2 only, plan M4c decisions 1 and 3). Agents that do not know it
+	// ignore the field.
+	Revocation *Revocation `json:"revocation,omitempty"`
+}
+
+// Revocation is the revocation section of a schema v2 bundle.
+type Revocation struct {
+	// Enabled is the server's feature flag PADDOCK_REVOCATION_ENABLED: the agent writes /etc/paddock/revoke-enabled
+	// only while it is true (plan M4c decision 1).
+	Enabled bool `json:"enabled"`
+	// Keys are the revocation-signing public keys. A device pins them only if it has no revocation trust anchor yet
+	// (enrolled before M4c, trust on first use); it never replaces a pinned anchor with them (plan M4c decision 3).
+	Keys []SigningKey `json:"keys"`
 }
 
 // Keys is the top-level keys object of a schema v2 bundle (plan M4a decision 5).

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
@@ -48,10 +49,8 @@ func (h *handlers) CreateEnrollmentToken(ctx context.Context, req adminapi.Creat
 	if err != nil {
 		return nil, err
 	}
-	keys := make([]adminapi.BundleKey, len(created.Config.BundleKeys))
-	for i, k := range created.Config.BundleKeys {
-		keys[i] = adminapi.BundleKey{KeyId: k.KeyID, PublicKey: k.PublicKey}
-	}
+	keys := toAPIKeys(created.Config.BundleKeys)
+	revocationKeys := toAPIKeys(created.Config.RevocationKeys)
 	loc := "/api/v1/enrollment-tokens/" + created.Token.ID.String()
 	return adminapi.CreateEnrollmentToken201JSONResponse{
 		Body: adminapi.EnrollmentTokenCreated{
@@ -59,7 +58,7 @@ func (h *handlers) CreateEnrollmentToken(ctx context.Context, req adminapi.Creat
 			Secret: created.Secret,
 			EnrollmentConfig: adminapi.EnrollmentConfig{
 				ServerUrl: created.Config.ServerURL, OrganizationId: created.Token.OrganizationID,
-				Token: created.Config.Token, BundleKeys: keys,
+				Token: created.Config.Token, BundleKeys: keys, RevocationKeys: &revocationKeys,
 			},
 		},
 		Headers: adminapi.CreateEnrollmentToken201ResponseHeaders{Location: &loc},
@@ -316,4 +315,12 @@ func utcPtr(t *time.Time) *time.Time {
 	}
 	u := t.UTC()
 	return &u
+}
+
+func toAPIKeys(in []protocol.BundleKey) []adminapi.BundleKey {
+	out := make([]adminapi.BundleKey, len(in))
+	for i, k := range in {
+		out[i] = adminapi.BundleKey{KeyId: k.KeyID, PublicKey: k.PublicKey}
+	}
+	return out
 }

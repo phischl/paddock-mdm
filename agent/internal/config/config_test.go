@@ -56,6 +56,11 @@ func TestParseEnrollment(t *testing.T) {
 	if _, err := ParseEnrollment([]byte(valid)); err != nil {
 		t.Fatalf("valid configuration rejected: %v", err)
 	}
+	withRevocation := strings.Replace(valid, `]}`,
+		`],"revocation_keys":[{"key_id":"revocation-signing:v1","public_key":"O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik="}]}`, 1)
+	if c, err := ParseEnrollment([]byte(withRevocation)); err != nil || len(c.RevocationKeys) != 1 {
+		t.Fatalf("configuration with revocation keys: %+v, %v", c, err)
+	}
 	for name, in := range map[string]string{
 		"not json":      "token",
 		"unknown field": strings.Replace(valid, `"token"`, `"tokn":"x","token"`, 1),
@@ -63,6 +68,8 @@ func TestParseEnrollment(t *testing.T) {
 		"no keys":       strings.Replace(valid, `[{"key_id":"bundle-signing:v1","public_key":"O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik="}]`, `[]`, 1),
 		"bad key":       strings.Replace(valid, `O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik=`, `AAAA`, 1),
 		"http url":      strings.Replace(valid, `https://d`, `http://d`, 1),
+		"bad revocation key": strings.Replace(valid, `]}`,
+			`],"revocation_keys":[{"key_id":"revocation-signing:v1","public_key":"AAAA"}]}`, 1),
 	} {
 		if _, err := ParseEnrollment([]byte(in)); err == nil {
 			t.Errorf("%s: accepted", name)

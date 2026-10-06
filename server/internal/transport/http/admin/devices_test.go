@@ -78,6 +78,10 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 		tok.EnrollmentConfig.BundleKeys[0].PublicKey != testBundleKey || tok.Token.Status != "active" {
 		t.Fatalf("created token %+v", tok)
 	}
+	// Plan M4c decision 3: the revocation trust anchor travels in the enrollment configuration.
+	if rk := tok.EnrollmentConfig.RevocationKeys; rk == nil || len(*rk) != 1 || (*rk)[0].KeyId != "revocation-signing:v1" {
+		t.Fatalf("revocation keys %+v", tok.EnrollmentConfig.RevocationKeys)
+	}
 	// Only the hash of the secret is stored, and the secret is nowhere in the audit trail.
 	var stored []byte
 	if err := e.super.QueryRow(context.Background(), "SELECT secret_sha256 FROM enrollment_token WHERE id = $1", tok.Token.Id).Scan(&stored); err != nil {

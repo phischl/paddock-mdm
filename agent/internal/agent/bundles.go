@@ -67,6 +67,7 @@ func (a *Agent) handleBundle(ctx context.Context, ref *protocol.BundleRef) {
 		return
 	}
 	rep := a.d.Applier.Apply(ctx, b)
+	a.applyRevocation(b)
 	if err := fsutil.WriteFile(a.d.Layout.Bundle(), env, 0o600, 0o700); err != nil {
 		slog.ErrorContext(ctx, "caching the bundle failed", "error", err)
 	}
@@ -83,6 +84,7 @@ func (a *Agent) drift(ctx context.Context) {
 	if a.current == nil {
 		return
 	}
+	a.applyRevocation(a.current)
 	ids := apply.Drifted(a.d.Applier.Plan(ctx, a.current))
 	if len(ids) == 0 {
 		return

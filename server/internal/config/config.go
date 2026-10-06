@@ -89,6 +89,27 @@ func (l *Loader) Int(name string, def int) int {
 	return n
 }
 
+// Bool returns the boolean variable ("true" or "false") or def.
+func (l *Loader) Bool(name string, def bool) bool {
+	v, ok := l.get(name)
+	if !ok {
+		return def
+	}
+	switch v {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	l.errs = append(l.errs, fmt.Sprintf("%s: not true or false: %q", name, v))
+	return def
+}
+
+// RevocationEnabled reads the feature flag PADDOCK_REVOCATION_ENABLED (default false; plan M4c decision 1). The
+// revocation path stays disabled until its second-person review and the hardware acceptance protocol have passed;
+// only development and test configurations enable it.
+func RevocationEnabled(l *Loader) bool { return l.Bool("PADDOCK_REVOCATION_ENABLED", false) }
+
 // Duration returns the duration variable or def.
 func (l *Loader) Duration(name string, def time.Duration) time.Duration {
 	v, ok := l.get(name)
