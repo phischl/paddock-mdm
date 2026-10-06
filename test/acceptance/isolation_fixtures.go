@@ -26,6 +26,8 @@ type isolationWorld struct {
 	globexUser, globexUserGroup, globexProfile, globexAssignment string
 	// globexUpstream is the Authentik pk of an upstream group whose only member is a globex user (seedGlobexUpstream).
 	globexUpstream string
+	// globexRevocation is a Destroy request of globexDevice that waits for its approval (seedGlobexDevices).
+	globexRevocation string
 }
 
 // seedGlobexIdentity creates, as carol, a local user in a user group, a permission profile and its assignment to the
@@ -93,6 +95,13 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	expectStatus(t, res, http.StatusAccepted, "")
 	w.globexIDs = append(w.globexIDs, w.globexDeviceGroup, w.globexToken, w.globexDevice, w.globexFile, w.globexUnit,
 		responseID(t, res).String())
+	// A Destroy waits for its second approval forever: nothing is ever issued.
+	stepUp(t, w.carol, env.Carol, true)
+	hostname := getDevice(t, w.carol, dev.DeviceID).Hostname
+	res = call(t, w.carol, http.MethodPost, "/api/v1/devices/"+dev.DeviceID+"/destroy", map[string]any{"confirm_hostname": hostname})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexRevocation = responseID(t, res).String()
+	w.globexIDs = append(w.globexIDs, w.globexRevocation)
 	w.globexGroups = append(w.globexGroups, w.globexDeviceGroup)
 }
 
@@ -241,6 +250,23 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/settings/login", currentLoginSettings(t, w.alice)
 	}},
 
+	"POST /api/v1/devices/{id}/lock": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/lock" },
+		map[string]any{"confirm_hostname": "x"}),
+	"POST /api/v1/devices/{id}/destroy": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/destroy" },
+		map[string]any{"confirm_hostname": "x"}),
+	"GET /api/v1/revocation-requests": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/revocation-requests?page_size=100", nil
+	}},
+	"POST /api/v1/revocation-requests/{id}/approve": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/revocation-requests/" + w.globexRevocation + "/approve"
+	}, map[string]any{"confirm_hostname": "x"}),
+	"POST /api/v1/revocation-requests/{id}/reject": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/revocation-requests/" + w.globexRevocation + "/reject"
+	}, map[string]any{"confirm_hostname": "x"}),
+	"POST /api/v1/revocation-requests/{id}/cancel": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/revocation-requests/" + w.globexRevocation + "/cancel"
+	}, map[string]any{"confirm_hostname": "x"}),
+
 	"GET /api/v1/devices/{id}/disk": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/disk" }, nil),
 	"POST /api/v1/devices/{id}/disk/recovery-key": itemFixture(func(w *isolationWorld) string {
 		return "/api/v1/devices/" + w.globexDevice + "/disk/recovery-key"
@@ -336,6 +362,10 @@ var listIsolationQueries = map[string][]url.Values{
 	// seedGlobexUpstream is carol's, never alice's.
 	"/api/v1/upstream-groups":       {{"q": {"globex-iso"}}, {"page_size": {"100"}}},
 	"/api/v1/devices/{id}/commands": {{"q": {"rotate"}}, {"type": {"rotate_admin_password"}, "status": {"pending", "delivered"}}},
+	"/api/v1/revocation-requests": {
+		{"q": {"globex-iso"}},
+		{"action": {"destroy"}, "status": {"requested"}, "page_size": {"100"}},
+	},
 }
 
 // currentLoginSettings returns acme's login settings as an update body (unchanged values).

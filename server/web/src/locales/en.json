@@ -172,7 +172,18 @@
       "tamper_protected_file_changed": "The device {target} found the protected file {file} changed",
       "tamper_local_admin_changed": "The device {target} found its local administrator account changed ({field})",
       "tamper_keyslot_changed": "The device {target} found the keyslots of its disk changed",
-      "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)"
+      "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
+      "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
+      "revocation_confirmed": "The device {target} confirmed that its disk keyslots are erased"
+    },
+    "revocation": {
+      "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
+      "approved": "{actor} approved destroying {hostname}",
+      "rejected": "{actor} rejected the request to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
+      "cancelled": "{actor} cancelled the request to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
+      "issued": "The {action, select, lock {lock} destroy {destroy} self_lock {self-lock} other {revocation}} of {hostname} was issued",
+      "issue_refused": "The revocation issuer refused to issue a revocation of {hostname} ({reason})",
+      "limit_exceeded": "The revocation issuer refused a revocation of {hostname}: a revocation limit was exceeded ({reason})"
     },
     "disk": {
       "recovery_key_revealed": "{actor} revealed the disk recovery key of {hostname}",

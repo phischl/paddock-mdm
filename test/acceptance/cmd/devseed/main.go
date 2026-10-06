@@ -91,6 +91,7 @@ func run() error {
 
 	for _, m := range []struct{ user, group string }{
 		{env.Alice, env.RoleGroup("acme", "admins")},
+		{env.Dave, env.RoleGroup("acme", "admins")},
 		{env.Bob, env.RoleGroup("acme", "auditors")},
 		{env.Carol, env.RoleGroup("globex", "admins")},
 	} {

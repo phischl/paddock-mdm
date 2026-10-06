@@ -178,6 +178,14 @@ func (d *Disk) confirmedEscrow(ctx context.Context, q *pgstore.Queries, rec Reco
 	}
 	s, err := q.LatestStoredEscrow(ctx, pgstore.LatestStoredEscrowParams{DeviceID: deviceID, Kind: kind, Generation: int32(generation)}) //nolint:gosec // bounded above
 	if db.IsNoRows(err) {
+		// After a Destroy the escrow is gone for good (plan M4c gate R2); before, it may still arrive.
+		destroyed, err := q.DeviceEscrowDestroyed(ctx, deviceID)
+		if err != nil {
+			return s, err
+		}
+		if destroyed {
+			return s, problem.NotFound.WithDetail("the device was destroyed; its escrow is deleted")
+		}
 		return s, problem.InvalidState.WithDetail("the device has no stored escrow of this kind and generation")
 	}
 	if err != nil {

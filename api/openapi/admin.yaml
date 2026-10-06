@@ -33,6 +33,7 @@ tags:
   - name: users
   - name: privileges
   - name: settings
+  - name: revocation
   - name: audit
   - name: platform
 paths:
@@ -1393,6 +1394,215 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/lock:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: lockDevice
+      tags: [revocation]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+        needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+        PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+        Requests a Lock: every keyslot of the device's encrypted root volume is erased and the device reboots; it
+        stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
+        the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
+        administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
+        open Lock, 409 invalid_state unless the device is active or quarantined.
+      x-paddock-audit: revocation.requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RevocationCreate" }
+      responses:
+        "201":
+          description: The request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevocationRequest" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/destroy:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: destroyDevice
+      tags: [revocation]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+        needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+        PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+        Requests a Destroy: a Lock whose escrowed header and recovery key are deleted before the token is issued, so
+        the device's data is unrecoverable. It waits for a second administrator (another account and another identity)
+        to approve it (two-person rule).
+      x-paddock-audit: revocation.requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RevocationCreate" }
+      responses:
+        "201":
+          description: The request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevocationRequest" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/revocation-requests:
+    get:
+      operationId: listRevocationRequests
+      tags: [revocation]
+      description: |
+        Roles: org_admin. The organization's Lock, Destroy and self-lock requests with their approvals (never the
+        step-up tokens). An issued request that the device has not confirmed yet is pending; issued_at tells for how
+        long.
+      x-paddock-list:
+        sort: [requested_at, status, action, hostname]
+        default_sort: -requested_at
+        search: [hostname, reason]
+        filters: [status, action, device_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/RevocationRequestSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/RevocationStatus" }
+        - name: action
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/RevocationAction" }
+        - name: device_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of revocation requests.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevocationRequestPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/revocation-requests/{id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: approveRevocationRequest
+      tags: [revocation]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+        needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+        PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+        The second approval of a Destroy; the caller must be another administrator than the requester, with another
+        identity (403 forbidden otherwise). 409 invalid_state unless the request waits for its approval.
+      x-paddock-audit: revocation.approved
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RevocationConfirm" }
+      responses:
+        "200":
+          description: The approved request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevocationRequest" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/revocation-requests/{id}/reject:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: rejectRevocationRequest
+      tags: [revocation]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+        needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+        PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+        Rejects a request that waits for its second approval. 409 invalid_state otherwise.
+      x-paddock-audit: revocation.rejected
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RevocationConfirm" }
+      responses:
+        "200":
+          description: The rejected request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevocationRequest" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/revocation-requests/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: cancelRevocationRequest
+      tags: [revocation]
+      description: |
+        Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
+        needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
+        PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
+        The requester cancels a request before it is issued (403 forbidden for anyone else). 409 invalid_state once
+        it was issued or closed.
+      x-paddock-audit: revocation.cancelled
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RevocationConfirm" }
+      responses:
+        "200":
+          description: The cancelled request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RevocationRequest" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/local-admin:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -1495,7 +1705,7 @@ paths:
       description: |
         Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns the newest stored
         recovery key of the device; confirm_hostname must equal the device's hostname. 409 invalid_state when none is
-        stored. Type it at the boot PIN prompt once the PIN attempts are used up (docs/operations/disk-recovery.md).
+        stored, 404 not_found once a Destroy of the device was issued. Type it at the boot PIN prompt once the PIN attempts are used up (docs/operations/disk-recovery.md).
         Responses are never cached.
       x-paddock-audit: disk.recovery_key_revealed
       parameters:
@@ -1527,7 +1737,8 @@ paths:
         Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns a stored LUKS header
         backup of the device, decrypted (the newest generation unless generation is given), as the file
         <hostname>-luks-header-<generation>.img for cryptsetup luksHeaderRestore; confirm_hostname must equal the
-        device's hostname. 409 invalid_state when no such generation is stored.
+        device's hostname. 409 invalid_state when no such generation is stored, 404 not_found once a Destroy of the
+        device was issued.
       x-paddock-audit: disk.header_downloaded
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -2285,6 +2496,14 @@ components:
         type: string
         enum: [issued_at, -issued_at, expires_at, -expires_at, type, -type, status, -status]
         default: -issued_at
+    RevocationRequestSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [requested_at, -requested_at, status, -status, action, -action, hostname, -hostname]
+        default: -requested_at
     DeviceStateFilter:
       name: state
       in: query
@@ -2933,6 +3152,72 @@ components:
           type: object
           additionalProperties: true
           description: Outcome details reported by the device.
+    RevocationAction:
+      type: string
+      enum: [lock, destroy, self_lock]
+    RevocationStatus:
+      type: string
+      enum: [requested, approved, issued, delivered, confirmed, failed, rejected, cancelled, expired]
+    RevocationCreate:
+      type: object
+      required: [confirm_hostname]
+      additionalProperties: false
+      properties:
+        confirm_hostname: { type: string, maxLength: 253 }
+        reason: { type: string, maxLength: 500, description: Why the device is revoked (shown to administrators). }
+    RevocationConfirm:
+      type: object
+      required: [confirm_hostname]
+      additionalProperties: false
+      properties:
+        confirm_hostname: { type: string, maxLength: 253 }
+    RevocationApproval:
+      type: object
+      required: [role, admin_id, username, approved_at]
+      properties:
+        role: { type: string, enum: [requester, approver] }
+        admin_id: { type: string, format: uuid }
+        username: { type: string }
+        approved_at: { type: string, format: date-time }
+    RevocationRequest:
+      type: object
+      required: [id, device_id, hostname, action, status, requested_at, reason, approvals]
+      properties:
+        id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        action: { $ref: "#/components/schemas/RevocationAction" }
+        status: { $ref: "#/components/schemas/RevocationStatus" }
+        requested_by: { type: string, format: uuid, description: The requesting administrator; absent for a self-lock. }
+        requested_by_username: { type: string }
+        requested_at: { type: string, format: date-time }
+        reason: { type: string }
+        approved_at: { type: string, format: date-time }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: The device refuses the token afterwards. }
+        delivered_at: { type: string, format: date-time }
+        confirmed_at: { type: string, format: date-time, description: When the device confirmed the erasure. }
+        finished_at: { type: string, format: date-time }
+        rejection: { type: string, description: "Why the revocation-issuer rejected or failed it, e.g. limit_admin_hour." }
+        result:
+          type: object
+          additionalProperties: true
+          description: 'The device''s confirmation, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}.'
+        approvals:
+          type: array
+          items: { $ref: "#/components/schemas/RevocationApproval" }
+    RevocationRequestPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/RevocationRequest" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     DeviceCommandPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

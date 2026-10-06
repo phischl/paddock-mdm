@@ -64,6 +64,20 @@ func StartPlain(t testing.TB, bucket string) *RustFS {
 	return r
 }
 
+// StartVersioned starts RustFS and creates bucket with versioning and without Object Lock, like paddock-escrow.
+func StartVersioned(t testing.TB, bucket string) *RustFS {
+	t.Helper()
+	ctx := context.Background()
+	r := StartPlain(t, bucket)
+	_, err := r.Root.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
+		Bucket: &bucket, VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+	})
+	if err != nil {
+		t.Fatalf("s3test: versioning: %v", err)
+	}
+	return r
+}
+
 func start(t testing.TB, bucket string) *RustFS {
 	t.Helper()
 	ctx := context.Background()

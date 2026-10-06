@@ -29,20 +29,22 @@ const commandLockKey = 0x7061646420636d64
 // Commands signs device commands with command-signing and publishes them to cmd:<device_id>, records their results
 // and expires them (plan M4a decisions 2 and 3). The worker's AppRole may sign with command-signing only.
 type Commands struct {
-	commands *app.DeviceCommands
-	pool     *db.OrgPool
-	platform *db.PlatformPool
-	cache    *devicecache.Cache
-	signer   commandsign.Signer
-	pause    time.Duration
-	interval time.Duration
-	now      func() time.Time
+	commands    *app.DeviceCommands
+	revocations *app.RevocationReports
+	pool        *db.OrgPool
+	platform    *db.PlatformPool
+	cache       *devicecache.Cache
+	signer      commandsign.Signer
+	pause       time.Duration
+	interval    time.Duration
+	now         func() time.Time
 }
 
-// NewCommands creates the command consumers and the command round.
-func NewCommands(commands *app.DeviceCommands, pool *db.OrgPool, platform *db.PlatformPool, cache *devicecache.Cache,
-	signer commandsign.Signer) *Commands {
-	return &Commands{commands: commands, pool: pool, platform: platform, cache: cache, signer: signer, pause: RetryPause,
+// NewCommands creates the command consumers and the command round; revocations handles the revocation tokens, which
+// travel like commands (plan M4c decision 10).
+func NewCommands(commands *app.DeviceCommands, revocations *app.RevocationReports, pool *db.OrgPool, platform *db.PlatformPool,
+	cache *devicecache.Cache, signer commandsign.Signer) *Commands {
+	return &Commands{commands: commands, revocations: revocations, pool: pool, platform: platform, cache: cache, signer: signer, pause: RetryPause,
 		interval: CommandInterval, now: time.Now}
 }
 
@@ -95,6 +97,12 @@ func (c *Commands) result(ctx context.Context, messageID string, body []byte) ou
 	if err := c.commands.Finish(ctx, res); err != nil {
 		slog.WarnContext(ctx, "recording command result failed; retrying", "command_id", res.CommandID, "error", err)
 		return retry
+	}
+	if confirmed, err := c.revocations.Finish(ctx, res); err != nil {
+		slog.WarnContext(ctx, "recording revocation result failed; retrying", "command_id", res.CommandID, "error", err)
+		return retry
+	} else if confirmed {
+		slog.InfoContext(ctx, "revocation confirmed by the device", "device_id", res.DeviceID, "request_id", res.CommandID, "status", res.Status)
 	}
 	// A finished command stays in Valkey only if this fails; the gateway answers its result from cres: anyway.
 	if err := c.cache.DeleteCommand(ctx, res.DeviceID, res.CommandID); err != nil {
@@ -162,6 +170,16 @@ func (c *Commands) roundOrg(ctx context.Context, org uuid.UUID) error {
 			return err
 		}
 		slog.InfoContext(ctx, "command expired", "organization_id", org, "device_id", e.DeviceID, "command_id", e.ID)
+	}
+	revocations, err := c.revocations.Expire(ctx, now)
+	if err != nil {
+		return err
+	}
+	for _, e := range revocations {
+		if err := c.cache.DeleteCommand(ctx, e.DeviceID, e.ID); err != nil {
+			return err
+		}
+		slog.InfoContext(ctx, "revocation expired", "organization_id", org, "device_id", e.DeviceID, "request_id", e.ID)
 	}
 	due, err := c.commands.Due(ctx, now)
 	if err != nil {

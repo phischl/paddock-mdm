@@ -18,6 +18,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   -v worker_pw="$(password PADDOCK_WORKER_PASSWORD)" \
   -v compiler_pw="$(password PADDOCK_COMPILER_PASSWORD)" \
   -v escrow_reader_pw="$(password PADDOCK_ESCROW_READER_PASSWORD)" \
+  -v revocation_pw="$(password PADDOCK_REVOCATION_PASSWORD)" \
   -v db="$POSTGRES_DB" <<'SQL'
 CREATE ROLE paddock_owner    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS PASSWORD :'owner_pw';
 CREATE ROLE paddock_api      LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'api_pw';
@@ -26,13 +27,14 @@ CREATE ROLE paddock_relay    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSR
 CREATE ROLE paddock_worker   LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'worker_pw';
 CREATE ROLE paddock_compiler LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'compiler_pw';
 CREATE ROLE paddock_escrow_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'escrow_reader_pw';
+CREATE ROLE paddock_revocation LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD :'revocation_pw';
 
 ALTER DATABASE :"db" OWNER TO paddock_owner;
 ALTER SCHEMA public OWNER TO paddock_owner;
 REVOKE ALL ON DATABASE :"db" FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"db" TO paddock_api, paddock_platform, paddock_relay, paddock_worker, paddock_compiler,
-  paddock_escrow_reader;
+  paddock_escrow_reader, paddock_revocation;
 GRANT USAGE ON SCHEMA public TO paddock_api, paddock_platform, paddock_relay, paddock_worker, paddock_compiler,
-  paddock_escrow_reader;
+  paddock_escrow_reader, paddock_revocation;
 SQL

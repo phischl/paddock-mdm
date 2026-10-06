@@ -49,6 +49,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	// Escrowed secrets are decrypted by the escrow-reader role only (plan M4b.1 decision 5).
 	escrowReaderURL := l.Required("PADDOCK_ESCROW_READER_URL")
 	escrowReaderToken := l.SecretFile("PADDOCK_ESCROW_READER_TOKEN_FILE")
+	revocationEnabled := config.RevocationEnabled(l)
 	oidcCfg := admin.OIDCConfig{
 		Issuer:       l.Required("PADDOCK_OIDC_ISSUER"),
 		ClientID:     l.Required("PADDOCK_OIDC_CLIENT_ID"),
@@ -148,6 +149,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:   app.NewAutoinstall(runner, orgPool, bundlesURL),
 		Disk:          app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
+		Revocations:   app.NewRevocations(runner, orgPool, stepUpTokens, revocationEnabled),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),

@@ -97,6 +97,15 @@ const (
 	CodeDiskHeaderDownloaded       Code = "disk.header_downloaded"
 
 	CodeDeviceRevocationTrustPinnedTOFU Code = "device.revocation_trust_pinned_tofu"
+	CodeRevocationRequested             Code = "revocation.requested"
+	CodeRevocationApproved              Code = "revocation.approved"
+	CodeRevocationRejected              Code = "revocation.rejected"
+	CodeRevocationCancelled             Code = "revocation.cancelled"
+	CodeRevocationIssued                Code = "revocation.issued"
+	CodeRevocationIssueRefused          Code = "revocation.issue_refused"
+	CodeRevocationLimitExceeded         Code = "revocation.limit_exceeded"
+	CodeDeviceEscrowDestroyed           Code = "device.escrow_destroyed"
+	CodeDeviceRevocationConfirmed       Code = "device.revocation_confirmed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -618,6 +627,65 @@ var registry = map[Code]Definition{
 		Description: "A device enrolled before revocation existed pinned the revocation-signing keys of the first bundle that carried them (trust on first use); re-enrolling the device replaces them with the keys of its enrollment configuration (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeRevocationRequested: {
+		Code: CodeRevocationRequested, Emitted: true,
+		Description: "An organization administrator requested a Lock or Destroy of a device after a step-up, typing its hostname; a Lock is approved with the request, a Destroy waits for a second administrator.",
+		Params:      []string{"action", "hostname", "request_id"},
+		Outcomes:    adminOutcomes,
+		Note:        "action is lock or destroy. denied with revocation_disabled while PADDOCK_REVOCATION_ENABLED is off, revocation_frozen while the administrator is frozen after a limit was exceeded.",
+	},
+	CodeRevocationApproved: {
+		Code: CodeRevocationApproved, Emitted: true,
+		Description: "A second organization administrator, with another account and another identity than the requester, approved a Destroy after a step-up (two-person rule).",
+		Params:      []string{"action", "hostname", "request_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeRevocationRejected: {
+		Code: CodeRevocationRejected, Emitted: true,
+		Description: "An organization administrator rejected a revocation request that waited for its second approval.",
+		Params:      []string{"action", "hostname", "request_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeRevocationCancelled: {
+		Code: CodeRevocationCancelled, Emitted: true,
+		Description: "The requester cancelled a revocation request before it was issued.",
+		Params:      []string{"action", "hostname", "request_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeRevocationIssued: {
+		Code: CodeRevocationIssued, Emitted: true,
+		Description: "The revocation-issuer verified the step-up proofs and the limits of a Lock or a self-lock and signed the device-bound revocation token (actor: system).",
+		Params:      []string{"action", "hostname", "request_id", "requested_by", "expires_at"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodeDeviceEscrowDestroyed: {
+		Code: CodeDeviceEscrowDestroyed, Emitted: true,
+		Description: "The revocation-issuer verified a Destroy, deleted every escrowed LUKS header object (all versions) and every recovery key and header generation of the device, and signed the Destroy token in the same transaction; the device's data is unrecoverable once it erased its keyslots (actor: system).",
+		Params:      []string{"action", "hostname", "request_id", "requested_by", "approved_by", "expires_at", "objects", "escrows"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeUnknown},
+		Note:        "failure leaves the request approved; the issuer retries it.",
+	},
+	CodeRevocationLimitExceeded: {
+		Code: CodeRevocationLimitExceeded, Emitted: true,
+		Description: "The revocation-issuer refused a revocation because it exceeded a limit of ADR 0014 (per administrator 3 per hour and 10 per 24 h, per organization 20 per 24 h); the request is rejected, an alert is raised and the requester's revocations are frozen for 24 h (actor: system).",
+		Params:      []string{"action", "hostname", "request_id", "requested_by", "reason", "frozen_until"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "reason is limit_admin_hour, limit_admin_day or limit_organization_day.",
+	},
+	CodeRevocationIssueRefused: {
+		Code: CodeRevocationIssueRefused, Emitted: true,
+		Description: "The revocation-issuer refused to sign a revocation: a step-up proof failed its checks (signature, issuer, audience, subject, auth_time, MFA, reuse), the approvals were not two distinct administrators, the requester is frozen, or revocation is disabled; the request is rejected (actor: system).",
+		Params:      []string{"action", "hostname", "request_id", "requested_by", "reason"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "reason is stepup_invalid, approvals_invalid, not_org_admin, admin_frozen, revocation_disabled or device_unavailable.",
+	},
+	CodeDeviceRevocationConfirmed: {
+		Code: CodeDeviceRevocationConfirmed, Emitted: true,
+		Description: "A device confirmed a revocation before its forced reboot: every keyslot of its encrypted root volume is erased (actor: the device).",
+		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "status"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "status failed means the device reported that the erasure did not complete.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

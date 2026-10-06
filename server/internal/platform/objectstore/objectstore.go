@@ -101,6 +101,37 @@ func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
+// DeleteAllVersions deletes every version and delete marker of every object below prefix in a versioned bucket and
+// returns how many it deleted. Nothing below prefix is recoverable afterwards (crypto-shredding of a Destroy, plan
+// M4c decision 9).
+func (s *Store) DeleteAllVersions(ctx context.Context, prefix string) (int, error) {
+	n := 0
+	for {
+		page, err := s.client.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{Bucket: &s.bucket, Prefix: &prefix})
+		if err != nil {
+			return n, err
+		}
+		type version struct{ key, id *string }
+		var all []version
+		for _, v := range page.Versions {
+			all = append(all, version{v.Key, v.VersionId})
+		}
+		for _, m := range page.DeleteMarkers {
+			all = append(all, version{m.Key, m.VersionId})
+		}
+		for _, v := range all {
+			if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: v.key, VersionId: v.id}); err != nil {
+				return n, err
+			}
+			n++
+		}
+		// The deleted versions are gone from the next listing, which therefore starts at the beginning again.
+		if !aws.ToBool(page.IsTruncated) {
+			return n, nil
+		}
+	}
+}
+
 // GetIfExists reads the current version of an object; found is false if it does not exist.
 func (s *Store) GetIfExists(ctx context.Context, key string) (data []byte, found bool, err error) {
 	data, err = s.Get(ctx, key)

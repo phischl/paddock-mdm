@@ -1,6 +1,7 @@
 // Package stepupproof checks and keeps the ID tokens of step-up authentications (plan M4b.1 decisions 6–8): their
 // signature against the issuer's cached JWKS and their claims, the raw token in Valkey for the decryptions of the
-// session that ran the step-up, and a use counter per token.
+// session that ran the step-up, and a use counter per token. The revocation-issuer checks the tokens of revocation
+// approvals against the time of the approval instead of its own clock (plan M4c decision 8).
 package stepupproof
 
 import (
@@ -39,6 +40,7 @@ type Verifier struct {
 
 	mu       sync.RWMutex
 	verifier *oidc.IDTokenVerifier
+	approval *oidc.IDTokenVerifier // without the expiry check: an approval is verified after the token expired
 }
 
 // NewVerifier creates a verifier; call Discover to connect. now is the clock (time.Now in production).
@@ -61,6 +63,7 @@ func (v *Verifier) Discover(ctx context.Context) {
 		if err == nil {
 			v.mu.Lock()
 			v.verifier = provider.Verifier(&oidc.Config{ClientID: v.clientID, Now: v.now})
+			v.approval = provider.Verifier(&oidc.Config{ClientID: v.clientID, SkipExpiryCheck: true})
 			v.mu.Unlock()
 			slog.InfoContext(ctx, "step-up issuer discovered", "issuer", v.issuer)
 			return
@@ -79,6 +82,33 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	v.mu.RLock()
 	verifier := v.verifier
 	v.mu.RUnlock()
+	return v.verify(ctx, verifier, raw, v.now())
+}
+
+// MaxApprovalAge bounds how long after its authentication a step-up token can still prove a revocation approval,
+// whatever approval time the database claims.
+const MaxApprovalAge = 24 * time.Hour
+
+// VerifyApproval checks the token of a revocation approval recorded at approvedAt: signature, iss, aud, sub, jti and
+// MFA as Verify, an auth_time at most the window before approvedAt, an approvedAt that is not in the future, and an
+// auth_time at most MaxApprovalAge ago. The token's own expiry is not checked: the issuer may verify an approval
+// after it (plan M4c decision 8). Every refusal wraps ErrInvalid.
+func (v *Verifier) VerifyApproval(ctx context.Context, raw string, approvedAt time.Time) (Claims, error) {
+	v.mu.RLock()
+	verifier := v.approval
+	v.mu.RUnlock()
+	c, err := v.verify(ctx, verifier, raw, approvedAt)
+	if err != nil {
+		return c, err
+	}
+	now := v.now()
+	if approvedAt.After(now.Add(clockSkew)) || now.Sub(c.AuthTime) > MaxApprovalAge {
+		return c, fmt.Errorf("%w: approved in the future or authenticated more than %s ago", ErrInvalid, MaxApprovalAge)
+	}
+	return c, nil
+}
+
+func (v *Verifier) verify(ctx context.Context, verifier *oidc.IDTokenVerifier, raw string, at time.Time) (Claims, error) {
 	if verifier == nil {
 		return Claims{}, errors.New("stepupproof: issuer not discovered")
 	}
@@ -95,11 +125,12 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 		return Claims{}, fmt.Errorf("%w: claims: %v", ErrInvalid, err)
 	}
 	out := Claims{Subject: idt.Subject, JTI: c.JTI, AuthTime: time.Unix(c.AuthTime, 0), Expiry: idt.Expiry}
-	return out, v.check(out, c.AuthTime, c.AMR)
+	return out, v.check(out, c.AuthTime, c.AMR, at)
 }
 
-func (v *Verifier) check(c Claims, authTime int64, amr []string) error {
-	age := v.now().Sub(c.AuthTime)
+// check verifies the claims against the time at that the step-up must have been fresh.
+func (v *Verifier) check(c Claims, authTime int64, amr []string, at time.Time) error {
+	age := at.Sub(c.AuthTime)
 	switch {
 	case c.Subject == "" || c.JTI == "":
 		return fmt.Errorf("%w: sub or jti missing", ErrInvalid)

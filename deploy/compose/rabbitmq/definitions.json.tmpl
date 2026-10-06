@@ -6,14 +6,16 @@
     { "name": "audit_writer", "password": "@AUDIT_WRITER_PASSWORD@", "tags": [] },
     { "name": "gateway", "password": "@GATEWAY_PASSWORD@", "tags": [] },
     { "name": "worker", "password": "@WORKER_PASSWORD@", "tags": [] },
-    { "name": "compiler", "password": "@COMPILER_PASSWORD@", "tags": [] }
+    { "name": "compiler", "password": "@COMPILER_PASSWORD@", "tags": [] },
+    { "name": "revocation_issuer", "password": "@REVOCATION_ISSUER_PASSWORD@", "tags": [] }
   ],
   "permissions": [
     { "user": "provisioner", "vhost": "paddock", "configure": ".*", "write": ".*", "read": ".*" },
-    { "user": "relay", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.(audit|state|command)$", "read": "^$" },
+    { "user": "relay", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.(audit|state|command|revocation)$", "read": "^$" },
     { "user": "audit_writer", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^audit\\.writer$" },
     { "user": "gateway", "vhost": "paddock", "configure": "^$", "write": "^paddock\\.ingest$", "read": "^$" },
     { "user": "worker", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^(ingest\\.(enroll|heartbeat|event|command_result|escrow)|command\\.issued)$" },
-    { "user": "compiler", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^state\\.(p[0-9]{2}|priority)$" }
+    { "user": "compiler", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^state\\.(p[0-9]{2}|priority)$" },
+    { "user": "revocation_issuer", "vhost": "paddock", "configure": "^$", "write": "^$", "read": "^revocation\\.approved$" }
   ]
 }

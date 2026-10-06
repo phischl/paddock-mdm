@@ -34,7 +34,8 @@ fi
 
 # Control-plane PostgreSQL
 secret postgres_superuser_password
-for role in paddock_owner paddock_api paddock_platform paddock_relay paddock_worker paddock_compiler paddock_escrow_reader; do
+for role in paddock_owner paddock_api paddock_platform paddock_relay paddock_worker paddock_compiler paddock_escrow_reader \
+  paddock_revocation; do
   secret "db_${role}_password"
   secret "db_${role}_url" "postgres://${role}:$(read_secret "db_${role}_password")@postgres:5432/paddock?sslmode=disable"
 done
@@ -72,7 +73,8 @@ secret rustfs_artifacts_api_access_key
 secret rustfs_artifacts_api_secret_key
 # Disk escrow (plan M4b decision 13): the worker verifies uploaded headers, the api reads them for a recovery; the
 # gateway presigns header uploads with its bundles credential.
-for role in worker api; do
+# The revocation-issuer deletes every header version of a destroyed device (plan M4c decision 9).
+for role in worker api revocation; do
   secret "rustfs_escrow_${role}_access_key"
   secret "rustfs_escrow_${role}_secret_key"
 done
@@ -88,7 +90,7 @@ secret valkey/auth.conf "requirepass $(read_secret valkey_password)"
 
 # RabbitMQ. The definitions file is derived from the passwords and the template, so it is rewritten whenever the
 # template gains users; RabbitMQ imports it again on the next start (definitions.skip_if_unchanged).
-for user in provisioner relay audit_writer gateway worker compiler; do
+for user in provisioner relay audit_writer gateway worker compiler revocation_issuer; do
   secret "rabbitmq_${user}_password"
 done
 mkdir -p "$SECRETS_DIR/rabbitmq"
@@ -98,6 +100,7 @@ definitions="$(sed -e "s|@PROVISIONER_PASSWORD@|$(read_secret rabbitmq_provision
     -e "s|@GATEWAY_PASSWORD@|$(read_secret rabbitmq_gateway_password)|" \
     -e "s|@WORKER_PASSWORD@|$(read_secret rabbitmq_worker_password)|" \
     -e "s|@COMPILER_PASSWORD@|$(read_secret rabbitmq_compiler_password)|" \
+    -e "s|@REVOCATION_ISSUER_PASSWORD@|$(read_secret rabbitmq_revocation_issuer_password)|" \
     "$COMPOSE_DIR/rabbitmq/definitions.json.tmpl")"
 if [[ "$definitions" != "$(cat "$SECRETS_DIR/rabbitmq/definitions.json" 2>/dev/null)" ]]; then
   printf '%s\n' "$definitions" >"$SECRETS_DIR/rabbitmq/definitions.json"
@@ -107,7 +110,7 @@ fi
 
 # Development test users (Authentik) and the keys of their TOTP authenticators (hex, 20 bytes), which `make dev-seed`
 # installs so that the acceptance gates can complete step-up authentications (plan M4a decision 8).
-for user in platform_admin alice bob carol; do
+for user in platform_admin alice bob carol dave; do
   secret "dev_${user}_password"
   secret "dev_${user}_totp_key" "$(head -c 20 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 done
@@ -116,7 +119,8 @@ done
 [[ -e "$SECRETS_DIR/caddy-root.crt" ]] || { : >"$SECRETS_DIR/caddy-root.crt"; chmod 666 "$SECRETS_DIR/caddy-root.crt"; }
 
 # AppRole credential directories are filled by openbao-bootstrap.sh; they must exist for the bind mounts.
-for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader; do
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader \
+  paddock-revocation-issuer; do
   mkdir -p "$SECRETS_DIR/approle/$role"
   for f in role_id secret_id; do
     [[ -e "$SECRETS_DIR/approle/$role/$f" ]] || { : >"$SECRETS_DIR/approle/$role/$f"; chmod 644 "$SECRETS_DIR/approle/$role/$f"; }

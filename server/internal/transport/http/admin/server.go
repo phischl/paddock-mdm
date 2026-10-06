@@ -35,6 +35,7 @@ type Deps struct {
 	LocalAdmin    *app.LocalAdmin
 	Autoinstall   *app.Autoinstall
 	Disk          *app.Disk
+	Revocations   *app.Revocations
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -107,6 +108,11 @@ var privileged = map[string]struct {
 	"POST /api/v1/autoinstall":                                             {app.ScopeOrg, app.SpecAutoinstallGenerate},
 	"POST /api/v1/devices/{id}/disk/recovery-key":                          {app.ScopeOrg, app.SpecDiskRecoveryKeyReveal},
 	"POST /api/v1/devices/{id}/disk/header":                                {app.ScopeOrg, app.SpecDiskHeaderDownload},
+	"POST /api/v1/devices/{id}/lock":                                       {app.ScopeOrg, app.SpecRevocationRequest},
+	"POST /api/v1/devices/{id}/destroy":                                    {app.ScopeOrg, app.SpecRevocationRequest},
+	"POST /api/v1/revocation-requests/{id}/approve":                        {app.ScopeOrg, app.SpecRevocationApprove},
+	"POST /api/v1/revocation-requests/{id}/reject":                         {app.ScopeOrg, app.SpecRevocationReject},
+	"POST /api/v1/revocation-requests/{id}/cancel":                         {app.ScopeOrg, app.SpecRevocationCancel},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -129,7 +135,7 @@ func NewHandler(d Deps) http.Handler {
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
-		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, now: d.Now,
+		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

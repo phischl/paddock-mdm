@@ -331,6 +331,46 @@ type ProfileAssignment struct {
 	CreatedAt      time.Time
 }
 
+type RevocationApproval struct {
+	RequestID      uuid.UUID
+	OrganizationID uuid.UUID
+	Role           string
+	AdminID        uuid.UUID
+	Subject        string
+	StepupJti      string
+	StepupIDToken  *string
+	ApprovedAt     time.Time
+}
+
+type RevocationFreeze struct {
+	OrganizationID uuid.UUID
+	AdminID        uuid.UUID
+	RequestID      uuid.UUID
+	FrozenAt       time.Time
+	FrozenUntil    time.Time
+}
+
+type RevocationRequest struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Action         string
+	Status         string
+	RequestedBy    uuid.NullUUID
+	RequestedAt    time.Time
+	Reason         string
+	ApprovedAt     *time.Time
+	IssuedAt       *time.Time
+	ExpiresAt      *time.Time
+	Envelope       []byte
+	PeriodDays     *int32
+	DeliveredAt    *time.Time
+	ConfirmedAt    *time.Time
+	FinishedAt     *time.Time
+	Rejection      *string
+	Result         json.RawMessage
+}
+
 type UserGroup struct {
 	ID                  uuid.UUID
 	OrganizationID      uuid.UUID

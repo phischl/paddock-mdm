@@ -31,6 +31,11 @@ const (
 	// signs and delivers the commands (plan M4a decision 2).
 	QueueCommandIssued = "command.issued"
 	CommandIssuedKey   = "issued"
+	// QueueRevocationApproved receives the revocation.approved messages of the outbox; the revocation-issuer, its
+	// single active consumer, verifies and issues them (plan M4c decision 8).
+	ExchangeRevocation      = "paddock.revocation"
+	QueueRevocationApproved = "revocation.approved"
+	RevocationApprovedKey   = "approved"
 )
 
 // Ingest kinds (M2a, M4a); each has the queue ingest.<kind> and routing keys ingest.<kind>.<organization_id>.
@@ -277,7 +282,8 @@ func Provision(ctx context.Context, cfg Config, o ProvisionOptions) error {
 
 	exchanges := []struct{ name, kind string }{
 		{ExchangeAudit, amqp.ExchangeTopic}, {ExchangeIngest, amqp.ExchangeTopic},
-		{ExchangeState, amqp.ExchangeDirect}, {ExchangeCommand, amqp.ExchangeDirect}, {ExchangeDLX, amqp.ExchangeTopic},
+		{ExchangeState, amqp.ExchangeDirect}, {ExchangeCommand, amqp.ExchangeDirect},
+		{ExchangeRevocation, amqp.ExchangeDirect}, {ExchangeDLX, amqp.ExchangeTopic},
 	}
 	for _, ex := range exchanges {
 		if err := ch.ExchangeDeclare(ex.name, ex.kind, true, false, false, false, nil); err != nil {
@@ -317,7 +323,9 @@ func topology(o ProvisionOptions) []queueSpec {
 			args: amqp.Table{"x-single-active-consumer": true},
 		})
 	}
-	return append(qs, queueSpec{name: QueueCommandIssued, exchange: ExchangeCommand, keys: []string{CommandIssuedKey}})
+	return append(qs, queueSpec{name: QueueCommandIssued, exchange: ExchangeCommand, keys: []string{CommandIssuedKey}},
+		queueSpec{name: QueueRevocationApproved, exchange: ExchangeRevocation, keys: []string{RevocationApprovedKey},
+			args: amqp.Table{"x-single-active-consumer": true}})
 }
 
 func declare(ch *amqp.Channel, q queueSpec) error {
