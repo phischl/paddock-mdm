@@ -51,8 +51,11 @@ type System interface {
 	PackageInstalled(name string) bool
 	// PackageVersion returns the version of an installed package, "" if it is not installed.
 	PackageVersion(name string) string
-	// AptGet runs apt-get non-interactively (DEBIAN_FRONTEND=noninteractive); it may take minutes.
+	// AptGet runs apt-get non-interactively (DEBIAN_FRONTEND=noninteractive); it may take minutes. A run killed at
+	// PackageTimeout returns an error wrapping context.DeadlineExceeded.
 	AptGet(ctx context.Context, args ...string) (output string, exit int, err error)
+	// Dpkg runs dpkg like AptGet, e.g. to finish an interrupted installation (--configure -a).
+	Dpkg(ctx context.Context, args ...string) (output string, exit int, err error)
 	// Loginctl runs loginctl.
 	Loginctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	// Getent looks key up in an NSS database (passwd, group); exit 2 means not found.

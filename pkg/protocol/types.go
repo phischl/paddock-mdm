@@ -259,6 +259,8 @@ type (
 	LoginApplyFailed struct {
 		Stage   string `json:"stage"`
 		Message string `json:"message"`
+		// Reason classifies some failures, e.g. LoginFailureTimeout of stage apt.
+		Reason string `json:"reason,omitempty"`
 	}
 	// UserLockApplied: a newly locked user is blocked on the device and its sessions were locked or terminated.
 	UserLockApplied struct {
@@ -301,6 +303,9 @@ type (
 		File string `json:"file"`
 	}
 )
+
+// LoginFailureTimeout is the Reason of a package operation the agent killed at its timeout (plan M4b.1 step 6).
+const LoginFailureTimeout = "timeout"
 
 // Stages of LoginApplyFailed.
 const (

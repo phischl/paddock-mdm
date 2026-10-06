@@ -10,8 +10,9 @@ At the first bundle with login management (agents report bundle schema 2), the a
 
 1. writes `/etc/himmelblau/himmelblau.conf` (step 2) before it installs the packages: their installation starts
    `himmelblaud`, and `himmelblau-sshd-config` restarts sshd, which `himmelblaud` orders after itself; without its
-   configuration `himmelblaud` fails in a restart loop that keeps sshd down and the installation waiting. The file is
-   removed again if the installation fails. It then installs Himmelblau `PADDOCK_HIMMELBLAU_VERSION` (setting of
+   configuration `himmelblaud` fails in a restart loop that keeps sshd down and the installation waiting. No
+   Himmelblau package ships the file. It is removed again if the installation fails, but kept after a timeout, which
+   may leave the packages half configured. It then installs Himmelblau `PADDOCK_HIMMELBLAU_VERSION` (setting of
    `paddock-compiler`, default `4.0.4`) from the official repository
    `https://packages.himmelblau-idm.org/stable/<version>/deb/ubuntu<release>/`. The repository signing key is built
    into the agent (fingerprint `E87F D8D4 63A5 E481 4B9C DBA9 0CC0 D400 2C42 5E03`) and written to
@@ -19,7 +20,9 @@ At the first bundle with login management (agents report bundle schema 2), the a
    source is updated; if the installation then fails on a dependency (stale package lists of the other sources), the
    agent runs one `apt-get update` of every source and tries once more. apt waits up to 10 minutes for a dpkg lock
    held by unattended upgrades. A failure is reported as `device.login_apply_failed` (stage `apt`) and retried at
-   every drift pass;
+   every drift pass. Every `apt-get` and `dpkg` run is killed with its process group after 15 minutes (reason
+   `timeout`); the next attempt waits 15 minutes, doubling up to 4 hours, and first finishes the interrupted
+   installation with `dpkg --configure -a`;
 2. writes `/etc/himmelblau/himmelblau.conf` (issuer and client of the organization's device application, the device's
    allow list `pam_allow_groups`, Hello PIN settings, no console password login, the fixed UID range
    `idmap_range = 200000-999999999` — sudo-rs cannot handle longer numeric users, and changing the range would give

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -142,15 +143,52 @@ func (o OS) PackageVersion(name string) string {
 	return strings.TrimSpace(out)
 }
 
-// aptTimeout bounds one apt-get run; apt itself waits up to 10 minutes for the dpkg lock (plan M3b risk R1).
-const aptTimeout = 30 * time.Minute
+// PackageTimeout bounds one apt-get or dpkg run, including the 10 minutes apt waits for the dpkg lock (plan M3b risk
+// R1); a run that takes longer is killed with its process group (plan M4b.1 step 6).
+const PackageTimeout = 15 * time.Minute
 
 // AptGet implements System.
 func (o OS) AptGet(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {
 		return "", -1, errTestRoot
 	}
-	return commandEnv(ctx, aptTimeout, []string{"DEBIAN_FRONTEND=noninteractive"}, "apt-get", args...)
+	return packageCommand(ctx, PackageTimeout, "apt-get", args...)
+}
+
+// Dpkg implements System.
+func (o OS) Dpkg(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return packageCommand(ctx, PackageTimeout, "dpkg", args...)
+}
+
+// packageCommand runs a package tool non-interactively in a process group of its own and kills the whole group at
+// timeout: maintainer scripts must not outlive a run the agent gave up on. A timeout is an error that wraps
+// context.DeadlineExceeded.
+func packageCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (string, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed package tools and arguments
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NOTIFY_SOCKET=") }),
+		"DEBIAN_FRONTEND=noninteractive")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 10 * time.Second // children that inherited the output pipes are gone with the group
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return out.String(), -1, fmt.Errorf("%s: %w", name, ctx.Err())
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return out.String(), exit.ExitCode(), nil
+	}
+	if err != nil {
+		return "", -1, err
+	}
+	return out.String(), 0, nil
 }
 
 // Loginctl implements System.

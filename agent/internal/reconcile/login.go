@@ -66,6 +66,12 @@ type Login struct {
 	// pass.
 	lastFailure string
 	pamBroken   bool
+	// Now is the clock of the installation back-off (nil: time.Now). After a package installation timed out,
+	// aptRetryAt is the earliest next attempt and aptTimeoutErr its error, reported meanwhile.
+	Now           func() time.Time
+	aptTimeouts   int
+	aptRetryAt    time.Time
+	aptTimeoutErr error
 }
 
 // Type implements Reconciler.
@@ -176,26 +182,13 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	wasSuspended := suspendedConf(l.read(HimmelblauConf))
 	confWritten := false
 	if !l.installed(s.Himmelblau.PackageVersion) {
-		// The configuration comes first: the packages start himmelblaud, and himmelblau-sshd-config restarts sshd,
-		// which himmelblaud orders after itself (Before=sshd.service). Without its configuration himmelblaud fails in
-		// a restart loop, sshd's start waits behind it, and the installation waits for sshd: SSH stays down and the
-		// installation never ends (plan M4b.1 step 6). dpkg keeps the file (--force-confold); a failed installation
-		// takes it back, so there is no configuration without the package.
-		previous, _, readErr := l.Sys.ReadFile(HimmelblauConf)
-		if !l.fileIs(HimmelblauConf, st.wantConf) {
-			if err := l.Sys.WriteFileAtomic(HimmelblauConf, st.wantConf, 0o644, 0, 0); err != nil {
-				return l.fail(r.ID, protocol.LoginStageConfig, err)
-			}
-			confWritten = true
+		var installed bool
+		installed, confWritten, aptErr = l.installPackages(ctx, s.Himmelblau.PackageVersion, st.wantConf)
+		if errors.Is(aptErr, errConfig) {
+			return l.fail(r.ID, protocol.LoginStageConfig, aptErr)
 		}
-		aptErr = l.install(ctx, s.Himmelblau.PackageVersion)
-		switch {
-		case aptErr == nil:
+		if installed {
 			changed = append(changed, "package")
-		case confWritten && readErr == nil:
-			aptErr = errors.Join(aptErr, l.Sys.WriteFileAtomic(HimmelblauConf, previous, 0o644, 0, 0))
-		case confWritten:
-			aptErr = errors.Join(aptErr, l.Sys.Remove(HimmelblauConf))
 		}
 	}
 	wasDenied := denied(l.read(DenyList))
@@ -240,11 +233,16 @@ func (l *Login) Apply(ctx context.Context, r bundle.Resource) Result {
 	return Result{ID: r.ID, Status: Changed}
 }
 
-// fail reports login.apply_failed once per distinct failure and returns the error result.
+// fail reports login.apply_failed once per distinct failure and returns the error result. A package operation
+// killed at its timeout has reason timeout.
 func (l *Login) fail(id, stage string, err error) Result {
 	if key := stage + ": " + err.Error(); key != l.lastFailure {
 		l.lastFailure = key
-		l.Events.emit(protocol.EventLoginApplyFailed, protocol.LoginApplyFailed{Stage: stage, Message: err.Error()})
+		ev := protocol.LoginApplyFailed{Stage: stage, Message: err.Error()}
+		if errors.Is(err, context.DeadlineExceeded) {
+			ev.Reason = protocol.LoginFailureTimeout
+		}
+		l.Events.emit(protocol.EventLoginApplyFailed, ev)
 	}
 	return errorResult(id, fmt.Errorf("%s: %w", stage, err))
 }
@@ -318,6 +316,61 @@ func pamLines(data []byte) []string {
 	return out
 }
 
+// errConfig marks a failure to write the configuration before the installation (stage config).
+var errConfig = errors.New("write the configuration")
+
+// aptBackoffMax bounds the wait after package installations that timed out; the first wait is PackageTimeout and
+// every further timeout doubles it.
+const aptBackoffMax = 4 * time.Hour
+
+// installPackages writes the configuration and installs the packages. The configuration comes first: the packages
+// start himmelblaud, and himmelblau-sshd-config restarts sshd, which himmelblaud orders after itself
+// (Before=sshd.service). Without its configuration himmelblaud fails in a restart loop, sshd's start waits behind it,
+// and the installation waits for sshd: SSH stays down and the installation never ends (plan M4b.1 step 6). No
+// Himmelblau package ships the file, so dpkg leaves it alone. A failed installation takes it back, so there is no
+// configuration without the package — except after a timeout, which may leave the packages half configured and their
+// maintainer scripts in need of it. After a timeout the installation waits for a back-off before it is tried again.
+func (l *Login) installPackages(ctx context.Context, version string, conf []byte) (installed, confWritten bool, err error) {
+	now := l.now()
+	if now.Before(l.aptRetryAt) {
+		return false, false, l.aptTimeoutErr
+	}
+	previous, _, readErr := l.Sys.ReadFile(HimmelblauConf)
+	if !l.fileIs(HimmelblauConf, conf) {
+		if err := l.Sys.WriteFileAtomic(HimmelblauConf, conf, 0o644, 0, 0); err != nil {
+			return false, false, fmt.Errorf("%w: %w", errConfig, err)
+		}
+		confWritten = true
+	}
+	err = l.install(ctx, version)
+	switch {
+	case err == nil:
+		l.aptTimeouts, l.aptRetryAt, l.aptTimeoutErr = 0, time.Time{}, nil
+		return true, confWritten, nil
+	case errors.Is(err, context.DeadlineExceeded):
+		backoff := aptBackoffMax
+		if l.aptTimeouts < 4 {
+			backoff = min(PackageTimeout<<l.aptTimeouts, aptBackoffMax)
+		}
+		l.aptTimeouts++
+		l.aptRetryAt = now.Add(backoff)
+		l.aptTimeoutErr = fmt.Errorf("killed after %s, next attempt in %s: %w", PackageTimeout, backoff, err)
+		return false, confWritten, l.aptTimeoutErr
+	case confWritten && readErr == nil:
+		return false, confWritten, errors.Join(err, l.Sys.WriteFileAtomic(HimmelblauConf, previous, 0o644, 0, 0))
+	case confWritten:
+		return false, confWritten, errors.Join(err, l.Sys.Remove(HimmelblauConf))
+	}
+	return false, confWritten, err
+}
+
+func (l *Login) now() time.Time {
+	if l.Now != nil {
+		return l.Now()
+	}
+	return time.Now()
+}
+
 // installed reports whether every Himmelblau package is installed in version (Debian versions "<version>-…").
 func (l *Login) installed(version string) bool {
 	for _, p := range himmelblauPackages {
@@ -352,6 +405,12 @@ func (l *Login) install(ctx context.Context, version string) error {
 	args := append([]string{"install", "-y", "-q", "-o", "DPkg::Lock::Timeout=600", "-o", "Dpkg::Options::=--force-confdef",
 		"-o", "Dpkg::Options::=--force-confold"}, himmelblauPackages...)
 	out, err := l.apt(ctx, args...)
+	if err != nil && strings.Contains(out, "dpkg was interrupted") {
+		// An installation killed at its timeout: dpkg finishes it first.
+		if _, err = l.packageRun(ctx, "dpkg", l.Sys.Dpkg, "--configure", "-a"); err == nil {
+			out, err = l.apt(ctx, args...)
+		}
+	}
 	if err != nil && dependencyFailure(out) {
 		if _, err = l.apt(ctx, "update", "-q", "-o", "DPkg::Lock::Timeout=600"); err == nil {
 			_, err = l.apt(ctx, args...)
@@ -368,12 +427,18 @@ func (l *Login) install(ctx context.Context, version string) error {
 
 // apt runs apt-get and returns its output; a non-zero exit is an error with the last output line.
 func (l *Login) apt(ctx context.Context, args ...string) (string, error) {
-	out, exit, err := l.Sys.AptGet(ctx, args...)
+	return l.packageRun(ctx, "apt-get", l.Sys.AptGet, args...)
+}
+
+// packageRun runs a package tool (System.AptGet or System.Dpkg); a non-zero exit is an error with the last output
+// line, a timeout an error wrapping context.DeadlineExceeded.
+func (l *Login) packageRun(ctx context.Context, name string, tool func(context.Context, ...string) (string, int, error), args ...string) (string, error) {
+	out, exit, err := tool(ctx, args...)
 	if err != nil {
-		return out, fmt.Errorf("apt-get %s: %w", args[0], err)
+		return out, fmt.Errorf("%s %s: %w", name, args[0], err)
 	}
 	if exit != 0 {
-		return out, fmt.Errorf("apt-get %s: exit %d: %s", args[0], exit, lastLine(out))
+		return out, fmt.Errorf("%s %s: exit %d: %s", name, args[0], exit, lastLine(out))
 	}
 	return out, nil
 }

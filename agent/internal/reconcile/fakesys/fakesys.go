@@ -46,6 +46,10 @@ type System struct {
 	// StaleLists makes apt-get install fail on an unmet dependency until an apt-get update of every source (not
 	// limited with Dir::Etc::sourceparts=-) refreshed the package lists.
 	StaleLists bool
+	// AptTimeout makes apt-get install time out (an error wrapping context.DeadlineExceeded) and leaves dpkg
+	// interrupted: every later apt-get install fails until dpkg --configure -a.
+	AptTimeout      bool
+	DpkgInterrupted bool
 	// Sessions are the logind sessions loginctl lists.
 	Sessions []Session
 	// Passwd are the users getent passwd resolves (name → UID); Members the members of groups getent group lists.
@@ -244,6 +248,13 @@ func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) 
 	}
 	cmd := "apt-get " + strings.Join(words, " ")
 	s.Calls = append(s.Calls, cmd)
+	if len(words) > 0 && words[0] == "install" && s.AptTimeout {
+		s.DpkgInterrupted = true
+		return "Setting up himmelblau-sshd-config ...\n", -1, fmt.Errorf("apt-get: %w", context.DeadlineExceeded)
+	}
+	if len(words) > 0 && words[0] == "install" && s.DpkgInterrupted {
+		return "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.\n", 100, nil
+	}
 	if strings.HasPrefix(s.FailCmd, "apt-get") && strings.HasPrefix(cmd, s.FailCmd) {
 		return "E: Could not get lock /var/lib/dpkg/lock-frontend\n", 100, nil
 	}
@@ -259,6 +270,17 @@ func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) 
 			s.Packages[p] = true
 			s.Versions[p] = s.AptVersion
 		}
+	}
+	return "", 0, nil
+}
+
+// Dpkg implements reconcile.System: --configure -a finishes an interrupted installation.
+func (s *System) Dpkg(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Calls = append(s.Calls, "dpkg "+strings.Join(args, " "))
+	if slices.Equal(args, []string{"--configure", "-a"}) {
+		s.DpkgInterrupted = false
 	}
 	return "", 0, nil
 }

@@ -261,7 +261,7 @@ var registry = map[Code]Definition{
 		Description: "A device could not apply its login configuration; the previous state stays in effect (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "stage is apt, config, restart, deny_list, pam, sessions or notice; pam means the deny-list PAM profile is not in place (`dpkg-reconfigure paddock-agent` restores it).",
+		Note:        "stage is apt, config, restart, deny_list, pam, sessions or notice; pam means the deny-list PAM profile is not in place (`dpkg-reconfigure paddock-agent` restores it); reason timeout marks an apt-get or dpkg run killed after 15 minutes.",
 	},
 	CodeDeviceUserLockApplied: {
 		Code: CodeDeviceUserLockApplied, Emitted: true,

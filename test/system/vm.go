@@ -132,7 +132,7 @@ func (v *VM) Fresh() {
 func (v *VM) sshArgs() []string {
 	return []string{
 		"-i", filepath.Join(v.dir, ".secrets", "id_ed25519"), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes",
+		"-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=30", "-o", "BatchMode=yes",
 	}
 }
 
