@@ -45,27 +45,23 @@ type identityWorld struct {
 	adminPassword, deviceRun string
 }
 
-// TestIdentityGates runs gates L1–L5, P3 and P4 of plan M3b §6 on each VM, each from a fresh base-installed, with
-// real GDM and GNOME. Screenshots are kept in bin/system-evidence/<vm>/.
+// TestIdentityGates runs gates L1–L5, P3 and P4 of plan M3b §6 on the VMs in parallel, each from a fresh
+// base-installed, with real GDM and GNOME. Screenshots are kept in bin/system-evidence/<vm>/.
 func TestIdentityGates(t *testing.T) {
-	for _, name := range vms(t) {
-		t.Run(name, func(t *testing.T) {
-			s := newStack(t)
-			requireBreakGlass(t, s)
-			vm := newVM(t, s.root, name)
-			vm.Fresh()
-			w := newIdentityWorld(t, s, Install(t, s, vm, debDir(s)))
-			if !t.Run("L1 login", func(t *testing.T) { gateL1(t, w) }) {
-				t.FailNow()
-			}
-			t.Run("P3 effective profile", func(t *testing.T) { gateP3(t, w) })
-			t.Run("L2 identity gate", func(t *testing.T) { gateL2(t, w) })
-			t.Run("L3 login suspension", func(t *testing.T) { gateL3(t, w) })
-			t.Run("L4 fail safe", func(t *testing.T) { gateL4(t, w) })
-			t.Run("L5 PAM order", func(t *testing.T) { gateL5(t, w) })
-			t.Run("P4 sudoers hygiene", func(t *testing.T) { gateP4(t, w) })
-		})
-	}
+	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
+		requireBreakGlass(t, s)
+		vm.Fresh()
+		w := newIdentityWorld(t, s, Install(t, s, vm, debDir(s)))
+		if !t.Run("L1 login", func(t *testing.T) { gateL1(t, w) }) {
+			t.FailNow()
+		}
+		t.Run("P3 effective profile", func(t *testing.T) { gateP3(t, w) })
+		t.Run("L2 identity gate", func(t *testing.T) { gateL2(t, w) })
+		t.Run("L3 login suspension", func(t *testing.T) { gateL3(t, w) })
+		t.Run("L4 fail safe", func(t *testing.T) { gateL4(t, w) })
+		t.Run("L5 PAM order", func(t *testing.T) { gateL5(t, w) })
+		t.Run("P4 sudoers hygiene", func(t *testing.T) { gateP4(t, w) })
+	})
 }
 
 // requireBreakGlass checks the login settings of acme that keep the test VMs administrable: the local admin paddock
@@ -295,21 +291,26 @@ func (w *identityWorld) toggleLink(t *testing.T) {
 // seat0.
 func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int, newPIN bool) Session {
 	t.Helper()
-	after := lastDeviceTokenID(t)
-	w.Shot(t, "01-greeter")
-	for range listed {
-		w.Key(keyTab...)
-		time.Sleep(time.Second)
-	}
-	w.Key(keyEnter...)
-	time.Sleep(2 * time.Second)
-	w.Type(u.name)
-	code, _ := pendingUserCode(t, "acme", after)
-	time.Sleep(3 * time.Second)
-	w.Shot(t, "02-device-code")
-	if err := approver(t, u)(code); err != nil {
-		t.Fatalf("approval at the greeter: %v", err)
-	}
+	func() {
+		// The greeter's code is read as the newest pending one of the organization: one VM at a time until approved.
+		unlock := w.group.Lock("device code")
+		defer unlock()
+		after := lastDeviceTokenID(t)
+		w.Shot(t, "01-greeter")
+		for range listed {
+			w.Key(keyTab...)
+			time.Sleep(time.Second)
+		}
+		w.Key(keyEnter...)
+		time.Sleep(2 * time.Second)
+		w.Type(u.name)
+		code, _ := pendingUserCode(t, "acme", after)
+		time.Sleep(3 * time.Second)
+		w.Shot(t, "02-device-code")
+		if err := approver(t, u)(code); err != nil {
+			t.Fatalf("approval at the greeter: %v", err)
+		}
+	}()
 	time.Sleep(10 * time.Second) // Himmelblau polls every 5 s
 	w.Shot(t, "03-after-approval")
 	if newPIN {

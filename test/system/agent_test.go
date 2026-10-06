@@ -38,22 +38,19 @@ func debDir(s *Stack) string {
 	return filepath.Join(s.root, "bin", "deb")
 }
 
-// TestAgentGates runs gates S1–S4 of plan M2b §8 on each VM in sequence, each from a fresh base-installed.
+// TestAgentGates runs gates S1–S4 of plan M2b §8 on the VMs in parallel, each from a fresh base-installed. The stack
+// outage of S3 and the releases of S4 are shared: they happen once, when every VM reached them.
 func TestAgentGates(t *testing.T) {
-	for _, name := range vms(t) {
-		t.Run(name, func(t *testing.T) {
-			s := newStack(t)
-			vm := newVM(t, s.root, name)
-			vm.Fresh()
-			d := Install(t, s, vm, debDir(s))
-			if !t.Run("S1 enrollment and bundle", func(t *testing.T) { gateS1(t, d) }) {
-				t.FailNow()
-			}
-			t.Run("S2 configuration idempotency", func(t *testing.T) { gateS2(t, d) })
-			t.Run("S3 agent outage", func(t *testing.T) { gateS3(t, d) })
-			t.Run("S4 agent update", func(t *testing.T) { gateS4(t, d) })
-		})
-	}
+	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
+		vm.Fresh()
+		d := Install(t, s, vm, debDir(s))
+		if !t.Run("S1 enrollment and bundle", func(t *testing.T) { gateS1(t, d) }) {
+			t.FailNow()
+		}
+		t.Run("S2 configuration idempotency", func(t *testing.T) { gateS2(t, d) })
+		t.Run("S3 agent outage", func(t *testing.T) { gateS3(t, d) })
+		t.Run("S4 agent update", func(t *testing.T) { gateS4(t, d) })
+	})
 }
 
 // fileFacts returns "<mode> <owner>:<group> <sha256>" of a guest file.
@@ -180,11 +177,12 @@ func trySpooled(d *Device) ([]map[string]any, error) {
 
 // gateS3: with the stack down for 10 minutes the device works normally (agent and supervisor running, SSH, managed
 // files, drift correction, no lock); after `make up` and a link down/up it checks in at once and the spooled events
-// arrive exactly once.
+// arrive exactly once. VMs in parallel share one outage.
 func gateS3(t *testing.T, d *Device) {
+	d.Gate(t, "S3")
 	unit := "/etc/systemd/system/" + d.Unit
 	want := fileFacts(d, unit)
-	d.s.Make("down")
+	d.Together(t, "S3", "stack down", func() string { d.s.Make("down"); return "" })
 	t.Cleanup(func() {
 		if t.Failed() {
 			d.s.Make("up") // never leave the stack down
@@ -216,7 +214,7 @@ func gateS3(t *testing.T, d *Device) {
 		t.Errorf("health while offline: %s", health)
 	}
 
-	d.s.Make("up")
+	d.Together(t, "S3", "stack up", func() string { d.s.Make("up"); return "" })
 	d.s.Login()
 	upAt := time.Now()
 	d.SetLink(false)
@@ -251,12 +249,24 @@ func gateS3(t *testing.T, d *Device) {
 	}
 }
 
+// release marks t as gate and releases a new version once every VM running in parallel arrived at it: a rollout
+// reaches every device.
+func release(t *testing.T, d *Device, gate string, minor int, label string, tags []string) string {
+	t.Helper()
+	d.Gate(t, gate)
+	return d.Together(t, gate, "release", func() string {
+		v := version(minor, label)
+		d.s.Release(v, tags)
+		return v
+	})
+}
+
 // gateS4: a good release is installed and reported; a release that crashes in probation is rolled back; one that
-// fails its self-test is never switched to; a binary with a bad signature is refused.
+// fails its self-test is never switched to; a binary with a bad signature is refused. VMs in parallel share the
+// releases.
 func gateS4(t *testing.T, d *Device) {
 	t.Run("good release", func(t *testing.T) {
-		v := version(2, "good")
-		d.s.Release(v, nil)
+		v := release(t, d, "S4 good", 2, "good", nil)
 		d.WaitEvent(t, "device.agent_updated", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 		if got := d.AgentVersion(); got != v {
 			t.Fatalf("agent version %s, want %s", got, v)
@@ -266,8 +276,7 @@ func gateS4(t *testing.T, d *Device) {
 	good, slot := d.AgentVersion(), d.Slot()
 
 	t.Run("probation failure", func(t *testing.T) {
-		v := version(3, "probation")
-		d.s.Release(v, []string{"paddock_testbroken_probation"})
+		v := release(t, d, "S4 probation", 3, "probation", []string{"paddock_testbroken_probation"})
 		p := d.WaitEvent(t, "device.agent_rolled_back", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 		if p["from_version"] != good || d.AgentVersion() != good || d.Slot() != slot {
 			t.Fatalf("after the rollback: %v, version %s slot %s; want %s in %s", p, d.AgentVersion(), d.Slot(), good, slot)
@@ -275,8 +284,7 @@ func gateS4(t *testing.T, d *Device) {
 	})
 
 	t.Run("self-test failure", func(t *testing.T) {
-		v := version(4, "selftest")
-		d.s.Release(v, []string{"paddock_testbroken_selftest"})
+		v := release(t, d, "S4 selftest", 4, "selftest", []string{"paddock_testbroken_selftest"})
 		d.WaitEvent(t, "device.agent_update_failed", 10*time.Minute, func(p map[string]any) bool {
 			return p["version"] == v && p["outcome"] == "self_test_failed"
 		})

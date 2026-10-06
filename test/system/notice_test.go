@@ -13,15 +13,14 @@ import (
 // at the GDM login screen (dconf of the greeter and a screenshot), on text consoles (/etc/issue.d through agetty)
 // and before SSH logins; a changed text reaches the device with one check-in, an empty one removes every file.
 func TestNoticeGate(t *testing.T) {
-	for _, name := range vms(t) {
-		t.Run(name, func(t *testing.T) {
-			s := newStack(t)
-			vm := newVM(t, s.root, name)
-			vm.Fresh()
-			d := Install(t, s, vm, debDir(s))
-			t.Run("N1 login notice", func(t *testing.T) { gateN1(t, d) })
+	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
+		vm.Fresh()
+		d := Install(t, s, vm, debDir(s))
+		t.Run("N1 login notice", func(t *testing.T) {
+			vm.group.Exclusive(t, "login notice") // the notice is one setting of the organization
+			gateN1(t, d)
 		})
-	}
+	})
 }
 
 // setNotice changes acme's notice text and returns the previous one.
