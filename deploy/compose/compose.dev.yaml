@@ -62,6 +62,12 @@ services:
       PADDOCK_STEPUP_WINDOW: ${PADDOCK_STEPUP_WINDOW:-30s}
       PADDOCK_STEPUP_MAX_AUTH_AGE: ${PADDOCK_STEPUP_MAX_AUTH_AGE:-15s}
 
+  paddock-escrow-reader:
+    environment:
+      PADDOCK_ENV: development
+      # The api's step-up window (above); the escrow-reader applies it to auth_time.
+      PADDOCK_STEPUP_WINDOW: ${PADDOCK_STEPUP_WINDOW:-30s}
+
   paddock-outbox-relay:
     environment:
       PADDOCK_ENV: development

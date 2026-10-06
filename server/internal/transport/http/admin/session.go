@@ -212,7 +212,7 @@ func (s Session) Principal(ip string) principal.Principal {
 		OrganizationID: s.Org, IP: ip,
 	}
 	if s.StepUpAt != 0 {
-		p.StepUpAt = time.Unix(s.StepUpAt, 0)
+		p.StepUpAt, p.StepUpJTI = time.Unix(s.StepUpAt, 0), s.StepUpJTI
 	}
 	return p
 }

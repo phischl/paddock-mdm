@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -28,15 +27,15 @@ var (
 // Disk holds the use cases of a device's disk encryption: its state, and the recovery of the recovery key and the
 // LUKS header for an organization administrator.
 type Disk struct {
-	runner    *ActionRunner
-	org       *db.OrgPool
-	decrypter Decrypter
-	headers   HeaderObjects
+	runner  *ActionRunner
+	org     *db.OrgPool
+	escrow  *EscrowAccess
+	headers HeaderObjects
 }
 
-// NewDisk creates the use cases; decrypter and headers are used by the recovery only.
-func NewDisk(runner *ActionRunner, org *db.OrgPool, decrypter Decrypter, headers HeaderObjects) *Disk {
-	return &Disk{runner: runner, org: org, decrypter: decrypter, headers: headers}
+// NewDisk creates the use cases; escrow and headers are used by the recovery only.
+func NewDisk(runner *ActionRunner, org *db.OrgPool, escrow *EscrowAccess, headers HeaderObjects) *Disk {
+	return &Disk{runner: runner, org: org, escrow: escrow, headers: headers}
 }
 
 // KeyslotChange is the last tamper.keyslot_changed of a device.
@@ -122,13 +121,12 @@ func (d *Disk) RevealRecoveryKey(ctx context.Context, deviceID uuid.UUID, confir
 		if err != nil {
 			return err
 		}
-		plain, err := d.decrypter.Decrypt(ctx, int(s.KeyVersion), base64.StdEncoding.EncodeToString(s.Ciphertext))
+		plain, err := d.escrow.decrypt(ctx, deviceID, []uuid.UUID{s.ID}, PurposeDiskRecoveryKey)
 		if err != nil {
-			slog.ErrorContext(ctx, "decrypting an escrowed recovery key failed", "device_id", deviceID, "generation", s.Generation, "error", err)
-			return problem.UpstreamUnavailable.WithDetail("the key service could not decrypt the recovery key")
+			return err
 		}
-		generation, key = int(s.Generation), string(plain)
-		clear(plain)
+		generation, key = int(s.Generation), string(plain[s.ID])
+		clear(plain[s.ID])
 		return nil
 	})
 	if err != nil {
@@ -199,11 +197,11 @@ func (d *Disk) openHeader(ctx context.Context, s pgstore.EscrowSecret) ([]byte, 
 		slog.ErrorContext(ctx, "reading an escrowed header failed", "device_id", s.DeviceID, "generation", s.Generation, "found", found, "error", err)
 		return nil, problem.UpstreamUnavailable.WithDetail("the escrow bucket does not answer with the header")
 	}
-	dek, err := d.decrypter.Decrypt(ctx, int(s.KeyVersion), base64.StdEncoding.EncodeToString(s.WrappedDek))
+	plain, err := d.escrow.decrypt(ctx, s.DeviceID, []uuid.UUID{s.ID}, PurposeDiskHeader)
 	if err != nil {
-		slog.ErrorContext(ctx, "unwrapping an escrowed header key failed", "device_id", s.DeviceID, "generation", s.Generation, "error", err)
-		return nil, problem.UpstreamUnavailable.WithDetail("the key service could not decrypt the header key")
+		return nil, err
 	}
+	dek := plain[s.ID]
 	defer clear(dek)
 	header, err := escrow.OpenHeader(dek, s.Nonce, s.ID.String(), object)
 	if err != nil {

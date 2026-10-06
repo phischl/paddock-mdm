@@ -5,10 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,7 +20,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
 
-// diskEscrow stands in for OpenBao (escrow-wrap) and the bucket paddock-escrow.
+// diskEscrow is the escrow-wrap key of the disk escrows and stands in for the bucket paddock-escrow.
 type diskEscrow struct {
 	key     *rsa.PrivateKey
 	mu      sync.Mutex
@@ -36,14 +34,6 @@ func newDiskEscrow(t *testing.T) *diskEscrow {
 		t.Fatal(err)
 	}
 	return &diskEscrow{key: key, objects: map[string][]byte{}}
-}
-
-func (d *diskEscrow) Decrypt(_ context.Context, version int, ciphertext string) ([]byte, error) {
-	raw, err := base64.StdEncoding.DecodeString(ciphertext)
-	if err != nil || version != 1 {
-		return nil, errors.New("decrypt failed")
-	}
-	return rsa.DecryptOAEP(sha256.New(), nil, d.key, raw, nil)
 }
 
 func (d *diskEscrow) GetIfExists(_ context.Context, key string) ([]byte, bool, error) {

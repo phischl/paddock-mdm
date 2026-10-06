@@ -120,6 +120,9 @@ type bff struct {
 	now      func() time.Time
 	// maxAuthAge is the oldest login a step-up callback accepts.
 	maxAuthAge time.Duration
+	// tokens keeps the raw step-up ID token for tokenTTL, the step-up window.
+	tokens   StepUpTokenStore
+	tokenTTL time.Duration
 }
 
 func randomToken() string {

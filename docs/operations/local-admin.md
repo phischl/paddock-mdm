@@ -67,7 +67,7 @@ password that is valid on the device.
 
 ## Keys and credentials
 
-Only `paddock-api`'s reveal decrypts, with its own OpenBao AppRole `paddock-escrow-reader` (`update` on
-`transit/decrypt/escrow-wrap`), configured with `PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE` and
-`PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE` (see `docs/operations/openbao.md`). The rest of the api uses its normal
-AppRole. A sealed OpenBao makes reveals fail with 502 `upstream_unavailable`; devices keep their passwords.
+Only the `paddock-escrow-reader` role decrypts, with the OpenBao AppRole `paddock-escrow-reader` (`update` on
+`transit/decrypt/escrow-wrap`), and only after it verified the administrator's step-up ID token itself; the api
+passes that token along and holds no decryption credential (see `docs/operations/escrow-reader.md`). A sealed OpenBao
+or an unreachable escrow-reader makes reveals fail with 502 `upstream_unavailable`; devices keep their passwords.

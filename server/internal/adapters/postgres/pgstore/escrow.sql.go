@@ -107,6 +107,47 @@ func (q *Queries) GetEscrowSecret(ctx context.Context, id uuid.UUID) (EscrowSecr
 	return i, err
 }
 
+const getEscrowSecrets = `-- name: GetEscrowSecrets :many
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret WHERE id = ANY($1::uuid[])
+`
+
+// The escrows of one decryption of the escrow-reader, which checks their device and kind (plan M4b.1 decision 6).
+func (q *Queries) GetEscrowSecrets(ctx context.Context, ids []uuid.UUID) ([]EscrowSecret, error) {
+	rows, err := q.db.Query(ctx, getEscrowSecrets, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EscrowSecret{}
+	for rows.Next() {
+		var i EscrowSecret
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.DeviceID,
+			&i.Kind,
+			&i.Generation,
+			&i.Status,
+			&i.Ciphertext,
+			&i.KeyVersion,
+			&i.CreatedAt,
+			&i.ActivatedAt,
+			&i.ObjectKey,
+			&i.WrappedDek,
+			&i.Nonce,
+			&i.Sha256,
+			&i.Size,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertEscrowHeader = `-- name: InsertEscrowHeader :execrows
 INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
                            nonce, sha256, size, created_at)

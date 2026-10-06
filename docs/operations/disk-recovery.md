@@ -89,4 +89,5 @@ device asks for the recovery key. Re-enroll TPM2+PIN as in step 3.
   after 15 minutes without the object).
 - The bucket keeps every version and has no Object Lock, so a Destroy can delete it. Credentials: the gateway's
   bundles credential may only `s3:PutObject` below `org/*/devices/*/luks-header/*`; the worker and the api have
-  read-only credentials (`PADDOCK_ESCROW_S3_*`). Only the api's `paddock-escrow-reader` AppRole can unwrap.
+  read-only credentials (`PADDOCK_ESCROW_S3_*`). Only the `paddock-escrow-reader` role can unwrap the header key,
+  after it verified the administrator's step-up itself (`docs/operations/escrow-reader.md`).

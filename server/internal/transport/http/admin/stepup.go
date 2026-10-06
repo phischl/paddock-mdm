@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -99,6 +100,12 @@ func (b *bff) stepUpStart(w http.ResponseWriter, r *http.Request) {
 		oauth2.SetAuthURLParam("login_hint", sess.Disp)), http.StatusFound)
 }
 
+// StepUpTokenStore keeps the raw ID token of a step-up under its jti for ttl (stepupproof.Store), so that the reveal and
+// recovery use cases can pass it to the escrow-reader as proof (plan M4b.1 decision 7).
+type StepUpTokenStore interface {
+	Put(ctx context.Context, jti, raw string, ttl time.Duration) error
+}
+
 type stepUpClaims struct {
 	Subject  string   `json:"sub"`
 	AuthTime int64    `json:"auth_time"`
@@ -134,7 +141,7 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 		stepUpFailed(w, r, st.ReturnTo)
 		return
 	}
-	claims, err := b.stepUpToken(r, st)
+	claims, raw, err := b.stepUpToken(r, st)
 	if err == nil {
 		err = checkStepUp(claims, st.Session, now, b.maxAuthAge)
 	}
@@ -149,6 +156,10 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 		stepUpFailed(w, r, st.ReturnTo)
 		return
 	}
+	// Without the stored token the step-up still counts for the api; only decryptions need the escrow-reader's proof.
+	if err := b.tokens.Put(ctx, claims.JTI, raw, b.tokenTTL); err != nil {
+		slog.ErrorContext(ctx, "keeping the step-up token failed; decryptions will ask for a new step-up", "error", err)
+	}
 	sess.Idle, sess.StepUpAt, sess.StepUpJTI = now.Unix(), now.Unix(), claims.JTI
 	value, err := b.keys.Seal(SessionCookie, sess)
 	if err != nil {
@@ -162,26 +173,32 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, st.ReturnTo, http.StatusFound)
 }
 
-// stepUpToken exchanges the code and returns the verified claims of the ID token.
-func (b *bff) stepUpToken(r *http.Request, st stepUpState) (stepUpClaims, error) {
+// stepUpToken exchanges the code and returns the verified claims and the raw ID token.
+func (b *bff) stepUpToken(r *http.Request, st stepUpState) (stepUpClaims, string, error) {
 	var claims stepUpClaims
 	oauth, verifier, _ := b.stepUp.snapshot()
 	if oauth == nil {
-		return claims, errors.New("step-up provider not discovered")
+		return claims, "", errors.New("step-up provider not discovered")
 	}
 	token, err := oauth.Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
-		return claims, err
+		return claims, "", err
 	}
 	raw, _ := token.Extra("id_token").(string)
 	idt, err := verifier.Verify(r.Context(), raw)
 	if err != nil {
-		return claims, err
+		return claims, "", err
 	}
 	if idt.Nonce != st.Nonce {
-		return claims, errors.New("nonce mismatch")
+		return claims, "", errors.New("nonce mismatch")
 	}
-	return claims, idt.Claims(&claims)
+	if err := idt.Claims(&claims); err != nil {
+		return claims, "", err
+	}
+	if claims.JTI == "" {
+		return claims, "", errors.New("ID token without jti")
+	}
+	return claims, raw, nil
 }
 
 // checkStepUp checks that the step-up authenticated the session's own user just now, with MFA.

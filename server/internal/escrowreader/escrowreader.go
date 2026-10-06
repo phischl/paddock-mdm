@@ -1,6 +1,6 @@
-// Package escrowreader is the only decryption path for escrowed secrets (plan M4a decision 9): an OpenBao client
-// logged in with the AppRole paddock-escrow-reader, which may decrypt with escrow-wrap and nothing else. Only the
-// api's reveal use case receives it; every other api code uses the api's own AppRole.
+// Package escrowreader is the only decryption path for escrowed secrets (plan M4a decision 9, plan M4b.1 decisions 5
+// and 6): the service of the escrow-reader role, which decrypts with the AppRole paddock-escrow-reader only after it
+// verified a fresh step-up proof of an organization administrator, and the api's client of that service.
 package escrowreader
 
 import (
@@ -10,7 +10,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 )
 
-// Reader decrypts escrowed secrets.
+// Reader decrypts escrowed secrets with escrow-wrap.
 type Reader struct{ c *bao.Client }
 
 // New creates a reader for the AppRole paddock-escrow-reader.

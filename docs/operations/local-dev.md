@@ -30,7 +30,7 @@ itself; all are idempotent and can also be run on their own.
 
 | Path | Purpose |
 | --- | --- |
-| `compose.yaml` | Control plane: Caddy, PostgreSQL, RabbitMQ, Valkey, RustFS (bundles), OpenBao, Authentik, Paddock roles (`api`, `gateway`, `worker`, `compiler`, `outbox-relay`) |
+| `compose.yaml` | Control plane: Caddy, PostgreSQL, RabbitMQ, Valkey, RustFS (bundles), OpenBao, Authentik, Paddock roles (`api`, `gateway`, `worker`, `compiler`, `outbox-relay`, `escrow-reader`) |
 | `compose.audit.yaml` | Audit domain: `audit-postgres`, `audit-rustfs`, audit writer |
 | `compose.dev.yaml` | Development overrides: `PADDOCK_ENV=development`, dev blueprint, loopback port mappings |
 | `versions.env` | Pinned images (tag and digest) |

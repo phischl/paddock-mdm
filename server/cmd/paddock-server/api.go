@@ -24,6 +24,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
+	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/web"
 )
@@ -44,9 +45,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	// New and revoked enrollment tokens are published to the gateway's cache at once (the worker's cache sync stays
 	// the authority).
 	vkCfg := config.LoadValkey(l)
-	// The reveal's own AppRole paddock-escrow-reader (plan M4a decision 9).
-	escrowRoleID := l.SecretFile("PADDOCK_OPENBAO_ESCROW_ROLE_ID_FILE")
-	escrowSecretID := l.SecretFile("PADDOCK_OPENBAO_ESCROW_SECRET_ID_FILE")
+	// Escrowed secrets are decrypted by the escrow-reader role only (plan M4b.1 decision 5).
+	escrowReaderURL := l.Required("PADDOCK_ESCROW_READER_URL")
+	escrowReaderToken := l.SecretFile("PADDOCK_ESCROW_READER_TOKEN_FILE")
 	oidcCfg := admin.OIDCConfig{
 		Issuer:       l.Required("PADDOCK_OIDC_ISSUER"),
 		ClientID:     l.Required("PADDOCK_OIDC_CLIENT_ID"),
@@ -116,10 +117,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		return err
 	}
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
-	escrowReader, err := escrowreader.New(baoCfg.Addr, escrowRoleID, escrowSecretID)
-	if err != nil {
-		return err
-	}
+	stepUpTokens := stepupproof.NewStore(vk)
+	escrowAccess := app.NewEscrowAccess(escrowreader.NewClient(escrowReaderURL, escrowReaderToken), stepUpTokens)
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
 	stepUp := admin.NewOIDC(stepUpCfg)
@@ -137,9 +136,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		LoginSettings: app.NewLoginSettings(runner, orgPool),
 		Privileges:    app.NewPrivileges(runner, orgPool),
 		Commands:      app.NewDeviceCommands(orgPool),
-		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowReader),
+		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:   app.NewAutoinstall(runner, orgPool, bundlesURL),
-		Disk:          app.NewDisk(runner, orgPool, escrowReader, escrowObjects),
+		Disk:          app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, common.Development()),
 		AuditLog:      app.NewAuditLog(auditReader),
@@ -147,6 +146,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Keys:          keys,
 		OIDC:          oidc,
 		StepUp:        stepUp,
+		StepUpTokens:  stepUpTokens,
 		PublicURL:     publicURL,
 		Static:        static,
 		// Development only: LoadDevStepUp refuses the variables in production.
