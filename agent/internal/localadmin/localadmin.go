@@ -43,6 +43,8 @@ type System interface {
 	// Chpasswd sets a password from "name:password\n" without PAM (pam_himmelblau would take it for a change of a
 	// directory user's credentials).
 	Chpasswd(ctx context.Context, input []byte) (string, int, error)
+	WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid, gid int) error
+	Systemctl(ctx context.Context, args ...string) (string, int, error)
 }
 
 // Escrow uploads encrypted passwords and polls their storage status (device API, bound to the device).
@@ -82,13 +84,16 @@ func (m *Manager) Request(commandID string) {
 	}
 }
 
-// Tick advances the local administrator: it finishes a pending rotation when the server stored the password (or
-// gives up after EscrowWait), and otherwise makes sure the account exists unchanged and starts a rotation when one
-// is due. spec nil (no login resource) leaves the device alone; keys are the keys of the applied bundle.
+// Tick advances the local administrator: it keeps the account off the login screen's user list, finishes a pending
+// rotation when the server stored the password (or gives up after EscrowWait), and otherwise makes sure the account
+// exists unchanged and starts a rotation when one is due. spec nil (no login resource) leaves the device alone; keys
+// are the keys of the applied bundle.
 func (m *Manager) Tick(ctx context.Context, spec *bundle.LocalAdminSpec, keys *bundle.Keys) {
 	if spec == nil {
 		return
 	}
+	// Before the account is created: AccountsService reads the file when useradd makes it load the new user.
+	m.hide(ctx, spec.Username)
 	if m.pending != nil {
 		m.poll(ctx, spec)
 		return

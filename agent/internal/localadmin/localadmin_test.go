@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/localadmin"
@@ -34,11 +35,15 @@ type fakeSys struct {
 	// chpasswdFails makes chpasswd fail.
 	chpasswdFails bool
 	password      string // the last password chpasswd set
+	// accountsService makes localadmin.AccountsServiceUsers exist; files are the files written there.
+	accountsService bool
+	files           map[string]string
+	writeFails      bool
 }
 
 func newFakeSys() *fakeSys {
 	return &fakeSys{shell: map[string]string{}, hash: map[string]string{}, expire: map[string]string{},
-		groups: map[string][]string{"sudo": {"paddock"}}}
+		groups: map[string][]string{"sudo": {"paddock"}}, files: map[string]string{}}
 }
 
 // ReadFile serves the local account databases; NSS (and Himmelblau's answers for any name) is never asked.
@@ -58,10 +63,34 @@ func (f *fakeSys) ReadFile(path string) ([]byte, fs.FileInfo, error) {
 		for name, m := range f.groups {
 			fmt.Fprintf(&b, "%s:x:27:%s\n", name, strings.Join(m, ","))
 		}
+	case localadmin.AccountsServiceUsers:
+		if !f.accountsService {
+			return nil, nil, fs.ErrNotExist
+		}
+		info, err := fs.Stat(fstest.MapFS{"users": {Mode: fs.ModeDir | 0o700}}, "users")
+		return nil, info, err
 	default:
-		return nil, nil, fs.ErrNotExist
+		data, ok := f.files[path]
+		if !ok {
+			return nil, nil, fs.ErrNotExist
+		}
+		return []byte(data), nil, nil
 	}
 	return []byte(b.String()), nil, nil
+}
+
+func (f *fakeSys) WriteFileAtomic(path string, data []byte, mode fs.FileMode, uid, gid int) error {
+	f.calls = append(f.calls, fmt.Sprintf("write %s %04o %d:%d", path, mode, uid, gid))
+	if f.writeFails {
+		return errors.New("read-only file system")
+	}
+	f.files[path] = string(data)
+	return nil
+}
+
+func (f *fakeSys) Systemctl(_ context.Context, args ...string) (string, int, error) {
+	f.calls = append(f.calls, "systemctl "+strings.Join(args, " "))
+	return "", 0, nil
 }
 
 func (f *fakeSys) UserTool(_ context.Context, tool string, args ...string) (string, int, error) {
@@ -384,6 +413,71 @@ func TestDeletedAccountIsRecreated(t *testing.T) {
 	if got := w.takeEvents(); len(got) < 1 || got[0].data != `{"field":"missing"}` || w.sys.shell["paddock-admin"] != "/bin/bash" || len(w.esc.uploads) != 2 {
 		t.Fatalf("events %v, uploads %d", got, len(w.esc.uploads))
 	}
+}
+
+// TestHiddenFromLoginScreen (plan M4a.1 decision 4): the AccountsService file marks the account as a system account
+// before the account is created; a removed or changed file is restored and AccountsService restarted, keys
+// AccountsService adds itself are kept.
+func TestHiddenFromLoginScreen(t *testing.T) {
+	path := localadmin.AccountsServiceUsers + "/paddock-admin"
+	write, restart := "write "+path+" 0600 0:0", "systemctl try-restart accounts-daemon.service"
+	w := newWorld(t)
+	w.sys.accountsService = true
+	w.tick()
+	if len(w.sys.calls) < 3 || w.sys.calls[0] != write || w.sys.calls[1] != restart || !strings.HasPrefix(w.sys.calls[2], "useradd ") {
+		t.Fatalf("calls %v", w.sys.calls)
+	}
+	if w.sys.files[path] != "[User]\nSystemAccount=true\n" {
+		t.Fatalf("file %q", w.sys.files[path])
+	}
+	w.rotate()
+
+	cases := map[string]struct {
+		content string // "" removes the file
+		restore bool
+	}{
+		"kept with keys AccountsService adds": {"[InputSource0]\nxkb=us\n\n[User]\nIcon=/home/paddock-admin/.face\nSystemAccount = true\n", false},
+		"removed":                             {"", true},
+		"no system account":                   {"[User]\nSystemAccount=false\n", true},
+		"in another group":                    {"[User]\nIcon=/x\n[Other]\nSystemAccount=true\n", true},
+		"empty":                               {"\n", true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			w.sys.files[path] = c.content
+			if c.content == "" {
+				delete(w.sys.files, path)
+			}
+			w.sys.calls = nil
+			w.advance(time.Minute)
+			restored := slices.Contains(w.sys.calls, write) && slices.Contains(w.sys.calls, restart)
+			if restored != c.restore {
+				t.Fatalf("restored %v, calls %v", restored, w.sys.calls)
+			}
+			if c.restore && w.sys.files[path] != "[User]\nSystemAccount=true\n" {
+				t.Fatalf("file %q", w.sys.files[path])
+			}
+		})
+	}
+}
+
+func TestHidingFailureKeepsTheAccount(t *testing.T) {
+	t.Run("without AccountsService", func(t *testing.T) {
+		w := newWorld(t)
+		w.tick()
+		if slices.ContainsFunc(w.sys.calls, func(c string) bool { return !strings.HasPrefix(c, "useradd ") && !strings.HasPrefix(c, "passwd ") }) {
+			t.Fatalf("calls %v", w.sys.calls)
+		}
+	})
+	t.Run("write fails", func(t *testing.T) {
+		w := newWorld(t)
+		w.sys.accountsService, w.sys.writeFails = true, true
+		w.tick()
+		if slices.ContainsFunc(w.sys.calls, func(c string) bool { return strings.HasPrefix(c, "systemctl ") }) || w.sys.shell["paddock-admin"] != "/bin/bash" ||
+			len(w.esc.uploads) != 1 {
+			t.Fatalf("calls %v, uploads %d", w.sys.calls, len(w.esc.uploads))
+		}
+	})
 }
 
 func TestWithoutSpecNothingHappens(t *testing.T) {

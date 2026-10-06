@@ -134,7 +134,8 @@ func newLAWorld(t *testing.T, d *Device) *laWorld {
 	return w
 }
 
-// TestLocalAdminGates runs gates LA1 and LA2 of plan M4a on each VM, each from a fresh base-installed.
+// TestLocalAdminGates runs gates LA1 and LA2 of plan M4a and LA3 of plan M4a.1 on each VM, each from a fresh
+// base-installed.
 func TestLocalAdminGates(t *testing.T) {
 	for _, name := range vms(t) {
 		t.Run(name, func(t *testing.T) {
@@ -146,6 +147,7 @@ func TestLocalAdminGates(t *testing.T) {
 				t.FailNow()
 			}
 			t.Run("LA2 tamper", func(t *testing.T) { gateLA2(t, w) })
+			t.Run("LA3 hidden from the login screen", func(t *testing.T) { gateLA3(t, w) })
 		})
 	}
 }
@@ -258,4 +260,56 @@ func gateLA2(t *testing.T, w *laWorld) {
 	Until(t, "sudo membership restored", 2*time.Minute, 5*time.Second, nil, func() bool {
 		return slices.Contains(strings.Fields(w.Must("id -nG "+localAdmin)), "sudo")
 	})
+}
+
+// gateLA3 (plan M4a.1 decision 4): AccountsService does not list the local administrator, so GDM shows only paddock;
+// a removed AccountsService file is restored. The account still logs in at GDM through "Not listed?".
+func gateLA3(t *testing.T, w *laWorld) {
+	uid := w.Must("id -u " + localAdmin)
+	cached := func() string {
+		return w.Must("busctl call org.freedesktop.Accounts /org/freedesktop/Accounts org.freedesktop.Accounts ListCachedUsers")
+	}
+	if users := cached(); users != `ao 1 "/org/freedesktop/Accounts/User1000"` {
+		t.Fatalf("AccountsService lists %s, want only paddock (uid 1000; %s has uid %s)", users, localAdmin, uid)
+	}
+
+	// Removed and AccountsService restarted: the account is listed until the agent restores the file.
+	w.Must("sudo rm /var/lib/AccountsService/users/" + localAdmin + " && sudo systemctl restart accounts-daemon.service")
+	Until(t, "AccountsService file restored", 2*time.Minute, 5*time.Second, nil, func() bool {
+		return w.Must("sudo grep -c '^SystemAccount=true$' /var/lib/AccountsService/users/"+localAdmin+" || true") == "1"
+	})
+	Until(t, localAdmin+" not listed", time.Minute, 2*time.Second, nil, func() bool {
+		return !strings.Contains(cached(), "/User"+uid+`"`)
+	})
+
+	// GDM: a freshly started greeter (focus on the first user, screen not blanked) lists only paddock; "Not listed?",
+	// the name and the revealed password.
+	pw := active(t, w.reveal(t))
+	w.Must("sudo systemctl restart gdm.service")
+	time.Sleep(15 * time.Second)
+	w.Shot(t, "30-greeter")
+	w.Key(keyTab...)
+	time.Sleep(time.Second)
+	w.Key(keyEnter...)
+	time.Sleep(2 * time.Second)
+	w.Type(localAdmin)
+	time.Sleep(3 * time.Second)
+	w.Type(pw.Password)
+	var console Session
+	Until(t, localAdmin+" session on seat0", 2*time.Minute, 3*time.Second, nil, func() bool {
+		for _, s := range w.UserSessions(localAdmin) {
+			if s.Seat == "seat0" {
+				console = s
+				return true
+			}
+		}
+		return false
+	})
+	time.Sleep(5 * time.Second)
+	w.Shot(t, "31-local-admin-session")
+	w.Must("sudo loginctl terminate-session " + console.ID)
+	w.WaitEvent(t, "local_admin.login", 5*time.Minute, func(p map[string]any) bool { return p["service"] == "gdm-password" })
+	if out := w.Must("sudo grep -c '^SystemAccount=true$' /var/lib/AccountsService/users/" + localAdmin + " || true"); out != "1" {
+		t.Errorf("AccountsService file after the GDM login: SystemAccount=true found %s times", out)
+	}
 }
