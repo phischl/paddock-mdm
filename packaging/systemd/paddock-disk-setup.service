@@ -1,0 +1,27 @@
+[Unit]
+Description=Paddock first-boot disk setup (boot PIN for the TPM2 disk unlock)
+Documentation=file:///usr/share/doc/paddock-agent
+# Runs once on a device installed with the Paddock autoinstall (plan M4b decisions 5 and 6): the marker is removed
+# when the PIN is set, skipped, or the device has no TPM 2.0. It asks on tty1 before the login screen and before
+# the agent starts; the boot continues in every case (fail safe).
+ConditionPathExists=/var/lib/paddock/disk-setup-pending
+After=cryptsetup.target local-fs.target systemd-vconsole-setup.service plymouth-start.service
+Before=display-manager.service getty@tty1.service paddock-supervisor.service
+
+[Service]
+Type=oneshot
+# The graphical boot splash would cover the console dialogue.
+ExecStartPre=-/usr/bin/plymouth quit
+ExecStartPre=-/usr/bin/chvt 1
+ExecStart=/usr/bin/paddockd disk-setup
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

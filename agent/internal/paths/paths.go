@@ -52,5 +52,22 @@ func (l Layout) Socket() string { return l.Join("/run/paddock/agent.sock") }
 // LastCheckin is touched after every successful check-in.
 func (l Layout) LastCheckin() string { return l.Join("/run/paddock/last-checkin") }
 
+// EnrollConfig is the enrollment configuration the Paddock autoinstall leaves for the first start of the agent
+// (plan M4b decision 7).
+func (l Layout) EnrollConfig() string { return l.Join("/etc/paddock/enroll.json") }
+
+// DiskSetupConfig holds the settings of the first-boot disk setup (plan M4b decision 4).
+func (l Layout) DiskSetupConfig() string { return l.Join("/etc/paddock/disk-setup.json") }
+
+// DiskSetupPending marks a first-boot disk setup that has not run yet (plan M4b decision 5).
+func (l Layout) DiskSetupPending() string { return l.Join("/var/lib/paddock/disk-setup-pending") }
+
+// InstallPassphrase is the temporary disk passphrase of the Paddock autoinstall (0600 root), removed once the
+// recovery key and the header are escrowed (plan M4b decision 11).
+func (l Layout) InstallPassphrase() string { return l.Join("/var/lib/paddock/install-passphrase") }
+
+// HeaderBackupDir is the tmpfs directory LUKS header backups are written to before they are escrowed.
+func (l Layout) HeaderBackupDir() string { return l.Join("/run/paddock") }
+
 // Slots holds the A/B slots and the current symlink.
 func (l Layout) Slots() string { return l.Join("/opt/paddock/agent") }

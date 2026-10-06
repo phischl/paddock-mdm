@@ -1,10 +1,13 @@
 #!/bin/sh
-# paddock-agent postinst: enable the PAM profile paddock-deny, and on a device without an agent install paddockd
-# into slot A and point current at it. An existing current (and every slot) is left alone: updates arrive as signed
+# paddock-agent postinst: enable the PAM profile paddock-deny and the first-boot disk setup (it runs only where the
+# Paddock autoinstall left its marker, plan M4b decision 5), and on a device without an agent install paddockd into
+# slot A and point current at it. An existing current (and every slot) is left alone: updates arrive as signed
 # releases (plan M2b decision 25). `dpkg-reconfigure paddock-agent` enables the profile again after it was removed
 # locally; the agent itself never edits PAM files (plan M3b decision 9).
 set -e
 pam-auth-update --package --enable paddock-deny
+# enable works in the installer's chroot too (it only creates links).
+systemctl enable paddock-disk-setup.service
 slots=/opt/paddock/agent
 if [ ! -e "$slots/current" ] && [ ! -L "$slots/current" ]; then
   install -d -m 0755 "$slots/A"
