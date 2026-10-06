@@ -36,26 +36,6 @@ func newVMGroup() *vmGroup {
 	return g
 }
 
-// forEachVM runs body for every VM of the run (PADDOCK_SYSTEM_VMS) as parallel subtests named after the VM; each
-// gets its own Stack session and a VM of the shared group.
-func forEachVM(t *testing.T, body func(t *testing.T, s *Stack, vm *VM)) {
-	names := vms(t)
-	g := newVMGroup()
-	for _, name := range names {
-		g.active[name] = true
-	}
-	for _, name := range names {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			t.Cleanup(func() { g.leave(name) })
-			s := newStack(t)
-			vm := newVM(t, s.root, name)
-			vm.group = g
-			body(t, s, vm)
-		})
-	}
-}
-
 func (g *vmGroup) leave(vm string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
