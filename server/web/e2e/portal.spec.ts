@@ -199,3 +199,25 @@ test('login denied page is accessible', async ({ page }) => {
   await expectAccessible(page)
   expect(csp).toEqual([])
 })
+
+test('favicons and the app-bar logo load without CSP violations', async ({ page }) => {
+  const csp = watchCSP(page)
+  await login(page, 'alice@acme.test', 'dev_alice_password')
+  const icons = await page.locator('link[rel="icon"]').evaluateAll((links) =>
+    links.map((l) => ({ href: l.getAttribute('href'), media: l.getAttribute('media') })),
+  )
+  expect(icons).toEqual([
+    { href: '/paddock-favicon-small.svg', media: null },
+    { href: '/paddock-favicon-light-tile-light.svg', media: '(prefers-color-scheme: light)' },
+    { href: '/paddock-favicon-dark-tile-dark.svg', media: '(prefers-color-scheme: dark)' },
+  ])
+  for (const icon of icons) {
+    const res = await page.request.get(icon.href ?? '')
+    expect(res.status(), icon.href ?? '').toBe(200)
+    expect(res.headers()['content-type']).toContain('image/svg+xml')
+  }
+  const logo = page.getByTestId('app-logo')
+  await expect(logo).toHaveAttribute('src', '/paddock-symbol-light.svg')
+  await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true)
+  expect(csp).toEqual([])
+})

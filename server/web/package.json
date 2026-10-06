@@ -9,8 +9,8 @@
   },
   "scripts": {
     "gen": "openapi-typescript ../../api/openapi/admin.yaml -o src/api/schema.d.ts",
-    "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build && touch dist/.gitkeep",
+    "dev": "node scripts/copy-logos.ts && vite",
+    "build": "node scripts/copy-logos.ts && vue-tsc --noEmit && vite build && touch dist/.gitkeep",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint . && node scripts/check-audit-messages.ts",
     "test": "vitest run",
