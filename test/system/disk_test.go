@@ -1,6 +1,8 @@
 package system
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -10,7 +12,8 @@ import (
 
 // TestDiskGates runs the disk encryption gates of plan M4b §6 on each VM, from base-installed with the Paddock
 // autoinstall simulated (PrepareDisk): the LUKS flow (gate D-24 on 24.04, the same flow on 26.04), D-ESC and D-TAMP
-// on that device, then D-SKIP from a second fresh base-installed. The VMs run in parallel.
+// on that device, then D-SKIP and D-KEEP (plan M4b.1 AC2) from fresh base-installed snapshots. The VMs run in
+// parallel.
 func TestDiskGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		t.Run("LUKS flow", func(t *testing.T) {
@@ -29,6 +32,10 @@ func TestDiskGates(t *testing.T) {
 		t.Run("D-SKIP skip the PIN", func(t *testing.T) {
 			vm.Fresh()
 			gateDSKIP(t, Install(t, s, vm, debDir(s)))
+		})
+		t.Run("D-KEEP foreign passphrase kept", func(t *testing.T) {
+			vm.Fresh()
+			gateDKEEP(t, Install(t, s, vm, debDir(s)))
 		})
 	})
 }
@@ -147,5 +154,44 @@ func gateDSKIP(t *testing.T, d *Device) {
 	}
 	if !d.Opens(t, credential(t, d.VM, "PADDOCK_LUKS_PASSPHRASE")) {
 		t.Fatal("the passphrase keyslot was removed")
+	}
+}
+
+// gateDKEEP (plan M4b.1 AC2): a passphrase keyslot an operator added before the agent's flow is never removed — the
+// agent removes only the install passphrase's keyslot — and is reported as tamper.keyslot_changed; the device is not
+// compliant.
+func gateDKEEP(t *testing.T, d *Device) {
+	d.PrepareDisk(t)
+	operator := make([]byte, 18)
+	_, _ = rand.Read(operator)
+	passphrase := hex.EncodeToString(operator)
+	d.MustIn([]byte(passphrase), `sudo sh -c 'set -e
+umask 077
+cat > /run/paddock-gate-operator
+trap "rm -f /run/paddock-gate-operator" EXIT
+cryptsetup luksAddKey -q --key-file /var/lib/paddock/install-passphrase `+d.LUKSDevice()+` /run/paddock-gate-operator'`)
+	if kinds := d.Keyslots(t); !slices.Equal(kinds, []string{"password", "password"}) {
+		t.Fatalf("keyslots after adding the operator's passphrase: %v", kinds)
+	}
+	d.RebootWithPassphrase(t)
+	d.AnswerDiskSetup(t, randomDigits(t, 8))
+	info := d.WaitDisk(t, "install passphrase removed, header escrowed again", 15*time.Minute, func(i diskInfo) bool {
+		return stored(i.RecoveryKeys) >= 1 && stored(i.Headers) >= 2 && slices.Equal(i.Tokens, []string{"password", "recovery", "tpm2+pin"})
+	})
+	if info.state() == "compliant" {
+		t.Fatalf("a device with a foreign keyslot is reported compliant: %+v", info)
+	}
+	if d.Opens(t, credential(t, d.VM, "PADDOCK_LUKS_PASSPHRASE")) {
+		t.Fatal("the install passphrase still unlocks the disk")
+	}
+	if !d.Opens(t, passphrase) {
+		t.Fatal("the operator's passphrase was removed")
+	}
+	if out := d.Must("sudo test -e /var/lib/paddock/install-passphrase && echo present || echo gone"); out != "gone" {
+		t.Fatal("the install passphrase file is kept although its keyslot is gone")
+	}
+	ev := d.WaitEvent(t, "device.tamper_keyslot_changed", 5*time.Minute, nil)
+	if after, _ := json.Marshal(ev["after"]); string(after) != `["password","recovery","tpm2+pin"]` {
+		t.Fatalf("tamper event %v", ev)
 	}
 }

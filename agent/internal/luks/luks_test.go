@@ -83,6 +83,43 @@ func TestDumpKinds(t *testing.T) {
 	}
 }
 
+func TestSlots(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "tpm2-recovery-password.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTools{answers: map[string]answer{"cryptsetup luksDump --dump-json-metadata -- /dev/sda3": {stdout: string(raw)}}}
+	m, err := luks.Dump(context.Background(), f, "/dev/sda3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{luks.KindPassword, luks.KindRecovery, luks.KindTPM2PIN} {
+		slots := m.Slots(kind)
+		if len(slots) != 1 || m.Kind(slots[0]) != kind {
+			t.Fatalf("%s: slots %v", kind, slots)
+		}
+	}
+	if m.Kind(31) != "" || len(m.Slots(luks.KindTPM2)) != 0 {
+		t.Fatal("an unused keyslot has a kind")
+	}
+}
+
+func TestKeySlot(t *testing.T) {
+	const line = "cryptsetup open --test-passphrase --verbose --disable-external-tokens --key-file /k /dev/sda3"
+	f := &fakeTools{answers: map[string]answer{line: {stdout: "No usable token is available.\nKey slot 3 unlocked.\nCommand successful.\n"}}}
+	if slot, err := luks.KeySlot(context.Background(), f, "/dev/sda3", "/k"); err != nil || slot != 3 {
+		t.Fatalf("slot %d, %v", slot, err)
+	}
+	f.answers[line] = answer{stdout: "Command successful.\n"}
+	if _, err := luks.KeySlot(context.Background(), f, "/dev/sda3", "/k"); err == nil {
+		t.Fatal("output without a keyslot accepted")
+	}
+	f.answers[line] = answer{stderr: "No key available with this passphrase.", exit: 2}
+	if _, err := luks.KeySlot(context.Background(), f, "/dev/sda3", "/k"); err == nil || !strings.Contains(err.Error(), "No key available") {
+		t.Fatalf("wrong key: %v", err)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	f := &fakeTools{answers: map[string]answer{"cryptsetup luksDump -- /dev/sda3": {stdout: "LUKS header information for /dev/sda3\n\nVersion:       \t1\nCipher name:   \taes\n"}}}
 	if v, err := luks.Version(context.Background(), f, "/dev/sda3"); err != nil || v != 1 {
@@ -96,7 +133,7 @@ func TestEnroll(t *testing.T) {
 	f := &fakeTools{answers: map[string]answer{
 		"systemd-cryptenroll --tpm2-device=auto --tpm2-with-pin=yes --tpm2-pcrs=7 --unlock-key-file=/k /dev/sda3": {},
 		"systemd-cryptenroll --recovery-key --unlock-key-file=/k /dev/sda3":                                       {stdout: recoveryKey + "\n"},
-		"systemd-cryptenroll --wipe-slot=password --unlock-key-file=/k /dev/sda3":                                 {},
+		"systemd-cryptenroll --wipe-slot=2 --unlock-key-file=/k /dev/sda3":                                        {},
 		"cryptsetup luksHeaderBackup /dev/sda3 --header-backup-file /run/h.img":                                   {},
 	}}
 	ctx := context.Background()
@@ -111,11 +148,12 @@ func TestEnroll(t *testing.T) {
 	if err != nil || string(key) != recoveryKey {
 		t.Fatalf("recovery key %q, %v", key, err)
 	}
-	if err := luks.Wipe(ctx, f, "/dev/sda3", "/k", luks.KindPassword); err != nil {
+	// Keyslots are wiped by number only, never by type.
+	if err := luks.WipeSlot(ctx, f, "/dev/sda3", "/k", 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := luks.Wipe(ctx, f, "/dev/sda3", "/k", luks.KindTPM2PIN); err == nil {
-		t.Fatal("wiping TPM2 keyslots must be refused")
+	if err := luks.WipeSlot(ctx, f, "/dev/sda3", "/k", -1); err == nil {
+		t.Fatal("a negative keyslot was accepted")
 	}
 	if err := luks.HeaderBackup(ctx, f, "/dev/sda3", "/run/h.img"); err != nil {
 		t.Fatal(err)

@@ -30,14 +30,17 @@ import (
 
 const testRecoveryKey = "fhjdtbcl-cuhkvnbr-huhbbcbt-klhvrgcj-kvjrhfdv-fnvlechn-rvgrgtiu-cnfdjbnl"
 
-// volume simulates the LUKS2 root volume /dev/sda3 behind the LUKS tools: its keyslots by kind (nil: a free slot).
+// volume simulates the LUKS2 root volume /dev/sda3 behind the LUKS tools: its keyslots by kind ("": a free slot).
+// The install passphrase (keyFile) opens keyslot installSlot only (-1: none); other password keyslots are passphrases
+// of their own.
 type volume struct {
-	t          *testing.T
-	slots      []string
-	plain      bool // the root is not on LUKS
-	keyFile    string
-	failEnroll bool
-	changes    []string // keyslot changes made through the tools
+	t           *testing.T
+	slots       []string
+	plain       bool // the root is not on LUKS
+	keyFile     string
+	installSlot int
+	failEnroll  bool
+	changes     []string // keyslot changes made through the tools
 }
 
 func (v *volume) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
@@ -51,19 +54,30 @@ func (v *volume) Command(_ context.Context, _ []string, name string, args ...str
 		return `{"blockdevices":[{"name":"/dev/mapper/vg-root","type":"lvm","fstype":"ext4","children":[{"name":"/dev/mapper/dm_crypt-0","type":"crypt","fstype":"LVM2_member","children":[{"name":"/dev/sda3","type":"part","fstype":"crypto_LUKS"}]}]}]}`, "", 0, nil
 	case line == "cryptsetup luksDump --dump-json-metadata -- /dev/sda3":
 		return v.metadata(), "", 0, nil
+	case line == "cryptsetup open --test-passphrase --verbose --disable-external-tokens --key-file "+v.keyFile+" /dev/sda3":
+		if v.installSlot < 0 {
+			return "No usable token is available.\n", "No key available with this passphrase.", 2, nil
+		}
+		return fmt.Sprintf("No usable token is available.\nKey slot %d unlocked.\nCommand successful.\n", v.installSlot), "", 0, nil
 	case line == "systemd-cryptenroll --recovery-key --unlock-key-file="+v.keyFile+" /dev/sda3":
-		if v.failEnroll {
+		if v.failEnroll || v.installSlot < 0 {
 			return "", "Failed to unlock", 1, nil
 		}
 		v.add("recovery")
 		return testRecoveryKey + "\n", "", 0, nil
-	case strings.HasPrefix(line, "systemd-cryptenroll --wipe-slot="):
-		kind := strings.TrimPrefix(args[0], "--wipe-slot=")
-		v.changes = append(v.changes, "wipe "+kind)
-		for i, k := range v.slots {
-			if k == kind {
-				v.slots[i] = ""
-			}
+	case strings.HasPrefix(line, "systemd-cryptenroll --wipe-slot=") && args[1] == "--unlock-key-file="+v.keyFile:
+		slot, err := strconv.Atoi(strings.TrimPrefix(args[0], "--wipe-slot="))
+		if err != nil {
+			v.t.Errorf("keyslots wiped by type: %s", line)
+			return "", "", -1, err
+		}
+		if v.installSlot < 0 || slot >= len(v.slots) || v.slots[slot] == "" {
+			return "", "Failed to unlock or no such keyslot", 1, nil
+		}
+		v.changes = append(v.changes, "wipe "+v.slots[slot])
+		v.slots[slot] = ""
+		if slot == v.installSlot {
+			v.installSlot = -1
 		}
 		return "", "", 0, nil
 	case strings.HasPrefix(line, "cryptsetup luksHeaderBackup /dev/sda3 --header-backup-file "):
@@ -179,7 +193,7 @@ func newLUKSFixture(t *testing.T, slots ...string) *luksFixture {
 		server: &escrowServer{key: key, objects: map[string][]byte{}},
 		keys: &bundle.Keys{EscrowWrap: &bundle.EncryptionKey{KeyID: "escrow-wrap:v1",
 			PublicKeyPEM: string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))}}}
-	f.vol = &volume{t: t, slots: slots, keyFile: f.layout.InstallPassphrase()}
+	f.vol = &volume{t: t, slots: slots, keyFile: f.layout.InstallPassphrase(), installSlot: slices.Index(slots, "password")}
 	f.write(f.layout.InstallPassphrase(), "installpassphrase")
 	f.m = &reconcile.LUKS{Tools: f.vol, Layout: f.layout, Escrow: f.server, State: &f.st, Save: func() error { return nil },
 		Emit: func(typ string, data any) {
@@ -410,5 +424,66 @@ func TestLUKSWithoutEscrowKey(t *testing.T) {
 	f.keys = nil
 	if s := f.pass(); s != protocol.DiskEscrowPending || len(f.vol.changes) != 0 {
 		t.Fatalf("without the escrow key: %s %v", s, f.vol.changes)
+	}
+}
+
+// An operator's passphrase keyslot and a recovery keyslot the agent did not create survive the replacement of a lost
+// recovery key and the removal of the install passphrase; the remaining extra keyslots are reported (plan M4b.1 AC2).
+func TestLUKSKeepsForeignKeyslots(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin", "password", "recovery")
+	f.server.answer = func(req escrow.Request) string {
+		if req.Kind == escrow.KindLUKSRecoveryKey && req.Generation == 1 {
+			return escrow.StatusFailed
+		}
+		return escrow.StatusStored
+	}
+	f.pass()
+	if f.st.PassphraseSlot == nil || *f.st.PassphraseSlot != 0 || f.st.RecoverySlot == nil || *f.st.RecoverySlot != 4 {
+		t.Fatalf("recorded keyslots: passphrase %v, recovery %v", f.st.PassphraseSlot, f.st.RecoverySlot)
+	}
+	f.poll() // generation 1 refused: its keyslot is replaced
+	f.pass() // generation 2
+	f.poll() // stored: header
+	f.poll() // header stored: the install passphrase goes
+	if f.passphrase() || len(f.events) != 1 || f.events[0].Type != protocol.EventTamperKeyslotChanged {
+		t.Fatalf("after the passphrase removal: passphrase %v, events %v, slots %v", f.passphrase(), f.events, f.vol.slots)
+	}
+	var data protocol.TamperKeyslotChanged
+	_ = json.Unmarshal(f.events[0].Data, &data)
+	if !slices.Equal(data.Before, []string{"recovery", "tpm2+pin"}) || !slices.Equal(data.After, []string{"password", "recovery", "recovery", "tpm2+pin"}) {
+		t.Fatalf("tamper data %+v", data)
+	}
+	f.pass()
+	if s := f.poll(); s != protocol.DiskEscrowPending || f.st.HeaderStored != 2 {
+		t.Fatalf("with foreign keyslots: %s %+v", s, f.st)
+	}
+	if !slices.Equal(f.vol.slots, []string{"", "tpm2+pin", "password", "recovery", "recovery"}) {
+		t.Fatalf("keyslots %v", f.vol.slots)
+	}
+	if !slices.Equal(f.vol.changes, []string{"add recovery", "wipe recovery", "add recovery", "wipe password"}) {
+		t.Fatalf("keyslot changes %v", f.vol.changes)
+	}
+	if f.pass(); len(f.events) != 1 || len(f.vol.changes) != 4 {
+		t.Fatalf("steady state: events %v, changes %v", f.events, f.vol.changes)
+	}
+}
+
+// A recorded keyslot that holds another kind now (removed and reused outside Paddock) is never wiped; neither is
+// anything wiped when the install passphrase opens no keyslot.
+func TestLUKSWipesOnlyRecordedKeyslots(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.server.answer = func(escrow.Request) string { return escrow.StatusFailed }
+	f.pass()
+	f.vol.slots[*f.st.RecoverySlot] = "password" // the recovery keyslot was replaced by a passphrase
+	f.poll()
+	f.pass()
+	if strings.Contains(strings.Join(f.vol.changes, ","), "wipe") {
+		t.Fatalf("a keyslot that is no longer the recorded one was wiped: %v", f.vol.changes)
+	}
+
+	g := newLUKSFixture(t, "password", "tpm2+pin")
+	g.vol.installSlot = -1
+	if g.pass(); len(g.vol.changes) != 0 || g.st.PassphraseSlot != nil || len(g.server.requests) != 0 {
+		t.Fatalf("without a keyslot for the install passphrase: changes %v, state %+v", g.vol.changes, g.st)
 	}
 }

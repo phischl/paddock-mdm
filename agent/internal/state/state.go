@@ -65,6 +65,10 @@ type LUKS struct {
 	HeaderAttempted int64  `json:"header_attempted,omitempty"`
 	HeaderStored    int64  `json:"header_stored,omitempty"`
 	HeaderDigest    string `json:"header_digest,omitempty"`
+	// PassphraseSlot is the keyslot of the install passphrase, recorded before the first change; RecoverySlot the
+	// keyslot of the agent's current recovery key. Only these slots are ever removed (plan M4b.1 decision 3).
+	PassphraseSlot *int `json:"passphrase_slot,omitempty"`
+	RecoverySlot   *int `json:"recovery_slot,omitempty"`
 }
 
 // LocalAdmin is the persistent state of the managed local administrator. The password itself is never stored.
