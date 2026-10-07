@@ -1,0 +1,81 @@
+# Implementierungsplan: M6a — Production deployment, backup and restore, monitoring
+
+Status: Ready for implementation (after M4c.1) · 2026-10-07 · Author: architect
+Basis: architecture v1.7 §4 (deployment topology, two hosts), §13.2 (OpenBao), §19 (observability, A12),
+§20 (backup and restore, A11); ADR 0016, 0017; concept C8, "Audit log" (separation of duties, WORM)
+
+Binding language: **MUST** / **MUST NOT** / **SHOULD** / **MAY**.
+
+## 1. Goal
+An operator can install Paddock in production on two hosts (control plane, audit domain) from documented steps, with
+public TLS, no development weakening, backups with stated RPO/RTO and a tested restore, and metrics with alert rules.
+
+## 2. Binding decisions
+
+### 2.1 Production overlays
+1. `deploy/compose/compose.prod.yaml` (control-plane host) and `deploy/compose/compose.audit.prod.yaml` (audit host):
+   Caddy with automatic HTTPS from a public ACME CA (`PADDOCK_ACME_EMAIL`, real domains `admin.`, `auth.`, `device.`,
+   `bundles.`, `fleet.` under `PADDOCK_DOMAIN`), no `tls internal`, no host port mappings other than 443/80 (ACME
+   HTTP-01), no dev blueprints, `PADDOCK_ENV=production`, OpenBao with TLS on its internal listener (self-signed CA
+   generated at install, mounted read-only into clients), RabbitMQ with `amqps` internally optional (documented), RustFS
+   and Postgres not published.
+2. `make prod-check` (and `paddock-server prod-check` used by it) refuses when: any dev-only variable is set
+   (`PADDOCK_STEPUP_WINDOW`, `PADDOCK_STEPUP_MAX_AUTH_AGE`, `PADDOCK_STALENESS_UNIT`, `PADDOCK_REVOCATION_ENABLED=true`
+   without `PADDOCK_REVOCATION_ACCEPTED=yes`, test delay hooks), a required secret file is missing or world-readable,
+   the audit bucket lacks Object Lock COMPLIANCE, the dev release public key is configured, or `compose.dev.yaml` is in
+   the effective config. Output is a checklist with PASS/FAIL per item; exit 1 on any FAIL.
+3. Install guide `docs/operations/install.md`: host requirements, DNS, secrets generation (`make prod-secrets`, which
+   never prints secrets), OpenBao production init with 5 custodians (existing runbook), audit bucket creation
+   (existing runbook), first platform admin, first organization, enrollment of the first device, upgrade procedure,
+   and a section "Residual risks you must record in your ISMS" linking `docs/compliance/residual-risks.md` (M6b).
+
+### 2.2 Backup and restore (A11)
+4. Container `pgbackrest` (image built from `debian:13.7-slim` + `pgbackrest` package — Debian package, approved;
+   pinned base) with stanzas for `paddock` and `authentik` Postgres: continuous WAL archive + daily full to an S3
+   endpoint (`PADDOCK_BACKUP_S3_*`, MUST be outside the control-plane host; the dev stack uses the audit host's RustFS
+   with a separate bucket `paddock-backup` without Object Lock). Retention 14 full backups.
+5. OpenBao: `paddock-server backup openbao` takes a Raft snapshot via the OpenBao API (AppRole `paddock-backup` with
+   `read` on `sys/storage/raft/snapshot` only), encrypts it with AES-256-GCM (Go standard library) using the key file
+   `backup_encryption_key` (32 bytes, secret file), uploads to the backup bucket; scheduled every 6 h by the
+   worker scheduler and after key operations (key creation/rotation events).
+6. Fleet MySQL: daily `mysqldump` from a sidecar job to the backup bucket (rebuildable data; RPO 24 h).
+7. Restore runbook `docs/operations/restore.md` and command `make restore-drill`: on the dev stack, take a backup, wipe
+   Postgres volumes, restore with pgBackRest (point in time = latest), restore OpenBao snapshot into a fresh OpenBao and
+   unseal with the dev shares, run `paddockctl admin bump-bundle-seq --by 1000000` and `paddockctl admin rebuild-cache`,
+   `paddockctl admin recompile --all`, then run the acceptance subset `TestDeviceProtocol|TestLoginGate|TestAuditChain|
+   TestOrganizationIsolation`. Measured RTO is written to the runbook. The audit store is not part of the restore.
+
+### 2.3 Monitoring (A12)
+8. Compose profile `observability` (prod and dev): Prometheus (image `prom/prometheus`, pinned — approved) scraping
+   every role's `/metrics` on the internal network, plus rule file `deploy/compose/prometheus/alerts.yml` with alerts:
+   role down, RabbitMQ DLQ depth > 0 (critical for `dlq.audit.writer`), audit writer lag > 10 min, compile latency p95
+   > 30 s, gateway 5xx rate, OpenBao sealed, OSV data stale (M5c), backup older than 26 h, certificate expiry < 14 d.
+   Alertmanager is **not** bundled; the docs show how to point Prometheus at an existing Alertmanager. Grafana not
+   bundled.
+9. Metrics added where missing for the alerts above (backup age, OpenBao seal status, cert expiry from Caddy's metrics).
+
+## 3. Non-goals
+Kubernetes/Helm; HA RabbitMQ/Postgres clustering automation (documented as operator topology, not automated);
+Alertmanager/Grafana bundling; multi-region.
+
+## 4. Steps
+1. Prod overlays + `prod-check` + install guide skeleton. Gate P-1: `make prod-check` on the prod overlay with generated
+   prod secrets passes; with any dev variable added it fails naming the item.
+2. pgBackRest + OpenBao snapshot + Fleet dump. Gate P-2: backups appear in the backup bucket; `pgbackrest info` lists
+   them.
+3. Restore drill. Gate P-3: `make restore-drill` green; RTO recorded.
+4. Observability profile + alerts + missing metrics. Gate P-4: `promtool check rules` passes; with the stack running
+   all targets are up; stopping the audit writer fires its alert in Prometheus within 15 min (test reads the
+   Prometheus API).
+5. Regression (acceptance, e2e; system tests not needed — no agent change). One commit per step.
+
+## 5. Acceptance criteria
+| # | Given / When / Then | Req. | Observed by |
+| --- | --- | --- | --- |
+| AC1 | Given the install guide, then an operator installs Paddock on two hosts with public TLS and `prod-check` passes | C8 | Platform operator |
+| AC2 | Given a lost control-plane database, then the restore runbook brings Paddock back within the stated RTO and devices accept new bundles | A11 | Platform operator |
+| AC3 | Given a failing role or a growing audit DLQ, then a Prometheus alert fires | A12 | Platform operator |
+
+## 6. Stop conditions
+pgBackRest cannot archive to the S3 endpoint (RustFS) — then report; any need to weaken a production default; M0 §11
+S2/S6/S7/S8.
