@@ -201,8 +201,8 @@ bundles-bootstrap: ## Create the bundles bucket and the compiler and gateway cre
 dev-seed: ## Create organizations acme and globex and assign the dev users
 	go run ./test/acceptance/cmd/devseed
 
-# Slower machines (CI runners) raise ACCEPTANCE_TIMEOUT.
-ACCEPTANCE_TIMEOUT ?= 30m
+# Guard against hangs; suite ~35 min since M4c. Slower machines (CI runners) raise ACCEPTANCE_TIMEOUT.
+ACCEPTANCE_TIMEOUT ?= 45m
 
 .PHONY: acceptance
 # The exactly-once gate checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check); they run in
