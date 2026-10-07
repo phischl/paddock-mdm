@@ -575,3 +575,42 @@ func init() {
 	deviceAuditCases["POST /api/v1/revocation-requests/{id}/reject"] = revocationReviewCases("reject", "revocation.rejected")
 	deviceAuditCases["POST /api/v1/revocation-requests/{id}/cancel"] = revocationReviewCases("cancel", "revocation.cancelled")
 }
+
+// dmsCases are the A3 cases of PUT /api/v1/settings/dms. They change a gate organization's switch, never acme's.
+func dmsCases() []auditCase {
+	const path = "/api/v1/settings/dms"
+	body := func(enabled bool, period int) map[string]any {
+		return map[string]any{"enabled": enabled, "period_days": period, "warn_days": []int{3, 1}}
+	}
+	return []auditCase{
+		{"success", func(t *testing.T, _ *auditWorld) {
+			slug, _ := gateOrganization(t)
+			a := newGateAdmin(t, slug)
+			a.stepUp(t)
+			res := call(t, a.portal, http.MethodPut, path, body(true, 30))
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, a.portal, res.RequestID, "settings.dms_changed", "success")
+		}},
+		{"validation failure", func(t *testing.T, _ *auditWorld) {
+			slug, _ := gateOrganization(t)
+			a := newGateAdmin(t, slug)
+			res := call(t, a.portal, http.MethodPut, path, body(false, 3))
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, a.portal, res.RequestID, "settings.dms_changed", "failure")
+		}},
+		{"no step-up", func(t *testing.T, _ *auditWorld) {
+			slug, _ := gateOrganization(t)
+			a := newGateAdmin(t, slug)
+			res := call(t, a.portal, http.MethodPut, path, body(true, 30))
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, a.portal, res.RequestID, "settings.dms_changed", "denied")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPut, path, body(false, 30))
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.dms_changed", "denied")
+		}},
+	}
+}
+
+func init() { deviceAuditCases["PUT /api/v1/settings/dms"] = dmsCases() }

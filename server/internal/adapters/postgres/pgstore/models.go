@@ -197,6 +197,7 @@ type DeviceStatus struct {
 	Health               json.RawMessage
 	SchemaVersions       []int32
 	LoginState           json.RawMessage
+	PresumedSelfLockedAt *time.Time
 }
 
 type DeviceUserSeen struct {
@@ -271,6 +272,15 @@ type Organization struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Domains   []string
+}
+
+type OrganizationDmsSetting struct {
+	OrganizationID uuid.UUID
+	Enabled        bool
+	PeriodDays     int32
+	WarnDays       []int32
+	UpdatedAt      time.Time
+	UpdatedBy      uuid.NullUUID
 }
 
 type OrganizationLoginSetting struct {

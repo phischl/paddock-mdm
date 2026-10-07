@@ -23,11 +23,15 @@ const PayloadType = "application/vnd.paddock.command.v1+json"
 // Command types (closed registry).
 const (
 	TypeRotateAdminPassword = "rotate_admin_password"
+	// TypeDeleteSelfLock removes the stored self-lock token of the dead man's switch after the organization turned
+	// the switch off (plan M4c decision 15).
+	TypeDeleteSelfLock = "delete_self_lock"
 )
 
 // lifetimes are the registered types with their default lifetime (architecture §11.4).
 var lifetimes = map[string]time.Duration{
 	TypeRotateAdminPassword: 7 * 24 * time.Hour,
+	TypeDeleteSelfLock:      30 * 24 * time.Hour,
 }
 
 // Lifetime returns the default lifetime of a registered type; ok is false for any other type.

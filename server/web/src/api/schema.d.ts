@@ -735,6 +735,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/dms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The dead man's switch; off with the defaults until changed. */
+        get: operations["getDMSSettings"];
+        /**
+         * @description Roles: org_admin. Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal
+         *     warns below 30), distinct warn_days below the period. Turning the switch on, or changing it while on, needs a
+         *     step-up within the last 300 s (403 step_up_required); 403 revocation_disabled while PADDOCK_REVOCATION_ENABLED
+         *     is off. Every device is recompiled; while the switch is on every active device holds a self-lock token, and if
+         *     Paddock is unreachable for longer than the period of uptime, every such device locks itself. Turning it off
+         *     deletes the tokens and tells the devices to delete their copies.
+         */
+        put: operations["updateDMSSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/login-assignment": {
         parameters: {
             query?: never;
@@ -1475,6 +1500,11 @@ export interface components {
             organization: components["schemas"]["MeOrganization"] | null;
             /** @enum {string} */
             locale: "en";
+            /**
+             * @description PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
+             *     dead man's switch answer 403 revocation_disabled.
+             */
+            revocation_enabled: boolean;
             step_up?: components["schemas"]["MeStepUp"];
         };
         /** @description Development only (PADDOCK_ENV=development; absent in production): the session's last step-up and the step-up timing the server applies, for the acceptance gates. */
@@ -1842,6 +1872,12 @@ export interface components {
              * @enum {string|null}
              */
             sudo_flavor: "classic" | "sudo-rs" | null;
+            /**
+             * Format: date-time
+             * @description Since when the device is presumed to have locked itself: it has been silent for longer than the
+             *     organization's dead man's switch period while the switch is on (plan M4c decision 17); null otherwise.
+             */
+            presumed_self_locked_at: string | null;
         };
         /** @description The latest login.* and sudo.* report of the device's agent (plan M3b decision 17). */
         DeviceLoginStatus: {
@@ -1943,7 +1979,7 @@ export interface components {
         /** @enum {string} */
         DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
         /** @enum {string} */
-        DeviceCommandType: "rotate_admin_password";
+        DeviceCommandType: "rotate_admin_password" | "delete_self_lock";
         DeviceCommand: {
             /** Format: uuid */
             id: string;
@@ -1968,6 +2004,22 @@ export interface components {
             result?: {
                 [key: string]: unknown;
             };
+        };
+        DMSSettingsUpdate: {
+            enabled: boolean;
+            /**
+             * @description Days of uptime without a time ticket after which a device locks itself: at least 7 (400 invalid_request
+             *     below), at least 1 in development installations (hardware acceptance protocol, plan M4c §7).
+             */
+            period_days: number;
+            warn_days: number[];
+        };
+        DMSSettings: {
+            enabled: boolean;
+            period_days: number;
+            warn_days: number[];
+            /** Format: date-time */
+            updated_at?: string;
         };
         /** @enum {string} */
         RevocationAction: "lock" | "destroy" | "self_lock";
@@ -4207,6 +4259,57 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    getDMSSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dead man's switch settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DMSSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateDMSSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DMSSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DMSSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     setDeviceLoginAssignment: {

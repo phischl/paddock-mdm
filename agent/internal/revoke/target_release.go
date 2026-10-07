@@ -7,9 +7,13 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 )
+
+// dayLength is a day of a self-lock token's period_days.
+const dayLength = 24 * time.Hour
 
 // RootDevice implements System: the LUKS volume of the root file system. A release binary refuses every token while
 // the test target override exists, so it can never be pointed elsewhere (plan M4c decision 13).

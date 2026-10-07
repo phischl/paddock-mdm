@@ -152,8 +152,8 @@ func revoker(sys *fakeSys, c *fakeConfirmer) *Revoker {
 func TestSequence(t *testing.T) {
 	sys := newSys(t)
 	c := &fakeConfirmer{sys: sys}
-	e, err := revoker(sys, c).Execute(context.Background(), token(t, trustedKey, nil), 0)
-	if err != nil || e != (Erasure{Erased: true, SlotsBefore: 2, SlotsAfter: 0}) {
+	e, stored, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	if err != nil || stored || e != (Erasure{Erased: true, SlotsBefore: 2, SlotsAfter: 0}) {
 		t.Fatalf("execute: %+v %v", e, err)
 	}
 	want := []string{
@@ -181,7 +181,7 @@ func TestRebootWithoutConfirmation(t *testing.T) {
 	sys.eraseFail = true
 	c := &fakeConfirmer{sys: sys, fail: true}
 	start := time.Now()
-	e, err := revoker(sys, c).Execute(context.Background(), token(t, trustedKey, nil), 0)
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
 	if err != nil || e.Erased || e.SlotsAfter != 2 {
 		t.Fatalf("execute: %+v %v", e, err)
 	}
@@ -207,7 +207,7 @@ func TestRefusals(t *testing.T) {
 	cases := map[string]struct {
 		prepare func(*fakeSys)
 		token   func(*testing.T) []byte
-		elapsed time.Duration
+		elapsed time.Duration // > 0: run as the dead man's switch
 		reason  string
 	}{
 		"missing marker":  {prepare: func(s *fakeSys) { delete(s.files, EnabledFile) }, reason: ReasonDisabled},
@@ -222,7 +222,8 @@ func TestRefusals(t *testing.T) {
 		"second within 24 h": {prepare: recent, reason: ReasonRateLimited},
 		"self-lock before its period": {token: func(t *testing.T) []byte {
 			return token(t, trustedKey, func(k *revocation.Token) { k.Action, k.PeriodDays = revocation.ActionSelfLock, 30 })
-		}, elapsed: 30*24*time.Hour - time.Second, reason: ReasonPeriod},
+		}, elapsed: 30*dayLength - time.Second, reason: ReasonPeriod},
+		"dead man's switch with a Lock":  {elapsed: 30 * dayLength, reason: ReasonNotSelfLock},
 		"test target in a release build": {prepare: func(s *fakeSys) { s.rootErr = refuse(ReasonTestTarget) }, reason: ReasonTestTarget},
 	}
 	for name, c := range cases {
@@ -235,7 +236,13 @@ func TestRefusals(t *testing.T) {
 			if c.token != nil {
 				env = c.token(t)
 			}
-			_, err := revoker(sys, &fakeConfirmer{sys: sys}).Execute(context.Background(), env, c.elapsed)
+			r := revoker(sys, &fakeConfirmer{sys: sys})
+			var err error
+			if c.elapsed > 0 {
+				_, err = r.SelfLock(context.Background(), env, c.elapsed)
+			} else {
+				_, _, err = r.Handle(context.Background(), env)
+			}
 			var refusal *Refusal
 			if !errors.As(err, &refusal) || refusal.Reason != c.reason {
 				t.Fatalf("got %v, want refusal %s", err, c.reason)
@@ -245,11 +252,25 @@ func TestRefusals(t *testing.T) {
 			}
 		})
 	}
-	// A self-lock after its period runs.
+}
+
+// TestSelfLockStoredThenRun (plan M4c decisions 15 and 16): a self-lock token paddockd hands over is stored, not run;
+// the dead man's switch runs it once its period has passed.
+func TestSelfLockStoredThenRun(t *testing.T) {
 	sys := newSys(t)
+	r := revoker(sys, &fakeConfirmer{sys: sys})
 	env := token(t, trustedKey, func(k *revocation.Token) { k.Action, k.PeriodDays = revocation.ActionSelfLock, 30 })
-	if _, err := revoker(sys, &fakeConfirmer{sys: sys}).Execute(context.Background(), env, 30*24*time.Hour); err != nil {
-		t.Fatalf("self-lock after its period: %v", err)
+	if _, stored, err := r.Handle(context.Background(), env); err != nil || !stored || string(sys.files[SelfLockFile]) != string(env) {
+		t.Fatalf("hand-off of a self-lock: stored %v, %v", stored, err)
+	}
+	if len(sys.log) != 1 || sys.log[0] != "write "+SelfLockFile {
+		t.Fatalf("storing changed more: %v", sys.log)
+	}
+	// A wall clock set two years ahead neither expires nor defers the stored token.
+	r.Now = func() time.Time { return now.Add(2 * 365 * 24 * time.Hour) }
+	e, err := r.SelfLock(context.Background(), env, 30*dayLength)
+	if err != nil || !e.Erased || sys.log[len(sys.log)-1] != "reboot" {
+		t.Fatalf("self-lock after its period: %+v %v %v", e, err, sys.log)
 	}
 }
 
@@ -257,16 +278,16 @@ func TestRefusals(t *testing.T) {
 func TestSecondTokenRefused(t *testing.T) {
 	sys := newSys(t)
 	r := revoker(sys, &fakeConfirmer{sys: sys})
-	if _, err := r.Execute(context.Background(), token(t, trustedKey, nil), 0); err != nil {
+	if _, _, err := r.Handle(context.Background(), token(t, trustedKey, nil)); err != nil {
 		t.Fatal(err)
 	}
 	other := token(t, trustedKey, func(k *revocation.Token) { k.CommandID = "0190f000-0000-7000-8000-0000000000c2" })
 	var refusal *Refusal
-	if _, err := r.Execute(context.Background(), other, 0); !errors.As(err, &refusal) || refusal.Reason != ReasonRateLimited {
+	if _, _, err := r.Handle(context.Background(), other); !errors.As(err, &refusal) || refusal.Reason != ReasonRateLimited {
 		t.Fatalf("second token: %v", err)
 	}
 	r.Now = func() time.Time { return now.Add(25 * time.Hour) }
-	if _, err := r.Execute(context.Background(), token(t, trustedKey, nil), 0); !errors.As(err, &refusal) || refusal.Reason != ReasonExecuted {
+	if _, _, err := r.Handle(context.Background(), token(t, trustedKey, nil)); !errors.As(err, &refusal) || refusal.Reason != ReasonExecuted {
 		t.Fatalf("same token a day later: %v", err)
 	}
 }

@@ -175,7 +175,8 @@
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
       "revocation_confirmed": "The device {target} confirmed that its disk keyslots are erased",
-      "revocation_refused": "The device {target} refused a revocation ({reason})"
+      "revocation_refused": "The device {target} refused a revocation ({reason})",
+      "presumed_self_locked": "The device {target} has not reached Paddock for longer than the dead man's switch period and presumably locked itself"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
@@ -232,7 +233,8 @@
       "member_removed": "{actor} removed {user} from the group {group} (highest rights {effective_class_before} → {effective_class_after})"
     },
     "settings": {
-      "login_changed": "{actor} changed the login settings"
+      "login_changed": "{actor} changed the login settings",
+      "dms_changed": "{actor} {enabled, select, true {turned on the dead man's switch with a period of {period_days, number} days} other {turned off the dead man's switch}}"
     },
     "permission_profile": {
       "created": "{actor} created the permission profile {name}",

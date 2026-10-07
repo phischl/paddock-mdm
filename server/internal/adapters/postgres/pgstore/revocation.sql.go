@@ -237,7 +237,7 @@ func (q *Queries) DeviceEscrowDestroyed(ctx context.Context, deviceID uuid.UUID)
 
 const expireRevocations = `-- name: ExpireRevocations :many
 UPDATE revocation_request SET status = 'expired', finished_at = $1::timestamptz
-WHERE status IN ('issued','delivered') AND action IN ('lock','destroy') AND expires_at <= $1::timestamptz
+WHERE status IN ('issued','delivered') AND expires_at <= $1::timestamptz
 RETURNING id, device_id
 `
 
@@ -532,6 +532,59 @@ func (q *Queries) InsertRevocationRequest(ctx context.Context, arg InsertRevocat
 	return i, err
 }
 
+const insertSelfLock = `-- name: InsertSelfLock :one
+INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_at, approved_at, issued_at,
+                                expires_at, envelope, period_days)
+VALUES ($1, $2, $3, 'self_lock', 'issued', $4, $4, $4, $5,
+        $6, $7)
+RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result
+`
+
+type InsertSelfLockParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	IssuedAt       time.Time
+	ExpiresAt      *time.Time
+	Envelope       []byte
+	PeriodDays     *int32
+}
+
+// A self-lock token of the dead man's switch: no approvals, no limits (plan M4c decision 15).
+func (q *Queries) InsertSelfLock(ctx context.Context, arg InsertSelfLockParams) (RevocationRequest, error) {
+	row := q.db.QueryRow(ctx, insertSelfLock,
+		arg.ID,
+		arg.OrganizationID,
+		arg.DeviceID,
+		arg.IssuedAt,
+		arg.ExpiresAt,
+		arg.Envelope,
+		arg.PeriodDays,
+	)
+	var i RevocationRequest
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.DeviceID,
+		&i.Action,
+		&i.Status,
+		&i.RequestedBy,
+		&i.RequestedAt,
+		&i.Reason,
+		&i.ApprovedAt,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.Envelope,
+		&i.PeriodDays,
+		&i.DeliveredAt,
+		&i.ConfirmedAt,
+		&i.FinishedAt,
+		&i.Rejection,
+		&i.Result,
+	)
+	return i, err
+}
+
 const issueRevocationRequest = `-- name: IssueRevocationRequest :one
 UPDATE revocation_request SET status = 'issued', issued_at = $1::timestamptz,
   expires_at = $2::timestamptz, envelope = $3
@@ -604,7 +657,7 @@ func (q *Queries) ListApprovedRevocationRequests(ctx context.Context) ([]uuid.UU
 
 const listOpenRevocationTokens = `-- name: ListOpenRevocationTokens :many
 SELECT id, device_id, expires_at::timestamptz AS expires_at, envelope FROM revocation_request
-WHERE status IN ('issued','delivered') AND action IN ('lock','destroy') AND expires_at > $1::timestamptz
+WHERE status IN ('issued','delivered') AND expires_at > $1::timestamptz
 ORDER BY issued_at, id
 `
 
@@ -615,7 +668,7 @@ type ListOpenRevocationTokensRow struct {
 	Envelope  []byte
 }
 
-// Issued, unexpired Lock and Destroy tokens: the issuer makes sure each is in cmd:<device_id>.
+// Issued, unexpired tokens: the issuer makes sure each is in cmd:<device_id>.
 func (q *Queries) ListOpenRevocationTokens(ctx context.Context, now time.Time) ([]ListOpenRevocationTokensRow, error) {
 	rows, err := q.db.Query(ctx, listOpenRevocationTokens, now)
 	if err != nil {

@@ -62,3 +62,26 @@ func TestSubject(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateDMS(t *testing.T) {
+	if err := ValidateDMS(MinPeriodDays, 30, []int{3, 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateDMS(MinPeriodDays, 7, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateDMS(DevMinPeriodDays, 1, nil); err != nil {
+		t.Fatalf("development period of one day: %v", err)
+	}
+	for name, c := range map[string]struct {
+		period int
+		warn   []int
+	}{
+		"period too short": {6, nil}, "period too long": {366, nil}, "warn equals period": {7, []int{7}},
+		"warn zero": {30, []int{0}}, "duplicate": {30, []int{3, 3}}, "too many": {30, []int{1, 2, 3, 4, 5, 6}},
+	} {
+		if err := ValidateDMS(MinPeriodDays, c.period, c.warn); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}

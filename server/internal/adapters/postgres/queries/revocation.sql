@@ -68,6 +68,14 @@ WHERE requested_by = @admin_id AND action IN ('lock','destroy') AND issued_at > 
 SELECT count(*) FROM revocation_request
 WHERE action IN ('lock','destroy') AND issued_at > @since::timestamptz;
 
+-- name: InsertSelfLock :one
+-- A self-lock token of the dead man's switch: no approvals, no limits (plan M4c decision 15).
+INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_at, approved_at, issued_at,
+                                expires_at, envelope, period_days)
+VALUES (@id, @organization_id, @device_id, 'self_lock', 'issued', @issued_at, @issued_at, @issued_at, @expires_at,
+        @envelope, @period_days)
+RETURNING *;
+
 -- name: IssueRevocationRequest :one
 UPDATE revocation_request SET status = 'issued', issued_at = @issued_at::timestamptz,
   expires_at = @expires_at::timestamptz, envelope = @envelope
@@ -79,9 +87,9 @@ RETURNING *;
 SELECT id FROM revocation_request WHERE status = 'approved' ORDER BY approved_at, id LIMIT 100;
 
 -- name: ListOpenRevocationTokens :many
--- Issued, unexpired Lock and Destroy tokens: the issuer makes sure each is in cmd:<device_id>.
+-- Issued, unexpired tokens: the issuer makes sure each is in cmd:<device_id>.
 SELECT id, device_id, expires_at::timestamptz AS expires_at, envelope FROM revocation_request
-WHERE status IN ('issued','delivered') AND action IN ('lock','destroy') AND expires_at > @now::timestamptz
+WHERE status IN ('issued','delivered') AND expires_at > @now::timestamptz
 ORDER BY issued_at, id;
 
 -- name: ClearRevocationStepUpTokens :execrows
@@ -113,7 +121,7 @@ RETURNING *;
 
 -- name: ExpireRevocations :many
 UPDATE revocation_request SET status = 'expired', finished_at = @now::timestamptz
-WHERE status IN ('issued','delivered') AND action IN ('lock','destroy') AND expires_at <= @now::timestamptz
+WHERE status IN ('issued','delivered') AND expires_at <= @now::timestamptz
 RETURNING id, device_id;
 
 -- name: GetRevocationRequestRow :one

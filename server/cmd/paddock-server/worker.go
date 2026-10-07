@@ -75,6 +75,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
 	escrowStore := worker.NewEscrow(app.NewEscrow(pool, escrowObjects), cache, pool, platformPool)
 	cacheSync := worker.NewCacheSync(pool, cache)
+	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), ak, pool, platformPool, syncEvery, reconcileEvery)
@@ -101,6 +102,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		commands.Run,
 		escrowStore.Run,
 		cacheSync.Run,
+		dms.Run,
 		rollouts.Run,
 		identity.RunSync,
 		identity.RunReconcile,

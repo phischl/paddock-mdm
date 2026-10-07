@@ -120,14 +120,15 @@ func revokeReason(err error) string {
 	return "internal_error"
 }
 
-// runRevoke runs `paddock-revoke execute` with the envelope on stdin. Exit 2 is a refusal with
-// {"refused": "<reason>"} on stdout; exit 0 an executed token (a real device reboots before it returns).
-func runRevoke(ctx context.Context, binary string, envelope []byte) (string, error) {
+// runRevoke runs `paddock-revoke execute [args]` with the envelope on stdin. Exit 2 is a refusal with
+// {"refused": "<reason>"} on stdout; exit 0 an executed token (a real device reboots before it returns) or a stored
+// self-lock token.
+func runRevoke(ctx context.Context, binary string, envelope []byte, args ...string) (string, error) {
 	if _, err := os.Stat(binary); err != nil {
 		return "", errNotInstalled
 	}
 	// Not canceled with the agent: a stop of paddockd must never interrupt paddock-revoke inside its sequence.
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), binary, "execute") //nolint:gosec // the fixed path of paddock-revoke
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), binary, append([]string{"execute"}, args...)...) //nolint:gosec // the fixed path of paddock-revoke
 	cmd.Stdin = bytes.NewReader(envelope)
 	cmd.Env = slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NOTIFY_SOCKET=") })
 	out, err := cmd.Output()

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Development bootstrap of OpenBao (plan M0 §6.8, M2a decision 15, M4a decision 2): init (5 shares, threshold 3),
 # unseal, transit keys audit-chain, bundle-signing, command-signing, revocation-signing (M4c decision 2) and
-# escrow-wrap (M4a decision 9), KV
+# escrow-wrap (M4a decision 9), time-ticket (M4c decision 14), KV
 # secret/paddock/session, policies and AppRoles. Idempotent. `openbao-bootstrap.sh unseal` only unseals.
 # Production: refuses to run; follow docs/operations/openbao.md.
 set -euo pipefail
@@ -83,7 +83,7 @@ if ! bao read transit/keys/audit-chain >/dev/null 2>&1; then
   echo "created transit key audit-chain"
 fi
 
-for key in bundle-signing command-signing revocation-signing; do
+for key in bundle-signing command-signing revocation-signing time-ticket; do
   if ! bao read "transit/keys/$key" >/dev/null 2>&1; then
     bao write "transit/keys/$key" type=ed25519 exportable=false allow_plaintext_backup=false >/dev/null
     echo "created transit key $key"
@@ -117,6 +117,12 @@ EOF
 bao policy write paddock-compiler - >/dev/null <<'EOF'
 path "transit/sign/bundle-signing" {
   capabilities = ["update"]
+}
+path "transit/sign/time-ticket" {
+  capabilities = ["update"]
+}
+path "transit/keys/time-ticket" {
+  capabilities = ["read"]
 }
 path "transit/keys/bundle-signing" {
   capabilities = ["read"]

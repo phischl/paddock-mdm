@@ -2,19 +2,23 @@ package compiler_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"os"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/pkg/sudoers"
+	"github.com/phischl/paddock-mdm/pkg/timeticket"
 	"github.com/phischl/paddock-mdm/server/internal/compiler"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
+	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 )
 
 // v2Device is an active device whose agent reports schema_versions.
@@ -79,6 +83,11 @@ func TestSchemaNegotiation(t *testing.T) {
 	}
 	if _, err := escrow.ParsePublicKey(b.Keys.EscrowWrap.PublicKeyPEM); err != nil {
 		t.Fatalf("escrow-wrap key: %v", err)
+	}
+	// Plan M4c decisions 14 and 15: the time-ticket keys, and the dead man's switch, off with the defaults.
+	if len(b.Keys.TimeTicket) != 1 || b.Keys.TimeTicket[0].KeyID != "time-ticket:v1" || b.DMS == nil || b.DMS.Enabled ||
+		b.DMS.PeriodDays != 30 || !slices.Equal(b.DMS.WarnDays, []int{3, 1}) {
+		t.Fatalf("time-ticket keys %+v, dms %+v", b.Keys.TimeTicket, b.DMS)
 	}
 	// Plan M4c decisions 1 and 3: the revocation section carries the flag (off by default) and revocation-signing.
 	if r := b.Revocation; r == nil || r.Enabled || len(r.Keys) != 1 || r.Keys[0].KeyID != "revocation-signing:v1" || len(r.Keys[0].PublicKey) != 44 {
@@ -349,5 +358,41 @@ func TestRevocationFlag(t *testing.T) {
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	if r := w.fetch(d).Revocation; r == nil || !r.Enabled || len(r.Keys) != 1 {
 		t.Fatalf("revocation %+v", r)
+	}
+}
+
+// TestDMSSection: the organization's dead man's switch reaches v2 bundles (plan M4c decision 15).
+func TestDMSSection(t *testing.T) {
+	w := newWorld(t)
+	d := w.v2Device("{1,2}")
+	w.exec("INSERT INTO organization_dms_settings (organization_id, enabled, period_days, warn_days) VALUES ($1, true, 14, '{5,2}')", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if dms := w.fetch(d).DMS; dms == nil || !dms.Enabled || dms.PeriodDays != 14 || !slices.Equal(dms.WarnDays, []int{5, 2}) {
+		t.Fatalf("dms %+v", dms)
+	}
+}
+
+// TestTimeTickets (plan M4c decision 14): one ticket per organization, signed with time-ticket, in tt:<org>.
+func TestTimeTickets(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	if err := w.comp.IssueTimeTickets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	env, err := w.cache.TimeTicket(ctx, w.org)
+	if err != nil || env == nil {
+		t.Fatalf("tt: %v", err)
+	}
+	reader, err := bao.NewWithToken(w.bao.Addr, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := reader.PublicKeys(ctx, "time-ticket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk, err := timeticket.Verify(env, map[string]ed25519.PublicKey{"time-ticket:v1": pub[1]}, w.org.String())
+	if err != nil || time.Since(tk.IssuedAt) > time.Minute {
+		t.Fatalf("ticket %+v %v", tk, err)
 	}
 }

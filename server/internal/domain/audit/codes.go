@@ -107,6 +107,8 @@ const (
 	CodeDeviceEscrowDestroyed           Code = "device.escrow_destroyed"
 	CodeDeviceRevocationConfirmed       Code = "device.revocation_confirmed"
 	CodeDeviceRevocationRefused         Code = "device.revocation_refused"
+	CodeSettingsDMSChanged              Code = "settings.dms_changed"
+	CodeDevicePresumedSelfLocked        Code = "device.presumed_self_locked"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -694,6 +696,19 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "reason is disabled, trust_missing, signature, malformed, wrong_device, expired, not_yet_valid, already_executed, rate_limited, period_not_reached, test_target_present, not_encrypted, not_enrolled, not_installed or internal_error.",
+	},
+	CodeSettingsDMSChanged: {
+		Code: CodeSettingsDMSChanged, Emitted: true,
+		Description: "An organization administrator changed the dead man's switch: on or off, its period and its warning lead times; turning it on or changing it while on needs a step-up.",
+		Params:      []string{"enabled", "period_days", "warn_days"},
+		Outcomes:    adminOutcomes,
+		Note:        "denied with revocation_disabled while PADDOCK_REVOCATION_ENABLED is off.",
+	},
+	CodeDevicePresumedSelfLocked: {
+		Code: CodeDevicePresumedSelfLocked, Emitted: true,
+		Description: "A device has not reached Paddock for longer than the dead man's switch period: it presumably locked itself (actor: system).",
+		Params:      []string{"period_days", "last_contact_at"},
+		Outcomes:    []Outcome{OutcomeSuccess},
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

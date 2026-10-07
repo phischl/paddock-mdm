@@ -120,6 +120,9 @@ func TestLifetime(t *testing.T) {
 	if d, ok := Lifetime(TypeRotateAdminPassword); !ok || d != 7*24*time.Hour {
 		t.Fatalf("rotate_admin_password: %v %v", d, ok)
 	}
+	if d, ok := Lifetime(TypeDeleteSelfLock); !ok || d != 30*24*time.Hour {
+		t.Fatalf("delete_self_lock: %v %v", d, ok)
+	}
 	if _, ok := Lifetime("install_now"); ok {
 		t.Fatal("install_now is not a type of this release")
 	}

@@ -106,6 +106,22 @@ var (
 // the device and the lifetime on the device clock now (expires_at must be after now; issued_at at most
 // ClockTolerance in the future). Whether the token was executed before is the caller's check.
 func Verify(envelope []byte, trust Trust, deviceID string, now time.Time) (*Token, error) {
+	t, err := VerifyStored(envelope, trust, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	if now.Add(ClockTolerance).Before(t.IssuedAt) {
+		return nil, ErrNotYetValid
+	}
+	if !now.Before(t.ExpiresAt) {
+		return nil, ErrExpired
+	}
+	return t, nil
+}
+
+// VerifyStored is Verify without the lifetime: for a self-lock token that Verify accepted when the device stored it,
+// so that the dead man's switch does not depend on the wall clock (plan M4c decision 16).
+func VerifyStored(envelope []byte, trust Trust, deviceID string) (*Token, error) {
 	if len(envelope) > MaxEnvelopeSize {
 		return nil, fmt.Errorf("%w: envelope larger than %d bytes", ErrMalformed, MaxEnvelopeSize)
 	}
@@ -130,12 +146,6 @@ func Verify(envelope []byte, trust Trust, deviceID string, now time.Time) (*Toke
 	}
 	if t.DeviceID != deviceID {
 		return nil, ErrWrongDevice
-	}
-	if now.Add(ClockTolerance).Before(t.IssuedAt) {
-		return nil, ErrNotYetValid
-	}
-	if !now.Before(t.ExpiresAt) {
-		return nil, ErrExpired
 	}
 	return &t, nil
 }

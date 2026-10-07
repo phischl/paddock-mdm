@@ -31,8 +31,10 @@ import (
 const usage = `usage: paddock-revoke <command> [flags]
 
 commands:
-  execute [--elapsed-seconds N]   verify the revocation token on stdin and execute it; JSON on stdout,
-                                  exit 0 executed, 2 refused (nothing changed), 1 error
+  execute                         verify the revocation token on stdin (from paddockd) and execute it, or store a
+                                  self-lock token for the dead man's switch; JSON on stdout,
+                                  exit 0 executed or stored, 2 refused (nothing changed), 1 error
+  execute --elapsed-seconds N     run the self-lock token on stdin after N seconds of uptime without contact
   version                         print the version
 `
 
@@ -59,8 +61,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) int {
 		return 0
 	case "execute":
 		fs := flag.NewFlagSet("execute", flag.ContinueOnError)
-		elapsed := fs.Int64("elapsed-seconds", 0, "uptime without contact counted by the dead man's switch (self-lock tokens)")
-		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || *elapsed < 0 {
+		elapsed := fs.Int64("elapsed-seconds", -1, "uptime without contact counted by the dead man's switch (self-lock tokens)")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 			fmt.Fprint(os.Stderr, usage)
 			return exitError
 		}
@@ -70,8 +72,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer) int {
 	return exitError
 }
 
-// execute reads the envelope, builds the revoker of this device and runs it. Every refusal is printed as
-// {"refused": "<reason>"} for paddockd, which reports it as revocation.refused.
+// execute reads the envelope, builds the revoker of this device and hands the token over, or — with a non-negative
+// elapsed — runs it as the dead man's switch. Every refusal is printed as {"refused": "<reason>"} for paddockd, which
+// reports it as revocation.refused.
 func execute(stdin io.Reader, stdout io.Writer, elapsed time.Duration) int {
 	envelope, err := io.ReadAll(io.LimitReader(stdin, revocation.MaxEnvelopeSize+1))
 	if err != nil {
@@ -86,7 +89,13 @@ func execute(stdin io.Reader, stdout io.Writer, elapsed time.Duration) int {
 		r.Confirm = newConfirmer(st)
 	}
 	out := json.NewEncoder(stdout)
-	erasure, err := r.Execute(context.Background(), envelope, elapsed)
+	var erasure revoke.Erasure
+	var stored bool
+	if elapsed >= 0 {
+		erasure, err = r.SelfLock(context.Background(), envelope, elapsed)
+	} else {
+		erasure, stored, err = r.Handle(context.Background(), envelope)
+	}
 	var refusal *revoke.Refusal
 	switch {
 	case errors.As(err, &refusal):
@@ -97,6 +106,10 @@ func execute(stdin io.Reader, stdout io.Writer, elapsed time.Duration) int {
 		slog.Error("revocation failed after the erasure", "error", err)
 		_ = out.Encode(erasure)
 		return exitError
+	}
+	if stored {
+		_ = out.Encode(map[string]bool{"stored": true})
+		return exitExecuted
 	}
 	_ = out.Encode(erasure)
 	return exitExecuted

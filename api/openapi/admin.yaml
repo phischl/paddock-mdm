@@ -1283,6 +1283,47 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/settings/dms:
+    get:
+      operationId: getDMSSettings
+      tags: [settings]
+      description: "Roles: org_admin, org_operator, org_auditor. The dead man's switch; off with the defaults until changed."
+      responses:
+        "200":
+          description: The dead man's switch settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DMSSettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateDMSSettings
+      tags: [settings]
+      description: |
+        Roles: org_admin. Replaces the dead man's switch settings (plan M4c decision 15): period_days 7–365 (the portal
+        warns below 30), distinct warn_days below the period. Turning the switch on, or changing it while on, needs a
+        step-up within the last 300 s (403 step_up_required); 403 revocation_disabled while PADDOCK_REVOCATION_ENABLED
+        is off. Every device is recompiled; while the switch is on every active device holds a self-lock token, and if
+        Paddock is unreachable for longer than the period of uptime, every such device locks itself. Turning it off
+        deletes the tokens and tells the devices to delete their copies.
+      x-paddock-audit: settings.dms_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DMSSettingsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DMSSettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
   /api/v1/devices/{id}/login-assignment:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -2604,7 +2645,7 @@ components:
         name: { type: string }
     Me:
       type: object
-      required: [id, username, display_name, role, organization, locale]
+      required: [id, username, display_name, role, organization, locale, revocation_enabled]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -2615,6 +2656,11 @@ components:
             - $ref: "#/components/schemas/MeOrganization"
           nullable: true
         locale: { type: string, enum: [en] }
+        revocation_enabled:
+          type: boolean
+          description: |
+            PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
+            dead man's switch answer 403 revocation_disabled.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
     MeStepUp:
@@ -2986,7 +3032,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Device"
         - type: object
-          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor]
+          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor, presumed_self_locked_at]
           properties:
             groups:
               type: array
@@ -3009,6 +3055,13 @@ components:
               enum: [classic, sudo-rs]
               nullable: true
               description: The device's sudo implementation as its agent reported it last; null until reported. sudo-rs ignores the custom lecture text.
+            presumed_self_locked_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: |
+                Since when the device is presumed to have locked itself: it has been silent for longer than the
+                organization's dead man's switch period while the switch is on (plan M4c decision 17); null otherwise.
     DeviceLoginStatus:
       type: object
       description: The latest login.* and sudo.* report of the device's agent (plan M3b decision 17).
@@ -3135,7 +3188,7 @@ components:
       enum: [pending, delivered, succeeded, failed, expired, cancelled]
     DeviceCommandType:
       type: string
-      enum: [rotate_admin_password]
+      enum: [rotate_admin_password, delete_self_lock]
     DeviceCommand:
       type: object
       required: [id, device_id, type, status, issued_at, expires_at]
@@ -3153,6 +3206,33 @@ components:
           type: object
           additionalProperties: true
           description: Outcome details reported by the device.
+    DMSSettingsUpdate:
+      type: object
+      required: [enabled, period_days, warn_days]
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        period_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: |
+            Days of uptime without a time ticket after which a device locks itself: at least 7 (400 invalid_request
+            below), at least 1 in development installations (hardware acceptance protocol, plan M4c §7).
+        warn_days:
+          type: array
+          maxItems: 5
+          items: { type: integer, minimum: 1 }
+    DMSSettings:
+      type: object
+      required: [enabled, period_days, warn_days]
+      properties:
+        enabled: { type: boolean }
+        period_days: { type: integer }
+        warn_days:
+          type: array
+          items: { type: integer }
+        updated_at: { type: string, format: date-time }
     RevocationAction:
       type: string
       enum: [lock, destroy, self_lock]

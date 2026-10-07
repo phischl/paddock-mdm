@@ -430,3 +430,133 @@ cryptsetup open --test-passphrase --key-file=- `+target.device+`'`)
 		vm.Must("sudo wipefs -aq " + target.device)
 	})
 }
+
+// dmsPeriod is the dead man's switch period of gate R6 in days of the development builds, which are minutes: longer
+// than the longest check-in interval (6 min), so the switch never fires while the stack answers.
+const dmsPeriod = 8
+
+// setDMS turns the acme dead man's switch on (period dmsPeriod, warnings 3 and 1 before) or off, as alice, signed in
+// again: the gate outlasts a portal session.
+func setDMS(s *Stack, enabled bool) {
+	s.Login()
+	s.StepUp()
+	s.Call(http.MethodPut, "/api/v1/settings/dms", map[string]any{"enabled": enabled, "period_days": dmsPeriod, "warn_days": []int{3, 1}},
+		http.StatusOK)
+}
+
+// blockStack makes the stack unreachable for the guest — the stack seen from the device is down — while SSH, which
+// comes in through the NAT port forward, keeps working.
+func blockStack(d *Device, on bool) {
+	rule := "OUTPUT -d 10.0.2.2 -p tcp --dport 8443 -j REJECT"
+	if on {
+		d.Must("sudo iptables -I " + rule)
+		return
+	}
+	d.Must("while sudo iptables -D " + rule + " 2>/dev/null; do :; done")
+}
+
+// dmsState is the agent's /var/lib/paddock/state/dms.json.
+func dmsState(t *testing.T, d *Device) (ticketAt time.Time, triggered bool) {
+	t.Helper()
+	var st struct {
+		TicketAt  time.Time `json:"ticket_at"`
+		Triggered bool      `json:"triggered"`
+	}
+	if out := d.Must("sudo cat /var/lib/paddock/state/dms.json 2>/dev/null || echo '{}'"); json.Unmarshal([]byte(out), &st) != nil {
+		t.Fatalf("dms.json %q", out)
+	}
+	return st.TicketAt, st.Triggered
+}
+
+func issue(d *Device) string {
+	return d.Must("cat /etc/issue.d/80-paddock-dms.issue 2>/dev/null || true")
+}
+
+// TestDeadMansSwitchGate is gate R6 of plan M4c (AC4) with the development builds, whose days are minutes: on each VM
+// with the stack unreachable, the device warns 3 and 1 periods' days before the end, locks itself only after the
+// period of uptime — wall-clock jumps neither defer nor trigger it — and with the switch off nothing happens for
+// three periods. The VMs run in parallel; the acme switch is turned on and off for both at once.
+func TestDeadMansSwitchGate(t *testing.T) {
+	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
+		vm.Fresh()
+		vm.Gate(t, "R6")
+		d := Install(t, s, vm, debDir(s))
+		target := loopTarget(t, d)
+		t.Cleanup(func() { vm.Together(t, "R6", "switch off at the end", func() string { setDMS(s, false); return "" }) })
+		vm.Together(t, "R6", "switch on", func() string { setDMS(s, true); return "" })
+		Until(t, vm.Name+": self-lock token stored", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
+			at, _ := dmsState(t, d)
+			return !at.IsZero() && d.Must("sudo test -s /var/lib/paddock/revoke/self-lock.dsse && echo stored || true") == "stored"
+		})
+
+		t.Run("warnings, then the self-lock", func(t *testing.T) {
+			// The last ticket the device accepts before the stack goes away starts the count.
+			before, _ := dmsState(t, d)
+			Until(t, vm.Name+": fresh ticket", 2*time.Minute, 5*time.Second, d.Checkin, func() bool {
+				at, _ := dmsState(t, d)
+				return at.After(before)
+			})
+			blockStack(d, true)
+			start := time.Now()
+			t.Cleanup(func() {
+				// The guest clock goes back to the host's time, also after a failure: later steps verify lifetimes.
+				d.Must(fmt.Sprintf("sudo date -s @%d >/dev/null && sudo timedatectl set-ntp true", time.Now().Unix()))
+				blockStack(d, false)
+			})
+			at := func(m float64) { time.Sleep(time.Until(start.Add(time.Duration(m * float64(time.Minute))))) }
+			since := func() float64 { return time.Since(start).Minutes() }
+			// The device counts in ticks of a minute from the ticket, accepted a few seconds before start: each step
+			// may come up to one tick after its time, never before.
+			const early = 0.25
+			wouldReboot := func() bool { return d.Must("test -e /run/paddock/revoke-would-reboot && echo yes || echo no") == "yes" }
+			waitFor := func(what string, until float64, ok func() bool) float64 {
+				t.Helper()
+				for !ok() {
+					if since() > until {
+						t.Fatalf("%s: not seen %.2f min after the stack went away", what, since())
+					}
+					time.Sleep(10 * time.Second)
+				}
+				return since()
+			}
+
+			at(1)
+			d.Must("sudo timedatectl set-ntp false && sudo date -s '+3 days' >/dev/null") // must not trigger
+			at(dmsPeriod - 3 - 1)
+			if w := issue(d); w != "" || wouldReboot() {
+				t.Fatalf("warning or self-lock after the jump forward: %q", w)
+			}
+			d.Must("sudo date -s '-6 days' >/dev/null") // must not defer
+			first := waitFor("first warning", dmsPeriod-3+1.5, func() bool { return strings.Contains(issue(d), "locks itself in 3 minutes") })
+			second := waitFor("second warning", dmsPeriod-1+1.5, func() bool { return strings.Contains(issue(d), "locks itself in 1 minutes") })
+			if first < dmsPeriod-3-early || second < dmsPeriod-1-early || wouldReboot() || target.slots(t) != 2 {
+				t.Fatalf("warnings at %.2f and %.2f min, self-lock %v, %d keyslots", first, second, wouldReboot(), target.slots(t))
+			}
+			locked := waitFor("self-lock", dmsPeriod+2, wouldReboot)
+			if locked < dmsPeriod-early {
+				t.Fatalf("self-locked after %.2f min, before the period", locked)
+			}
+			if n := target.slots(t); n != 0 {
+				t.Fatalf("%d keyslots left after the self-lock", n)
+			}
+			t.Logf("%s: warnings after %.2f and %.2f min, self-lock after %.2f min (period %d)", vm.Name, first, second, locked, dmsPeriod)
+		})
+
+		t.Run("switch off: nothing happens", func(t *testing.T) {
+			vm.Together(t, "R6", "switch off", func() string { setDMS(s, false); return "" })
+			Until(t, vm.Name+": self-lock token deleted", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
+				return d.Must("sudo test -e /var/lib/paddock/revoke/self-lock.dsse && echo stored || echo gone") == "gone"
+			})
+			d.Must("sudo rm -f /run/paddock/revoke-would-reboot /var/lib/paddock/revoke/state.json")
+			target.format(t)
+			blockStack(d, true)
+			time.Sleep(3 * dmsPeriod * time.Minute)
+			_, triggered := dmsState(t, d)
+			if w := issue(d); w != "" || triggered || d.Must("test -e /run/paddock/revoke-would-reboot && echo yes || echo no") != "no" ||
+				target.slots(t) != 2 {
+				t.Fatalf("switch off: warning %q, triggered %v, %d keyslots", w, triggered, target.slots(t))
+			}
+			blockStack(d, false)
+		})
+	})
+}

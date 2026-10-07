@@ -27,6 +27,8 @@ const (
 	TrustFile   = "/etc/paddock/revoke-trust.json"     // pinned at enrollment (plan M4c decision 3)
 	EnabledFile = "/etc/paddock/revoke-enabled"        // kept by paddockd from the bundle (decision 1)
 	StateFile   = "/var/lib/paddock/revoke/state.json" // executed tokens (decision 11)
+	// SelfLockFile is the stored self-lock token of the dead man's switch (decision 15).
+	SelfLockFile = "/var/lib/paddock/revoke/self-lock.dsse"
 )
 
 // RateLimit is the minimum time between two revocations of a device (ADR 0014).
@@ -52,6 +54,7 @@ const (
 	ReasonNotEncrypted = "not_encrypted"       // the root file system is not on LUKS
 	ReasonNotEnrolled  = "not_enrolled"        // no enrolled device identity
 	ReasonInternal     = "internal_error"      // a check could not run (unreadable state)
+	ReasonNotSelfLock  = "not_self_lock"       // the dead man's switch ran a token that is no self-lock
 )
 
 // Refusal is a refused token: the reason, and nothing changed on the device.
@@ -97,11 +100,46 @@ type Erasure struct {
 	SlotsAfter  int  `json:"slots_after"`
 }
 
-// Execute verifies a token and, if every check passes, runs the binding sequence. elapsed is the uptime without
-// contact the dead man's switch counted (self-lock tokens only). It returns a *Refusal when the token is refused;
-// then no session and no keyslot was touched. On success it does not return on a real device: it reboots.
-func (r *Revoker) Execute(ctx context.Context, envelope []byte, elapsed time.Duration) (Erasure, error) {
-	tok, device, err := r.check(ctx, envelope, elapsed)
+// Handle verifies a token paddockd handed over. A Lock or Destroy runs the binding sequence at once; a self-lock
+// token is stored in SelfLockFile for the dead man's switch (stored is true), replacing an older one. It returns a
+// *Refusal when the token is refused; then no session and no keyslot was touched. A run does not return on a real
+// device: it reboots.
+func (r *Revoker) Handle(ctx context.Context, envelope []byte) (e Erasure, stored bool, err error) {
+	tok, err := r.verify(envelope, true)
+	if err != nil {
+		return Erasure{}, false, err
+	}
+	if tok.Action == revocation.ActionSelfLock {
+		if err := r.Sys.WriteFile(SelfLockFile, envelope); err != nil {
+			return Erasure{}, false, refuse(ReasonInternal)
+		}
+		return Erasure{}, true, nil
+	}
+	e, err = r.execute(ctx, tok)
+	return e, false, err
+}
+
+// SelfLock runs a self-lock token of the dead man's switch after elapsed, the uptime without contact paddockd counted;
+// the token's own period_days must have passed (plan M4c decision 16). Refusals and the sequence are those of Handle.
+func (r *Revoker) SelfLock(ctx context.Context, envelope []byte, elapsed time.Duration) (Erasure, error) {
+	// The stored token's lifetime was checked when it was stored: a wall-clock change must neither defer nor
+	// trigger the switch.
+	tok, err := r.verify(envelope, false)
+	if err != nil {
+		return Erasure{}, err
+	}
+	if tok.Action != revocation.ActionSelfLock {
+		return Erasure{}, refuse(ReasonNotSelfLock)
+	}
+	if elapsed < time.Duration(tok.PeriodDays)*dayLength {
+		return Erasure{}, refuse(ReasonPeriod)
+	}
+	return r.execute(ctx, tok)
+}
+
+// execute checks whether the token may run now and runs the binding sequence.
+func (r *Revoker) execute(ctx context.Context, tok *revocation.Token) (Erasure, error) {
+	device, err := r.check(ctx, tok)
 	if err != nil {
 		return Erasure{}, err
 	}
@@ -125,52 +163,59 @@ func (r *Revoker) Execute(ctx context.Context, envelope []byte, elapsed time.Dur
 	return result, nil
 }
 
-// check runs every check before the sequence: the marker, the trust anchor, the token (signature, device, expiry,
-// period of a self-lock), whether it ran before, the 24 h limit and the root device. It returns the token and the
-// device to erase, or a refusal.
-func (r *Revoker) check(ctx context.Context, envelope []byte, elapsed time.Duration) (*revocation.Token, string, error) {
+// verify checks the marker, the trust anchor and the token: signature of a pinned key, this device and, with
+// lifetime, unexpired and not issued in the future.
+func (r *Revoker) verify(envelope []byte, lifetime bool) (*revocation.Token, error) {
 	if _, err := r.Sys.ReadFile(EnabledFile); err != nil {
-		return nil, "", refuse(ReasonDisabled)
+		return nil, refuse(ReasonDisabled)
 	}
 	if r.DeviceID == "" {
-		return nil, "", refuse(ReasonNotEnrolled)
+		return nil, refuse(ReasonNotEnrolled)
 	}
 	data, err := r.Sys.ReadFile(TrustFile)
 	if err != nil {
-		return nil, "", refuse(ReasonNoTrust)
+		return nil, refuse(ReasonNoTrust)
 	}
 	trust, err := revocation.ParseTrust(data)
 	if err != nil {
-		return nil, "", refuse(ReasonNoTrust)
+		return nil, refuse(ReasonNoTrust)
 	}
-	tok, err := revocation.Verify(envelope, trust, r.DeviceID, r.Now())
+	var tok *revocation.Token
+	if lifetime {
+		tok, err = revocation.Verify(envelope, trust, r.DeviceID, r.Now())
+	} else {
+		tok, err = revocation.VerifyStored(envelope, trust, r.DeviceID)
+	}
 	if err != nil {
-		return nil, "", refuse(verifyReason(err))
+		return nil, refuse(verifyReason(err))
 	}
-	if tok.Action == revocation.ActionSelfLock && elapsed < time.Duration(tok.PeriodDays)*24*time.Hour {
-		return nil, "", refuse(ReasonPeriod)
-	}
+	return tok, nil
+}
+
+// check runs the checks before the sequence: whether the token ran before, the 24 h limit and the root device. It
+// returns the device to erase, or a refusal.
+func (r *Revoker) check(ctx context.Context, tok *revocation.Token) (string, error) {
 	st, err := r.load()
 	if err != nil {
-		return nil, "", refuse(ReasonInternal)
+		return "", refuse(ReasonInternal)
 	}
 	if _, done := st.Executed[tok.CommandID]; done {
-		return nil, "", refuse(ReasonExecuted)
+		return "", refuse(ReasonExecuted)
 	}
 	if last := st.LastRevocationAt; last != nil && r.Now().Sub(*last) < RateLimit {
-		return nil, "", refuse(ReasonRateLimited)
+		return "", refuse(ReasonRateLimited)
 	}
 	device, err := r.Sys.RootDevice(ctx)
 	var refusal *Refusal
 	switch {
 	case errors.As(err, &refusal):
-		return nil, "", err
+		return "", err
 	case errors.Is(err, luks.ErrNotEncrypted):
-		return nil, "", refuse(ReasonNotEncrypted)
+		return "", refuse(ReasonNotEncrypted)
 	case err != nil:
-		return nil, "", refuse(ReasonInternal)
+		return "", refuse(ReasonInternal)
 	}
-	return tok, device, nil
+	return device, nil
 }
 
 func verifyReason(err error) string {

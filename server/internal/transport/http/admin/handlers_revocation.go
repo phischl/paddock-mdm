@@ -135,3 +135,23 @@ func toRevocationRequest(it app.RevocationItem) adminapi.RevocationRequest {
 	}
 	return out
 }
+
+func (h *handlers) GetDMSSettings(ctx context.Context, _ adminapi.GetDMSSettingsRequestObject) (adminapi.GetDMSSettingsResponseObject, error) {
+	s, err := h.dms.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.GetDMSSettings200JSONResponse(toDMSSettings(s)), nil
+}
+
+func (h *handlers) UpdateDMSSettings(ctx context.Context, req adminapi.UpdateDMSSettingsRequestObject) (adminapi.UpdateDMSSettingsResponseObject, error) {
+	s, err := h.dms.Update(ctx, app.DMSSettings{Enabled: req.Body.Enabled, PeriodDays: req.Body.PeriodDays, WarnDays: req.Body.WarnDays})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UpdateDMSSettings200JSONResponse(toDMSSettings(s)), nil
+}
+
+func toDMSSettings(s app.DMSSettings) adminapi.DMSSettings {
+	return adminapi.DMSSettings{Enabled: s.Enabled, PeriodDays: s.PeriodDays, WarnDays: s.WarnDays, UpdatedAt: utcPtr(s.UpdatedAt)}
+}
