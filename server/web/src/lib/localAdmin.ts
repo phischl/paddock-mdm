@@ -5,7 +5,7 @@ import {
 import type { ListFilter, ListParams, Page } from './listQuery'
 
 export const commandStatuses: DeviceCommandStatus[] = ['pending', 'delivered', 'succeeded', 'failed', 'expired', 'cancelled']
-export const commandTypes: DeviceCommandType[] = ['rotate_admin_password']
+export const commandTypes: DeviceCommandType[] = ['rotate_admin_password', 'delete_self_lock']
 
 /** The filters of the command list. */
 export const commandFilters: ListFilter[] = [

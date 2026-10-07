@@ -23,6 +23,8 @@ export const router = createRouter({
       component: () => import('./views/PermissionProfileDetail.vue'),
     },
     { path: '/settings/login', name: 'login-settings', component: () => import('./views/LoginSettings.vue') },
+    { path: '/settings/dms', name: 'dms-settings', component: () => import('./views/DMSSettings.vue') },
+    { path: '/revocations', name: 'revocations', component: () => import('./views/RevocationRequests.vue') },
     { path: '/audit', name: 'audit', component: () => import('./views/Audit.vue') },
     { path: '/platform/organizations', name: 'organizations', component: () => import('./views/Organizations.vue') },
     { path: '/platform/agent-releases', name: 'agent-releases', component: () => import('./views/AgentReleases.vue') },

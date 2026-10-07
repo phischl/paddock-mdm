@@ -20,7 +20,9 @@
     "users": "Users",
     "userGroups": "Groups",
     "permissionProfiles": "Permission profiles",
-    "loginSettings": "Login & privileges"
+    "loginSettings": "Login & privileges",
+    "revocations": "Revocations",
+    "dms": "Dead man's switch"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -99,7 +101,10 @@
     "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\ ^ $ * ? [ ].",
     "setting_locked": "This setting cannot change any more: devices already use it.",
     "step_up_required": "Confirm your identity to continue.",
-    "step_up_failed": "The identity confirmation failed. Try again with your own account."
+    "step_up_failed": "The identity confirmation failed. Try again with your own account.",
+    "revocation_disabled": "Revocation is not enabled on this installation (pending acceptance).",
+    "revocation_frozen": "You cannot request or approve revocations for 24 hours because you exceeded a revocation limit.",
+    "revocation_rejected": "The revocation was rejected."
   },
   "audit": {
     "title": "Audit log",
@@ -519,6 +524,37 @@
         "copied": "Copied",
         "close": "Hide"
       }
+    },
+    "revocation": {
+      "title": "Lock and Destroy",
+      "hint": "Lock erases every keyslot of the disk and reboots the device; it can be restored with the escrowed header and recovery key. Destroy also deletes the escrow, so the data cannot be recovered; a second administrator must approve it.",
+      "reason": "Reason",
+      "reasonHint": "Shown to the administrators and kept with the request.",
+      "lock": {
+        "label": "Lock device",
+        "title": "Lock the device",
+        "confirm": "The device {hostname} erases every keyslot of its disk and reboots with its next check-in. Nobody can unlock it until an administrator restores it with the escrowed header and recovery key."
+      },
+      "destroy": {
+        "label": "Destroy device",
+        "title": "Destroy the device",
+        "confirm": "The escrowed header and recovery key of {hostname} are deleted and the device erases every keyslot of its disk. Its data cannot be recovered. A second administrator must approve this request before anything happens."
+      },
+      "requested": {
+        "lock": "The lock was requested. The device locks itself with its next check-in.",
+        "destroy": "The destroy was requested. It waits for the approval of a second administrator on the Revocations page."
+      },
+      "presumedSelfLocked": "The device has not reached Paddock since before {at} and has presumably locked itself (dead man's switch).",
+      "timeline": "Revocations of this device",
+      "steps": "Progress",
+      "timelineSteps": {
+        "requested": "Requested {at}",
+        "approved": "Approved {at}",
+        "issued": "Issued {at}",
+        "delivered": "Delivered to the device {at}",
+        "confirmed": "Keyslots erased, confirmed by the device {at}",
+        "finished": "Ended {at}"
+      }
     }
   },
   "tokens": {
@@ -762,7 +798,8 @@
     "issuedAt": "Issued",
     "expiresAt": "Expires",
     "types": {
-      "rotate_admin_password": "Rotate the local administrator password"
+      "rotate_admin_password": "Rotate the local administrator password",
+      "delete_self_lock": "Delete the dead man's switch token"
     },
     "statuses": {
       "pending": "Pending",
@@ -771,6 +808,72 @@
       "failed": "Failed",
       "expired": "Expired",
       "cancelled": "Cancelled"
+    }
+  },
+  "revocations": {
+    "title": "Revocations",
+    "hint": "Lock, Destroy and dead man's switch requests of the organization. A Destroy waits here for a second administrator, who approves or rejects it; its requester can cancel it.",
+    "disabled": "Revocation is not enabled on this installation (pending acceptance).",
+    "hostname": "Device",
+    "action": "Action",
+    "status": "Status",
+    "requestedAt": "Requested",
+    "requestedBy": "Requested by",
+    "reason": "Reason",
+    "deadMansSwitch": "Dead man's switch",
+    "actions": {
+      "lock": "Lock",
+      "destroy": "Destroy",
+      "self_lock": "Self-lock"
+    },
+    "statuses": {
+      "requested": "Waiting for approval",
+      "approved": "Approved",
+      "issued": "Issued",
+      "delivered": "Delivered",
+      "confirmed": "Confirmed",
+      "failed": "Failed",
+      "rejected": "Rejected",
+      "cancelled": "Cancelled",
+      "expired": "Expired"
+    },
+    "review": {
+      "approve": {
+        "label": "Approve",
+        "title": "Approve the destroy",
+        "confirm": "The escrowed header and recovery key of {hostname} are deleted and the device erases every keyslot of its disk. Its data cannot be recovered.",
+        "done": "The destroy of {hostname} was approved."
+      },
+      "reject": {
+        "label": "Reject",
+        "title": "Reject the destroy",
+        "confirm": "The destroy of {hostname} is rejected; nothing happens to the device.",
+        "done": "The destroy of {hostname} was rejected."
+      },
+      "cancel": {
+        "label": "Cancel request",
+        "title": "Cancel the destroy",
+        "confirm": "Your destroy request for {hostname} is cancelled; nothing happens to the device.",
+        "done": "The destroy of {hostname} was cancelled."
+      }
+    }
+  },
+  "dms": {
+    "title": "Dead man's switch",
+    "warning": "If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself.",
+    "enabled": "Turn on the dead man's switch",
+    "period": "Period (days)",
+    "periodHint": "Days of uptime without reaching Paddock after which a device locks itself.",
+    "periodInvalid": "Enter a whole number of days from {min} to {max}.",
+    "shortPeriod": "Periods below {days} days lock devices that are merely offline for a while, for example during a vacation.",
+    "warnDays": "Warnings (days before)",
+    "warnDaysHint": "Comma-separated, for example 3, 1: the user sees a warning that many days before the device locks itself.",
+    "warnDaysInvalid": "Enter up to five whole numbers of days, each at least 1 and shorter than the period.",
+    "saved": "The settings were saved. Devices receive them with their next check-in.",
+    "confirm": {
+      "title": "Turn on the dead man's switch",
+      "message": "Every device of the organization locks itself after {days, plural, one {# day} other {# days}} of uptime without reaching Paddock, also when Paddock itself is down. A locked device must be restored with its escrowed header and recovery key.",
+      "label": "Turn on"
     }
   }
 }
