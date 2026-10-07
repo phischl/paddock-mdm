@@ -127,23 +127,26 @@ func (a *Agent) tickDMS(ctx context.Context) {
 	defer func() { a.saveDMS(st) }()
 	if a.current == nil || a.current.DMS == nil || !a.current.DMS.Enabled {
 		// Without the switch nothing happens; warnings of a switch turned off go.
-		if len(st.Warned) > 0 {
-			st.Warned = nil
-			a.clearDMSWarning()
-		}
+		a.dropDMSWarnings(&st)
 		return
 	}
 	period := time.Duration(a.current.DMS.PeriodDays) * dmsDay()
-	for _, w := range a.current.DMS.WarnDays {
-		if st.Elapsed >= period-time.Duration(w)*dmsDay() && st.Elapsed < period && !slices.Contains(st.Warned, w) {
-			st.Warned = append(st.Warned, w)
-			a.warnDMS(ctx, period-st.Elapsed)
+	env, err := os.ReadFile(a.d.Layout.Join(selfLockFile))
+	if err != nil {
+		// Without a self-lock token (delete_self_lock arrived before the bundle that turns the switch off) there is
+		// no lock to warn of (plan M5a step 0b).
+		a.dropDMSWarnings(&st)
+	} else {
+		for _, w := range a.current.DMS.WarnDays {
+			if st.Elapsed >= period-time.Duration(w)*dmsDay() && st.Elapsed < period && !slices.Contains(st.Warned, w) {
+				st.Warned = append(st.Warned, w)
+				a.warnDMS(ctx, period-st.Elapsed)
+			}
 		}
 	}
 	if st.Elapsed < period || st.Triggered {
 		return
 	}
-	env, err := os.ReadFile(a.d.Layout.Join(selfLockFile))
 	if err != nil {
 		slog.ErrorContext(ctx, "the dead man's switch period ended, but there is no self-lock token", "error", err)
 		st.Triggered = true
@@ -183,6 +186,14 @@ func (a *Agent) warnDMS(ctx context.Context, remaining time.Duration) {
 	}
 	if a.d.Notify != nil {
 		a.d.Notify(ctx, msg)
+	}
+}
+
+// dropDMSWarnings forgets the warnings shown and removes the login screen warning.
+func (a *Agent) dropDMSWarnings(st *dmsState) {
+	if len(st.Warned) > 0 {
+		st.Warned = nil
+		a.clearDMSWarning()
 	}
 }
 
@@ -234,12 +245,16 @@ func notifySessions(ctx context.Context, loginctl sessions.Loginctl, run func(ct
 }
 
 // deleteSelfLock is the command delete_self_lock: the organization turned its dead man's switch off, the stored
-// self-lock token goes (plan M4c decision 15).
+// self-lock token goes (plan M4c decision 15), and with it the pending warnings, before the bundle that turns the
+// switch off arrives (plan M5a step 0b).
 func (a *Agent) deleteSelfLock(context.Context, *command.Command) (string, map[string]any) {
 	err := os.Remove(a.d.Layout.Join(selfLockFile))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return protocol.CommandFailed, map[string]any{"reason": "remove_failed"}
 	}
+	st := a.loadDMS()
+	st.Warned = nil
+	a.saveDMS(st)
 	a.clearDMSWarning()
 	return protocol.CommandSucceeded, map[string]any{"deleted": err == nil}
 }
