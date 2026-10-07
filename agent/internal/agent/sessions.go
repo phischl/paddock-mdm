@@ -57,7 +57,8 @@ func (a *Agent) trackSessions(ctx context.Context) {
 
 // upn returns the Paddock username (UPN) of a directory user's session. Himmelblau names the users of its domain by
 // their short name (the part before @), and Paddock, device_user_seen and the affected-device rule of locks know the
-// UPN: the candidate name@domain counts only if NSS (Himmelblau) resolves it to the session's UID.
+// UPN: the candidate name@domain counts only if NSS (Himmelblau) resolves it to the session's UID. Himmelblau answers
+// for any name, but derives every UID from the name (plan M5a step 0a): only the session user's own name matches.
 func (a *Agent) upn(ctx context.Context, s sessions.Session, domain string) (string, error) {
 	if strings.Contains(s.User, "@") {
 		return s.User, nil

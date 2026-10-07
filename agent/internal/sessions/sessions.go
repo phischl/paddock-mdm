@@ -90,7 +90,8 @@ func parseShow(out string) []Session {
 	return list
 }
 
-// LocalUIDs parses /etc/passwd into name → UID.
+// LocalUIDs parses /etc/passwd into name → UID; it parses /etc/group into name → GID as well (the same first three
+// fields).
 func LocalUIDs(passwd []byte) map[string]int {
 	out := map[string]int{}
 	sc := bufio.NewScanner(bytes.NewReader(passwd))

@@ -134,6 +134,28 @@ func TestSudoUnresolvedUserIsRetried(t *testing.T) {
 	}
 }
 
+// TestSudoUIDOfLocalAccountIsUnresolved: a local account with the entry's name shadows the directory user in NSS; its
+// UID below the directory range is never written into a sudoers file (plan M5a step 0a). Himmelblau's synthetic
+// entry of a user who never signed in (the fake's empty GECOS) resolves: its UID is the one of the first login.
+func TestSudoUIDOfLocalAccountIsUnresolved(t *testing.T) {
+	ctx := context.Background()
+	sys, s, events := sudoFixture(t)
+	sys.Passwd["frank@acme.test"] = 1001
+	r := sudoResource(t, restricted("frank@acme.test", "/usr/bin/true"), restricted("dave@acme.test", "/usr/bin/true"))
+	if res := s.Apply(ctx, r); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v", res)
+	}
+	if sys.Files["/etc/sudoers.d/"+sudoers.FileName("frank@acme.test")] != nil {
+		t.Fatal("sudoers file for a local UID")
+	}
+	if sys.Files["/etc/sudoers.d/"+sudoers.FileName("dave@acme.test")] == nil {
+		t.Fatal("no sudoers file for the directory user")
+	}
+	if got := takeEvents(events); !slices.Equal(got, []event{{protocol.EventSudoUserUnresolved, `{"username":"frank@acme.test"}`}}) {
+		t.Fatalf("events %v", got)
+	}
+}
+
 func TestSudoVisudoFailureKeepsThePreviousState(t *testing.T) {
 	ctx := context.Background()
 	sys, s, events := sudoFixture(t)

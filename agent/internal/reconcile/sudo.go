@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/sessions"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/sudoers"
@@ -276,7 +277,11 @@ func (s *Sudo) Apply(ctx context.Context, r bundle.Resource) Result {
 	return Result{ID: r.ID, Status: Changed}
 }
 
-// uid resolves a username through NSS (Himmelblau answers online and from its cache).
+// uid resolves a username through NSS (Himmelblau answers online and from its cache). Himmelblau also answers for a
+// user who never signed in on the device, with a synthetic entry (empty GECOS); its UID is the one the user gets at
+// the first login (both derive it from the name with the same idmap), so the sudoers file names the right UID before
+// that login (plan M5a step 0a). A local account of the same name shadows the directory user in NSS; a UID below
+// sessions.FirstDirectoryUID is no directory user's and counts as unresolved.
 func (s *Sudo) uid(ctx context.Context, username string) (uint32, bool, error) {
 	out, exit, err := s.Sys.Getent(ctx, "passwd", username)
 	if err != nil {
@@ -287,7 +292,7 @@ func (s *Sudo) uid(ctx context.Context, username string) (uint32, bool, error) {
 		return 0, false, nil
 	}
 	uid, err := strconv.ParseUint(f[2], 10, 32)
-	if err != nil {
+	if err != nil || uid < sessions.FirstDirectoryUID {
 		return 0, false, nil
 	}
 	return uint32(uid), true, nil

@@ -155,6 +155,7 @@ func TestFileOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	writeAccounts(t, root, me.Username+":x:"+me.Uid+":"+me.Gid+"::/home/x:/bin/sh\n", group.Name+":x:"+me.Gid+":\n")
 	sys := reconcile.OS{Root: root}
 	f := &reconcile.File{Sys: sys, Managed: managed(t)}
 	r := fileRes(t, "/etc/paddock-test/sub/app.conf", "0640", me.Username, group.Name, "key = value\n")
@@ -194,6 +195,51 @@ func TestFileOnDisk(t *testing.T) {
 	}
 	if _, err := os.Stat(full); !os.IsNotExist(err) {
 		t.Fatal("not removed")
+	}
+}
+
+// writeAccounts writes etc/passwd and etc/group below root.
+func writeAccounts(t *testing.T, root, passwd, group string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{"passwd": passwd, "group": group} {
+		if err := os.WriteFile(filepath.Join(root, "etc", name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestLookupReadsLocalFilesOnly: file owners and groups resolve from /etc/passwd and /etc/group only, never through
+// NSS, where Himmelblau answers for any name with a synthetic entry (plan M5a step 0a).
+func TestLookupReadsLocalFilesOnly(t *testing.T) {
+	root := t.TempDir()
+	writeAccounts(t, root, "root:x:0:0:root:/root:/bin/bash\n# comment\nsyslog:x:104:110::/home/syslog:/usr/sbin/nologin\n",
+		"root:x:0:\nadm:x:4:syslog\n")
+	sys := reconcile.OS{Root: root}
+	if uid, err := sys.LookupUser("syslog"); err != nil || uid != 104 {
+		t.Fatalf("syslog: %d %v", uid, err)
+	}
+	if gid, err := sys.LookupGroup("adm"); err != nil || gid != 4 {
+		t.Fatalf("adm: %d %v", gid, err)
+	}
+	// Names only NSS knows: the user running the test exists on the host, but not in the root's files.
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"dave@acme.test", "syslog@acme.test"}
+	if me.Username != "root" {
+		names = append(names, me.Username)
+	}
+	for _, name := range names {
+		if uid, err := sys.LookupUser(name); err == nil {
+			t.Errorf("user %s resolved to %d", name, uid)
+		}
+	}
+	if gid, err := sys.LookupGroup("syslog"); err == nil {
+		t.Errorf("group syslog resolved to %d", gid)
 	}
 }
 
