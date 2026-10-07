@@ -85,6 +85,9 @@ type Agent struct {
 	lastAttempt time.Time
 	localAdmin  *localadmin.Manager
 	luks        *reconcile.LUKS
+	// ticketAccepted is set by a check-in that accepted a time ticket: the loop restarts the dead man's switch ticks
+	// from it, so that the count reaches each lead time at a tick, not up to a tick later (gate R6).
+	ticketAccepted bool
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -247,6 +250,10 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			d := a.Cycle(ctx)
 			nextAt = a.d.Now().Add(d)
 			next.Reset(d)
+			if a.ticketAccepted {
+				a.ticketAccepted = false
+				dms.Reset(DMSTick)
+			}
 			a.tickLocalAdmin(ctx)
 			a.tickLUKS(ctx, true)
 		}
@@ -309,7 +316,7 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	}
 	a.reportUpdate()
 	a.handleBundle(ctx, resp.Bundle)
-	a.acceptTicket(resp.TimeTicket)
+	a.ticketAccepted = a.acceptTicket(resp.TimeTicket) || a.ticketAccepted
 	a.handleCommands(ctx, resp.Commands)
 	a.handleUpdate(ctx, resp.AgentUpdate)
 	a.flush(ctx)

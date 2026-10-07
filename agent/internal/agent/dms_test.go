@@ -103,12 +103,16 @@ func TestDMSWarnsThenLocks(t *testing.T) {
 
 	// A fresh ticket resets the count and removes the warning; an older one changes nothing.
 	at := time.Now().UTC().Truncate(time.Second)
-	w.a.acceptTicket(testgw.SignedTicket(t, at))
+	if !w.a.acceptTicket(testgw.SignedTicket(t, at)) {
+		t.Fatal("fresh ticket not accepted")
+	}
 	if st := w.a.loadDMS(); st.Elapsed != 0 || len(st.Warned) != 0 || st.Triggered || w.issue(t) != "" {
 		t.Fatalf("after a ticket: %+v, issue %q", st, w.issue(t))
 	}
 	w.advance(8 * day)
-	w.a.acceptTicket(testgw.SignedTicket(t, at.Add(-time.Hour)))
+	if w.a.acceptTicket(testgw.SignedTicket(t, at.Add(-time.Hour))) {
+		t.Fatal("older ticket accepted")
+	}
 	if st := w.a.loadDMS(); st.Elapsed != 8*day {
 		t.Fatalf("an older ticket reset the count: %+v", st)
 	}
