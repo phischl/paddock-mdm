@@ -21,8 +21,8 @@ the root volume.
 
 ## 3. Steps
 1. Implementation + unit tests (fake crypttab with root, one extra LUKS volume, one unresolvable entry).
-2. Gate R1 extended: the test VM gets two secondary LUKS disks in the test-target build? — no: the test-target build
-   keeps a single target; add a unit-level test for multi-volume and an acceptance check of the extended confirmation.
+2. Gate R1 keeps its single test target (test-target build). Multi-volume behaviour is covered by unit tests and by an
+   acceptance check of the extended confirmation schema.
 3. Regression of R1/R4 on both VMs. One commit (two-person-rule path: mark the commit message "needs second review").
 
 ## 4. Stop conditions
