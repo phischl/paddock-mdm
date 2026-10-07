@@ -1,6 +1,6 @@
 # Implementierungsplan: M5a — Inventory and vulnerabilities (Fleet integration)
 
-Status: Ready for implementation (after M4c) · 2026-10-07 · Author: architect
+Status: Ready for implementation · 2026-10-07 · Author: architect
 Basis: architecture v1.7 §15 (Fleet, A10), §4.1 (hostnames), §11.5 (mutual watch), §14 privacy table; concept F4, C9,
 "Privacy by design" (negative list), ADR 0009; M4b (Debian packages in the artifact bucket, autoinstall)
 
@@ -81,6 +81,16 @@ Update management, holds, immediate installs, staleness alerts (M5b); Fleet prem
 uninstall; Fleet UI access for anyone but platform operators via local port-forward (documented).
 
 ## 5. Steps
+0. **M4c review follow-ups** (one commit each):
+   a) Himmelblau's NSS module answers `getent passwd` for **any** name (synthesised entries). Audit every place where the
+      agent or its package scripts decide "does this user exist / which UID" (sudo UID resolution, deny-list short
+      names, local admin, session detection, postinst scripts) and make each one either use the local files
+      (`/etc/passwd`, `/etc/group`) or require an entry that Himmelblau marks as a real directory user. Document the
+      result in `docs/operations/device-login.md`; add unit tests for the corrected spots. CHANGELOG `Fixed` if behaviour
+      changes.
+   b) Dead man's switch: when the self-lock token is deleted (switch disabled), the agent removes its pending warnings
+      (desktop notification state and `/etc/issue.d/80-paddock-dms.issue`) immediately, not only after the next bundle.
+      Unit test.
 1. Stack + bootstrap + Caddy restrictions + settings check. Gate F0: from outside, `fleet.<domain>/api/latest/fleet/*`
    and the UI return 404; device paths work.
 2. fleetd package build into the release pipeline; agent `inventory` reconciler; bundle field. Gate F1 (both VMs, in
