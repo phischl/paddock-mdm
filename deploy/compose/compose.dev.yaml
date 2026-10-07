@@ -50,6 +50,16 @@ services:
 
   authentik-worker: *authentik-dev
 
+  # Faster Fleet rounds so that the inventory gates (plan M5a F1–F4) do not wait an hour.
+  fleet:
+    environment:
+      FLEET_OSQUERY_POLICY_UPDATE_INTERVAL: ${FLEET_OSQUERY_POLICY_UPDATE_INTERVAL:-30s}
+      FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL: ${FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL:-2m}
+      FLEET_VULNERABILITIES_PERIODICITY: ${FLEET_VULNERABILITIES_PERIODICITY:-5m}
+    ports:
+      # Fleet's UI for platform operators on the development host only (docs/operations/fleet.md).
+      - "127.0.0.1:8412:8080"
+
   paddock-migrate:
     environment:
       PADDOCK_ENV: development
@@ -90,6 +100,8 @@ services:
       PADDOCK_ENV: development
       # Shorter identity rounds so that the acceptance gates do not wait 5 minutes for a sync round.
       PADDOCK_IDENTITY_SYNC_INTERVAL: ${PADDOCK_IDENTITY_SYNC_INTERVAL:-60s}
+      # Inventory rounds of the gates F1–F4 (plan M5a).
+      PADDOCK_INVENTORY_SYNC_INTERVAL: ${PADDOCK_INVENTORY_SYNC_INTERVAL:-60s}
 
   paddock-gateway:
     environment:

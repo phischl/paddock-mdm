@@ -53,3 +53,21 @@ bundles.{$PADDOCK_DOMAIN} {
 		respond 403
 	}
 }
+
+# Fleet (plan M5a decision 1, architecture §4.1): only the device endpoints of osquery (`/api/osquery/*`, which
+# osquery calls as `/api/v1/osquery/*`) and of fleetd (`/api/fleet/orbit/*`) are published. Fleet's UI, admin API and
+# file carving (`…/osquery/carve/*`, which Paddock never uses) answer 404 at the edge.
+fleet.{$PADDOCK_DOMAIN} {
+	tls internal
+	@carve path /api/osquery/carve/* /api/v1/osquery/carve/*
+	handle @carve {
+		respond 404
+	}
+	@device path /api/osquery/* /api/v1/osquery/* /api/fleet/orbit/*
+	handle @device {
+		reverse_proxy fleet:8080
+	}
+	handle {
+		respond 404
+	}
+}

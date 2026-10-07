@@ -115,6 +115,18 @@ for user in platform_admin alice bob carol dave; do
   secret "dev_${user}_totp_key" "$(head -c 20 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 done
 
+# Fleet (plan M5a decision 1). Fleet requires a number and a symbol in the admin password. The API token of the
+# API-only user paddock is written by fleet-bootstrap.sh; the empty file must exist for the bind mounts.
+secret fleet_mysql_root_password
+secret fleet_mysql_password
+secret fleet_redis_password
+mkdir -p "$SECRETS_DIR/fleet-redis"
+secret fleet-redis/auth.conf "requirepass $(read_secret fleet_redis_password)"
+secret fleet_server_private_key
+secret fleet_admin_password "$(rand)1!"
+secret fleet_enroll_secret
+[[ -e "$SECRETS_DIR/fleet_api_token" ]] || { : >"$SECRETS_DIR/fleet_api_token"; chmod 644 "$SECRETS_DIR/fleet_api_token"; }
+
 # Placeholder for the Caddy root certificate; the caddy-ca-export service overwrites it.
 [[ -e "$SECRETS_DIR/caddy-root.crt" ]] || { : >"$SECRETS_DIR/caddy-root.crt"; chmod 666 "$SECRETS_DIR/caddy-root.crt"; }
 

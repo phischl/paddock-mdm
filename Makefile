@@ -174,6 +174,7 @@ up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock r
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
+	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 	$(COMPOSE) --profile paddock up -d --build
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh --profile paddock
 
@@ -196,6 +197,10 @@ audit-bootstrap: ## Create the WORM audit bucket and the writer credential
 .PHONY: bundles-bootstrap
 bundles-bootstrap: ## Create the bundles bucket and the compiler and gateway credentials
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
+
+.PHONY: fleet-bootstrap
+fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), global enroll secret (development)
+	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 
 .PHONY: dev-seed
 dev-seed: ## Create organizations acme and globex and assign the dev users

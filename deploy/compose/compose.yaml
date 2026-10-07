@@ -241,6 +241,90 @@ services:
       authentik-server:
         condition: service_started
 
+  # Inventory and vulnerabilities (plan M5a decision 1, architecture §15). Fleet's UI and admin API are reachable on
+  # network cp only (paddock-worker); Caddy publishes the device paths alone under fleet.<domain>. MySQL and Redis
+  # are on the internal network fleet.
+  fleet-mysql:
+    image: ${FLEET_MYSQL_IMAGE}
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/fleet_mysql_root_password
+      MYSQL_DATABASE: fleet
+      MYSQL_USER: fleet
+      MYSQL_PASSWORD_FILE: /run/secrets/fleet_mysql_password
+    secrets: [fleet_mysql_root_password, fleet_mysql_password]
+    volumes:
+      - fleet-mysql-data:/var/lib/mysql
+    networks: [fleet]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Fleet speaks the Redis protocol; Valkey serves it (plan M5a decision 1).
+  fleet-redis:
+    image: ${VALKEY_IMAGE}
+    restart: unless-stopped
+    command: ["valkey-server", "/etc/valkey/valkey.conf"]
+    volumes:
+      - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
+      - fleet-redis-data:/data
+    secrets:
+      - source: fleet_redis_auth_conf
+        target: valkey_auth_conf
+      - fleet_redis_password
+    networks: [fleet]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/fleet_redis_password)\" valkey-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  fleet:
+    image: ${FLEET_IMAGE}
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
+    environment:
+      FLEET_MYSQL_ADDRESS: fleet-mysql:3306
+      FLEET_MYSQL_USERNAME: fleet
+      FLEET_MYSQL_DATABASE: fleet
+      FLEET_MYSQL_PASSWORD_PATH: /run/secrets/fleet_mysql_password
+      FLEET_REDIS_ADDRESS: fleet-redis:6379
+      FLEET_SERVER_ADDRESS: 0.0.0.0:8080
+      # Caddy terminates TLS.
+      FLEET_SERVER_TLS: "false"
+      # Hosts enroll with their hardware UUID, which Paddock maps to devices (plan M5a decision 6).
+      FLEET_OSQUERY_HOST_IDENTIFIER: uuid
+      FLEET_OSQUERY_STATUS_LOG_PLUGIN: stdout
+      FLEET_OSQUERY_RESULT_LOG_PLUGIN: stdout
+      # Policy results (mutual watch, plan M5a decision 8) at most this old.
+      FLEET_OSQUERY_POLICY_UPDATE_INTERVAL: ${FLEET_OSQUERY_POLICY_UPDATE_INTERVAL:-10m}
+      FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL: ${FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL:-1h}
+      FLEET_VULNERABILITIES_DATABASES_PATH: /vulndb
+      FLEET_VULNERABILITIES_PERIODICITY: ${FLEET_VULNERABILITIES_PERIODICITY:-1h}
+      FLEET_LOGGING_JSON: "true"
+      # Exported from files by /paddock/entrypoint.sh so that no secret is visible in `docker inspect`.
+      FLEET_REDIS_PASSWORD_FROMFILE: /run/secrets/fleet_redis_password
+      FLEET_SERVER_PRIVATE_KEY_FROMFILE: /run/secrets/fleet_server_private_key
+    secrets: [fleet_mysql_password, fleet_redis_password, fleet_server_private_key]
+    volumes:
+      - ./fleet/entrypoint.sh:/paddock/entrypoint.sh:ro
+      - fleet-vulndb:/vulndb
+    networks: [cp, fleet]
+    depends_on:
+      fleet-mysql:
+        condition: service_healthy
+      fleet-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+
   paddock-migrate:
     <<: *paddock
     restart: "no"
@@ -537,8 +621,13 @@ services:
       PADDOCK_ESCROW_S3_BUCKET: paddock-escrow
       PADDOCK_ESCROW_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_escrow_worker_access_key
       PADDOCK_ESCROW_S3_SECRET_KEY_FILE: /run/secrets/rustfs_escrow_worker_secret_key
+      # Fleet settings, inventory sync and policies (plan M5a decisions 2, 6 and 8).
+      PADDOCK_FLEET_URL: http://fleet:8080
+      PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
+      PADDOCK_FLEET_TOKEN_FILE: /run/secrets/fleet_api_token
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
+      - fleet_api_token
       - rustfs_escrow_worker_access_key
       - rustfs_escrow_worker_secret_key
       - db_paddock_worker_url
@@ -566,6 +655,9 @@ networks:
   # api ↔ escrow-reader only (plan M4b.1 decision 5).
   escrow:
     internal: true
+  # Fleet ↔ its MySQL and Redis only (plan M5a decision 1).
+  fleet:
+    internal: true
 
 volumes:
   caddy-data: {}
@@ -577,6 +669,9 @@ volumes:
   openbao-data: {}
   authentik-postgres-data: {}
   authentik-data: {}
+  fleet-mysql-data: {}
+  fleet-redis-data: {}
+  fleet-vulndb: {}
 
 secrets:
   postgres_superuser_password: { file: ./.secrets/postgres_superuser_password }
@@ -640,3 +735,10 @@ secrets:
   approle_revocation_issuer_secret_id: { file: ./.secrets/approle/paddock-revocation-issuer/secret_id }
   escrow_reader_token: { file: ./.secrets/escrow_reader_token }
   caddy_root_crt: { file: ./.secrets/caddy-root.crt }
+  fleet_mysql_root_password: { file: ./.secrets/fleet_mysql_root_password }
+  fleet_mysql_password: { file: ./.secrets/fleet_mysql_password }
+  fleet_redis_password: { file: ./.secrets/fleet_redis_password }
+  fleet_redis_auth_conf: { file: ./.secrets/fleet-redis/auth.conf }
+  fleet_server_private_key: { file: ./.secrets/fleet_server_private_key }
+  fleet_api_token: { file: ./.secrets/fleet_api_token }
+  fleet_enroll_secret: { file: ./.secrets/fleet_enroll_secret }

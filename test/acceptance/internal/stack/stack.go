@@ -80,6 +80,12 @@ func BundlesURL() string {
 	return Env("PADDOCK_TEST_BUNDLES_URL", "https://bundles.paddock.localhost:8443")
 }
 
+// FleetURL is Fleet's public device host (PADDOCK_TEST_FLEET_URL overrides).
+func FleetURL() string { return Env("PADDOCK_TEST_FLEET_URL", "https://fleet.paddock.localhost:8443") }
+
+// FleetAdminURL is Fleet's API on the development host (compose.dev.yaml maps 127.0.0.1:8412).
+func FleetAdminURL() string { return Env("PADDOCK_TEST_FLEET_ADMIN_URL", "http://127.0.0.1:8412") }
+
 // AuthURL is the Authentik URL (PADDOCK_TEST_AUTH_URL overrides).
 func AuthURL() string { return Env("PADDOCK_TEST_AUTH_URL", "https://auth.paddock.localhost:8443") }
 
