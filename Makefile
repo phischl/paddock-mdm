@@ -77,6 +77,11 @@ lint-web:
 		$(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run lint && npm run typecheck'; \
 	else echo "lint-web: no portal yet, skipped"; fi
 
+.PHONY: typecheck
+typecheck: ## Type-check every Go module (go vet, including tests) and the portal (vue-tsc, containerized)
+	go vet $(GO_PACKAGES)
+	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run typecheck'; fi
+
 .PHONY: test
 test: ## Unit and integration tests (requires Docker)
 	go test -count=1 $(UNIT_PACKAGES)
