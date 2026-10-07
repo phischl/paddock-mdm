@@ -543,9 +543,17 @@ func TestDeadMansSwitchGate(t *testing.T) {
 		})
 
 		t.Run("switch off: nothing happens", func(t *testing.T) {
+			before := d.bundleVersion()
 			vm.Together(t, "R6", "switch off", func() string { setDMS(s, false); return "" })
 			Until(t, vm.Name+": self-lock token deleted", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
 				return d.Must("sudo test -e /var/lib/paddock/revoke/self-lock.dsse && echo stored || echo gone") == "gone"
+			})
+			// The command that deletes the token and the bundle that turns the switch off reach the device
+			// independently: the device is only switched off once it applied a bundle compiled after the change.
+			Until(t, vm.Name+": bundle with the switch off applied", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
+				compiled := d.bundleVersion()
+				applied, _ := d.State()["applied_bundle_version"].(float64)
+				return compiled > before && applied >= compiled
 			})
 			d.Must("sudo rm -f /run/paddock/revoke-would-reboot /var/lib/paddock/revoke/state.json")
 			target.format(t)
