@@ -549,6 +549,14 @@ func TestCheckinCommands(t *testing.T) {
 	if !slices.Equal(hb.DeliveredCommands, []uuid.UUID{first, second}) {
 		t.Fatalf("delivered %v", hb.DeliveredCommands)
 	}
+	if out.TimeTicket != nil {
+		t.Fatalf("a time ticket before the first was issued: %s", out.TimeTicket)
+	}
+	// Plan M4c decision 14: every check-in carries the organization's newest time ticket, quarantined devices too.
+	ticket := []byte(`{"payloadType":"application/vnd.paddock.time-ticket.v1+json","payload":"e30=","signatures":[{"keyid":"time-ticket:v1","sig":"c2ln"}]}`)
+	if err := e.cache.PutTimeTicket(ctx, e.org, ticket); err != nil {
+		t.Fatal(err)
+	}
 
 	q := newClient(t)
 	qid := e.enrolled(q, "quarantined")
@@ -557,7 +565,8 @@ func TestCheckinCommands(t *testing.T) {
 	}
 	r = e.send(q, request{method: "POST", path: "/v1/checkin", device: qid.String(), body: checkinBody(0)})
 	out = protocol.CheckinResponse{}
-	if err := json.Unmarshal(r.body, &out); err != nil || r.status != http.StatusOK || out.Commands == nil || len(out.Commands) != 0 {
+	if err := json.Unmarshal(r.body, &out); err != nil || r.status != http.StatusOK || out.Commands == nil || len(out.Commands) != 0 ||
+		string(out.TimeTicket) != string(ticket) {
 		t.Fatalf("quarantined device: %d %s", r.status, r.body)
 	}
 }

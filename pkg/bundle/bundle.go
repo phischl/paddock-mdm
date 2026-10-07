@@ -56,6 +56,16 @@ type Bundle struct {
 	// Revocation is the revocation section (schema v2 only, plan M4c decisions 1 and 3). Agents that do not know it
 	// ignore the field.
 	Revocation *Revocation `json:"revocation,omitempty"`
+	// DMS is the organization's dead man's switch (schema v2 only, plan M4c decisions 15 and 16).
+	DMS *DMS `json:"dms,omitempty"`
+}
+
+// DMS configures the dead man's switch of a device: when enabled, a device that has not accepted a time ticket for
+// PeriodDays of uptime locks itself with its stored self-lock token; it warns WarnDays before.
+type DMS struct {
+	Enabled    bool  `json:"enabled"`
+	PeriodDays int   `json:"period_days"`
+	WarnDays   []int `json:"warn_days"`
 }
 
 // Revocation is the revocation section of a schema v2 bundle.
@@ -74,6 +84,8 @@ type Keys struct {
 	CommandSigning []SigningKey `json:"command_signing"`
 	// EscrowWrap is the latest version of the escrow-wrap key that devices encrypt escrowed secrets to.
 	EscrowWrap *EncryptionKey `json:"escrow_wrap,omitempty"`
+	// TimeTicket are all active versions of the time-ticket key (plan M4c decision 14).
+	TimeTicket []SigningKey `json:"time_ticket,omitempty"`
 }
 
 // EncryptionKey is an RSA public key with its key ID, e.g. "escrow-wrap:v1".

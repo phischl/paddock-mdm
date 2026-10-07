@@ -250,6 +250,13 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/settings/login", currentLoginSettings(t, w.alice)
 	}},
 
+	"GET /api/v1/settings/dms": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/dms", nil
+	}},
+	"PUT /api/v1/settings/dms": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/dms", map[string]any{"enabled": false, "period_days": 30, "warn_days": []int{3, 1}}
+	}},
+
 	"POST /api/v1/devices/{id}/lock": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/lock" },
 		map[string]any{"confirm_hostname": "x"}),
 	"POST /api/v1/devices/{id}/destroy": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/destroy" },

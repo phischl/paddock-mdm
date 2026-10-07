@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -34,6 +35,11 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	visudo := l.String("PADDOCK_VISUDO", "/usr/sbin/visudo")
 	himmelblau := l.String("PADDOCK_HIMMELBLAU_VERSION", "4.0.4")
 	revocationEnabled := config.RevocationEnabled(l)
+	// Development agents count the dead man's switch in minutes (plan M4c gate R6): tickets every 30 s.
+	var ticketInterval time.Duration
+	if common.Development() {
+		ticketInterval = 30 * time.Second
+	}
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -66,12 +72,14 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 		Runner:            app.NewActionRunner(pool, nil, httpx.RequestID),
 		Keys:              signer,
 		RevocationEnabled: revocationEnabled,
+		TicketInterval:    ticketInterval,
 	})
 
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}
 	var consumers []*mq.Consumer
 	fns := []func(context.Context) error{
 		func(ctx context.Context) error { comp.RunReconcile(ctx); return nil },
+		func(ctx context.Context) error { comp.RunTimeTickets(ctx); return nil },
 	}
 	for _, key := range mq.StateRoutingKeys() {
 		consumer := mq.NewConsumer(mqCfg, mq.StateQueue(key), compiler.Prefetch)

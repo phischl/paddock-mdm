@@ -72,8 +72,9 @@ func (i *Issuer) Run(ctx context.Context) error {
 	}
 }
 
-// Round issues approved requests that no message handled (lost, failed), puts every open token that is missing into
-// cmd:<device_id> again (an emptied Valkey) and deletes the raw step-up tokens of requests finished 30 days ago.
+// Round issues approved requests that no message handled (lost, failed), keeps the self-lock tokens of the dead man's
+// switch, puts every open token that is missing into cmd:<device_id> again (an emptied Valkey) and deletes the raw
+// step-up tokens of requests finished 30 days ago.
 func (i *Issuer) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "revocation-issuer"})
 	orgs, err := i.org.OrganizationIDs(sys)
@@ -90,13 +91,9 @@ func (i *Issuer) Round(ctx context.Context) error {
 
 func (i *Issuer) roundOrg(ctx context.Context, org uuid.UUID) error {
 	var approved []uuid.UUID
-	var open []pgstore.ListOpenRevocationTokensRow
 	err := i.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		if approved, err = q.ListApprovedRevocationRequests(ctx); err != nil {
-			return err
-		}
-		if open, err = q.ListOpenRevocationTokens(ctx, i.now()); err != nil {
 			return err
 		}
 		n, err := q.ClearRevocationStepUpTokens(ctx, i.now().Add(-TokenRetention))
@@ -112,6 +109,17 @@ func (i *Issuer) roundOrg(ctx context.Context, org uuid.UUID) error {
 		if err := i.Issue(ctx, org, id); err != nil {
 			slog.WarnContext(ctx, "issuing a revocation failed; retrying next round", "request_id", id, "error", err)
 		}
+	}
+	if err := i.reconcileSelfLocks(ctx); err != nil {
+		return err
+	}
+	var open []pgstore.ListOpenRevocationTokensRow
+	if err := i.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		open, err = q.ListOpenRevocationTokens(ctx, i.now())
+		return err
+	}); err != nil {
+		return err
 	}
 	for _, t := range open {
 		present, err := i.commands.HasCommand(ctx, t.DeviceID, t.ID)

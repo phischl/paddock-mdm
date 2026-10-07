@@ -77,6 +77,9 @@ type Config struct {
 	Keys KeyReader
 	// RevocationEnabled is PADDOCK_REVOCATION_ENABLED, the revocation.enabled of v2 bundles (plan M4c decision 1).
 	RevocationEnabled bool
+	// TicketInterval replaces timeticket.Interval (development stacks issue tickets more often, so a dead man's switch
+	// period of minutes in development agents is never reached while the stack is up).
+	TicketInterval time.Duration
 }
 
 // KeyReader reads public keys of Transit keys (bao.Client).
@@ -176,6 +179,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		identity := &identityLoader{q: q}
 		ids, err := expand(ctx, q, events, identity)
 		if err != nil || len(ids) == 0 {
+			return err
+		}
+		if keys.DMS, err = loadDMS(ctx, q); err != nil {
 			return err
 		}
 		rows, err := q.ListCompileTargets(ctx, ids)
@@ -338,7 +344,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
 		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources, Keys: v2.Keys,
-		Revocation: v2.Revocation,
+		Revocation: v2.Revocation, DMS: v2.DMS,
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -359,10 +365,11 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted}, true, nil, nil
 }
 
-// v2Trust are the key material and the revocation section of v2 bundles.
+// v2Trust are the key material, the revocation section and the organization's dead man's switch of v2 bundles.
 type v2Trust struct {
 	Keys       *bundle.Keys       `json:"keys"`
 	Revocation *bundle.Revocation `json:"revocation"`
+	DMS        *bundle.DMS        `json:"-"` // per organization, not part of the reconcile digest
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap
@@ -385,8 +392,13 @@ func (c *Compiler) keys(ctx context.Context) (v2Trust, error) {
 	for i, k := range revocationKeys {
 		rev.Keys[i] = bundle.SigningKey{KeyID: k.KeyID, PublicKey: k.PublicKey}
 	}
+	ticketKeys, err := timeTicketKeys(ctx, c.cfg.Keys)
+	if err != nil {
+		return v2Trust{}, err
+	}
 	return v2Trust{
-		Keys:       &bundle.Keys{CommandSigning: commandKeys, EscrowWrap: &bundle.EncryptionKey{KeyID: escrow.KeyID(version), PublicKeyPEM: pem}},
+		Keys: &bundle.Keys{CommandSigning: commandKeys, EscrowWrap: &bundle.EncryptionKey{KeyID: escrow.KeyID(version), PublicKeyPEM: pem},
+			TimeTicket: ticketKeys},
 		Revocation: rev,
 	}, nil
 }

@@ -72,6 +72,13 @@ func (c *commands) PutCommand(_ context.Context, _, id uuid.UUID, cmd devicecach
 	return nil
 }
 
+func (c *commands) DeleteCommand(_ context.Context, _, id uuid.UUID) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.put, id)
+	return nil
+}
+
 func (c *commands) HasCommand(_ context.Context, _, id uuid.UUID) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -422,5 +429,93 @@ func TestRoundRepublishes(t *testing.T) {
 	}
 	if _, ok := w.commands.put[id]; !ok {
 		t.Fatal("round did not republish")
+	}
+}
+
+// selfLocks returns the open self-lock tokens of a device: request ID → period.
+func (w *world) selfLocks(dev uuid.UUID) map[uuid.UUID]int {
+	w.t.Helper()
+	rows, err := w.super.Query(context.Background(), `SELECT id, period_days FROM revocation_request
+		WHERE device_id = $1 AND action = 'self_lock' AND status IN ('issued','delivered')`, dev)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]int{}
+	for rows.Next() {
+		var id uuid.UUID
+		var period int
+		if err := rows.Scan(&id, &period); err != nil {
+			w.t.Fatal(err)
+		}
+		out[id] = period
+	}
+	return out
+}
+
+// TestSelfLocks (plan M4c decision 15): while the switch is on every active device has one self-lock token with the
+// period in it, without approvals; a new period replaces it; turning the switch off cancels it and removes it from
+// cmd:<device_id>; with revocation disabled nothing is signed.
+func TestSelfLocks(t *testing.T) {
+	w := newWorld(t, true)
+	dev, retired := w.device(), w.device()
+	w.exec("UPDATE device SET state = 'retired' WHERE id = $1", retired)
+	ctx := context.Background()
+	if err := w.issuer.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.selfLocks(dev)); n != 0 {
+		t.Fatalf("%d self-locks with the switch off", n)
+	}
+	w.exec("INSERT INTO organization_dms_settings (organization_id, enabled, period_days) VALUES ($1, true, 14)", w.org)
+	if err := w.issuer.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	locks := w.selfLocks(dev)
+	if len(locks) != 1 || len(w.selfLocks(retired)) != 0 {
+		t.Fatalf("self-locks %v, retired %v", locks, w.selfLocks(retired))
+	}
+	var first uuid.UUID
+	for id := range locks {
+		first = id
+	}
+	tok, err := revocation.Verify(w.commands.put[first].Envelope, w.trust, dev.String(), time.Now())
+	if err != nil || tok.Action != revocation.ActionSelfLock || tok.PeriodDays != 14 || tok.ExpiresAt.Sub(tok.IssuedAt) != 365*24*time.Hour {
+		t.Fatalf("self-lock token %+v %v", tok, err)
+	}
+	if err := w.issuer.Round(ctx); err != nil || len(w.selfLocks(dev)) != 1 {
+		t.Fatalf("second round: %v %v", w.selfLocks(dev), err)
+	}
+
+	w.exec("UPDATE organization_dms_settings SET period_days = 21 WHERE organization_id = $1", w.org)
+	if err := w.issuer.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	locks = w.selfLocks(dev)
+	if _, old := locks[first]; old || len(locks) != 1 {
+		t.Fatalf("after a new period: %v", locks)
+	}
+	if _, kept := w.commands.put[first]; kept {
+		t.Fatal("the replaced token stays in cmd:<device_id>")
+	}
+	var second uuid.UUID
+	for id := range locks {
+		second = id
+	}
+
+	w.exec("UPDATE organization_dms_settings SET enabled = false WHERE organization_id = $1", w.org)
+	if err := w.issuer.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The round repairs the cmd:<device_id> of every organization of the shared database; only this device counts.
+	if _, kept := w.commands.put[second]; kept || len(w.selfLocks(dev)) != 0 {
+		t.Fatalf("switch off: self-locks %v, token kept in cmd: %v", w.selfLocks(dev), kept)
+	}
+
+	off := newWorld(t, false)
+	d := off.device()
+	off.exec("INSERT INTO organization_dms_settings (organization_id, enabled, period_days) VALUES ($1, true, 14)", off.org)
+	if err := off.issuer.Round(ctx); err != nil || len(off.selfLocks(d)) != 0 {
+		t.Fatalf("revocation disabled: %v %v", off.selfLocks(d), err)
 	}
 }

@@ -388,18 +388,31 @@ components:
           description: |
             Pending commands of the device, oldest first, each a DSSE envelope with payload type
             application/vnd.paddock.command.v1+json signed by a command-signing key from the device's bundle
-            (pkg/command). Agents that do not know commands ignore the field.
+            (pkg/command), or a revocation token (application/vnd.paddock.revocation.v1+json, pkg/revocation) signed by
+            a revocation-signing key, which the agent hands to paddock-revoke uninterpreted (plan M4c decision 11).
+            Agents that do not know commands ignore the field.
           items: { $ref: "#/components/schemas/CommandEnvelope" }
+        time_ticket:
+          description: |
+            The organization's newest time ticket of the dead man's switch: a DSSE envelope with payload type
+            application/vnd.paddock.time-ticket.v1+json over {organization_id, issued_at}, signed by a time-ticket key
+            from the device's bundle (pkg/timeticket, plan M4c decision 14). Absent until the first ticket.
+          allOf:
+            - $ref: "#/components/schemas/CommandEnvelope"
     CommandEnvelope:
       type: object
       required: [payloadType, payload, signatures]
       properties:
-        payloadType: { type: string, enum: [application/vnd.paddock.command.v1+json] }
+        payloadType:
+          type: string
+          enum: [application/vnd.paddock.command.v1+json, application/vnd.paddock.revocation.v1+json,
+                 application/vnd.paddock.time-ticket.v1+json]
         payload:
           type: string
           description: |
-            Standard base64 of the canonical JSON (RFC 8785) {command_id, device_id, organization_id, type, params,
-            issued_at, expires_at}.
+            Standard base64 of the canonical JSON (RFC 8785): a command {command_id, device_id, organization_id, type,
+            params, issued_at, expires_at}, a revocation token {command_id, device_id, organization_id, action,
+            issued_at, expires_at, request_id, period_days} or a time ticket {organization_id, issued_at}.
         signatures:
           type: array
           minItems: 1
@@ -407,7 +420,7 @@ components:
             type: object
             required: [keyid, sig]
             properties:
-              keyid: { type: string, description: 'e.g. "command-signing:v1"' }
+              keyid: { type: string, description: 'e.g. "command-signing:v1", "revocation-signing:v1", "time-ticket:v1"' }
               sig: { type: string, description: Standard base64 Ed25519 signature over the DSSE PAE. }
     EscrowRequest:
       type: object

@@ -149,12 +149,24 @@ func TestRevocationFrozen(t *testing.T) {
 	e.expectEvent(r, "revocation.requested:denied:revocation_frozen")
 }
 
-// TestRevocationDisabled (gate R5, plan M4c decision 1): with the feature flag off every revocation endpoint answers
-// 403 revocation_disabled and records the attempt as denied.
+// TestRevocationDisabled (gate R5, plan M4c decision 1): with the feature flag off every revocation endpoint and the
+// dead man's switch answer 403 revocation_disabled and record the attempt as denied; GET /api/v1/me tells the portal.
 func TestRevocationDisabled(t *testing.T) {
-	e := newEnvWith(t, func(d *admin.Deps) { d.Revocations = app.NewRevocations(d.Runner, nil, nil, false) })
+	e := newEnvWith(t, func(d *admin.Deps) {
+		d.Revocations = app.NewRevocations(d.Runner, nil, nil, false)
+		d.DMS = app.NewDMS(d.Runner, nil, nil, false, false)
+	})
 	alice := e.steppedUp(e.session(e.acme, principal.RoleOrgAdmin), time.Now())
+	var me adminapi.Me
+	if e.do(call{method: "GET", path: "/api/v1/me", cookie: alice}).decode(t, &me); me.RevocationEnabled {
+		t.Fatal("/me: revocation_enabled with the flag off")
+	}
 	dev := e.insertDevice(e.acme, "lt-off", "active")
+	r := e.do(call{method: "PUT", path: "/api/v1/settings/dms", cookie: alice,
+		body: map[string]any{"enabled": true, "period_days": 30, "warn_days": []int{3, 1}}})
+	if r.status != http.StatusForbidden || !strings.Contains(string(r.body), "revocation_disabled") {
+		t.Fatalf("dms: %d %s", r.status, r.body)
+	}
 	body := map[string]any{"confirm_hostname": "lt-off"}
 	for _, path := range []string{
 		"/api/v1/devices/" + dev.String() + "/lock",
@@ -170,5 +182,66 @@ func TestRevocationDisabled(t *testing.T) {
 		if got := e.events(r.header.Get("X-Request-Id")); len(got) != 1 || !strings.HasSuffix(got[0], ":denied:revocation_disabled") {
 			t.Fatalf("%s audit %v", path, got)
 		}
+	}
+}
+
+// TestDMSSettings (plan M4c decision 15): off with the defaults until changed; turning the switch on needs a step-up;
+// turning it off cancels the self-lock tokens and tells every active device to delete its copy.
+func TestDMSSettings(t *testing.T) {
+	e := newEnv(t)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	var me adminapi.Me
+	if e.do(call{method: "GET", path: "/api/v1/me", cookie: alice}).decode(t, &me); !me.RevocationEnabled {
+		t.Fatal("/me: revocation_enabled false with the flag on")
+	}
+	dev := e.insertDevice(e.acme, "lt-dms", "active")
+	var s adminapi.DMSSettings
+	e.do(call{method: "GET", path: "/api/v1/settings/dms", cookie: alice}).decode(t, &s)
+	if s.Enabled || s.PeriodDays != 30 || len(s.WarnDays) != 2 {
+		t.Fatalf("defaults %+v", s)
+	}
+	on := map[string]any{"enabled": true, "period_days": 14, "warn_days": []int{3, 1}}
+	r := e.do(call{method: "PUT", path: "/api/v1/settings/dms", cookie: alice, body: on})
+	if r.status != http.StatusForbidden || !strings.Contains(string(r.body), "step_up_required") {
+		t.Fatalf("without step-up: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "settings.dms_changed:denied:step_up_required")
+	alice = e.steppedUp(alice, time.Now())
+	if r := e.do(call{method: "PUT", path: "/api/v1/settings/dms", cookie: alice, body: map[string]any{"enabled": true, "period_days": 14, "warn_days": []int{14}}}); r.status != http.StatusBadRequest {
+		t.Fatalf("warning at the period: %d %s", r.status, r.body)
+	}
+	r = e.do(call{method: "PUT", path: "/api/v1/settings/dms", cookie: alice, body: on})
+	if r.status != http.StatusOK {
+		t.Fatalf("enable: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "settings.dms_changed:success:")
+
+	if _, err := e.super.Exec(context.Background(), `INSERT INTO revocation_request (id, organization_id, device_id, action, status, issued_at,
+		expires_at, envelope, period_days) VALUES ('0190f000-0000-7000-8000-0000000000e1', $1, $2, 'self_lock', 'issued', now(),
+		now() + interval '365 days', '\x7b7d', 14)`, e.acme, dev); err != nil {
+		t.Fatal(err)
+	}
+	r = e.do(call{method: "PUT", path: "/api/v1/settings/dms", cookie: e.session(e.acme, principal.RoleOrgAdmin),
+		body: map[string]any{"enabled": false, "period_days": 14, "warn_days": []int{3, 1}}})
+	if r.status != http.StatusOK {
+		t.Fatalf("disable: %d %s", r.status, r.body)
+	}
+	var status string
+	var commands int
+	if err := e.super.QueryRow(context.Background(), `SELECT (SELECT status FROM revocation_request WHERE id = '0190f000-0000-7000-8000-0000000000e1'),
+		(SELECT count(*) FROM device_command WHERE device_id = $1 AND type = 'delete_self_lock')`, dev).Scan(&status, &commands); err != nil ||
+		status != "cancelled" || commands != 1 {
+		t.Fatalf("after disabling: token %s, %d delete commands, %v", status, commands, err)
+	}
+
+	// The device page shows a device the worker presumes self-locked (decision 17).
+	if _, err := e.super.Exec(context.Background(), `INSERT INTO device_status (device_id, organization_id, presumed_self_locked_at)
+		VALUES ($1, $2, '2026-10-01T00:00:00Z')`, dev, e.acme); err != nil {
+		t.Fatal(err)
+	}
+	var detail adminapi.DeviceDetail
+	e.do(call{method: "GET", path: "/api/v1/devices/" + dev.String(), cookie: alice}).decode(t, &detail)
+	if detail.PresumedSelfLockedAt == nil || !detail.PresumedSelfLockedAt.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("presumed_self_locked_at %v", detail.PresumedSelfLockedAt)
 	}
 }

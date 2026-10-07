@@ -176,6 +176,7 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		}
 		out.LoginStatus = toDeviceLoginStatus(d.Status.LoginState)
 		out.SudoFlavor = toSudoFlavor(d.Status.Health)
+		out.PresumedSelfLockedAt = d.Status.PresumedSelfLockedAt
 	}
 	for i, u := range d.Login.Users {
 		out.LoginAssignment.Users[i] = toUserRef(u)

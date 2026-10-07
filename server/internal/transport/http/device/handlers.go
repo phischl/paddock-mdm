@@ -169,6 +169,12 @@ func (g *gateway) checkin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The time ticket proves the contact to the dead man's switch (plan M4c decision 14); quarantined devices get it
+	// too (fail safe).
+	if out.TimeTicket, err = g.d.Cache.TimeTicket(r.Context(), dev.key.OrganizationID); err != nil {
+		g.fail(w, r, err)
+		return
+	}
 	issued := seq - 1 // the value the device should have sent
 	hb := ingest.Heartbeat{
 		DeviceID: dev.id, OrganizationID: dev.key.OrganizationID, ReceivedAt: g.d.Now().UTC(),

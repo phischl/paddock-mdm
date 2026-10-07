@@ -8,6 +8,7 @@ OpenBao holds Paddock's keys (ADR 0006):
 | `transit/keys/bundle-signing` | Ed25519 key that signs device bundles (non-exportable) | `compiler` (AppRole `paddock-compiler`); `api` reads the public keys |
 | `transit/keys/command-signing` | Ed25519 key that signs device commands (non-exportable); its public keys reach devices in their bundles | `worker` (AppRole `paddock-worker`, sign only); `compiler` reads the public keys |
 | `transit/keys/revocation-signing` | Ed25519 key that signs revocation tokens (Lock, Destroy, self-lock; non-exportable); its public keys reach devices only in their enrollment configuration (`revocation_keys`, pinned in `/etc/paddock/revoke-trust.json`), never through bundles except once for devices enrolled before it existed | the `revocation-issuer` role only (AppRole `paddock-revocation-issuer`, sign and read); `api` and `compiler` read the public keys |
+| `transit/keys/time-ticket` | Ed25519 key that signs the time tickets of the dead man's switch (non-exportable); its public keys reach devices in their bundles | `compiler` (AppRole `paddock-compiler`, sign and read) |
 | `transit/keys/escrow-wrap` | RSA-4096 key (non-exportable) devices encrypt escrowed secrets to (RSA-OAEP with SHA-256); its latest public key reaches devices in their bundles | encrypt: devices; decrypt: the `escrow-reader` role only (AppRole `paddock-escrow-reader`, `docs/operations/escrow-reader.md`); `compiler` reads the public key |
 | `secret/paddock/session` (KV v2) | AES-256 keys `current` / `previous` of the portal session cookie | `api` (AppRole `paddock-api`) |
 
@@ -43,7 +44,7 @@ export BAO_TOKEN=<decrypted root token>
 bao secrets enable transit
 bao secrets enable -path=secret kv-v2
 bao auth enable approle
-for key in audit-chain bundle-signing command-signing revocation-signing; do
+for key in audit-chain bundle-signing command-signing revocation-signing time-ticket; do
   bao write "transit/keys/$key" type=ed25519 exportable=false allow_plaintext_backup=false
 done
 bao write transit/keys/escrow-wrap type=rsa-4096 exportable=false allow_plaintext_backup=false
@@ -66,6 +67,8 @@ EOF
 bao policy write paddock-compiler - <<'EOF'
 path "transit/sign/bundle-signing" { capabilities = ["update"] }
 path "transit/keys/bundle-signing" { capabilities = ["read"] }
+path "transit/sign/time-ticket" { capabilities = ["update"] }
+path "transit/keys/time-ticket" { capabilities = ["read"] }
 path "transit/keys/command-signing" { capabilities = ["read"] }
 path "transit/keys/revocation-signing" { capabilities = ["read"] }
 path "transit/keys/escrow-wrap" { capabilities = ["read"] }

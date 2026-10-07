@@ -12,6 +12,10 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 )
 
+// dayLength is a day of a self-lock token's period_days: a minute in test builds, so the dead man's switch gate runs
+// in minutes (plan M4c gate R6).
+const dayLength = time.Minute
+
 // RootDevice implements System for test builds: the LUKS device named in TestTargetFile (a secondary disk of a test
 // VM), never the root volume.
 func (o OS) RootDevice(context.Context) (string, error) {

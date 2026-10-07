@@ -45,6 +45,9 @@ func NewRevocations(runner *ActionRunner, org *db.OrgPool, tokens StepUpTokens, 
 	return &Revocations{runner: runner, org: org, tokens: tokens, enabled: enabled, now: time.Now}
 }
 
+// Enabled reports PADDOCK_REVOCATION_ENABLED.
+func (r *Revocations) Enabled() bool { return r.enabled }
+
 // RevocationInput is a Lock or Destroy request.
 type RevocationInput struct {
 	DeviceID        uuid.UUID

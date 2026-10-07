@@ -112,6 +112,9 @@ type CheckinResponse struct {
 	// Commands are the device's pending commands, each a DSSE envelope verified with pkg/command (plan M4a
 	// decision 3).
 	Commands []json.RawMessage `json:"commands"`
+	// TimeTicket is the organization's newest time ticket (DSSE, pkg/timeticket), absent until the first one was
+	// issued (plan M4c decision 14).
+	TimeTicket json.RawMessage `json:"time_ticket,omitempty"`
 }
 
 // Command result statuses of CommandResult.Status.

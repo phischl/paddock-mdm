@@ -53,6 +53,7 @@ type TokenClaims interface {
 type Commands interface {
 	PutCommand(ctx context.Context, device, id uuid.UUID, cmd devicecache.Command) error
 	HasCommand(ctx context.Context, device, id uuid.UUID) (bool, error)
+	DeleteCommand(ctx context.Context, device, id uuid.UUID) error
 }
 
 // Shredder deletes every version of the objects below a prefix of the escrow bucket (objectstore.Store).

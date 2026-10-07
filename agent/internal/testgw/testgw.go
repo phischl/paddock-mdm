@@ -28,6 +28,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/dsse"
 	"github.com/phischl/paddock-mdm/pkg/escrow"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/pkg/timeticket"
 )
 
 // Gateway is the fake. Lock Mu when changing the programmable fields while requests may run.
@@ -232,6 +233,28 @@ var CommandKey = ed25519.NewKeyFromSeed(append(make([]byte, ed25519.SeedSize-1),
 func CommandKeys() *bundle.Keys {
 	return &bundle.Keys{CommandSigning: []bundle.SigningKey{{KeyID: "command-signing:v1",
 		PublicKey: base64.StdEncoding.EncodeToString(CommandKey.Public().(ed25519.PublicKey))}}}
+}
+
+// TicketKey signs the fake's time tickets (seeded).
+var TicketKey = ed25519.NewKeyFromSeed(append(make([]byte, ed25519.SeedSize-1), 2))
+
+// TicketKeys are the time-ticket keys of a bundle that trusts TicketKey.
+func TicketKeys() []bundle.SigningKey {
+	return []bundle.SigningKey{{KeyID: "time-ticket:v1", PublicKey: base64.StdEncoding.EncodeToString(TicketKey.Public().(ed25519.PublicKey))}}
+}
+
+// SignedTicket returns a time ticket of the fake's organization issued at, signed with TicketKey.
+func SignedTicket(t *testing.T, at time.Time) json.RawMessage {
+	t.Helper()
+	payload, err := timeticket.Encode(timeticket.Ticket{OrganizationID: OrgID, IssuedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := dsse.New(timeticket.PayloadType, payload, dsse.SignEd25519(TicketKey, "time-ticket:v1", timeticket.PayloadType, payload)).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
 }
 
 // SignedCommand signs c with CommandKey and returns the DSSE envelope.

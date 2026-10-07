@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -61,6 +62,13 @@ type Deps struct {
 	// Revoke hands a revocation envelope to paddock-revoke and returns its refusal reason ("" when it executed);
 	// nil runs the installed paddock-revoke (plan M4c decision 11).
 	Revoke func(ctx context.Context, envelope []byte) (refused string, err error)
+	// SelfLock runs the stored self-lock token with paddock-revoke after elapsed (the dead man's switch); nil runs the
+	// installed paddock-revoke.
+	SelfLock func(ctx context.Context, envelope []byte, elapsed time.Duration) (refused string, err error)
+	// Uptime returns the time since boot including suspend and the boot ID; nil reads /proc.
+	Uptime func() (time.Duration, string, error)
+	// Notify shows a desktop notification on the user sessions; nil shows none.
+	Notify func(ctx context.Context, msg string)
 	// Supervisor returns the PID of paddock-supervisor and Signal sends it SIGUSR1 (tests replace both).
 	Supervisor func() (int, error)
 	Signal     func(pid int) error
@@ -110,6 +118,7 @@ func Load(l paths.Layout) (Deps, error) {
 	if l.Root == "" || l.Root == "/" {
 		d.FollowLogins = localadmin.FollowJournal
 		d.LUKS = luks.OS{}
+		d.Notify = func(ctx context.Context, msg string) { notifySessions(ctx, sys.Loginctl, runTool, msg) }
 	}
 	return d, nil
 }
@@ -140,6 +149,7 @@ func New(d Deps) (*Agent, error) {
 	if a.d.Commands == nil {
 		a.d.Commands = commands.New(commands.Handlers(map[string]commands.Handler{
 			command.TypeRotateAdminPassword: a.rotateCommand,
+			command.TypeDeleteSelfLock:      a.deleteSelfLock,
 		}), d.Now)
 	}
 	if a.d.Spool == nil {
@@ -152,6 +162,14 @@ func New(d Deps) (*Agent, error) {
 		a.d.Revoke = func(ctx context.Context, envelope []byte) (string, error) {
 			return runRevoke(ctx, a.d.Layout.RevokeBinary(), envelope)
 		}
+	}
+	if a.d.SelfLock == nil {
+		a.d.SelfLock = func(ctx context.Context, envelope []byte, elapsed time.Duration) (string, error) {
+			return runRevoke(ctx, a.d.Layout.RevokeBinary(), envelope, "--elapsed-seconds", strconv.FormatInt(int64(elapsed/time.Second), 10))
+		}
+	}
+	if a.d.Uptime == nil {
+		a.d.Uptime = procUptime
 	}
 	if a.d.Supervisor == nil {
 		a.d.Supervisor = func() (int, error) { return update.SupervisorPID(a.d.Layout) }
@@ -200,6 +218,8 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 	defer drift.Stop()
 	sessionPoll := time.NewTicker(SessionPoll)
 	defer sessionPoll.Stop()
+	dms := time.NewTicker(DMSTick)
+	defer dms.Stop()
 	nextAt := a.d.Now()
 	for {
 		select {
@@ -210,6 +230,8 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 			a.tickLUKS(ctx, true)
 		case <-sessionPoll.C:
 			a.trackSessions(ctx)
+		case <-dms.C:
+			a.tickDMS(ctx)
 		case <-localAdmin.C:
 			a.tickLocalAdmin(ctx)
 			a.tickLUKS(ctx, false)
@@ -286,6 +308,7 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	}
 	a.reportUpdate()
 	a.handleBundle(ctx, resp.Bundle)
+	a.acceptTicket(resp.TimeTicket)
 	a.handleCommands(ctx, resp.Commands)
 	a.handleUpdate(ctx, resp.AgentUpdate)
 	a.flush(ctx)

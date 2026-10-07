@@ -239,6 +239,10 @@ type discardStore struct{}
 
 func (discardStore) Put(context.Context, string, string, string, []byte) error { return nil }
 
+type discardCommands struct{}
+
+func (discardCommands) DeleteCommand(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+
 type env struct {
 	t        *testing.T
 	keysDown bool // the fake bundle key source fails
@@ -341,6 +345,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Autoinstall:   app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
 		Disk:          app.NewDisk(runner, orgPool, escrowAccess, e.disk),
 		Revocations:   app.NewRevocations(runner, orgPool, e.stepUps, true),
+		DMS:           app.NewDMS(runner, orgPool, discardCommands{}, true, false),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,

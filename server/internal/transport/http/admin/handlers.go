@@ -38,6 +38,7 @@ type handlers struct {
 	autoinstall *app.Autoinstall
 	disk        *app.Disk
 	revocations *app.Revocations
+	dms         *app.DMS
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).
@@ -54,7 +55,7 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	if err != nil {
 		return nil, err
 	}
-	out := toMe(me)
+	out := h.toMe(me)
 	if h.stepUpTiming != nil {
 		p, _ := principal.From(ctx)
 		out.StepUp = &adminapi.MeStepUp{
@@ -74,13 +75,13 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.UpdateMe200JSONResponse(toMe(me)), nil
+	return adminapi.UpdateMe200JSONResponse(h.toMe(me)), nil
 }
 
-func toMe(me app.Me) adminapi.Me {
+func (h *handlers) toMe(me app.Me) adminapi.Me {
 	out := adminapi.Me{
 		Id: me.ID, Username: me.Username, DisplayName: me.DisplayName, Role: adminapi.MeRole(me.Role),
-		Locale: adminapi.MeLocale(me.Locale),
+		Locale: adminapi.MeLocale(me.Locale), RevocationEnabled: h.revocations.Enabled(),
 	}
 	if me.Organization != nil {
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name}

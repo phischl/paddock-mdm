@@ -70,9 +70,20 @@ func nilIfEmpty(s []string) []string {
 	return s
 }
 
-// issueCommand inserts a pending command of a registered type for a device inside the action's transaction and
-// queues its command.issued message; notBefore (optional) delays its delivery (plan M4a decision 17).
+// issueCommand inserts a pending command of a registered type for a device inside the action's transaction, queues
+// its command.issued message and records its ID as audit param command_id; notBefore (optional) delays its delivery
+// (plan M4a decision 17).
 func issueCommand(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceID uuid.UUID, typ string,
+	params map[string]any, now time.Time, notBefore *time.Time) (pgstore.DeviceCommand, error) {
+	c, err := queueCommand(ctx, q, rec, deviceID, typ, params, now, notBefore)
+	if err == nil {
+		rec.SetParam("command_id", c.ID.String())
+	}
+	return c, err
+}
+
+// queueCommand is issueCommand without the audit param, for actions that issue a command to many devices.
+func queueCommand(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceID uuid.UUID, typ string,
 	params map[string]any, now time.Time, notBefore *time.Time) (pgstore.DeviceCommand, error) {
 	lifetime, ok := command.Lifetime(typ)
 	if !ok {
@@ -106,7 +117,6 @@ func issueCommand(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceI
 		return c, fmt.Errorf("insert command: %w", err)
 	}
 	rec.CommandIssued(c.ID)
-	rec.SetParam("command_id", c.ID.String())
 	return c, nil
 }
 
