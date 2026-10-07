@@ -6,6 +6,7 @@ import DataList from '../components/DataList.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
 import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
 import RevocationCard from '../components/RevocationCard.vue'
+import DeviceTabs from '../components/DeviceTabs.vue'
 import type { DeviceCommand } from '../api/client'
 import { useDeviceDetailPage } from '../lib/deviceDetailPage'
 import type { ListColumn } from '../lib/listQuery'
@@ -72,6 +73,7 @@ function groupName(id: string | null | undefined): string {
           </v-btn>
         </div>
       </div>
+      <DeviceTabs :device-id="device.id" />
 
       <h2>{{ t('devices.identity') }}</h2>
       <v-table

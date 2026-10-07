@@ -71,6 +71,20 @@ onBeforeUnmount(() => observer.disconnect())
           {{ t('nav.deviceGroups') }}
         </v-btn>
         <v-btn
+          v-if="session.canReadGroups"
+          to="/software"
+          variant="text"
+        >
+          {{ t('nav.software') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/vulnerabilities"
+          variant="text"
+        >
+          {{ t('nav.vulnerabilities') }}
+        </v-btn>
+        <v-btn
           v-if="session.canWrite"
           to="/enrollment-tokens"
           variant="text"

@@ -67,3 +67,21 @@ func TestApplyPolicies(t *testing.T) {
 		t.Fatalf("spec %v", s)
 	}
 }
+
+// TestVulnerabilityState: the digest of Fleet's vulnerable software versions is stable and changes with a new match.
+func TestVulnerabilityState(t *testing.T) {
+	ctx := context.Background()
+	f, srv := newFake(t)
+	c := client(srv.URL)
+	first, err := c.VulnerabilityState(ctx)
+	if err != nil || first == "" {
+		t.Fatalf("state %q, %v", first, err)
+	}
+	if again, _ := c.VulnerabilityState(ctx); again != first {
+		t.Fatalf("unstable state %q, %q", first, again)
+	}
+	f.vulnerableSoftware = []map[string]any{{"id": 82, "vulnerabilities": []map[string]any{{"cve": "CVE-2022-28653"}, {"cve": "CVE-2026-0001"}}}}
+	if changed, _ := c.VulnerabilityState(ctx); changed == first {
+		t.Fatal("a new match did not change the state")
+	}
+}

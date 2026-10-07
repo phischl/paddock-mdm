@@ -58,7 +58,8 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
 1. pushes Paddock's policies (`server/internal/inventory/policies/*.sql`: `paddock_agent_running`,
    `disk_encrypted`) as global Fleet policies for Linux; they return pass or fail, never rows;
 2. reads the hosts whose details, software or policy results changed since the previous round, and every host after a
-   start and every 12th round (Fleet matches vulnerabilities on its own schedule without marking hosts as changed);
+   start, whenever Fleet's set of vulnerable software versions changed (Fleet matches vulnerabilities on its own
+   schedule, about hourly, without marking hosts as changed) and every 12th round;
 3. maps each host to a device by hardware UUID: a host maps only if exactly one active or quarantined device in any
    organization has its UUID. Hosts that map to no device or to several are never stored and are counted in the metric
    `paddock_inventory_unmapped_hosts` (ops port, `/metrics`). A reinstalled device that enrolled again keeps its
@@ -70,7 +71,22 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch).
 
 Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only); Paddock stores them as
-unknown.
+unknown. The portal and the admin API show such findings with severity `unknown` (filter `severity=unknown`), sort
+them last by score, and the start page tile counts the devices with critical or high findings and, next to it, the
+devices with findings of unknown severity. Until a later milestone adds a severity source, treat every finding of
+unknown severity as worth checking: the CVE links to its entry in the National Vulnerability Database.
+
+## Portal and admin API
+
+Organization members see, per device, the tabs *Software* and *Vulnerabilities*, and, per organization, the pages
+*Software* (per package and version with the number of devices) and *Vulnerabilities* (per CVE with the affected
+devices). The admin API offers the same as read-only list endpoints: `GET /api/v1/devices/{id}/software`,
+`GET /api/v1/devices/{id}/vulnerabilities`, `GET /api/v1/software`, `GET /api/v1/vulnerabilities`,
+`GET /api/v1/vulnerabilities/{cve}/devices` and `GET /api/v1/vulnerabilities/summary`. Reads are not audited. The
+organization-wide views and the tile count active and quarantined devices only; a retired device keeps its last
+inventory on its own tabs. The
+lists show the state of the last inventory round, so a package change on a device appears after fleetd's next
+software report (hourly by default) and the next round.
 
 ## Access for platform operators
 

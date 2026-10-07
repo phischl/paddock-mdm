@@ -34,6 +34,7 @@ tags:
   - name: privileges
   - name: settings
   - name: revocation
+  - name: inventory
   - name: audit
   - name: platform
 paths:
@@ -1821,6 +1822,165 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/software:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceSoftware
+      tags: [inventory]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The packages installed on the device as the inventory system
+        reported them at the last sync (plan M5a decision 9).
+      x-paddock-list:
+        sort: [name, version]
+        default_sort: name
+        search: [name]
+        filters: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceSoftwareSort"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: One page of installed packages.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstalledSoftwarePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/vulnerabilities:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceVulnerabilities
+      tags: [inventory]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The CVEs matched to the device's packages. Fleet free reports no
+        CVSS score, severity or fixed version: those findings have severity unknown and no score.
+      x-paddock-list:
+        sort: [cvss_score, cve]
+        default_sort: -cve
+        search: [cve, software_name]
+        filters: [severity]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/FindingSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/SeverityFilter"
+      responses:
+        "200":
+          description: One page of vulnerability findings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VulnerabilityFindingPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/software:
+    get:
+      operationId: listSoftware
+      tags: [inventory]
+      description: "Roles: org_admin, org_operator, org_auditor. The organization's packages per name and version."
+      x-paddock-list:
+        sort: [name, version, device_count]
+        default_sort: name
+        search: [name]
+        filters: [has_vulnerabilities]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/SoftwareSort"
+        - $ref: "#/components/parameters/Search"
+        - name: has_vulnerabilities
+          in: query
+          description: Only packages with (true) or without (false) matched CVEs.
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: One page of packages.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SoftwareSummaryPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/vulnerabilities:
+    get:
+      operationId: listVulnerabilities
+      tags: [inventory]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The organization's vulnerabilities per CVE: the highest score and
+        severity of its findings, the affected devices and a fixed version if known.
+      x-paddock-list:
+        sort: [cvss_score, cve, device_count]
+        default_sort: -cve
+        search: [cve]
+        filters: [severity]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/VulnerabilitySort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/SeverityFilter"
+      responses:
+        "200":
+          description: One page of vulnerabilities.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VulnerabilityPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/vulnerabilities/summary:
+    get:
+      operationId: getVulnerabilitySummary
+      tags: [inventory]
+      description: "Roles: org_admin, org_operator, org_auditor. The numbers of the start page tile (plan M5a decision 10)."
+      responses:
+        "200":
+          description: Devices with findings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VulnerabilitySummary" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/vulnerabilities/{cve}/devices:
+    parameters:
+      - name: cve
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[Cc][Vv][Ee]-[0-9]{4}-[0-9]{4,19}$' }
+    get:
+      operationId: listVulnerabilityDevices
+      tags: [inventory]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The organization's devices with a finding of the CVE; a CVE
+        without finding in the organization is 404.
+      x-paddock-list:
+        sort: [hostname]
+        default_sort: hostname
+        search: [hostname, software_name]
+        filters: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/VulnerableDeviceSort"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: One page of affected devices.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VulnerableDevicePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /api/v1/permission-profiles:
     get:
@@ -2505,6 +2665,55 @@ components:
         type: string
         enum: [slug, -slug, name, -name, created_at, -created_at, status, -status]
         default: slug
+    DeviceSoftwareSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. Name, version and source are the tie-breakers.
+      schema:
+        type: string
+        enum: [name, -name, version, -version]
+        default: name
+    FindingSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. Findings without score sort last in both directions. CVE, package name and version are the tie-breakers.
+      schema:
+        type: string
+        enum: [cvss_score, -cvss_score, cve, -cve]
+        default: -cve
+    SoftwareSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. Name and version are the tie-breakers.
+      schema:
+        type: string
+        enum: [name, -name, version, -version, device_count, -device_count]
+        default: name
+    VulnerabilitySort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. CVEs without score sort last in both directions. The CVE is the tie-breaker.
+      schema:
+        type: string
+        enum: [cvss_score, -cvss_score, cve, -cve, device_count, -device_count]
+        default: -cve
+    VulnerableDeviceSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. Device ID, package name and version are the tie-breakers.
+      schema:
+        type: string
+        enum: [hostname, -hostname]
+        default: hostname
+    SeverityFilter:
+      name: severity
+      in: query
+      description: Repeatable. unknown selects findings without severity (Fleet free reports none).
+      style: form
+      explode: true
+      schema:
+        type: array
+        items: { $ref: "#/components/schemas/Severity" }
     DeviceSort:
       name: sort
       in: query
@@ -3319,6 +3528,120 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    Severity:
+      type: string
+      enum: [critical, high, medium, low, unknown]
+      description: From the CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without score.
+    InstalledSoftware:
+      type: object
+      required: [name, version, source]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        source: { type: string, description: "Package manager, e.g. deb_packages or rpm_packages." }
+    InstalledSoftwarePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/InstalledSoftware" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    VulnerabilityFinding:
+      type: object
+      required: [cve, software_name, software_version, cvss_score, severity, fixed_version, first_seen_at]
+      properties:
+        cve: { type: string }
+        software_name: { type: string }
+        software_version: { type: string }
+        cvss_score: { type: number, format: double, nullable: true, description: CVSS v3 base score; null where unknown. }
+        severity: { $ref: "#/components/schemas/Severity" }
+        fixed_version: { type: string, nullable: true }
+        first_seen_at: { type: string, format: date-time }
+    VulnerabilityFindingPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/VulnerabilityFinding" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    SoftwareSummary:
+      type: object
+      required: [name, version, device_count, has_vulnerabilities]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        device_count: { type: integer }
+        has_vulnerabilities: { type: boolean }
+    SoftwareSummaryPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SoftwareSummary" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    Vulnerability:
+      type: object
+      required: [cve, cvss_score, severity, device_count, fixed_version]
+      properties:
+        cve: { type: string }
+        cvss_score: { type: number, format: double, nullable: true }
+        severity: { $ref: "#/components/schemas/Severity" }
+        device_count: { type: integer }
+        fixed_version: { type: string, nullable: true }
+    VulnerabilityPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Vulnerability" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    VulnerableDevice:
+      type: object
+      required: [device_id, hostname, software_name, software_version]
+      properties:
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        software_name: { type: string }
+        software_version: { type: string }
+    VulnerableDevicePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/VulnerableDevice" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    VulnerabilitySummary:
+      type: object
+      required: [critical_high_devices, unknown_severity_devices, affected_devices]
+      properties:
+        critical_high_devices: { type: integer, description: Devices with at least one critical or high finding. }
+        unknown_severity_devices: { type: integer, description: Devices with at least one finding of unknown severity. }
+        affected_devices: { type: integer, description: Devices with at least one finding. }
     DevicePage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

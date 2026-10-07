@@ -37,6 +37,7 @@ type Deps struct {
 	Disk          *app.Disk
 	Revocations   *app.Revocations
 	DMS           *app.DMS
+	Inventory     *app.Inventory
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -137,7 +138,8 @@ func NewHandler(d Deps) http.Handler {
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
-		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS, now: d.Now,
+		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
+		inventory: d.Inventory, now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

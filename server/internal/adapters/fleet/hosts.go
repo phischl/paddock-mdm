@@ -2,9 +2,13 @@ package fleet
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/ports"
@@ -119,6 +123,39 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 		}
 	}
 	return inv, nil
+}
+
+// VulnerabilityState implements ports.Inventory: a digest of Fleet's vulnerable software versions and their CVEs.
+func (c *Client) VulnerabilityState(ctx context.Context) (string, error) {
+	h := sha256.New()
+	for page := 0; ; page++ {
+		q := url.Values{"vulnerable": {"true"}, "page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(hostsPerPage)}, "order_key": {"id"}}
+		var out struct {
+			Software []struct {
+				ID              int `json:"id"`
+				Vulnerabilities []struct {
+					CVE string `json:"cve"`
+				} `json:"vulnerabilities"`
+			} `json:"software"`
+			Meta struct {
+				HasNextResults bool `json:"has_next_results"`
+			} `json:"meta"`
+		}
+		if err := c.do(ctx, "GET", "/api/latest/fleet/software/versions?"+q.Encode(), nil, &out); err != nil {
+			return "", fmt.Errorf("list fleet vulnerable software: %w", err)
+		}
+		for _, s := range out.Software {
+			cves := make([]string, len(s.Vulnerabilities))
+			for i, v := range s.Vulnerabilities {
+				cves[i] = v.CVE
+			}
+			slices.Sort(cves)
+			fmt.Fprintf(h, "%d:%s\n", s.ID, strings.Join(cves, ","))
+		}
+		if !out.Meta.HasNextResults || len(out.Software) == 0 {
+			return hex.EncodeToString(h.Sum(nil)), nil
+		}
+	}
 }
 
 // ApplyPolicies implements ports.Inventory: Fleet's policy spec creates or updates global policies by name.
