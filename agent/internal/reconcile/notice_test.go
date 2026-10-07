@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -88,5 +89,77 @@ func TestLoginNoticeWithoutGDMAndSSH(t *testing.T) {
 	spec.Notice = "bad\x1b[31m"
 	if res := l.Apply(context.Background(), loginResource(t, spec)); res.Status != reconcile.Error {
 		t.Fatalf("control characters accepted: %+v", res)
+	}
+}
+
+// TestLoginNoticeGDMProfile: the GDM banner works without himmelblau-qr-greeter creating the greeter profile. A
+// missing profile is the distribution's with system-db:gdm after the user database, an existing one only gets the
+// line, and a correct one stays untouched; local removal of the line is restored.
+func TestLoginNoticeGDMProfile(t *testing.T) {
+	const distribution = "user-db:user\nfile-db:/var/lib/gdm3/greeter-dconf-defaults\n"
+	tests := []struct {
+		name          string
+		existing      string // "" = no /etc/dconf/profile/gdm
+		distribution  string // "" = no /usr/share/dconf/profile/gdm
+		want          string
+		profileChange bool
+	}{
+		{"no profile", "", distribution, "user-db:user\nsystem-db:gdm\nfile-db:/var/lib/gdm3/greeter-dconf-defaults\n", true},
+		{"no profile and no distribution profile", "", "", "user-db:user\nsystem-db:gdm\n", true},
+		{"profile without system-db:gdm", "user-db:user\nfile-db:/usr/share/gdm/greeter-dconf-defaults", distribution,
+			"user-db:user\nsystem-db:gdm\nfile-db:/usr/share/gdm/greeter-dconf-defaults", true},
+		{"profile already correct", "user-db:user\nsystem-db:gdm\nsystem-db:local\nfile-db:/x\n", distribution,
+			"user-db:user\nsystem-db:gdm\nsystem-db:local\nfile-db:/x\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			sys, l, _ := loginFixture(t)
+			for _, p := range []string{"gdm3", "dconf-cli"} {
+				sys.Packages[p] = true
+			}
+			if tt.existing != "" {
+				sys.Files[reconcile.GDMProfile] = &fakesys.File{Data: []byte(tt.existing), Mode: 0o644}
+			}
+			if tt.distribution != "" {
+				sys.Files["/usr/share/dconf/profile/gdm"] = &fakesys.File{Data: []byte(tt.distribution), Mode: 0o644}
+			}
+			spec := loginSpec()
+			spec.Notice = "Authorized use only."
+			r := loginResource(t, spec)
+			changes, err := l.Plan(ctx, r)
+			if err != nil || slices.Contains(changes, "notice "+reconcile.GDMProfile) != tt.profileChange {
+				t.Fatalf("plan %v %v", changes, err)
+			}
+			if res := l.Apply(ctx, r); res.Status != reconcile.Changed {
+				t.Fatalf("apply %+v", res)
+			}
+			if got := string(sys.Files[reconcile.GDMProfile].Data); got != tt.want {
+				t.Fatalf("profile %q, want %q", got, tt.want)
+			}
+			if !slices.Contains(sys.TakeCalls(), "dconf update") {
+				t.Fatal("dconf update not run")
+			}
+			if changes, err := l.Plan(ctx, r); err != nil || len(changes) != 0 {
+				t.Fatalf("plan after apply: %v %v", changes, err)
+			}
+
+			// Removing the line locally is drift; the agent adds it again and compiles the databases.
+			sys.Files[reconcile.GDMProfile].Data = []byte(strings.Replace(tt.want, "system-db:gdm\n", "", 1))
+			if changes, _ := l.Plan(ctx, r); !slices.Equal(changes, []string{"notice " + reconcile.GDMProfile}) {
+				t.Fatalf("drift plan %v", changes)
+			}
+			l.Apply(ctx, r)
+			if got := string(sys.Files[reconcile.GDMProfile].Data); got != tt.want || !slices.Contains(sys.TakeCalls(), "dconf update") {
+				t.Fatalf("after drift: profile %q", got)
+			}
+
+			// An empty notice removes the banner but keeps the profile.
+			spec.Notice = ""
+			l.Apply(ctx, loginResource(t, spec))
+			if sys.Files[reconcile.NoticeGDM] != nil || sys.Files[reconcile.GDMProfile] == nil {
+				t.Fatal("empty notice: banner kept or profile removed")
+			}
+		})
 	}
 }

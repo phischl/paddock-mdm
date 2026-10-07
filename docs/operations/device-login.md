@@ -58,7 +58,7 @@ characters of plain text; empty removes it) is shown before every login (plan M4
 
 | Where | File (written by the agent, restored when changed locally) |
 | --- | --- |
-| GDM login screen | `/etc/dconf/db/gdm.d/90-paddock-notice` (`banner-message-enable`, `banner-message-text`), then `dconf update`; only with `gdm3` installed |
+| GDM login screen | `/etc/dconf/db/gdm.d/90-paddock-notice` (`banner-message-enable`, `banner-message-text`) and the line `system-db:gdm` in the greeter profile `/etc/dconf/profile/gdm` (created from the distribution's `/usr/share/dconf/profile/gdm` if missing; other lines are kept, and the profile stays when the notice is removed), then `dconf update`; only with `gdm3` installed |
 | Text consoles | `/etc/issue.d/90-paddock.issue` |
 | SSH | `/etc/paddock/notice` and `/etc/ssh/sshd_config.d/90-paddock-banner.conf` (`Banner /etc/paddock/notice`), then `systemctl try-reload-or-restart ssh.service`; only with `openssh-server` installed |
 
