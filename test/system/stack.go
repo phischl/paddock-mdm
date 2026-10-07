@@ -19,7 +19,7 @@ import (
 )
 
 // guestHosts are the stack's hostnames, which the guest reaches on the host as 10.0.2.2.
-const guestHosts = "10.0.2.2 device.paddock.localhost bundles.paddock.localhost admin.paddock.localhost auth.paddock.localhost"
+const guestHosts = "10.0.2.2 device.paddock.localhost bundles.paddock.localhost admin.paddock.localhost auth.paddock.localhost fleet.paddock.localhost"
 
 // Stack is the development stack as the system tests use it.
 type Stack struct {

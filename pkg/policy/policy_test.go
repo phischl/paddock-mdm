@@ -23,7 +23,8 @@ func TestValidatePath(t *testing.T) {
 		"/etc/nsswitch.conf", "/etc/himmelblau/himmelblau.conf", "/etc/paddock/trust.json", "/etc/paddock",
 		"/opt/paddock/bin/paddockd", "/opt/paddock", "/etc/crypttab", "/etc/fstab", "/etc/passwd", "/etc/shadow",
 		"/etc/group", "/etc/gshadow", "/etc/apt/sources.list", "/etc/apt", "/etc/systemd/system/paddockd.service",
-		"/etc/systemd/system/paddock-supervisor.service", "/etc/mo\ntd", "/etc/mo\x00td", "/etc/a\\b",
+		"/etc/systemd/system/paddock-supervisor.service", "/opt/orbit/secret.txt", "/opt/orbit", "/etc/default/orbit",
+		"/etc/systemd/system/orbit.service.d/90-paddock.conf", "/etc/systemd/system/orbit.service", "/etc/mo\ntd", "/etc/mo\x00td", "/etc/a\\b",
 		"/etc/" + strings.Repeat("a", 1100),
 	}
 	for _, p := range rejected {
@@ -64,7 +65,7 @@ func TestValidateUnit(t *testing.T) {
 	}
 	for _, u := range []string{
 		"chrony", "x.mount", "x.target", "paddockd.service", "Paddock.service", "himmelblaud.service",
-		"fleet-osquery.service", "ssh.service", "sshd.socket", "gdm.service", "systemd-timesyncd.service",
+		"fleet-osquery.service", "orbit.service", "ssh.service", "sshd.socket", "gdm.service", "systemd-timesyncd.service",
 		"a b.service", "../x.service", "",
 	} {
 		if !errors.Is(ValidateUnit(u), ErrUnitNotAllowed) {

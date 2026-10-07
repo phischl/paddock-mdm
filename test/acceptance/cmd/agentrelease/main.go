@@ -7,7 +7,8 @@
 //	    [--failure-threshold-percent 2]] [--halt-running]
 //
 // Debian packages (plan M4b decision 1) are named <name>_<version>_<arch>.deb, as `make deb` builds them; they are
-// stored under the release version.
+// stored under the release version. fleetd (plan M5a decision 3) is fleet-osquery_<fleetd version>_<arch>.deb, as
+// `make fleetd-deb` builds it.
 //
 // It prints the release detail as JSON.
 package main
@@ -122,7 +123,7 @@ func run(args []string) error {
 		}
 	}
 	for _, path := range packages {
-		name, arch, err := debName(filepath.Base(path), *version)
+		name, packageVersion, arch, err := debName(filepath.Base(path), *version)
 		if err != nil {
 			return err
 		}
@@ -135,7 +136,11 @@ func run(args []string) error {
 			signer = revokePriv
 		}
 		sig := minisign.SignWithComments(signer, deb, fmt.Sprintf("%s %s %s", name, *version, arch), "paddock agent package")
-		if res, err := upload(ctx, p, base+"/packages/"+name+"/"+arch, deb, sig); err != nil || res.Status != http.StatusOK {
+		target := base + "/packages/" + name + "/" + arch
+		if packageVersion != "" {
+			target += "?package_version=" + packageVersion
+		}
+		if res, err := upload(ctx, p, target, deb, sig); err != nil || res.Status != http.StatusOK {
 			return fail("upload "+name+" "+arch, res, err)
 		}
 	}
@@ -175,13 +180,16 @@ func run(args []string) error {
 }
 
 // debName splits <name>_<version>_<arch>.deb and checks the version; nfpm writes a pre-release version such as
-// 1.2.0-rc.1 as 1.2.0~rc.1 (Debian ordering).
-func debName(file, version string) (name, arch string, err error) {
+// 1.2.0-rc.1 as 1.2.0~rc.1 (Debian ordering). fleet-osquery carries the fleetd version, returned as packageVersion.
+func debName(file, version string) (name, packageVersion, arch string, err error) {
 	parts := strings.Split(strings.TrimSuffix(file, ".deb"), "_")
-	if len(parts) != 3 || !strings.HasSuffix(file, ".deb") || (parts[1] != version && parts[1] != strings.Replace(version, "-", "~", 1)) {
-		return "", "", fmt.Errorf("--deb %s: want <name>_%s_<arch>.deb", file, version)
+	if len(parts) == 3 && strings.HasSuffix(file, ".deb") && parts[0] == "fleet-osquery" {
+		return parts[0], parts[1], parts[2], nil
 	}
-	return parts[0], parts[2], nil
+	if len(parts) != 3 || !strings.HasSuffix(file, ".deb") || (parts[1] != version && parts[1] != strings.Replace(version, "-", "~", 1)) {
+		return "", "", "", fmt.Errorf("--deb %s: want <name>_%s_<arch>.deb", file, version)
+	}
+	return parts[0], "", parts[2], nil
 }
 
 func upload(ctx context.Context, p *env.Portal, path string, bin, sig []byte) (env.Response, error) {

@@ -10,14 +10,16 @@ make system-test VM=paddock-u2604 T='TestDiskGates'
 ```
 
 `VM` is `paddock-u2404`, `paddock-u2604`, both comma-separated, or `all`. `make system-test` builds the packages as
-version 0.1.0 with the `paddock_dev` tag into `bin/deb/` first. Every test starts from the snapshot `base-installed`
+version 0.1.0 with the `paddock_dev` tag into `bin/deb/` and fleetd into `bin/fleetd/` (`make fleetd-deb`, needs
+outbound HTTPS to Fleet's update server) first; `TestInventoryGates` publishes that fleetd package once per run in a
+release without rollout. Every test starts from the snapshot `base-installed`
 and restores it, powered off, when it ends; with `PADDOCK_SYSTEM_KEEP=1` a failed test leaves its VM running for
 inspection. Screenshots are kept in `bin/system-evidence/<vm>/`.
 
 ## Both VMs in parallel
 
 The per-VM subtests of every gate (`TestAgentGates`, `TestIdentityGates`, `TestLocalAdminGates`, `TestDiskGates`,
-`TestNoticeGate`) run in parallel, one subtest per VM (`forEachVM`, plan M4b.1 step 5), so `make system-test VM=all`
+`TestNoticeGate`, `TestInventoryGates`) run in parallel, one subtest per VM (`forEachVM`, plan M4b.1 step 5), so `make system-test VM=all`
 takes about as long as the slower VM instead of both together. A VM is never used by two tests at a time: the test
 functions themselves still run one after another. Gate S5 (`TestRolloutAutoStop`) drives both VMs itself.
 

@@ -10,8 +10,8 @@ the portal shows its data from Paddock's own tables, isolated per organization.
 | `fleet-mysql` | `FLEET_MYSQL_IMAGE` (MySQL 8.4) | `fleet` (internal) | Fleet's database (volume `fleet-mysql-data`) |
 | `fleet-redis` | `VALKEY_IMAGE` | `fleet` (internal) | Fleet's cache and live-query channel (Valkey speaks the Redis protocol) |
 
-Vulnerability feeds (NVD, OSV) are downloaded by Fleet into the volume `fleet-vulndb`; Fleet needs outbound HTTPS
-for them.
+Vulnerability feeds (NVD, OSV) are downloaded by Fleet into the volume `fleet-vulndb`, mounted on the home directory
+of the image's `fleet` user, which Fleet runs as; Fleet needs outbound HTTPS for them.
 
 ## What is published
 
@@ -25,6 +25,30 @@ Caddy publishes `fleet.<domain>` with the device endpoints only:
 Every other path — Fleet's UI, its admin API, setup, health check and file carving (`…/osquery/carve/*`) — answers
 404 at the proxy. Devices need no other Fleet path: fleetd updates come from Paddock's package store, not from
 Fleet's update server.
+
+## fleetd on devices
+
+fleetd (orbit and osquery) is built per agent release with `make fleetd-deb` (`fleetctl package` of `FLEETCTL_IMAGE`:
+scripts, Fleet Desktop and auto-updates off; no Fleet URL and no enroll secret in the package, because `fleetctl`
+accepts a URL only together with a secret) and uploaded as the package `fleet-osquery` of the release
+(`packages/<release>/fleet-osquery_<fleetd version>_amd64.deb`, `docs/operations/agent-releases.md`). The compiler puts
+the package of the newest published release that has one (and whose rollout is not halted), Fleet's public URL
+(`PADDOCK_FLEET_PUBLIC_URL`) and the global enroll secret (`PADDOCK_FLEET_ENROLL_SECRET_FILE`) into the `inventory`
+section of every v2 bundle. The agent of an amd64 device then:
+
+1. writes `/opt/orbit/secret.txt` (the enroll secret, 0600), `/etc/paddock/orbit.env` (Fleet URL, path of the secret,
+   the system trust store `/etc/ssl/certs/ca-certificates.crt`, updates, scripts and Fleet Desktop off; 0600) and the
+   drop-in `/etc/systemd/system/orbit.service.d/90-paddock.conf`, which makes `orbit.service` read `orbit.env` after
+   the package's `/etc/default/orbit`;
+2. downloads the package from `https://bundles.<domain>/<path>` (derived from the agent's `device.<domain>` server
+   URL), checks its SHA-256 and installs it with `dpkg -i` (killed after 15 minutes like every package run of the
+   agent, then retried after a back-off);
+3. keeps `orbit.service` enabled and running.
+
+fleetd and these paths are a protected area: a changed file is restored at the next drift pass and reported as
+`device.tamper_protected_file_changed`; a stopped `orbit.service` is started again and reported as
+`device.tamper_service_stopped` (the agent's half of the mutual watch). Managed files and units cannot touch
+`/opt/orbit/`, `/etc/default/orbit`, `/etc/systemd/system/orbit*` or units named `orbit*` or `fleet*`.
 
 ## Access for platform operators
 

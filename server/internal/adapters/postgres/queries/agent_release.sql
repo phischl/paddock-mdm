@@ -111,11 +111,11 @@ ON CONFLICT DO NOTHING;
 -- Debian packages of a release (plan M4b decision 1).
 
 -- name: UpsertAgentPackage :one
-INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key)
-VALUES (@version, @name, @arch, @sha256, @size, @minisig, @object_key)
+INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key, package_version)
+VALUES (@version, @name, @arch, @sha256, @size, @minisig, @object_key, sqlc.narg(package_version))
 ON CONFLICT (version, name, arch) DO UPDATE
   SET sha256 = EXCLUDED.sha256, size = EXCLUDED.size, minisig = EXCLUDED.minisig, object_key = EXCLUDED.object_key,
-      created_at = now()
+      package_version = EXCLUDED.package_version, created_at = now()
 RETURNING *;
 
 -- name: ListAgentPackages :many
@@ -124,3 +124,7 @@ SELECT * FROM agent_package WHERE version = @version ORDER BY name, arch;
 -- The packages of the release new devices install (plan M4b decision 2); paddock-supervisor first.
 -- name: InstallPackages :many
 SELECT version::text, name::text, sha256::text, object_key::text FROM paddock_install_packages(@arch::text);
+
+-- The fleetd package devices install (plan M5a decision 3); no row if no published release has one.
+-- name: FleetdPackage :many
+SELECT package_version::text, sha256::text, object_key::text FROM paddock_fleetd_package(@arch::text);

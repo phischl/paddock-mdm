@@ -10,6 +10,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -27,7 +28,11 @@ func (h releaseHarness) withPackages(t *testing.T, names ...string) string {
 	}
 	for _, name := range names {
 		deb := []byte(name + " " + v)
-		if _, err := h.releases.UploadPackage(ctx, v, name, "amd64", deb, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb))); err != nil {
+		var packageVersion string
+		if name == "fleet-osquery" {
+			packageVersion = "1.48.0"
+		}
+		if _, err := h.releases.UploadPackage(ctx, v, name, packageVersion, "amd64", deb, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -76,8 +81,55 @@ func TestInstallPackagesSelection(t *testing.T) {
 	if rows := install(); len(rows) != 2 || rows[0].Version != both {
 		t.Fatalf("a halted release is installed: %+v", rows)
 	}
-	newest := h.withPackages(t, "paddock-agent", "paddock-supervisor")
+	newest := h.withPackages(t, "paddock-agent", "paddock-supervisor", "fleet-osquery")
 	if rows := install(); len(rows) != 2 || rows[0].Version != newest || rows[0].ObjectKey != "packages/"+newest+"/paddock-supervisor_"+newest+"_amd64.deb" {
-		t.Fatalf("install packages %+v, want %s", rows, newest)
+		t.Fatalf("install packages %+v, want %s without fleet-osquery", rows, newest)
 	}
+}
+
+// TestFleetdPackageSelection checks which fleetd package devices install (plan M5a decision 3): the one of the newest
+// published release that has one for the architecture and whose rollout is not halted, read by the compiler in
+// organization scope.
+func TestFleetdPackageSelection(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	compiler, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).Compiler, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(compiler.Close)
+	org, _ := h.device(t)
+	fleetd := func(arch string) []pgstore.FleetdPackageRow {
+		t.Helper()
+		var rows []pgstore.FleetdPackageRow
+		if err := compiler.InOrg(systemCtx(org), func(ctx context.Context, q *pgstore.Queries) error {
+			var err error
+			rows, err = q.FleetdPackage(ctx, arch)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	with := h.withPackages(t, "paddock-agent", "paddock-supervisor", "fleet-osquery")
+	_ = h.withPackages(t, "paddock-agent", "paddock-supervisor") // newer, without fleetd
+	rows := fleetd("amd64")
+	if len(rows) != 1 || rows[0].PackageVersion != "1.48.0" || rows[0].ObjectKey != "packages/"+with+"/fleet-osquery_1.48.0_amd64.deb" {
+		t.Fatalf("fleetd package %+v, want the one of %s", rows, with)
+	}
+	if rows := fleetd("arm64"); len(rows) != 0 {
+		t.Fatalf("arm64 fleetd package %+v", rows)
+	}
+	halted := h.withPackages(t, "paddock-agent", "fleet-osquery")
+	if _, err := h.releases.StartRollout(platformAdmin(), halted, app.RolloutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.releases.Halt(platformAdmin(), halted); err != nil {
+		t.Fatal(err)
+	}
+	if rows := fleetd("amd64"); len(rows) != 1 || rows[0].ObjectKey != "packages/"+with+"/fleet-osquery_1.48.0_amd64.deb" {
+		t.Fatalf("the package of a halted release: %+v", rows)
+	}
+	_, err = h.releases.UploadPackage(platformAdmin(), uniqueVersion(), "fleet-osquery", "", "amd64", []byte("x"), "")
+	expectProblem(t, err, problem.InvalidRequest)
 }

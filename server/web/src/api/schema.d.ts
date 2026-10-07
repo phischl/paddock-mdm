@@ -1356,7 +1356,7 @@ export interface paths {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
                 arch: "amd64" | "arm64";
             };
             cookie?: never;
@@ -1368,8 +1368,10 @@ export interface paths {
          *     the revocation release public key (400 otherwise).
          *     Packages are stored below packages/ in the artifact bucket and served without authentication at
          *     https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
-         *     SHA-256 (plan M4b decision 1). Uploading again replaces the package while the release is a draft. Audited as
-         *     an artifact upload with kind deb.
+         *     SHA-256 (plan M4b decision 1). fleet-osquery (fleetd, plan M5a decision 3) needs package_version, the fleetd
+         *     version its file is named after (packages/<version>/fleet-osquery_<package_version>_<arch>.deb); the agent
+         *     installs it, the autoinstall never. Uploading again replaces the package while the release is a draft.
+         *     Audited as an artifact upload with kind deb.
          */
         put: operations["uploadAgentPackage"];
         post?: never;
@@ -1593,7 +1595,9 @@ export interface components {
         };
         AgentPackage: {
             /** @enum {string} */
-            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke";
+            name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
+            /** @description The fleetd version of fleet-osquery; absent for Paddock's packages. */
+            package_version?: string;
             /** @enum {string} */
             arch: "amd64" | "arm64";
             /** @description Hex SHA-256 of the package. */
@@ -5426,7 +5430,10 @@ export interface operations {
     };
     uploadAgentPackage: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The fleetd version of fleet-osquery, e.g. 1.48.0; required for fleet-osquery and refused for every other package. */
+                package_version?: string;
+            };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
                 /** @description Standard base64 of the .minisig signature file of the package. */
@@ -5435,7 +5442,7 @@ export interface operations {
             path: {
                 /** @description Semantic version of an agent release. */
                 version: components["parameters"]["Version"];
-                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke";
+                name: "paddock-agent" | "paddock-supervisor" | "paddock-revoke" | "fleet-osquery";
                 arch: "amd64" | "arm64";
             };
             cookie?: never;

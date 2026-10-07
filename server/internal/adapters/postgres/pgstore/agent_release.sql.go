@@ -164,6 +164,37 @@ func (q *Queries) CurrentReleaseStats(ctx context.Context, arg CurrentReleaseSta
 	return i, err
 }
 
+const fleetdPackage = `-- name: FleetdPackage :many
+SELECT package_version::text, sha256::text, object_key::text FROM paddock_fleetd_package($1::text)
+`
+
+type FleetdPackageRow struct {
+	PackageVersion string
+	Sha256         string
+	ObjectKey      string
+}
+
+// The fleetd package devices install (plan M5a decision 3); no row if no published release has one.
+func (q *Queries) FleetdPackage(ctx context.Context, arch string) ([]FleetdPackageRow, error) {
+	rows, err := q.db.Query(ctx, fleetdPackage, arch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FleetdPackageRow{}
+	for rows.Next() {
+		var i FleetdPackageRow
+		if err := rows.Scan(&i.PackageVersion, &i.Sha256, &i.ObjectKey); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAgentRelease = `-- name: GetAgentRelease :one
 SELECT version, status, created_by, created_at, published_at FROM agent_release WHERE version = $1
 `
@@ -372,7 +403,7 @@ func (q *Queries) ListAgentArtifacts(ctx context.Context, version string) ([]Age
 }
 
 const listAgentPackages = `-- name: ListAgentPackages :many
-SELECT version, name, arch, sha256, size, minisig, object_key, created_at FROM agent_package WHERE version = $1 ORDER BY name, arch
+SELECT version, name, arch, sha256, size, minisig, object_key, created_at, package_version FROM agent_package WHERE version = $1 ORDER BY name, arch
 `
 
 func (q *Queries) ListAgentPackages(ctx context.Context, version string) ([]AgentPackage, error) {
@@ -393,6 +424,7 @@ func (q *Queries) ListAgentPackages(ctx context.Context, version string) ([]Agen
 			&i.Minisig,
 			&i.ObjectKey,
 			&i.CreatedAt,
+			&i.PackageVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -667,22 +699,23 @@ func (q *Queries) UpsertAgentArtifact(ctx context.Context, arg UpsertAgentArtifa
 
 const upsertAgentPackage = `-- name: UpsertAgentPackage :one
 
-INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key, package_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (version, name, arch) DO UPDATE
   SET sha256 = EXCLUDED.sha256, size = EXCLUDED.size, minisig = EXCLUDED.minisig, object_key = EXCLUDED.object_key,
-      created_at = now()
-RETURNING version, name, arch, sha256, size, minisig, object_key, created_at
+      package_version = EXCLUDED.package_version, created_at = now()
+RETURNING version, name, arch, sha256, size, minisig, object_key, created_at, package_version
 `
 
 type UpsertAgentPackageParams struct {
-	Version   string
-	Name      string
-	Arch      string
-	Sha256    string
-	Size      int64
-	Minisig   string
-	ObjectKey string
+	Version        string
+	Name           string
+	Arch           string
+	Sha256         string
+	Size           int64
+	Minisig        string
+	ObjectKey      string
+	PackageVersion *string
 }
 
 // Debian packages of a release (plan M4b decision 1).
@@ -695,6 +728,7 @@ func (q *Queries) UpsertAgentPackage(ctx context.Context, arg UpsertAgentPackage
 		arg.Size,
 		arg.Minisig,
 		arg.ObjectKey,
+		arg.PackageVersion,
 	)
 	var i AgentPackage
 	err := row.Scan(
@@ -706,6 +740,7 @@ func (q *Queries) UpsertAgentPackage(ctx context.Context, arg UpsertAgentPackage
 		&i.Minisig,
 		&i.ObjectKey,
 		&i.CreatedAt,
+		&i.PackageVersion,
 	)
 	return i, err
 }

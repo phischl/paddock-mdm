@@ -169,14 +169,14 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 	}
 	deb := []byte("debian package")
 	debSig := base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, deb))
-	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "amd64", deb, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin)))
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "", "amd64", deb, base64.StdEncoding.EncodeToString(minisign.Sign(h.priv, bin)))
 	expectProblem(t, err, problem.InvalidRequest)
-	_, err = h.releases.UploadPackage(ctx, v, "../paddockd", "amd64", deb, debSig)
+	_, err = h.releases.UploadPackage(ctx, v, "../paddockd", "", "amd64", deb, debSig)
 	expectProblem(t, err, problem.InvalidRequest)
-	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "386", deb, debSig)
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-agent", "", "386", deb, debSig)
 	expectProblem(t, err, problem.InvalidRequest)
-	pkg, err := h.releases.UploadPackage(ctx, v, "paddock-agent", "amd64", deb, debSig)
-	if err != nil || pkg.ObjectKey != agentrelease.PackageObjectKey(v, "paddock-agent", "amd64") || string(h.store.puts[pkg.ObjectKey]) != "debian package" {
+	pkg, err := h.releases.UploadPackage(ctx, v, "paddock-agent", "", "amd64", deb, debSig)
+	if err != nil || pkg.ObjectKey != agentrelease.PackageObjectKey(v, "paddock-agent", "", "amd64") || string(h.store.puts[pkg.ObjectKey]) != "debian package" {
 		t.Fatalf("package upload: %+v, %v", pkg, err)
 	}
 	if r, err := h.releases.Publish(ctx, v); err != nil || r.Status != agentrelease.StatusPublished {
@@ -184,7 +184,7 @@ func TestAgentReleaseLifecycle(t *testing.T) {
 	}
 	_, err = h.releases.UploadArtifact(ctx, v, "amd64", bin, h.signBinary(bin, v, "amd64"))
 	expectProblem(t, err, problem.InvalidState)
-	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "amd64", deb, debSig)
+	_, err = h.releases.UploadPackage(ctx, v, "paddock-supervisor", "", "amd64", deb, debSig)
 	expectProblem(t, err, problem.InvalidState)
 
 	short := 5

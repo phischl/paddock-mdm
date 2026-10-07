@@ -103,6 +103,8 @@ var eventCodes = map[string]audit.Code{
 
 	protocol.EventRevocationTrustPinnedTOFU: audit.CodeDeviceRevocationTrustPinnedTOFU,
 	protocol.EventRevocationRefused:         audit.CodeDeviceRevocationRefused,
+
+	protocol.EventTamperServiceStopped: audit.CodeDeviceTamperServiceStopped,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -226,7 +228,7 @@ func eventParams(ev protocol.Event) map[string]any {
 		}
 	}
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
-		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field"} {
+		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}

@@ -92,29 +92,46 @@ const (
 	// PackageRevoke is signed with the revocation release key and reaches devices only as a package: the Paddock
 	// autoinstall installs it, the agent update never delivers it.
 	PackageRevoke = "paddock-revoke"
+	// PackageFleetd is fleetd, built with `fleetctl package` for the release (plan M5a decision 3); its file carries
+	// the fleetd version. The agent installs it from the bundle's inventory section, the autoinstall never.
+	PackageFleetd = "fleet-osquery"
 )
 
 // Packages are the Debian packages a release can carry; the Paddock autoinstall needs RequiredPackages.
-var Packages = []string{PackageAgent, PackageSupervisor, PackageRevoke}
+var Packages = []string{PackageAgent, PackageSupervisor, PackageRevoke, PackageFleetd}
 
 // RequiredPackages are the packages without which the Paddock autoinstall does not install a release.
 var RequiredPackages = []string{PackageAgent, PackageSupervisor}
 
-// ErrInvalidPackage rejects an unknown package name.
-var ErrInvalidPackage = errors.New("name must be paddock-agent, paddock-supervisor or paddock-revoke")
+// Package errors.
+var (
+	ErrInvalidPackage        = errors.New("name must be paddock-agent, paddock-supervisor, paddock-revoke or fleet-osquery")
+	ErrInvalidPackageVersion = errors.New("package_version is required for fleet-osquery only and must be a release number such as 1.48.0")
+)
 
-// ValidatePackage checks a package name.
-func ValidatePackage(name string) error {
+// packageVersion is the version of a package that is not Paddock's own (fleetd), e.g. 1.48.0.
+var packageVersion = regexp.MustCompile(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$`)
+
+// ValidatePackage checks a package name and its package version: fleet-osquery needs one, the others carry the
+// release version.
+func ValidatePackage(name, version string) error {
 	if !slices.Contains(Packages, name) {
 		return ErrInvalidPackage
+	}
+	if (name == PackageFleetd) != (version != "") || (version != "" && !packageVersion.MatchString(version)) {
+		return ErrInvalidPackageVersion
 	}
 	return nil
 }
 
-// PackageObjectKey is the object of a Debian package in the bucket paddock-agent-artifacts. Objects below packages/
-// are public-read: packages carry no secrets, and the autoinstall pins their SHA-256.
-func PackageObjectKey(version, name, arch string) string {
-	return fmt.Sprintf("packages/%s/%s_%s_%s.deb", version, name, version, arch)
+// PackageObjectKey is the object of a Debian package in the bucket paddock-agent-artifacts; packageVersion is the
+// fleetd version of fleet-osquery and empty for Paddock's packages. Objects below packages/ are public-read: packages
+// carry no secrets, and the autoinstall and the agent pin their SHA-256.
+func PackageObjectKey(version, name, packageVersion, arch string) string {
+	if packageVersion == "" {
+		packageVersion = version
+	}
+	return fmt.Sprintf("packages/%s/%s_%s_%s.deb", version, name, packageVersion, arch)
 }
 
 // Bucket is the rollout bucket of a device: FNV-1a (32 bit) of the canonical UUID text modulo 100. The SQL function

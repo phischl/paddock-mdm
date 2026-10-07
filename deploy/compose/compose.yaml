@@ -302,7 +302,8 @@ services:
       # Policy results (mutual watch, plan M5a decision 8) at most this old.
       FLEET_OSQUERY_POLICY_UPDATE_INTERVAL: ${FLEET_OSQUERY_POLICY_UPDATE_INTERVAL:-10m}
       FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL: ${FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL:-1h}
-      FLEET_VULNERABILITIES_DATABASES_PATH: /vulndb
+      # The volume is mounted on the fleet user's home, so it belongs to that user (Fleet does not run as root).
+      FLEET_VULNERABILITIES_DATABASES_PATH: /home/fleet
       FLEET_VULNERABILITIES_PERIODICITY: ${FLEET_VULNERABILITIES_PERIODICITY:-1h}
       FLEET_LOGGING_JSON: "true"
       # Exported from files by /paddock/entrypoint.sh so that no secret is visible in `docker inspect`.
@@ -311,7 +312,7 @@ services:
     secrets: [fleet_mysql_password, fleet_redis_password, fleet_server_private_key]
     volumes:
       - ./fleet/entrypoint.sh:/paddock/entrypoint.sh:ro
-      - fleet-vulndb:/vulndb
+      - fleet-vulndb:/home/fleet
     networks: [cp, fleet]
     depends_on:
       fleet-mysql:
@@ -574,12 +575,16 @@ services:
       PADDOCK_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_compiler_secret_id
       # revocation.enabled of v2 bundles (plan M4c decision 1).
       PADDOCK_REVOCATION_ENABLED: ${PADDOCK_REVOCATION_ENABLED:-false}
+      # inventory section of v2 bundles: fleetd enrollment (plan M5a decision 4).
+      PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN:-paddock.localhost}:${PADDOCK_HTTPS_PORT:-8443}
+      PADDOCK_FLEET_ENROLL_SECRET_FILE: /run/secrets/fleet_enroll_secret
       PADDOCK_BUNDLES_S3_ENDPOINT: http://rustfs:9000
       PADDOCK_BUNDLES_S3_BUCKET: paddock-bundles
       PADDOCK_BUNDLES_S3_ACCESS_KEY_FILE: /run/secrets/rustfs_bundles_compiler_access_key
       PADDOCK_BUNDLES_S3_SECRET_KEY_FILE: /run/secrets/rustfs_bundles_compiler_secret_key
     secrets:
       - db_paddock_compiler_url
+      - fleet_enroll_secret
       - rabbitmq_compiler_password
       - valkey_password
       - approle_compiler_role_id
