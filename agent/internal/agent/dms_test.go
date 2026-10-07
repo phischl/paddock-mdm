@@ -136,3 +136,22 @@ func TestDMSOff(t *testing.T) {
 		t.Fatalf("delete_self_lock: %s, %v", status, err)
 	}
 }
+
+// TestDMSDeleteSelfLockDropsWarnings (plan M5a step 0b): delete_self_lock removes the warnings at once, while the
+// applied bundle still has the switch on, and no warning follows until the token is back.
+func TestDMSDeleteSelfLockDropsWarnings(t *testing.T) {
+	w := newDMSWorld(t, true)
+	day := 24 * time.Hour
+	w.advance(7 * day)
+	if len(w.notified) != 1 || w.issue(t) == "" {
+		t.Fatalf("first warning: %v / %q", w.notified, w.issue(t))
+	}
+	status, _ := w.a.deleteSelfLock(context.Background(), &command.Command{Type: command.TypeDeleteSelfLock})
+	if status != protocol.CommandSucceeded || w.issue(t) != "" || len(w.a.loadDMS().Warned) != 0 {
+		t.Fatalf("delete_self_lock: %s, issue %q, state %+v", status, w.issue(t), w.a.loadDMS())
+	}
+	w.advance(2*day + time.Hour)
+	if len(w.notified) != 1 || w.issue(t) != "" || len(w.elapsed) != 0 {
+		t.Fatalf("after delete_self_lock: warnings %v, issue %q, self-locks %v", w.notified, w.issue(t), w.elapsed)
+	}
+}
