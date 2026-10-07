@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/fleet"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
@@ -33,6 +34,11 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	// Verifies uploaded LUKS headers with a read-only credential of paddock-escrow (plan M4b decision 13).
 	escrowObjects := objectstore.New(l.Required("PADDOCK_ESCROW_S3_ENDPOINT"), l.SecretFile("PADDOCK_ESCROW_S3_ACCESS_KEY_FILE"),
 		l.SecretFile("PADDOCK_ESCROW_S3_SECRET_KEY_FILE"), l.String("PADDOCK_ESCROW_S3_BUCKET", "paddock-escrow"))
+	// Inventory (plan M5a decisions 2 and 6): Fleet's internal API with the API-only user's token.
+	fleetURL := l.Required("PADDOCK_FLEET_URL")
+	fleetToken := l.SecretFile("PADDOCK_FLEET_TOKEN_FILE")
+	fleetPublicURL := l.Required("PADDOCK_FLEET_PUBLIC_URL")
+	inventoryEvery := l.Duration("PADDOCK_INVENTORY_SYNC_INTERVAL", worker.DefaultInventorySyncInterval)
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -79,6 +85,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), ak, pool, platformPool, syncEvery, reconcileEvery)
+	inventory := worker.NewInventory(fleet.New(fleetURL, fleetToken, fleetPublicURL), inventoryEvery)
 	slog.InfoContext(ctx, "worker starting")
 
 	return runAll(ctx,
@@ -107,5 +114,6 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		identity.RunSync,
 		identity.RunReconcile,
 		identity.RunBrandFlows,
+		inventory.RunSettings,
 	)
 }
