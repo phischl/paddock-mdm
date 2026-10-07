@@ -62,6 +62,12 @@ export type DiskEncryption = components['schemas']['DiskEncryption']
 export type DiskEscrow = components['schemas']['DiskEscrow']
 export type DiskRecoveryKey = components['schemas']['DiskRecoveryKey']
 export type DiskState = components['schemas']['DiskState']
+export type RevocationRequest = components['schemas']['RevocationRequest']
+export type RevocationRequestSort = components['parameters']['RevocationRequestSort']
+export type RevocationAction = components['schemas']['RevocationAction']
+export type RevocationStatus = components['schemas']['RevocationStatus']
+export type DMSSettings = components['schemas']['DMSSettings']
+export type DMSSettingsUpdate = components['schemas']['DMSSettingsUpdate']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

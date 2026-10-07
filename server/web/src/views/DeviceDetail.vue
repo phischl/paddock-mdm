@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
 import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
+import RevocationCard from '../components/RevocationCard.vue'
 import type { DeviceCommand } from '../api/client'
 import { useDeviceDetailPage } from '../lib/deviceDetailPage'
 import type { ListColumn } from '../lib/listQuery'
@@ -160,6 +161,13 @@ function groupName(id: string | null | undefined): string {
       <DiskEncryptionCard
         :device-id="device.id"
         :hostname="device.hostname"
+      />
+
+      <RevocationCard
+        :device-id="device.id"
+        :hostname="device.hostname"
+        :revocable="device.state === 'active' || device.state === 'quarantined'"
+        :presumed-self-locked-at="device.presumed_self_locked_at"
       />
 
       <h2>{{ t('commands.title') }}</h2>

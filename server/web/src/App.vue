@@ -120,6 +120,20 @@ onBeforeUnmount(() => observer.disconnect())
           {{ t('nav.loginSettings') }}
         </v-btn>
         <v-btn
+          v-if="session.canDelete"
+          to="/revocations"
+          variant="text"
+        >
+          {{ t('nav.revocations') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/settings/dms"
+          variant="text"
+        >
+          {{ t('nav.dms') }}
+        </v-btn>
+        <v-btn
           v-if="session.canReadAudit"
           to="/audit"
           variant="text"

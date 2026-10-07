@@ -52,6 +52,7 @@ h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.75rem; }
 .state-quarantined, .state-rejected, .state-retired { color: var(--danger); font-weight: 600; }
 .state-pending { color: #7a4b00; font-weight: 600; }
 .mono { font-family: ui-monospace, monospace; word-break: break-all; }
+.timeline { margin: 0; padding-left: 1.25rem; }
 
 /* Identity and privileges (plan M3a step 5). */
 .badge { display: inline-block; border-radius: 4px; padding: 0 0.4rem; font-size: 0.8125rem; border: 1px solid currentColor; }
