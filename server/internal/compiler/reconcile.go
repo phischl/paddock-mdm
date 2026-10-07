@@ -24,7 +24,8 @@ const ReconcileInterval = 60 * time.Second
 // after a commit or an emptied Valkey heals itself, and recompiles devices whose agent reports another bundle schema
 // than their latest bundle has (an agent update to schema 2, plan M3a decision 14a). When the keys object of v2
 // bundles changed (a key rotation, or the first round after start), it recompiles every organization once, so
-// devices receive the new keys (plan M4a decision 5); unchanged devices keep their bundle version.
+// devices receive the new keys (plan M4a decision 5), and likewise when the inventory section changed (a new fleetd
+// package, plan M5a decision 3); unchanged devices keep their bundle version.
 func (c *Compiler) RunReconcile(ctx context.Context) {
 	for {
 		if err := c.Reconcile(ctx); err != nil && ctx.Err() == nil {
@@ -47,6 +48,16 @@ func (c *Compiler) Reconcile(ctx context.Context) error {
 	keys, err := c.keys(ctx)
 	if err != nil {
 		return err
+	}
+	// The fleetd package is platform data; any organization's transaction reads it.
+	if len(orgs) > 0 {
+		err = c.pool.InOrg(systemContext(ctx, orgs[0]), func(ctx context.Context, q *pgstore.Queries) error {
+			keys.Inventory, err = c.inventory(ctx, q)
+			return err
+		})
+		if err != nil {
+			return err
+		}
 	}
 	raw, err := json.Marshal(keys)
 	if err != nil {

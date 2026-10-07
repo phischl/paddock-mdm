@@ -55,9 +55,13 @@ minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<versio
    agent-release` refuses it): `PUT /api/platform/v1/agent-releases/<version>/packages/<name>/<arch>` with the package
    as body and `X-Paddock-Minisig`. The server stores them under
    `packages/<version>/<name>_<version>_<arch>.deb`; the Paddock autoinstall installs new devices from them.
+   fleetd (plan M5a) is uploaded the same way as package `fleet-osquery`, signed with the agent release key, with the
+   query parameter `package_version=<fleetd version>`; it is stored as
+   `packages/<version>/fleet-osquery_<fleetd version>_<arch>.deb` and installed by the agent, never by the autoinstall
+   (`docs/operations/fleet.md`).
 5. Publish: `POST …/<version>/publish`. Published releases are immutable.
 
-In development, `make agent-release VERSION=x.y.z` does all of this with the development key.
+In development, `make agent-release VERSION=x.y.z` does all of this with the development key, fleetd included.
 
 ### Public packages
 

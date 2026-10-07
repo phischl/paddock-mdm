@@ -396,3 +396,44 @@ func TestTimeTickets(t *testing.T) {
 		t.Fatalf("ticket %+v %v", tk, err)
 	}
 }
+
+// TestInventorySection (plan M5a decisions 3 and 4): v2 bundles carry Fleet's URL, the enroll secret and the fleetd
+// package of the newest published release that has one; a new package reaches every device with the next reconcile,
+// v1 bundles never get the section.
+func TestInventorySection(t *testing.T) {
+	w := newWorldConfig(t, func(c *compiler.Config) {
+		c.FleetURL, c.FleetEnrollSecret = "https://fleet.test", "enroll-secret"
+	})
+	release := func(version, fleetd string, sum byte) {
+		w.exec("INSERT INTO agent_release (version, status, created_by, published_at) VALUES ($1, 'published', 'test', now())", version)
+		w.exec(`INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key, package_version)
+			VALUES ($1, 'fleet-osquery', 'amd64', $2, 1, 'sig', $3, $4)`,
+			version, strings.Repeat(string("0123456789abcdef"[sum]), 64), "packages/"+version+"/fleet-osquery_"+fleetd+"_amd64.deb", fleetd)
+	}
+	v2, v1 := w.v2Device("{1,2}"), w.v2Device("{1}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if inv := w.fetch(v2).Inventory; inv != nil {
+		t.Fatalf("inventory without a fleetd package: %+v", inv)
+	}
+	release("90.0.1", "1.48.0", 1)
+	ctx := context.Background()
+	if err := w.comp.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	inv := w.fetch(v2).Inventory
+	if inv == nil || inv.FleetURL != "https://fleet.test" || inv.EnrollSecret != "enroll-secret" ||
+		inv.Package != (bundle.InventoryPackage{Version: "1.48.0", URLPath: "packages/90.0.1/fleet-osquery_1.48.0_amd64.deb", SHA256: strings.Repeat("1", 64)}) {
+		t.Fatalf("inventory %+v", inv)
+	}
+	if b := w.fetch(v1); b.Inventory != nil {
+		t.Fatalf("v1 bundle with inventory %+v", b.Inventory)
+	}
+	before := w.version(v2)
+	release("90.0.2", "1.49.0", 2)
+	if err := w.comp.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b := w.fetch(v2); b.BundleVersion != before+1 || b.Inventory.Package.Version != "1.49.0" {
+		t.Fatalf("after a new fleetd package: version %d→%d, inventory %+v", before, b.BundleVersion, b.Inventory)
+	}
+}

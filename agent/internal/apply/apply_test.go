@@ -2,6 +2,8 @@ package apply_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -154,5 +156,41 @@ func TestRejectReason(t *testing.T) {
 		if got := apply.RejectReason(err); got != want {
 			t.Errorf("%v: %s", err, got)
 		}
+	}
+}
+
+// TestInventorySection (plan M5a decision 5): the bundle's inventory section is planned and applied after the
+// resources and drift-corrected like one; an applier without inventory reconciler ignores it, and a bundle that names
+// "inventory" as a resource type is refused.
+func TestInventorySection(t *testing.T) {
+	ctx := context.Background()
+	sys, a := fixture(t)
+	b := newBundle(t, 4, nil)
+	sum := sha256.Sum256([]byte("deb"))
+	b.Inventory = &bundle.Inventory{FleetURL: "https://fleet.example.org", EnrollSecret: "s", Package: bundle.InventoryPackage{
+		Version: "1.61.0", URLPath: "packages/1.2.0/fleet-osquery_1.61.0_amd64.deb", SHA256: hex.EncodeToString(sum[:])}}
+	if plan := a.Plan(ctx, b); slices.ContainsFunc(plan, func(p apply.Planned) bool { return p.ID == reconcile.InventoryID }) {
+		t.Fatalf("planned without an inventory reconciler: %+v", plan)
+	}
+	a.WithInventory(&reconcile.Inventory{Sys: sys, BundlesURL: "https://bundles.example.org",
+		Download: func(context.Context, string, int64) ([]byte, error) { return []byte("deb"), nil }})
+	plan := a.Plan(ctx, b)
+	if last := plan[len(plan)-1]; last.ID != reconcile.InventoryID || len(last.Changes) == 0 {
+		t.Fatalf("plan %+v", plan)
+	}
+	if rep := a.Apply(ctx, b); len(rep.Errors) != 0 || !slices.Contains(rep.ChangedIDs, reconcile.InventoryID) {
+		t.Fatalf("apply %+v", rep)
+	}
+	sys.Units["orbit.service"].Active = false
+	ids := apply.Drifted(a.Plan(ctx, b))
+	if !slices.Equal(ids, []string{reconcile.InventoryID}) {
+		t.Fatalf("drifted %v", ids)
+	}
+	if rep := a.ApplyResources(ctx, b, ids); !slices.Equal(rep.ChangedIDs, []string{reconcile.InventoryID}) || !sys.Units["orbit.service"].Active {
+		t.Fatalf("drift correction %+v", rep)
+	}
+	b.Resources = append(b.Resources, bundle.Resource{ID: "inventory", Type: "inventory", Spec: []byte("{}")})
+	if err := a.CheckTypes(b); err == nil {
+		t.Fatal("a resource of type inventory was accepted")
 	}
 }

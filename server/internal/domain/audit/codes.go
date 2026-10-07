@@ -109,6 +109,8 @@ const (
 	CodeDeviceRevocationRefused         Code = "device.revocation_refused"
 	CodeSettingsDMSChanged              Code = "settings.dms_changed"
 	CodeDevicePresumedSelfLocked        Code = "device.presumed_self_locked"
+	// Inventory (plan M5a decisions 5 and 8): the mutual watch of agent and fleetd.
+	CodeDeviceTamperServiceStopped Code = "device.tamper_service_stopped"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -130,7 +132,7 @@ var deviceEventParams = []string{
 	"event_seq", "occurred_at", "bundle_version", "reason", "resource", "version", "changed", "errors", "resource_ids",
 	"from_version", "outcome", "count", "from_seq", "to_seq", "stage", "message", "username", "sessions_locked",
 	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
-	"generation", "service", "at", "field", "before", "after",
+	"generation", "service", "at", "field", "before", "after", "unit",
 }
 
 var registry = map[Code]Definition{
@@ -371,9 +373,9 @@ var registry = map[Code]Definition{
 	CodeAgentReleaseArtifactUploaded: {
 		Code: CodeAgentReleaseArtifactUploaded, Emitted: true,
 		Description: "A platform administrator uploaded the signed agent binary or a signed Debian package of a release for one architecture; the server verified its signature with the release public key.",
-		Params:      []string{"version", "arch", "sha256", "size", "kind", "name"},
+		Params:      []string{"version", "arch", "sha256", "size", "kind", "name", "package_version"},
 		Outcomes:    adminOutcomes,
-		Note:        "kind is binary (paddockd) or deb (a Debian package, with name paddock-agent or paddock-supervisor); events before M4b have no kind.",
+		Note:        "kind is binary (paddockd) or deb (a Debian package, with name paddock-agent, paddock-supervisor, paddock-revoke or fleet-osquery); package_version is the fleetd version of fleet-osquery; events before M4b have no kind.",
 	},
 	CodeAgentReleasePublished: {
 		Code: CodeAgentReleasePublished, Emitted: true,
@@ -709,6 +711,13 @@ var registry = map[Code]Definition{
 		Description: "A device has not reached Paddock for longer than the dead man's switch period: it presumably locked itself (actor: system).",
 		Params:      []string{"period_days", "last_contact_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceTamperServiceStopped: {
+		Code: CodeDeviceTamperServiceStopped, Emitted: true,
+		Description: "A device found a service Paddock keeps running stopped outside Paddock and started it again (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "unit is orbit.service (fleetd, the mutual watch of agent and fleetd).",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

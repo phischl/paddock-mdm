@@ -58,6 +58,25 @@ type Bundle struct {
 	Revocation *Revocation `json:"revocation,omitempty"`
 	// DMS is the organization's dead man's switch (schema v2 only, plan M4c decisions 15 and 16).
 	DMS *DMS `json:"dms,omitempty"`
+	// Inventory enrolls the device into the inventory system (schema v2 only, plan M5a decision 4). Agents that do
+	// not know it ignore the field.
+	Inventory *Inventory `json:"inventory,omitempty"`
+}
+
+// Inventory is fleetd's installation and enrollment. The enroll secret only lets a host enroll into Fleet; Paddock
+// ignores hosts it cannot map to a device (architecture §15).
+type Inventory struct {
+	FleetURL     string           `json:"fleet_url"`
+	EnrollSecret string           `json:"enroll_secret"`
+	Package      InventoryPackage `json:"package"`
+}
+
+// InventoryPackage is the fleetd Debian package (amd64) in Paddock's package store: URLPath is relative to
+// https://bundles.<domain>/, e.g. packages/1.2.0/fleet-osquery_1.48.0_amd64.deb.
+type InventoryPackage struct {
+	Version string `json:"version"`
+	URLPath string `json:"url_path"`
+	SHA256  string `json:"sha256"`
 }
 
 // DMS configures the dead man's switch of a device: when enabled, a device that has not accepted a time ticket for

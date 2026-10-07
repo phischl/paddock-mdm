@@ -79,7 +79,11 @@ func (h *handlers) UploadAgentPackage(ctx context.Context, req adminapi.UploadAg
 	if err != nil {
 		return nil, problem.InvalidRequest.WithDetail("unreadable body")
 	}
-	p, err := h.releases.UploadPackage(ctx, req.Version, string(req.Name), string(req.Arch), body, req.Params.XPaddockMinisig)
+	var packageVersion string
+	if req.Params.PackageVersion != nil {
+		packageVersion = *req.Params.PackageVersion
+	}
+	p, err := h.releases.UploadPackage(ctx, req.Version, string(req.Name), packageVersion, string(req.Arch), body, req.Params.XPaddockMinisig)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +151,7 @@ func toAgentArtifact(a pgstore.AgentArtifact) adminapi.AgentArtifact {
 func toAgentPackage(p pgstore.AgentPackage) adminapi.AgentPackage {
 	return adminapi.AgentPackage{
 		Name: adminapi.AgentPackageName(p.Name), Arch: adminapi.AgentPackageArch(p.Arch), Sha256: p.Sha256, Size: p.Size,
-		UrlPath: "/" + p.ObjectKey, CreatedAt: p.CreatedAt.UTC(),
+		UrlPath: "/" + p.ObjectKey, CreatedAt: p.CreatedAt.UTC(), PackageVersion: p.PackageVersion,
 	}
 }
 

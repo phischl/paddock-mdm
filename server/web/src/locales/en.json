@@ -177,6 +177,7 @@
       "tamper_protected_file_changed": "The device {target} found the protected file {file} changed",
       "tamper_local_admin_changed": "The device {target} found its local administrator account changed ({field})",
       "tamper_keyslot_changed": "The device {target} found the keyslots of its disk changed",
+      "tamper_service_stopped": "The device {target} found the service {unit} stopped and started it again",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
       "escrow_destroyed": "The escrowed disk keys of {hostname} were destroyed and its Destroy was issued",
       "revocation_confirmed": "The device {target} confirmed that its disk keyslots are erased",

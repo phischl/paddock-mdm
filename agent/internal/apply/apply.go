@@ -1,6 +1,6 @@
 // Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10, M3b decision 6): resources in
-// the order time → file → systemd_unit → login → sudo, each independently (an error does not stop the others), then
-// the removal of files that left the bundle.
+// the order time → file → systemd_unit → login → sudo, then the inventory section (plan M5a decision 5), each
+// independently (an error does not stop the others), then the removal of files that left the bundle.
 package apply
 
 import (
@@ -47,9 +47,16 @@ type Planned struct {
 
 // Applier applies bundles with a set of reconcilers.
 type Applier struct {
-	recs  map[string]reconcile.Reconciler
-	file  *reconcile.File
-	login *reconcile.Login
+	recs      map[string]reconcile.Reconciler
+	file      *reconcile.File
+	login     *reconcile.Login
+	inventory *reconcile.Inventory
+}
+
+// WithInventory adds the reconciler of the bundle's inventory section; without it the section is ignored.
+func (a *Applier) WithInventory(inv *reconcile.Inventory) *Applier {
+	a.inventory = inv
+	return a
 }
 
 // New creates an applier for sys; managed is the record of files Paddock wrote, events receives the device events
@@ -67,8 +74,9 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 	}
 }
 
-// sorted returns the resources of b in apply order, filtered by keep.
-func sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource {
+// sorted returns the resources of b in apply order, filtered by keep, and, with an inventory reconciler, the
+// inventory section last.
+func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource {
 	var out []bundle.Resource
 	for _, typ := range order {
 		for _, r := range b.Resources {
@@ -82,7 +90,21 @@ func sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource
 			out = append(out, r) // reported as unsupported
 		}
 	}
+	if a.inventory != nil && b.Inventory != nil {
+		if r, err := reconcile.InventoryResource(b.Inventory); err == nil && keep(r) {
+			out = append(out, r)
+		}
+	}
 	return out
+}
+
+// reconciler returns the reconciler of a resource type.
+func (a *Applier) reconciler(typ string) (reconcile.Reconciler, bool) {
+	if typ == reconcile.InventoryID && a.inventory != nil {
+		return a.inventory, true
+	}
+	rec, ok := a.recs[typ]
+	return rec, ok
 }
 
 func all(bundle.Resource) bool { return true }
@@ -115,8 +137,8 @@ func (a *Applier) ApplyResources(ctx context.Context, b *bundle.Bundle, ids []st
 
 func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.Resource) bool) Report {
 	rep := Report{Version: b.BundleVersion, Errors: []ResourceError{}}
-	for _, res := range sorted(b, keep) {
-		rec, ok := a.recs[res.Type]
+	for _, res := range a.sorted(b, keep) {
+		rec, ok := a.reconciler(res.Type)
 		if !ok {
 			rep.Errors = append(rep.Errors, ResourceError{ID: res.ID, Message: "unsupported resource type " + res.Type})
 			continue
@@ -176,9 +198,9 @@ func (a *Applier) removeStale(b *bundle.Bundle, rep *Report) {
 // Plan plans every resource of b without changing the system.
 func (a *Applier) Plan(ctx context.Context, b *bundle.Bundle) []Planned {
 	var out []Planned
-	for _, res := range sorted(b, all) {
+	for _, res := range a.sorted(b, all) {
 		p := Planned{ID: res.ID}
-		if rec, ok := a.recs[res.Type]; !ok {
+		if rec, ok := a.reconciler(res.Type); !ok {
 			p.Error = "unsupported resource type " + res.Type
 		} else if changes, err := rec.Plan(ctx, res); err != nil {
 			p.Error = err.Error()

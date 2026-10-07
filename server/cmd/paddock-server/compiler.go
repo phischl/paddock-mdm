@@ -35,6 +35,12 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	visudo := l.String("PADDOCK_VISUDO", "/usr/sbin/visudo")
 	himmelblau := l.String("PADDOCK_HIMMELBLAU_VERSION", "4.0.4")
 	revocationEnabled := config.RevocationEnabled(l)
+	// fleetd enrollment of v2 bundles (plan M5a decision 4); without both, bundles have no inventory section.
+	fleetURL := l.String("PADDOCK_FLEET_PUBLIC_URL", "")
+	var fleetEnrollSecret string
+	if fleetURL != "" {
+		fleetEnrollSecret = l.SecretFile("PADDOCK_FLEET_ENROLL_SECRET_FILE")
+	}
 	// Development agents count the dead man's switch in minutes (plan M4c gate R6): tickets every 30 s.
 	var ticketInterval time.Duration
 	if common.Development() {
@@ -73,6 +79,8 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 		Keys:              signer,
 		RevocationEnabled: revocationEnabled,
 		TicketInterval:    ticketInterval,
+		FleetURL:          fleetURL,
+		FleetEnrollSecret: fleetEnrollSecret,
 	})
 
 	mqCfg := mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}

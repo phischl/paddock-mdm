@@ -203,22 +203,28 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 }
 
 // UploadPackage verifies the minisign signature of a Debian package with the release public key — paddock-revoke with
-// the revocation release key (plan M4c decision 4) — and stores it below packages/, from where the Paddock autoinstall downloads it (plan M4b
-// decision 1). It is audited as an artifact of kind deb. Published releases are immutable.
-func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, arch string, deb []byte, minisigB64 string) (pgstore.AgentPackage, error) {
+// the revocation release key (plan M4c decision 4) — and stores it below packages/, from where the Paddock autoinstall
+// (plan M4b decision 1) or, for fleet-osquery, the agent (plan M5a decision 3) downloads it. packageVersion is the
+// fleetd version of fleet-osquery and empty for every other package. It is audited as an artifact of kind deb.
+// Published releases are immutable.
+func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packageVersion, arch string, deb []byte, minisigB64 string) (pgstore.AgentPackage, error) {
 	sum := sha256.Sum256(deb)
 	pkg := pgstore.UpsertAgentPackageParams{
 		Version: version, Name: name, Arch: arch, Sha256: hex.EncodeToString(sum[:]), Size: int64(len(deb)),
-		Minisig: minisigB64, ObjectKey: agentrelease.PackageObjectKey(version, name, arch),
+		Minisig: minisigB64, ObjectKey: agentrelease.PackageObjectKey(version, name, packageVersion, arch),
 	}
 	spec := SpecAgentReleaseUpload
 	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": pkg.Sha256, "size": pkg.Size, "kind": "deb", "name": name}
+	if packageVersion != "" {
+		pkg.PackageVersion = &packageVersion
+		spec.Params["package_version"] = packageVersion
+	}
 	t := releaseTarget(version)
 	spec.Target = &t
 	var out pgstore.AgentPackage
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
-			if err := agentrelease.ValidatePackage(name); err != nil {
+			if err := agentrelease.ValidatePackage(name, packageVersion); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
 			verify := a.verify

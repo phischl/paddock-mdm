@@ -14,7 +14,7 @@ import (
 // Policy errors.
 var (
 	ErrPathNotAllowed = errors.New("path must be an absolute, normalized path below /etc/, /usr/local/etc/ or /opt/ and outside the protected areas")
-	ErrUnitNotAllowed = errors.New("unit must be a .service, .timer, .socket or .path unit not managed by Paddock, Himmelblau, Fleet, SSH, GDM or systemd")
+	ErrUnitNotAllowed = errors.New("unit must be a .service, .timer, .socket or .path unit not managed by Paddock, Himmelblau, Fleet (fleet*, orbit*), SSH, GDM or systemd")
 	ErrInvalidMode    = errors.New("mode must be four octal digits without setuid, setgid or sticky bit, e.g. 0644")
 	ErrInvalidOwner   = errors.New("owner and group must match ^[a-z_][a-z0-9_-]{0,31}$")
 )
@@ -27,13 +27,14 @@ var allowedRoots = []string{"/etc/", "/usr/local/etc/", "/opt/"}
 var (
 	protectedFiles = []string{
 		"/etc/sudoers", "/etc/nsswitch.conf", "/etc/crypttab", "/etc/fstab", "/etc/passwd", "/etc/shadow",
-		"/etc/group", "/etc/gshadow",
+		"/etc/group", "/etc/gshadow", "/etc/default/orbit",
 	}
 	protectedDirs = []string{
 		"/etc/sudoers.d/", "/etc/pam.d/", "/etc/security/", "/etc/himmelblau/", "/etc/paddock/", "/opt/paddock/",
-		"/etc/apt/",
+		"/etc/apt/", "/opt/orbit/",
 	}
-	protectedPrefixes = []string{"/etc/systemd/system/paddock"}
+	// fleetd's unit and drop-ins (plan M5a decision 5) as well as Paddock's own units.
+	protectedPrefixes = []string{"/etc/systemd/system/paddock", "/etc/systemd/system/orbit"}
 )
 
 // ValidatePath enforces the file path policy.
@@ -75,7 +76,7 @@ var (
 )
 
 // reservedUnitPrefixes are units that belong to Paddock or to components whose configuration is protected.
-var reservedUnitPrefixes = []string{"paddock", "himmelblau", "fleet", "ssh", "gdm", "systemd-"}
+var reservedUnitPrefixes = []string{"paddock", "himmelblau", "fleet", "orbit", "ssh", "gdm", "systemd-"}
 
 // ValidateMode checks the file mode.
 func ValidateMode(m string) error {

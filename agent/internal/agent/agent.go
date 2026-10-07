@@ -111,9 +111,10 @@ func Load(l paths.Layout) (Deps, error) {
 	}
 	sys := reconcile.OS{Root: l.Root}
 	events := &reconcile.Events{}
+	inventory := &reconcile.Inventory{Sys: sys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
 	d := Deps{
-		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Applier: apply.New(sys, managed, events), Events: events,
-		Sys: sys, Accounts: sys,
+		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys,
+		Applier: apply.New(sys, managed, events).WithInventory(inventory),
 	}
 	if l.Root == "" || l.Root == "/" {
 		d.FollowLogins = localadmin.FollowJournal

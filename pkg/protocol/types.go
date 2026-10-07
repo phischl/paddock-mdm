@@ -167,7 +167,15 @@ const (
 	EventRevocationTrustPinnedTOFU = "revocation.trust_pinned_tofu"
 	// paddock-revoke refused a revocation token; nothing changed on the device (plan M4c decision 11).
 	EventRevocationRefused = "revocation.refused"
+	// Mutual watch (plan M5a decision 5): a unit Paddock keeps running (fleetd's orbit.service) was found stopped;
+	// the agent starts it again.
+	EventTamperServiceStopped = "tamper.service_stopped"
 )
+
+// TamperServiceStopped is the data of tamper.service_stopped.
+type TamperServiceStopped struct {
+	Unit string `json:"unit"`
+}
 
 // EventTypes is the closed set of event types.
 var EventTypes = []string{
@@ -179,6 +187,7 @@ var EventTypes = []string{
 	EventLocalAdminRotated, EventLocalAdminRotationFailed, EventLocalAdminLogin, EventTamperLocalAdminChanged,
 	EventTamperKeyslotChanged,
 	EventRevocationTrustPinnedTOFU, EventRevocationRefused,
+	EventTamperServiceStopped,
 }
 
 // Disk states of DiskHealth (plan M4b decision 8), from the least to the most complete.
@@ -307,7 +316,8 @@ type (
 		SHA256Before string `json:"sha256_before"`
 		SHA256After  string `json:"sha256_after"`
 	}
-	// TamperProtectedFileChanged: a protected file the agent cannot restore itself was changed (e.g. a PAM file).
+	// TamperProtectedFileChanged: a protected file was changed outside Paddock: one the agent cannot restore itself
+	// (e.g. a PAM file), or one of fleetd's files, which it restores (plan M5a decision 5).
 	TamperProtectedFileChanged struct {
 		File string `json:"file"`
 	}

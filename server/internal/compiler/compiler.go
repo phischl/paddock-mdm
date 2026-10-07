@@ -80,6 +80,9 @@ type Config struct {
 	// TicketInterval replaces timeticket.Interval (development stacks issue tickets more often, so a dead man's switch
 	// period of minutes in development agents is never reached while the stack is up).
 	TicketInterval time.Duration
+	// FleetURL (https://fleet.<domain>) and FleetEnrollSecret enroll fleetd (inventory.fleet_url and
+	// inventory.enroll_secret of v2 bundles, plan M5a decision 4); empty: no inventory section.
+	FleetURL, FleetEnrollSecret string
 }
 
 // KeyReader reads public keys of Transit keys (bao.Client).
@@ -182,6 +185,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			return err
 		}
 		if keys.DMS, err = loadDMS(ctx, q); err != nil {
+			return err
+		}
+		if keys.Inventory, err = c.inventory(ctx, q); err != nil {
 			return err
 		}
 		rows, err := q.ListCompileTargets(ctx, ids)
@@ -344,7 +350,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
 		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources, Keys: v2.Keys,
-		Revocation: v2.Revocation, DMS: v2.DMS,
+		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory,
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -365,11 +371,14 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted}, true, nil, nil
 }
 
-// v2Trust are the key material, the revocation section and the organization's dead man's switch of v2 bundles.
+// v2Trust are the key material, the revocation section, the organization's dead man's switch and the inventory
+// section of v2 bundles.
 type v2Trust struct {
 	Keys       *bundle.Keys       `json:"keys"`
 	Revocation *bundle.Revocation `json:"revocation"`
 	DMS        *bundle.DMS        `json:"-"` // per organization, not part of the reconcile digest
+	// Inventory is the same for every organization; a new fleetd package recompiles every device (reconcile digest).
+	Inventory *bundle.Inventory `json:"inventory"`
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap

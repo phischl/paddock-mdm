@@ -2291,7 +2291,7 @@ paths:
       - name: name
         in: path
         required: true
-        schema: { type: string, enum: [paddock-agent, paddock-supervisor, paddock-revoke] }
+        schema: { type: string, enum: [paddock-agent, paddock-supervisor, paddock-revoke, fleet-osquery] }
       - name: arch
         in: path
         required: true
@@ -2305,11 +2305,18 @@ paths:
         the revocation release public key (400 otherwise).
         Packages are stored below packages/ in the artifact bucket and served without authentication at
         https://bundles.<domain>/packages/<version>/<name>_<version>_<arch>.deb; the Paddock autoinstall pins their
-        SHA-256 (plan M4b decision 1). Uploading again replaces the package while the release is a draft. Audited as
-        an artifact upload with kind deb.
+        SHA-256 (plan M4b decision 1). fleet-osquery (fleetd, plan M5a decision 3) needs package_version, the fleetd
+        version its file is named after (packages/<version>/fleet-osquery_<package_version>_<arch>.deb); the agent
+        installs it, the autoinstall never. Uploading again replaces the package while the release is a draft.
+        Audited as an artifact upload with kind deb.
       x-paddock-audit: agent_release.artifact_uploaded
       parameters:
         - $ref: "#/components/parameters/Csrf"
+        - name: package_version
+          in: query
+          required: false
+          description: The fleetd version of fleet-osquery, e.g. 1.48.0; required for fleet-osquery and refused for every other package.
+          schema: { type: string, pattern: '^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$' }
         - name: X-Paddock-Minisig
           in: header
           required: true
@@ -2764,7 +2771,8 @@ components:
       type: object
       required: [name, arch, sha256, size, url_path, created_at]
       properties:
-        name: { type: string, enum: [paddock-agent, paddock-supervisor, paddock-revoke] }
+        name: { type: string, enum: [paddock-agent, paddock-supervisor, paddock-revoke, fleet-osquery] }
+        package_version: { type: string, description: The fleetd version of fleet-osquery; absent for Paddock's packages. }
         arch: { type: string, enum: [amd64, arm64] }
         sha256: { type: string, description: Hex SHA-256 of the package. }
         size: { type: integer, format: int64 }

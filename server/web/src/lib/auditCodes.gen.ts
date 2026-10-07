@@ -44,6 +44,7 @@ export const auditCodes = [
   'device.tamper_keyslot_changed',
   'device.tamper_local_admin_changed',
   'device.tamper_protected_file_changed',
+  'device.tamper_service_stopped',
   'device.tamper_sudo_group_member',
   'device.tamper_sudoers_changed',
   'device.tamper_sudoers_d_file',

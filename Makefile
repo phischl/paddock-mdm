@@ -158,14 +158,26 @@ deb: agent ## Build the paddock-supervisor, paddock-agent and paddock-revoke Deb
 	done
 	@ls -1 bin/deb/*.deb
 
+# fleetd (plan M5a decision 3): fleetctl packages orbit and osquery from Fleet's update server (needs outbound HTTPS)
+# without enroll secret, scripts, Fleet Desktop or auto-updates. fleetctl accepts a Fleet URL only together with an
+# enroll secret, so the package has neither: the agent installs it and gives fleetd both from the bundle.
+.PHONY: fleetd-deb
+fleetd-deb: ## Build the fleetd Debian package fleet-osquery (amd64) with fleetctl into bin/fleetd/
+	rm -rf bin/fleetd && mkdir -p bin/fleetd
+	docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e USER=paddock -v $(CURDIR)/bin/fleetd:/out -w /out $(FLEETCTL_IMAGE) \
+		package --type deb --arch amd64 --enable-scripts=false --disable-updates --fleet-desktop=false --disable-open-folder
+	mv bin/fleetd/build/fleet-osquery_*_amd64.deb bin/fleetd/ && rm -rf bin/fleetd/build
+	@ls -1 bin/fleetd/fleet-osquery_*_amd64.deb
+
 .PHONY: agent-release
-agent-release: ## Build paddockd and the Debian packages VERSION (TAGS), sign them with the development release key and upload and publish them
+agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd, sign them with the development release key and upload and publish them
 	@test -n "$(filter-out 0.0.0-dev,$(VERSION))" || { echo "usage: make agent-release VERSION=x.y.z [TAGS=...]"; exit 1; }
 	@test -z "$(REVOKE_TAGS)" || { echo "agent-release never builds paddock-revoke with REVOKE_TAGS ($(REVOKE_TAGS))"; exit 1; }
 	$(MAKE) --no-print-directory deb VERSION=$(VERSION) TAGS='$(TAGS)'
+	$(MAKE) --no-print-directory fleetd-deb
 	go run ./test/acceptance/cmd/agentrelease --version $(VERSION) --publish \
 		--artifact amd64=bin/agent/amd64/paddockd --artifact arm64=bin/agent/arm64/paddockd \
-		$$(for f in bin/deb/*.deb; do printf -- '--deb %s ' "$$f"; done)
+		$$(for f in bin/deb/*.deb bin/fleetd/*.deb; do printf -- '--deb %s ' "$$f"; done)
 
 .PHONY: up
 up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy
@@ -219,6 +231,7 @@ acceptance: ## Run acceptance gates against the running stack (optional T=<regex
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)
 	@test -n "$(VM)" || { echo "usage: make system-test VM=<paddock-u2404|paddock-u2604|all> [T=<regex>]"; exit 1; }
 	$(MAKE) --no-print-directory deb VERSION=0.1.0 TAGS=paddock_dev REVOKE_TAGS=paddock_revoke_testtarget
+	$(MAKE) --no-print-directory fleetd-deb
 	CGO_ENABLED=0 go build -trimpath -o bin/revoke-release/paddock-revoke ./agent/cmd/paddock-revoke
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... $(if $(T),-run '$(T)',) -v

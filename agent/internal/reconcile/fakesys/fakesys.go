@@ -50,6 +50,8 @@ type System struct {
 	// interrupted: every later apt-get install fails until dpkg --configure -a.
 	AptTimeout      bool
 	DpkgInterrupted bool
+	// DpkgTimeout makes dpkg -i time out (an error wrapping context.DeadlineExceeded).
+	DpkgTimeout bool
 	// Sessions are the logind sessions loginctl lists.
 	Sessions []Session
 	// Passwd are the users getent passwd resolves (name → UID), with an empty GECOS like Himmelblau's synthetic entry
@@ -160,6 +162,10 @@ func (s *System) Owner(fi fs.FileInfo) (int, int) {
 func (s *System) Systemctl(_ context.Context, args ...string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(args) == 1 && args[0] == "daemon-reload" {
+		s.Calls = append(s.Calls, "systemctl daemon-reload")
+		return "", 0, nil
+	}
 	if len(args) != 2 {
 		return "", 1, fmt.Errorf("fake systemctl: unsupported %v", args)
 	}
@@ -279,9 +285,30 @@ func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) 
 func (s *System) Dpkg(_ context.Context, args ...string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Calls = append(s.Calls, "dpkg "+strings.Join(args, " "))
+	cmd := "dpkg " + strings.Join(args, " ")
+	s.Calls = append(s.Calls, cmd)
 	if slices.Equal(args, []string{"--configure", "-a"}) {
 		s.DpkgInterrupted = false
+	}
+	if len(args) != 2 || args[0] != "-i" {
+		return "", 0, nil
+	}
+	// -i <dir>/<name>_<version>_<arch>.deb installs the package; fleet-osquery's postinst enables and starts orbit.
+	switch {
+	case s.DpkgTimeout:
+		return "", -1, fmt.Errorf("dpkg: %w", context.DeadlineExceeded)
+	case s.DpkgInterrupted:
+		return "dpkg: error: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.\n", 2, nil
+	case cmd == s.FailCmd || s.Files[args[1]] == nil:
+		return "dpkg: error processing archive " + args[1] + "\n", 1, nil
+	}
+	f := strings.Split(strings.TrimSuffix(args[1][strings.LastIndex(args[1], "/")+1:], ".deb"), "_")
+	if len(f) != 3 {
+		return "dpkg: error: not a Debian archive\n", 2, nil
+	}
+	s.Packages[f[0]], s.Versions[f[0]] = true, f[1]
+	if f[0] == "fleet-osquery" {
+		s.Units["orbit.service"] = &Unit{State: "enabled", Active: true}
 	}
 	return "", 0, nil
 }
