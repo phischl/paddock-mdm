@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -15,6 +16,16 @@ const (
 	NoticeIssue     = "/etc/issue.d/90-paddock.issue"
 	NoticeSSH       = "/etc/paddock/notice"
 	NoticeSSHConfig = "/etc/ssh/sshd_config.d/90-paddock-banner.conf"
+	// GDMProfile is the greeter's dconf profile. The distribution's profile has no system database, so the greeter
+	// reads gdm.d only with this one; the agent never relies on another package (himmelblau-qr-greeter) creating it.
+	GDMProfile = "/etc/dconf/profile/gdm"
+)
+
+// gdmProfileDefault is the distribution's greeter profile, the base of GDMProfile; gdmSystemDB is the line that makes
+// the greeter read gdm.d.
+const (
+	gdmProfileDefault = "/usr/share/dconf/profile/gdm"
+	gdmSystemDB       = "system-db:gdm"
 )
 
 // noticeFiles are the notice files in a fixed order.
@@ -35,8 +46,8 @@ func validNotice(text string) bool {
 	return true
 }
 
-// renderNotice returns the desired content of every notice file; nil means absent. The GDM banner needs GDM, the
-// SSH banner an SSH server; an empty text removes every file.
+// renderNotice returns the desired content of every notice file; nil means absent. The GDM banner needs GDM and its
+// greeter profile, the SSH banner an SSH server; an empty text removes every file but the profile.
 func (l *Login) renderNotice(text string) map[string][]byte {
 	want := map[string][]byte{}
 	if text == "" {
@@ -45,6 +56,7 @@ func (l *Login) renderNotice(text string) map[string][]byte {
 	if l.Sys.PackageInstalled("gdm3") {
 		want[NoticeGDM] = []byte(managedHeader + "[org/gnome/login-screen]\nbanner-message-enable=true\nbanner-message-text=" +
 			gvariantString(text) + "\n")
+		want[GDMProfile] = l.gdmProfile()
 	}
 	// agetty expands backslash sequences in issue files.
 	want[NoticeIssue] = []byte(strings.ReplaceAll(text, `\`, `\\`) + "\n\n")
@@ -61,13 +73,49 @@ func gvariantString(s string) string {
 	return "'" + r.Replace(s) + "'"
 }
 
-// noticeChanges lists the notice files that differ from want.
+// gdmProfile returns the greeter profile with gdmSystemDB: the existing one, else the distribution's, else a user
+// database only.
+func (l *Login) gdmProfile() []byte {
+	data, _, err := l.Sys.ReadFile(GDMProfile)
+	if err != nil || data == nil {
+		data, _, err = l.Sys.ReadFile(gdmProfileDefault)
+	}
+	if err != nil || data == nil {
+		data = []byte("user-db:user\n")
+	}
+	return withSystemDB(data)
+}
+
+// withSystemDB returns profile unchanged if it has gdmSystemDB, otherwise with the line added after the user database
+// (the first database is the writable one) or, without one, first.
+func withSystemDB(profile []byte) []byte {
+	lines := strings.SplitAfter(string(profile), "\n")
+	at := 0
+	for i, line := range lines {
+		if strings.TrimSpace(line) == gdmSystemDB {
+			return profile
+		}
+		if at == 0 && strings.HasPrefix(line, "user-db:") {
+			at = i + 1
+		}
+	}
+	if at > 0 && !strings.HasSuffix(lines[at-1], "\n") {
+		lines[at-1] += "\n"
+	}
+	return []byte(strings.Join(slices.Insert(lines, at, gdmSystemDB+"\n"), ""))
+}
+
+// noticeChanges lists the notice files that differ from want. The greeter profile is only checked while the GDM
+// banner needs it and never removed.
 func (l *Login) noticeChanges(want map[string][]byte) []string {
 	var out []string
 	for _, path := range noticeFiles {
 		if !l.fileIs(path, want[path]) {
 			out = append(out, path)
 		}
+	}
+	if want[GDMProfile] != nil && !l.fileIs(GDMProfile, want[GDMProfile]) {
+		out = append(out, GDMProfile)
 	}
 	return out
 }
@@ -94,7 +142,7 @@ func (l *Login) applyNotice(ctx context.Context, text string) (bool, error) {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("notice %s: %w", path, err))
 		}
-		gdm = gdm || path == NoticeGDM
+		gdm = gdm || path == NoticeGDM || path == GDMProfile
 		ssh = ssh || path == NoticeSSH || path == NoticeSSHConfig
 	}
 	if gdm && l.Sys.PackageInstalled("dconf-cli") {
