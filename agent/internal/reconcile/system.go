@@ -8,15 +8,14 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/agent/internal/sessions"
 )
 
 // commandTimeout bounds every call of systemctl, timedatectl, loginctl, getent, sudo, visudo, gpasswd and dpkg-query.
@@ -74,22 +73,24 @@ func (o OS) mkdirs(dir string) error {
 // Remove implements System.
 func (o OS) Remove(path string) error { return os.Remove(o.path(path)) }
 
-// LookupUser implements System.
-func (o OS) LookupUser(name string) (int, error) {
-	u, err := user.Lookup(name)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.Atoi(u.Uid)
-}
+// LookupUser implements System from /etc/passwd, never through NSS: Himmelblau's NSS module answers for any user
+// name with a synthetic entry (plan M5a step 0a), and os/user would ask NSS in a cgo build.
+func (o OS) LookupUser(name string) (int, error) { return o.localID("/etc/passwd", name) }
 
-// LookupGroup implements System.
-func (o OS) LookupGroup(name string) (int, error) {
-	g, err := user.LookupGroup(name)
+// LookupGroup implements System from /etc/group, never through NSS.
+func (o OS) LookupGroup(name string) (int, error) { return o.localID("/etc/group", name) }
+
+// localID returns the numeric ID (third field) of name in a local account database.
+func (o OS) localID(file, name string) (int, error) {
+	data, _, err := o.ReadFile(file)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("read %s: %w", file, err)
 	}
-	return strconv.Atoi(g.Gid)
+	id, ok := sessions.LocalUIDs(data)[name]
+	if !ok {
+		return 0, fmt.Errorf("%s has no entry %s", file, name)
+	}
+	return id, nil
 }
 
 // Owner implements System.

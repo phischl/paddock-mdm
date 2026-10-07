@@ -52,7 +52,8 @@ type System struct {
 	DpkgInterrupted bool
 	// Sessions are the logind sessions loginctl lists.
 	Sessions []Session
-	// Passwd are the users getent passwd resolves (name → UID); Members the members of groups getent group lists.
+	// Passwd are the users getent passwd resolves (name → UID), with an empty GECOS like Himmelblau's synthetic entry
+	// of a user who never signed in; Members the members of groups getent group lists.
 	Passwd  map[string]int
 	Members map[string][]string
 	// VisudoReject makes visudo fail for a file (or, with -c alone, a configuration) that contains it. A visudo

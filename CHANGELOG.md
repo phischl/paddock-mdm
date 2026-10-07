@@ -157,6 +157,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The agent resolves the owner and group of managed files from `/etc/passwd` and `/etc/group` only, never through NSS, where Himmelblau answers for any name; a sudo entry whose name resolves to a local account (UID below 60000) is reported as `device.sudo_user_unresolved` instead of granting that account sudo. `docs/operations/device-login.md` lists how every user decision is made (M5a step 0a).
 - The GDM login notice was not shown on devices set up since M4b.1: the agent now adds `system-db:gdm` to the greeter profile `/etc/dconf/profile/gdm` itself (created from the distribution's profile if missing, other lines kept, restored when changed locally) instead of relying on the `himmelblau-qr-greeter` package to create it; no operator action needed, the next check-in repairs affected devices (M4a decision 19, M4c step 8).
 - Login setup could leave sshd stopped (Himmelblau restart loop blocked the ssh restart); configuration is now written before the package install (M4b.1 step 6).
 - Every `apt-get` and `dpkg` run of the agent is killed with its process group after 15 minutes and reported as `device.login_apply_failed` with `stage` `apt` and `reason` `timeout`; the installation is tried again after a back-off (15 minutes, doubling up to 4 hours), finishing an interrupted installation with `dpkg --configure -a` first, so a hanging package operation no longer blocks the agent (M4b.1 step 6).

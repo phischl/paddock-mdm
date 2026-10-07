@@ -139,10 +139,30 @@ local administrator.
 Users with a permission profile get a file `/etc/sudoers.d/paddock-u-<hash>` that names their numeric UID. The agent
 writes it for the sudo implementation behind `/usr/bin/sudo` — classic sudo, or sudo-rs, the default of Ubuntu 26.04 —
 and checks it with that implementation's `visudo`. sudo-rs does not support a custom lecture text: on such devices users
-see sudo-rs's default lecture, and the device detail says so. A user who
-never signed in on a device is not known there yet (`device.sudo_user_unresolved`); the rights apply after the first
-login. Changes of `/etc/sudoers` are reported (`device.tamper_sudoers_changed`) but not reverted; a missing
+see sudo-rs's default lecture, and the device detail says so. The rights
+apply before the user's first login on the device: Himmelblau resolves a user it has not seen yet with the UID of
+that later login (see *How the agent resolves users*). `device.sudo_user_unresolved` means the device could not
+resolve the user to a directory UID — Himmelblau is not installed or offline without a cached entry, or a local
+account with the same name shadows the directory user. Changes of `/etc/sudoers` are reported (`device.tamper_sudoers_changed`) but not reverted; a missing
 `@includedir /etc/sudoers.d` is reported as `device.sudo_apply_failed`.
+
+## How the agent resolves users
+
+Himmelblau's NSS module answers `getent passwd` for **any** name: for a name it has not seen sign in, it returns a
+synthetic entry (empty GECOS) whose UID it derives from the name — the same UID that name gets at its first login.
+"Does this user exist" can therefore never be answered through NSS. The agent and its packages decide as follows
+(plan M5a step 0a):
+
+| Decision | Source |
+| --- | --- |
+| Owner and group of managed files | `/etc/passwd` and `/etc/group` only |
+| Local administrator account (exists, UID, groups) | `/etc/passwd`, `/etc/shadow`, `/etc/group` only; `useradd --prefix /` checks the local files |
+| Deny list: whether a locked user's short name is a local account | `/etc/passwd` |
+| Session of a directory user or of a local account | UID ≥ 60000 or not in `/etc/passwd` |
+| Username (UPN) of a directory user's session | NSS, accepted only if `name@domain` resolves to the session's UID |
+| UID of a sudo entry | NSS; a UID below 60000 (a local account of that name) is refused as unresolved |
+| Members of the privileged groups `sudo`, `admin`, `wheel` | NSS `getent group`; Himmelblau's OIDC provider never synthesizes groups, and `gpasswd` removes members from `/etc/group` |
+| Package scripts | no user or group lookups |
 
 ## Device reports
 
