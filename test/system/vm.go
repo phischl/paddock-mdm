@@ -105,10 +105,38 @@ const aptUnits = "apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.se
 
 // Fresh restores base-installed, boots, stops and masks aptUnits, and restores base-installed again (powered off)
 // when the test ends. With PADDOCK_SYSTEM_KEEP set, a failed test leaves the VM running as it is, for inspection.
-func (v *VM) Fresh() {
+func (v *VM) Fresh() { v.fresh(false) }
+
+// FreshWithDisk is Fresh with a second, empty 64 MiB disk on SATA port 2: the test target of paddock-revoke (plan M4c
+// gate R1). The disk is attached after base-installed is restored and before the VM boots; when the test ends it is
+// deleted after base-installed is restored again, which detaches it. base-installed itself never changes.
+func (v *VM) FreshWithDisk() { v.fresh(true) }
+
+func (v *VM) fresh(disk bool) {
 	v.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
+	var medium string
+	if disk {
+		dir, err := os.MkdirTemp("", "paddock-systest-disk-")
+		if err != nil {
+			v.t.Fatal(err)
+		}
+		medium = filepath.Join(dir, v.Name+"-revoke-target.vdi")
+		// Registered before the restore below, so it runs after it (cleanups run last first).
+		v.t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if s := v.state(ctx); s != "poweroff" && s != "aborted" && s != "saved" {
+				v.t.Logf("%s is %s; leaving the test disk %s", v.Name, s, medium)
+				return
+			}
+			if out, err := run(ctx, "VBoxManage", "closemedium", "disk", medium, "--delete"); err != nil {
+				v.t.Errorf("delete the test disk of %s: %v: %s", v.Name, err, out)
+			}
+			_ = os.RemoveAll(dir)
+		})
+	}
 	v.t.Cleanup(func() {
 		if v.t.Failed() && os.Getenv("PADDOCK_SYSTEM_KEEP") != "" {
 			v.t.Logf("PADDOCK_SYSTEM_KEEP: %s left running; restore %s yourself", v.Name, Snapshot)
@@ -122,6 +150,17 @@ func (v *VM) Fresh() {
 	})
 	if err := v.Restore(ctx); err != nil {
 		v.t.Fatal(err)
+	}
+	if disk {
+		for _, args := range [][]string{
+			{"createmedium", "disk", "--filename", medium, "--size", "64", "--format", "VDI"},
+			{"storagectl", v.Name, "--name", "SATA", "--portcount", "3"},
+			{"storageattach", v.Name, "--storagectl", "SATA", "--port", "2", "--device", "0", "--type", "hdd", "--medium", medium},
+		} {
+			if out, err := run(ctx, "VBoxManage", args...); err != nil {
+				v.t.Fatalf("VBoxManage %s: %v: %s", strings.Join(args, " "), err, out)
+			}
+		}
 	}
 	if err := v.Start(ctx); err != nil {
 		v.t.Fatal(err)

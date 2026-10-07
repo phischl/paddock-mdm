@@ -124,8 +124,9 @@ dev-release-key: ## Generate the password-less development agent and revocation 
 
 # Agent builds (plan M2b decisions 5, 17, 18, 25). VERSION is the agent version; TAGS adds build tags, e.g.
 # TAGS=paddock_dev for the development probation and drift interval (system tests). The supervisor gets the release
-# public key compiled in (default: the development key). REVOKE_TAGS are the build tags of paddock-revoke (plan M4c
-# decision 13): paddock_revoke_testtarget for the system tests only, never in a release (agent-release refuses it).
+# public key compiled in (default: the development key). paddock-revoke gets TAGS too (it reads agent.yml as paddockd
+# does) and REVOKE_TAGS (plan M4c decision 13): paddock_revoke_testtarget for the system tests only, never in a release
+# (agent-release refuses it).
 VERSION                 ?= 0.0.0-dev
 TAGS                    ?=
 REVOKE_TAGS             ?=
@@ -140,7 +141,7 @@ agent: ## Build paddockd, paddock-supervisor and paddock-revoke for amd64 and ar
 		GOOS=linux GOARCH=$$arch $(AGENT_BUILD) -ldflags '$(AGENT_LDFLAGS)' -o bin/agent/$$arch/paddockd ./agent/cmd/paddockd && \
 		GOOS=linux GOARCH=$$arch $(AGENT_BUILD) -ldflags '$(AGENT_LDFLAGS) -X main.releasePublicKey=$(shell sed -n 2p $(RELEASE_PUBLIC_KEY_FILE))' \
 			-o bin/agent/$$arch/paddock-supervisor ./agent/cmd/paddock-supervisor && \
-		GOOS=linux GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -tags '$(REVOKE_TAGS)' -ldflags '$(AGENT_LDFLAGS)' \
+		GOOS=linux GOARCH=$$arch CGO_ENABLED=0 go build -trimpath -tags '$(TAGS) $(REVOKE_TAGS)' -ldflags '$(AGENT_LDFLAGS)' \
 			-o bin/agent/$$arch/paddock-revoke ./agent/cmd/paddock-revoke || exit 1; \
 	done
 	@echo "built bin/agent/{amd64,arm64}/{paddockd,paddock-supervisor,paddock-revoke} $(VERSION) $(TAGS) $(REVOKE_TAGS)"

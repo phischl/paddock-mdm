@@ -86,7 +86,9 @@ func Compose(ctx context.Context, args ...string) (string, error) {
 }
 
 // LoginAs signs in any user with its password.
-func LoginAs(ctx context.Context, user, password string) (*Session, error) { return env.Login(ctx, user, password) }
+func LoginAs(ctx context.Context, user, password string) (*Session, error) {
+	return env.Login(ctx, user, password)
+}
 
 // RoleGroup is an organization's Authentik role group; role is admins, operators or auditors.
 func RoleGroup(slug, role string) string { return env.RoleGroup(slug, role) }

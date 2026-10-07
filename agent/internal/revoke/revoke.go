@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -231,9 +232,11 @@ func (r *Revoker) confirm(ctx context.Context, commandID string, e Erasure) {
 	}
 	raw, _ := json.Marshal(e)
 	for {
-		if err := r.Confirm.Confirm(ctx, commandID, protocol.CommandResult{Status: status, Result: raw}); err == nil {
+		err := r.Confirm.Confirm(ctx, commandID, protocol.CommandResult{Status: status, Result: raw})
+		if err == nil {
 			return
 		}
+		slog.Warn("the confirmation was not accepted; retrying until the timeout", "command_id", commandID, "error", err)
 		select {
 		case <-ctx.Done():
 			return

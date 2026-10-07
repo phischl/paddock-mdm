@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -230,5 +232,201 @@ func TestRevocationRefusalGates(t *testing.T) {
 				t.Fatalf("handed refusal: %d keyslots left", n)
 			}
 		})
+	})
+}
+
+// revocationAdmin is a temporary acme administrator with a TOTP authenticator: the gate's Locks count against its
+// own revocation limits (ADR 0014), never against alice's.
+type revocationAdmin struct {
+	session            *portal.Session
+	username, password string
+	totp               *portal.TOTP
+}
+
+func newRevocationAdmin(t *testing.T) *revocationAdmin {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	ak, err := portal.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &revocationAdmin{username: "systest-revoke-" + unique() + "@acme.test", password: "pw-" + uuid.NewString()}
+	pk, err := ak.CreateUser(ctx, a.username, a.password, portal.RoleGroup("acme", "admins"))
+	t.Cleanup(func() {
+		if pk != 0 {
+			_ = ak.DeleteUser(context.Background(), pk)
+		}
+	})
+	if err != nil {
+		t.Fatalf("create %s: %v", a.username, err)
+	}
+	if a.totp, err = portal.AddTOTP(ctx, a.username); err != nil {
+		t.Fatal(err)
+	}
+	if a.session, err = portal.LoginAs(ctx, a.username, a.password); err != nil {
+		t.Fatalf("login %s: %v", a.username, err)
+	}
+	return a
+}
+
+// stepUp runs a step-up, repeated once after the maximum auth age (see Stack.StepUp).
+func (a *revocationAdmin) stepUp(t *testing.T) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		final, err := portal.StepUpAs(ctx, a.session, a.username, a.password, a.totp)
+		cancel()
+		if err == nil && !strings.Contains(final, "stepup=failed") {
+			return
+		}
+		if attempt == 2 {
+			t.Fatalf("step-up of %s: %v (returned to %s)", a.username, err, final)
+		}
+		time.Sleep(stepUpRetryAfter)
+	}
+}
+
+func (a *revocationAdmin) call(t *testing.T, method, path string, body any, status int) portal.Response {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	res, err := a.session.Do(ctx, method, path, body)
+	if err != nil || res.Status != status {
+		t.Fatalf("%s %s: %v HTTP %d %s, want %d", method, path, err, res.Status, res.Body, status)
+	}
+	return res
+}
+
+// secondDiskTarget makes the empty 64 MiB disk of FreshWithDisk a copy of the root volume's LUKS header with a UUID
+// of its own, and names it in the test target override: the root volume's escrowed header and recovery key open it,
+// so the restore of a Lock can be shown on it without touching the root volume.
+func secondDiskTarget(t *testing.T, d *Device, rootDev string) *revokeTarget {
+	t.Helper()
+	dev := d.Must(`lsblk -dnbpo NAME,SIZE | awk '$2 == 67108864 { print $1 }'`)
+	if !strings.HasPrefix(dev, "/dev/sd") {
+		t.Fatalf("second disk %q", dev)
+	}
+	d.Must(`sudo sh -c 'set -e
+umask 077
+cryptsetup luksHeaderBackup ` + rootDev + ` --header-backup-file /run/paddock-gate-root-header.img
+trap "rm -f /run/paddock-gate-root-header.img" EXIT
+cryptsetup luksHeaderRestore -q ` + dev + ` --header-backup-file /run/paddock-gate-root-header.img
+cryptsetup luksUUID -q ` + dev + ` --uuid ` + uuid.NewString() + `
+echo ` + dev + ` > /etc/paddock/revoke-test-target'`)
+	return &revokeTarget{Device: d, device: dev}
+}
+
+// TestRevocationLockGate is gate R1 of plan M4c (AC1): on each VM with a second disk as test target of the
+// paddock_revoke_testtarget build, a Lock terminates the user sessions, erases every keyslot of the target, stores the
+// confirmation before the would-reboot marker appears, and the request is confirmed; the root volume is not touched.
+// Then the escrowed header and recovery key restore the target. The VMs run in parallel.
+func TestRevocationLockGate(t *testing.T) {
+	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
+		vm.FreshWithDisk()
+		d := Install(t, s, vm, debDir(s))
+		w := &diskWorld{Device: d, pin: randomDigits(t, 8)}
+		if !t.Run("root volume escrowed", func(t *testing.T) { gateDiskFlow(t, w) }) {
+			t.FailNow()
+		}
+		rootDev := vm.LUKSDevice() // before the target, which carries a copy of its header
+		rootSlots := keyslotCount(t, vm, rootDev)
+		target := secondDiskTarget(t, d, rootDev)
+		before := target.slots(t)
+		if before != rootSlots {
+			t.Fatalf("target %d keyslots, root %d", before, rootSlots)
+		}
+		admin := newRevocationAdmin(t)
+		hostname := d.Must("hostname")
+
+		// A session of the user paddock (UID 1000) that the Lock must end.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		session := exec.CommandContext(ctx, "ssh", append(vm.sshArgs(), "-p", vm.port, "paddock@127.0.0.1", "sleep 900")...)
+		if err := session.Start(); err != nil {
+			t.Fatal(err)
+		}
+		ended := make(chan error, 1)
+		go func() { ended <- session.Wait() }()
+		Until(t, vm.Name+": user session", time.Minute, 2*time.Second, nil, func() bool {
+			return strings.Contains(vm.Must("loginctl list-sessions --no-legend"), "paddock")
+		})
+
+		admin.stepUp(t)
+		res := admin.call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/lock", map[string]any{"confirm_hostname": hostname, "reason": "gate R1"},
+			http.StatusCreated)
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(res.Body, &req); err != nil {
+			t.Fatal(err)
+		}
+		var confirmed struct {
+			Status      string          `json:"status"`
+			ConfirmedAt *time.Time      `json:"confirmed_at"`
+			Result      json.RawMessage `json:"result"`
+		}
+		Until(t, vm.Name+": Lock confirmed", 5*time.Minute, 5*time.Second, d.Checkin, func() bool {
+			var page struct {
+				Items []json.RawMessage `json:"items"`
+			}
+			_ = json.Unmarshal(admin.call(t, http.MethodGet, "/api/v1/revocation-requests?device_id="+d.ID, nil, http.StatusOK).Body, &page)
+			for _, it := range page.Items {
+				var r struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal(it, &r) == nil && r.ID == req.ID {
+					_ = json.Unmarshal(it, &confirmed)
+				}
+			}
+			return confirmed.Status == "confirmed"
+		})
+		select {
+		case <-ended:
+		case <-time.After(time.Minute):
+			t.Fatal("the user session survived the Lock")
+		}
+		if n := target.slots(t); n != 0 {
+			t.Fatalf("%d keyslots left on the target", n)
+		}
+		if n := keyslotCount(t, vm, rootDev); n != rootSlots {
+			t.Fatalf("root volume: %d keyslots, %d before", n, rootSlots)
+		}
+		want := fmt.Sprintf(`{"erased":true,"slots_after":0,"slots_before":%d}`, before)
+		var result map[string]any
+		_ = json.Unmarshal(confirmed.Result, &result)
+		if got, _ := json.Marshal(result); string(got) != want {
+			t.Fatalf("confirmation %s, want %s", got, want)
+		}
+		marker, err := time.Parse(time.RFC3339Nano, vm.Must("cat /run/paddock/revoke-would-reboot"))
+		if err != nil || confirmed.ConfirmedAt == nil {
+			t.Fatalf("would-reboot marker %v, confirmed at %v", err, confirmed.ConfirmedAt)
+		}
+		// The server stored the confirmation before paddock-revoke went on to reboot (clocks synchronized by NTP).
+		if confirmed.ConfirmedAt.After(marker.Add(time.Second)) {
+			t.Fatalf("confirmation stored at %s, after the would-reboot marker %s", confirmed.ConfirmedAt, marker)
+		}
+		t.Logf("%s: confirmation stored %s, would-reboot %s", vm.Name, confirmed.ConfirmedAt.Format(time.RFC3339Nano), marker.Format(time.RFC3339Nano))
+
+		t.Run("restore from the escrow", func(t *testing.T) {
+			admin.stepUp(t)
+			body := map[string]any{"confirm_hostname": hostname}
+			var revealed struct {
+				RecoveryKey string `json:"recovery_key"`
+			}
+			if err := json.Unmarshal(admin.call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/disk/recovery-key", body, http.StatusOK).Body, &revealed); err != nil {
+				t.Fatal(err)
+			}
+			header := admin.call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/disk/header", body, http.StatusOK).Body
+			if _, err := vm.SSH(context.Background(), []byte(revealed.RecoveryKey), "sudo cryptsetup open --test-passphrase --key-file=- "+target.device); err == nil {
+				t.Fatal("the erased target opens before the restore")
+			}
+			vm.MustIn(header, "sudo sh -c 'umask 077 && cat > /run/paddock-gate-header.img'")
+			vm.MustIn([]byte(revealed.RecoveryKey), `sudo sh -c 'set -e
+trap "rm -f /run/paddock-gate-header.img" EXIT
+cryptsetup luksHeaderRestore -q `+target.device+` --header-backup-file /run/paddock-gate-header.img
+cryptsetup open --test-passphrase --key-file=- `+target.device+`'`)
+		})
+		vm.Must("sudo wipefs -aq " + target.device)
 	})
 }
