@@ -7,8 +7,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/fleet"
+	"github.com/phischl/paddock-mdm/server/internal/inventory"
 )
 
 // TestLiveFleet runs the adapter against a real Fleet (the development stack, whose Fleet UI port is published on
@@ -17,7 +19,8 @@ import (
 //	PADDOCK_FLEET_LIVE_URL=http://127.0.0.1:8412 \
 //	PADDOCK_FLEET_LIVE_TOKEN_FILE=deploy/compose/.secrets/fleet_api_token go test -run TestLiveFleet ./internal/adapters/fleet/
 //
-// It changes Fleet's settings (and corrects them again) and creates and removes a scheduled query.
+// It changes Fleet's settings (and corrects them again), creates and removes a scheduled query, applies Paddock's
+// policies and reads every host's inventory.
 func TestLiveFleet(t *testing.T) {
 	base := os.Getenv("PADDOCK_FLEET_LIVE_URL")
 	if base == "" {
@@ -42,6 +45,28 @@ func TestLiveFleet(t *testing.T) {
 	}
 	if corrected, err := c.EnsureSettings(ctx); err != nil || len(corrected) != 0 {
 		t.Fatalf("after the correction %v, %v", corrected, err)
+	}
+
+	policies, err := inventory.Policies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // idempotent
+		if err := c.ApplyPolicies(ctx, policies); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := c.ListHostsChangedSince(ctx, time.Time{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range page.Hosts {
+		inv, err := c.HostInventory(ctx, h.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("host %s %s: %s, agent %s, %d packages, policies %+v", h.Ref, h.HardwareUUID, inv.OSVersion, inv.AgentVersion,
+			len(inv.Software), inv.Policies)
 	}
 }
 

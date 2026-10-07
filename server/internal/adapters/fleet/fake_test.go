@@ -24,6 +24,8 @@ type fakeFleet struct {
 	packs    map[int]string
 	nextID   int
 	requests []string // "METHOD path" of every request
+	// policySpecs is the body of the last POST /spec/policies.
+	policySpecs []map[string]any
 	// failNext makes the next n requests answer 503.
 	failNext int
 }
@@ -91,9 +93,33 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.Atoi(strings.TrimPrefix(path, "/api/latest/fleet/packs/id/"))
 		delete(f.packs, id)
 		f.write(w, map[string]any{})
+	case r.Method == http.MethodGet && path == "/api/latest/fleet/hosts":
+		f.fixture(w, "testdata/get_hosts.json")
+	case r.Method == http.MethodGet && path == "/api/latest/fleet/hosts/1":
+		f.fixture(w, "testdata/get_host.json")
+	case r.Method == http.MethodPost && path == "/api/latest/fleet/spec/policies":
+		var spec struct {
+			Specs []map[string]any `json:"specs"`
+		}
+		if err := json.Unmarshal(body, &spec); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		f.policySpecs = spec.Specs
+		f.write(w, map[string]any{})
 	default:
 		http.Error(w, "404 page not found", http.StatusNotFound)
 	}
+}
+
+// fixture answers with a recorded response.
+func (f *fakeFleet) fixture(w http.ResponseWriter, path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		f.t.Error(err)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
 }
 
 func (f *fakeFleet) write(w http.ResponseWriter, v any) {

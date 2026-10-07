@@ -47,10 +47,11 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		return err
 	}
 	defer pool.Close()
-	// The platform pool serves the rollout round (agent releases are platform data, plan M2b decision 19) and holds
-	// the advisory locks of the rollout and the two identity rounds for their whole duration; one more connection is
-	// left for the readiness check.
-	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 5})
+	// The platform pool serves the rollout round (agent releases are platform data, plan M2b decision 19) and the host
+	// mapping of the inventory round (plan M5a decision 6), and holds the advisory locks of the rollout, the two
+	// identity, the dead man's switch and the inventory rounds for their whole duration; two more connections are left
+	// for those rounds' own queries and the readiness check.
+	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 7})
 	if err != nil {
 		return err
 	}
@@ -85,7 +86,9 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), ak, pool, platformPool, syncEvery, reconcileEvery)
-	inventory := worker.NewInventory(fleet.New(fleetURL, fleetToken, fleetPublicURL), inventoryEvery)
+	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
+	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
+		platformPool, inventoryEvery)
 	slog.InfoContext(ctx, "worker starting")
 
 	return runAll(ctx,
@@ -115,5 +118,6 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		identity.RunReconcile,
 		identity.RunBrandFlows,
 		inventory.RunSettings,
+		inventory.RunSync,
 	)
 }

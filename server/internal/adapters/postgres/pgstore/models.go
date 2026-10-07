@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Action struct {
@@ -181,6 +182,16 @@ type DeviceIdentityKey struct {
 	CreatedAt      time.Time
 }
 
+type DeviceInventoryRef struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	ExternalID     string
+	LastSeenAt     *time.Time
+	OsVersion      string
+	FleetdVersion  string
+	SyncedAt       time.Time
+}
+
 type DeviceLoginAssignment struct {
 	OrganizationID uuid.UUID
 	DeviceID       uuid.UUID
@@ -239,6 +250,23 @@ type EscrowSecret struct {
 	Nonce          []byte
 	Sha256         *string
 	Size           *int64
+}
+
+type InstalledSoftware struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Version        string
+	Source         string
+}
+
+type InventoryPolicyResult struct {
+	DeviceID       uuid.UUID
+	OrganizationID uuid.UUID
+	PolicyKey      string
+	Passing        bool
+	UpdatedAt      time.Time
+	AlertedAt      *time.Time
 }
 
 type ManagedFile struct {
@@ -398,4 +426,16 @@ type UserGroupMember struct {
 	OrganizationID uuid.UUID
 	GroupID        uuid.UUID
 	UserID         uuid.UUID
+}
+
+type VulnerabilityFinding struct {
+	DeviceID        uuid.UUID
+	OrganizationID  uuid.UUID
+	Cve             string
+	SoftwareName    string
+	SoftwareVersion string
+	CvssScore       pgtype.Numeric
+	Severity        *string
+	FixedVersion    *string
+	FirstSeenAt     time.Time
 }

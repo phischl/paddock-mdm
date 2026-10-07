@@ -1,0 +1,30 @@
+{
+  "hosts": [
+    {
+      "id": 1,
+      "uuid": "04bd9b98-b777-de46-bb10-c2fc5696cfa7",
+      "hostname": "paddock-u2404",
+      "os_version": "Ubuntu 24.04.5 LTS",
+      "osquery_version": "5.23.1",
+      "orbit_version": null,
+      "seen_time": "2026-10-07T13:18:25Z",
+      "detail_updated_at": "2026-10-07T13:18:21Z",
+      "software_updated_at": "2026-10-07T13:18:21Z",
+      "policy_updated_at": "2026-10-07T13:18:21Z",
+      "platform": "ubuntu"
+    },
+    {
+      "id": 2,
+      "uuid": "a7ace4c5-76d1-ab48-a28d-55cd12a90b68",
+      "hostname": "paddock-u2604",
+      "os_version": "Ubuntu 26.04.1 LTS",
+      "osquery_version": "5.23.1",
+      "orbit_version": null,
+      "seen_time": "2026-10-07T13:18:34Z",
+      "detail_updated_at": "2026-10-07T13:18:30Z",
+      "software_updated_at": "2026-10-07T13:18:29Z",
+      "policy_updated_at": "2026-10-07T13:18:30Z",
+      "platform": "ubuntu"
+    }
+  ]
+}

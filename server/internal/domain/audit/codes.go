@@ -110,7 +110,8 @@ const (
 	CodeSettingsDMSChanged              Code = "settings.dms_changed"
 	CodeDevicePresumedSelfLocked        Code = "device.presumed_self_locked"
 	// Inventory (plan M5a decisions 5 and 8): the mutual watch of agent and fleetd.
-	CodeDeviceTamperServiceStopped Code = "device.tamper_service_stopped"
+	CodeDeviceTamperServiceStopped  Code = "device.tamper_service_stopped"
+	CodeDeviceTamperAgentNotRunning Code = "device.tamper_agent_not_running"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -718,6 +719,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "unit is orbit.service (fleetd, the mutual watch of agent and fleetd).",
+	},
+	CodeDeviceTamperAgentNotRunning: {
+		Code: CodeDeviceTamperAgentNotRunning, Emitted: true,
+		Description: "fleetd reports that the Paddock agent does not run on a device that has not checked in for 15 minutes: the agent was stopped or removed (actor: system; the inventory system's policy paddock_agent_running).",
+		Params:      []string{"policy", "last_contact_at"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per failure; the policy passing again ends it.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

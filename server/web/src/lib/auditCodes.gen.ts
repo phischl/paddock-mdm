@@ -41,6 +41,7 @@ export const auditCodes = [
   'device.revocation_trust_pinned_tofu',
   'device.sudo_apply_failed',
   'device.sudo_user_unresolved',
+  'device.tamper_agent_not_running',
   'device.tamper_keyslot_changed',
   'device.tamper_local_admin_changed',
   'device.tamper_protected_file_changed',
