@@ -324,3 +324,15 @@ func expectError(t *testing.T, op string, err error) {
 	}
 	t.Logf("%s rejected as expected: %v", op, err)
 }
+
+// stepUp runs a step-up of p as user and fails the test unless the outcome matches ok.
+func stepUp(t *testing.T, p *env.Portal, user string, ok bool) {
+	t.Helper()
+	final, err := p.StepUp(testContext(t, 3*time.Minute), user, "/settings")
+	if err != nil {
+		t.Fatalf("step-up as %s: %v", user, err)
+	}
+	if failed := strings.Contains(final, "stepup=failed"); failed == ok {
+		t.Fatalf("step-up as %s returned to %s", user, final)
+	}
+}

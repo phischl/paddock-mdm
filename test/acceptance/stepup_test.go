@@ -10,18 +10,6 @@ import (
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
-// stepUp runs a step-up of p as user and fails the test unless the outcome matches ok.
-func stepUp(t *testing.T, p *env.Portal, user string, ok bool) {
-	t.Helper()
-	final, err := p.StepUp(testContext(t, 3*time.Minute), user, "/settings")
-	if err != nil {
-		t.Fatalf("step-up as %s: %v", user, err)
-	}
-	if failed := strings.Contains(final, "stepup=failed"); failed == ok {
-		t.Fatalf("step-up as %s returned to %s", user, final)
-	}
-}
-
 // stepUpState is the development-only step_up of GET /api/v1/me: the session's last step-up as the server recorded
 // it and the server's step-up timing.
 type stepUpState struct {
