@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import DeviceGroupForm from '../components/DeviceGroupForm.vue'
+import VulnerabilityTile from '../components/VulnerabilityTile.vue'
 import type { DeviceGroup } from '../api/client'
 import { useDeviceGroupPage } from '../lib/deviceGroupPage'
 import { listDeviceGroups } from '../lib/deviceGroups'
@@ -42,6 +43,8 @@ const columns = computed<ListColumn[]>(() => [
         {{ t('deviceGroups.create') }}
       </v-btn>
     </div>
+    <!-- The start page of administrators and operators carries the vulnerability tile (plan M5a decision 10). -->
+    <VulnerabilityTile />
     <p
       v-if="pageProblem"
       class="form-error"

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +19,9 @@ import (
 )
 
 // TestInventoryGates runs the device gates of plan M5a on the VMs in parallel, each from a fresh base-installed: F1
-// (fleetd installed from Paddock's package store, enrolled into Fleet, mapped to the device) and F2 (mutual watch of
-// agent and fleetd). The fleetd package of this run (make fleetd-deb) is published once, as a release without
-// rollout, for both VMs.
+// (fleetd installed from Paddock's package store, enrolled into Fleet, mapped to the device), F4 (an old package
+// version shows its CVEs) and F2 (mutual watch of agent and fleetd). The fleetd package of this run (make
+// fleetd-deb) is published once, as a release without rollout, for both VMs.
 func TestInventoryGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Gate(t, "inventory")
@@ -29,6 +31,7 @@ func TestInventoryGates(t *testing.T) {
 		if !t.Run("F1 fleetd enrolled", func(t *testing.T) { gateF1(t, d, fleetd) }) {
 			t.FailNow()
 		}
+		t.Run("F4 old package version", func(t *testing.T) { gateF4(t, d) })
 		t.Run("F2 mutual watch", func(t *testing.T) { gateF2(t, d) })
 	})
 }
@@ -110,6 +113,64 @@ func retireTwins(t *testing.T, d *Device, hardwareUUID string) {
 	}
 }
 
+// gateF4: an intentionally old package version shows its CVEs (plan M5a step 4, AC1). The device downgrades wget to
+// the oldest version apt offers (the release pocket); after fleetd's next software report (refetched through Fleet's
+// API) and Fleet's next vulnerability round, Paddock lists the old version among the device's packages and the CVEs
+// Fleet matched to it among its vulnerabilities, within 10 minutes.
+func gateF4(t *testing.T, d *Device) {
+	const pkg = "wget"
+	installed := d.Must("dpkg-query -W -f '${Version}' " + pkg)
+	old := d.Must("apt-cache madison " + pkg + " | tail -n 1 | cut -d '|' -f 2 | tr -d ' '")
+	if old == "" || old == installed {
+		t.Fatalf("%s: no version of %s older than %s in apt", d.Name, pkg, installed)
+	}
+	d.Must(fmt.Sprintf("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades -o DPkg::Lock::Timeout=300 %s=%s", pkg, old))
+	start := time.Now()
+	host, ok := fleetHostByUUID(t, d.Must("sudo cat /sys/class/dmi/id/product_uuid"))
+	if !ok {
+		t.Fatalf("%s: no Fleet host", d.Name)
+	}
+	resp, err := fleetAPI(t, http.MethodPost, fmt.Sprintf("/api/latest/fleet/hosts/%d/refetch", host.ID), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s: refetch of Fleet host %d: HTTP %d", d.Name, host.ID, resp.StatusCode)
+	}
+
+	type page struct {
+		Items []map[string]any `json:"items"`
+	}
+	list := func(path string) page {
+		var p page
+		if err := json.Unmarshal(d.s.Call(http.MethodGet, path, nil, http.StatusOK).Body, &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	var cves []string
+	Until(t, d.Name+": CVEs of "+pkg+" "+old+" in Paddock", 10*time.Minute, 15*time.Second, nil, func() bool {
+		cves = nil
+		for _, f := range list("/api/v1/devices/" + d.ID + "/vulnerabilities?page_size=100&q=" + pkg).Items {
+			if f["software_name"] == pkg && f["software_version"] == old {
+				cves = append(cves, fmt.Sprint(f["cve"]))
+			}
+		}
+		return len(cves) > 0
+	})
+	t.Logf("%s: %s %s (downgraded from %s) shows %v after %s", d.Name, pkg, old, installed, cves, time.Since(start).Round(time.Second))
+	var versions []string
+	for _, s := range list("/api/v1/devices/" + d.ID + "/software?page_size=100&q=" + pkg).Items {
+		if s["name"] == pkg {
+			versions = append(versions, fmt.Sprint(s["version"]))
+		}
+	}
+	if !slices.Equal(versions, []string{old}) {
+		t.Errorf("%s: software lists %s %v, want only %s", d.Name, pkg, versions, old)
+	}
+}
+
 // gateF2 is the mutual watch: a stopped fleetd is reported by the agent (tamper.service_stopped) and started again;
 // a stopped agent is reported through fleetd's policy once the device has not checked in for 15 minutes
 // (device.tamper_agent_not_running).
@@ -136,8 +197,9 @@ type fleetHost struct {
 	OrbitVersion   string `json:"orbit_version"`
 }
 
-// fleetHostByUUID looks a host up through Fleet's API on the development host (127.0.0.1:8412).
-func fleetHostByUUID(t *testing.T, uuid string) (fleetHost, bool) {
+// fleetAPI sends a request to Fleet's API on the development host (127.0.0.1:8412) as Paddock's API-only user; the
+// caller closes the response.
+func fleetAPI(t *testing.T, method, path string, body io.Reader) (*http.Response, error) {
 	t.Helper()
 	dir, err := portal.SecretsDir()
 	if err != nil {
@@ -148,13 +210,19 @@ func fleetHostByUUID(t *testing.T, uuid string) (fleetHost, bool) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8412/api/latest/fleet/hosts?query="+url.QueryEscape(uuid), nil)
+	t.Cleanup(cancel)
+	req, err := http.NewRequestWithContext(ctx, method, "http://127.0.0.1:8412"+path, body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	resp, err := http.DefaultClient.Do(req)
+	return http.DefaultClient.Do(req)
+}
+
+// fleetHostByUUID looks a host up through Fleet's API.
+func fleetHostByUUID(t *testing.T, uuid string) (fleetHost, bool) {
+	t.Helper()
+	resp, err := fleetAPI(t, http.MethodGet, "/api/latest/fleet/hosts?query="+url.QueryEscape(uuid), nil)
 	if err != nil {
 		t.Logf("fleet hosts: %v", err)
 		return fleetHost{}, false

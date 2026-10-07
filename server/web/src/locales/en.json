@@ -22,7 +22,9 @@
     "permissionProfiles": "Permission profiles",
     "loginSettings": "Login & privileges",
     "revocations": "Revocations",
-    "dms": "Dead man's switch"
+    "dms": "Dead man's switch",
+    "software": "Software",
+    "vulnerabilities": "Vulnerabilities"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -876,6 +878,45 @@
       "title": "Turn on the dead man's switch",
       "message": "Every device of the organization locks itself after {days, plural, one {# day} other {# days}} of uptime without reaching Paddock, also when Paddock itself is down. A locked device must be restored with its escrowed header and recovery key.",
       "label": "Turn on"
+    }
+  },
+  "inventory": {
+    "deviceTabs": "Device sections",
+    "tabs": {
+      "details": "Details",
+      "software": "Software",
+      "vulnerabilities": "Vulnerabilities"
+    },
+    "softwareTitle": "Software",
+    "vulnerabilitiesTitle": "Vulnerabilities",
+    "softwareHint": "Packages of the system package managers as fleetd reported them at the last inventory sync.",
+    "severityHint": "The inventory system reports no CVSS score for most vulnerabilities; their severity is unknown.",
+    "package": "Package",
+    "version": "Version",
+    "source": "Source",
+    "devices": "Devices",
+    "cve": "CVE",
+    "cvss": "CVSS",
+    "severity": "Severity",
+    "severities": {
+      "critical": "Critical",
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low",
+      "unknown": "Unknown"
+    },
+    "fixedVersion": "Fixed in",
+    "firstSeen": "First seen",
+    "packageVersion": "{name} {version}",
+    "hasVulnerabilities": "Matched CVEs",
+    "withVulnerabilities": "With matched CVEs",
+    "withoutVulnerabilities": "Without matched CVEs",
+    "backToVulnerabilities": "Back to vulnerabilities",
+    "nvdLink": "Details in the National Vulnerability Database",
+    "tile": {
+      "title": "Vulnerabilities",
+      "criticalHigh": "{count, plural, =0 {No device has critical or high findings} one {# device has critical or high findings} other {# devices have critical or high findings}}",
+      "unknown": "{count, plural, =0 {No device has findings of unknown severity} one {# device has findings of unknown severity} other {# devices have findings of unknown severity}}"
     }
   }
 }

@@ -1150,6 +1150,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/software": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The packages installed on the device as the inventory system
+         *     reported them at the last sync (plan M5a decision 9).
+         */
+        get: operations["listDeviceSoftware"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/vulnerabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The CVEs matched to the device's packages. Fleet free reports no
+         *     CVSS score, severity or fixed version: those findings have severity unknown and no score.
+         */
+        get: operations["listDeviceVulnerabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/software": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The organization's packages per name and version. */
+        get: operations["listSoftware"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnerabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's vulnerabilities per CVE: the highest score and
+         *     severity of its findings, the affected devices and a fixed version if known.
+         */
+        get: operations["listVulnerabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnerabilities/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The numbers of the start page tile (plan M5a decision 10). */
+        get: operations["getVulnerabilitySummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vulnerabilities/{cve}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cve: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's devices with a finding of the CVE; a CVE
+         *     without finding in the organization is 404.
+         */
+        get: operations["listVulnerabilityDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/permission-profiles": {
         parameters: {
             query?: never;
@@ -2111,6 +2231,115 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /**
+         * @description From the CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without score.
+         * @enum {string}
+         */
+        Severity: "critical" | "high" | "medium" | "low" | "unknown";
+        InstalledSoftware: {
+            name: string;
+            version: string;
+            /** @description Package manager, e.g. deb_packages or rpm_packages. */
+            source: string;
+        };
+        InstalledSoftwarePage: {
+            items: components["schemas"]["InstalledSoftware"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        VulnerabilityFinding: {
+            cve: string;
+            software_name: string;
+            software_version: string;
+            /**
+             * Format: double
+             * @description CVSS v3 base score; null where unknown.
+             */
+            cvss_score: number | null;
+            severity: components["schemas"]["Severity"];
+            fixed_version: string | null;
+            /** Format: date-time */
+            first_seen_at: string;
+        };
+        VulnerabilityFindingPage: {
+            items: components["schemas"]["VulnerabilityFinding"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        SoftwareSummary: {
+            name: string;
+            version: string;
+            device_count: number;
+            has_vulnerabilities: boolean;
+        };
+        SoftwareSummaryPage: {
+            items: components["schemas"]["SoftwareSummary"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        Vulnerability: {
+            cve: string;
+            /** Format: double */
+            cvss_score: number | null;
+            severity: components["schemas"]["Severity"];
+            device_count: number;
+            fixed_version: string | null;
+        };
+        VulnerabilityPage: {
+            items: components["schemas"]["Vulnerability"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        VulnerableDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            software_name: string;
+            software_version: string;
+        };
+        VulnerableDevicePage: {
+            items: components["schemas"]["VulnerableDevice"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        VulnerabilitySummary: {
+            /** @description Devices with at least one critical or high finding. */
+            critical_high_devices: number;
+            /** @description Devices with at least one finding of unknown severity. */
+            unknown_severity_devices: number;
+            /** @description Devices with at least one finding. */
+            affected_devices: number;
+        };
         DevicePage: {
             items: components["schemas"]["Device"][];
             page: number;
@@ -2607,6 +2836,18 @@ export interface components {
         Version: string;
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         OrganizationSort: "slug" | "-slug" | "name" | "-name" | "created_at" | "-created_at" | "status" | "-status";
+        /** @description Sort field; "-" prefix sorts descending. Name, version and source are the tie-breakers. */
+        DeviceSoftwareSort: "name" | "-name" | "version" | "-version";
+        /** @description Sort field; "-" prefix sorts descending. Findings without score sort last in both directions. CVE, package name and version are the tie-breakers. */
+        FindingSort: "cvss_score" | "-cvss_score" | "cve" | "-cve";
+        /** @description Sort field; "-" prefix sorts descending. Name and version are the tie-breakers. */
+        SoftwareSort: "name" | "-name" | "version" | "-version" | "device_count" | "-device_count";
+        /** @description Sort field; "-" prefix sorts descending. CVEs without score sort last in both directions. The CVE is the tie-breaker. */
+        VulnerabilitySort: "cvss_score" | "-cvss_score" | "cve" | "-cve" | "device_count" | "-device_count";
+        /** @description Sort field; "-" prefix sorts descending. Device ID, package name and version are the tie-breakers. */
+        VulnerableDeviceSort: "hostname" | "-hostname";
+        /** @description Repeatable. unknown selects findings without severity (Fleet free reports none). */
+        SeverityFilter: components["schemas"]["Severity"][];
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -4851,6 +5092,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EffectiveSudo"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceSoftware: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Name, version and source are the tie-breakers. */
+                sort?: components["parameters"]["DeviceSoftwareSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of installed packages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstalledSoftwarePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceVulnerabilities: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Findings without score sort last in both directions. CVE, package name and version are the tie-breakers. */
+                sort?: components["parameters"]["FindingSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. unknown selects findings without severity (Fleet free reports none). */
+                severity?: components["parameters"]["SeverityFilter"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of vulnerability findings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VulnerabilityFindingPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listSoftware: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Name and version are the tie-breakers. */
+                sort?: components["parameters"]["SoftwareSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only packages with (true) or without (false) matched CVEs. */
+                has_vulnerabilities?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of packages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoftwareSummaryPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    listVulnerabilities: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. CVEs without score sort last in both directions. The CVE is the tie-breaker. */
+                sort?: components["parameters"]["VulnerabilitySort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. unknown selects findings without severity (Fleet free reports none). */
+                severity?: components["parameters"]["SeverityFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of vulnerabilities. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VulnerabilityPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getVulnerabilitySummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Devices with findings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VulnerabilitySummary"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    listVulnerabilityDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Device ID, package name and version are the tie-breakers. */
+                sort?: components["parameters"]["VulnerableDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path: {
+                cve: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of affected devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VulnerableDevicePage"];
                 };
             };
             400: components["responses"]["Problem"];

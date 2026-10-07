@@ -30,6 +30,14 @@ sql:
           - db_type: jsonb
             nullable: true
             go_type: encoding/json.RawMessage
+          # CVSS scores (vulnerability_finding.cvss_score, plan M5a decision 7).
+          - db_type: pg_catalog.numeric
+            go_type: float64
+          - db_type: pg_catalog.numeric
+            nullable: true
+            go_type:
+              type: float64
+              pointer: true
   - engine: postgresql
     schema: migrations/audit
     queries: internal/adapters/auditpg/queries

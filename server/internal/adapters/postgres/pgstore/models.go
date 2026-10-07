@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Action struct {
@@ -434,7 +433,7 @@ type VulnerabilityFinding struct {
 	Cve             string
 	SoftwareName    string
 	SoftwareVersion string
-	CvssScore       pgtype.Numeric
+	CvssScore       *float64
 	Severity        *string
 	FixedVersion    *string
 	FirstSeenAt     time.Time

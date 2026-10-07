@@ -68,6 +68,18 @@ export type RevocationAction = components['schemas']['RevocationAction']
 export type RevocationStatus = components['schemas']['RevocationStatus']
 export type DMSSettings = components['schemas']['DMSSettings']
 export type DMSSettingsUpdate = components['schemas']['DMSSettingsUpdate']
+export type InstalledSoftware = components['schemas']['InstalledSoftware']
+export type DeviceSoftwareSort = components['parameters']['DeviceSoftwareSort']
+export type VulnerabilityFinding = components['schemas']['VulnerabilityFinding']
+export type FindingSort = components['parameters']['FindingSort']
+export type SoftwareSummary = components['schemas']['SoftwareSummary']
+export type SoftwareSort = components['parameters']['SoftwareSort']
+export type Vulnerability = components['schemas']['Vulnerability']
+export type VulnerabilitySort = components['parameters']['VulnerabilitySort']
+export type VulnerableDevice = components['schemas']['VulnerableDevice']
+export type VulnerableDeviceSort = components['parameters']['VulnerableDeviceSort']
+export type VulnerabilitySummary = components['schemas']['VulnerabilitySummary']
+export type Severity = components['schemas']['Severity']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

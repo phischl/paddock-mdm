@@ -12,6 +12,131 @@ import (
 	"github.com/google/uuid"
 )
 
+const countDeviceSoftware = `-- name: CountDeviceSoftware :one
+SELECT count(*) FROM (
+  SELECT 1 FROM installed_software
+  WHERE device_id = $1
+    AND ($2::text IS NULL OR name ILIKE $2::text ESCAPE '\')
+  LIMIT $3
+) matching
+`
+
+type CountDeviceSoftwareParams struct {
+	DeviceID   uuid.UUID
+	QPattern   *string
+	CountLimit int32
+}
+
+func (q *Queries) CountDeviceSoftware(ctx context.Context, arg CountDeviceSoftwareParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countDeviceSoftware, arg.DeviceID, arg.QPattern, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countDeviceVulnerabilities = `-- name: CountDeviceVulnerabilities :one
+SELECT count(*) FROM (
+  SELECT 1 FROM vulnerability_finding
+  WHERE device_id = $1
+    AND ($2::text IS NULL OR cve ILIKE $2::text ESCAPE '\'
+         OR software_name ILIKE $2::text ESCAPE '\')
+    AND ($3::text[] IS NULL OR coalesce(severity, 'unknown') = ANY($3::text[]))
+  LIMIT $4
+) matching
+`
+
+type CountDeviceVulnerabilitiesParams struct {
+	DeviceID   uuid.UUID
+	QPattern   *string
+	Severities []string
+	CountLimit int32
+}
+
+func (q *Queries) CountDeviceVulnerabilities(ctx context.Context, arg CountDeviceVulnerabilitiesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countDeviceVulnerabilities,
+		arg.DeviceID,
+		arg.QPattern,
+		arg.Severities,
+		arg.CountLimit,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSoftware = `-- name: CountSoftware :one
+SELECT count(*) FROM (
+  SELECT 1 FROM installed_software s JOIN device d ON d.id = s.device_id AND d.state IN ('active','quarantined')
+  WHERE ($1::text IS NULL OR s.name ILIKE $1::text ESCAPE '\')
+    AND ($2::boolean IS NULL OR $2::boolean = EXISTS (
+          SELECT 1 FROM vulnerability_finding f WHERE f.software_name = s.name AND f.software_version = s.version))
+  GROUP BY s.name, s.version
+  LIMIT $3
+) matching
+`
+
+type CountSoftwareParams struct {
+	QPattern           *string
+	HasVulnerabilities *bool
+	CountLimit         int32
+}
+
+func (q *Queries) CountSoftware(ctx context.Context, arg CountSoftwareParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSoftware, arg.QPattern, arg.HasVulnerabilities, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countVulnerabilities = `-- name: CountVulnerabilities :one
+SELECT count(*) FROM (
+  SELECT cve FROM (
+    SELECT DISTINCT ON (f.cve) f.cve, coalesce(f.severity, 'unknown') AS severity
+    FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+    WHERE $1::text IS NULL OR f.cve ILIKE $1::text ESCAPE '\'
+    ORDER BY f.cve, f.cvss_score DESC NULLS LAST
+  ) vulnerabilities
+  WHERE $2::text[] IS NULL OR severity = ANY($2::text[])
+  LIMIT $3
+) matching
+`
+
+type CountVulnerabilitiesParams struct {
+	QPattern   *string
+	Severities []string
+	CountLimit int32
+}
+
+func (q *Queries) CountVulnerabilities(ctx context.Context, arg CountVulnerabilitiesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countVulnerabilities, arg.QPattern, arg.Severities, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countVulnerabilityDevices = `-- name: CountVulnerabilityDevices :one
+SELECT count(*) FROM (
+  SELECT 1 FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+  WHERE f.cve = $1
+    AND ($2::text IS NULL OR d.hostname ILIKE $2::text ESCAPE '\'
+         OR f.software_name ILIKE $2::text ESCAPE '\')
+  LIMIT $3
+) matching
+`
+
+type CountVulnerabilityDevicesParams struct {
+	Cve        string
+	QPattern   *string
+	CountLimit int32
+}
+
+func (q *Queries) CountVulnerabilityDevices(ctx context.Context, arg CountVulnerabilityDevicesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countVulnerabilityDevices, arg.Cve, arg.QPattern, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteMissingFindings = `-- name: DeleteMissingFindings :exec
 DELETE FROM vulnerability_finding f
 WHERE f.device_id = $1
@@ -72,6 +197,17 @@ func (q *Queries) DeleteMissingSoftware(ctx context.Context, arg DeleteMissingSo
 		arg.Sources,
 	)
 	return err
+}
+
+const deviceExists = `-- name: DeviceExists :one
+SELECT EXISTS (SELECT 1 FROM device WHERE id = $1)
+`
+
+func (q *Queries) DeviceExists(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, deviceExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const insertInstalledSoftware = `-- name: InsertInstalledSoftware :exec
@@ -162,6 +298,337 @@ func (q *Queries) ListAgentNotRunning(ctx context.Context, arg ListAgentNotRunni
 	for rows.Next() {
 		var i ListAgentNotRunningRow
 		if err := rows.Scan(&i.DeviceID, &i.LastContactAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeviceSoftware = `-- name: ListDeviceSoftware :many
+
+SELECT name, version, source FROM installed_software
+WHERE device_id = $1
+  AND ($2::text IS NULL OR name ILIKE $2::text ESCAPE '\')
+ORDER BY
+  CASE WHEN $3::text = 'name' THEN name END ASC,
+  CASE WHEN $3::text = '-name' THEN name END DESC,
+  CASE WHEN $3::text = 'version' THEN version END ASC,
+  CASE WHEN $3::text = '-version' THEN version END DESC,
+  name, version, source
+LIMIT $5 OFFSET $4
+`
+
+type ListDeviceSoftwareParams struct {
+	DeviceID uuid.UUID
+	QPattern *string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListDeviceSoftwareRow struct {
+	Name    string
+	Version string
+	Source  string
+}
+
+// List queries of the admin API (plan M5a decision 9, ADR 0018); see device_group.sql.
+func (q *Queries) ListDeviceSoftware(ctx context.Context, arg ListDeviceSoftwareParams) ([]ListDeviceSoftwareRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceSoftware,
+		arg.DeviceID,
+		arg.QPattern,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceSoftwareRow{}
+	for rows.Next() {
+		var i ListDeviceSoftwareRow
+		if err := rows.Scan(&i.Name, &i.Version, &i.Source); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeviceVulnerabilities = `-- name: ListDeviceVulnerabilities :many
+SELECT cve, software_name, software_version, cvss_score, coalesce(severity, 'unknown')::text AS severity, fixed_version,
+       first_seen_at
+FROM vulnerability_finding
+WHERE device_id = $1
+  AND ($2::text IS NULL OR cve ILIKE $2::text ESCAPE '\'
+       OR software_name ILIKE $2::text ESCAPE '\')
+  AND ($3::text[] IS NULL OR coalesce(severity, 'unknown') = ANY($3::text[]))
+ORDER BY
+  CASE WHEN $4::text = 'cvss_score' THEN cvss_score END ASC,
+  CASE WHEN $4::text = '-cvss_score' THEN cvss_score END DESC NULLS LAST,
+  CASE WHEN $4::text = 'cve' THEN cve END ASC,
+  CASE WHEN $4::text = '-cve' THEN cve END DESC,
+  cve, software_name, software_version
+LIMIT $6 OFFSET $5
+`
+
+type ListDeviceVulnerabilitiesParams struct {
+	DeviceID   uuid.UUID
+	QPattern   *string
+	Severities []string
+	Sort       string
+	SkipRows   int32
+	MaxRows    int32
+}
+
+type ListDeviceVulnerabilitiesRow struct {
+	Cve             string
+	SoftwareName    string
+	SoftwareVersion string
+	CvssScore       *float64
+	Severity        string
+	FixedVersion    *string
+	FirstSeenAt     time.Time
+}
+
+// Severity "unknown" selects findings without severity (Fleet free reports none); unknown scores sort last both ways.
+func (q *Queries) ListDeviceVulnerabilities(ctx context.Context, arg ListDeviceVulnerabilitiesParams) ([]ListDeviceVulnerabilitiesRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceVulnerabilities,
+		arg.DeviceID,
+		arg.QPattern,
+		arg.Severities,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceVulnerabilitiesRow{}
+	for rows.Next() {
+		var i ListDeviceVulnerabilitiesRow
+		if err := rows.Scan(
+			&i.Cve,
+			&i.SoftwareName,
+			&i.SoftwareVersion,
+			&i.CvssScore,
+			&i.Severity,
+			&i.FixedVersion,
+			&i.FirstSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSoftware = `-- name: ListSoftware :many
+
+SELECT name, version, device_count, has_vulnerabilities FROM (
+  SELECT s.name, s.version, count(DISTINCT s.device_id)::int AS device_count,
+         EXISTS (SELECT 1 FROM vulnerability_finding f WHERE f.software_name = s.name AND f.software_version = s.version)
+           AS has_vulnerabilities
+  FROM installed_software s JOIN device d ON d.id = s.device_id AND d.state IN ('active','quarantined')
+  WHERE $1::text IS NULL OR s.name ILIKE $1::text ESCAPE '\'
+  GROUP BY s.name, s.version
+) software
+WHERE $2::boolean IS NULL OR has_vulnerabilities = $2::boolean
+ORDER BY
+  CASE WHEN $3::text = 'name' THEN name END ASC,
+  CASE WHEN $3::text = '-name' THEN name END DESC,
+  CASE WHEN $3::text = 'version' THEN version END ASC,
+  CASE WHEN $3::text = '-version' THEN version END DESC,
+  CASE WHEN $3::text = 'device_count' THEN device_count END ASC,
+  CASE WHEN $3::text = '-device_count' THEN device_count END DESC,
+  name, version
+LIMIT $5 OFFSET $4
+`
+
+type ListSoftwareParams struct {
+	QPattern           *string
+	HasVulnerabilities *bool
+	Sort               string
+	SkipRows           int32
+	MaxRows            int32
+}
+
+type ListSoftwareRow struct {
+	Name               string
+	Version            string
+	DeviceCount        int32
+	HasVulnerabilities bool
+}
+
+// The organization-wide views count only the devices the inventory sync maps (active or quarantined); a retired
+// device keeps its last inventory on its own pages.
+// Software of the organization per name and version.
+func (q *Queries) ListSoftware(ctx context.Context, arg ListSoftwareParams) ([]ListSoftwareRow, error) {
+	rows, err := q.db.Query(ctx, listSoftware,
+		arg.QPattern,
+		arg.HasVulnerabilities,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSoftwareRow{}
+	for rows.Next() {
+		var i ListSoftwareRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.Version,
+			&i.DeviceCount,
+			&i.HasVulnerabilities,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVulnerabilities = `-- name: ListVulnerabilities :many
+SELECT cve, cvss_score, severity, device_count, fixed_version FROM (
+  SELECT DISTINCT ON (f.cve) f.cve, f.cvss_score, coalesce(f.severity, 'unknown')::text AS severity,
+         (SELECT count(DISTINCT g.device_id) FROM vulnerability_finding g
+            JOIN device gd ON gd.id = g.device_id AND gd.state IN ('active','quarantined') WHERE g.cve = f.cve)::int AS device_count,
+         f.fixed_version
+  FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+  WHERE $1::text IS NULL OR f.cve ILIKE $1::text ESCAPE '\'
+  ORDER BY f.cve, f.cvss_score DESC NULLS LAST, f.fixed_version NULLS LAST
+) vulnerabilities
+WHERE $2::text[] IS NULL OR severity = ANY($2::text[])
+ORDER BY
+  CASE WHEN $3::text = 'cvss_score' THEN cvss_score END ASC,
+  CASE WHEN $3::text = '-cvss_score' THEN cvss_score END DESC NULLS LAST,
+  CASE WHEN $3::text = 'cve' THEN cve END ASC,
+  CASE WHEN $3::text = '-cve' THEN cve END DESC,
+  CASE WHEN $3::text = 'device_count' THEN device_count END ASC,
+  CASE WHEN $3::text = '-device_count' THEN device_count END DESC,
+  cve
+LIMIT $5 OFFSET $4
+`
+
+type ListVulnerabilitiesParams struct {
+	QPattern   *string
+	Severities []string
+	Sort       string
+	SkipRows   int32
+	MaxRows    int32
+}
+
+type ListVulnerabilitiesRow struct {
+	Cve          string
+	CvssScore    *float64
+	Severity     string
+	DeviceCount  int32
+	FixedVersion *string
+}
+
+// Vulnerabilities of the organization per CVE: the finding with the highest score (its severity and fixed version, if
+// the inventory system knows them) and the number of affected devices.
+func (q *Queries) ListVulnerabilities(ctx context.Context, arg ListVulnerabilitiesParams) ([]ListVulnerabilitiesRow, error) {
+	rows, err := q.db.Query(ctx, listVulnerabilities,
+		arg.QPattern,
+		arg.Severities,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVulnerabilitiesRow{}
+	for rows.Next() {
+		var i ListVulnerabilitiesRow
+		if err := rows.Scan(
+			&i.Cve,
+			&i.CvssScore,
+			&i.Severity,
+			&i.DeviceCount,
+			&i.FixedVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVulnerabilityDevices = `-- name: ListVulnerabilityDevices :many
+SELECT device_id, hostname, software_name, software_version FROM (
+  SELECT f.device_id, d.hostname, f.software_name, f.software_version
+  FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+  WHERE f.cve = $1
+) affected
+WHERE $2::text IS NULL OR hostname ILIKE $2::text ESCAPE '\'
+  OR software_name ILIKE $2::text ESCAPE '\'
+ORDER BY
+  CASE WHEN $3::text = 'hostname' THEN hostname END ASC,
+  CASE WHEN $3::text = '-hostname' THEN hostname END DESC,
+  device_id, software_name, software_version
+LIMIT $5 OFFSET $4
+`
+
+type ListVulnerabilityDevicesParams struct {
+	Cve      string
+	QPattern *string
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+}
+
+type ListVulnerabilityDevicesRow struct {
+	DeviceID        uuid.UUID
+	Hostname        string
+	SoftwareName    string
+	SoftwareVersion string
+}
+
+func (q *Queries) ListVulnerabilityDevices(ctx context.Context, arg ListVulnerabilityDevicesParams) ([]ListVulnerabilityDevicesRow, error) {
+	rows, err := q.db.Query(ctx, listVulnerabilityDevices,
+		arg.Cve,
+		arg.QPattern,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListVulnerabilityDevicesRow{}
+	for rows.Next() {
+		var i ListVulnerabilityDevicesRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Hostname,
+			&i.SoftwareName,
+			&i.SoftwareVersion,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -276,4 +743,26 @@ func (q *Queries) UpsertVulnerabilityFindings(ctx context.Context, arg UpsertVul
 		arg.Fixed,
 	)
 	return err
+}
+
+const vulnerabilitySummary = `-- name: VulnerabilitySummary :one
+SELECT count(DISTINCT f.device_id) FILTER (WHERE f.severity IN ('critical','high'))::int AS critical_high_devices,
+       count(DISTINCT f.device_id) FILTER (WHERE f.severity IS NULL)::int AS unknown_severity_devices,
+       count(DISTINCT f.device_id)::int AS affected_devices
+FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
+`
+
+type VulnerabilitySummaryRow struct {
+	CriticalHighDevices    int32
+	UnknownSeverityDevices int32
+	AffectedDevices        int32
+}
+
+// The dashboard tile (plan M5a decision 10): devices with critical or high findings, and devices with findings of
+// unknown severity.
+func (q *Queries) VulnerabilitySummary(ctx context.Context) (VulnerabilitySummaryRow, error) {
+	row := q.db.QueryRow(ctx, vulnerabilitySummary)
+	var i VulnerabilitySummaryRow
+	err := row.Scan(&i.CriticalHighDevices, &i.UnknownSeverityDevices, &i.AffectedDevices)
+	return i, err
 }

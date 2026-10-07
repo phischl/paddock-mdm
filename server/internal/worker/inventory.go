@@ -23,8 +23,8 @@ const DefaultInventorySyncInterval = 5 * time.Minute
 // inventoryRetryInterval is how soon a failed settings round is repeated: Fleet may still be starting.
 const inventoryRetryInterval = 15 * time.Second
 
-// inventoryFullEvery is how often a sync round reads every host instead of the changed ones: the inventory system
-// matches vulnerabilities on its own schedule without marking the hosts as changed.
+// inventoryFullEvery is how often a sync round reads every host instead of the changed ones even though the
+// vulnerability state did not change (a safety net).
 const inventoryFullEvery = 12
 
 // inventorySyncLockKey is the advisory lock of the sync round ("padd inv").
@@ -52,9 +52,11 @@ type Inventory struct {
 	retry    time.Duration
 	now      func() time.Time
 
-	// since is the start of the last complete sync round; rounds counts them (owned by RunSync).
-	since  time.Time
-	rounds int
+	// since is the start of the last complete sync round, vulnState the vulnerability state it stored; rounds counts
+	// them (owned by RunSync).
+	since     time.Time
+	vulnState string
+	rounds    int
 }
 
 // NewInventory creates the inventory rounds.
@@ -103,8 +105,9 @@ func (i *Inventory) RunSync(ctx context.Context) error {
 	}
 }
 
-// Round pushes Paddock's policies, stores the inventory of every changed host that maps to a device (every host each
-// inventoryFullEvery rounds and after a start), and reports devices whose agent fleetd finds not running.
+// Round pushes Paddock's policies, stores the inventory of every changed host that maps to a device — every host
+// after a start, when the inventory system's vulnerability matches changed and each inventoryFullEvery rounds — and
+// reports devices whose agent fleetd finds not running.
 func (i *Inventory) Round(ctx context.Context) error {
 	start := i.now()
 	policies, err := inventory.Policies()
@@ -114,8 +117,12 @@ func (i *Inventory) Round(ctx context.Context) error {
 	if err := i.source.ApplyPolicies(ctx, policies); err != nil {
 		return err
 	}
+	vulnState, err := i.source.VulnerabilityState(ctx)
+	if err != nil {
+		return err
+	}
 	since := i.since
-	if i.rounds%inventoryFullEvery == 0 {
+	if i.rounds%inventoryFullEvery == 0 || vulnState != i.vulnState {
 		since = time.Time{}
 	}
 	hosts, err := i.changedHosts(ctx, since)
@@ -151,7 +158,7 @@ func (i *Inventory) Round(ctx context.Context) error {
 	if err := i.reportAgents(ctx, start); err != nil {
 		return err
 	}
-	i.since, i.rounds = start.Add(-time.Minute), i.rounds+1 // a margin for clocks and in-flight updates
+	i.since, i.vulnState, i.rounds = start.Add(-time.Minute), vulnState, i.rounds+1 // a margin for clocks and in-flight updates
 	slog.InfoContext(ctx, "inventory synced", "hosts", len(hosts), "unmapped", unmapped, "full", since.IsZero())
 	return nil
 }

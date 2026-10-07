@@ -102,7 +102,7 @@ func TestOrganizationIsolation(t *testing.T) {
 			}
 			resolved, parent := path, listParents[path]
 			if parent != nil {
-				resolved = strings.Replace(path, "{id}", parent(w), 1)
+				resolved = pathParam.ReplaceAllString(path, parent(w))
 			}
 			for _, q := range queries {
 				target := resolved + "?" + q.Encode()

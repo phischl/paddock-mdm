@@ -26,6 +26,8 @@ type fakeFleet struct {
 	requests []string // "METHOD path" of every request
 	// policySpecs is the body of the last POST /spec/policies.
 	policySpecs []map[string]any
+	// vulnerableSoftware replaces the recorded vulnerable software versions when set.
+	vulnerableSoftware []map[string]any
 	// failNext makes the next n requests answer 503.
 	failNext int
 }
@@ -97,6 +99,16 @@ func (f *fakeFleet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.fixture(w, "testdata/get_hosts.json")
 	case r.Method == http.MethodGet && path == "/api/latest/fleet/hosts/1":
 		f.fixture(w, "testdata/get_host.json")
+	case r.Method == http.MethodGet && path == "/api/latest/fleet/software/versions":
+		if r.URL.Query().Get("vulnerable") != "true" {
+			http.Error(w, "want vulnerable=true", http.StatusBadRequest)
+			return
+		}
+		if f.vulnerableSoftware != nil {
+			f.write(w, map[string]any{"software": f.vulnerableSoftware, "meta": map[string]any{"has_next_results": false}})
+			return
+		}
+		f.fixture(w, "testdata/get_software_versions.json")
 	case r.Method == http.MethodPost && path == "/api/latest/fleet/spec/policies":
 		var spec struct {
 			Specs []map[string]any `json:"specs"`

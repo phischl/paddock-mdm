@@ -39,6 +39,7 @@ type handlers struct {
 	disk        *app.Disk
 	revocations *app.Revocations
 	dms         *app.DMS
+	inventory   *app.Inventory
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).

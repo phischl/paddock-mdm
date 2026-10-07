@@ -60,11 +60,14 @@ func TestInventorySettingsRetryUntilChecked(t *testing.T) {
 
 // fakeSource is an inventory system with fixed hosts; it records the since of every listing and the hosts read.
 type fakeSource struct {
-	hosts    []ports.InventoryHost
-	since    []time.Time
-	read     []ports.HostRef
-	policies int
+	hosts     []ports.InventoryHost
+	since     []time.Time
+	read      []ports.HostRef
+	policies  int
+	vulnState string
 }
+
+func (s *fakeSource) VulnerabilityState(context.Context) (string, error) { return s.vulnState, nil }
 
 func (s *fakeSource) ListHostsChangedSince(_ context.Context, since time.Time, cursor string) (ports.HostPage, error) {
 	s.since = append(s.since, since)
@@ -86,7 +89,7 @@ func (s *fakeSource) ApplyPolicies(_ context.Context, p []ports.PolicyDefinition
 
 // TestInventoryRound (plan M5a decision 6): a round pushes the policies, reads every page, stores the hosts that map
 // to a device and skips the others; after the first (full) round only changes since the previous round are listed,
-// and every inventoryFullEvery rounds all hosts again.
+// all hosts again when the vulnerability state changed and every inventoryFullEvery rounds.
 func TestInventoryRound(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -105,7 +108,10 @@ func TestInventoryRound(t *testing.T) {
 	runner := app.NewActionRunner(f.pool, platform, httpx.RequestID)
 	i := NewInventory(nil, src, app.NewInventorySync(runner, f.pool, platform), f.pool, platform, time.Minute)
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
-	for range inventoryFullEvery + 1 {
+	for n := range inventoryFullEvery + 1 {
+		if n == 5 {
+			src.vulnState = "new matches" // a full round
+		}
 		if err := i.Round(sys); err != nil {
 			t.Fatal(err)
 		}
@@ -125,7 +131,7 @@ func TestInventoryRound(t *testing.T) {
 			t.Fatalf("listing %d since %v, not after the previous round", k, s)
 		}
 	}
-	if full != 4 { // two pages each in rounds 1 and 13
+	if full != 6 { // two pages each in rounds 1, 6 (new vulnerability matches) and 13
 		t.Fatalf("%d full listings in %v", full, src.since)
 	}
 }

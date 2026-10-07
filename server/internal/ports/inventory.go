@@ -66,6 +66,9 @@ type Inventory interface {
 	ListHostsChangedSince(ctx context.Context, since time.Time, cursor string) (HostPage, error)
 	// HostInventory returns a host's OS, agent version, software with vulnerabilities and policy results.
 	HostInventory(ctx context.Context, ref HostRef) (HostInventory, error)
+	// VulnerabilityState returns an opaque value that changes whenever the inventory system's vulnerability matches
+	// change; it matches them on its own schedule, without marking the hosts as changed.
+	VulnerabilityState(ctx context.Context) (string, error)
 	// ApplyPolicies creates or updates Paddock's policies (idempotent).
 	ApplyPolicies(ctx context.Context, policies []PolicyDefinition) error
 }

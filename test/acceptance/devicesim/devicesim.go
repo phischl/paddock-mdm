@@ -136,11 +136,14 @@ func (d *Device) Do(ctx context.Context, rq Request) (Response, error) {
 	return Response{Status: res.StatusCode, Header: res.Header, Body: out}, err
 }
 
+// HardwareUUID is the hardware UUID the device enrolls with.
+func (d *Device) HardwareUUID() string { return "sim-" + d.KeyID[:12] }
+
 // Enroll sends the enrollment request and remembers the enrollment ID.
 func (d *Device) Enroll(ctx context.Context, hostname string) (Response, error) {
 	res, err := d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/enroll", Device: protocol.EnrollDevice, Body: protocol.EnrollRequest{
 		Token: d.Config.Token, PublicKey: base64.StdEncoding.EncodeToString(d.SPKI), KeyProtection: protocol.KeyProtectionFile,
-		Hostname: hostname, HardwareUUID: "sim-" + d.KeyID[:12], MachineID: d.KeyID[:32],
+		Hostname: hostname, HardwareUUID: d.HardwareUUID(), MachineID: d.KeyID[:32],
 		OSRelease: map[string]string{"id": "ubuntu", "version_id": "26.04"}, AgentVersion: "0.0.0-devicesim",
 	}})
 	if err != nil || res.Status != http.StatusAccepted {

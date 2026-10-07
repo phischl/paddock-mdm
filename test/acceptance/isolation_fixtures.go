@@ -28,6 +28,8 @@ type isolationWorld struct {
 	globexUpstream string
 	// globexRevocation is a Destroy request of globexDevice that waits for its approval (seedGlobexDevices).
 	globexRevocation string
+	// globexCVE is a vulnerability found on globexDevice only (seedGlobexDevices).
+	globexCVE string
 }
 
 // seedGlobexIdentity creates, as carol, a local user in a user group, a permission profile and its assignment to the
@@ -95,6 +97,11 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	expectStatus(t, res, http.StatusAccepted, "")
 	w.globexIDs = append(w.globexIDs, w.globexDeviceGroup, w.globexToken, w.globexDevice, w.globexFile, w.globexUnit,
 		responseID(t, res).String())
+	// Its inventory, as the worker stores it from Fleet.
+	w.globexCVE = uniqueCVE()
+	pkg := "globex-iso-pkg-" + uniqueSuffix()
+	storeInventory(t, dev.DeviceID, [][2]string{{pkg, "1.0"}}, [][4]string{{w.globexCVE, pkg, "1.0", "7.5"}})
+	w.globexIDs = append(w.globexIDs, w.globexCVE)
 	// A Destroy waits for its second approval forever: nothing is ever issued.
 	stepUp(t, w.carol, env.Carol, true)
 	hostname := getDevice(t, w.carol, dev.DeviceID).Hostname
@@ -299,6 +306,19 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/devices/" + w.globexDevice + "/local-admin/rotate"
 	}, nil),
 
+	"GET /api/v1/devices/{id}/software":        itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/software" }, nil),
+	"GET /api/v1/devices/{id}/vulnerabilities": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/vulnerabilities" }, nil),
+	"GET /api/v1/software": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/software?page_size=100", nil
+	}},
+	"GET /api/v1/vulnerabilities": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/vulnerabilities?page_size=100", nil
+	}},
+	"GET /api/v1/vulnerabilities/summary": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/vulnerabilities/summary", nil
+	}},
+	"GET /api/v1/vulnerabilities/{cve}/devices": itemFixture(func(w *isolationWorld) string { return "/api/v1/vulnerabilities/" + w.globexCVE + "/devices" }, nil),
+
 	"GET /api/v1/permission-profiles": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/permission-profiles?page_size=100", nil
 	}},
@@ -325,9 +345,12 @@ var isolationFixtures = map[string]isolationFixture{
 // listParents resolves the parent ID of collection GETs below an item (path with {id}): the globex parent whose
 // data carol finds and alice must get 404 for.
 var listParents = map[string]func(w *isolationWorld) string{
-	"/api/v1/device-groups/{id}/devices": func(w *isolationWorld) string { return w.globexDeviceGroup },
-	"/api/v1/user-groups/{id}/members":   func(w *isolationWorld) string { return w.globexUserGroup },
-	"/api/v1/devices/{id}/commands":      func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/device-groups/{id}/devices":    func(w *isolationWorld) string { return w.globexDeviceGroup },
+	"/api/v1/user-groups/{id}/members":      func(w *isolationWorld) string { return w.globexUserGroup },
+	"/api/v1/devices/{id}/commands":         func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/devices/{id}/software":         func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/devices/{id}/vulnerabilities":  func(w *isolationWorld) string { return w.globexDevice },
+	"/api/v1/vulnerabilities/{cve}/devices": func(w *isolationWorld) string { return w.globexCVE },
 }
 
 func fixtureKey(method, path string) string { return strings.ToUpper(method) + " " + path }
@@ -367,8 +390,13 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/profile-assignments":        {{"q": {"globex-iso"}}, {"subject_type": {"group"}, "page_size": {"100"}}},
 	// Upstream groups with a member of the organization only (plan M3b decision 1): the globex-only group of
 	// seedGlobexUpstream is carol's, never alice's.
-	"/api/v1/upstream-groups":       {{"q": {"globex-iso"}}, {"page_size": {"100"}}},
-	"/api/v1/devices/{id}/commands": {{"q": {"rotate"}}, {"type": {"rotate_admin_password"}, "status": {"pending", "delivered"}}},
+	"/api/v1/upstream-groups":               {{"q": {"globex-iso"}}, {"page_size": {"100"}}},
+	"/api/v1/devices/{id}/commands":         {{"q": {"rotate"}}, {"type": {"rotate_admin_password"}, "status": {"pending", "delivered"}}},
+	"/api/v1/software":                      {{"q": {"globex-iso"}}, {"has_vulnerabilities": {"true"}, "page_size": {"100"}}},
+	"/api/v1/vulnerabilities":               {{"q": {"CVE-2099"}, "page_size": {"100"}}, {"severity": {"high"}, "page_size": {"100"}}},
+	"/api/v1/devices/{id}/software":         {{"q": {"globex-iso"}}},
+	"/api/v1/devices/{id}/vulnerabilities":  {{"q": {"globex-iso"}}, {"severity": {"high"}}},
+	"/api/v1/vulnerabilities/{cve}/devices": {{"q": {"globex-iso"}}},
 	"/api/v1/revocation-requests": {
 		{"q": {"globex-iso"}},
 		{"action": {"destroy"}, "status": {"requested"}, "page_size": {"100"}},

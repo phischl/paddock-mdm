@@ -2,10 +2,13 @@
 //
 //	devicesim enroll --hostname <name> < enrollment-config.json
 //	devicesim local-admin --hostname <name> < enrollment-config.json
+//	devicesim inventory --hostname <name> --package <name>=<version> ... < enrollment-config.json
 //
 // enroll prints {"enrollment_id", "device_id", "status"} once the enrollment left "processing". local-admin needs an
 // auto-approving token: it enrolls, escrows a first local administrator password like an agent (encrypted to the
-// escrow key of its bundle, confirmed with local_admin.rotated) and prints {"device_id", "password"}.
+// escrow key of its bundle, confirmed with local_admin.rotated) and prints {"device_id", "password"}. inventory needs
+// an auto-approving token, too: it enrolls, enrolls an osquery host with the device's hardware UUID in Fleet (plan
+// M5a), reports the packages and prints {"device_id"}.
 package main
 
 import (
@@ -16,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +29,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 func main() {
@@ -34,14 +39,23 @@ func main() {
 	}
 }
 
-const usage = "usage: devicesim enroll|local-admin --hostname <name> < enrollment-config.json"
+const usage = "usage: devicesim enroll|local-admin|inventory --hostname <name> [--package <name>=<version> ...] < enrollment-config.json"
 
 func run(args []string) error {
-	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin") {
+	if len(args) == 0 || (args[0] != "enroll" && args[0] != "local-admin" && args[0] != "inventory") {
 		return errors.New(usage)
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	hostname := fs.String("hostname", "", "hostname to report")
+	var packages [][2]string
+	fs.Func("package", "deb package <name>=<version> to report to Fleet (inventory)", func(v string) error {
+		name, version, ok := strings.Cut(v, "=")
+		if !ok || name == "" || version == "" {
+			return errors.New("want <name>=<version>")
+		}
+		packages = append(packages, [2]string{name, version})
+		return nil
+	})
 	if err := fs.Parse(args[1:]); err != nil || *hostname == "" {
 		return errors.New(usage)
 	}
@@ -78,11 +92,30 @@ func run(args []string) error {
 	if s.Status != protocol.EnrollActive {
 		return fmt.Errorf("enrollment %s, want active (auto-approving token)", s.Status)
 	}
+	if args[0] == "inventory" {
+		if err := reportInventory(ctx, client, dev, *hostname, packages); err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID})
+	}
 	password, err := escrowLocalAdmin(ctx, dev)
 	if err != nil {
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(map[string]string{"device_id": s.DeviceID, "password": password})
+}
+
+// reportInventory enrolls the device's osquery host in Fleet and answers Fleet's queries until it has the packages.
+func reportInventory(ctx context.Context, client *http.Client, dev *devicesim.Device, hostname string, packages [][2]string) error {
+	secret, err := stack.Secret("fleet_enroll_secret")
+	if err != nil {
+		return err
+	}
+	host, err := devicesim.EnrollFleet(ctx, client, stack.FleetURL(), strings.TrimSpace(secret), dev.HardwareUUID(), hostname, packages)
+	if err != nil {
+		return err
+	}
+	return host.WaitAnswered(ctx)
 }
 
 // escrowLocalAdmin checks in as a schema 2 agent until the bundle carries the escrow key, escrows generation 1 of

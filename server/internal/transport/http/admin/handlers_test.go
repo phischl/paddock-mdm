@@ -346,6 +346,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Disk:          app.NewDisk(runner, orgPool, escrowAccess, e.disk),
 		Revocations:   app.NewRevocations(runner, orgPool, e.stepUps, true),
 		DMS:           app.NewDMS(runner, orgPool, discardCommands{}, true, false),
+		Inventory:     app.NewInventory(orgPool),
 		AuditLog:      app.NewAuditLog(reader),
 		Runner:        runner,
 		Keys:          keys,

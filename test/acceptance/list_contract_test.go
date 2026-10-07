@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -88,8 +90,10 @@ func TestListContract(t *testing.T) {
 		expectStatus(t, call(t, sessions[false], http.MethodPost, "/api/v1/devices/"+member.DeviceID+"/local-admin/rotate", nil), http.StatusAccepted, "")
 	}
 	userGroup := listContractUserGroup(t, sessions[false])
+	cve := seedListInventory(t, member.DeviceID)
 	parents := map[string]string{"/api/v1/device-groups/{id}/devices": parentGroup, "/api/v1/user-groups/{id}/members": userGroup,
-		"/api/v1/devices/{id}/commands": member.DeviceID}
+		"/api/v1/devices/{id}/commands": member.DeviceID, "/api/v1/devices/{id}/software": member.DeviceID,
+		"/api/v1/devices/{id}/vulnerabilities": member.DeviceID, "/api/v1/vulnerabilities/{cve}/devices": cve}
 	order := newCollation(t)
 	paths := make([]string, 0, len(lists))
 	for p := range lists {
@@ -105,7 +109,7 @@ func TestListContract(t *testing.T) {
 				if !ok {
 					t.Fatalf("collection %s below an item has no parent in this gate", path)
 				}
-				target = strings.Replace(path, "{id}", parent, 1)
+				target = pathParam.ReplaceAllString(path, parent)
 			}
 			for _, name := range listParams {
 				if op.Parameters.GetByInAndName("query", name) == nil {
@@ -162,9 +166,9 @@ func TestListContract(t *testing.T) {
 					keys[i] = fmt.Sprint(it[field])
 				}
 				if s[0] == '-' {
-					slices.Reverse(keys)
+					reverse(keys, nullsLast[field])
 				}
-				if err := order.ascending(keys, prop.Value.Format == "date-time"); err != nil {
+				if err := order.ascending(keys, prop.Value); err != nil {
 					t.Errorf("sort=%s: %v", s, err)
 				}
 				t.Logf("sort=%s: %d of %d items in order", s, len(page.Items), page.Total)
@@ -224,15 +228,23 @@ func newCollation(t *testing.T) *collation {
 }
 
 // ascending reports the first adjacent pair out of ascending order. Missing values (null) sort after every value,
-// as PostgreSQL orders NULL in ascending order (and first in descending order, which the caller reverses).
-func (c *collation) ascending(keys []string, timestamps bool) error {
+// as PostgreSQL orders NULL in ascending order (and first in descending order, which the caller reverses). Numbers
+// compare as numbers, date-time strings as times, other strings in the database's collation.
+func (c *collation) ascending(keys []string, prop *openapi3.Schema) error {
 	for i := 1; i < len(keys); i++ {
 		a, b := keys[i-1], keys[i]
 		var ok bool
 		switch {
 		case a == nullKey || b == nullKey:
 			ok = b == nullKey
-		case timestamps:
+		case prop.Type.Is("number") || prop.Type.Is("integer"):
+			na, errA := strconv.ParseFloat(a, 64)
+			nb, errB := strconv.ParseFloat(b, 64)
+			if errA != nil || errB != nil {
+				return fmt.Errorf("not numbers: %q, %q", a, b)
+			}
+			ok = na <= nb
+		case prop.Format == "date-time":
 			ta, errA := time.Parse(time.RFC3339Nano, a)
 			tb, errB := time.Parse(time.RFC3339Nano, b)
 			if errA != nil || errB != nil {
@@ -253,6 +265,34 @@ func (c *collation) ascending(keys []string, timestamps bool) error {
 
 // nullKey is fmt.Sprint of a JSON null.
 const nullKey = "<nil>"
+
+// nullsLast are the sort fields whose missing values sort last in both directions: findings without CVSS score
+// (Fleet free reports none) stay below the scored ones also when sorted by descending score.
+var nullsLast = map[string]bool{"cvss_score": true}
+
+// reverse turns the keys of a descending sort into ascending order; with nullsLast, only the values before the first
+// null are reversed, so a null before a value stays there and fails the order check.
+func reverse(keys []string, nullsLast bool) {
+	n := len(keys)
+	if i := slices.Index(keys, nullKey); nullsLast && i >= 0 {
+		n = i
+	}
+	slices.Reverse(keys[:n])
+}
+
+// pathParam is the path parameter of a collection below an item ({id}, {cve}).
+var pathParam = regexp.MustCompile(`\{[a-z]+\}`)
+
+// seedListInventory stores packages and findings of an acme device whose name, version and score orders differ,
+// with a finding without score, and returns the CVE of a finding for the list of its devices.
+func seedListInventory(t *testing.T, device string) string {
+	t.Helper()
+	cve := uniqueCVE()
+	storeInventory(t, device, [][2]string{{"Zlib-list", "1:1.3"}, {"apt-list", "2.10"}, {"Bash-list", "10.0"}},
+		[][4]string{{cve, "apt-list", "2.10", "9.8"}, {uniqueCVE(), "Bash-list", "10.0", ""}, {uniqueCVE(), "Zlib-list", "1:1.3", "10"},
+			{uniqueCVE(), "apt-list", "2.10", "4.3"}})
+	return cve
+}
 
 func sorted(s []string) []string {
 	s = slices.Clone(s)
