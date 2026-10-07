@@ -81,10 +81,10 @@ func (a *Agent) saveDMS(st dmsState) {
 }
 
 // acceptTicket resets the counter when the check-in carried a valid time ticket newer than the last accepted one,
-// and removes the warnings.
-func (a *Agent) acceptTicket(raw json.RawMessage) {
+// and removes the warnings. It reports whether it accepted the ticket.
+func (a *Agent) acceptTicket(raw json.RawMessage) bool {
 	if len(raw) == 0 || a.current == nil || a.current.Keys == nil || len(a.current.Keys.TimeTicket) == 0 {
-		return
+		return false
 	}
 	keys := map[string]ed25519.PublicKey{}
 	for _, k := range a.current.Keys.TimeTicket {
@@ -95,11 +95,11 @@ func (a *Agent) acceptTicket(raw json.RawMessage) {
 	t, err := timeticket.Verify(raw, keys, a.d.Config.OrganizationID)
 	if err != nil {
 		slog.Warn("time ticket refused", "error", err)
-		return
+		return false
 	}
 	st := a.loadDMS()
 	if !t.IssuedAt.After(st.TicketAt) {
-		return
+		return false
 	}
 	st.TicketAt, st.Elapsed, st.Warned, st.Triggered = t.IssuedAt, 0, nil, false
 	// The count starts now, not at the last tick.
@@ -108,6 +108,7 @@ func (a *Agent) acceptTicket(raw json.RawMessage) {
 	}
 	a.saveDMS(st)
 	a.clearDMSWarning()
+	return true
 }
 
 // tickDMS advances the counter by the uptime since the last count and acts on the switch of the current bundle.
