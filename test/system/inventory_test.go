@@ -3,6 +3,7 @@ package system
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,15 +17,19 @@ import (
 )
 
 // TestInventoryGates runs the device gates of plan M5a on the VMs in parallel, each from a fresh base-installed: F1
-// (fleetd installed from Paddock's package store, enrolled into Fleet). The fleetd package of this run (make
-// fleetd-deb) is published once, as a release without rollout, for both VMs.
+// (fleetd installed from Paddock's package store, enrolled into Fleet, mapped to the device) and F2 (mutual watch of
+// agent and fleetd). The fleetd package of this run (make fleetd-deb) is published once, as a release without
+// rollout, for both VMs.
 func TestInventoryGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Gate(t, "inventory")
 		fleetd := vm.Together(t, "inventory", "fleetd release", func() string { return s.PublishFleetd() })
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
-		t.Run("F1 fleetd enrolled", func(t *testing.T) { gateF1(t, d, fleetd) })
+		if !t.Run("F1 fleetd enrolled", func(t *testing.T) { gateF1(t, d, fleetd) }) {
+			t.FailNow()
+		}
+		t.Run("F2 mutual watch", func(t *testing.T) { gateF2(t, d) })
 	})
 }
 
@@ -52,10 +57,12 @@ func (s *Stack) PublishFleetd() string {
 // Fleet's update server) and gives it the enroll secret; orbit.service runs, and Fleet knows the host by the device's
 // hardware UUID.
 func gateF1(t *testing.T, d *Device, fleetd string) {
-	Until(t, d.Name+": fleetd installed", 10*time.Minute, 10*time.Second, d.Checkin, func() bool {
-		return d.Must("dpkg-query -W -f '${Version}' fleet-osquery 2>/dev/null || true") == fleetd
+	// dpkg-query names the version as soon as the package is unpacked; installed means configured, too.
+	Until(t, d.Name+": fleetd installed and running", 10*time.Minute, 10*time.Second, d.Checkin, func() bool {
+		return d.Must("dpkg-query -W -f '${Status} ${Version}' fleet-osquery 2>/dev/null || true") == "install ok installed "+fleetd &&
+			d.Must("systemctl is-active orbit.service || true") == "active"
 	})
-	if out := d.Must("systemctl is-active orbit.service; systemctl is-enabled orbit.service"); out != "active\nenabled" {
+	if out := d.Must("systemctl is-enabled orbit.service || true"); out != "enabled" {
 		t.Errorf("orbit.service: %q", out)
 	}
 	if out := d.Must("sudo stat -c '%a %U' /opt/orbit/secret.txt /etc/paddock/orbit.env"); out != "600 root\n600 root" {
@@ -73,6 +80,51 @@ func gateF1(t *testing.T, d *Device, fleetd string) {
 		return ok && host.OsqueryVersion != ""
 	})
 	t.Logf("%s: Fleet host %d (%s, osquery %s, orbit %s)", d.Name, host.ID, host.Hostname, host.OsqueryVersion, host.OrbitVersion)
+
+	// Earlier runs left active devices with this VM's hardware UUID; the host maps only to a unique device.
+	retireTwins(t, d, uuid)
+	start := time.Now()
+	query := fmt.Sprintf("SELECT external_id FROM device_inventory_ref WHERE device_id = '%s'", d.ID)
+	Until(t, d.Name+": host mapped to the device", 3*time.Minute, 5*time.Second, nil, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		out, err := paddockSQL(ctx, query)
+		return err == nil && out == fmt.Sprint(host.ID)
+	})
+	t.Logf("%s: mapped to device %s after %s", d.Name, d.ID, time.Since(start).Round(time.Second))
+}
+
+// retireTwins retires every other active or quarantined device of the organization with the hardware UUID.
+func retireTwins(t *testing.T, d *Device, hardwareUUID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := paddockSQL(ctx, fmt.Sprintf(`SELECT id FROM device WHERE lower(hardware_uuid) = lower('%s')
+		AND state IN ('active','quarantined') AND id <> '%[2]s'
+		AND organization_id = (SELECT organization_id FROM device WHERE id = '%[2]s')`, hardwareUUID, d.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range strings.Fields(out) {
+		d.s.Call(http.MethodPost, "/api/v1/devices/"+id+"/retire", nil, http.StatusOK)
+	}
+}
+
+// gateF2 is the mutual watch: a stopped fleetd is reported by the agent (tamper.service_stopped) and started again;
+// a stopped agent is reported through fleetd's policy once the device has not checked in for 15 minutes
+// (device.tamper_agent_not_running).
+func gateF2(t *testing.T, d *Device) {
+	d.Must("sudo systemctl stop orbit.service")
+	d.WaitEvent(t, "device.tamper_service_stopped", 3*time.Minute, func(p map[string]any) bool { return p["unit"] == "orbit.service" })
+	Until(t, d.Name+": orbit.service running again", time.Minute, 5*time.Second, nil, func() bool {
+		return d.Must("systemctl is-active orbit.service || true") == "active"
+	})
+
+	stopped := time.Now()
+	d.Must("sudo systemctl stop paddock-supervisor && ! pgrep -x paddockd")
+	t.Cleanup(func() { d.Must("sudo systemctl start paddock-supervisor") })
+	d.WaitEvent(t, "device.tamper_agent_not_running", 25*time.Minute, nil)
+	t.Logf("%s: agent stop reported after %s", d.Name, time.Since(stopped).Round(time.Second))
 }
 
 // fleetHost is a host as Fleet's API returns it.

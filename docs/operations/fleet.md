@@ -50,6 +50,28 @@ fleetd and these paths are a protected area: a changed file is restored at the n
 `device.tamper_service_stopped` (the agent's half of the mutual watch). Managed files and units cannot touch
 `/opt/orbit/`, `/etc/default/orbit`, `/etc/systemd/system/orbit*` or units named `orbit*` or `fleet*`.
 
+## Inventory sync and mutual watch
+
+Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one worker replica at a time)
+`paddock-worker`:
+
+1. pushes Paddock's policies (`server/internal/inventory/policies/*.sql`: `paddock_agent_running`,
+   `disk_encrypted`) as global Fleet policies for Linux; they return pass or fail, never rows;
+2. reads the hosts whose details, software or policy results changed since the previous round, and every host after a
+   start and every 12th round (Fleet matches vulnerabilities on its own schedule without marking hosts as changed);
+3. maps each host to a device by hardware UUID: a host maps only if exactly one active or quarantined device in any
+   organization has its UUID. Hosts that map to no device or to several are never stored and are counted in the metric
+   `paddock_inventory_unmapped_hosts` (ops port, `/metrics`). A reinstalled device that enrolled again keeps its
+   hardware UUID: retire the old device so that its host maps again;
+4. stores, per mapped device and under its organization, the OS version, the fleetd (or osquery) version, the last
+   time Fleet saw the host, the installed packages, the matched CVEs and the policy results; what the host no longer
+   reports is deleted. Fleet's host IDs appear only in `device_inventory_ref.external_id`;
+5. reports, once per failure, `device.tamper_agent_not_running` for every active device whose `paddock_agent_running`
+   policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch).
+
+Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only); Paddock stores them as
+unknown.
+
 ## Access for platform operators
 
 Fleet's UI and API are reachable on the internal network `cp` only (`http://fleet:8080`). Platform operators who need
