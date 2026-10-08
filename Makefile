@@ -328,6 +328,28 @@ e2e: ## Run Playwright end-to-end tests against the running stack
 		-v $(CURDIR):/src -w /src/$(WEB_DIR) \
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test'
 
+# Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network paddock_cp and talk to
+# one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Forwarded-For address.
+LOAD_DIR := bin/load
+COUNT    ?= 10000
+SCENARIO ?= checkin
+
+.PHONY: load-identities
+load-identities: ## Enroll COUNT load test devices with the enrollment configurations CONFIGS (auto-approving tokens) into bin/load/identities.json
+	@test -n "$(CONFIGS)" || { echo "usage: make load-identities CONFIGS='token-1.json token-2.json …' [COUNT=10000]"; exit 2; }
+	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/identities ./test/load/cmd/identities
+	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
+		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
+		--server http://paddock-gateway:8081 --forwarded-for --out $(LOAD_DIR)/identities.json
+
+.PHONY: load-test
+load-test: ## Run the k6 scenario SCENARIO=checkin|ingest against the running stack (RATE, VUS, WARMUP, DURATION, EVENTS_PER_S, BATCH, DRAIN)
+	@test -s $(LOAD_DIR)/identities.json || { echo "missing $(LOAD_DIR)/identities.json: run make load-identities"; exit 2; }
+	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
+		-e IDENTITIES=/data/identities.json \
+		$(foreach v,RATE VUS WARMUP DURATION EVENTS_PER_S BATCH DRAIN GATEWAY_URL PROMETHEUS_URL,$(if $($(v)),-e $(v)='$($(v))',)) \
+		$(K6_IMAGE) run --summary-export /data/$(SCENARIO)-summary.json /scripts/$(SCENARIO).js
+
 .PHONY: ci
 ci: lint test web ## Everything CI runs
 
