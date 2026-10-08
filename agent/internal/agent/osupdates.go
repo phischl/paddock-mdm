@@ -55,29 +55,21 @@ func (a *Agent) reportUpdateRuns(ctx context.Context) {
 	if a.d.Sys == nil {
 		return
 	}
-	out, exit, err := a.d.Sys.Systemctl(ctx, "show", "--timestamp=unix", "-p", "ActiveExitTimestamp,Result", reconcile.SecurityUnit)
+	out, exit, err := a.d.Sys.Systemctl(ctx, "show", "--timestamp=unix", "-p", "ExecMainStartTimestamp,ExecMainExitTimestamp,Result",
+		reconcile.SecurityUnit)
 	if err != nil || exit != 0 {
 		return
 	}
-	exited, result, ok := osupdates.ParseUnitExit(out)
-	if !ok || (a.st.ReportedSecurityAt != nil && !exited.After(*a.st.ReportedSecurityAt)) {
+	unit, ok := osupdates.ParseUnitRun(out)
+	if !ok || (a.st.ReportedSecurityAt != nil && !unit.Exited.After(*a.st.ReportedSecurityAt)) {
 		return
 	}
 	log, err := os.ReadFile(a.d.Layout.UnattendedLog())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.WarnContext(ctx, "reading the unattended-upgrades log failed", "error", err)
 	}
-	run, found := osupdates.ParseUnattendedLog(log)
-	if !found || run.StartedAt.After(exited) {
-		run = protocol.UpdatesRun{Kind: protocol.UpdatesKindSecurity, StartedAt: exited, HeldBack: []string{}, Result: protocol.UpdatesResultOK}
-	}
-	run.FinishedAt, run.RebootRequired = exited, osupdates.RebootRequired(a.d.Layout)
-	if result != "success" {
-		run.Result = protocol.UpdatesResultFailed
-		if run.Error == "" {
-			run.Error = reconcile.SecurityUnit + ": " + result
-		}
-	}
+	run := osupdates.SecurityRun(unit, log, osupdates.RebootRequired(a.d.Layout))
+	exited := unit.Exited
 	a.event(protocol.EventUpdatesRun, run)
 	a.st.ReportedSecurityAt = &exited
 	a.saveState()
