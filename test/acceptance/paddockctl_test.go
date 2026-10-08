@@ -132,7 +132,7 @@ func TestPaddockctl(t *testing.T) {
 	}
 	doc["managed_files"] = append(doc["managed_files"].([]any), map[string]any{"path": "/etc/paddock-t3.conf", "content": "t3\n"})
 	added, _ := json.Marshal(doc)
-	if r := ctl.run(t, org, string(added), "apply", "--dry-run", "-f", "-"); r.code != 0 || !strings.Contains(r.stdout, "+ managed_files /etc/paddock-t3.conf\n") {
+	if r := ctl.run(t, org, string(added), "apply", "--dry-run", "-f", "-"); r.code != 0 || !strings.Contains(r.stdout, "+ managed_files [null,\"/etc/paddock-t3.conf\"]\n") {
 		t.Fatalf("dry run of a changed file: %+v", r)
 	}
 	if n := listTotal(t, admin.Portal, "/api/v1/change-sets"); n != 0 {
@@ -149,6 +149,13 @@ func TestPaddockctl(t *testing.T) {
 		t.Fatalf("apply with a deletion and no --yes: %+v", r)
 	}
 	if listTotal(t, admin.Portal, "/api/v1/package-holds?q=t3-held") != 1 || listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t3") != 0 {
+		t.Fatal("the refused apply changed something")
+	}
+	// The apply carries the confirmed plan (plan M6c amendment 2026-10-08): another plan is refused with 412 and
+	// nothing is applied.
+	res = call(t, tokenPortal(t, tok.Secret), http.MethodPut, "/api/v1/config?expected_plan="+strings.Repeat("0", 64), json.RawMessage(changed))
+	expectStatus(t, res, http.StatusPreconditionFailed, "plan_changed")
+	if listTotal(t, admin.Portal, "/api/v1/package-holds?q=t3-held") != 1 {
 		t.Fatal("the refused apply changed something")
 	}
 	if r := ctl.run(t, org, "", "apply", "--yes", "-f", file); r.code != 0 || !changeSetLine.MatchString(r.stdout) {

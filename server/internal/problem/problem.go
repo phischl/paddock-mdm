@@ -61,7 +61,10 @@ var (
 	// InvalidDocument: a declarative configuration violates its schema (plan M6c decision 18); the detail lists up to
 	// 20 "path: message" pairs.
 	InvalidDocument = &Error{Code: "invalid_document", Status: http.StatusUnprocessableEntity}
-	TooManyDevices  = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
+	// PlanChanged: the plan of PUT /api/v1/config differs from the one the client confirmed (expected_plan); nothing
+	// is applied (plan M6c amendment 2026-10-08).
+	PlanChanged    = &Error{Code: "plan_changed", Status: http.StatusPreconditionFailed}
+	TooManyDevices = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
 	// Identity and privileges (plan M3a).
 	UsernameTaken          = &Error{Code: "username_taken", Status: http.StatusConflict}
 	DomainTaken            = &Error{Code: "domain_taken", Status: http.StatusConflict}

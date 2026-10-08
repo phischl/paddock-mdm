@@ -50,16 +50,30 @@ func TestDeclarativeConfigEndpoints(t *testing.T) {
 	doc["device_groups"] = []any{map[string]any{"name": "from config"}}
 	r = e.do(call{method: "PUT", path: "/api/v1/config?dry_run=true", cookie: alice, body: doc})
 	r.decode(t, &res)
-	if res.Plan.Created != 1 || len(res.Plan.Changes) != 1 || res.Plan.Changes[0].Key != "from config" {
+	if res.Plan.Created != 1 || len(res.Plan.Changes) != 1 || res.Plan.Changes[0].Key != `["from config"]` {
 		t.Fatalf("dry run plan %s", r.body)
 	}
 	if ev := e.events(r.header.Get(httpx.HeaderRequestID)); len(ev) != 0 {
 		t.Fatalf("dry run recorded %v", ev)
 	}
 
-	r = e.do(call{method: "PUT", path: "/api/v1/config", cookie: alice, body: doc})
+	confirmed := res.PlanSha256
+	if len(confirmed) != 64 {
+		t.Fatalf("plan_sha256 %q", confirmed)
+	}
+	// expected_plan (plan M6c amendment 2026-10-08): another plan is refused with 412 and applies nothing.
+	r = e.do(call{method: "PUT", path: "/api/v1/config?expected_plan=" + strings.Repeat("0", 64), cookie: alice, body: doc})
+	if r.status != http.StatusPreconditionFailed || r.problemCode(t) != "plan_changed" {
+		t.Fatalf("other plan: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "config.applied:failure:plan_changed")
+	r = e.do(call{method: "PUT", path: "/api/v1/config?expected_plan=XYZ", cookie: alice, body: doc, skipReqCheck: true})
+	if r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" {
+		t.Fatalf("malformed expected_plan: %d %s", r.status, r.body)
+	}
+	r = e.do(call{method: "PUT", path: "/api/v1/config?expected_plan=" + confirmed, cookie: alice, body: doc})
 	r.decode(t, &res)
-	if r.status != http.StatusOK || res.DryRun || res.ChangeSetId == nil || res.Plan.Created != 1 {
+	if r.status != http.StatusOK || res.DryRun || res.ChangeSetId == nil || res.Plan.Created != 1 || res.PlanSha256 != confirmed {
 		t.Fatalf("apply: %d %s", r.status, r.body)
 	}
 	e.expectEvent(r, "config.applied:success:")

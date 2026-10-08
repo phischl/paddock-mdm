@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 
 	"github.com/google/uuid"
 
@@ -14,6 +15,9 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
+
+// expectedPlanPattern is the form of expected_plan, a hex SHA-256.
+var expectedPlanPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // changeSetList is the list definition of GET /api/v1/change-sets (plan M6c decision 17).
 var changeSetList = listing.Spec{Sort: []string{"applied_at"}, DefaultSort: "-applied_at"}
@@ -47,12 +51,19 @@ func (h *handlers) ApplyConfig(ctx context.Context, req adminapi.ApplyConfigRequ
 		return nil, problem.InvalidRequest.WithDetail(err.Error())
 	}
 	out := adminapi.ConfigApplyResult{DryRun: req.Params.DryRun != nil && *req.Params.DryRun}
+	expected := ""
+	if req.Params.ExpectedPlan != nil {
+		expected = *req.Params.ExpectedPlan
+		if !expectedPlanPattern.MatchString(expected) {
+			return nil, problem.InvalidRequest.WithDetail("expected_plan must be 64 lowercase hex digits")
+		}
+	}
 	var plan declarative.Plan
 	if out.DryRun {
 		plan, err = h.declarative.Plan(ctx, raw)
 	} else {
 		var id uuid.UUID
-		id, plan, err = h.declarative.Apply(ctx, raw)
+		id, plan, err = h.declarative.Apply(ctx, raw, expected)
 		if id != uuid.Nil {
 			out.ChangeSetId = &id
 		}
@@ -60,7 +71,7 @@ func (h *handlers) ApplyConfig(ctx context.Context, req adminapi.ApplyConfigRequ
 	if err != nil {
 		return nil, err
 	}
-	out.Plan = toConfigPlan(plan)
+	out.Plan, out.PlanSha256 = toConfigPlan(plan), plan.SHA256()
 	return adminapi.ApplyConfig200JSONResponse(out), nil
 }
 

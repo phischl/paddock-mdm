@@ -67,8 +67,10 @@ func TestConfigFileErrors(t *testing.T) {
 	if _, err := cfg.Resolve(cfg.Sources{URL: "https://x.test", Getenv: env(map[string]string{"HOME": dir})}); !errors.As(err, &cerr) {
 		t.Fatalf("no token file: %v", err)
 	}
-	if _, err := cfg.Resolve(cfg.Sources{URL: "ftp://x.test", TokenFile: "/t", Getenv: e}); !errors.As(err, &cerr) {
-		t.Fatalf("URL scheme: %v", err)
+	for _, u := range []string{"ftp://x.test", "http://x.test", "http://127.0.0.1:8443", "HTTP://x.test", "admin.example.org"} {
+		if _, err := cfg.Resolve(cfg.Sources{URL: u, TokenFile: "/t", Getenv: e}); !errors.As(err, &cerr) || !strings.Contains(err.Error(), "https://") {
+			t.Errorf("URL %s: %v, want a refusal", u, err)
+		}
 	}
 }
 

@@ -2,7 +2,7 @@
   "changes": [
     {
       "section": "managed_files",
-      "key": "/etc/motd",
+      "key": "[null,\"/etc/motd\"]",
       "action": "delete",
       "fields": [
         {
@@ -39,7 +39,7 @@
     },
     {
       "section": "device_groups",
-      "key": "laptops",
+      "key": "[\"laptops\"]",
       "action": "delete",
       "fields": [
         {
@@ -56,7 +56,7 @@
     },
     {
       "section": "device_groups",
-      "key": "notebooks",
+      "key": "[\"notebooks\"]",
       "action": "create",
       "fields": [
         {
@@ -73,7 +73,7 @@
     },
     {
       "section": "managed_files",
-      "key": "/etc/motd.d/paddock",
+      "key": "[null,\"/etc/motd.d/paddock\"]",
       "action": "create",
       "fields": [
         {

@@ -147,8 +147,8 @@ func TestDeclarativeConfig(t *testing.T) {
 	for _, c := range dry.Plan.Changes {
 		actions[c.Section] = c.Action + " " + c.Key
 	}
-	if actions["managed_files"] != "create /etc/paddock-t2.conf" || actions["settings.updates"] != "update " ||
-		actions["package_holds"] != "delete t2-held" {
+	if actions["managed_files"] != `create [null,"/etc/paddock-t2.conf"]` || actions["settings.updates"] != "update " ||
+		actions["package_holds"] != `delete [null,"t2-held"]` {
 		t.Fatalf("dry run changes %v", actions)
 	}
 	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2") != 0 {

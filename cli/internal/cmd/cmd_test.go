@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,9 @@ import (
 
 const secret = "pdk_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
+// planSHA is the plan_sha256 the fake API answers every dry run with.
+const planSHA = "abababababababababababababababababababababababababababababababab"
+
 // fakeAPI is the part of the admin API paddockctl uses; plan is the plan it answers to PUT /api/v1/config.
 type fakeAPI struct {
 	mu       sync.Mutex
@@ -25,6 +29,8 @@ type fakeAPI struct {
 	puts     []string // query of every PUT /api/v1/config
 	lastBody []byte
 	headers  http.Header
+	// changed makes an apply with expected_plan fail as if the configuration changed after the dry run.
+	changed bool
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -51,11 +57,17 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.puts = append(f.puts, r.URL.RawQuery)
 		f.lastBody, _ = io.ReadAll(r.Body)
 		dry := r.URL.Query().Get("dry_run") == "true"
+		if !dry && f.changed && r.URL.Query().Get("expected_plan") != "" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = io.WriteString(w, `{"status":412,"code":"plan_changed","detail":"the plan differs"}`)
+			return
+		}
 		id := `"0193f7a2-6c1e-7cc1-9d1e-6a4f0f6e8a10"`
 		if dry || strings.Contains(f.plan, `"changes":[]`) {
 			id = "null"
 		}
-		_, _ = io.WriteString(w, `{"dry_run":`+map[bool]string{true: "true", false: "false"}[dry]+`,"change_set_id":`+id+`,"plan":`+f.plan+`}`)
+		_, _ = io.WriteString(w, `{"dry_run":`+map[bool]string{true: "true", false: "false"}[dry]+`,"change_set_id":`+id+`,"plan":`+f.plan+
+			`,"plan_sha256":"`+planSHA+`"}`)
 	case "GET /api/v1/devices":
 		_, _ = io.WriteString(w, `{"items":[{"hostname":"h1","state":"active","last_contact_at":null,"agent_version":"1.0.0",`+
 			`"applied_bundle_version":3}],"page":1,"page_size":10,"total":1,"total_capped":false,"sort":"hostname","q":"`+r.URL.RawQuery+`"}`)
@@ -73,14 +85,18 @@ type run struct {
 func setup(t *testing.T, plan string) (*fakeAPI, func(stdin string, args ...string) run) {
 	t.Helper()
 	api := &fakeAPI{plan: plan}
-	srv := httptest.NewServer(api)
+	srv := httptest.NewTLSServer(api)
 	t.Cleanup(srv.Close)
 	dir := t.TempDir()
 	token := filepath.Join(dir, "token")
 	if err := os.WriteFile(token, []byte(secret+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"PADDOCK_URL": srv.URL, "PADDOCK_TOKEN_FILE": token, "HOME": dir}
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"PADDOCK_URL": srv.URL, "PADDOCK_TOKEN_FILE": token, "PADDOCK_CA_FILE": ca, "HOME": dir}
 	return api, func(stdin string, args ...string) run {
 		var out, errOut bytes.Buffer
 		code := cmd.Main(context.Background(), cmd.Env{Args: args, Stdin: strings.NewReader(stdin), Stdout: &out, Stderr: &errOut,
@@ -159,7 +175,8 @@ func TestApply(t *testing.T) {
 		t.Fatalf("the YAML was not sent as JSON: %s", api.lastBody)
 	}
 	r = pc(doc, "apply", "-f", "-")
-	if r.code != 0 || !strings.HasSuffix(r.stdout, "Applied change set 0193f7a2-6c1e-7cc1-9d1e-6a4f0f6e8a10\n") || len(api.puts) != 3 || api.puts[2] != "" {
+	if r.code != 0 || !strings.HasSuffix(r.stdout, "Applied change set 0193f7a2-6c1e-7cc1-9d1e-6a4f0f6e8a10\n") || len(api.puts) != 3 ||
+		api.puts[2] != "expected_plan="+planSHA {
 		t.Fatalf("apply: %+v puts %v", r, api.puts)
 	}
 
@@ -171,6 +188,14 @@ func TestApply(t *testing.T) {
 	}
 	if r = pc("", "apply", "-f", file, "--yes", "-o", "json"); r.code != 0 || len(api.puts) != 3 || !strings.Contains(r.stdout, `"change_set_id"`) {
 		t.Fatalf("deletion with --yes: %+v", r)
+	}
+
+	// The configuration changed between the dry run and the apply: nothing is applied, exit 3 (PDK-013).
+	api, pc = setup(t, createPlan)
+	api.changed = true
+	if r = pc("", "apply", "-f", file); r.code != cmd.ExitRefused || !strings.Contains(r.stderr, "the configuration changed") ||
+		strings.Contains(r.stdout, "Applied change set") {
+		t.Fatalf("changed plan: %+v", r)
 	}
 
 	_, pc = setup(t, emptyPlan)
@@ -207,7 +232,11 @@ func TestErrorsAndExitCodes(t *testing.T) {
 		strings.Contains(r.stderr, secret) {
 		t.Fatalf("0644 token file: %+v", r)
 	}
-	if r := pc("", "whoami", "--url", "http://127.0.0.1:1"); r.code != cmd.ExitError {
+	if r := pc("", "whoami", "--url", "http://127.0.0.1:8443"); r.code != cmd.ExitUsage ||
+		!strings.Contains(r.stderr, "must start with https://") {
+		t.Fatalf("http URL: %+v", r)
+	}
+	if r := pc("", "whoami", "--url", "https://127.0.0.1:1"); r.code != cmd.ExitError {
 		t.Fatalf("unreachable server: %+v", r)
 	}
 	if r := pc("", "whoami", "--config", filepath.Join(dir, "none.yaml")); r.code != cmd.ExitUsage {

@@ -334,6 +334,9 @@ export interface paths {
          *     A schema violation is 422 invalid_document listing up to 20 "path: message" pairs. With dry_run=true the
          *     plan is computed and checked the same way but nothing is applied and nothing is audited. An apply with
          *     changes records a change set; one without changes records the event with zeros and no change set.
+         *     expected_plan (plan M6c amendment 2026-10-08) is the plan_sha256 of a dry run the client confirmed: when the
+         *     plan computed now differs, the apply is refused with 412 plan_changed (audited as failure) and nothing is
+         *     applied.
          */
         put: operations["applyConfig"];
         post?: never;
@@ -2267,6 +2270,8 @@ export interface components {
         };
         ConfigApplyResult: {
             dry_run: boolean;
+            /** @description Hex SHA-256 of the plan's canonical JSON; send it as expected_plan to apply exactly this plan. */
+            plan_sha256: string;
             /**
              * Format: uuid
              * @description Null for dry runs and empty plans.
@@ -4106,6 +4111,8 @@ export interface operations {
             query?: {
                 /** @description Compute and check the plan without applying it. */
                 dry_run?: boolean;
+                /** @description plan_sha256 of the confirmed dry run; a different plan is refused with 412 plan_changed. */
+                expected_plan?: string;
             };
             header: {
                 "X-Paddock-CSRF": components["parameters"]["Csrf"];
@@ -4132,6 +4139,7 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
         };
     };

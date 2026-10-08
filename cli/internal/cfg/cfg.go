@@ -70,7 +70,8 @@ func Resolve(s Sources) (Config, error) {
 	switch {
 	case c.URL == "":
 		return Config{}, Errorf("no admin API URL: set --url, PADDOCK_URL or url in %s", path)
-	case !strings.HasPrefix(c.URL, "https://") && !strings.HasPrefix(c.URL, "http://"):
+	// The token travels in every request, so it is never sent in clear text (review 1 of PDK-008).
+	case !strings.HasPrefix(c.URL, "https://"):
 		return Config{}, Errorf("the URL %q must start with https://", c.URL)
 	case c.TokenFile == "":
 		return Config{}, Errorf("no token file: set --token-file, PADDOCK_TOKEN_FILE or token_file in %s", path)

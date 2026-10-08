@@ -56,7 +56,7 @@ func (ex *configExec) run(ctx context.Context, plan declarative.Plan) error {
 // path is where a change is in the document; a deleted item is not in it and is named by its key.
 func (ex *configExec) path(c declarative.Change) string {
 	if c.Action == declarative.ActionDelete {
-		return "/" + c.Section + " (delete " + strconv.Quote(c.Key) + ")"
+		return "/" + c.Section + " (delete " + c.Key + ")"
 	}
 	return declarative.Path(c.Section, ex.index[c.Section][c.Key])
 }
@@ -131,7 +131,7 @@ func (ex *configExec) deviceGroup(ctx context.Context, c declarative.Change) err
 		if err == nil && n == 0 {
 			return problem.NotFound
 		}
-		delete(ex.st.groups, c.Key)
+		delete(ex.st.groups, ex.st.names[c.Key])
 		return err
 	}
 	g := (*ex.desired.DeviceGroups)[ex.item(c)]
@@ -160,7 +160,7 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 		if db.IsForeignKeyViolation(err) {
 			return problem.InUse.WithDetail("the profile is still assigned; remove its assignments first")
 		}
-		delete(ex.st.profiles, c.Key)
+		delete(ex.st.profiles, ex.st.names[c.Key])
 		return err
 	}
 	d := (*ex.desired.PermissionProfiles)[ex.item(c)]
@@ -178,7 +178,7 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 			Lecture:             string(in.Lecture),
 		})
 	} else {
-		if in.Class == privilege.ClassFull && ex.st.profiles[c.Key].Class != string(privilege.ClassFull) {
+		if in.Class == privilege.ClassFull && ex.st.profiles[ex.st.names[c.Key]].Class != string(privilege.ClassFull) {
 			if err := ex.requireStepUp(); err != nil {
 				return err
 			}

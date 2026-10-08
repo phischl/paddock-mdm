@@ -2,7 +2,7 @@
   "changes": [
     {
       "section": "profile_assignments",
-      "key": "laptops:ops for group:devs",
+      "key": "[\"laptops\",\"ops\",\"group\",\"devs\"]",
       "action": "delete",
       "fields": [
         {
@@ -24,7 +24,7 @@
     },
     {
       "section": "package_holds",
-      "key": "firefox",
+      "key": "[null,\"firefox\"]",
       "action": "delete",
       "fields": [
         {
@@ -51,7 +51,7 @@
     },
     {
       "section": "managed_files",
-      "key": "laptops:/etc/laptop.conf",
+      "key": "[\"laptops\",\"/etc/laptop.conf\"]",
       "action": "delete",
       "fields": [
         {
@@ -88,7 +88,7 @@
     },
     {
       "section": "device_groups",
-      "key": "servers",
+      "key": "[\"servers\"]",
       "action": "delete",
       "fields": [
         {
@@ -105,7 +105,7 @@
     },
     {
       "section": "device_groups",
-      "key": "kiosks",
+      "key": "[\"kiosks\"]",
       "action": "create",
       "fields": [
         {
@@ -122,7 +122,7 @@
     },
     {
       "section": "device_groups",
-      "key": "laptops",
+      "key": "[\"laptops\"]",
       "action": "update",
       "fields": [
         {
@@ -134,7 +134,7 @@
     },
     {
       "section": "permission_profiles",
-      "key": "ops",
+      "key": "[\"ops\"]",
       "action": "update",
       "fields": [
         {
@@ -151,7 +151,7 @@
     },
     {
       "section": "managed_files",
-      "key": "/etc/issue.net",
+      "key": "[null,\"/etc/issue.net\"]",
       "action": "create",
       "fields": [
         {
@@ -188,7 +188,7 @@
     },
     {
       "section": "managed_files",
-      "key": "/etc/motd",
+      "key": "[null,\"/etc/motd\"]",
       "action": "update",
       "fields": [
         {
@@ -200,7 +200,7 @@
     },
     {
       "section": "managed_units",
-      "key": "laptops:foo.service",
+      "key": "[\"laptops\",\"foo.service\"]",
       "action": "update",
       "fields": [
         {
@@ -212,7 +212,7 @@
     },
     {
       "section": "profile_assignments",
-      "key": "ops for user:alice@example.org",
+      "key": "[null,\"ops\",\"user\",\"alice@example.org\"]",
       "action": "create",
       "fields": [
         {

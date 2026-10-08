@@ -17,7 +17,7 @@ the config file; only the path of the file that holds it is.
 
 | Flag | Environment | Config file | Meaning |
 | --- | --- | --- | --- |
-| `--url` | `PADDOCK_URL` | `url` | Base URL of the admin API, for example `https://admin.example.org` (required). |
+| `--url` | `PADDOCK_URL` | `url` | Base URL of the admin API, for example `https://admin.example.org` (required; only `https://`, because every request carries the token). |
 | `--token-file` | `PADDOCK_TOKEN_FILE` | `token_file` | File holding the token (required). It may not be readable by group or others (`chmod 600`); otherwise paddockctl exits with code 2. |
 | `--ca-file` | `PADDOCK_CA_FILE` | `ca_file` | PEM bundle added to the system roots (development stack: `deploy/compose/.secrets/caddy-root.crt`). |
 | `--config` | | | Config file; default `$XDG_CONFIG_HOME/paddockctl/config.yaml`, otherwise `~/.config/paddockctl/config.yaml`. A missing default file is fine. |
@@ -37,15 +37,18 @@ Flags come after the command: `paddockctl get config -o json --url https://admin
 | `paddockctl whoami [-o text\|json]` | Organization, role, token name and expiry of the token. |
 | `paddockctl schema` | Prints the JSON Schema of `paddock.yml` (`api/schema/paddock.v1.json`), for editors and validators. |
 | `paddockctl get config [-o yaml\|json]` | Exports the configuration with every section, in the order of the schema. |
-| `paddockctl apply -f <file\|-> [--dry-run] [--yes] [-o text\|json]` | Reads YAML or JSON and prints the plan. With `--dry-run` it stops there. Without `--yes` a plan that deletes something is refused (exit code 3; paddockctl never asks). Otherwise it applies the file and prints `Applied change set <id>`, or `No changes`. |
+| `paddockctl apply -f <file\|-> [--dry-run] [--yes] [-o text\|json]` | Reads YAML or JSON and prints the plan. With `--dry-run` it stops there. Without `--yes` a plan that deletes something is refused (exit code 3; paddockctl never asks). Otherwise it applies exactly the plan it showed: the apply carries the plan's SHA-256 (`expected_plan`), and if the configuration changed in between, the server applies nothing and paddockctl exits with code 3; run it again to review the new plan. On success it prints `Applied change set <id>`, or `No changes`. |
 | `paddockctl devices list [--page N] [--page-size 10\|25\|50\|100] [--sort <field>] [-q <text>] [--state <s>]… [--device-group-id <uuid>] [--disk-state <s>]… [-o table\|json]` | Lists devices with the parameters of the admin API's list contract; `-o json` prints the API's answer unchanged. |
 
 A plan shows one line per created (`+`) and deleted (`-`) item and one line per changed field (`~ settings.login
-hello_enabled: false -> true`), then `Plan: N to create, M to update, K to delete`. File contents appear only as their
-SHA-256 and length.
+hello_enabled: false -> true`), then `Plan: N to create, M to update, K to delete`. An item is named by its key, the
+JSON array of its parts: `+ managed_files [null,"/etc/motd"]` (`null` = every device), `- package_holds
+["kiosks","firefox"]`, `+ profile_assignments ["laptops","ops","group","devs"]`. Every part is quoted, so names may
+contain any character. File contents appear only as their SHA-256 and length.
 
 **Exit codes:** 0 success; 1 API or network error, printed as `error: <code>: <detail> (request <id>)`; 2 usage or
-configuration error; 3 apply refused because the plan deletes resources and `--yes` is missing.
+configuration error; 3 apply refused because the plan deletes resources and `--yes` is missing, or because the
+configuration changed after the plan was shown (nothing was applied in both cases).
 
 ## paddock.yml
 

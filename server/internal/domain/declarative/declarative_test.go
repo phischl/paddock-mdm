@@ -279,3 +279,89 @@ func TestExampleIsValid(t *testing.T) {
 		t.Fatal("the example has duplicate keys")
 	}
 }
+
+// collisionDoc holds the items whose names contain the characters an old string key joined parts with (review 1 of
+// PDK-008): a global assignment of profile "lab:ops" and the assignment of profile "ops" in group "lab", and a
+// group "a:b" next to group "a".
+func collisionDoc() declarative.Document {
+	return declarative.Document{
+		APIVersion: declarative.APIVersion, Kind: declarative.Kind,
+		DeviceGroups: &[]declarative.DeviceGroup{{Name: "lab"}, {Name: "a"}, {Name: "a:b"}},
+		PermissionProfiles: &[]declarative.PermissionProfile{
+			{Name: "lab:ops", Class: "none", Commands: []string{}, Lecture: "once"},
+			{Name: "ops", Class: "none", Commands: []string{}, Lecture: "once"},
+			{Name: "b:ops", Class: "none", Commands: []string{}, Lecture: "once"},
+			{Name: "x for global", Class: "none", Commands: []string{}, Lecture: "once"},
+		},
+		ProfileAssignments: &[]declarative.ProfileAssignment{
+			{Profile: "lab:ops", Subject: declarative.Subject{Type: "global"}},
+			{Profile: "ops", Subject: declarative.Subject{Type: "global"}, DeviceGroup: ptr("lab")},
+			{Profile: "ops", Subject: declarative.Subject{Type: "global"}, DeviceGroup: ptr("a:b")},
+			{Profile: "b:ops", Subject: declarative.Subject{Type: "global"}, DeviceGroup: ptr("a")},
+			{Profile: "x", Subject: declarative.Subject{Type: "global"}},
+			{Profile: "x for global", Subject: declarative.Subject{Type: "global"}},
+		},
+		ManagedUnits: &[]declarative.ManagedUnit{
+			{Unit: "b:x.service", DeviceGroup: ptr("a"), Enabled: true, Active: true},
+			{Unit: "x.service", DeviceGroup: ptr("a:b"), Enabled: true, Active: true},
+		},
+	}
+}
+
+// TestPlanSHA256 (plan M6c amendment 2026-10-08): the same change gives the same hash, also after a JSON round trip
+// of the document; another change gives another hash.
+func TestPlanSHA256(t *testing.T) {
+	d := current()
+	d.Settings.Updates.SecurityDailyAt = "02:30"
+	first := declarative.Diff(current(), d)
+	raw, _ := json.Marshal(d)
+	decoded, err := declarative.Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again := declarative.Diff(current(), decoded); again.SHA256() != first.SHA256() || len(first.SHA256()) != 64 {
+		t.Fatalf("hashes %s and %s", first.SHA256(), again.SHA256())
+	}
+	d.Settings.Updates.SecurityDailyAt = "02:31"
+	if other := declarative.Diff(current(), d); other.SHA256() == first.SHA256() {
+		t.Fatal("different plans have the same hash")
+	}
+}
+
+func TestKeysOfItemsWithSeparatorsInNamesStayDistinct(t *testing.T) {
+	d := collisionDoc()
+	if verr := declarative.Duplicates(d); verr != nil {
+		t.Fatalf("distinct items reported as duplicates: %v", verr)
+	}
+	keys := map[string]bool{}
+	for _, a := range *d.ProfileAssignments {
+		keys[a.Key().String()] = true
+	}
+	for _, u := range *d.ManagedUnits {
+		keys[u.Key().String()] = true
+	}
+	if len(keys) != 8 {
+		t.Fatalf("keys collide: %v", keys)
+	}
+	if got := (*d.ProfileAssignments)[1].Key().String(); got != `["lab","ops","global",null]` {
+		t.Fatalf("key %s", got)
+	}
+	// (b) An unchanged document is a no-op.
+	if plan := declarative.Diff(collisionDoc(), collisionDoc()); len(plan.Changes) != 0 {
+		t.Fatalf("unchanged document: %+v", plan)
+	}
+	// (a) Keeping only the group-scoped "ops" deletes the global "lab:ops" instead of updating it.
+	keep := collisionDoc()
+	*keep.ProfileAssignments = (*keep.ProfileAssignments)[1:]
+	plan := declarative.Diff(collisionDoc(), keep)
+	if plan.Deleted != 1 || plan.Updated != 0 || plan.Created != 0 || plan.Changes[0].Key != `[null,"lab:ops","global",null]` {
+		t.Fatalf("plan %+v", plan)
+	}
+	// (c) Group "a:b" with unit "x.service" and group "a" with unit "b:x.service" are different items.
+	units := collisionDoc()
+	*units.ManagedUnits = (*units.ManagedUnits)[:1]
+	plan = declarative.Diff(collisionDoc(), units)
+	if plan.Deleted != 1 || plan.Changes[0].Key != `["a:b","x.service"]` {
+		t.Fatalf("plan %+v", plan)
+	}
+}

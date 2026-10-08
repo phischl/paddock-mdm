@@ -85,7 +85,7 @@ func TestDeclarativeExportApplyRoundTrip(t *testing.T) {
 		t.Fatalf("dry run of the export: plan %+v, actions %v", plan, got)
 	}
 	got = h.during(t, func() {
-		id, plan, err := h.config.Apply(ctx, raw(t, doc))
+		id, plan, err := h.config.Apply(ctx, raw(t, doc), "")
 		if err != nil || id != uuid.Nil || len(plan.Changes) != 0 {
 			t.Fatalf("Apply = %s, %+v, %v", id, plan, err)
 		}
@@ -130,7 +130,7 @@ func TestDeclarativeApplyChanges(t *testing.T) {
 
 	var id uuid.UUID
 	got := h.during(t, func() {
-		if id, plan, err = h.config.Apply(ctx, raw(t, doc)); err != nil {
+		if id, plan, err = h.config.Apply(ctx, raw(t, doc), ""); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -181,7 +181,7 @@ func TestDeclarativeApplyIsAtomic(t *testing.T) {
 	*doc.ManagedUnits = append(*doc.ManagedUnits, declarative.ManagedUnit{Unit: "paddockd.service", Enabled: true, Active: true})
 	for name, apply := range map[string]func() error{
 		"dry run": func() error { _, err := h.config.Plan(ctx, raw(t, doc)); return err },
-		"apply":   func() error { _, _, err := h.config.Apply(ctx, raw(t, doc)); return err },
+		"apply":   func() error { _, _, err := h.config.Apply(ctx, raw(t, doc), ""); return err },
 	} {
 		err := apply()
 		if !errors.Is(err, problem.UnitNotAllowed) || !strings.HasPrefix(problem.From(err).Detail, "/managed_units/0: ") {
@@ -196,7 +196,7 @@ func TestDeclarativeApplyIsAtomic(t *testing.T) {
 	}
 
 	bad := strings.Replace(string(raw(t, doc)), `"mode":"0644"`, `"mode":"999"`, 1)
-	_, _, err := h.config.Apply(ctx, []byte(bad))
+	_, _, err := h.config.Apply(ctx, []byte(bad), "")
 	if !errors.Is(err, problem.InvalidDocument) || !strings.Contains(problem.From(err).Detail, "/managed_files/0/mode") {
 		t.Fatalf("schema violation = %v", err)
 	}
@@ -230,15 +230,15 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 
 	noGroups := base
 	noGroups.DeviceGroups = &[]declarative.DeviceGroup{}
-	if _, _, err := h.config.Apply(ctx(operator), raw(t, noGroups)); !errors.Is(err, problem.Forbidden) {
+	if _, _, err := h.config.Apply(ctx(operator), raw(t, noGroups), ""); !errors.Is(err, problem.Forbidden) {
 		t.Fatalf("operator deleting a device group = %v", err)
 	}
-	if _, _, err := h.config.Apply(ctx(admin), raw(t, noGroups)); !errors.Is(err, problem.InUse) {
+	if _, _, err := h.config.Apply(ctx(admin), raw(t, noGroups), ""); !errors.Is(err, problem.InUse) {
 		t.Fatalf("deleting a device group with an enrollment token = %v", err)
 	}
 	settings := h.export(t, admin)
 	settings.Settings.Login.HelloEnabled = !settings.Settings.Login.HelloEnabled
-	if _, _, err := h.config.Apply(ctx(operator), raw(t, settings)); !errors.Is(err, problem.Forbidden) {
+	if _, _, err := h.config.Apply(ctx(operator), raw(t, settings), ""); !errors.Is(err, problem.Forbidden) {
 		t.Fatalf("operator changing login settings = %v", err)
 	}
 	if _, err := h.config.Plan(ctx(auditor), raw(t, base)); !errors.Is(err, problem.Forbidden) {
@@ -246,7 +246,7 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 	}
 	schedule := h.export(t, admin)
 	schedule.Settings.Updates.RegularSchedule = "Mon..Fri 04:00"
-	if _, _, err := h.config.Apply(ctx(admin), raw(t, schedule)); !errors.Is(err, problem.InvalidSchedule) ||
+	if _, _, err := h.config.Apply(ctx(admin), raw(t, schedule), ""); !errors.Is(err, problem.InvalidSchedule) ||
 		!strings.HasPrefix(problem.From(err).Detail, "/settings/updates: ") {
 		t.Fatalf("invalid schedule = %v", err)
 	}
@@ -263,7 +263,7 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := h.during(t, func() {
-		if _, _, err := h.config.Apply(ctx(tp), raw(t, full)); !errors.Is(err, problem.StepUpRequired) {
+		if _, _, err := h.config.Apply(ctx(tp), raw(t, full), ""); !errors.Is(err, problem.StepUpRequired) {
 			t.Errorf("token assigning a full profile = %v", err)
 		}
 	})
@@ -273,7 +273,7 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 	if n := h.count(t, "SELECT count(*) FROM permission_profile WHERE organization_id = $1", h.org); n != 0 {
 		t.Fatal("the refused apply created the profile")
 	}
-	id, _, err := h.config.Apply(ctx(steppedUp), raw(t, full))
+	id, _, err := h.config.Apply(ctx(steppedUp), raw(t, full), "")
 	if err != nil || id == uuid.Nil {
 		t.Fatalf("stepped-up apply = %v", err)
 	}
@@ -294,7 +294,7 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 	// Changes made with a token are attributed to it.
 	tokenDoc := h.export(t, admin)
 	*tokenDoc.PackageHolds = append(*tokenDoc.PackageHolds, declarative.PackageHold{Package: "vim"})
-	id, _, err = h.config.Apply(ctx(tp), raw(t, tokenDoc))
+	id, _, err = h.config.Apply(ctx(tp), raw(t, tokenDoc), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,3 +309,56 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// TestDeclarativeNamesWithSeparators: an organization with profiles "lab:ops" and "ops", a group "lab", the global
+// assignment of "lab:ops" and the assignment of "ops" in "lab" round-trips unchanged, and a document keeping only the
+// second deletes the first instead of rewriting it (review 1 of PDK-008).
+func TestDeclarativeNamesWithSeparators(t *testing.T) {
+	h := newConfigHarness(t)
+	admin := h.account(t, principal.RoleOrgAdmin, false)
+	ctx := principal.With(context.Background(), admin)
+	doc := h.export(t, admin)
+	*doc.DeviceGroups = append(*doc.DeviceGroups, declarative.DeviceGroup{Name: "lab"}, declarative.DeviceGroup{Name: "lab:x"})
+	none := func(name string) declarative.PermissionProfile {
+		return declarative.PermissionProfile{Name: name, Class: "none", Commands: []string{}, RequirePassword: true, TimestampTimeoutMin: 5, Lecture: "once"}
+	}
+	*doc.PermissionProfiles = append(*doc.PermissionProfiles, none("lab:ops"), none("ops"))
+	*doc.ProfileAssignments = append(*doc.ProfileAssignments,
+		declarative.ProfileAssignment{Profile: "lab:ops", Subject: declarative.Subject{Type: "global"}},
+		declarative.ProfileAssignment{Profile: "ops", Subject: declarative.Subject{Type: "global"}, DeviceGroup: strPtr("lab")})
+	if _, _, err := h.config.Apply(ctx, raw(t, doc), ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.count(t, "SELECT count(*) FROM profile_assignment WHERE organization_id = $1", h.org); n != 2 {
+		t.Fatalf("%d assignments, want 2", n)
+	}
+
+	exported := h.export(t, admin)
+	plan, err := h.config.Plan(ctx, raw(t, exported))
+	if err != nil || len(plan.Changes) != 0 {
+		t.Fatalf("dry run of the unchanged export: %+v, %v", plan, err)
+	}
+	if id, plan, err := h.config.Apply(ctx, raw(t, exported), ""); err != nil || id != uuid.Nil || len(plan.Changes) != 0 {
+		t.Fatalf("apply of the unchanged export: %s %+v %v", id, plan, err)
+	}
+
+	only := h.export(t, admin)
+	kept := []declarative.ProfileAssignment{}
+	for _, a := range *only.ProfileAssignments {
+		if a.Profile == "ops" {
+			kept = append(kept, a)
+		}
+	}
+	*only.ProfileAssignments = kept
+	if _, plan, err = h.config.Apply(ctx, raw(t, only), ""); err != nil || plan.Deleted != 1 || plan.Updated != 0 || plan.Created != 0 {
+		t.Fatalf("apply keeping the group assignment: %+v, %v", plan, err)
+	}
+	var global int
+	if err := h.super.QueryRow(context.Background(), `SELECT count(*) FROM profile_assignment a JOIN permission_profile p ON p.id = a.profile_id
+		WHERE a.organization_id = $1 AND p.name = 'lab:ops'`, h.org).Scan(&global); err != nil || global != 0 {
+		t.Fatalf("the global lab:ops assignment survived (%d, %v)", global, err)
+	}
+	if n := h.count(t, "SELECT count(*) FROM profile_assignment WHERE organization_id = $1", h.org); n != 1 {
+		t.Fatalf("%d assignments, want 1", n)
+	}
+}
