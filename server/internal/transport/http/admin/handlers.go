@@ -26,8 +26,9 @@ type handlers struct {
 	devices  *app.Devices
 	managed  *app.ManagedConfig
 	releases *app.AgentReleases
-	// apiTokens are the API tokens of plan M6c.
-	apiTokens *app.APITokens
+	// API tokens and the declarative configuration (plan M6c).
+	apiTokens   *app.APITokens
+	declarative *app.Declarative
 
 	users         *app.Users
 	userGroups    *app.UserGroups

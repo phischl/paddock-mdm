@@ -31,10 +31,29 @@ func createAPIToken(t *testing.T, p *env.Portal, user, role string) apiTokenCrea
 	return created
 }
 
+// mfaUser is an Authentik user with a TOTP authenticator, signed in to the portal.
+type mfaUser struct {
+	*env.Portal
+	username, password string
+	totp               *authflow.TOTP
+}
+
+// stepUp completes a step-up of the session, or renews it unless it has at least 10 s of its window left.
+func (u *mfaUser) stepUp(t *testing.T) {
+	t.Helper()
+	if s := serverStepUp(t, u.Portal); s.At != nil && time.Until(s.At.Add(s.Window)) > 10*time.Second {
+		return
+	}
+	res, err := authflow.StepUp(testContext(t, 3*time.Minute), u.Client, stack.AdminURL(), "/settings", u.username, u.password, u.totp, false)
+	if err != nil || strings.Contains(res.Final, "stepup=failed") {
+		t.Fatalf("step-up of %s: %v", u.username, err)
+	}
+}
+
 // steppedUpTempUser creates an Authentik user in groups with a TOTP authenticator, signs it in and completes a
 // step-up. The step-up flow denies users without an authenticator (not_configured_action: deny), so the gate installs
 // one the way `make dev-seed` does for the dev users; the key travels on stdin.
-func steppedUpTempUser(t *testing.T, prefix string, groups ...string) (*env.Portal, string) {
+func steppedUpTempUser(t *testing.T, prefix string, groups ...string) *mfaUser {
 	t.Helper()
 	user, password := tempUser(t, prefix, groups...)
 	key := make([]byte, 20)
@@ -46,8 +65,7 @@ func steppedUpTempUser(t *testing.T, prefix string, groups ...string) (*env.Port
 		fmt.Sprintf("TOTPDevice.objects.update_or_create(user=User.objects.get(username=%q), name=\"paddock-acceptance\", "+
 			"defaults={\"key\": %q, \"confirmed\": True})\n", user, hex.EncodeToString(key)) +
 		"print(\"paddock-acceptance totp ok\")\n"
-	ctx := testContext(t, 3*time.Minute)
-	out, err := stack.ComposeInput(ctx, strings.NewReader(script), "exec", "-T", "authentik-worker", "ak", "shell")
+	out, err := stack.ComposeInput(testContext(t, 3*time.Minute), strings.NewReader(script), "exec", "-T", "authentik-worker", "ak", "shell")
 	if err != nil || !strings.Contains(out, "paddock-acceptance totp ok") {
 		t.Fatalf("install TOTP authenticator of %s: %v: %s", user, err, out)
 	}
@@ -55,12 +73,10 @@ func steppedUpTempUser(t *testing.T, prefix string, groups ...string) (*env.Port
 	if err != nil {
 		t.Fatalf("login %s: %v", user, err)
 	}
-	totp := &authflow.TOTP{Secret: base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)}
-	res, err := authflow.StepUp(ctx, p.Client, stack.AdminURL(), "/settings", user, password, totp, false)
-	if err != nil || strings.Contains(res.Final, "stepup=failed") {
-		t.Fatalf("step-up of %s: %v", user, err)
-	}
-	return p, user
+	u := &mfaUser{Portal: p, username: user, password: password,
+		totp: &authflow.TOTP{Secret: base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)}}
+	u.stepUp(t)
+	return u
 }
 
 // TestAPITokens is gate T1 of plan M6c: token creation needs a fresh step-up and is audited without the secret, the
@@ -133,8 +149,8 @@ func TestAPITokens(t *testing.T) {
 	})
 
 	t.Run("operator above its role", func(t *testing.T) {
-		operator, _ := steppedUpTempUser(t, "t1-operator", env.RoleGroup("acme", "operators"))
-		res := postAPIToken(t, operator, apiTokenName("operator admin"), "org_admin", 2*time.Hour)
+		operator := steppedUpTempUser(t, "t1-operator", env.RoleGroup("acme", "operators"))
+		res := postAPIToken(t, operator.Portal, apiTokenName("operator admin"), "org_admin", 2*time.Hour)
 		expectStatus(t, res, http.StatusForbidden, "forbidden")
 		expectOneEvent(t, alice, res.RequestID, "api_token.created", "denied")
 	})

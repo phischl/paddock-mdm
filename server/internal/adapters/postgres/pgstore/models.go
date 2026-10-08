@@ -159,6 +159,19 @@ type Bundle struct {
 	SchemaVersion  int32
 }
 
+type ChangeSet struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	AppliedAt      time.Time
+	Actor          json.RawMessage
+	Source         string
+	CreatedN       int32
+	UpdatedN       int32
+	DeletedN       int32
+	Sections       []string
+	Plan           json.RawMessage
+}
+
 type Device struct {
 	ID                uuid.UUID
 	OrganizationID    uuid.UUID

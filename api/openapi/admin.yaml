@@ -33,6 +33,7 @@ tags:
   - name: device-groups
   - name: enrollment-tokens
   - name: api-tokens
+  - name: config
   - name: devices
   - name: managed-config
   - name: users
@@ -543,6 +544,106 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/config:
+    get:
+      operationId: getConfig
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The organization's declarative configuration as a paddock.v1
+        document (api/schema/paddock.v1.json) with every section present, in the key order of the schema.
+      responses:
+        "200":
+          description: The configuration document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigDocument" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: applyConfig
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator. Applies a paddock.v1 document (at most 1 MiB) in one transaction: a present
+        section is authoritative (items not listed are deleted), absent sections are untouched. The rules of the
+        per-resource endpoints apply unchanged and abort the whole apply with their problem code, the document path
+        in the detail: deleting device groups and changing settings need org_admin (403 forbidden), assigning a full
+        profile or changing a profile to full needs a step-up (403 step_up_required; an API token never has one).
+        A schema violation is 422 invalid_document listing up to 20 "path: message" pairs. With dry_run=true the
+        plan is computed and checked the same way but nothing is applied and nothing is audited. An apply with
+        changes records a change set; one without changes records the event with zeros and no change set.
+      x-paddock-audit: config.applied
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - name: dry_run
+          in: query
+          description: Compute and check the plan without applying it.
+          schema: { type: boolean, default: false }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfigDocument" }
+      responses:
+        "200":
+          description: The plan, applied unless dry_run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigApplyResult" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/change-sets:
+    get:
+      operationId: listChangeSets
+      tags: [config]
+      description: "Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something."
+      x-paddock-list:
+        sort: [applied_at]
+        default_sort: -applied_at
+        search: [actor_display]
+        filters: [source]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ChangeSetSort"
+        - $ref: "#/components/parameters/Search"
+        - name: source
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ChangeSetSource" }
+      responses:
+        "200":
+          description: One page of change sets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChangeSetPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/change-sets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getChangeSet
+      tags: [config]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The change set with its plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChangeSet" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
 
   /api/v1/autoinstall:
     post:
@@ -3107,6 +3208,14 @@ components:
         type: string
         enum: [name, -name, created_at, -created_at, expires_at, -expires_at]
         default: -created_at
+    ChangeSetSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [applied_at, -applied_at]
+        default: -applied_at
     ApiTokenSort:
       name: sort
       in: query
@@ -3613,6 +3722,90 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/EnrollmentToken" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ConfigDocument:
+      type: object
+      description: >-
+        A paddock.v1 document; its schema is api/schema/paddock.v1.json (JSON Schema draft 2020-12, also printed by
+        paddockctl schema), which the server validates every document against.
+      additionalProperties: true
+    ConfigPlan:
+      type: object
+      required: [changes, created, updated, deleted]
+      properties:
+        changes:
+          type: array
+          description: In application order; deletions first.
+          items: { $ref: "#/components/schemas/ConfigChange" }
+        created: { type: integer }
+        updated: { type: integer }
+        deleted: { type: integer }
+    ConfigChange:
+      type: object
+      required: [section, key, action, fields]
+      properties:
+        section: { type: string, description: "A section of the document, settings as settings.login and settings.updates." }
+        key: { type: string, description: "The natural key of the item; empty for settings." }
+        action: { type: string, enum: [create, update, delete] }
+        fields:
+          type: array
+          description: Changed fields; every field for creations and deletions. File content is shown as its SHA-256.
+          items: { $ref: "#/components/schemas/ConfigFieldChange" }
+    ConfigFieldChange:
+      type: object
+      required: [name, before, after]
+      properties:
+        name: { type: string }
+        before: { nullable: true, description: Value before; null for creations. }
+        after: { nullable: true, description: Value after; null for deletions. }
+    ConfigApplyResult:
+      type: object
+      required: [dry_run, change_set_id, plan]
+      properties:
+        dry_run: { type: boolean }
+        change_set_id: { type: string, format: uuid, nullable: true, description: Null for dry runs and empty plans. }
+        plan: { $ref: "#/components/schemas/ConfigPlan" }
+    ChangeSetSource:
+      type: string
+      enum: [session, api_token]
+    ChangeSetActor:
+      type: object
+      required: [type, display]
+      properties:
+        type: { type: string }
+        id: { type: string }
+        display: { type: string }
+    ChangeSetSummary:
+      type: object
+      required: [created, updated, deleted, sections]
+      properties:
+        created: { type: integer }
+        updated: { type: integer }
+        deleted: { type: integer }
+        sections:
+          type: array
+          items: { type: string }
+    ChangeSet:
+      type: object
+      required: [id, applied_at, actor, source, summary, plan]
+      properties:
+        id: { type: string, format: uuid }
+        applied_at: { type: string, format: date-time }
+        actor: { $ref: "#/components/schemas/ChangeSetActor" }
+        source: { $ref: "#/components/schemas/ChangeSetSource" }
+        summary: { $ref: "#/components/schemas/ChangeSetSummary" }
+        plan: { $ref: "#/components/schemas/ConfigPlan" }
+    ChangeSetPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ChangeSet" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

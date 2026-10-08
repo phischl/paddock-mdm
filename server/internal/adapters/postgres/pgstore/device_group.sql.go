@@ -95,6 +95,38 @@ func (q *Queries) InsertDeviceGroup(ctx context.Context, arg InsertDeviceGroupPa
 	return i, err
 }
 
+const listAllDeviceGroups = `-- name: ListAllDeviceGroups :many
+SELECT id, organization_id, name, description, created_at, updated_at FROM device_group ORDER BY name, id
+`
+
+// Declarative configuration (plan M6c decision 16): every device group of the organization.
+func (q *Queries) ListAllDeviceGroups(ctx context.Context) ([]DeviceGroup, error) {
+	rows, err := q.db.Query(ctx, listAllDeviceGroups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceGroup{}
+	for rows.Next() {
+		var i DeviceGroup
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Name,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeviceGroups = `-- name: ListDeviceGroups :many
 
 SELECT id, organization_id, name, description, created_at, updated_at FROM device_group

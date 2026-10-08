@@ -156,6 +156,9 @@
       "created": "{actor} created the enrollment token {name}",
       "revoked": "{actor} revoked the enrollment token {name}"
     },
+    "config": {
+      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)"
+    },
     "api_token": {
       "created": "{actor} created the API token {name} ({role})",
       "revoked": "{actor} revoked the API token {name}",

@@ -28,6 +28,7 @@ var lists = map[string]struct {
 
 	"listEnrollmentTokens":   {enrollmentTokenList, "postgres/queries/enrollment_token.sql", "ListEnrollmentTokens", "id"},
 	"listApiTokens":          {apiTokenList, "postgres/queries/api_token.sql", "ListApiTokens", "id"},
+	"listChangeSets":         {changeSetList, "postgres/queries/change_set.sql", "ListChangeSets", "id"},
 	"listDevices":            {deviceList, "postgres/queries/device.sql", "ListDevices", "id"},
 	"listDeviceGroupDevices": {deviceList, "postgres/queries/device.sql", "ListDevices", "id"},
 	"listDeviceCommands":     {deviceCommandList, "postgres/queries/command.sql", "ListDeviceCommands", "id"},

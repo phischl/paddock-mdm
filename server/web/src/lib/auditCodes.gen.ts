@@ -15,6 +15,7 @@ export const auditCodes = [
   'api_token.revoked',
   'api_token.use_denied',
   'autoinstall.generated',
+  'config.applied',
   'device.agent_events_dropped',
   'device.agent_rolled_back',
   'device.agent_update_failed',

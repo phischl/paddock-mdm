@@ -58,6 +58,9 @@ var (
 	// Update management (plan M5b decisions 1 and 3).
 	InvalidSchedule = &Error{Code: "invalid_schedule", Status: http.StatusUnprocessableEntity}
 	PackageOnHold   = &Error{Code: "package_on_hold", Status: http.StatusConflict}
+	// InvalidDocument: a declarative configuration violates its schema (plan M6c decision 18); the detail lists up to
+	// 20 "path: message" pairs.
+	InvalidDocument = &Error{Code: "invalid_document", Status: http.StatusUnprocessableEntity}
 	TooManyDevices  = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
 	// Identity and privileges (plan M3a).
 	UsernameTaken          = &Error{Code: "username_taken", Status: http.StatusConflict}

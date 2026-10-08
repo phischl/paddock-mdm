@@ -130,6 +130,9 @@ const (
 	CodeAPITokenCreated   Code = "api_token.created"
 	CodeAPITokenRevoked   Code = "api_token.revoked"
 	CodeAPITokenUseDenied Code = "api_token.use_denied" //nolint:gosec // an audit code, not a credential
+
+	// Declarative configuration (plan M6c decision 16).
+	CodeConfigApplied Code = "config.applied"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -833,6 +836,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"name", "reason"},
 		Outcomes:    []Outcome{OutcomeDenied},
 		Note:        "reason is revoked or expired. Unknown or malformed secrets are not recorded.",
+	},
+	CodeConfigApplied: {
+		Code: CodeConfigApplied, Emitted: true,
+		Description: "A declarative configuration (PUT /api/v1/config, paddockctl apply) was applied in one transaction; the change set lists every change.",
+		Params:      []string{"change_set_id", "created", "updated", "deleted", "sections"},
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,
