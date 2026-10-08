@@ -19,3 +19,10 @@ in their own CI.
 
 ## Consequences
 + "Same path" holds: there is exactly one write path. − Git history is derived, not authoritative.
+
+## Amendment 2026-10-08
+The dry run is `PUT /api/v1/config?dry_run=true` instead of `POST /api/v1/config:plan` (no `:verb` endpoints).
+The declarative endpoint and its `change_set` records serve `paddockctl apply` and CI; portal forms keep their
+per-resource endpoints, and both paths share the same use-case layer and validation (one write path at the use-case
+level, not at the HTTP level). Sections present in a document are authoritative for that section; absent sections
+are untouched. Plan: `docs/plans/M6c-paddockctl.md`.
