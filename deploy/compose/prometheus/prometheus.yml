@@ -1,0 +1,19 @@
+# Prometheus of the Compose profile observability (plan M6a decision 8, docs/operations/monitoring.md). The scrape
+# targets of a host are the files mounted into /etc/prometheus/scrape/: controlplane.yml on the control plane,
+# audit.yml on the audit host, both in the development stack.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_config_files:
+  - /etc/prometheus/scrape/*.yml
+
+# Alertmanager is not bundled. To send the alerts, mount a copy of this file with your Alertmanager added
+# (docs/operations/monitoring.md):
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["alertmanager.example.org:9093"]

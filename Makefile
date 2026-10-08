@@ -45,7 +45,15 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web ## Run all linters, govulncheck and the server image build
+lint: lint-go lint-vuln lint-image lint-web lint-prometheus ## Run all linters, govulncheck and the server image build
+
+# Prometheus configuration and alert rules (plan M6a decision 8): promtool check config, check rules and the rule tests
+# of alerts_test.yml, in the pinned Prometheus image.
+.PHONY: lint-prometheus
+lint-prometheus:
+	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/prometheus:/etc/prometheus:ro -w /etc/prometheus --entrypoint sh \
+		$(PROMETHEUS_IMAGE) -c 'promtool check config prometheus.yml && promtool check rules alerts.yml && \
+			promtool test rules alerts_test.yml'
 
 .PHONY: lint-go
 lint-go:
@@ -234,12 +242,12 @@ up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock r
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
 	$(if $(BACKUP),$(COMPOSE_DIR)/scripts/rustfs-backup-bootstrap.sh,)
-	$(COMPOSE) --profile paddock up -d --build
+	$(COMPOSE) --profile paddock --profile observability up -d --build
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh --profile paddock
 
 .PHONY: down
 down: ## Stop the stack (pass V=1 to delete volumes)
-	$(COMPOSE) --profile paddock down $(if $(V),-v,)
+	$(COMPOSE) --profile paddock --profile observability down $(if $(V),-v,)
 
 .PHONY: bao-bootstrap
 bao-bootstrap: ## Initialize and unseal OpenBao, create keys, policies and AppRoles (development)

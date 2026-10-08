@@ -52,6 +52,14 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	if err := l.Err(); err != nil {
 		return err
 	}
+	// Certificate expiry of the public hostnames, read from Caddy on the internal network (plan M6a decision 9).
+	var tlsHosts []string
+	for _, h := range strings.Split(l.String("PADDOCK_TLS_PROBE_HOSTS", ""), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			tlsHosts = append(tlsHosts, h)
+		}
+	}
+	tlsAddr := l.String("PADDOCK_TLS_PROBE_ADDR", "caddy:443")
 	backups, err := loadBackup(l, baoCfg.Addr)
 	if err != nil {
 		return err
@@ -108,7 +116,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
 	slog.InfoContext(ctx, "worker starting")
 
-	jobs := []func(context.Context) error{}
+	jobs := []func(context.Context) error{worker.NewOpsProbe(signer, worker.DialCertExpiry(tlsAddr), tlsHosts).Run}
 	if backups != nil {
 		jobs = append(jobs, worker.NewBackups(backups.store, backups.snap, backups.key, platformPool).Run)
 	}

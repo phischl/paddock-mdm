@@ -26,6 +26,10 @@ credential for audit events and the read-only audit database role; it holds noth
 - The control plane is reachable from the internet on 80 (ACME HTTP-01, redirect) and 443. Nothing else is published;
   `make prod-check` refuses any other published port that is not bound to the interconnect address.
 - An S3 bucket for backups **outside the control-plane host** (section 9).
+- Outbound HTTPS from the control plane (allow it in the host's firewall): the ACME CA (Caddy), Ubuntu's OSV feed
+  `https://osv-vulnerabilities.storage.googleapis.com` (`paddock-worker`, daily; without it the alert
+  `PaddockOSVStale` fires after 3 days, and `docs/operations/vulnerability-data.md` describes the offline import),
+  Fleet's vulnerability feeds (`fleet`), the backup S3 endpoint, and the identity sources Authentik connects to.
 
 ## 2. DNS
 
@@ -116,9 +120,9 @@ OpenBao starts sealed after every restart; three custodians unseal it (`docs/ope
 
 ```sh
 make prod-check HOST=controlplane          # every item PASS, else fix and repeat
-pc --profile paddock up -d
+pc --profile paddock --profile observability up -d   # monitoring: docs/operations/monitoring.md
 make prod-check HOST=audit ONLINE=1        # on the audit host
-pa --profile paddock up -d
+pa --profile paddock --profile observability up -d
 ```
 
 `make prod-check` prints one PASS/FAIL line per item and exits 1 on any FAIL. It refuses: `compose.dev.yaml` in the
@@ -158,8 +162,8 @@ pgbackrest info` lists a full backup. The restore runbook and the quarterly rest
    it is in the backup bucket.
 3. `git fetch && git checkout <new release tag>`, then build or pull the new images.
 4. `make prod-check` on both hosts.
-5. Control plane: `pc --profile paddock up -d`. `paddock-migrate` applies the database migrations before the roles
-   start; migrations only move forward. Audit host: `pa --profile paddock up -d`.
+5. Control plane: `pc --profile paddock --profile observability up -d`. `paddock-migrate` applies the database migrations before the roles
+   start; migrations only move forward. Audit host: `pa --profile paddock --profile observability up -d`.
 6. Watch the roles' readiness (`pc ps`) and the alerts (`docs/operations/monitoring.md`).
 
 Agent releases are separate: `docs/operations/agent-releases.md`.

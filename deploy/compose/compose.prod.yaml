@@ -145,6 +145,8 @@ services:
   paddock-worker:
     environment:
       PADDOCK_ENV: production
+      # Expiry of the public certificates (alert PaddockCertificateExpiry), read from Caddy on the internal network.
+      PADDOCK_TLS_PROBE_HOSTS: admin.${PADDOCK_DOMAIN},auth.${PADDOCK_DOMAIN},device.${PADDOCK_DOMAIN},bundles.${PADDOCK_DOMAIN},fleet.${PADDOCK_DOMAIN}
       PADDOCK_AUTHENTIK_URL: https://auth.${PADDOCK_DOMAIN}
       PADDOCK_FLEET_PUBLIC_URL: https://fleet.${PADDOCK_DOMAIN}
       PADDOCK_OPENBAO_ADDR: https://openbao:8200

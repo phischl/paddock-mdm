@@ -115,3 +115,15 @@ Decided on the implementer's questions during PDK-005; binding for steps 1–4.
    backup credential may write below `openbao/` and list the bucket. OpenBao key operations are manual `bao` CLI
    operations outside Paddock, so "after key operations" is a runbook step (`paddock-server backup openbao`,
    `docs/operations/openbao.md` section 5) besides the 6-hourly snapshot.
+7. **Missing metrics (decision 9), as implemented in step 4.** Caddy exports no certificate metrics, so the worker
+   probes the public hostnames over TLS through Caddy on the internal network (`PADDOCK_TLS_PROBE_HOSTS`, production
+   only) and exports `paddock_tls_certificate_expiry_timestamp_seconds{host}` and `paddock_tls_probe_success{host}`.
+   The worker exports `paddock_openbao_sealed` and `paddock_openbao_reachable` from OpenBao's unauthenticated
+   `sys/health`, and `paddock_backup_last_success_timestamp_seconds{kind}` from the newest object of each kind in the
+   backup bucket (0 before the first, so that a kind that never ran alerts too).
+8. **Prometheus per host (decision 8).** The control plane's Prometheus scrapes the roles and RabbitMQ (plugin
+   `rabbitmq_prometheus`, bundled with the image); the audit host runs its own (`prometheus-audit`) for the audit
+   writer, because no further port crosses the interconnect. The control plane watches the audit queue
+   (`PaddockAuditWriterLag`: `audit.writer` not drained for 10 minutes; `PaddockAuditWriterNotConsuming`). Each role is
+   one static target, so that a stopped role stays a target with `up == 0`. `make lint-prometheus` (part of
+   `make lint`) runs `promtool check config`, `check rules` and the rule tests.
