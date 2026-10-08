@@ -53,19 +53,35 @@ func readZip(r io.Reader, maxSize int64, fn func(name string, body []byte) error
 	}
 }
 
+// maxEndRecord is the size of the end of central directory record with the longest comment.
+const maxEndRecord = 22 + 65535
+
 // readTrailer reads the central directory to its end record, so that a download cut short after the last entry is
-// an error too.
+// an error too. It keeps only the last maxEndRecord bytes, where the end record must be.
 func readTrailer(br *bufio.Reader, sig uint32) error {
-	rest, err := io.ReadAll(br)
-	if err != nil {
-		return fmt.Errorf("zip: %w", err)
-	}
 	end := []byte{0x50, 0x4b, 0x05, 0x06}
+	var tail []byte
 	if sig == sigEndOfCentral {
-		rest = append(end, rest...)
+		tail = append(tail, end...)
 	}
-	// The end record has 22 bytes plus a comment of at most 65535.
-	if i := bytes.LastIndex(rest, end); i < 0 || len(rest)-i < 22 {
+	buf := make([]byte, 1<<16)
+	for {
+		n, err := br.Read(buf)
+		tail = append(tail, buf[:n]...)
+		if len(tail) > 2*maxEndRecord {
+			tail = append(tail[:0], tail[len(tail)-maxEndRecord:]...)
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("zip: %w", err)
+		}
+	}
+	if len(tail) > maxEndRecord {
+		tail = tail[len(tail)-maxEndRecord:]
+	}
+	if i := bytes.LastIndex(tail, end); i < 0 || len(tail)-i < 22 {
 		return fmt.Errorf("zip: %w", io.ErrUnexpectedEOF)
 	}
 	return nil

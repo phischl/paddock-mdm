@@ -32,6 +32,47 @@ type isolationWorld struct {
 	globexCVE string
 	// globexHold is a package hold of globexDeviceGroup (seedGlobexDevices).
 	globexHold string
+	// globexAPIToken is an API token of globex (seedGlobexDevices).
+	globexAPIToken string
+	// globexChangeSet is a change set of globex (seedGlobexChangeSet).
+	globexChangeSet string
+}
+
+// seedGlobexChangeSet applies, as carol, a document with only globex's update settings and a changed daily time, so
+// that globex has a change set; the original settings are applied again when the gate ends. Sections other than the
+// settings stay absent, so nothing of globex is deleted.
+func seedGlobexChangeSet(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	original := currentUpdateSettings(t, w.carol)
+	changed := map[string]any{}
+	for k, v := range original {
+		changed[k] = v
+	}
+	changed["security_daily_at"] = "04:44"
+	if original["security_daily_at"] == "04:44" {
+		changed["security_daily_at"] = "04:45"
+	}
+	doc := func(updates map[string]any) map[string]any {
+		return map[string]any{"api_version": "paddock/v1", "kind": "OrganizationConfig", "settings": map[string]any{"updates": updates}}
+	}
+	res := call(t, w.carol, http.MethodPut, "/api/v1/config", doc(changed))
+	expectStatus(t, res, http.StatusOK, "")
+	var out struct {
+		ChangeSetID string `json:"change_set_id"`
+	}
+	if err := res.JSON(&out); err != nil || out.ChangeSetID == "" {
+		t.Fatalf("globex apply: %v %s", err, res.Body)
+	}
+	w.globexChangeSet = out.ChangeSetID
+	w.globexIDs = append(w.globexIDs, out.ChangeSetID)
+	w.top.Cleanup(func() { _ = call(w.top, w.carol, http.MethodPut, "/api/v1/config", doc(original)) })
+}
+
+// settingsOnlyConfig is a document with acme's current update settings only: applying it changes and deletes nothing.
+func settingsOnlyConfig(t *testing.T, p *env.Portal) map[string]any {
+	t.Helper()
+	return map[string]any{"api_version": "paddock/v1", "kind": "OrganizationConfig",
+		"settings": map[string]any{"updates": currentUpdateSettings(t, p)}}
 }
 
 // seedGlobexIdentity creates, as carol, a local user in a user group, a permission profile and its assignment to the
@@ -118,6 +159,16 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	w.globexRevocation = responseID(t, res).String()
 	w.globexIDs = append(w.globexIDs, w.globexRevocation)
 	w.globexGroups = append(w.globexGroups, w.globexDeviceGroup)
+	// An API token (plan M6c), still within carol's step-up.
+	res = postAPIToken(t, w.carol, apiTokenName("globex-iso token"), "org_auditor", 2*time.Hour)
+	expectStatus(t, res, http.StatusCreated, "")
+	removeCreated(w.top, w.carol, "/api/v1/api-tokens", res)
+	var apiTok apiTokenCreated
+	if err := res.JSON(&apiTok); err != nil {
+		t.Fatal(err)
+	}
+	w.globexAPIToken = apiTok.Token.ID
+	w.globexIDs = append(w.globexIDs, w.globexAPIToken)
 }
 
 // itemFixture is an item operation on one globex resource.
@@ -191,6 +242,28 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"GET /api/v1/enrollment-tokens/{id}":         itemFixture(func(w *isolationWorld) string { return "/api/v1/enrollment-tokens/" + w.globexToken }, nil),
 	"POST /api/v1/enrollment-tokens/{id}/revoke": itemFixture(func(w *isolationWorld) string { return "/api/v1/enrollment-tokens/" + w.globexToken + "/revoke" }, nil),
+
+	"GET /api/v1/api-tokens": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/api-tokens?page_size=100", nil
+	}},
+	// alice has a step-up (TestOrganizationIsolation), so the creation succeeds in acme.
+	"POST /api/v1/api-tokens": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/api-tokens", map[string]any{"name": apiTokenName("acme isolation"), "role": "org_auditor",
+			"expires_at": time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)}
+	}},
+	"GET /api/v1/api-tokens/{id}":         itemFixture(func(w *isolationWorld) string { return "/api/v1/api-tokens/" + w.globexAPIToken }, nil),
+	"POST /api/v1/api-tokens/{id}/revoke": itemFixture(func(w *isolationWorld) string { return "/api/v1/api-tokens/" + w.globexAPIToken + "/revoke" }, nil),
+
+	"GET /api/v1/config": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/config", nil
+	}},
+	"PUT /api/v1/config": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/config?dry_run=true", settingsOnlyConfig(t, w.alice)
+	}},
+	"GET /api/v1/change-sets": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/change-sets?page_size=100", nil
+	}},
+	"GET /api/v1/change-sets/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/change-sets/" + w.globexChangeSet }, nil),
 
 	"GET /api/v1/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/devices?page_size=100", nil
@@ -414,6 +487,14 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/devices": {
 		{"q": {"globex-iso"}},
 		{"state": {"active"}, "sort": {"-last_contact_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/change-sets": {
+		{"q": {"carol"}},
+		{"source": {"session"}, "sort": {"applied_at"}, "page_size": {"100"}},
+	},
+	"/api/v1/api-tokens": {
+		{"q": {"globex-iso"}},
+		{"status": {"active"}, "sort": {"-created_at"}, "page_size": {"100"}},
 	},
 	"/api/v1/managed-files": {{"q": {"globex-iso"}}},
 	"/api/v1/managed-units": {{"q": {"globex-iso"}}},

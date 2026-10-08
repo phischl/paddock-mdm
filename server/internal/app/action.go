@@ -64,6 +64,9 @@ type Recorder interface {
 	// PriorityStateChanged is StateChanged on the compiler's priority lane (user lock and unlock, login suspension,
 	// architecture §9.5).
 	PriorityStateChanged(scope string, id uuid.UUID)
+	// ForcedStateChanged is StateChanged for a recompile that publishes a new bundle version even for devices whose
+	// content did not change (paddock-server admin recompile --all, plan M6c decision 19).
+	ForcedStateChanged(scope string, id uuid.UUID)
 	// CommandIssued queues the command.issued message of a device command inserted by the action; like a state
 	// change it is written to the outbox only when the action succeeds (plan M4a decision 2).
 	CommandIssued(id uuid.UUID)
@@ -151,6 +154,10 @@ func (r *recorder) PriorityStateChanged(scope string, id uuid.UUID) {
 	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id, Priority: true})
 }
 
+func (r *recorder) ForcedStateChanged(scope string, id uuid.UUID) {
+	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id, Force: true})
+}
+
 func (r *recorder) CommandIssued(id uuid.UUID) { r.commands = append(r.commands, id) }
 
 func (r *recorder) RevocationApproved(id uuid.UUID) { r.approved = append(r.approved, id) }
@@ -223,7 +230,12 @@ func (r *ActionRunner) checkStepUp(p principal.Principal) error {
 	return nil
 }
 
+// actorOf derives the audit actor. A request made with an API token is attributed to the token; its created_by leads
+// to the administrator who created it (plan M6c decision 8).
 func actorOf(p principal.Principal) audit.Actor {
+	if p.APITokenID != uuid.Nil {
+		return audit.Actor{Type: audit.ActorAPIToken, ID: p.APITokenID.String(), Display: p.APITokenName, IP: p.IP}
+	}
 	a := audit.Actor{Display: p.Display, IP: p.IP}
 	switch p.Kind {
 	case principal.KindAdmin:

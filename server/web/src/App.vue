@@ -74,12 +74,15 @@ onBeforeUnmount(() => observer.disconnect())
           data-testid="nav-attention"
         >
           {{ t('nav.attention') }}
+          <!-- Vuetify makes a badge a polite live region; this count changes on every navigation and is not news. -->
           <v-badge
             v-if="attention > 0"
             :content="attention"
             color="error"
             inline
             :aria-label="t('nav.attentionCount', { count: attention })"
+            role="img"
+            aria-live="off"
             data-testid="attention-count"
           />
         </v-btn>
@@ -187,6 +190,20 @@ onBeforeUnmount(() => observer.disconnect())
           variant="text"
         >
           {{ t('nav.dms') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/api-tokens"
+          variant="text"
+        >
+          {{ t('nav.apiTokens') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/change-sets"
+          variant="text"
+        >
+          {{ t('nav.changeSets') }}
         </v-btn>
         <v-btn
           v-if="session.canReadAudit"

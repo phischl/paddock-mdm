@@ -248,6 +248,140 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/api-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listApiTokens"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator; requires a step-up within the last 5 minutes (403 step_up_required), so an
+         *     API token cannot create tokens. The role may not be above the creator's: org_admin creates any organization
+         *     role, org_operator creates org_operator and org_auditor (403 forbidden). expires_at lies between 1 hour and
+         *     365 days ahead. The response carries the secret exactly once; only its SHA-256 is stored.
+         */
+        post: operations["createApiToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getApiToken"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-tokens/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin (any token of the organization), org_operator (only tokens it created; otherwise 403
+         *     forbidden). A request made with an API token cannot revoke (403 forbidden). The token is refused from its
+         *     next request on. Revoking a revoked token is 409 invalid_state.
+         */
+        post: operations["revokeApiToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's declarative configuration as a paddock.v1
+         *     document (api/schema/paddock.v1.json) with every section present, in the key order of the schema.
+         */
+        get: operations["getConfig"];
+        /**
+         * @description Roles: org_admin, org_operator. Applies a paddock.v1 document (at most 1 MiB) in one transaction: a present
+         *     section is authoritative (items not listed are deleted), absent sections are untouched. The rules of the
+         *     per-resource endpoints apply unchanged and abort the whole apply with their problem code, the document path
+         *     in the detail: deleting device groups and changing settings need org_admin (403 forbidden), assigning a full
+         *     profile or changing a profile to full needs a step-up (403 step_up_required; an API token never has one).
+         *     A schema violation is 422 invalid_document listing up to 20 "path: message" pairs. With dry_run=true the
+         *     plan is computed and checked the same way but nothing is applied and nothing is audited. An apply with
+         *     changes records a change set; one without changes records the event with zeros and no change set.
+         *     expected_plan (plan M6c amendment 2026-10-08) is the plan_sha256 of a dry run the client confirmed: when the
+         *     plan computed now differs, the apply is refused with 412 plan_changed (audited as failure) and nothing is
+         *     applied.
+         */
+        put: operations["applyConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something. */
+        get: operations["listChangeSets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getChangeSet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autoinstall": {
         parameters: {
             query?: never;
@@ -1791,6 +1925,15 @@ export interface components {
              */
             revocation_enabled: boolean;
             step_up?: components["schemas"]["MeStepUp"];
+            api_token?: components["schemas"]["MeApiToken"];
+        };
+        /** @description The API token the request authenticated with; absent for sessions. */
+        MeApiToken: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            expires_at: string;
         };
         /** @description Development only (PADDOCK_ENV=development; absent in production): the session's last step-up and the step-up timing the server applies, for the acceptance gates. */
         MeStepUp: {
@@ -1973,7 +2116,7 @@ export interface components {
         /** @enum {string} */
         AuditOutcome: "success" | "failure" | "denied" | "unknown";
         /** @enum {string} */
-        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous" | "device";
+        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous" | "device" | "api_token";
         AuditActor: {
             type: string;
             id?: string;
@@ -2090,6 +2233,134 @@ export interface components {
         };
         EnrollmentTokenPage: {
             items: components["schemas"]["EnrollmentToken"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @description A paddock.v1 document; its schema is api/schema/paddock.v1.json (JSON Schema draft 2020-12, also printed by paddockctl schema), which the server validates every document against. */
+        ConfigDocument: {
+            [key: string]: unknown;
+        };
+        ConfigPlan: {
+            /** @description In application order; deletions first. */
+            changes: components["schemas"]["ConfigChange"][];
+            created: number;
+            updated: number;
+            deleted: number;
+        };
+        ConfigChange: {
+            /** @description A section of the document, settings as settings.login and settings.updates. */
+            section: string;
+            /** @description The natural key of the item; empty for settings. */
+            key: string;
+            /** @enum {string} */
+            action: "create" | "update" | "delete";
+            /** @description Changed fields; every field for creations and deletions. File content is shown as its SHA-256. */
+            fields: components["schemas"]["ConfigFieldChange"][];
+        };
+        ConfigFieldChange: {
+            name: string;
+            /** @description Value before; null for creations. */
+            before: unknown;
+            /** @description Value after; null for deletions. */
+            after: unknown;
+        };
+        ConfigApplyResult: {
+            dry_run: boolean;
+            /** @description Hex SHA-256 of the plan's canonical JSON; send it as expected_plan to apply exactly this plan. */
+            plan_sha256: string;
+            /**
+             * Format: uuid
+             * @description Null for dry runs and empty plans.
+             */
+            change_set_id: string | null;
+            plan: components["schemas"]["ConfigPlan"];
+        };
+        /** @enum {string} */
+        ChangeSetSource: "session" | "api_token";
+        ChangeSetActor: {
+            type: string;
+            id?: string;
+            display: string;
+        };
+        ChangeSetSummary: {
+            created: number;
+            updated: number;
+            deleted: number;
+            sections: string[];
+        };
+        ChangeSet: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            applied_at: string;
+            actor: components["schemas"]["ChangeSetActor"];
+            source: components["schemas"]["ChangeSetSource"];
+            summary: components["schemas"]["ChangeSetSummary"];
+            plan: components["schemas"]["ConfigPlan"];
+        };
+        ChangeSetPage: {
+            items: components["schemas"]["ChangeSet"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @enum {string} */
+        ApiTokenRole: "org_admin" | "org_operator" | "org_auditor";
+        /** @enum {string} */
+        ApiTokenStatus: "active" | "expired" | "revoked";
+        ApiToken: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description The first 12 characters of the secret (pdk_ and 8). */
+            prefix: string;
+            role: components["schemas"]["ApiTokenRole"];
+            status: components["schemas"]["ApiTokenStatus"];
+            created_by: components["schemas"]["ApiTokenCreator"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /**
+             * Format: date-time
+             * @description Last request made with the token, updated at most once per minute.
+             */
+            last_used_at: string | null;
+            /** Format: date-time */
+            revoked_at: string | null;
+        };
+        ApiTokenCreator: {
+            /** Format: uuid */
+            id: string;
+            display: string;
+        };
+        ApiTokenCreate: {
+            name: string;
+            role: components["schemas"]["ApiTokenRole"];
+            /**
+             * Format: date-time
+             * @description Between 1 hour and 365 days ahead.
+             */
+            expires_at: string;
+        };
+        ApiTokenCreated: {
+            token: components["schemas"]["ApiToken"];
+            /** @description Shown once; keep it like a password. */
+            secret: string;
+        };
+        ApiTokenPage: {
+            items: components["schemas"]["ApiToken"][];
             page: number;
             page_size: number;
             /** @description Matching items, counted up to 10000. */
@@ -3187,6 +3458,10 @@ export interface components {
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        ChangeSetSort: "applied_at" | "-applied_at";
+        /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
+        ApiTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at" | "last_used_at" | "-last_used_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         ManagedFileSort: "path" | "-path" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         ManagedUnitSort: "unit" | "-unit" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
@@ -3720,6 +3995,243 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnrollmentToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listApiTokens: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
+                sort?: components["parameters"]["ApiTokenSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["ApiTokenStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of API tokens. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiTokenPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createApiToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiTokenCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiTokenCreated"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getApiToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The API token (without secret). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    revokeApiToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The configuration document. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigDocument"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    applyConfig: {
+        parameters: {
+            query?: {
+                /** @description Compute and check the plan without applying it. */
+                dry_run?: boolean;
+                /** @description plan_sha256 of the confirmed dry run; a different plan is refused with 412 plan_changed. */
+                expected_plan?: string;
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigDocument"];
+            };
+        };
+        responses: {
+            /** @description The plan, applied unless dry_run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigApplyResult"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listChangeSets: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["ChangeSetSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                source?: components["schemas"]["ChangeSetSource"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of change sets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSetPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getChangeSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The change set with its plan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSet"];
                 };
             };
             400: components["responses"]["Problem"];

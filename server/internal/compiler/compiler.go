@@ -41,7 +41,7 @@ import (
 
 var (
 	metricBundles = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "paddock_compiler_bundles_total", Help: "Compiled devices by result (new, unchanged, failed).",
+		Name: "paddock_compiler_bundles_total", Help: "Compiled devices by result (new, unchanged, forced, failed).",
 	}, []string{"result"})
 	metricLatency = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name: "paddock_compiler_latency_seconds", Help: "Time from the oldest state change of a batch to its published bundles.",
@@ -145,6 +145,9 @@ type rendered struct {
 	content [32]byte
 	payload []byte
 	omitted []omittedEntry
+	// forced: the content equals the latest bundle and a forced state change publishes it anyway (plan M6c
+	// decision 19).
+	forced bool
 }
 
 // compileTarget is a device to compile with what decides its schema.
@@ -154,6 +157,7 @@ type compileTarget struct {
 	seq       int64
 	suspended bool
 	v2        bool // the agent reports bundle schema 2
+	forced    bool // a forced state change targets the device (plan M6c decision 19)
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -180,7 +184,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 	}
 	err = c.pool.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		identity := &identityLoader{q: q}
-		ids, err := expand(ctx, q, events, identity)
+		ids, forced, err := expand(ctx, q, events, identity)
 		if err != nil || len(ids) == 0 {
 			return err
 		}
@@ -203,7 +207,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		}
 		for _, row := range rows {
 			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
-				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2))}
+				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID]}
 			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
@@ -275,12 +279,17 @@ func truncateReason(s string) string {
 	return s
 }
 
-// expand turns the scopes of events into the IDs of the affected devices; only active devices are compiled.
-func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event, identity *identityLoader) ([]uuid.UUID, error) {
+// expand turns the scopes of events into the IDs of the affected devices; only active devices are compiled. forced
+// holds the devices targeted by at least one forced event (plan M6c decision 19).
+func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event, identity *identityLoader) (ids []uuid.UUID, forced map[uuid.UUID]bool, err error) {
 	seen := map[uuid.UUID]bool{}
-	var ids []uuid.UUID
+	forced = map[uuid.UUID]bool{}
+	var force bool
 	add := func(more []uuid.UUID) {
 		for _, id := range more {
+			if force {
+				forced[id] = true
+			}
 			if !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)
@@ -288,17 +297,18 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event,
 		}
 	}
 	for _, ev := range events {
+		force = ev.Force
 		switch ev.Scope {
 		case statechange.ScopeOrg:
 			all, err := q.ListActiveDeviceIDs(ctx)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			add(all)
 		case statechange.ScopeDeviceGroup:
 			members, err := q.ListActiveGroupMemberIDs(ctx, ev.ID)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			add(members)
 		case statechange.ScopeDevice:
@@ -306,12 +316,12 @@ func expand(ctx context.Context, q *pgstore.Queries, events []statechange.Event,
 		case statechange.ScopeUser:
 			id, err := identity.get(ctx)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			add(id.AffectedDevices(ev.ID))
 		}
 	}
-	return ids, nil
+	return ids, forced, nil
 }
 
 // render builds the next bundle of an active device and reports whether its content differs from the last one.
@@ -364,8 +374,9 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		return rendered{}, false, nil, err
 	}
 	latest, err := q.GetLatestBundle(ctx, t.id)
+	unchanged := err == nil && bytes.Equal(latest.ContentSha256, content[:])
 	switch {
-	case err == nil && bytes.Equal(latest.ContentSha256, content[:]):
+	case unchanged && !t.forced:
 		metricBundles.WithLabelValues("unchanged").Inc()
 		return rendered{}, false, nil, nil
 	case err != nil && !db.IsNoRows(err):
@@ -375,7 +386,8 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	if err != nil {
 		return rendered{}, false, nil, err
 	}
-	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted}, true, nil, nil
+	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted,
+		forced: unchanged}, true, nil, nil
 }
 
 // v2Trust are the key material, the revocation section, the organization's dead man's switch, the inventory section
@@ -446,7 +458,11 @@ func (c *Compiler) publish(ctx context.Context, org uuid.UUID, todo []rendered) 
 			errs = append(errs, fmt.Errorf("device %s: %w", r.device, err))
 			continue
 		}
-		metricBundles.WithLabelValues("new").Inc()
+		if r.forced {
+			metricBundles.WithLabelValues("forced").Inc()
+		} else {
+			metricBundles.WithLabelValues("new").Inc()
+		}
 		c.recordOmissions(ctx, r)
 	}
 	return errors.Join(errs...)

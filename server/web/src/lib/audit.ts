@@ -6,7 +6,7 @@ import { dateInputToRFC3339 } from './format'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
 const outcomes: AuditOutcome[] = ['success', 'failure', 'denied', 'unknown']
-const actorTypes: AuditActorType[] = ['admin', 'platform_admin', 'system', 'anonymous', 'device']
+const actorTypes: AuditActorType[] = ['admin', 'platform_admin', 'system', 'anonymous', 'device', 'api_token']
 
 /** Filters of the audit log; without dates the server shows the last 7 days. */
 export const auditFilters: ListFilter[] = [

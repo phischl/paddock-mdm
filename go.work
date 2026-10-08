@@ -4,6 +4,7 @@ toolchain go1.27.1
 
 use (
 	./agent
+	./cli
 	./pkg
 	./server
 	./test/acceptance
