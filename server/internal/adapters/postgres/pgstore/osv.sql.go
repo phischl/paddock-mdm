@@ -142,6 +142,17 @@ func (q *Queries) InsertOSVEntries(ctx context.Context, arg InsertOSVEntriesPara
 	return err
 }
 
+const lockOSVImport = `-- name: LockOSVImport :exec
+SELECT pg_advisory_xact_lock(8097863986192544617)
+`
+
+// Imports of the worker and of paddock-server osv import replace the data one after another ("padd osi"): a second
+// one waits for the first to commit instead of failing on its rows.
+func (q *Queries) LockOSVImport(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockOSVImport)
+	return err
+}
+
 const markOSVFailed = `-- name: MarkOSVFailed :exec
 UPDATE osv_sync_state SET last_attempt_at = now(), last_error = $1 WHERE source = 'ubuntu'
 `

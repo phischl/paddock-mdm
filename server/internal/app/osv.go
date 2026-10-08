@@ -69,6 +69,9 @@ func (o *OSV) State(ctx context.Context) (OSVState, error) {
 func (o *OSV) Import(ctx context.Context, etag string, read func(fn func(osv.Entry) error) (osv.Stats, error)) (osv.Stats, error) {
 	var st osv.Stats
 	err := o.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if err := q.LockOSVImport(ctx); err != nil {
+			return err
+		}
 		if err := q.DeleteOSVData(ctx); err != nil {
 			return err
 		}

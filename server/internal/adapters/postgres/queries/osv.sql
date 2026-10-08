@@ -5,6 +5,11 @@
 SELECT etag, data_version, entries, last_success_at, last_attempt_at, last_error, stale_alerted_at, created_at
 FROM osv_sync_state WHERE source = 'ubuntu';
 
+-- Imports of the worker and of paddock-server osv import replace the data one after another ("padd osi"): a second
+-- one waits for the first to commit instead of failing on its rows.
+-- name: LockOSVImport :exec
+SELECT pg_advisory_xact_lock(8097863986192544617);
+
 -- name: DeleteOSVData :exec
 DELETE FROM osv_ubuntu;
 
