@@ -1157,6 +1157,13 @@ Apply order: `time` → `systemd_unit` → `file` → `apt_hold` → `updates` �
 `login` → `luks` → `playbook` → **re-verify protected areas** (so a playbook cannot silently change
 them; any change it made is reverted and reported as `config.playbook_touched_protected`).
 
+> **Amendment 2026-10-08 (M5b):** `apt_hold` and `updates` are delivered as the optional top-level
+> bundle section `updates` (schema v2), not as resource entries; the agent maps it to one internal
+> `updates` reconciler (holds included) at the `apt_hold`/`updates` position of the apply order.
+> Reason: an agent rejects bundles with resource types it does not know, so a new resource type would
+> stop bundles on devices that have not received the agent update yet during a staged rollout.
+> New capabilities are added as optional top-level sections (as `inventory`, `revocation`, `dms`).
+
 ### 11.4 Commands
 
 Commands are delivered in the check-in response, signed individually (DSSE,
