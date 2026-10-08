@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/osv"
@@ -170,4 +172,16 @@ func (o *OSV) AlertIfStale(ctx context.Context, now time.Time) (bool, error) {
 	return true, o.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 		return q.MarkOSVStaleAlerted(ctx)
 	})
+}
+
+// Enrich gives the findings of the organization in ctx Ubuntu's severity, fixed version and CVSS vector for the
+// release of their device (plan M5c decision 2) and returns the number of changed findings.
+func (o *OSV) Enrich(ctx context.Context) (int64, error) {
+	var n int64
+	err := o.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		n, err = q.EnrichFindings(ctx, uuid.NullUUID{})
+		return err
+	})
+	return n, err
 }
