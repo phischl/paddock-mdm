@@ -319,12 +319,12 @@ system-test: ## Run the agent system tests on the VirtualBox VMs against the run
 	PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... $(if $(T),-run '$(T)',) -v
 
 .PHONY: e2e
-e2e: ## Run Playwright end-to-end tests against the running stack
+e2e: ## Run Playwright end-to-end tests against the running stack (PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 		-e PADDOCK_E2E_SECRETS=/src/$(SECRETS_DIR) -e PADDOCK_E2E_DEVICESIM=/src/bin/devicesim \
-		-e PADDOCK_E2E_AGENTRELEASE=/src/bin/agentrelease \
+		-e PADDOCK_E2E_AGENTRELEASE=/src/bin/agentrelease -e PADDOCK_E2E_SCREENSHOTS \
 		-v $(CURDIR):/src -w /src/$(WEB_DIR) \
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test'
 

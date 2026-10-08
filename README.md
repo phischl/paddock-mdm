@@ -9,10 +9,38 @@
 
 Open-source management for Linux workstations that keeps local administrator rights with their users.
 
-Status: milestones M0–M4b done (control plane, audit, portal, device agent with A/B updates, identity and sudo
-management via Authentik and Himmelblau, managed local administrator, Paddock autoinstall with TPM2+PIN disk
-encryption and escrow); revocation (Lock/Destroy) is in development and disabled until its hardware acceptance. Architecture: `docs/architecture.md`, decisions: `docs/adr/`, plans: `docs/plans/`, binding rules for
-contributors and AI agents: `CLAUDE.md`.
+Paddock distributes signed configuration to Linux laptops and desktops, manages identity and device login
+(Authentik and Himmelblau), sudo rights from permission profiles, a managed local administrator, disk encryption
+with TPM2, boot PIN and escrowed recovery keys, updates and inventory (Fleet), detects tampering and keeps a
+tamper-evident audit trail for ISO 27001 (WORM storage, signed daily hash chain). Devices only ever talk to the
+server on their own initiative, and keep working when it is unreachable. Users keep the administrator rights their
+organization grants them; Paddock makes those rights explicit, reviewable and audited. The portal speaks English
+and German.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/devices-dark.png">
+    <img src="docs/assets/screenshots/devices-light.png" alt="The device list of the Paddock portal" width="800">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/audit-dark.png">
+    <img src="docs/assets/screenshots/audit-light.png" alt="The audit log of the Paddock portal" width="800">
+  </picture>
+</p>
+
+Status: release 0.1.0 in preparation (milestones M0–M6b). Revocation (Lock, Destroy, dead man's switch) ships
+disabled until an installation has passed its hardware acceptance (`docs/operations/revocation-acceptance.md`).
+
+| Read | For |
+| --- | --- |
+| [Production installation](docs/operations/install.md) | operators: two hosts, TLS, secrets, backups, monitoring, `make prod-check` |
+| [Operations runbooks](docs/operations/) | day-to-day operation: agent releases, disk recovery, revocation, restore, capacity |
+| [Compliance pack](docs/compliance/) | auditors: [ISO 27001 mapping](docs/compliance/iso27001-mapping.md), [residual risks](docs/compliance/residual-risks.md), [audit codes](docs/compliance/audit-codes.md), [privacy](docs/compliance/privacy.md), [third-party licenses](docs/compliance/third-party.md) |
+| [CHANGELOG](CHANGELOG.md) | what changed per release |
+| [Architecture](docs/architecture.md), [decisions](docs/adr/), [plans](docs/plans/) | contributors; binding rules for contributors and AI agents: `CLAUDE.md` |
 
 ## Quick start (local development)
 
@@ -52,7 +80,7 @@ The Authentik admin interface is at <https://auth.paddock.localhost:8443/if/admi
 
 | Target | Purpose |
 | --- | --- |
-| `make lint` | golangci-lint, `go vet`, OpenAPI contract lint, ESLint and vue-tsc for the portal |
+| `make lint` | golangci-lint, `go vet`, OpenAPI contract lint, govulncheck, the license gate, ESLint, the message catalog check and vue-tsc for the portal |
 | `make test` | Go unit and integration tests (Docker test containers) and portal unit tests |
 | `make gen` | sqlc, oapi-codegen, audit code document (`docs/compliance/audit-codes.md`), TypeScript API types |
 | `make web` | Builds the portal into `server/web/dist` (in the pinned Node container) |
@@ -62,6 +90,8 @@ The Authentik admin interface is at <https://auth.paddock.localhost:8443/if/admi
 | `make agent` / `make deb` | Builds `paddockd` and `paddock-supervisor` (amd64, arm64) / the Debian packages for amd64 (`VERSION=`, `TAGS=`) |
 | `make agent-release VERSION=x.y.z` | Builds, signs (development release key) and uploads an agent release (`TAGS=` for test builds) |
 | `make system-test VM=<vm\|all>` | Agent system tests on the VirtualBox VMs of `test/vms/virtualbox` against the running stack (`T=<regex>`); `VM=paddock-ai-2604 T=TestAutoinstallGate` builds a throwaway VM from a Paddock autoinstall (gate D-AI, about an hour) |
+| `make load-identities` / `make load-test` | Load test devices and the k6 scenarios `checkin` and `ingest` (`docs/operations/capacity.md`) |
+| `make release-artifacts` / `make release-sign` | Release images, unsigned agent packages, SBOMs and checksums / cosign signatures (`docs/operations/agent-releases.md`) |
 | `make fuzz` | Fuzz tests of `pkg` (`FUZZTIME=30s` per target by default) |
 | `make logs` / `make down` | Logs of the stack / stop it (`make down V=1` also deletes all volumes) |
 
@@ -80,6 +110,7 @@ packaging/               nfpm configurations, systemd unit and maintainer script
 deploy/compose/          Compose stack, pinned image versions, bootstrap scripts
 test/acceptance/         acceptance gates, the reference device client devicesim and the release uploader
 test/system/             system tests of the agent packages on the test VMs
+test/load/               k6 load scenarios and the load test identity generator
 docs/                    architecture, ADRs, plans, operations runbooks, compliance
 ```
 

@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-08
+
+First public release (prepared, not tagged yet: the product owner sets the date when tagging `v0.1.0`). Paddock
+manages Linux workstations — signed configuration, identity and device login, sudo rights, managed local
+administrator, disk encryption with escrow, updates and inventory, tamper detection and a WORM audit trail — with
+an English and German portal, a license-checked supply chain and a compliance pack (`docs/compliance/`).
+Revocation (Lock, Destroy, dead man's switch) ships disabled until an installation has passed its hardware
+acceptance.
+
 ### Added
 
+- Public README (M6b step 6): what Paddock is, screenshots of the portal (written by `PADDOCK_E2E_SCREENSHOTS=1 make e2e`, light and dark), links to the installation guide, the runbooks, the compliance pack and this changelog.
 - Compliance pack (M6b step 5, `docs/compliance/`): `iso27001-mapping.md` maps ISO/IEC 27001:2022 A.5.33, A.8.15, A.8.16, A.8.17, A.8.1, A.8.2, A.8.5, A.8.8, A.8.9, A.8.13 and A.8.24 to Paddock features, evidence (audit codes, WORM store, hash chain, `audit verify`) and operator duties; `residual-risks.md` lists every residual risk recorded so far with its mitigation and what to record in the ISMS; `privacy.md` now also lists update runs, revocation results, the per-volume disk data and what Paddock stores of administrators; `README.md` indexes the pack.
 - Release artifacts (M6b step 4, `docs/operations/agent-releases.md` section *Server release*): `make release-artifacts RELEASE_VERSION=x.y.z RELEASE_PUBLIC_KEY_FILE=… [PUSH=1]` builds the images `ghcr.io/phischl/paddock-server` and `ghcr.io/phischl/paddock-server-compiler` (OCI labels; `PUSH=1` pushes them and records the digests), the Debian packages and `paddockd` for amd64 and arm64 with the production release public key, all marked `-unsigned` (the release keys stay offline), an SPDX SBOM per image (`syft`, pinned `SYFT_IMAGE`) and `SHA256SUMS` into `dist/release/<version>/`; it refuses the development keys and build tags. `make release-sign` signs the pushed images keyless with `cosign` (pinned `COSIGN_IMAGE`, GitHub OIDC), attaches each SBOM as a signed attestation and signs `SHA256SUMS`; `DRY_RUN=1` prints the commands. The runbook describes the offline signing of the agent artifacts.
 - Load test (M6b step 1, N1, N2; `docs/operations/capacity.md`): k6 scenarios `checkin` (1 000 check-ins/s against one gateway replica, p99 < 200 ms, error rate < 0.1 %) and `ingest` (5 000 events/s with 3 worker replicas, consumer lag of `ingest.event` < 60 s, read from Prometheus) in `test/load/k6/`, run with `make load-test SCENARIO=checkin|ingest` on the Compose network with the pinned `K6_IMAGE` (tool only, not shipped). Devices sign like the agent with k6's WebCrypto. `make load-identities CONFIGS=… COUNT=…` enrolls the load devices through the real enrollment API (`test/load/cmd/identities`, new workspace module `test/load`).
@@ -230,3 +240,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The portal uses a backend-for-frontend session: tokens stay on the server, the browser only holds an encrypted, `HttpOnly`, `SameSite=Strict` session cookie (F8, M0 step 7).
 - The portal is served with a strict Content Security Policy without `'unsafe-inline'`, with `frame-ancestors 'none'` and no third-party origins (C7, M0 step 8).
 - Portal CSP now uses a per-response style nonce: `index.html` is served with `Cache-Control: no-store` and a fresh nonce in its `style-src` directive, still without `'unsafe-inline'` (C7, M0.1 step 4).
+
+[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0
