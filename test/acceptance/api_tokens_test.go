@@ -173,7 +173,7 @@ func TestAPITokens(t *testing.T) {
 		// One hour plus a margin for the request's travel: the server compares with its own clock.
 		res = postAPIToken(t, alice, apiTokenName("one hour"), "org_auditor", time.Hour+time.Minute)
 		expectStatus(t, res, http.StatusCreated, "")
-		_ = call(t, alice, http.MethodPost, "/api/v1/api-tokens/"+responseID(t, res).String()+"/revoke", nil)
+		removeCreated(t, alice, "/api/v1/api-tokens", res)
 	})
 
 	t.Run("revocation", func(t *testing.T) {
