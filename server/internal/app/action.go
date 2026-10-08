@@ -223,7 +223,12 @@ func (r *ActionRunner) checkStepUp(p principal.Principal) error {
 	return nil
 }
 
+// actorOf derives the audit actor. A request made with an API token is attributed to the token; its created_by leads
+// to the administrator who created it (plan M6c decision 8).
 func actorOf(p principal.Principal) audit.Actor {
+	if p.APITokenID != uuid.Nil {
+		return audit.Actor{Type: audit.ActorAPIToken, ID: p.APITokenID.String(), Display: p.APITokenName, IP: p.IP}
+	}
 	a := audit.Actor{Display: p.Display, IP: p.IP}
 	switch p.Kind {
 	case principal.KindAdmin:

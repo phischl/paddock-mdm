@@ -92,6 +92,37 @@ type AgentUpdateReport struct {
 	ReportedAt     time.Time
 }
 
+type ApiToken struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Role           string
+	SecretSha256   []byte
+	Prefix         string
+	CreatedBy      uuid.UUID
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+	LastUsedAt     *time.Time
+	RevokedAt      *time.Time
+	RevokedBy      uuid.NullUUID
+}
+
+type ApiTokenListed struct {
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	Name             string
+	Role             string
+	Prefix           string
+	CreatedBy        uuid.UUID
+	CreatedByDisplay string
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
+	LastUsedAt       *time.Time
+	RevokedAt        *time.Time
+	RevokedBy        uuid.NullUUID
+	Status           string
+}
+
 type AppUser struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
