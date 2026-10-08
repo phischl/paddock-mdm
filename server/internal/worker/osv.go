@@ -113,19 +113,20 @@ func (o *OSV) Round(ctx context.Context) error {
 			metricOSVLastSuccess.Set(float64(st.LastSuccessAt.Unix()))
 		}
 		metricOSVEntries.Set(float64(st.Entries))
+		var enrichErr error
 		if st.DataVersion != o.enriched {
-			if err := o.enrich(ctx); err != nil {
-				return err
+			if enrichErr = o.enrich(ctx); enrichErr == nil {
+				o.enriched = st.DataVersion
 			}
-			o.enriched = st.DataVersion
 		}
+		// A failing organization must not keep the platform operator from learning that the data is stale.
 		stale, err := o.osv.AlertIfStale(ctx, o.now())
 		if stale {
 			metricOSVStale.Set(1)
 		} else {
 			metricOSVStale.Set(0)
 		}
-		return err
+		return errors.Join(enrichErr, err)
 	})
 	return err
 }

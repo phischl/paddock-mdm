@@ -124,7 +124,8 @@ const (
 	CodeDeviceStaleCritical Code = "device.stale_critical"
 	CodeDeviceStaleCleared  Code = "device.stale_cleared"
 
-	CodePlatformOSVStale Code = "platform.osv_stale"
+	CodePlatformOSVStale    Code = "platform.osv_stale"
+	CodePlatformOSVImported Code = "platform.osv_imported"
 
 	// API tokens (plan M6c decisions 4, 5 and 9).
 	CodeAPITokenCreated   Code = "api_token.created"
@@ -868,6 +869,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"change_set_id", "created", "updated", "deleted", "sections"},
 		Outcomes:    adminOutcomes,
 		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied.",
+	},
+	CodePlatformOSVImported: {
+		Code: CodePlatformOSVImported, Emitted: true,
+		Description: "An operator imported Ubuntu's vulnerability data (OSV) from a file with paddock-server osv import (actor: system osv-import, platform pseudo-organization).",
+		Params:      []string{"records", "entries", "data_version"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "The file path is not recorded. data_version is the version of the data after a successful import.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,
