@@ -122,7 +122,7 @@ test('organization admin manages users, groups, profiles and device logins', asy
   await page.getByRole('option', { name: username }).click()
   await page.keyboard.press('Escape')
   await page.getByTestId('save-login-assignment').click()
-  await expect(page.getByRole('status')).toHaveText('Login assignment saved.')
+  await expect(page.getByRole('main').getByRole('status')).toHaveText('Login assignment saved.')
   await expectAccessible(page)
   await page.getByTestId('toggle-suspension').click()
   const suspend = page.getByRole('dialog', { name: 'Suspend logins' })

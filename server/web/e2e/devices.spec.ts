@@ -80,7 +80,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await page.getByRole('option', { name: groupName }).click()
   await page.keyboard.press('Escape')
   await page.getByTestId('save-device-groups').click()
-  await expect(page.getByRole('status')).toHaveText('Device groups saved.')
+  await expect(page.getByRole('main').getByRole('status')).toHaveText('Device groups saved.')
 
   await page.getByRole('link', { name: 'Managed files' }).click()
   await expect(page.getByRole('heading', { name: 'Managed files' })).toBeVisible()
