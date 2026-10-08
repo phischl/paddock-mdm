@@ -247,9 +247,6 @@ func TestDiskEscrowVolumes(t *testing.T) {
 	d.Health = json.RawMessage(`{"disk":{"state":"compliant","luks_version":2,"tokens":["recovery","tpm2+pin"],"keyslots":2,"volumes":[` +
 		`{"uuid":"` + root + `","device":"/dev/sda3","root":true,"luks_version":2,"tokens":["recovery","tpm2+pin"],"keyslots":2,"escrowed":true,"header_generation":1},` +
 		`{"uuid":"` + data + `","device":"/dev/sdb1","luks_version":2,"tokens":["password"],"keyslots":1,"escrowed":true,"header_generation":2}]}}`)
-	if _, res, err := d.Checkin(testContext(t, time.Minute)); err != nil || res.Status != http.StatusOK {
-		t.Fatalf("check-in: %v HTTP %d", err, res.Status)
-	}
 
 	path := "/api/v1/devices/" + d.DeviceID + "/disk"
 	var disk struct {
@@ -263,7 +260,13 @@ func TestDiskEscrowVolumes(t *testing.T) {
 			Volume     string `json:"volume"`
 		} `json:"headers"`
 	}
-	for deadline := time.Now().Add(time.Minute); ; time.Sleep(2 * time.Second) {
+	// The worker writes device_status at most once a minute per device (plan M2a decision 12) and latestBundle just
+	// checked in, so the device keeps checking in like an agent until a heartbeat with the volumes is materialized;
+	// every 5 s stays below the gateway's 30 requests a minute per device.
+	for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(5 * time.Second) {
+		if _, res, err := d.Checkin(testContext(t, time.Minute)); err != nil || res.Status != http.StatusOK {
+			t.Fatalf("check-in: %v HTTP %d", err, res.Status)
+		}
 		if err := call(t, alice, http.MethodGet, path, nil).JSON(&disk); err != nil {
 			t.Fatal(err)
 		}
