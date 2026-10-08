@@ -49,7 +49,8 @@ type State struct {
 	// HandedRevocations are the SHA-256 (hex) of the revocation envelopes handed to paddock-revoke, with the time,
 	// so each is handed once (plan M4c decision 11); kept 31 days, longer than a token lives.
 	HandedRevocations map[string]time.Time `json:"handed_revocations,omitempty"`
-	// PendingInstalls are the install_now commands accepted but not finished; a restarted agent runs them again.
+	// PendingInstalls are the install_now commands accepted but not finished; a restarted agent reports them as
+	// interrupted.
 	PendingInstalls []PendingInstall `json:"pending_installs,omitempty"`
 	// CommandResults are the results the server has not accepted yet.
 	CommandResults []CommandResult `json:"command_results,omitempty"`

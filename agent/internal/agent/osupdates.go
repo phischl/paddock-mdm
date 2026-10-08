@@ -100,21 +100,25 @@ func (a *Agent) installNowCommand(_ context.Context, c *command.Command) (string
 	return commands.Deferred, nil
 }
 
-// requeueInstalls queues the install_now commands an earlier run of the agent accepted but did not finish (a
-// restart, an agent update): installing is idempotent, so they run again (review of plan M5b decision 7).
-func (a *Agent) requeueInstalls() {
-	for _, p := range a.st.PendingInstalls {
-		select {
-		case a.installJobs <- installJob{commandID: p.CommandID, packages: p.Packages}:
-		default:
-			slog.Warn("install_now not requeued: queue full", "command_id", p.CommandID)
-		}
+// reportInterruptedInstalls reports the install_now commands an earlier run of the agent accepted but did not finish
+// (a restart, an agent update) as failed with reason interrupted and runs none of them: the command may have expired
+// or a package may have been held meanwhile (review of plan M5b decision 7).
+func (a *Agent) reportInterruptedInstalls() {
+	if len(a.st.PendingInstalls) == 0 {
+		return
 	}
+	for _, p := range a.st.PendingInstalls {
+		slog.Warn("install_now interrupted by a restart; reported as failed", "command_id", p.CommandID)
+		result := commands.Encode(map[string]any{"reason": "interrupted", "installed": []string{}, "failed": p.Packages})
+		a.st.CommandResults = append(a.st.CommandResults, state.CommandResult{CommandID: p.CommandID, Status: protocol.CommandFailed, Result: result})
+	}
+	a.st.PendingInstalls = nil
+	a.saveState()
 }
 
 // runInstalls executes the queued install_now commands one after another until ctx ends. A running installation is
-// not cancelled with ctx: apt and dpkg stopped halfway leave dpkg broken. It ends at its own time limit; its result
-// is reported by the next run of the agent if this one stopped meanwhile (the job stays pending).
+// not cancelled with ctx: apt and dpkg stopped halfway leave dpkg broken. It ends at its own time limit; if the agent
+// stopped meanwhile, its next run reports the job as interrupted (the job stays pending).
 func (a *Agent) runInstalls(ctx context.Context) {
 	for {
 		select {
