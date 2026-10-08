@@ -50,7 +50,8 @@ func (s *InventorySync) MapHosts(ctx context.Context, uuids []string) (map[strin
 }
 
 // StoreHost replaces the stored inventory of a device of the organization in ctx in one transaction: reference,
-// software, vulnerability findings and policy results; rows the host no longer reports are deleted.
+// software, vulnerability findings (enriched with Ubuntu's data) and policy results; rows the host no longer reports
+// are deleted.
 func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref ports.HostRef, inv ports.HostInventory) error {
 	return s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		org := mustOrg(ctx)
@@ -80,6 +81,10 @@ func (s *InventorySync) StoreHost(ctx context.Context, device uuid.UUID, ref por
 		if err := q.DeleteMissingFindings(ctx, pgstore.DeleteMissingFindingsParams{
 			DeviceID: device, Cves: findings.cves, Names: findings.names, Versions: findings.versions,
 		}); err != nil {
+			return err
+		}
+		// Ubuntu's data replaces what the inventory system reports in the same transaction (plan M5c decision 2).
+		if _, err := q.EnrichFindings(ctx, uuid.NullUUID{UUID: device, Valid: true}); err != nil {
 			return err
 		}
 		keys := []string{}

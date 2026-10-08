@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand/v2"
@@ -46,24 +48,28 @@ type OSVSource interface {
 	Fetch(ctx context.Context, etag string, read func(etag string, body io.Reader) error) (notModified bool, err error)
 }
 
-// OSV is the osv-sync job (plan M5c decisions 1 and 4): a download once a day at a random minute, at start when the
-// data is older than a day, and the stale alert.
+// OSV is the osv-sync job (plan M5c decisions 1, 2 and 4): a download once a day at a random minute, at start when the
+// data is older than a day, the enrichment of every organization's findings when the data changed, and the stale
+// alert.
 type OSV struct {
 	osv      *app.OSV
 	source   OSVSource
+	org      *db.OrgPool
 	platform *db.PlatformPool
 	every    time.Duration
 	slot     time.Duration
 	now      func() time.Time
 
-	// started is set after the first due check (owned by Round).
-	started bool
+	// started is set after the first due check, enriched is the data version the findings were enriched with (owned
+	// by Round; 0 enriches once at start, which also covers an import by paddock-server osv import).
+	started  bool
+	enriched int64
 }
 
 // NewOSV creates the job; every > 0 replaces the daily download by one every interval (development installations,
 // gate O1).
-func NewOSV(o *app.OSV, source OSVSource, platform *db.PlatformPool, every time.Duration) *OSV {
-	return &OSV{osv: o, source: source, platform: platform, every: every,
+func NewOSV(o *app.OSV, source OSVSource, org *db.OrgPool, platform *db.PlatformPool, every time.Duration) *OSV {
+	return &OSV{osv: o, source: source, org: org, platform: platform, every: every,
 		slot: time.Duration(rand.Int64N(int64(24*time.Hour/time.Minute))) * time.Minute, now: time.Now} //nolint:gosec // spreads downloads over the day
 
 }
@@ -88,7 +94,7 @@ func (o *OSV) Run(ctx context.Context) error {
 	}
 }
 
-// Round downloads the data when it is due and raises the stale alert.
+// Round downloads the data when it is due, enriches the findings when it changed and raises the stale alert.
 func (o *OSV) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	_, err := o.platform.WithLeaderLock(sys, osvLockKey, func(ctx context.Context) error {
@@ -106,6 +112,12 @@ func (o *OSV) Round(ctx context.Context) error {
 			metricOSVLastSuccess.Set(float64(st.LastSuccessAt.Unix()))
 		}
 		metricOSVEntries.Set(float64(st.Entries))
+		if st.DataVersion != o.enriched {
+			if err := o.enrich(ctx); err != nil {
+				return err
+			}
+			o.enriched = st.DataVersion
+		}
 		stale, err := o.osv.AlertIfStale(ctx, o.now())
 		if stale {
 			metricOSVStale.Set(1)
@@ -160,4 +172,24 @@ func (o *OSV) sync(ctx context.Context, st app.OSVState) {
 		slog.InfoContext(ctx, "Ubuntu's vulnerability data imported", "records", stats.Records, "entries", stats.Entries,
 			"skipped", stats.Skipped, "took", o.now().Sub(start).Round(time.Second))
 	}
+}
+
+// enrich enriches the findings of every organization; a failing organization does not stop the others, and the next
+// round tries all again.
+func (o *OSV) enrich(ctx context.Context) error {
+	orgs, err := o.org.OrganizationIDs(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	var changed int64
+	for _, org := range orgs {
+		n, err := o.osv.Enrich(systemContext(ctx, org, "osv-sync"))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("organization %s: %w", org, err))
+		}
+		changed += n
+	}
+	slog.InfoContext(ctx, "findings enriched with Ubuntu's vulnerability data", "organizations", len(orgs), "changed", changed)
+	return errors.Join(errs...)
 }

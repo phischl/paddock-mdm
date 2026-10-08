@@ -716,7 +716,8 @@ SELECT $1, $2, k.cve, k.name, k.version, NULLIF(k.cvss, -1)::numeric(3,1), NULLI
 FROM (SELECT unnest($3::text[]) AS cve, unnest($4::text[]) AS name, unnest($5::text[]) AS version,
              unnest($6::float8[]) AS cvss, unnest($7::text[]) AS severity, unnest($8::text[]) AS fixed) k
 ON CONFLICT (device_id, cve, software_name, software_version) DO UPDATE
-  SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version
+  SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version,
+      cvss_vector = NULL
 `
 
 type UpsertVulnerabilityFindingsParams struct {
@@ -730,7 +731,8 @@ type UpsertVulnerabilityFindingsParams struct {
 	Fixed          []string
 }
 
-// The arrays are parallel; cvss -1 and empty strings stand for unknown values.
+// The arrays are parallel; cvss -1 and empty strings stand for unknown values. The CVSS vector comes from Ubuntu's
+// data only: the enrichment in the same transaction sets it again (plan M5c decision 2).
 func (q *Queries) UpsertVulnerabilityFindings(ctx context.Context, arg UpsertVulnerabilityFindingsParams) error {
 	_, err := q.db.Exec(ctx, upsertVulnerabilityFindings,
 		arg.DeviceID,

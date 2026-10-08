@@ -101,7 +101,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
 		platformPool, inventoryEvery)
-	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), platformPool, osvEvery)
+	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
 	slog.InfoContext(ctx, "worker starting")
 
 	return runAll(ctx,

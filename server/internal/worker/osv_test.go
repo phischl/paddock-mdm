@@ -8,8 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -75,8 +78,8 @@ func (f *fakeOSVSource) Fetch(_ context.Context, etag string, read func(string, 
 	return false, read(f.etag, bytes.NewReader(f.zip))
 }
 
-// TestOSVRound (plan M5c decisions 1 and 4, AC2): a round downloads and imports, a later one sends the ETag and
-// keeps the data on 304, a failing download keeps it and records the error.
+// TestOSVRound (plan M5c decisions 1, 2 and 4, AC1, AC2): a round downloads, imports and enriches the findings, a
+// later one sends the ETag and keeps the data on 304, a failing download keeps it and records the error.
 func TestOSVRound(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -87,7 +90,7 @@ func TestOSVRound(t *testing.T) {
 	t.Cleanup(platform.Close)
 	src := &fakeOSVSource{zip: osvFixtureZip(t), etag: `"round-1"`}
 	uc := app.NewOSV(app.NewActionRunner(f.pool, platform, httpx.RequestID), f.pool, platform)
-	o := NewOSV(uc, src, platform, time.Nanosecond)
+	o := NewOSV(uc, src, f.pool, platform, time.Nanosecond)
 	rows := func() int {
 		var n int
 		if err := f.super.QueryRow(ctx, "SELECT count(*) FROM osv_ubuntu").Scan(&n); err != nil {
@@ -103,8 +106,29 @@ func TestOSVRound(t *testing.T) {
 		return st
 	}
 
+	dev := uuid.Must(uuid.NewV7())
+	for _, sql := range []string{
+		"INSERT INTO device (id, organization_id, hostname, state, hardware_uuid) VALUES ($1, $2, 'lt-osv', 'active', $3)",
+		"INSERT INTO device_inventory_ref (device_id, organization_id, external_id, os_version) VALUES ($1, $2, $3, 'Ubuntu 24.04.3 LTS')",
+		`INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version)
+		 VALUES ($1, $2, 'CVE-2024-6387', 'openssh-server', '1:9.6p1-3ubuntu13')`,
+	} {
+		args := []any{dev, f.org}
+		if strings.Count(sql, "$") == 3 {
+			args = append(args, uuid.NewString())
+		}
+		if _, err := f.super.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if err := o.Round(ctx); err != nil {
 		t.Fatal(err)
+	}
+	var severity, fixed string
+	if err := f.super.QueryRow(ctx, "SELECT severity, fixed_version FROM vulnerability_finding WHERE device_id = $1", dev).
+		Scan(&severity, &fixed); err != nil || severity != "high" || fixed != "1:9.6p1-3ubuntu13.3" {
+		t.Fatalf("finding after the import: %q %q %v", severity, fixed, err)
 	}
 	first := state()
 	if src.downloads != 1 || rows() != 8 || first.ETag != `"round-1"` || first.LastError != "" {

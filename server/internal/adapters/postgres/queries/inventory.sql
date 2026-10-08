@@ -22,7 +22,8 @@ WHERE s.device_id = @device_id
   AND (s.name, s.version, s.source) NOT IN (
     SELECT unnest(@names::text[]), unnest(@versions::text[]), unnest(@sources::text[]));
 
--- The arrays are parallel; cvss -1 and empty strings stand for unknown values.
+-- The arrays are parallel; cvss -1 and empty strings stand for unknown values. The CVSS vector comes from Ubuntu's
+-- data only: the enrichment in the same transaction sets it again (plan M5c decision 2).
 -- name: UpsertVulnerabilityFindings :exec
 INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, cvss_score, severity, fixed_version)
 SELECT @device_id, @organization_id, k.cve, k.name, k.version, NULLIF(k.cvss, -1)::numeric(3,1), NULLIF(k.severity, ''),
@@ -30,7 +31,8 @@ SELECT @device_id, @organization_id, k.cve, k.name, k.version, NULLIF(k.cvss, -1
 FROM (SELECT unnest(@cves::text[]) AS cve, unnest(@names::text[]) AS name, unnest(@versions::text[]) AS version,
              unnest(@cvss::float8[]) AS cvss, unnest(@severities::text[]) AS severity, unnest(@fixed::text[]) AS fixed) k
 ON CONFLICT (device_id, cve, software_name, software_version) DO UPDATE
-  SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version;
+  SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version,
+      cvss_vector = NULL;
 
 -- name: DeleteMissingFindings :exec
 DELETE FROM vulnerability_finding f
