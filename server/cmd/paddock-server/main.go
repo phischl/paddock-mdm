@@ -26,6 +26,9 @@ commands:
   audit seal [--day YYYY-MM-DD]
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD
   osv import <file>
+  admin bump-bundle-seq --by N
+  admin recompile --all
+  admin rebuild-cache
   healthcheck
 
 Commands separated by a lone "+" run one after another; the first failure stops the chain.
@@ -89,6 +92,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runAudit(ctx, l, common, args[1:])
 	case "osv":
 		err = runOSV(ctx, l, args[1:])
+	case "admin":
+		err = runAdmin(ctx, l, args[1:])
 	case "provision":
 		if len(args) != 2 || args[1] != "rabbitmq" {
 			err = errUsage

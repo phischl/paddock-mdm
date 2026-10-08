@@ -145,7 +145,8 @@
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
-      "domains_changed": "{actor} set the domains of {slug}"
+      "domains_changed": "{actor} set the domains of {slug}",
+      "recompile_requested": "{actor} requested a new bundle for every device (restore)"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -231,7 +232,9 @@
       "published": "{actor} published the agent release {version}"
     },
     "platform": {
-      "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days"
+      "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
+      "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
+      "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",

@@ -133,6 +133,11 @@ const (
 
 	// Declarative configuration (plan M6c decision 16).
 	CodeConfigApplied Code = "config.applied"
+
+	// Restore commands of paddock-server admin (plan M6c decision 21).
+	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
+	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
+	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -836,6 +841,26 @@ var registry = map[Code]Definition{
 		Params:      []string{"name", "reason"},
 		Outcomes:    []Outcome{OutcomeDenied},
 		Note:        "reason is revoked or expired. Unknown or malformed secrets are not recorded.",
+	},
+	CodeOrganizationRecompileRequested: {
+		Code: CodeOrganizationRecompileRequested, Emitted: true,
+		Description: "An operator ran paddock-server admin recompile --all: every active device of the organization gets a new bundle version, also when its content is unchanged (actor: system).",
+		Params:      []string{"organizations_total"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "One event per organization; part of the restore order of docs/operations/paddockctl.md.",
+	},
+	CodePlatformBundleSeqBumped: {
+		Code: CodePlatformBundleSeqBumped, Emitted: true,
+		Description: "An operator ran paddock-server admin bump-bundle-seq after a database restore: the bundle sequence of every device was raised (actor: system, platform pseudo-organization).",
+		Params:      []string{"by", "devices"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodePlatformCacheRebuilt: {
+		Code: CodePlatformCacheRebuilt, Emitted: true,
+		Description: "An operator ran paddock-server admin rebuild-cache: the enrollment tokens, device keys and sequence numbers of the gateway's cache were rewritten from PostgreSQL (actor: system, platform pseudo-organization).",
+		Params:      []string{"organizations"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Bundle pointers and time tickets are rewritten by the running compiler within 60 s.",
 	},
 	CodeConfigApplied: {
 		Code: CodeConfigApplied, Emitted: true,
