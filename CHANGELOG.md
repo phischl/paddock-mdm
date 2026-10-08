@@ -168,6 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The attention count in the portal navigation is no longer a live region, so screen readers do not announce it on every page change; its label still names the number of open conditions.
+- An organization administrator who opens another page while the start page is still deciding stays there instead of being sent to the attention list a moment later.
 - Portal lists announce their loading state to assistive technology: the table is marked busy while a request runs and its loading bar is named *Loading results*.
 - The dead man's switch counts in ticks from the last accepted time ticket, so every warning appears at its lead time; before, a tick that fell just short of a lead time delayed the warning by a tick, and the last warning could be skipped when its lead time equals one tick (development builds) (M4c gate R6, M5a step 5).
 - When the dead man's switch is turned off, the device removes its pending warnings (login screen notice `/etc/issue.d/80-paddock-dms.issue` and the record of warnings shown) as soon as `delete_self_lock` arrives, and shows no further warning while it has no self-lock token, instead of warning again until the bundle with the switch off is applied (M5a step 0b).
