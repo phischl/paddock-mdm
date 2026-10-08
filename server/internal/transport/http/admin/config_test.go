@@ -71,6 +71,7 @@ func TestDeclarativeConfigEndpoints(t *testing.T) {
 	if r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" {
 		t.Fatalf("malformed expected_plan: %d %s", r.status, r.body)
 	}
+	e.expectEvent(r, "config.applied:failure:invalid_request")
 	r = e.do(call{method: "PUT", path: "/api/v1/config?expected_plan=" + confirmed, cookie: alice, body: doc})
 	r.decode(t, &res)
 	if r.status != http.StatusOK || res.DryRun || res.ChangeSetId == nil || res.Plan.Created != 1 || res.PlanSha256 != confirmed {

@@ -180,6 +180,11 @@ var auditCases = map[string][]auditCase{
 			expectStatus(t, res, http.StatusPreconditionFailed, "plan_changed")
 			expectOneEvent(t, w.alice, res.RequestID, "config.applied", "failure")
 		}},
+		{"malformed expected plan", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPut, "/api/v1/config?expected_plan=XYZ", settingsOnlyConfig(t, w.alice))
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "config.applied", "failure")
+		}},
 		{"malformed body", func(t *testing.T, w *auditWorld) {
 			res := call(t, w.alice, http.MethodPut, "/api/v1/config", []byte("{"))
 			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
