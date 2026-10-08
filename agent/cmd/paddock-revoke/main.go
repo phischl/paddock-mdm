@@ -1,6 +1,6 @@
 // Command paddock-revoke executes revocation tokens (architecture §12.3, plan M4c decisions 11–13). paddockd hands it
 // every revocation envelope of a check-in on stdin without interpreting it; paddock-revoke verifies the token against
-// the trust anchor pinned at enrollment and only then erases the keyslots of the root volume and reboots.
+// the trust anchor pinned at enrollment and only then erases the keyslots of every LUKS volume and reboots.
 //
 // Two-person rule (design contract 10): every change to this command and to agent/internal/revoke needs the review
 // of a second person and a passed test on real hardware (docs/operations/revocation-acceptance.md).

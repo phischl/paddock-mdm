@@ -702,10 +702,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceRevocationConfirmed: {
 		Code: CodeDeviceRevocationConfirmed, Emitted: true,
-		Description: "A device confirmed a revocation before its forced reboot: every keyslot of its encrypted root volume is erased (actor: the device).",
-		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "status"},
+		Description: "A device confirmed a revocation before its forced reboot: every keyslot of every LUKS volume of the device is erased (actor: the device).",
+		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "volumes", "unresolved", "status"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "status failed means the device reported that the erasure did not complete.",
+		Note:        "status failed means the device reported that the erasure did not complete. erased is true only if every volume has no keyslot left; slots_before and slots_after are sums over the volumes, volumes counts the erased volumes and unresolved the crypttab entries the device could not resolve (both 0 for devices before M4c.1).",
 	},
 	CodeDeviceRevocationRefused: {
 		Code: CodeDeviceRevocationRefused, Emitted: true,

@@ -1,9 +1,10 @@
 # Revocation: Lock and Destroy
 
-An organization administrator can **Lock** a device: every keyslot of its encrypted root volume is erased and the
-device reboots; the escrowed LUKS header and recovery key restore it. Two organization administrators can
-**Destroy** a device: a Lock whose escrow is deleted before the token is issued, so the data cannot be recovered
-(architecture §12.3, plan M4c).
+An organization administrator can **Lock** a device: every keyslot of its encrypted root volume and of every other
+LUKS volume listed in its `/etc/crypttab` is erased and the device reboots; the escrowed LUKS header and recovery key
+restore the root volume (Paddock escrows no other volume). Two organization administrators can **Destroy** a device:
+a Lock whose escrow is deleted before the token is issued, so the data cannot be recovered (architecture §12.3, plans
+M4c and M4c.1).
 
 > **The revocation path is disabled** (`PADDOCK_REVOCATION_ENABLED=false`, the default) until a second person has
 > reviewed `agent/internal/revoke/` and `agent/cmd/paddock-revoke/` and the hardware protocol in
@@ -56,7 +57,10 @@ start and no PIN, passphrase or key opens it. The escrow is untouched, so an org
 as for a damaged header (`docs/operations/disk-recovery.md`):
 
 1. Make sure the reason for the Lock is resolved (the device is back with its owner, or with IT). The request on the
-   *Revocations* page shows `confirmed` with the device's result (`slots_before`, `slots_after: 0`).
+   *Revocations* page shows `confirmed` with the device's result (`slots_before`, `slots_after: 0`, and per volume
+   in `volumes`; the device page lists every volume and the crypttab entries the device could not resolve). Restore
+   the root volume as below. Paddock escrows only the root volume: another erased volume can be restored only from a
+   header backup taken outside Paddock, otherwise its data is lost.
 2. Portal → device → *Disk encryption*: *Download header backup* (the newest stored generation was taken before the
    Lock; the Lock does not escrow a new one) and *Show recovery key*. Both need a step-up and the typed hostname.
 3. Boot the device from a live USB system, find the LUKS partition (`lsblk -f`) and restore:

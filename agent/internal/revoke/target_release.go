@@ -15,14 +15,25 @@ import (
 // dayLength is a day of a self-lock token's period_days.
 const dayLength = 24 * time.Hour
 
-// RootDevice implements System: the LUKS volume of the root file system. A release binary refuses every token while
-// the test target override exists, so it can never be pointed elsewhere (plan M4c decision 13).
-func (o OS) RootDevice(ctx context.Context) (string, error) {
+// Targets implements System: the root volume and every other LUKS volume of /etc/crypttab (plan M4c.1 decision 1).
+// A release binary refuses every token while the test target override exists, so it can never be pointed elsewhere
+// (plan M4c decision 13).
+func (o OS) Targets(ctx context.Context) (Targets, error) {
 	if _, err := os.Lstat(o.path(TestTargetFile)); !errors.Is(err, fs.ErrNotExist) {
-		return "", refuse(ReasonTestTarget)
+		return Targets{}, refuse(ReasonTestTarget)
 	}
 	v, err := luks.Root(ctx, o.OS)
-	return v.Device, err
+	if err != nil {
+		return Targets{}, err
+	}
+	crypttab, err := os.ReadFile(o.path(CrypttabFile))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// The root volume is still erased; the unreadable list is reported instead of its entries.
+		return Targets{Devices: []string{v.Device}, Unresolved: []string{CrypttabFile}}, nil
+	}
+	return volumes(ctx, o.OS, v.Device, crypttab, func(source string) (string, error) {
+		return resolveSource(o.Root, source)
+	}), nil
 }
 
 // Reboot implements System.

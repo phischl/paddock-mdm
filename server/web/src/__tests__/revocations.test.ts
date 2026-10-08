@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RevocationRequest } from '../api/client'
-import { parseWarnDays, revocationActions, revocationStatuses, reviewVerbs, timeline } from '../lib/revocations'
+import { parseWarnDays, revocationActions, revocationStatuses, reviewVerbs, timeline, volumeResults } from '../lib/revocations'
 import en from '../locales/en.json'
 
 const alice = '0190f000-0000-7000-8000-00000000000a'
@@ -29,6 +29,15 @@ describe('revocations', () => {
     })).map((s) => s.step)).toEqual(['requested', 'approved', 'issued', 'delivered', 'confirmed'])
     expect(timeline(request({ status: 'rejected', finished_at: '2026-10-07T11:00:00Z' })).map((s) => s.step))
       .toEqual(['requested', 'finished'])
+  })
+
+  it('reads the per-volume results of a confirmation and ignores malformed entries', () => {
+    const volume = { device: '/dev/sda3', slots_before: 2, slots_after: 0, erased: true }
+    expect(volumeResults(request({ result: { erased: true, volumes: [{ device: '/dev/sdb1' }, volume, 'x'], unresolved: ['UUID=gone', 3] } })))
+      .toEqual({ volumes: [volume], unresolved: ['UUID=gone'] })
+    expect(volumeResults(request({ result: { erased: true, slots_before: 2, slots_after: 0 } }))).toEqual({ volumes: [], unresolved: [] })
+    expect(volumeResults(request({ result: { volumes: 'all' } }))).toEqual({ volumes: [], unresolved: [] })
+    expect(volumeResults(request({}))).toEqual({ volumes: [], unresolved: [] })
   })
 
   it('parses the warning lead times', () => {

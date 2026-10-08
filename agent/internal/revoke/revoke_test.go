@@ -6,13 +6,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/pkg/dsse"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/revocation"
@@ -29,21 +32,30 @@ var (
 	otherKey   = ed25519.NewKeyFromSeed([]byte("paddock-revoke-test-other---key!"))
 )
 
-// fakeSys is a device with two keyslots on /dev/vda3, the marker and the trust anchor; it logs every action.
-type fakeSys struct {
-	mu        sync.Mutex
-	files     map[string][]byte
+// fakeVolume is a LUKS volume of fakeSys.
+type fakeVolume struct {
 	slots     int
-	log       []string
-	rootErr   error
+	luks1     bool // only the text dump of a LUKS1 header, no JSON metadata
 	eraseFail bool
+}
+
+// fakeSys is a device with two keyslots on its root volume /dev/vda3, the marker and the trust anchor; it logs every
+// action. targets are the volumes Targets returns, root last.
+type fakeSys struct {
+	mu      sync.Mutex
+	files   map[string][]byte
+	volumes map[string]*fakeVolume
+	targets Targets
+	log     []string
+	rootErr error
 }
 
 func newSys(t *testing.T) *fakeSys {
 	t.Helper()
 	trust, _ := json.Marshal(revocation.TrustFile{RevocationKeys: []revocation.Key{{KeyID: "revocation-signing:v1",
 		PublicKey: base64.StdEncoding.EncodeToString(trustedKey.Public().(ed25519.PublicKey))}}})
-	return &fakeSys{files: map[string][]byte{EnabledFile: {}, TrustFile: trust}, slots: 2}
+	return &fakeSys{files: map[string][]byte{EnabledFile: {}, TrustFile: trust},
+		volumes: map[string]*fakeVolume{"/dev/vda3": {slots: 2}}, targets: Targets{Devices: []string{"/dev/vda3"}}}
 }
 
 func (s *fakeSys) add(entry string) {
@@ -54,19 +66,35 @@ func (s *fakeSys) add(entry string) {
 
 func (s *fakeSys) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	s.add(name + " " + strings.Join(args, " "))
+	v := s.volumes[args[len(args)-1]]
 	switch {
-	case name == "cryptsetup" && args[0] == "luksDump":
+	case name != "cryptsetup" || v == nil:
+	case args[0] == "luksDump" && args[1] == "--dump-json-metadata":
+		if v.luks1 {
+			return "", "Unsupported for LUKS1", 1, nil
+		}
 		slots := map[string]any{}
-		for i := range s.slots {
+		for i := range v.slots {
 			slots[string(rune('0'+i))] = map[string]any{"type": "luks2"}
 		}
 		out, _ := json.Marshal(map[string]any{"keyslots": slots, "tokens": map[string]any{}})
 		return string(out), "", 0, nil
-	case name == "cryptsetup" && args[0] == "luksErase":
-		if s.eraseFail {
+	case args[0] == "luksDump" && v.luks1:
+		var out strings.Builder
+		out.WriteString("LUKS header information for " + args[len(args)-1] + "\n\nVersion:       \t1\nCipher name:   \taes\n\n")
+		for i := range 8 {
+			state := "DISABLED"
+			if i < v.slots {
+				state = "ENABLED"
+			}
+			fmt.Fprintf(&out, "Key Slot %d: %s\n", i, state)
+		}
+		return out.String(), "", 0, nil
+	case args[0] == "luksErase":
+		if v.eraseFail {
 			return "", "erase failed", 1, nil
 		}
-		s.slots = 0
+		v.slots = 0
 		return "", "", 0, nil
 	}
 	return "", "unexpected", 1, nil
@@ -80,11 +108,11 @@ func (s *fakeSys) Loginctl(_ context.Context, args ...string) (string, int, erro
 	return "", 0, nil
 }
 
-func (s *fakeSys) RootDevice(context.Context) (string, error) {
+func (s *fakeSys) Targets(context.Context) (Targets, error) {
 	if s.rootErr != nil {
-		return "", s.rootErr
+		return Targets{}, s.rootErr
 	}
-	return "/dev/vda3", nil
+	return s.targets, nil
 }
 
 func (s *fakeSys) Reboot(context.Context) error { s.add("reboot"); return nil }
@@ -153,7 +181,8 @@ func TestSequence(t *testing.T) {
 	sys := newSys(t)
 	c := &fakeConfirmer{sys: sys}
 	e, stored, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
-	if err != nil || stored || e != (Erasure{Erased: true, SlotsBefore: 2, SlotsAfter: 0}) {
+	if err != nil || stored || !reflect.DeepEqual(e, Erasure{Erased: true, SlotsBefore: 2, SlotsAfter: 0,
+		Volumes: []VolumeErasure{{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true}}}) {
 		t.Fatalf("execute: %+v %v", e, err)
 	}
 	want := []string{
@@ -169,8 +198,77 @@ func TestSequence(t *testing.T) {
 		t.Fatalf("sequence\n%s\nwant\n%s", strings.Join(sys.log, "\n"), strings.Join(want, "\n"))
 	}
 	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
-		string(c.results[0].Result) != `{"erased":true,"slots_before":2,"slots_after":0}` {
+		string(c.results[0].Result) != `{"erased":true,"slots_before":2,"slots_after":0,`+
+			`"volumes":[{"device":"/dev/vda3","slots_before":2,"slots_after":0,"erased":true}]}` {
+		t.Fatalf("confirmation %s", c.results[0].Result)
+	}
+}
+
+// TestEveryVolume (plan M4c.1 decisions 1–3): every target is erased and verified, the root volume last; the
+// confirmation lists every volume and the unresolved crypttab entries, and erased is true as every volume has no
+// keyslot left. A LUKS1 volume is counted from its text dump.
+func TestEveryVolume(t *testing.T) {
+	sys := newSys(t)
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
+	sys.volumes["/dev/vdc"] = &fakeVolume{slots: 1, luks1: true}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc", "/dev/vda3"}, Unresolved: []string{"UUID=0000-gone"}}
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	want := Erasure{Erased: true, SlotsBefore: 6, SlotsAfter: 0, Unresolved: []string{"UUID=0000-gone"}, Volumes: []VolumeErasure{
+		{Device: "/dev/vdb1", SlotsBefore: 3, SlotsAfter: 0, Erased: true},
+		{Device: "/dev/vdc", SlotsBefore: 1, SlotsAfter: 0, Erased: true},
+		{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true},
+	}}
+	t.Logf("per-volume results: %+v", e)
+	if err != nil || !reflect.DeepEqual(e, want) {
+		t.Fatalf("execute: %+v %v\nwant %+v", e, err, want)
+	}
+	erases := []string{}
+	for _, entry := range sys.log {
+		if strings.HasPrefix(entry, "cryptsetup luksErase") {
+			erases = append(erases, entry)
+		}
+	}
+	if !slices.Equal(erases, []string{"cryptsetup luksErase --batch-mode -- /dev/vdb1",
+		"cryptsetup luksErase --batch-mode -- /dev/vdc", "cryptsetup luksErase --batch-mode -- /dev/vda3"}) {
+		t.Fatalf("erasures %v", erases)
+	}
+	if tail := sys.log[len(sys.log)-2:]; !slices.Equal(tail, []string{"confirm 0190f000-0000-7000-8000-0000000000c1", "reboot"}) {
+		t.Fatalf("sequence ends with %v", tail)
+	}
+	var posted Erasure
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
+		json.Unmarshal(c.results[0].Result, &posted) != nil || !reflect.DeepEqual(posted, want) {
 		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestOneVolumeLeftKeyslots (plan M4c.1 decision 2): a volume whose erasure failed does not stop the others, and the
+// confirmation reports the revocation as failed with that volume's keyslots.
+func TestOneVolumeLeftKeyslots(t *testing.T) {
+	sys := newSys(t)
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3, eraseFail: true}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vda3"}}
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	t.Logf("per-volume results: %+v", e)
+	if err != nil || e.Erased || e.SlotsBefore != 5 || e.SlotsAfter != 3 || len(e.Volumes) != 2 ||
+		e.Volumes[0] != (VolumeErasure{Device: "/dev/vdb1", SlotsBefore: 3, SlotsAfter: 3}) ||
+		e.Volumes[1] != (VolumeErasure{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true}) {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandFailed || sys.log[len(sys.log)-1] != "reboot" {
+		t.Fatalf("confirmation %+v, log %v", c.results, sys.log)
+	}
+}
+
+// TestUnknownKeyslotCount: a volume whose keyslots cannot be counted after the erasure is never reported as erased.
+func TestUnknownKeyslotCount(t *testing.T) {
+	sys := newSys(t)
+	sys.targets = Targets{Devices: []string{"/dev/vdz", "/dev/vda3"}}
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
+	if err != nil || e.Erased || e.SlotsAfter != -1 || e.Volumes[0].SlotsAfter != -1 || e.Volumes[0].Erased || !e.Volumes[1].Erased {
+		t.Fatalf("execute: %+v %v", e, err)
 	}
 }
 
@@ -178,7 +276,7 @@ func TestSequence(t *testing.T) {
 // keyslot is reported as failed.
 func TestRebootWithoutConfirmation(t *testing.T) {
 	sys := newSys(t)
-	sys.eraseFail = true
+	sys.volumes["/dev/vda3"].eraseFail = true
 	c := &fakeConfirmer{sys: sys, fail: true}
 	start := time.Now()
 	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
@@ -225,6 +323,8 @@ func TestRefusals(t *testing.T) {
 		}, elapsed: 30*dayLength - time.Second, reason: ReasonPeriod},
 		"dead man's switch with a Lock":  {elapsed: 30 * dayLength, reason: ReasonNotSelfLock},
 		"test target in a release build": {prepare: func(s *fakeSys) { s.rootErr = refuse(ReasonTestTarget) }, reason: ReasonTestTarget},
+		"root not on LUKS":               {prepare: func(s *fakeSys) { s.rootErr = luks.ErrNotEncrypted }, reason: ReasonNotEncrypted},
+		"no target":                      {prepare: func(s *fakeSys) { s.targets = Targets{Unresolved: []string{"UUID=x"}} }, reason: ReasonInternal},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
