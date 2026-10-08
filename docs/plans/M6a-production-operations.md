@@ -44,6 +44,8 @@ public TLS, no development weakening, backups with stated RPO/RTO and a tested r
    unseal with the dev shares, run `paddockctl admin bump-bundle-seq --by 1000000` and `paddockctl admin rebuild-cache`,
    `paddockctl admin recompile --all`, then run the acceptance subset `TestDeviceProtocol|TestLoginGate|TestAuditChain|
    TestOrganizationIsolation`. Measured RTO is written to the runbook. The audit store is not part of the restore.
+   Amendment 2026-10-08 (architect): `paddockctl admin …` → `paddock-server admin …` (plan M6c decisions 20–23; item 9
+   of the amendment below).
 
 ### 2.3 Monitoring (A12)
 8. Compose profile `observability` (prod and dev): Prometheus (image `prom/prometheus`, pinned — approved) scraping
@@ -127,3 +129,10 @@ Decided on the implementer's questions during PDK-005; binding for steps 1–4.
    (`PaddockAuditWriterLag`: `audit.writer` not drained for 10 minutes; `PaddockAuditWriterNotConsuming`). Each role is
    one static target, so that a stopped role stays a target with `up == 0`. `make lint-prometheus` (part of
    `make lint`) runs `promtool check config`, `check rules` and the rule tests.
+9. **Restore commands (decision 7).** Amendment 2026-10-08 (architect): `paddockctl admin …` → `paddock-server admin …`
+   (plan M6c decisions 20–23). Order, each as `docker compose … run --rm --no-deps paddock-worker admin …`: stop
+   `paddock-compiler` → `bump-bundle-seq --by 1000000` → start the compiler → `rebuild-cache` → `recompile --all`
+   (plan M6c §5). The OpenBao snapshot is decrypted to stdout (`paddock-server backup decrypt <in> -`) straight into
+   the fresh OpenBao container, which after `raft snapshot restore -force` is sealed with the original barrier and is
+   unsealed with the original shares (verified on a throwaway OpenBao). `make restore-drill` requires the development
+   stack with backups (`make up BACKUP=1`).

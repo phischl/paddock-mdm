@@ -68,3 +68,77 @@ pc run --rm --no-deps pgbackrest info                # pgbackrest info of the st
 pc run --rm --no-deps paddock-worker backup openbao  # OpenBao snapshot now
 pc run --rm --no-deps fleet-backup once              # Fleet dump now; fleet-backup-upload uploads it within a minute
 ```
+
+## Restoring the control plane
+
+Use this procedure when the control-plane databases or OpenBao are lost, for example after a host failure. The audit
+store is not restored; the audit host keeps running. Commands use the control plane's Compose files (`pc`).
+
+1. **Prepare.** A rebuilt host with the repository, `.env` and `.secrets/` as in `docs/operations/install.md`
+   (secrets from your secret store, `backup_encryption_key` from the custodians' offline copy). Three OpenBao
+   custodians are available.
+2. **Stop the writers.** `pc --profile paddock stop` and `pc stop authentik-server authentik-worker pgbackrest
+   pgbackrest-authentik`.
+3. **PostgreSQL.** With empty volumes `postgres-data` and `authentik-postgres-data` (remove damaged ones with
+   `docker volume rm paddock_postgres-data …`):
+
+   ```sh
+   pc run --rm --no-deps pgbackrest restore               # latest point of the WAL archive
+   pc run --rm --no-deps pgbackrest-authentik restore
+   pc up -d --no-deps postgres authentik-postgres         # replays the staged WAL, then promotes
+   pc exec postgres psql -U postgres -Atc 'select pg_is_in_recovery()'   # f when done
+   pc up -d --no-deps pgbackrest pgbackrest-authentik
+   ```
+
+4. **OpenBao.** Start a fresh OpenBao (empty `openbao-data`), initialize it with a single temporary share, unseal it
+   with that share, and restore the newest snapshot (`openbao/<UTC time>.snap.enc`, downloaded with the pgBackRest
+   credential):
+
+   ```sh
+   pc run --rm --no-deps -T -v "$PWD/snapshot.enc:/in:ro" paddock-worker backup decrypt /in - |
+     pc exec -T openbao sh -c 'cat >/tmp/snapshot'
+   bao operator raft snapshot restore -force /tmp/snapshot     # with the temporary root token
+   pc exec openbao rm /tmp/snapshot
+   ```
+
+   The restored node is sealed with the original barrier: three custodians unseal it with their shares
+   (`docs/operations/openbao.md` section 2). Policies, AppRoles and keys are those of the snapshot; secret IDs issued
+   after it must be issued again.
+5. **Paddock.** Start Authentik and the roles except the compiler, then run the restore commands in exactly this order
+   (plan M6c decisions 20–22): a restored database can hold older bundle sequence numbers than the devices, which would
+   refuse new bundles as downgrades; Valkey's caches and the bundles bucket are rebuilt from PostgreSQL.
+
+   ```sh
+   pc up -d --no-deps authentik-server authentik-worker
+   pc --profile paddock up -d paddock-api paddock-gateway paddock-worker paddock-outbox-relay paddock-escrow-reader \
+     paddock-revocation-issuer
+   pc stop paddock-compiler
+   pc run --rm --no-deps paddock-worker admin bump-bundle-seq --by 1000000
+   pc start paddock-compiler
+   pc run --rm --no-deps paddock-worker admin rebuild-cache
+   pc run --rm --no-deps paddock-worker admin recompile --all
+   ```
+
+   On a rebuilt host where the compiler's container was never created, create it first
+   (`pc --profile paddock create paddock-compiler`), so that `start` has a container to start.
+
+6. **Fleet**, if its MySQL is lost: restore the newest `fleet/*.sql.gz.enc` into an empty `fleet-mysql`
+   (`openssl enc -d -aes-256-cbc -pbkdf2 -pass file:.secrets/backup_encryption_key -in <file> | gunzip | mysql …`)
+   or let the devices rebuild it within 24 hours.
+7. **Check.** `make prod-check`, all roles ready (`pc ps`), no firing alerts, a device checks in and receives a new
+   bundle version.
+
+## Restore drill (quarterly)
+
+`make restore-drill` runs the whole procedure on the development stack (started with `make up BACKUP=1`, dev-seeded):
+full backups and an OpenBao snapshot, then it deletes the volumes of both databases, their WAL spools and OpenBao,
+restores them (OpenBao unsealed with the stored development shares), runs the restore commands of step 5 and the
+acceptance subset `TestDeviceProtocol|TestLoginGate|TestAuditChain|TestOrganizationIsolation`. It prints the time from
+the loss until the control plane is ready and until the subset is green.
+
+| Drill | Control plane ready | Subset green (RTO) |
+| --- | --- | --- |
+| first drill (gate P-3) | pending | pending |
+
+The stated RTO of 4 hours covers a rebuilt host, the custodians' arrival and the download of the backups; the drill
+measures the technical part.
