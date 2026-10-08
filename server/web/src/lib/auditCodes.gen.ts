@@ -81,6 +81,7 @@ export const auditCodes = [
   'permission_profile.created',
   'permission_profile.deleted',
   'permission_profile.updated',
+  'platform.osv_imported',
   'platform.osv_stale',
   'profile_assignment.created',
   'profile_assignment.deleted',

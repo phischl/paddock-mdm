@@ -33,7 +33,7 @@ type OSV struct {
 	platform *db.PlatformPool
 }
 
-// NewOSV creates the use cases; org may be nil where only the import runs (paddock-server osv import).
+// NewOSV creates the use cases; org may be nil where only the import of a file runs (paddock-server osv import).
 func NewOSV(runner *ActionRunner, org *db.OrgPool, platform *db.PlatformPool) *OSV {
 	return &OSV{runner: runner, org: org, platform: platform}
 }
@@ -130,6 +130,31 @@ func (o *OSV) Import(ctx context.Context, etag string, read func(fn func(osv.Ent
 		}
 		return q.MarkOSVImported(ctx, pgstore.MarkOSVImportedParams{Etag: etag, Entries: int32(min(st.Entries, 1<<31-1))}) //nolint:gosec // clamped
 	})
+	return st, err
+}
+
+// ImportFile is Import for an operator's file (paddock-server osv import, plan M5c decision 3), audited as
+// platform.osv_imported with the counts and the resulting data version.
+func (o *OSV) ImportFile(ctx context.Context, read func(fn func(osv.Entry) error) (osv.Stats, error)) (osv.Stats, error) {
+	var st osv.Stats
+	spec := ActionSpec{Code: audit.CodePlatformOSVImported, Target: &audit.Target{Type: "osv_source", ID: "ubuntu"}}
+	err := o.runner.RunExternal(ctx, ScopePlatform, spec,
+		func(context.Context, *pgstore.Queries, Recorder) error { return nil },
+		func(ctx context.Context) error {
+			var err error
+			st, err = o.Import(ctx, "", read)
+			return err
+		},
+		func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error {
+			rec.SetParam("records", st.Records)
+			rec.SetParam("entries", st.Entries)
+			if externalErr != nil {
+				return nil
+			}
+			state, err := q.GetOSVSyncState(ctx)
+			rec.SetParam("data_version", state.DataVersion)
+			return err
+		})
 	return st, err
 }
 

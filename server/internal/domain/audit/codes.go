@@ -124,7 +124,8 @@ const (
 	CodeDeviceStaleCritical Code = "device.stale_critical"
 	CodeDeviceStaleCleared  Code = "device.stale_cleared"
 
-	CodePlatformOSVStale Code = "platform.osv_stale"
+	CodePlatformOSVStale    Code = "platform.osv_stale"
+	CodePlatformOSVImported Code = "platform.osv_imported"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -807,6 +808,13 @@ var registry = map[Code]Definition{
 		Params:      []string{"last_success_at", "last_error"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stale period; the next successful download or import ends it. last_success_at is missing if no download ever succeeded.",
+	},
+	CodePlatformOSVImported: {
+		Code: CodePlatformOSVImported, Emitted: true,
+		Description: "An operator imported Ubuntu's vulnerability data (OSV) from a file with paddock-server osv import (actor: system osv-import, platform pseudo-organization).",
+		Params:      []string{"records", "entries", "data_version"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "The file path is not recorded. data_version is the version of the data after a successful import.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,
