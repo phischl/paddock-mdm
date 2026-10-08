@@ -104,6 +104,12 @@ services:
       PADDOCK_INVENTORY_SYNC_INTERVAL: ${PADDOCK_INVENTORY_SYNC_INTERVAL:-60s}
       # Staleness thresholds count minutes, for gate U4 (plan M5b decision 9).
       PADDOCK_STALENESS_UNIT: ${PADDOCK_STALENESS_UNIT:-minute}
+      # Ubuntu's vulnerability data from the fixture server of gate O1 on the host, every 30 s, instead of the real
+      # bulk file once a day (plan M5c); without the gate running, the downloads fail and the data stays.
+      PADDOCK_OSV_UBUNTU_URL: ${PADDOCK_OSV_UBUNTU_URL:-http://host.docker.internal:18490/Ubuntu/all.zip}
+      PADDOCK_OSV_SYNC_INTERVAL: ${PADDOCK_OSV_SYNC_INTERVAL:-30s}
+    extra_hosts:
+      - host.docker.internal:host-gateway
 
   paddock-gateway:
     environment:
