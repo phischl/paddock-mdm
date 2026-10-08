@@ -23,7 +23,7 @@ const columns: ListColumn[] = [
     <h1>{{ t('inventory.vulnerabilitiesTitle') }}</h1>
     <VulnerabilityTile />
     <p class="summary">
-      {{ t('inventory.severityHint') }}
+      {{ t('inventory.severityHintOrganization') }}
     </p>
     <DataList
       :columns="columns"

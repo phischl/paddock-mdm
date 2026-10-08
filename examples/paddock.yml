@@ -1,0 +1,68 @@
+# Declarative configuration of a Paddock organization (paddock.v1). Schema: `paddockctl schema`
+# (api/schema/paddock.v1.json); guide: docs/operations/paddockctl.md.
+#
+# A section that is present is authoritative: items it does not list are deleted, so keep every section complete or
+# leave it out. Preview with `paddockctl apply -f paddock.yml --dry-run`; deletions need --yes.
+api_version: paddock/v1
+kind: OrganizationConfig
+settings:
+  login:
+    hello_enabled: true
+    hello_pin_min_length: 6
+    user_lock_session_action: lock_screen
+    break_glass_accounts: []
+    sudoers_d_allowlist:
+      - README
+    sudo_lecture_text: |-
+      This device is managed by your organization.
+      Use administrative rights only for the tasks you are responsible for.
+    local_admin_username: paddock-admin
+    local_admin_rotation_days: 30
+    rotate_after_reveal_hours: null
+    notice_text: ""
+    boot_pin_min_length: 8
+  updates:
+    security_daily_at: "03:00"
+    regular_schedule: "Sat 04:00"
+    regular_updates_enabled: true
+    max_random_delay_min: 60
+    staleness_warning_h: 24
+    staleness_critical_h: 168
+device_groups:
+  - name: laptops
+    description: Notebooks of the field staff
+  - name: kiosks
+    description: ""
+permission_profiles:
+  - name: ops
+    class: restricted
+    commands:
+      - /usr/bin/systemctl restart *
+    require_password: true
+    timestamp_timeout_min: 5
+    lecture: once
+managed_files:
+  - path: /etc/motd
+    device_group: null
+    mode: "0644"
+    owner: root
+    group: root
+    content: |
+      Managed by Paddock.
+      Changes are overwritten.
+managed_units:
+  - unit: chrony.service
+    device_group: laptops
+    enabled: true
+    active: true
+package_holds:
+  - package: firefox
+    version: null
+    device_group: kiosks
+    reason: Kiosk browser is pinned until the next release test
+profile_assignments:
+  - profile: ops
+    subject:
+      type: group
+      slug: devs
+    device_group: laptops

@@ -89,6 +89,15 @@ export type DeviceUpdates = components['schemas']['DeviceUpdates']
 export type Attention = components['schemas']['Attention']
 export type AttentionKind = components['schemas']['AttentionKind']
 export type AttentionSort = components['parameters']['AttentionSort']
+export type ApiToken = components['schemas']['ApiToken']
+export type ApiTokenCreated = components['schemas']['ApiTokenCreated']
+export type ApiTokenRole = components['schemas']['ApiTokenRole']
+export type ApiTokenStatus = components['schemas']['ApiTokenStatus']
+export type ApiTokenSort = components['parameters']['ApiTokenSort']
+export type ChangeSet = components['schemas']['ChangeSet']
+export type ChangeSetSource = components['schemas']['ChangeSetSource']
+export type ChangeSetSort = components['parameters']['ChangeSetSort']
+export type ConfigPlan = components['schemas']['ConfigPlan']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

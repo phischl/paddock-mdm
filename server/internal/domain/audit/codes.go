@@ -125,7 +125,21 @@ const (
 	CodeDeviceStaleCritical Code = "device.stale_critical"
 	CodeDeviceStaleCleared  Code = "device.stale_cleared"
 
-	CodePlatformOSVStale Code = "platform.osv_stale"
+	CodePlatformOSVStale    Code = "platform.osv_stale"
+	CodePlatformOSVImported Code = "platform.osv_imported"
+
+	// API tokens (plan M6c decisions 4, 5 and 9).
+	CodeAPITokenCreated   Code = "api_token.created"
+	CodeAPITokenRevoked   Code = "api_token.revoked"
+	CodeAPITokenUseDenied Code = "api_token.use_denied" //nolint:gosec // an audit code, not a credential
+
+	// Declarative configuration (plan M6c decision 16).
+	CodeConfigApplied Code = "config.applied"
+
+	// Restore commands of paddock-server admin (plan M6c decision 21).
+	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
+	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
+	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -817,6 +831,61 @@ var registry = map[Code]Definition{
 		Params:      []string{"last_success_at", "last_error"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stale period; the next successful download or import ends it. last_success_at is missing if no download ever succeeded.",
+	},
+	CodeAPITokenCreated: {
+		Code: CodeAPITokenCreated, Emitted: true,
+		Description: "An organization administrator or operator created an API token. The token secret is never recorded.",
+		Params:      []string{"name", "role", "expires_at", "prefix"},
+		Outcomes:    adminOutcomes,
+		Note:        "Requires a fresh step-up: denied with step_up_required without one (an API token never has one, so a token cannot create tokens); denied with forbidden for a role above the creator's.",
+	},
+	CodeAPITokenRevoked: {
+		Code: CodeAPITokenRevoked, Emitted: true,
+		Description: "An API token was revoked; it is refused from its next request on.",
+		Params:      []string{"name", "role", "created_by"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for an operator revoking another administrator's token and for a request made with an API token.",
+	},
+	CodeAPITokenUseDenied: {
+		Code: CodeAPITokenUseDenied, Emitted: true,
+		Description: "A request authenticated with a revoked or expired API token was refused (actor: anonymous, with the token's name).",
+		Params:      []string{"name", "reason"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "reason is revoked or expired. Unknown or malformed secrets are not recorded.",
+	},
+	CodeOrganizationRecompileRequested: {
+		Code: CodeOrganizationRecompileRequested, Emitted: true,
+		Description: "An operator ran paddock-server admin recompile --all: every active device of the organization gets a new bundle version, also when its content is unchanged (actor: system).",
+		Params:      []string{"organizations_total"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "One event per organization; part of the restore order of docs/operations/paddockctl.md.",
+	},
+	CodePlatformBundleSeqBumped: {
+		Code: CodePlatformBundleSeqBumped, Emitted: true,
+		Description: "An operator ran paddock-server admin bump-bundle-seq after a database restore: the bundle sequence of every device was raised (actor: system, platform pseudo-organization).",
+		Params:      []string{"by", "devices"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodePlatformCacheRebuilt: {
+		Code: CodePlatformCacheRebuilt, Emitted: true,
+		Description: "An operator ran paddock-server admin rebuild-cache: the enrollment tokens, device keys and sequence numbers of the gateway's cache were rewritten from PostgreSQL (actor: system, platform pseudo-organization).",
+		Params:      []string{"organizations"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Bundle pointers and time tickets are rewritten by the running compiler within 60 s.",
+	},
+	CodeConfigApplied: {
+		Code: CodeConfigApplied, Emitted: true,
+		Description: "A declarative configuration (PUT /api/v1/config, paddockctl apply) was applied in one transaction; the change set lists every change.",
+		Params:      []string{"change_set_id", "created", "updated", "deleted", "sections"},
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied.",
+	},
+	CodePlatformOSVImported: {
+		Code: CodePlatformOSVImported, Emitted: true,
+		Description: "An operator imported Ubuntu's vulnerability data (OSV) from a file with paddock-server osv import (actor: system osv-import, platform pseudo-organization).",
+		Params:      []string{"records", "entries", "data_version"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "The file path is not recorded. data_version is the version of the data after a successful import.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

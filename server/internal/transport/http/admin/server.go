@@ -23,6 +23,8 @@ type Deps struct {
 	Accounts      *app.Accounts
 	AuditLog      *app.AuditLog
 	Tokens        *app.EnrollmentTokens
+	APITokens     *app.APITokens
+	Declarative   *app.Declarative
 	Devices       *app.Devices
 	Managed       *app.ManagedConfig
 	Releases      *app.AgentReleases
@@ -73,6 +75,9 @@ var privileged = map[string]struct {
 	"POST /api/v1/devices/{id}/release-quarantine":                         {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},
 	"POST /api/v1/devices/{id}/retire":                                     {app.ScopeOrg, app.SpecDeviceRetire},
 	"POST /api/v1/enrollment-tokens/{id}/revoke":                           {app.ScopeOrg, app.SpecEnrollmentTokenRevoke},
+	"POST /api/v1/api-tokens":                                              {app.ScopeOrg, app.SpecAPITokenCreate},
+	"POST /api/v1/api-tokens/{id}/revoke":                                  {app.ScopeOrg, app.SpecAPITokenRevoke},
+	"PUT /api/v1/config":                                                   {app.ScopeOrg, app.SpecConfigApply},
 	"POST /api/platform/v1/agent-releases":                                 {app.ScopePlatform, app.SpecAgentReleaseCreate},
 	"PUT /api/platform/v1/agent-releases/{version}/artifacts/{arch}":       {app.ScopePlatform, app.SpecAgentReleaseUpload},
 	"PUT /api/platform/v1/agent-releases/{version}/packages/{name}/{arch}": {app.ScopePlatform, app.SpecAgentReleaseUpload},
@@ -147,7 +152,8 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, now: d.Now,
+		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, apiTokens: d.APITokens, declarative: d.Declarative,
+		now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}
@@ -159,7 +165,7 @@ func NewHandler(d Deps) http.Handler {
 		})
 	adminapi.HandlerWithOptions(strict, adminapi.StdHTTPServerOptions{
 		BaseRouter:       api,
-		Middlewares:      []adminapi.MiddlewareFunc{s.csrf},
+		Middlewares:      []adminapi.MiddlewareFunc{s.csrf, limitConfigBody},
 		ErrorHandlerFunc: s.rejected,
 	})
 	api.Handle("POST /api/auth/logout", s.csrf(s.bff.logout(d.PublicURL)))
@@ -185,9 +191,14 @@ type server struct {
 	bff *bff
 }
 
-// session turns the session cookie into the request principal; requests without a valid session get 401.
+// session turns the session cookie, or the API token of an Authorization: Bearer header (bearer.go), into the request
+// principal; requests without a valid session or token get 401.
 func (s *server) session(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if secret, ok := bearerSecret(r); ok {
+			s.bearer(next, w, r, secret)
+			return
+		}
 		c, err := r.Cookie(SessionCookie)
 		if err != nil {
 			httpx.WriteProblem(w, r, problem.Unauthenticated)
@@ -252,6 +263,18 @@ func (s *server) rejected(w http.ResponseWriter, r *http.Request, err error) {
 		}
 	}
 	httpx.WriteProblem(w, r, p)
+}
+
+// limitConfigBody bounds the body of PUT /api/v1/config one byte above app.MaxDocumentBytes, so that a larger
+// document is refused while it is read (400 invalid_request, audited by rejected) and a document of exactly the limit
+// reaches the use case.
+func limitConfigBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/api/v1/config" {
+			r.Body = http.MaxBytesReader(w, r.Body, app.MaxDocumentBytes+1)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func noStore(next http.Handler) http.Handler {

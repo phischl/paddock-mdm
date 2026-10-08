@@ -21,6 +21,8 @@ export const router = createRouter({
     { path: '/vulnerabilities', name: 'vulnerabilities', component: () => import('./views/Vulnerabilities.vue') },
     { path: '/vulnerabilities/:cve', name: 'vulnerability', component: () => import('./views/VulnerabilityDevices.vue') },
     { path: '/enrollment-tokens', name: 'enrollment-tokens', component: () => import('./views/EnrollmentTokens.vue') },
+    { path: '/api-tokens', name: 'api-tokens', component: () => import('./views/ApiTokens.vue') },
+    { path: '/change-sets', name: 'change-sets', component: () => import('./views/ChangeSets.vue') },
     { path: '/managed-files', name: 'managed-files', component: () => import('./views/ManagedFiles.vue') },
     { path: '/managed-units', name: 'managed-units', component: () => import('./views/ManagedUnits.vue') },
     { path: '/users', name: 'users', component: () => import('./views/Users.vue') },
@@ -57,13 +59,20 @@ export function homeFor(role: string | null | undefined): RouteLocationRaw {
   }
 }
 
+// navigations counts the guarded navigations: vue-router follows a redirect even when a later navigation started
+// while the guard waited, so a slow start page decision would take the user away from where they went meanwhile.
+let navigations = 0
+
 router.beforeEach(async (to) => {
+  const navigation = ++navigations
   if (to.meta.public) return true
   const session = useSessionStore()
   const me = await session.load()
   if (!me) return false // the API client redirects to the login
   // Organization administrators start on the attention list while it has entries (plan M5b decision 11).
-  if (to.name === 'home' && me.role === 'org_admin' && (await attentionCount()) > 0) return { name: 'attention' }
+  if (to.name === 'home' && me.role === 'org_admin' && (await attentionCount()) > 0) {
+    return navigation === navigations ? { name: 'attention' } : false
+  }
   if (to.name === 'home') return homeFor(me.role)
   return true
 })

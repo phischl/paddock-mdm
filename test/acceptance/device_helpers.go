@@ -97,6 +97,17 @@ func removeCreated(t *testing.T, p *env.Portal, collection string, res env.Respo
 	case "/api/v1/enrollment-tokens":
 		createdTokenOf(t, p, res)
 		return
+	case "/api/v1/api-tokens": // {token, secret}; tokens are revoked, never deleted
+		var out struct {
+			Token struct {
+				ID string `json:"id"`
+			} `json:"token"`
+		}
+		if err := res.JSON(&out); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = call(t, p, http.MethodPost, collection+"/"+out.Token.ID+"/revoke", nil) })
+		return
 	case "/api/v1/users": // {user, recovery_link}
 		var out struct {
 			User struct {

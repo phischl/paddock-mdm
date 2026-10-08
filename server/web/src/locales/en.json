@@ -28,7 +28,9 @@
     "attention": "Attention",
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
-    "updateSettings": "Updates"
+    "updateSettings": "Updates",
+    "apiTokens": "API tokens",
+    "changeSets": "Change sets"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -131,7 +133,8 @@
       "platform_admin": "Platform administrator",
       "system": "System",
       "anonymous": "Anonymous",
-      "device": "Device"
+      "device": "Device",
+      "api_token": "API token"
     },
     "outcomes": {
       "success": "Success",
@@ -144,7 +147,8 @@
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
-      "domains_changed": "{actor} set the domains of {slug}"
+      "domains_changed": "{actor} set the domains of {slug}",
+      "recompile_requested": "{actor} requested a new bundle for every device (restore)"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -154,6 +158,14 @@
     "enrollment_token": {
       "created": "{actor} created the enrollment token {name}",
       "revoked": "{actor} revoked the enrollment token {name}"
+    },
+    "config": {
+      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)"
+    },
+    "api_token": {
+      "created": "{actor} created the API token {name} ({role})",
+      "revoked": "{actor} revoked the API token {name}",
+      "use_denied": "A request with the {reason} API token {name} was refused"
     },
     "device": {
       "enrolled": "The device {hostname} enrolled",
@@ -223,7 +235,10 @@
       "published": "{actor} published the agent release {version}"
     },
     "platform": {
-      "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days"
+      "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
+      "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
+      "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
+      "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -634,6 +649,70 @@
     "copied": "Copied to the clipboard.",
     "done": "Done"
   },
+  "apiTokens": {
+    "title": "API tokens",
+    "summary": "API tokens let automation such as paddockctl act in this organization with one role. Everything a token does is in the audit log under its name.",
+    "create": "Create API token",
+    "createTitle": "New API token",
+    "nameHint": "Letters, digits, spaces, dots, underscores and hyphens; at most 64 characters.",
+    "nameInvalid": "The name must start with a letter or digit and have at most 64 characters of letters, digits, spaces, '.', '_' and '-'.",
+    "role": "Role",
+    "roles": {
+      "org_admin": "Organization administrator",
+      "org_operator": "Operator",
+      "org_auditor": "Auditor"
+    },
+    "roleAboveCeiling": "The role exceeds your own role.",
+    "expires": "Expires",
+    "expiryTooSoon": "The token must be valid for at least 1 hour.",
+    "expiryTooLate": "The token can be valid for at most 365 days.",
+    "prefix": "Prefix",
+    "status": "Status",
+    "statuses": {
+      "active": "Active",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "createdBy": "Created by",
+    "lastUsed": "Last used",
+    "neverUsed": "Never",
+    "secret": "API token",
+    "shownOnce": "This is the only time the token is shown. Copy it now and store it like a password; Paddock keeps only a hash of it.",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke API token",
+    "revokeConfirm": "Revoke the API token {name}? Requests made with it are refused from now on.",
+    "revokeLabel": "Revoke {name}"
+  },
+  "changeSets": {
+    "title": "Change sets",
+    "summary": "Every configuration applied with paddockctl or PUT /api/v1/config that changed something, with its plan.",
+    "appliedAt": "Applied",
+    "actor": "By",
+    "source": "Source",
+    "sources": {
+      "session": "Portal session",
+      "api_token": "API token"
+    },
+    "created": "Created",
+    "updated": "Updated",
+    "deleted": "Deleted",
+    "details": "Details",
+    "detailsLabel": "Details of the change set of {at}",
+    "detailsTitle": "Change set",
+    "detailsSummary": "Applied by {actor} on {at}.",
+    "section": "Section",
+    "key": "Item",
+    "action": "Change",
+    "actions": {
+      "create": "Created",
+      "update": "Updated",
+      "delete": "Deleted"
+    },
+    "field": "Field",
+    "before": "Before",
+    "after": "After",
+    "close": "Close"
+  },
   "managed": {
     "scope": "Applies to",
     "allDevices": "All devices",
@@ -934,6 +1013,7 @@
     "softwareTitle": "Software",
     "vulnerabilitiesTitle": "Vulnerabilities",
     "softwareHint": "Packages of the system package managers as fleetd reported them at the last inventory sync.",
+    "severityHintOrganization": "Severity is Ubuntu's priority, the highest among the CVE's findings; \"Fixed in\" is the version that fixes it for the Ubuntu release of that finding; other releases can have other versions. Vulnerabilities Ubuntu has not rated yet have unknown severity.",
     "severityHint": "Severity is Ubuntu's priority for the device's release, \"Fixed in\" the version that fixes it there. Vulnerabilities Ubuntu has not rated yet have unknown severity.",
     "package": "Package",
     "version": "Version",

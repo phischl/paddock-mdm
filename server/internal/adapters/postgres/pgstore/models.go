@@ -92,6 +92,37 @@ type AgentUpdateReport struct {
 	ReportedAt     time.Time
 }
 
+type ApiToken struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	Name           string
+	Role           string
+	SecretSha256   []byte
+	Prefix         string
+	CreatedBy      uuid.UUID
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+	LastUsedAt     *time.Time
+	RevokedAt      *time.Time
+	RevokedBy      uuid.NullUUID
+}
+
+type ApiTokenListed struct {
+	ID               uuid.UUID
+	OrganizationID   uuid.UUID
+	Name             string
+	Role             string
+	Prefix           string
+	CreatedBy        uuid.UUID
+	CreatedByDisplay string
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
+	LastUsedAt       *time.Time
+	RevokedAt        *time.Time
+	RevokedBy        uuid.NullUUID
+	Status           string
+}
+
 type AppUser struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
@@ -126,6 +157,19 @@ type Bundle struct {
 	ObjectKey      string
 	CreatedAt      time.Time
 	SchemaVersion  int32
+}
+
+type ChangeSet struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	AppliedAt      time.Time
+	Actor          json.RawMessage
+	Source         string
+	CreatedN       int32
+	UpdatedN       int32
+	DeletedN       int32
+	Sections       []string
+	Plan           json.RawMessage
 }
 
 type Device struct {
@@ -501,14 +545,16 @@ type UserGroupMember struct {
 }
 
 type VulnerabilityFinding struct {
-	DeviceID        uuid.UUID
-	OrganizationID  uuid.UUID
-	Cve             string
-	SoftwareName    string
-	SoftwareVersion string
-	CvssScore       *float64
-	Severity        *string
-	FixedVersion    *string
-	FirstSeenAt     time.Time
-	CvssVector      *string
+	DeviceID          uuid.UUID
+	OrganizationID    uuid.UUID
+	Cve               string
+	SoftwareName      string
+	SoftwareVersion   string
+	CvssScore         *float64
+	Severity          *string
+	FixedVersion      *string
+	FirstSeenAt       time.Time
+	CvssVector        *string
+	FleetSeverity     *string
+	FleetFixedVersion *string
 }

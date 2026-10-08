@@ -26,6 +26,9 @@ commands:
   audit seal [--day YYYY-MM-DD]
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD
   osv import <file>
+  admin bump-bundle-seq --by N
+  admin recompile --all
+  admin rebuild-cache
   backup openbao
   backup decrypt <in> <out|->
   prod-check [--host controlplane|audit] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
@@ -96,6 +99,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runBackup(ctx, l, args[1:])
 	case "prod-check":
 		err = runProdCheck(ctx, args[1:], os.Stdin, os.Stdout)
+	case "admin":
+		err = runAdmin(ctx, l, args[1:])
 	case "provision":
 		if len(args) != 2 || args[1] != "rabbitmq" {
 			err = errUsage

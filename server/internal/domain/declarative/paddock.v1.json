@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paddock-mdm.invalid/schema/paddock.v1.json",
+  "title": "Paddock organization configuration (paddock.yml)",
+  "description": "The declarative configuration of one Paddock organization (plan M6c decision 13). A section that is present is authoritative: items not listed are deleted, listed items are created or updated. Absent sections are untouched.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "kind"],
+  "properties": {
+    "api_version": { "const": "paddock/v1" },
+    "kind": { "const": "OrganizationConfig" },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "login": { "$ref": "#/$defs/loginSettings" },
+        "updates": { "$ref": "#/$defs/updateSettings" }
+      }
+    },
+    "device_groups": {
+      "description": "Key: name.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/deviceGroup" }
+    },
+    "permission_profiles": {
+      "description": "Key: name.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/permissionProfile" }
+    },
+    "managed_files": {
+      "description": "Key: device_group and path.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/managedFile" }
+    },
+    "managed_units": {
+      "description": "Key: device_group and unit.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/managedUnit" }
+    },
+    "package_holds": {
+      "description": "Key: device_group and package.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/packageHold" }
+    },
+    "profile_assignments": {
+      "description": "Key: profile, subject and device_group.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/profileAssignment" }
+    }
+  },
+  "$defs": {
+    "deviceGroupRef": {
+      "description": "The name of a device group of the organization; null for every device of the organization.",
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "loginSettings": {
+      "description": "When present, every field is required (same constraints as PUT /api/v1/settings/login).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hello_enabled", "hello_pin_min_length", "user_lock_session_action", "break_glass_accounts",
+        "sudoers_d_allowlist", "sudo_lecture_text", "local_admin_username", "local_admin_rotation_days",
+        "rotate_after_reveal_hours", "notice_text", "boot_pin_min_length"],
+      "properties": {
+        "hello_enabled": { "type": "boolean" },
+        "hello_pin_min_length": { "type": "integer", "minimum": 6, "maximum": 32 },
+        "user_lock_session_action": { "enum": ["lock_screen", "terminate"] },
+        "break_glass_accounts": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 32 } },
+        "sudoers_d_allowlist": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 64 } },
+        "sudo_lecture_text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "local_admin_username": { "type": "string", "pattern": "^[a-z_][a-z0-9_-]{0,31}$" },
+        "local_admin_rotation_days": { "type": "integer", "minimum": 1, "maximum": 365 },
+        "rotate_after_reveal_hours": { "type": ["integer", "null"], "minimum": 1, "maximum": 168 },
+        "notice_text": { "type": "string", "maxLength": 2000 },
+        "boot_pin_min_length": { "type": "integer", "minimum": 6, "maximum": 32 }
+      }
+    },
+    "updateSettings": {
+      "description": "When present, every field is required (same constraints as PUT /api/v1/settings/updates).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["security_daily_at", "regular_schedule", "regular_updates_enabled", "max_random_delay_min",
+        "staleness_warning_h", "staleness_critical_h"],
+      "properties": {
+        "security_daily_at": { "type": "string", "maxLength": 5 },
+        "regular_schedule": { "type": "string", "maxLength": 64 },
+        "regular_updates_enabled": { "type": "boolean" },
+        "max_random_delay_min": { "type": "integer" },
+        "staleness_warning_h": { "type": "integer" },
+        "staleness_critical_h": { "type": "integer" }
+      }
+    },
+    "deviceGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 1000, "default": "" }
+      }
+    },
+    "permissionProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "class"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "class": { "enum": ["none", "restricted", "full"] },
+        "commands": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 1024 }, "default": [] },
+        "require_password": { "type": "boolean", "default": true },
+        "timestamp_timeout_min": { "type": "integer", "minimum": 0, "maximum": 60, "default": 5 },
+        "lecture": { "enum": ["always", "once", "never"], "default": "once" }
+      }
+    },
+    "managedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "content"],
+      "properties": {
+        "path": { "type": "string", "maxLength": 1024 },
+        "device_group": { "$ref": "#/$defs/deviceGroupRef", "default": null },
+        "mode": { "type": "string", "pattern": "^0[0-7]{3}$", "default": "0644" },
+        "owner": { "type": "string", "default": "root" },
+        "group": { "type": "string", "default": "root" },
+        "content": { "type": "string", "description": "UTF-8 text, at most 64 KiB." }
+      }
+    },
+    "managedUnit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit"],
+      "properties": {
+        "unit": { "type": "string", "maxLength": 255 },
+        "device_group": { "$ref": "#/$defs/deviceGroupRef", "default": null },
+        "enabled": { "type": "boolean", "default": true },
+        "active": { "type": "boolean", "default": true }
+      }
+    },
+    "packageHold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package"],
+      "properties": {
+        "package": { "type": "string", "maxLength": 128 },
+        "version": { "type": ["string", "null"], "maxLength": 128, "default": null },
+        "device_group": { "$ref": "#/$defs/deviceGroupRef", "default": null },
+        "reason": { "type": "string", "maxLength": 500, "default": "" }
+      }
+    },
+    "profileAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "subject"],
+      "properties": {
+        "profile": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "subject": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type"],
+              "properties": { "type": { "const": "global" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "slug"],
+              "properties": {
+                "type": { "const": "group" },
+                "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,40}[a-z0-9]$" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "username"],
+              "properties": {
+                "type": { "const": "user" },
+                "username": { "type": "string", "minLength": 1, "maxLength": 256 }
+              }
+            }
+          ]
+        },
+        "device_group": { "$ref": "#/$defs/deviceGroupRef", "default": null }
+      }
+    }
+  }
+}

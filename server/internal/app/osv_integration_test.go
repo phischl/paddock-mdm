@@ -229,8 +229,10 @@ func TestOSVEnrich(t *testing.T) {
 			dev, org, uuid.NewString(), os)
 	}
 	finding := func(dev uuid.UUID, cve, pkg, severity string) {
-		exec(`INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, severity, fixed_version)
-			VALUES ($1, $2, $3, $4, '1.0', NULLIF($5, ''), CASE WHEN $5 = '' THEN NULL ELSE 'fleet-fix' END)`, dev, org, cve, pkg, severity)
+		exec(`INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, severity, fixed_version,
+			fleet_severity, fleet_fixed_version)
+			VALUES ($1, $2, $3, $4, '1.0', NULLIF($5, ''), CASE WHEN $5 = '' THEN NULL ELSE 'fleet-fix' END,
+			NULLIF($5, ''), CASE WHEN $5 = '' THEN NULL ELSE 'fleet-fix' END)`, dev, org, cve, pkg, severity)
 	}
 	for _, dev := range []uuid.UUID{noble, resolute, jammy, unknown} {
 		finding(dev, "CVE-2026-11386", "ubuntu-pro-client", "")
@@ -327,6 +329,23 @@ func TestOSVEnrich(t *testing.T) {
 			t.Errorf("high vulnerabilities %+v (count %d)", res.Items, res.Count)
 		}
 	})
+	t.Run("dropped CVE reverts to Fleet's values", func(t *testing.T) {
+		finding(noble, "CVE-2026-11386", "paddock-dropped", "medium")
+		exec(`UPDATE vulnerability_finding SET severity = 'critical', fixed_version = 'osv-fix', cvss_vector = 'CVSS:3.1/AV:N'
+			WHERE device_id = $1 AND software_name = 'paddock-dropped'`, noble)
+		if _, err := h.osv.Enrich(systemOrg(org)); err != nil {
+			t.Fatal(err)
+		}
+		var severity, fixed string
+		var vector *string
+		if err := h.super.QueryRow(ctx, `SELECT severity, fixed_version, cvss_vector FROM vulnerability_finding
+			WHERE device_id = $1 AND software_name = 'paddock-dropped'`, noble).Scan(&severity, &fixed, &vector); err != nil {
+			t.Fatal(err)
+		}
+		if severity != "medium" || fixed != "fleet-fix" || vector != nil {
+			t.Errorf("finding without Ubuntu data: %q %q %v, want Fleet's medium, fleet-fix and no vector", severity, fixed, vector)
+		}
+	})
 	t.Run("isolation", func(t *testing.T) {
 		other, foreign := inv.device(t, uuid.Nil, uuid.NewString(), "active")
 		exec("INSERT INTO device_inventory_ref (device_id, organization_id, external_id, os_version) VALUES ($1, $2, $3, 'Ubuntu 24.04 LTS')",
@@ -375,5 +394,52 @@ func TestOSVImportFeed(t *testing.T) {
 	if n := h.count(t, `SELECT count(*) FROM vulnerability_finding WHERE device_id = $1 AND severity = 'high'
 		AND fixed_version = '1:9.6p1-3ubuntu13.3'`, dev); n != 1 {
 		t.Error("CVE-2024-6387 of openssh-server not enriched")
+	}
+}
+
+// TestOSVImportFileAudited (plan M5c decision 3): an operator's import is recorded as platform.osv_imported in the
+// platform pseudo-organization with the counts and the data version, a failed one as failure.
+func TestOSVImportFileAudited(t *testing.T) {
+	h := newOSVHarness(t)
+	ctx := systemPlatform()
+	if _, err := h.osv.ImportFile(ctx, readZip(osvZip(t))); err != nil {
+		t.Fatal(err)
+	}
+	st, err := h.osv.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := h.count(t, `SELECT count(*) FROM action WHERE code = 'platform.osv_imported' AND outcome = 'success'
+		AND organization_id = '00000000-0000-0000-0000-000000000000' AND (params ->> 'records')::int = 6
+		AND (params ->> 'entries')::int = 8 AND (params ->> 'data_version')::bigint = $1`, st.DataVersion); n != 1 {
+		t.Errorf("%d platform.osv_imported success events with the counts and data version %d", n, st.DataVersion)
+	}
+	if _, err := h.osv.ImportFile(ctx, readZip([]byte("not a zip"))); err == nil {
+		t.Fatal("a damaged file was imported")
+	}
+	if n := h.count(t, "SELECT count(*) FROM action WHERE code = 'platform.osv_imported' AND outcome = 'failure'"); n < 1 {
+		t.Error("no platform.osv_imported failure event")
+	}
+}
+
+// TestOSVConcurrentImports: the worker's download and an operator's import at the same time both succeed, one after
+// the other, instead of one failing on the other's rows.
+func TestOSVConcurrentImports(t *testing.T) {
+	h := newOSVHarness(t)
+	data := osvZip(t)
+	errs := make(chan error, 2)
+	for _, etag := range []string{`"a"`, `"b"`} {
+		go func() {
+			_, err := h.osv.Import(systemPlatform(), etag, readZip(data))
+			errs <- err
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent import: %v", err)
+		}
+	}
+	if n := h.count(t, "SELECT count(*) FROM osv_ubuntu"); n != 8 {
+		t.Errorf("osv_ubuntu has %d rows, want 8", n)
 	}
 }
