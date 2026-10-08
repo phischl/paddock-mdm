@@ -257,8 +257,9 @@ func (r *Revoker) check(ctx context.Context, tok *revocation.Token) (Targets, er
 }
 
 // restorable returns the targets of a token: for a Destroy every target; for a Lock and a self-lock the root volume
-// and, of the other volumes, exactly those whose LUKS UUID the token lists and that share it with no other volume,
-// so that every erased volume can be restored from its escrowed header (PDK-009). The other volumes are returned as
+// and, of the other volumes, exactly those whose LUKS UUID the token lists and that share it with no other volume —
+// none while the root volume's UUID is unknown —, so that every erased volume can be restored from its escrowed
+// header (PDK-009). The other volumes are returned as
 // skipped. The list comes only from the token the revocation-issuer signed; nothing paddockd hands over decides what
 // is erased.
 func restorable(tok *revocation.Token, tg Targets) (Targets, []SkippedVolume) {
@@ -266,10 +267,11 @@ func restorable(tok *revocation.Token, tg Targets) (Targets, []SkippedVolume) {
 		return tg, nil
 	}
 	last := len(tg.Devices) - 1
-	out := Targets{UUIDs: tg.UUIDs, Shared: tg.Shared, Unresolved: tg.Unresolved}
+	out := Targets{UUIDs: tg.UUIDs, Shared: tg.Shared, Unresolved: tg.Unresolved, RootUnknown: tg.RootUnknown}
 	var skipped []SkippedVolume
 	for _, d := range tg.Devices[:last] {
-		if id := tg.UUIDs[d]; id != "" && !slices.Contains(tg.Shared, d) && slices.Contains(tok.Volumes, id) {
+		// Without the root volume's UUID a clone of it is not marked shared: no other volume is erased (round 3).
+		if id := tg.UUIDs[d]; id != "" && !tg.RootUnknown && !slices.Contains(tg.Shared, d) && slices.Contains(tok.Volumes, id) {
 			out.Devices = append(out.Devices, d)
 		} else {
 			skipped = append(skipped, SkippedVolume{Device: d, UUID: id})

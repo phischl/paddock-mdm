@@ -37,6 +37,12 @@ and the device reports its capabilities anew.
   reported as `shared_uuid` in `health.disk` and in the confirmation (not as unresolved, so they do not make an
   erasure incomplete): a **Destroy erases them**, a Lock skips them (`skipped_not_escrowed`), and they stay readable
   after a Lock.
+- If `paddock-revoke` cannot read the root volume's LUKS UUID (the read fails or hangs), it cannot recognize a clone
+  of the root volume: a Lock or self-lock then erases the root volume only and reports every other volume as
+  `skipped_not_escrowed`. A Destroy is not affected: it erases every classified volume and the root volume; the
+  root UUID is read separately and never holds up or shrinks it. The agent escrows no other volume while the root
+  UUID is unknown, and inventories the other volumes in the background, one run at a time, so that a hung disk
+  never holds up the agent.
 - **Residual risk, accepted:** the server cannot verify the content of a sealed header. A compromised device (root)
   can therefore have a volume counted as escrowed with a forged header upload, or claim a false root volume UUID in
   its check-in (which the server writes onto the root headers escrowed before PDK-009). A Lock then makes that

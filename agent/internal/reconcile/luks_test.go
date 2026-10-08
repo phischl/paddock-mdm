@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,11 +59,19 @@ type dataVolume struct {
 	uuid  string
 	luks1 bool
 	slots int
+	// hang blocks isLuks until it is closed, whatever the context says (a disk stuck in the kernel); isLuks counts
+	// the calls.
+	hang   chan struct{}
+	isLuks atomic.Int32
 }
 
 func (d *dataVolume) command(line, device string, args []string) (string, string, int, error) {
 	switch {
 	case line == "cryptsetup isLuks -- "+device:
+		d.isLuks.Add(1)
+		if d.hang != nil {
+			<-d.hang
+		}
 		return "", "", 0, nil
 	case line == "cryptsetup luksUUID -- "+device && d.uuid != "":
 		return d.uuid + "\n", "", 0, nil
@@ -265,7 +274,8 @@ func newLUKSFixture(t *testing.T, slots ...string) *luksFixture {
 			raw, _ := json.Marshal(data)
 			f.events = append(f.events, protocol.Event{Type: typ, Data: raw})
 		},
-		Now: func() time.Time { return f.now }, TPM2Present: func() bool { return f.tpm }}
+		Now: func() time.Time { return f.now }, TPM2Present: func() bool { return f.tpm },
+		Background: func(fn func()) { fn() }}
 	return f
 }
 
@@ -747,5 +757,47 @@ func TestLUKSRefusedVolume(t *testing.T) {
 	f.now = f.now.Add(reconcile.RefusedRetry + time.Minute)
 	if f.settle(); len(f.volumeHeaders(dataUUID)) != 3 {
 		t.Fatalf("not tried again after a day: %d", len(f.volumeHeaders(dataUUID)))
+	}
+}
+
+// TestLUKSHungVolumeKeepsTicking (PDK-009 review round 3, design contract 8): a crypttab volume whose cryptsetup hangs
+// never holds up the agent loop. The inventory of the other volumes runs in the background, at most once at a time;
+// until it completes the root volume is reported alone and nothing else is escrowed, and the result is used once it
+// arrives.
+func TestLUKSHungVolumeKeepsTicking(t *testing.T) {
+	f := newLUKSFixture(t, "recovery", "tpm2+pin")
+	f.m.Background = nil
+	hang := make(chan struct{})
+	data := &dataVolume{uuid: dataUUID, slots: 1, hang: hang}
+	f.addVolume("/dev/vdb1", data)
+	if err := os.Remove(f.layout.InstallPassphrase()); err != nil { // no install passphrase: no keyslot change
+		t.Fatal(err)
+	}
+	for range 5 {
+		start := time.Now()
+		h := f.m.Tick(context.Background(), f.keys, true)
+		if time.Since(start) > time.Second || h == nil || len(h.Volumes) != 1 || h.State == protocol.DiskCompliant {
+			t.Fatalf("tick took %s, health %+v", time.Since(start), h)
+		}
+	}
+	for wait := time.Now().Add(5 * time.Second); data.isLuks.Load() == 0 && time.Now().Before(wait); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	for range 5 {
+		f.m.Tick(context.Background(), f.keys, true)
+	}
+	if n := data.isLuks.Load(); n != 1 {
+		t.Fatalf("%d inventories of the hung volume started, want 1", n)
+	}
+	close(hang)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if h := f.m.Tick(context.Background(), f.keys, true); len(h.Volumes) == 2 && h.Volumes[1].UUID == dataUUID {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the inventory was never used after the disk answered")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

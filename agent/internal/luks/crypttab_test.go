@@ -128,7 +128,7 @@ func TestParseCrypttabSharedUUID(t *testing.T) {
 			"/dev/vdd": shared, "/dev/vde": rootID}}
 	crypttab := []byte("b /dev/vdb none luks\nc /dev/vdc none luks\nd /dev/vdd none luks\ne /dev/vde none luks\n")
 	got := ParseCrypttab(context.Background(), tools, root, "/dev/vda3", crypttab, time.Minute)
-	want := Crypttab{Root: "/dev/vda3", Volumes: []CrypttabVolume{
+	want := Crypttab{Root: "/dev/vda3", RootUUID: rootID, Volumes: []CrypttabVolume{
 		{Header: "/dev/vdb", UUID: shared, Shared: true},
 		{Header: "/dev/vdc", UUID: "1b6a3c1e-0000-4000-8000-00000000000c"},
 		{Header: "/dev/vdd", UUID: shared, Shared: true},
@@ -136,6 +136,27 @@ func TestParseCrypttabSharedUUID(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("crypttab %+v\nwant %+v", got, want)
+	}
+}
+
+// TestParseCrypttabRootUUIDUnknown (PDK-009 review round 3): a root volume whose luksUUID hangs or fails neither holds
+// up nor shrinks the classified volumes; RootUUID stays "", and a clone of the root volume is not recognized.
+func TestParseCrypttabRootUUIDUnknown(t *testing.T) {
+	root := fakeDev(t, nil, "/dev/vda3", "/dev/vdb", "/dev/vdc")
+	crypttab := []byte("b /dev/vdb none luks\nc /dev/vdc none luks\n")
+	const clone = "1b6a3c1e-0000-4000-8000-0000000000aa"
+	want := Crypttab{Root: "/dev/vda3", Volumes: []CrypttabVolume{{Header: "/dev/vdb", UUID: clone}, {Header: "/dev/vdc"}}}
+	failing := &isLuksTools{luks: []string{"/dev/vdb", "/dev/vdc"}, uuids: map[string]string{"/dev/vdb": clone}}
+	if got := ParseCrypttab(context.Background(), failing, root, "/dev/vda3", crypttab, time.Minute); !reflect.DeepEqual(got, want) {
+		t.Fatalf("root luksUUID fails: %+v", got)
+	}
+	hung := &isLuksTools{luks: []string{"/dev/vdb", "/dev/vdc"}, uuids: map[string]string{"/dev/vdb": clone, "/dev/vda3": clone},
+		hang: []string{"/dev/vda3"}, release: make(chan struct{})}
+	t.Cleanup(func() { close(hung.release) })
+	start := time.Now()
+	got := ParseCrypttab(context.Background(), hung, root, "/dev/vda3", crypttab, 300*time.Millisecond)
+	if !reflect.DeepEqual(got, want) || time.Since(start) > 5*time.Second {
+		t.Fatalf("root luksUUID hangs: %+v after %s", got, time.Since(start))
 	}
 }
 

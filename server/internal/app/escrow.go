@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -57,10 +56,19 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 	refused := -1
 	err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		if cur, err := q.GetEscrowSecret(ctx, m.EscrowID); err == nil {
-			if cur.DeviceID == m.DeviceID && cur.Status != escrow.StatusFailed {
+			switch {
+			case cur.DeviceID != m.DeviceID:
+			case cur.Status != escrow.StatusFailed:
 				status = cur.Status
 				if status == escrowActive || status == "superseded" {
 					status = escrow.StatusStored
+				}
+			case cur.Kind == escrow.KindLUKSHeader && cur.Volume.Valid:
+				// A redelivered refusal reports refused again, without a second audit event (review round 3).
+				if n, err := overCap(ctx, q, cur.DeviceID, cur.Volume.UUID); err != nil {
+					return err
+				} else if n >= 0 {
+					status = escrow.StatusRefused
 				}
 			}
 			return nil
@@ -79,13 +87,8 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 			return err
 		}
 		if m.Kind == escrow.KindLUKSHeader && m.Volume != nil {
-			v, err := q.DeviceHeaderVolumeKnown(ctx, pgstore.DeviceHeaderVolumeKnownParams{Volume: *m.Volume, DeviceID: m.DeviceID})
-			if err != nil {
+			if refused, err = overCap(ctx, q, m.DeviceID, *m.Volume); err != nil || refused >= 0 {
 				return err
-			}
-			if !v.Known && int(v.Volumes) >= MaxHeaderVolumes {
-				refused = int(v.Volumes)
-				return nil
 			}
 		}
 		n, inserted := int64(0), escrow.StatusStored
@@ -114,16 +117,47 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 	if err != nil || refused < 0 {
 		return status, err
 	}
+	return e.refuse(ctx, m, refused)
+}
+
+// overCap takes the device's volume cap lock for the transaction and returns the number of volumes the device escrows
+// when volume is a new one beyond MaxHeaderVolumes, -1 otherwise (PDK-009 review round 3: workers must not let two new
+// volumes pass at 31).
+func overCap(ctx context.Context, q *pgstore.Queries, device, volume uuid.UUID) (int, error) {
+	if err := q.LockDeviceHeaderVolumes(ctx, device); err != nil {
+		return 0, err
+	}
+	v, err := q.DeviceHeaderVolumeKnown(ctx, pgstore.DeviceHeaderVolumeKnownParams{Volume: volume, DeviceID: device})
+	if err != nil {
+		return 0, err
+	}
+	if v.Known || int(v.Volumes) < MaxHeaderVolumes {
+		return -1, nil
+	}
+	return int(v.Volumes), nil
+}
+
+// refuse records a refused header as a failed row together with its audit event, once per escrow ID: a redelivered
+// message finds the row and is not audited again (review round 3).
+func (e *Escrow) refuse(ctx context.Context, m ingest.Escrow, volumes int) (string, error) {
 	spec := ActionSpec{
 		Code:   audit.CodeDeviceHeaderEscrowRefused,
 		Actor:  &audit.Actor{Type: audit.ActorDevice, ID: m.DeviceID.String()},
 		Target: &audit.Target{Type: "device", ID: m.DeviceID.String()},
-		Params: map[string]any{"volume": m.Volume.String(), "generation": m.Generation, "volumes": refused},
+		Params: map[string]any{"volume": m.Volume.String(), "generation": m.Generation, "volumes": volumes},
 	}
-	err = e.runner.RunTx(ctx, ScopeOrg, spec, func(context.Context, *pgstore.Queries, Recorder) error { return problem.TooManyVolumes })
-	if errors.Is(err, problem.TooManyVolumes) {
-		err = nil
-	}
+	_, err := e.runner.RecordOnceRefusal(ctx, spec, problem.TooManyVolumes, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		org, err := orgOf(ctx)
+		if err != nil {
+			return false, err
+		}
+		n, err := q.InsertRefusedEscrowHeader(ctx, pgstore.InsertRefusedEscrowHeaderParams{
+			ID: m.EscrowID, OrganizationID: org, DeviceID: m.DeviceID, Generation: int32(m.Generation), //nolint:gosec // bounded by Store
+			KeyVersion: int32(m.KeyVersion), ObjectKey: &m.ObjectKey, WrappedDek: m.WrappedDEK, Nonce: m.Nonce, //nolint:gosec // bounded by the gateway
+			Sha256: &m.SHA256, Size: &m.Size, CreatedAt: m.ReceivedAt, Volume: *m.Volume,
+		})
+		return n == 1, err
+	})
 	return escrow.StatusRefused, err
 }
 
