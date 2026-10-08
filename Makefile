@@ -127,6 +127,41 @@ dev-release-key: ## Generate the password-less development agent and revocation 
 			echo "created development release key $(RELEASE_KEY_DIR)/$$key.pub" || exit 1; fi; \
 	done
 
+# --- Production (plan M6a, docs/operations/install.md) ------------------------------------------------------------
+# HOST is the host of the two-host topology (controlplane or audit). A HOST variable inherited from the shell (zsh sets
+# it to the machine name) is ignored; pass it on the make command line.
+ifeq ($(origin HOST),environment)
+HOST := controlplane
+endif
+HOST ?= controlplane
+PROD_FILES_controlplane := compose.yaml compose.prod.yaml
+PROD_FILES_audit        := compose.audit.yaml compose.audit.prod.yaml
+PROD_FILES               = $(PROD_FILES_$(HOST))
+comma                   := ,
+space                   := $(subst ,, )
+PROD_COMPOSE             = docker compose --project-directory $(COMPOSE_DIR) -p paddock \
+	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env $(foreach f,$(PROD_FILES),-f $(COMPOSE_DIR)/$(f))
+
+.PHONY: prod-secrets
+prod-secrets: ## Generate the production secrets of one host (HOST=controlplane|audit; idempotent, prints no secret)
+	@test -n "$(PROD_FILES)" || { echo "usage: make prod-secrets HOST=controlplane|audit"; exit 2; }
+	$(COMPOSE_DIR)/scripts/gen-prod-secrets.sh $(HOST)
+
+# The check runs from source in the pinned Go image, so the host needs neither Go nor a built image; the repository is
+# mounted read-only at its own path, where Compose resolved the secret files. ONLINE=1 (audit host) also reads the
+# audit bucket's Object Lock configuration on the network paddock_audit-store.
+.PHONY: prod-check
+prod-check: ## Check the production configuration of one host (HOST=controlplane|audit, ONLINE=1): PASS/FAIL checklist
+	@test -n "$(PROD_FILES)" || { echo "usage: make prod-check HOST=controlplane|audit [ONLINE=1]"; exit 2; }
+	@set -o pipefail; $(PROD_COMPOSE) --profile '*' config --format json | \
+		docker run --rm -i $(if $(ONLINE),--network paddock_audit-store,) \
+			-v $(CURDIR):$(CURDIR):ro -w $(CURDIR) -v paddock-gomod:/go/pkg/mod \
+			-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false $(GO_BUILD_IMAGE) \
+			go run ./server/cmd/paddock-server prod-check --host $(HOST) \
+				--compose-files $(subst $(space),$(comma),$(strip $(PROD_FILES))) \
+				--dev-release-key $(CURDIR)/$(RELEASE_KEY_DIR)/minisign.pub \
+				--dev-release-key $(CURDIR)/$(RELEASE_KEY_DIR)/revoke-minisign.pub $(if $(ONLINE),--online,)
+
 # Agent builds (plan M2b decisions 5, 17, 18, 25). VERSION is the agent version; TAGS adds build tags, e.g.
 # TAGS=paddock_dev for the development probation and drift interval (system tests). The supervisor gets the release
 # public key compiled in (default: the development key). paddock-revoke gets TAGS too (it reads agent.yml as paddockd

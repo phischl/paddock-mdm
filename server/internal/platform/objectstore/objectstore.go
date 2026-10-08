@@ -85,6 +85,24 @@ func (s *Store) Retention(ctx context.Context, key string) (types.ObjectLockRete
 	return out.Retention.Mode, *out.Retention.RetainUntilDate, nil
 }
 
+// DefaultRetention returns the bucket's Object Lock state and default retention ("" and 0 without a default rule).
+func (s *Store) DefaultRetention(ctx context.Context) (enabled bool, mode types.ObjectLockRetentionMode, days int32, err error) {
+	out, err := s.client.GetObjectLockConfiguration(ctx, &s3.GetObjectLockConfigurationInput{Bucket: &s.bucket})
+	if err != nil {
+		return false, "", 0, err
+	}
+	c := out.ObjectLockConfiguration
+	if c == nil {
+		return false, "", 0, nil
+	}
+	enabled = c.ObjectLockEnabled == types.ObjectLockEnabledEnabled
+	if c.Rule != nil && c.Rule.DefaultRetention != nil {
+		mode = types.ObjectLockRetentionMode(c.Rule.DefaultRetention.Mode)
+		days = aws.ToInt32(c.Rule.DefaultRetention.Days)
+	}
+	return enabled, mode, days, nil
+}
+
 // List returns the keys below prefix.
 func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 	var keys []string

@@ -26,6 +26,7 @@ commands:
   audit seal [--day YYYY-MM-DD]
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD
   osv import <file>
+  prod-check [--host controlplane|audit] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
   healthcheck
 
 Commands separated by a lone "+" run one after another; the first failure stops the chain.
@@ -89,6 +90,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runAudit(ctx, l, common, args[1:])
 	case "osv":
 		err = runOSV(ctx, l, args[1:])
+	case "prod-check":
+		err = runProdCheck(ctx, args[1:], os.Stdin, os.Stdout)
 	case "provision":
 		if len(args) != 2 || args[1] != "rabbitmq" {
 			err = errUsage
@@ -135,6 +138,8 @@ func exitCode(err error) int {
 	case errors.Is(err, errUsage):
 		fmt.Fprint(os.Stderr, usage)
 		return 2
+	case errors.Is(err, errProdCheckFailed):
+		return 1
 	case errors.As(err, &missing):
 		slog.Error("configuration incomplete", "missing", missing.Names)
 		return 2
