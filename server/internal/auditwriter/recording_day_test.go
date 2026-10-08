@@ -14,6 +14,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/auditwriter"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/mq"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/mqtest"
 )
@@ -121,17 +122,22 @@ func TestLateEventCoveredByRecordingDay(t *testing.T) {
 	}
 }
 
-// slowStore delays the first slowPuts calls of PutLocked, so the writer transaction outlives its timeout.
+// slowStore delays the first slowPuts calls of PutLocked, so the writer transaction outlives its timeout. afterSlow
+// runs after the last delayed call, in the writer's goroutine.
 type slowStore struct {
 	auditwriter.ObjectStore
-	delay    time.Duration
-	slowPuts int32
-	puts     atomic.Int32
+	delay     time.Duration
+	slowPuts  int32
+	puts      atomic.Int32
+	afterSlow func()
 }
 
 func (s *slowStore) PutLocked(ctx context.Context, key, contentType string, body []byte, retainUntil time.Time) error {
-	if s.puts.Add(1) <= s.slowPuts {
+	if n := s.puts.Add(1); n <= s.slowPuts {
 		time.Sleep(s.delay)
+		if n == s.slowPuts && s.afterSlow != nil {
+			s.afterSlow()
+		}
 	}
 	return s.ObjectStore.PutLocked(ctx, key, contentType, body, retainUntil)
 }
@@ -150,6 +156,11 @@ func TestWriterTransactionTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	auditwriter.SetTransactionTimeout(writer, 500*time.Millisecond)
+	// The redelivery must not time out as well: on a loaded machine its transaction (partition DDL, index rows, object
+	// upload) can take longer than 500 ms, which made a fourth put (PDK-010). The slow puts exceed 500 ms whatever the
+	// load, so only they run under the low timeout. The writer reads the timeout in its own goroutine, where afterSlow
+	// runs, so this needs no synchronisation.
+	slow.afterSlow = func() { auditwriter.SetTransactionTimeout(writer, db.WriterTransactionTimeout) }
 
 	if _, err := writer.WriteBatch(ctx, []audit.Event{ev}); err == nil {
 		t.Fatal("WriteBatch outlived transaction_timeout without an error")
