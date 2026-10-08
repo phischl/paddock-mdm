@@ -194,3 +194,38 @@ func TestInventorySection(t *testing.T) {
 		t.Fatal("a resource of type inventory was accepted")
 	}
 }
+
+// TestUpdatesSection (plan M5b decisions 4 and 5): the updates section is applied as resource "updates" after the
+// units and planned for drift like any resource; a bundle without it leaves updates alone.
+func TestUpdatesSection(t *testing.T) {
+	sys, a := fixture(t)
+	sys.Packages["unattended-upgrades"] = true
+	for _, u := range []string{"apt-daily.timer", "apt-daily-upgrade.timer"} {
+		sys.Units[u] = &fakesys.Unit{State: "enabled", Active: true}
+	}
+	b := newBundle(t, 1, nil, bundle.UnitSpec{Unit: "cron.service", Enabled: true, Active: true})
+	sys.Units["cron.service"] = &fakesys.Unit{State: "disabled"}
+	b.Updates = &bundle.UpdatesSpec{SecurityDailyAt: "03:00", RegularSchedule: "Sat 04:00", RegularUpdatesEnabled: true,
+		MaxRandomDelayMin: 60, Holds: []bundle.Hold{{Package: "curl"}}}
+	if err := a.CheckTypes(b); err != nil {
+		t.Fatal(err)
+	}
+	rep := a.Apply(context.Background(), b)
+	if len(rep.Errors) != 0 || !slices.Equal(rep.ChangedIDs, []string{"unit:cron.service", "updates"}) {
+		t.Fatalf("report %+v", rep)
+	}
+	if !sys.Held["curl"] {
+		t.Fatal("hold not applied")
+	}
+	if drifted := apply.Drifted(a.Plan(context.Background(), b)); len(drifted) != 0 {
+		t.Fatalf("drift after apply %v", drifted)
+	}
+	delete(sys.Files, reconcile.UnattendedConf)
+	if drifted := apply.Drifted(a.Plan(context.Background(), b)); !slices.Equal(drifted, []string{"updates"}) {
+		t.Fatalf("drift %v", drifted)
+	}
+	b.Updates = nil
+	if plan := a.Plan(context.Background(), b); slices.ContainsFunc(plan, func(p apply.Planned) bool { return p.ID == "updates" }) {
+		t.Fatalf("plan without the section %+v", plan)
+	}
+}

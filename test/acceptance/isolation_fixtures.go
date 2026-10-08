@@ -30,6 +30,8 @@ type isolationWorld struct {
 	globexRevocation string
 	// globexCVE is a vulnerability found on globexDevice only (seedGlobexDevices).
 	globexCVE string
+	// globexHold is a package hold of globexDeviceGroup (seedGlobexDevices).
+	globexHold string
 }
 
 // seedGlobexIdentity creates, as carol, a local user in a user group, a permission profile and its assignment to the
@@ -97,6 +99,12 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	expectStatus(t, res, http.StatusAccepted, "")
 	w.globexIDs = append(w.globexIDs, w.globexDeviceGroup, w.globexToken, w.globexDevice, w.globexFile, w.globexUnit,
 		responseID(t, res).String())
+	res = call(t, w.carol, http.MethodPost, "/api/v1/package-holds", map[string]any{
+		"package": "globex-iso-" + uniqueSuffix(), "device_group_id": w.globexDeviceGroup, "reason": "globex-iso",
+	})
+	expectStatus(t, res, http.StatusCreated, "")
+	w.globexHold = createdID(t, w.carol, "/api/v1/package-holds", res)
+	w.globexIDs = append(w.globexIDs, w.globexHold)
 	// Its inventory, as the worker stores it from Fleet.
 	w.globexCVE = uniqueCVE()
 	pkg := "globex-iso-pkg-" + uniqueSuffix()
@@ -319,6 +327,33 @@ var isolationFixtures = map[string]isolationFixture{
 	}},
 	"GET /api/v1/vulnerabilities/{cve}/devices": itemFixture(func(w *isolationWorld) string { return "/api/v1/vulnerabilities/" + w.globexCVE + "/devices" }, nil),
 
+	"GET /api/v1/settings/updates": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/updates", nil
+	}},
+	"PUT /api/v1/settings/updates": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		return "/api/v1/settings/updates", currentUpdateSettings(t, w.alice)
+	}},
+	"GET /api/v1/package-holds": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/package-holds?page_size=100", nil
+	}},
+	"POST /api/v1/package-holds": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/package-holds", map[string]any{"package": "acme-iso-" + uniqueSuffix()}
+	}},
+	"GET /api/v1/package-holds/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/package-holds/" + w.globexHold }, nil),
+	"PATCH /api/v1/package-holds/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/package-holds/" + w.globexHold },
+		map[string]any{"version": nil, "reason": ""}),
+	"DELETE /api/v1/package-holds/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/package-holds/" + w.globexHold }, nil),
+	"POST /api/v1/devices/{id}/install-now": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/devices/" + w.globexDevice + "/install-now"
+	}, map[string]any{"packages": []string{"htop"}}),
+	"POST /api/v1/device-groups/{id}/install-now": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/device-groups/" + w.globexDeviceGroup + "/install-now"
+	}, map[string]any{"packages": []string{"htop"}}),
+	"GET /api/v1/attention": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/attention?page_size=100", nil
+	}},
+	"GET /api/v1/devices/{id}/updates": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/updates" }, nil),
+
 	"GET /api/v1/permission-profiles": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/permission-profiles?page_size=100", nil
 	}},
@@ -380,8 +415,11 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"globex-iso"}},
 		{"state": {"active"}, "sort": {"-last_contact_at"}, "page_size": {"100"}},
 	},
-	"/api/v1/managed-files":              {{"q": {"globex-iso"}}},
-	"/api/v1/managed-units":              {{"q": {"globex-iso"}}},
+	"/api/v1/managed-files": {{"q": {"globex-iso"}}},
+	"/api/v1/managed-units": {{"q": {"globex-iso"}}},
+	"/api/v1/package-holds": {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
+	// globex's waiting Destroy (seedGlobexDevices) is a revocation_pending condition.
+	"/api/v1/attention":                  {{"q": {"globex-iso"}}, {"kind": {"revocation_pending"}, "page_size": {"100"}}},
 	"/api/v1/device-groups/{id}/devices": {{"q": {"globex-iso"}}, {"state": {"active"}}},
 	"/api/v1/users":                      {{"q": {"globex-iso"}}, {"source": {"local"}, "sort": {"-created_at"}, "page_size": {"100"}}},
 	"/api/v1/user-groups":                {{"q": {"globex-iso"}}},
@@ -407,6 +445,19 @@ var listIsolationQueries = map[string][]url.Values{
 func currentLoginSettings(t *testing.T, p *env.Portal) map[string]any {
 	t.Helper()
 	res := call(t, p, http.MethodGet, "/api/v1/settings/login", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var s map[string]any
+	if err := res.JSON(&s); err != nil {
+		t.Fatal(err)
+	}
+	delete(s, "updated_at")
+	return s
+}
+
+// currentUpdateSettings returns acme's update settings as an update body (unchanged values).
+func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
+	t.Helper()
+	res := call(t, p, http.MethodGet, "/api/v1/settings/updates", nil)
 	expectStatus(t, res, http.StatusOK, "")
 	var s map[string]any
 	if err := res.JSON(&s); err != nil {

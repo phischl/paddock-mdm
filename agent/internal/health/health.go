@@ -35,6 +35,9 @@ type Report struct {
 	SudoFlavor string `json:"sudo_flavor,omitempty"`
 	// Disk is the disk encryption of the device (nil until the first inventory).
 	Disk *protocol.DiskHealth `json:"disk,omitempty"`
+	// RebootRequired is set while a package asks for a reboot (/var/run/reboot-required, plan M5b decision 8);
+	// Paddock never reboots for updates.
+	RebootRequired bool `json:"reboot_required"`
 }
 
 // State is the current health, shared between the run loop (writer) and the socket server (reader).

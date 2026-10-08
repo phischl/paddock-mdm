@@ -70,11 +70,12 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
 5. reports, once per failure, `device.tamper_agent_not_running` for every active device whose `paddock_agent_running`
    policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch).
 
-Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only); Paddock stores them as
-unknown. The portal and the admin API show such findings with severity `unknown` (filter `severity=unknown`), sort
-them last by score, and the start page tile counts the devices with critical or high findings and, next to it, the
-devices with findings of unknown severity. Until a later milestone adds a severity source, treat every finding of
-unknown severity as worth checking: the CVE links to its entry in the National Vulnerability Database.
+Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only). Paddock adds Ubuntu's
+priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it stores a host's findings
+(`docs/operations/vulnerability-data.md`). Findings Ubuntu has not rated keep severity `unknown` (filter
+`severity=unknown`) and sort last; the start page tile counts the devices with critical or high findings and, next to
+it, the devices with findings of unknown severity. Treat a finding of unknown severity as worth checking: the CVE links
+to its entry in the National Vulnerability Database.
 
 ## Portal and admin API
 

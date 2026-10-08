@@ -82,3 +82,15 @@ func (l Layout) RevokeBinary() string { return l.Join("/opt/paddock/revoke/paddo
 // RevokeEnabled is the marker the agent keeps while the bundle says revocation.enabled (plan M4c decision 1);
 // paddock-revoke refuses to run without it.
 func (l Layout) RevokeEnabled() string { return l.Join("/etc/paddock/revoke-enabled") }
+
+// UpdatesResult is the result of the last regular update run, written by `paddockd updates run` for the agent (plan
+// M5b decision 6).
+func (l Layout) UpdatesResult() string { return l.Join("/var/lib/paddock/state/updates-result.json") }
+
+// RebootRequired is the marker packages leave when the device needs a reboot (plan M5b decision 8).
+func (l Layout) RebootRequired() string { return l.Join("/var/run/reboot-required") }
+
+// UnattendedLog is the log of unattended-upgrades, the daily security updates.
+func (l Layout) UnattendedLog() string {
+	return l.Join("/var/log/unattended-upgrades/unattended-upgrades.log")
+}

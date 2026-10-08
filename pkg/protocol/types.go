@@ -170,7 +170,34 @@ const (
 	// Mutual watch (plan M5a decision 5): a unit Paddock keeps running (fleetd's orbit.service) was found stopped;
 	// the agent starts it again.
 	EventTamperServiceStopped = "tamper.service_stopped"
+	// Update management (plan M5b decision 6): one finished run of regular or security updates.
+	EventUpdatesRun = "updates.run"
 )
+
+// Kinds and results of UpdatesRun.
+const (
+	UpdatesKindRegular   = "regular"
+	UpdatesKindSecurity  = "security"
+	UpdatesResultOK      = "ok"
+	UpdatesResultFailed  = "failed"
+	UpdatesResultTimeout = "timeout"
+)
+
+// MaxHeldBack bounds UpdatesRun.HeldBack.
+const MaxHeldBack = 50
+
+// UpdatesRun is the data of updates.run: a finished run of regular updates (paddockd updates run) or of the daily
+// security updates (unattended-upgrades). HeldBack are the packages the run kept back, at most MaxHeldBack.
+type UpdatesRun struct {
+	Kind           string    `json:"kind"`
+	StartedAt      time.Time `json:"started_at"`
+	FinishedAt     time.Time `json:"finished_at"`
+	Upgraded       int       `json:"upgraded"`
+	HeldBack       []string  `json:"held_back"`
+	RebootRequired bool      `json:"reboot_required"`
+	Result         string    `json:"result"`
+	Error          string    `json:"error,omitempty"`
+}
 
 // TamperServiceStopped is the data of tamper.service_stopped.
 type TamperServiceStopped struct {
@@ -188,6 +215,7 @@ var EventTypes = []string{
 	EventTamperKeyslotChanged,
 	EventRevocationTrustPinnedTOFU, EventRevocationRefused,
 	EventTamperServiceStopped,
+	EventUpdatesRun,
 }
 
 // Disk states of DiskHealth (plan M4b decision 8), from the least to the most complete.

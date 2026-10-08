@@ -22,15 +22,18 @@ WHERE s.device_id = @device_id
   AND (s.name, s.version, s.source) NOT IN (
     SELECT unnest(@names::text[]), unnest(@versions::text[]), unnest(@sources::text[]));
 
--- The arrays are parallel; cvss -1 and empty strings stand for unknown values.
+-- The arrays are parallel; cvss -1 and empty strings stand for unknown values. The CVSS vector comes from Ubuntu's
+-- data only: the enrichment in the same transaction sets it again (plan M5c decision 2).
 -- name: UpsertVulnerabilityFindings :exec
-INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, cvss_score, severity, fixed_version)
+INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, cvss_score, severity, fixed_version,
+                                   fleet_severity, fleet_fixed_version)
 SELECT @device_id, @organization_id, k.cve, k.name, k.version, NULLIF(k.cvss, -1)::numeric(3,1), NULLIF(k.severity, ''),
-       NULLIF(k.fixed, '')
+       NULLIF(k.fixed, ''), NULLIF(k.severity, ''), NULLIF(k.fixed, '')
 FROM (SELECT unnest(@cves::text[]) AS cve, unnest(@names::text[]) AS name, unnest(@versions::text[]) AS version,
              unnest(@cvss::float8[]) AS cvss, unnest(@severities::text[]) AS severity, unnest(@fixed::text[]) AS fixed) k
 ON CONFLICT (device_id, cve, software_name, software_version) DO UPDATE
-  SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version;
+  SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version,
+      fleet_severity = EXCLUDED.fleet_severity, fleet_fixed_version = EXCLUDED.fleet_fixed_version, cvss_vector = NULL;
 
 -- name: DeleteMissingFindings :exec
 DELETE FROM vulnerability_finding f
@@ -84,18 +87,26 @@ SELECT count(*) FROM (
   LIMIT @count_limit
 ) matching;
 
--- Severity "unknown" selects findings without severity (Fleet free reports none); unknown scores sort last both ways.
+-- Severity "unknown" selects findings without severity (no Ubuntu priority and no score); unknown scores and
+-- severities sort last both ways. In ORDER BY, severity is the inner query's rank (critical highest): names inside an
+-- expression resolve to input columns, not to the output column of the same name.
 -- name: ListDeviceVulnerabilities :many
-SELECT cve, software_name, software_version, cvss_score, coalesce(severity, 'unknown')::text AS severity, fixed_version,
-       first_seen_at
-FROM vulnerability_finding
-WHERE device_id = @device_id
-  AND (sqlc.narg(q_pattern)::text IS NULL OR cve ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
-       OR software_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
-  AND (sqlc.narg(severities)::text[] IS NULL OR coalesce(severity, 'unknown') = ANY(sqlc.narg(severities)::text[]))
+SELECT cve, software_name, software_version, cvss_score, coalesce(label, 'unknown')::text AS severity, fixed_version,
+       cvss_vector, first_seen_at
+FROM (
+  SELECT cve, software_name, software_version, cvss_score, severity AS label, fixed_version, cvss_vector, first_seen_at,
+         CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 END AS severity
+  FROM vulnerability_finding
+  WHERE device_id = @device_id
+    AND (sqlc.narg(q_pattern)::text IS NULL OR cve ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR software_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+    AND (sqlc.narg(severities)::text[] IS NULL OR coalesce(severity, 'unknown') = ANY(sqlc.narg(severities)::text[]))
+) findings
 ORDER BY
   CASE WHEN @sort::text = 'cvss_score' THEN cvss_score END ASC,
   CASE WHEN @sort::text = '-cvss_score' THEN cvss_score END DESC NULLS LAST,
+  CASE WHEN @sort::text = 'severity' THEN severity END ASC,
+  CASE WHEN @sort::text = '-severity' THEN severity END DESC NULLS LAST,
   CASE WHEN @sort::text = 'cve' THEN cve END ASC,
   CASE WHEN @sort::text = '-cve' THEN cve END DESC,
   cve, software_name, software_version
@@ -145,22 +156,27 @@ SELECT count(*) FROM (
   LIMIT @count_limit
 ) matching;
 
--- Vulnerabilities of the organization per CVE: the finding with the highest score (its severity and fixed version, if
--- the inventory system knows them) and the number of affected devices.
+-- Vulnerabilities of the organization per CVE: the finding with the highest severity, then score (its fixed version
+-- and CVSS vector, if known) and the number of affected devices; CountVulnerabilities picks the same finding. In ORDER
+-- BY, severity is the rank (see ListDeviceVulnerabilities).
 -- name: ListVulnerabilities :many
-SELECT cve, cvss_score, severity, device_count, fixed_version FROM (
-  SELECT DISTINCT ON (f.cve) f.cve, f.cvss_score, coalesce(f.severity, 'unknown')::text AS severity,
+SELECT cve, cvss_score, label AS severity, device_count, fixed_version, cvss_vector FROM (
+  SELECT DISTINCT ON (f.cve) f.cve, f.cvss_score, coalesce(f.severity, 'unknown')::text AS label,
+         CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 END AS severity,
          (SELECT count(DISTINCT g.device_id) FROM vulnerability_finding g
             JOIN device gd ON gd.id = g.device_id AND gd.state IN ('active','quarantined') WHERE g.cve = f.cve)::int AS device_count,
-         f.fixed_version
+         f.fixed_version, f.cvss_vector
   FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
   WHERE sqlc.narg(q_pattern)::text IS NULL OR f.cve ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
-  ORDER BY f.cve, f.cvss_score DESC NULLS LAST, f.fixed_version NULLS LAST
+  ORDER BY f.cve, CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 END DESC NULLS LAST, f.cvss_score DESC NULLS LAST,
+    f.fixed_version NULLS LAST
 ) vulnerabilities
-WHERE sqlc.narg(severities)::text[] IS NULL OR severity = ANY(sqlc.narg(severities)::text[])
+WHERE sqlc.narg(severities)::text[] IS NULL OR label = ANY(sqlc.narg(severities)::text[])
 ORDER BY
   CASE WHEN @sort::text = 'cvss_score' THEN cvss_score END ASC,
   CASE WHEN @sort::text = '-cvss_score' THEN cvss_score END DESC NULLS LAST,
+  CASE WHEN @sort::text = 'severity' THEN severity END ASC,
+  CASE WHEN @sort::text = '-severity' THEN severity END DESC NULLS LAST,
   CASE WHEN @sort::text = 'cve' THEN cve END ASC,
   CASE WHEN @sort::text = '-cve' THEN cve END DESC,
   CASE WHEN @sort::text = 'device_count' THEN device_count END ASC,
@@ -174,7 +190,8 @@ SELECT count(*) FROM (
     SELECT DISTINCT ON (f.cve) f.cve, coalesce(f.severity, 'unknown') AS severity
     FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
     WHERE sqlc.narg(q_pattern)::text IS NULL OR f.cve ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
-    ORDER BY f.cve, f.cvss_score DESC NULLS LAST
+    ORDER BY f.cve, CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 END DESC NULLS LAST,
+      f.cvss_score DESC NULLS LAST
   ) vulnerabilities
   WHERE sqlc.narg(severities)::text[] IS NULL OR severity = ANY(sqlc.narg(severities)::text[])
   LIMIT @count_limit

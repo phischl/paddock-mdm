@@ -156,6 +156,30 @@ func (o OS) AptGet(ctx context.Context, args ...string) (string, int, error) {
 	return packageCommand(ctx, PackageTimeout, "apt-get", args...)
 }
 
+// AptGetWithin runs apt-get like AptGet with another timeout (`paddockd updates run`, plan M5b decision 6).
+func (o OS) AptGetWithin(ctx context.Context, timeout time.Duration, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return packageCommand(ctx, timeout, "apt-get", args...)
+}
+
+// DpkgWithin runs dpkg like Dpkg with another timeout (`paddockd updates run`).
+func (o OS) DpkgWithin(ctx context.Context, timeout time.Duration, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return packageCommand(ctx, timeout, "dpkg", args...)
+}
+
+// AptMark implements System.
+func (o OS) AptMark(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "apt-mark", args...)
+}
+
 // Dpkg implements System.
 func (o OS) Dpkg(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {
@@ -171,8 +195,10 @@ func packageCommand(ctx context.Context, timeout time.Duration, name string, arg
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed package tools and arguments
+	// LC_ALL=C: the agent reads apt's output (the counts of an update run, "dpkg was interrupted"), which is
+	// translated in the device's locale otherwise.
 	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NOTIFY_SOCKET=") }),
-		"DEBIAN_FRONTEND=noninteractive")
+		"DEBIAN_FRONTEND=noninteractive", "LC_ALL=C")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 10 * time.Second // children that inherited the output pipes are gone with the group

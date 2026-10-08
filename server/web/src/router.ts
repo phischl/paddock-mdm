@@ -1,10 +1,12 @@
 import { createRouter, createWebHistory, type RouteLocationRaw } from 'vue-router'
 import { useSessionStore } from './stores/session'
+import { attentionCount } from './lib/updates'
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', name: 'home', component: () => import('./views/Home.vue') },
+    { path: '/attention', name: 'attention', component: () => import('./views/Attention.vue') },
     { path: '/login-denied', name: 'login-denied', component: () => import('./views/LoginDenied.vue'), meta: { public: true } },
     { path: '/device-groups', name: 'device-groups', component: () => import('./views/DeviceGroups.vue') },
     { path: '/device-groups/:id', name: 'device-group', component: () => import('./views/DeviceGroupDetail.vue') },
@@ -32,6 +34,8 @@ export const router = createRouter({
     },
     { path: '/settings/login', name: 'login-settings', component: () => import('./views/LoginSettings.vue') },
     { path: '/settings/dms', name: 'dms-settings', component: () => import('./views/DMSSettings.vue') },
+    { path: '/settings/updates', name: 'update-settings', component: () => import('./views/UpdateSettings.vue') },
+    { path: '/package-holds', name: 'package-holds', component: () => import('./views/PackageHolds.vue') },
     { path: '/revocations', name: 'revocations', component: () => import('./views/RevocationRequests.vue') },
     { path: '/audit', name: 'audit', component: () => import('./views/Audit.vue') },
     { path: '/platform/organizations', name: 'organizations', component: () => import('./views/Organizations.vue') },
@@ -53,11 +57,20 @@ export function homeFor(role: string | null | undefined): RouteLocationRaw {
   }
 }
 
+// navigations counts the guarded navigations: vue-router follows a redirect even when a later navigation started
+// while the guard waited, so a slow start page decision would take the user away from where they went meanwhile.
+let navigations = 0
+
 router.beforeEach(async (to) => {
+  const navigation = ++navigations
   if (to.meta.public) return true
   const session = useSessionStore()
   const me = await session.load()
   if (!me) return false // the API client redirects to the login
+  // Organization administrators start on the attention list while it has entries (plan M5b decision 11).
+  if (to.name === 'home' && me.role === 'org_admin' && (await attentionCount()) > 0) {
+    return navigation === navigations ? { name: 'attention' } : false
+  }
   if (to.name === 'home') return homeFor(me.role)
   return true
 })

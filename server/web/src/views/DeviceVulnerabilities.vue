@@ -2,13 +2,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import CvssScore from '../components/CvssScore.vue'
 import DataList from '../components/DataList.vue'
 import DeviceTabs from '../components/DeviceTabs.vue'
 import SeverityChip from '../components/SeverityChip.vue'
 import type { VulnerabilityFinding } from '../api/client'
 import { getDevice } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
-import { formatScore, listDeviceVulnerabilities, severityFilter } from '../lib/inventory'
+import { listDeviceVulnerabilities, severityFilter } from '../lib/inventory'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 
@@ -26,7 +27,7 @@ onMounted(async () => {
 const fetch = computed(() => listDeviceVulnerabilities(id.value))
 const columns: ListColumn[] = [
   { key: 'cve', title: 'inventory.cve', sortable: true },
-  { key: 'severity', title: 'inventory.severity' },
+  { key: 'severity', title: 'inventory.severity', sortable: true },
   { key: 'cvss_score', title: 'inventory.cvss', sortable: true },
   { key: 'package', title: 'inventory.package' },
   { key: 'fixed_version', title: 'inventory.fixedVersion' },
@@ -72,7 +73,10 @@ const columns: ListColumn[] = [
           <SeverityChip :severity="item.severity" />
         </template>
         <template #[`item.cvss_score`]="{ item }: { item: VulnerabilityFinding }">
-          {{ formatScore(item.cvss_score) }}
+          <CvssScore
+            :score="item.cvss_score"
+            :vector="item.cvss_vector"
+          />
         </template>
         <template #[`item.package`]="{ item }: { item: VulnerabilityFinding }">
           {{ t('inventory.packageVersion', { name: item.software_name, version: item.software_version }) }}

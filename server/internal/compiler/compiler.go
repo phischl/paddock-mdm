@@ -190,6 +190,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Inventory, err = c.inventory(ctx, q); err != nil {
 			return err
 		}
+		if keys.Updates, err = loadUpdates(ctx, q); err != nil {
+			return err
+		}
 		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err
@@ -331,6 +334,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	schema := bundle.SchemaVersion
 	var omitted []omittedEntry
 	var v2 v2Trust
+	var updatesSection *bundle.UpdatesSpec
 	if t.v2 {
 		v2 = keys
 		id, err := identity.get(ctx)
@@ -344,13 +348,16 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		omitted = omits
 		schema = bundle.SchemaVersion2
 		resources = append(resources, extra...)
+		if keys.Updates != nil {
+			updatesSection = keys.Updates.section(groups)
+		}
 		bundle.SortResources(resources)
 	}
 	b := bundle.Bundle{
 		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
 		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources, Keys: v2.Keys,
-		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory,
+		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection,
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -371,14 +378,16 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	return rendered{device: t.id, oldSeq: t.seq, schema: schema, content: content, payload: payload, omitted: omitted}, true, nil, nil
 }
 
-// v2Trust are the key material, the revocation section, the organization's dead man's switch and the inventory
-// section of v2 bundles.
+// v2Trust are the key material, the revocation section, the organization's dead man's switch, the inventory section
+// and the organization's updates of v2 bundles.
 type v2Trust struct {
 	Keys       *bundle.Keys       `json:"keys"`
 	Revocation *bundle.Revocation `json:"revocation"`
 	DMS        *bundle.DMS        `json:"-"` // per organization, not part of the reconcile digest
 	// Inventory is the same for every organization; a new fleetd package recompiles every device (reconcile digest).
 	Inventory *bundle.Inventory `json:"inventory"`
+	// Updates are the organization's update settings and holds (plan M5b decision 4), not part of the digest.
+	Updates *orgUpdates `json:"-"`
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap
