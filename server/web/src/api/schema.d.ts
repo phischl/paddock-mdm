@@ -760,6 +760,166 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The update settings (plan M5b decisions 1 and 9); the defaults until changed. */
+        get: operations["getUpdateSettings"];
+        /**
+         * @description Roles: org_admin. Replaces the update settings: security_daily_at (HH:MM, local device time),
+         *     regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything
+         *     else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720)
+         *     and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). Every device is
+         *     recompiled.
+         */
+        put: operations["updateUpdateSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/package-holds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listPackageHolds"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Holds a package for every device of the organization or of a device group:
+         *     without a version the installed version is kept (apt-mark hold), with a version it is pinned (apt preferences,
+         *     Pin-Priority 1001). Held packages are left out of security and regular updates, and install-now refuses them.
+         *     A package held twice in one scope is 409 already_exists.
+         */
+        post: operations["createPackageHold"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/package-holds/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getPackageHold"];
+        put?: never;
+        post?: never;
+        /** @description Roles: org_admin, org_operator. The devices release the hold with their next bundle. */
+        delete: operations["deletePackageHold"];
+        options?: never;
+        head?: never;
+        /** @description Roles: org_admin, org_operator. Replaces version and reason; the package and the scope are fixed. */
+        patch: operations["updatePackageHold"];
+        trace?: never;
+    };
+    "/api/v1/attention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The conditions that need an administrator, one row per open
+         *     condition of a device (plan M5b decision 11): staleness warning and critical (the organization's thresholds),
+         *     presumed lost, quarantined (clone suspected), disk encryption not compliant, agent not the current release,
+         *     the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days.
+         *     Read-only; the actions are the device's own (retire, release quarantine, lock).
+         */
+        get: operations["listAttention"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/install-now": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Issues the command install_now (valid 24 hours) to an active device: the agent
+         *     installs the packages, or upgrades installed ones, at its next check-in. A package held for the device is 409
+         *     package_on_hold and no command is issued; another device state is 409 invalid_state.
+         */
+        post: operations["installNowOnDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/device-groups/{id}/install-now": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Issues install_now to every active device of the group, one command per device.
+         *     More than 500 active devices is 422 too_many_devices; a package held for any of them is 409 package_on_hold;
+         *     then no command is issued.
+         */
+        post: operations["installNowOnDeviceGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The update state of the device (plan M5b decision 12): its last
+         *     security and regular update runs, whether a reboot is pending, the holds that apply to it and the packages held
+         *     with different versions (the smallest version wins).
+         */
+        get: operations["getDeviceUpdates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/login-assignment": {
         parameters: {
             query?: never;
@@ -2002,6 +2162,12 @@ export interface components {
              *     organization's dead man's switch period while the switch is on (plan M4c decision 17); null otherwise.
              */
             presumed_self_locked_at: string | null;
+            /**
+             * Format: date-time
+             * @description Since when the device is presumed lost: it has been silent for longer than the organization's critical
+             *     staleness threshold (plan M5b decision 10); null otherwise, cleared by its next contact.
+             */
+            presumed_lost_at: string | null;
         };
         /** @description The latest login.* and sudo.* report of the device's agent (plan M3b decision 17). */
         DeviceLoginStatus: {
@@ -2103,7 +2269,7 @@ export interface components {
         /** @enum {string} */
         DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
         /** @enum {string} */
-        DeviceCommandType: "rotate_admin_password" | "delete_self_lock";
+        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now";
         DeviceCommand: {
             /** Format: uuid */
             id: string;
@@ -2144,6 +2310,128 @@ export interface components {
             warn_days: number[];
             /** Format: date-time */
             updated_at?: string;
+        };
+        UpdateSettingsUpdate: {
+            /** @description HH:MM, local device time. */
+            security_daily_at: string;
+            /** @description e.g. "Sat 04:00", "Mon,Thu 12:30", "02:00" (every day). */
+            regular_schedule: string;
+            regular_updates_enabled: boolean;
+            max_random_delay_min: number;
+            staleness_warning_h: number;
+            staleness_critical_h: number;
+        };
+        UpdateSettings: {
+            security_daily_at: string;
+            regular_schedule: string;
+            regular_updates_enabled: boolean;
+            max_random_delay_min: number;
+            staleness_warning_h: number;
+            staleness_critical_h: number;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        PackageHold: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: uuid
+             * @description null = every device.
+             */
+            device_group_id: string | null;
+            package: string;
+            /** @description null = the installed version is kept. */
+            version: string | null;
+            reason: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PackageHoldCreate: {
+            /**
+             * Format: uuid
+             * @description Omit for every device of the organization.
+             */
+            device_group_id?: string;
+            /** @description ^[a-z0-9][a-z0-9+.-]+$ */
+            package: string;
+            /** @description ^[A-Za-z0-9.+:~-]+$; omit or null to keep the installed version. */
+            version?: string | null;
+            reason?: string;
+        };
+        PackageHoldUpdate: {
+            /** @description null keeps the installed version. */
+            version: string | null;
+            reason: string;
+        };
+        PackageHoldPage: {
+            items: components["schemas"]["PackageHold"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        InstallNowRequest: {
+            packages: string[];
+        };
+        InstallNowGroupResult: {
+            /** @description Commands issued, one per active device of the group. */
+            commands: number;
+        };
+        DeviceUpdateHold: {
+            package: string;
+            version: string | null;
+            /**
+             * Format: uuid
+             * @description null = organization-wide.
+             */
+            device_group_id: string | null;
+        };
+        DeviceUpdateConflict: {
+            package: string;
+            versions: (string | null)[];
+            chosen: string | null;
+        };
+        DeviceUpdates: {
+            /** @description Latest updates.run of kind security; null until reported. */
+            last_security_run: components["schemas"]["DeviceReport"] | null;
+            /** @description Latest updates.run of kind regular; null until reported. */
+            last_regular_run: components["schemas"]["DeviceReport"] | null;
+            /** @description The last check-in reported a pending reboot; Paddock never reboots for updates. */
+            reboot_required: boolean;
+            holds: components["schemas"]["DeviceUpdateHold"][];
+            conflicts: components["schemas"]["DeviceUpdateConflict"][];
+        };
+        /** @enum {string} */
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired";
+        Attention: {
+            kind: components["schemas"]["AttentionKind"];
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            /**
+             * Format: date-time
+             * @description When the condition began (for disk and agent the last contact).
+             */
+            since: string;
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; *_apply_failed: the stage; revocation_*: action:status; otherwise empty. */
+            detail: string;
+        };
+        AttentionPage: {
+            items: components["schemas"]["Attention"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
         };
         /** @enum {string} */
         RevocationAction: "lock" | "destroy" | "self_lock";
@@ -2862,6 +3150,10 @@ export interface components {
         RevocationRequestSort: "requested_at" | "-requested_at" | "status" | "-status" | "action" | "-action" | "hostname" | "-hostname";
         /** @description Repeatable. */
         DeviceStateFilter: components["schemas"]["DeviceState"][];
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
+        /** @description Sort field; "-" prefix sorts descending. The device and the kind are the tie-breaker. */
+        AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
         /** @description Only definitions scoped to this device group. */
         DeviceGroupFilter: string;
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -4555,6 +4847,332 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    getUpdateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The update settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateUpdateSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listPackageHolds: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["PackageHoldSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only definitions scoped to this device group. */
+                device_group_id?: components["parameters"]["DeviceGroupFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of package holds. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageHoldPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createPackageHold: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackageHoldCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageHold"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getPackageHold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The package hold. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageHold"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deletePackageHold: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    updatePackageHold: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackageHoldUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageHold"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listAttention: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The device and the kind are the tie-breaker. */
+                sort?: components["parameters"]["AttentionSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                kind?: components["schemas"]["AttentionKind"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of conditions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttentionPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    installNowOnDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstallNowRequest"];
+            };
+        };
+        responses: {
+            /** @description The issued command. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCommand"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    installNowOnDeviceGroup: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstallNowRequest"];
+            };
+        };
+        responses: {
+            /** @description The number of issued commands. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstallNowGroupResult"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    getDeviceUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The update state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceUpdates"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
         };
     };
     setDeviceLoginAssignment: {

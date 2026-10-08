@@ -102,6 +102,8 @@ services:
       PADDOCK_IDENTITY_SYNC_INTERVAL: ${PADDOCK_IDENTITY_SYNC_INTERVAL:-60s}
       # Inventory rounds of the gates F1–F4 (plan M5a).
       PADDOCK_INVENTORY_SYNC_INTERVAL: ${PADDOCK_INVENTORY_SYNC_INTERVAL:-60s}
+      # Staleness thresholds count minutes, for gate U4 (plan M5b decision 9).
+      PADDOCK_STALENESS_UNIT: ${PADDOCK_STALENESS_UNIT:-minute}
 
   paddock-gateway:
     environment:

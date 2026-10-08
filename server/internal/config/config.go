@@ -193,6 +193,23 @@ func LoadDevStepUp(l *Loader, c Common) DevStepUp {
 	return d
 }
 
+// StalenessUnit reads PADDOCK_STALENESS_UNIT, the unit of the organizations' staleness thresholds (plan M5b decision
+// 9): "hour" (default) or, with PADDOCK_ENV=development only, "minute" for the acceptance gate U4.
+func StalenessUnit(l *Loader, c Common) time.Duration {
+	v, ok := l.get("PADDOCK_STALENESS_UNIT")
+	switch {
+	case !ok || v == "hour":
+		return time.Hour
+	case v != "minute":
+		l.Invalid("PADDOCK_STALENESS_UNIT", fmt.Sprintf("not hour or minute: %q", v))
+	case !c.Development():
+		l.Invalid("PADDOCK_STALENESS_UNIT", "minute is only allowed with PADDOCK_ENV=development")
+	default:
+		return time.Minute
+	}
+	return time.Hour
+}
+
 // AMQP is the RabbitMQ connection of relay, audit-writer and provision.
 type AMQP struct {
 	URL      string

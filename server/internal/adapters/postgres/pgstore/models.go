@@ -108,6 +108,14 @@ type AppUser struct {
 	LockReactivate *bool
 }
 
+type AttentionCondition struct {
+	Kind     string
+	DeviceID uuid.UUID
+	Hostname string
+	Since    time.Time
+	Detail   string
+}
+
 type Bundle struct {
 	DeviceID       uuid.UUID
 	Version        int64
@@ -132,6 +140,15 @@ type Device struct {
 	EnrolledAt        time.Time
 	StateChangedAt    time.Time
 	LoginsSuspended   bool
+}
+
+type DeviceAlert struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Kind           string
+	RaisedAt       time.Time
+	ClearedAt      *time.Time
 }
 
 type DeviceCommand struct {
@@ -209,6 +226,7 @@ type DeviceStatus struct {
 	SchemaVersions       []int32
 	LoginState           json.RawMessage
 	PresumedSelfLockedAt *time.Time
+	PresumedLostAt       *time.Time
 }
 
 type DeviceUserSeen struct {
@@ -327,6 +345,18 @@ type OrganizationLoginSetting struct {
 	BootPinMinLength       int32
 }
 
+type OrganizationUpdateSetting struct {
+	OrganizationID        uuid.UUID
+	SecurityDailyAt       string
+	RegularSchedule       string
+	RegularUpdatesEnabled bool
+	MaxRandomDelayMin     int32
+	StalenessWarningH     int32
+	StalenessCriticalH    int32
+	UpdatedAt             time.Time
+	UpdatedBy             uuid.NullUUID
+}
+
 type Outbox struct {
 	ID             int64
 	OrganizationID uuid.UUID
@@ -335,6 +365,18 @@ type Outbox struct {
 	Payload        json.RawMessage
 	CreatedAt      time.Time
 	PublishedAt    *time.Time
+}
+
+type PackageHold struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceGroupID  uuid.NullUUID
+	Package        string
+	Version        *string
+	Reason         string
+	CreatedBy      uuid.NullUUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type PermissionProfile struct {

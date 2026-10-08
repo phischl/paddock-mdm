@@ -1,6 +1,7 @@
 // Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10, M3b decision 6): resources in
-// the order time → file → systemd_unit → login → sudo, then the inventory section (plan M5a decision 5), each
-// independently (an error does not stop the others), then the removal of files that left the bundle.
+// the order time → file → systemd_unit → updates (the bundle's updates section, plan M5b decision 5) → login → sudo,
+// then the inventory section (plan M5a decision 5), each independently (an error does not stop the others), then the
+// removal of files that left the bundle.
 package apply
 
 import (
@@ -20,8 +21,8 @@ import (
 var SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
 
 // order is the apply order of resource types: units may depend on files; sudo rights follow the login component
-// that resolves their users.
-var order = []string{bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit, bundle.TypeLogin, bundle.TypeSudo}
+// that resolves their users. The updates section takes the place of bundle.TypeUpdates.
+var order = []string{bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit, bundle.TypeUpdates, bundle.TypeLogin, bundle.TypeSudo}
 
 // ResourceError is one entry of Report.Errors.
 type ResourceError struct {
@@ -48,6 +49,7 @@ type Planned struct {
 // Applier applies bundles with a set of reconcilers.
 type Applier struct {
 	recs      map[string]reconcile.Reconciler
+	updates   *reconcile.Updates
 	file      *reconcile.File
 	login     *reconcile.Login
 	inventory *reconcile.Inventory
@@ -65,8 +67,9 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 	file := &reconcile.File{Sys: sys, Managed: managed}
 	login := &reconcile.Login{Sys: sys, Events: events}
 	return &Applier{
-		file:  file,
-		login: login,
+		file:    file,
+		login:   login,
+		updates: &reconcile.Updates{Sys: sys, Events: events},
 		recs: map[string]reconcile.Reconciler{
 			bundle.TypeFile: file, bundle.TypeSystemdUnit: &reconcile.Unit{Sys: sys}, bundle.TypeTime: &reconcile.Time{Sys: sys},
 			bundle.TypeLogin: login, bundle.TypeSudo: &reconcile.Sudo{Sys: sys, Events: events},
@@ -74,11 +77,17 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 	}
 }
 
-// sorted returns the resources of b in apply order, filtered by keep, and, with an inventory reconciler, the
-// inventory section last.
+// sorted returns the resources of b in apply order with the updates section as a resource, filtered by keep, and,
+// with an inventory reconciler, the inventory section last.
 func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource {
 	var out []bundle.Resource
 	for _, typ := range order {
+		if typ == bundle.TypeUpdates && b.Updates != nil {
+			if r, err := bundle.UpdatesResource(*b.Updates); err == nil && keep(r) {
+				out = append(out, r)
+			}
+			continue
+		}
 		for _, r := range b.Resources {
 			if r.Type == typ && keep(r) {
 				out = append(out, r)
@@ -102,6 +111,9 @@ func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bu
 func (a *Applier) reconciler(typ string) (reconcile.Reconciler, bool) {
 	if typ == reconcile.InventoryID && a.inventory != nil {
 		return a.inventory, true
+	}
+	if typ == bundle.TypeUpdates {
+		return a.updates, true
 	}
 	rec, ok := a.recs[typ]
 	return rec, ok

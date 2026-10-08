@@ -22,9 +22,12 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/disksetup"
 	"github.com/phischl/paddock-mdm/agent/internal/enroll"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
+	"github.com/phischl/paddock-mdm/agent/internal/osupdates"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/selftest"
 	"github.com/phischl/paddock-mdm/agent/internal/triggers"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
 const usage = `usage: paddockd [--root DIR] <command> [flags]
@@ -35,6 +38,7 @@ commands:
   run            run the agent (started by paddock-supervisor)
   self-test      check this binary against the device's configuration; JSON report, exit 0 or 1
   plan           show what applying the last applied bundle again would change (read-only); JSON report
+  updates run    install the regular updates and record the result for the agent (paddock-updates.timer)
   disk-setup     ask for the boot PIN on the console and enroll TPM2+PIN (first boot, paddock-disk-setup.service)
   version        print the version
 `
@@ -68,6 +72,8 @@ func run(args []string, stdout io.Writer) int {
 		return runPlan(ctx, layout, stdout)
 	case "disk-setup":
 		return runDiskSetup(ctx, layout)
+	case "updates":
+		return runUpdates(ctx, layout, rest)
 	case "self-test":
 		r := selftest.Run(ctx, layout)
 		enc := json.NewEncoder(stdout)
@@ -165,6 +171,31 @@ func runPlan(ctx context.Context, layout paths.Layout, stdout io.Writer) int {
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(map[string]any{"bundle_version": version, "changes": changes, "resources": plan})
+	return 0
+}
+
+// runUpdates runs the regular updates (`updates run`, plan M5b decision 6) and stores the result, which the agent
+// reports; it exits 1 when the run did not succeed.
+func runUpdates(ctx context.Context, layout paths.Layout, args []string) int {
+	if len(args) != 1 || args[0] != "run" {
+		fmt.Fprint(os.Stderr, usage)
+		return 1
+	}
+	if layout.Root == "/" && os.Geteuid() != 0 {
+		slog.Error("paddockd updates run must run as root")
+		return 1
+	}
+	sys := reconcile.OS{Root: layout.Root}
+	r := osupdates.RunRegular(ctx, sys.AptGetWithin, time.Now, func() bool { return osupdates.RebootRequired(layout) })
+	if err := osupdates.WriteResult(layout, r); err != nil {
+		slog.ErrorContext(ctx, "storing the update result failed", "error", err)
+		return 1
+	}
+	slog.InfoContext(ctx, "regular updates finished", "result", r.Result, "upgraded", r.Upgraded, "held_back", len(r.HeldBack),
+		"reboot_required", r.RebootRequired, "error", r.Error)
+	if r.Result != protocol.UpdatesResultOK {
+		return 1
+	}
 	return 0
 }
 

@@ -37,6 +37,10 @@ type State struct {
 	FailedUpdateVersion string `json:"failed_update_version,omitempty"`
 	// ReportedUpdateAt is the "at" of the update result already turned into an event.
 	ReportedUpdateAt *time.Time `json:"reported_update_at,omitempty"`
+	// ReportedRegularAt and ReportedSecurityAt are the ends of the last regular and security update runs reported as
+	// updates.run (plan M5b decision 6).
+	ReportedRegularAt  *time.Time `json:"reported_regular_at,omitempty"`
+	ReportedSecurityAt *time.Time `json:"reported_security_at,omitempty"`
 	// SessionsReported is the last session.login per directory user (at most one per 24 h, plan M3b decision 11).
 	SessionsReported map[string]time.Time `json:"sessions_reported,omitempty"`
 	// ExecutedCommands are the IDs of the commands this device started, with the time, kept 60 days so a command is

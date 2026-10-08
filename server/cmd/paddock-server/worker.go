@@ -39,6 +39,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	fleetToken := l.SecretFile("PADDOCK_FLEET_TOKEN_FILE")
 	fleetPublicURL := l.Required("PADDOCK_FLEET_PUBLIC_URL")
 	inventoryEvery := l.Duration("PADDOCK_INVENTORY_SYNC_INTERVAL", worker.DefaultInventorySyncInterval)
+	// Development stacks count the staleness thresholds in minutes (plan M5b decision 9, gate U4).
+	stalenessUnit := config.StalenessUnit(l, common)
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -83,6 +85,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	escrowStore := worker.NewEscrow(app.NewEscrow(pool, escrowObjects), cache, pool, platformPool)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
+	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
+		min(worker.StalenessInterval, stalenessUnit/4))
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), ak, pool, platformPool, syncEvery, reconcileEvery)
@@ -113,6 +117,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		escrowStore.Run,
 		cacheSync.Run,
 		dms.Run,
+		staleness.Run,
 		rollouts.Run,
 		identity.RunSync,
 		identity.RunReconcile,
