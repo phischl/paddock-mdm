@@ -33,7 +33,7 @@ func (q *Queries) CountAttention(ctx context.Context, arg CountAttentionParams) 
 
 const listAttention = `-- name: ListAttention :many
 
-SELECT kind, device_id, hostname, since, detail FROM attention_condition
+SELECT kind, device_id, hostname, since, detail, id FROM attention_condition
 WHERE ($1::text IS NULL OR hostname ILIKE $1::text ESCAPE '\')
   AND ($2::text[] IS NULL OR kind = ANY($2::text[]))
 ORDER BY
@@ -43,7 +43,7 @@ ORDER BY
   CASE WHEN $3::text = '-kind' THEN kind END DESC,
   CASE WHEN $3::text = 'hostname' THEN hostname END ASC,
   CASE WHEN $3::text = '-hostname' THEN hostname END DESC,
-  device_id, kind
+  id
 LIMIT $5 OFFSET $4
 `
 
@@ -79,6 +79,7 @@ func (q *Queries) ListAttention(ctx context.Context, arg ListAttentionParams) ([
 			&i.Hostname,
 			&i.Since,
 			&i.Detail,
+			&i.ID,
 		); err != nil {
 			return nil, err
 		}

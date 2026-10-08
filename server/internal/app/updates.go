@@ -87,6 +87,9 @@ func (u *Updates) GetSettings(ctx context.Context) (UpdateSettings, error) {
 // recompiled.
 func (u *Updates) UpdateSettings(ctx context.Context, in updates.Settings) (UpdateSettings, error) {
 	spec := SpecUpdateSettings
+	if org, err := orgOf(ctx); err == nil {
+		spec.Target = &audit.Target{Type: "organization", ID: org.String()}
+	}
 	spec.Params = map[string]any{
 		"security_daily_at": in.SecurityDailyAt, "regular_schedule": in.RegularSchedule,
 		"regular_updates_enabled": in.RegularUpdatesEnabled, "max_random_delay_min": in.MaxRandomDelayMin,
@@ -100,7 +103,6 @@ func (u *Updates) UpdateSettings(ctx context.Context, in updates.Settings) (Upda
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}
 		p, _ := principal.From(ctx)
-		rec.SetTarget(audit.Target{Type: "organization", ID: p.OrganizationID.String()})
 		_, err := q.UpsertUpdateSettings(ctx, pgstore.UpsertUpdateSettingsParams{
 			OrganizationID: p.OrganizationID, SecurityDailyAt: in.SecurityDailyAt, RegularSchedule: in.RegularSchedule,
 			RegularUpdatesEnabled: in.RegularUpdatesEnabled,

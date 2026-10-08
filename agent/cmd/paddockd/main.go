@@ -186,7 +186,7 @@ func runUpdates(ctx context.Context, layout paths.Layout, args []string) int {
 		return 1
 	}
 	sys := reconcile.OS{Root: layout.Root}
-	r := osupdates.RunRegular(ctx, sys.AptGetWithin, time.Now, func() bool { return osupdates.RebootRequired(layout) })
+	r := osupdates.RunRegular(ctx, sys.AptGetWithin, sys.DpkgWithin, time.Now, func() bool { return osupdates.RebootRequired(layout) })
 	if err := osupdates.WriteResult(layout, r); err != nil {
 		slog.ErrorContext(ctx, "storing the update result failed", "error", err)
 		return 1

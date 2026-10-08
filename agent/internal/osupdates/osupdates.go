@@ -29,21 +29,30 @@ const RunLimit = 60 * time.Minute
 // maxError bounds the error of a run (the server records at most 256 characters).
 const maxError = 240
 
-// AptGet runs apt-get non-interactively with a timeout; a run killed at the timeout returns an error wrapping
-// context.DeadlineExceeded.
-type AptGet func(ctx context.Context, timeout time.Duration, args ...string) (output string, exit int, err error)
+// PackageTool runs apt-get or dpkg non-interactively with a timeout; a run killed at the timeout returns an error
+// wrapping context.DeadlineExceeded.
+type PackageTool func(ctx context.Context, timeout time.Duration, args ...string) (output string, exit int, err error)
 
 // lockWait lets apt wait for a dpkg lock held by another package operation (plan M3b risk R1).
 var lockWait = []string{"-o", "DPkg::Lock::Timeout=600"}
 
 // RunRegular updates the package lists and upgrades every package that is not held (apt-get dist-upgrade with
-// --force-confold), both within RunLimit, and returns the result of kind regular.
-func RunRegular(ctx context.Context, apt AptGet, now func() time.Time, rebootRequired func() bool) protocol.UpdatesRun {
+// --force-confold), both within RunLimit, and returns the result of kind regular. A signal does not stop apt halfway,
+// which would leave dpkg broken: the run ends at RunLimit. An installation interrupted earlier is finished with
+// `dpkg --configure -a` first.
+func RunRegular(ctx context.Context, apt, dpkg PackageTool, now func() time.Time, rebootRequired func() bool) protocol.UpdatesRun {
 	r := protocol.UpdatesRun{Kind: protocol.UpdatesKindRegular, StartedAt: now().UTC(), HeldBack: []string{}}
-	ctx, cancel := context.WithTimeout(ctx, RunLimit)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RunLimit)
 	defer cancel()
 	step := func(args ...string) (string, error) {
-		out, exit, err := apt(ctx, RunLimit, append(append([]string{}, lockWait...), args...)...)
+		full := append(append([]string{}, lockWait...), args...)
+		out, exit, err := apt(ctx, RunLimit, full...)
+		if err == nil && exit != 0 && strings.Contains(out, "dpkg was interrupted") {
+			if dout, dexit, derr := dpkg(ctx, RunLimit, "--configure", "-a"); derr != nil || dexit != 0 {
+				return dout, fmt.Errorf("dpkg --configure -a: exit %d %v: %s", dexit, derr, lastLine(dout))
+			}
+			out, exit, err = apt(ctx, RunLimit, full...)
+		}
 		switch {
 		case err != nil:
 			return out, fmt.Errorf("apt-get %s: %w", args[len(args)-1], err)

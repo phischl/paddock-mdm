@@ -49,12 +49,20 @@ type State struct {
 	// HandedRevocations are the SHA-256 (hex) of the revocation envelopes handed to paddock-revoke, with the time,
 	// so each is handed once (plan M4c decision 11); kept 31 days, longer than a token lives.
 	HandedRevocations map[string]time.Time `json:"handed_revocations,omitempty"`
+	// PendingInstalls are the install_now commands accepted but not finished; a restarted agent runs them again.
+	PendingInstalls []PendingInstall `json:"pending_installs,omitempty"`
 	// CommandResults are the results the server has not accepted yet.
 	CommandResults []CommandResult `json:"command_results,omitempty"`
 	// LocalAdmin is the managed local administrator (plan M4a decision 15).
 	LocalAdmin LocalAdmin `json:"local_admin"`
 	// LUKS is the disk encryption of the root volume (plan M4b decisions 8–12).
 	LUKS LUKS `json:"luks"`
+}
+
+// PendingInstall is an install_now command waiting for the install worker.
+type PendingInstall struct {
+	CommandID string   `json:"command_id"`
+	Packages  []string `json:"packages"`
 }
 
 // LUKS is the persistent state of the luks reconciler. Secrets — the recovery key, the install passphrase — are

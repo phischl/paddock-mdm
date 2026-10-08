@@ -193,3 +193,20 @@ func TestUpdatesRunIsTheLastRun(t *testing.T) {
 		t.Fatalf("login_state %s", raw)
 	}
 }
+
+// TestAttentionRowsAreUnique (review 1): a device with an open Lock, an open Destroy and an expired Lock has three
+// revocation rows on the attention list, each with its own key, so the key orders pages deterministically.
+func TestAttentionRowsAreUnique(t *testing.T) {
+	h := newStalenessHarness(t)
+	d := h.device(t, "active", time.Now())
+	admin := uuid.New()
+	for _, r := range [][2]string{{"lock", "requested"}, {"destroy", "approved"}, {"lock", "expired"}} {
+		h.exec(t, "INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_by, finished_at) VALUES ($1, $2, $3, $4, $5, $6, now())",
+			uuid.Must(uuid.NewV7()), h.org, d, r[0], r[1], admin)
+	}
+	var rows, keys int
+	if err := h.super.QueryRow(context.Background(), "SELECT count(*), count(DISTINCT id) FROM attention_condition WHERE device_id = $1 AND kind LIKE 'revocation_%'", d).
+		Scan(&rows, &keys); err != nil || rows != 3 || keys != 3 {
+		t.Fatalf("%d rows with %d keys (%v), want 3 and 3", rows, keys, err)
+	}
+}

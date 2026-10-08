@@ -32,7 +32,7 @@ const columns: ListColumn[] = [
       :filters="[attentionFilter]"
       searchable
       default-sort="-since"
-      item-value="key"
+      item-value="id"
       data-testid="attention-list"
     >
       <template #[`item.kind`]="{ item }: { item: Attention }">

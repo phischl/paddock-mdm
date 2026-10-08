@@ -22,6 +22,9 @@ const (
 	UnattendedConf = "/etc/apt/apt.conf.d/52paddock-unattended"
 	// UpgradeTimerDropIn moves apt-daily-upgrade.timer, which runs unattended-upgrades, to security_daily_at.
 	UpgradeTimerDropIn = "/etc/systemd/system/apt-daily-upgrade.timer.d/50-paddock.conf"
+	// SecurityServiceDropIn runs unattended-upgrades in the C locale, so that its log, which the agent reads for the
+	// counts of security runs, is English on every device.
+	SecurityServiceDropIn = "/etc/systemd/system/apt-daily-upgrade.service.d/50-paddock.conf"
 	// PinFile pins the packages held with a version.
 	PinFile = "/etc/apt/preferences.d/50paddock"
 	// RegularService and RegularTimer run `paddockd updates run` on regular_schedule.
@@ -103,6 +106,7 @@ func updatesFiles(s bundle.UpdatesSpec) []updatesFile {
 	return []updatesFile{
 		{path: UnattendedConf, data: []byte(unattended)},
 		{path: UpgradeTimerDropIn, data: []byte(dropIn), unit: "apt-daily-upgrade.timer"},
+		{path: SecurityServiceDropIn, data: []byte(managedHeader + "[Service]\nEnvironment=LC_ALL=C\n")},
 		{path: PinFile, data: pinData},
 		{path: RegularService, data: []byte(service)},
 		{path: RegularTimer, data: []byte(timer), unit: RegularTimerUnit},
@@ -129,11 +133,13 @@ func versionless(s bundle.UpdatesSpec) []string {
 }
 
 // holdChanges compares the versionless holds with apt's holds and the record of the holds Paddock set: hold what is
-// wanted and not held, unhold what Paddock held and is no longer wanted.
-func (u *Updates) holdChanges(ctx context.Context, s bundle.UpdatesSpec) (hold, unhold []string, record bool, err error) {
+// wanted and not held, unhold what Paddock held and is no longer wanted. The new record keeps the recorded holds that
+// are still wanted and adds those Paddock is about to set; a package that was held locally before Paddock wanted it
+// never enters the record, so releasing Paddock's hold leaves the local one alone.
+func (u *Updates) holdChanges(ctx context.Context, s bundle.UpdatesSpec) (hold, unhold, record []string, err error) {
 	out, exit, err := u.Sys.AptMark(ctx, "showhold")
 	if err != nil || exit != 0 {
-		return nil, nil, false, fmt.Errorf("apt-mark showhold: exit %d %v", exit, err)
+		return nil, nil, nil, fmt.Errorf("apt-mark showhold: exit %d %v", exit, err)
 	}
 	held := strings.Fields(out)
 	wanted := versionless(s)
@@ -144,20 +150,31 @@ func (u *Updates) holdChanges(ctx context.Context, s bundle.UpdatesSpec) (hold, 
 		}
 	}
 	for _, p := range recorded {
-		if !slices.Contains(wanted, p) && slices.Contains(held, p) {
+		switch {
+		case slices.Contains(wanted, p):
+			record = append(record, p)
+		case slices.Contains(held, p):
 			unhold = append(unhold, p)
 		}
 	}
-	return hold, unhold, !slices.Equal(recorded, wanted), nil
+	for _, p := range hold {
+		if !slices.Contains(record, p) {
+			record = append(record, p)
+		}
+	}
+	slices.Sort(record)
+	return hold, unhold, record, nil
 }
 
-// recorded returns the packages Paddock held with apt-mark.
+// recorded returns the packages Paddock held with apt-mark, sorted.
 func (u *Updates) recorded() []string {
 	data, _, err := u.Sys.ReadFile(heldRecord)
 	if err != nil {
 		return nil
 	}
-	return strings.Fields(string(data))
+	out := strings.Fields(string(data))
+	slices.Sort(out)
+	return out
 }
 
 // unitPlan returns the unit changes: the distribution's apt timers enabled and active, the regular timer as the spec
@@ -203,7 +220,7 @@ func (u *Updates) Plan(ctx context.Context, r bundle.Resource) ([]string, error)
 	for _, p := range unhold {
 		changes = append(changes, "apt-mark unhold "+p)
 	}
-	if record && len(hold)+len(unhold) == 0 {
+	if !slices.Equal(record, u.recorded()) && len(hold)+len(unhold) == 0 {
 		changes = append(changes, "file "+heldRecord)
 	}
 	units, err := u.unitPlan(ctx, s)
@@ -297,8 +314,8 @@ func (u *Updates) applyHolds(ctx context.Context, s bundle.UpdatesSpec) (bool, e
 			return false, fmt.Errorf("apt-mark %s: exit %d %v %s", verb, exit, err, strings.TrimSpace(out))
 		}
 	}
-	if record || len(hold)+len(unhold) > 0 {
-		data := []byte(strings.Join(versionless(s), "\n") + "\n")
+	if !slices.Equal(record, u.recorded()) {
+		data := []byte(strings.Join(record, "\n") + "\n")
 		if err := u.Sys.WriteFileAtomic(heldRecord, data, 0o600, 0, 0); err != nil {
 			return false, err
 		}

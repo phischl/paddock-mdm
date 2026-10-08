@@ -25,3 +25,6 @@ UPDATE device_status SET presumed_lost_at = @now::timestamptz WHERE device_id = 
 
 -- name: ClearPresumedLost :exec
 UPDATE device_status SET presumed_lost_at = NULL WHERE device_id = @device_id AND presumed_lost_at IS NOT NULL;
+
+-- name: GetDeviceLastContact :one
+SELECT last_contact_at FROM device_status WHERE device_id = @device_id;

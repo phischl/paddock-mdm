@@ -114,6 +114,7 @@ type AttentionCondition struct {
 	Hostname string
 	Since    time.Time
 	Detail   string
+	ID       string
 }
 
 type Bundle struct {

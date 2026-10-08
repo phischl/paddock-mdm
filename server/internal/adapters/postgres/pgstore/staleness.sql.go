@@ -38,6 +38,17 @@ func (q *Queries) ClearPresumedLost(ctx context.Context, deviceID uuid.UUID) err
 	return err
 }
 
+const getDeviceLastContact = `-- name: GetDeviceLastContact :one
+SELECT last_contact_at FROM device_status WHERE device_id = $1
+`
+
+func (q *Queries) GetDeviceLastContact(ctx context.Context, deviceID uuid.UUID) (*time.Time, error) {
+	row := q.db.QueryRow(ctx, getDeviceLastContact, deviceID)
+	var last_contact_at *time.Time
+	err := row.Scan(&last_contact_at)
+	return last_contact_at, err
+}
+
 const getOpenDeviceAlertKind = `-- name: GetOpenDeviceAlertKind :one
 SELECT kind FROM device_alert WHERE device_id = $1 AND cleared_at IS NULL
 `

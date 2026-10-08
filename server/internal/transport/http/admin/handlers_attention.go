@@ -28,7 +28,7 @@ func (h *handlers) ListAttention(ctx context.Context, req adminapi.ListAttention
 	}
 	items := make([]adminapi.Attention, len(res.Items))
 	for i, c := range res.Items {
-		items[i] = adminapi.Attention{Kind: adminapi.AttentionKind(c.Kind), DeviceId: c.DeviceID, Hostname: c.Hostname,
+		items[i] = adminapi.Attention{Id: c.ID, Kind: adminapi.AttentionKind(c.Kind), DeviceId: c.DeviceID, Hostname: c.Hostname,
 			Since: c.Since.UTC(), Detail: c.Detail}
 	}
 	return adminapi.ListAttention200JSONResponse(listing.NewPage(items, params, res.Count)), nil

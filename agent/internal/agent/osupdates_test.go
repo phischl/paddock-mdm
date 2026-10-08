@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/commands"
 	"github.com/phischl/paddock-mdm/agent/internal/osupdates"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/command"
@@ -138,5 +140,56 @@ func TestReportUpdateRuns(t *testing.T) {
 	var r protocol.UpdatesRun
 	if _ = json.Unmarshal(last.Data, &r); last.Type != protocol.EventUpdatesRun || r.Result != protocol.UpdatesResultFailed {
 		t.Fatalf("last event %s %+v", last.Type, r)
+	}
+}
+
+// TestInstallNowSurvivesARestart (review 1): an accepted install_now is kept in the agent state until it finished;
+// a new agent on the same state runs it again and reports it.
+func TestInstallNowSurvivesARestart(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	withSystem(t, a)
+	params, _ := json.Marshal(command.InstallNowParams{Packages: []string{"htop"}})
+	if status, _ := a.installNowCommand(context.Background(), &command.Command{CommandID: "c-restart", Params: params}); status != commands.Deferred {
+		t.Fatalf("status %q", status)
+	}
+	// The agent stops before the worker ran the job.
+	st, err := state.Load(a.d.Layout.State())
+	if err != nil || len(st.PendingInstalls) != 1 || st.PendingInstalls[0].CommandID != "c-restart" {
+		t.Fatalf("persisted %+v %v", st.PendingInstalls, err)
+	}
+	b := newAgent(t, g)
+	b.d.Layout = a.d.Layout
+	b.st = st
+	sys := withSystem(t, b)
+	b.requeueInstalls()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go b.runInstalls(ctx)
+	select {
+	case d := <-b.installDone:
+		b.finishInstall(d)
+	case <-time.After(5 * time.Second):
+		t.Fatal("requeued job did not run")
+	}
+	if !sys.Packages["htop"] || len(b.st.PendingInstalls) != 0 || len(b.st.CommandResults) != 1 || b.st.CommandResults[0].CommandID != "c-restart" {
+		t.Fatalf("installed %v, pending %+v, results %+v", sys.Packages["htop"], b.st.PendingInstalls, b.st.CommandResults)
+	}
+}
+
+// TestInstallPackagesRecoversDpkg (review 1): an installation interrupted earlier is finished with
+// dpkg --configure -a and the install is retried; a cancelled context does not stop it.
+func TestInstallPackagesRecoversDpkg(t *testing.T) {
+	a := newAgent(t, testgw.New(t))
+	sys := withSystem(t, a)
+	sys.DpkgInterrupted = true
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	status, result := installPackages(context.WithoutCancel(ctx), sys, []string{"htop"}, func() bool { return false })
+	if status != protocol.CommandSucceeded || !sys.Packages["htop"] {
+		t.Fatalf("%s %v", status, result)
+	}
+	if calls := sys.TakeCalls(); !slices.Contains(calls, "dpkg --configure -a") {
+		t.Fatalf("calls %v", calls)
 	}
 }
