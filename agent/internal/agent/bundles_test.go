@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -246,7 +245,8 @@ func TestSessionLogins(t *testing.T) {
 }
 
 // TestCheckinReportsRevokeCapabilities (PDK-009): the check-in health carries what the installed paddock-revoke
-// understands; a build before PDK-009 (unknown command) and a missing paddock-revoke report none.
+// understands; when the call fails — a build before PDK-009 (unknown command), a missing paddock-revoke — the field
+// is not reported at all, so that the server keeps the last value (review round 1).
 func TestCheckinReportsRevokeCapabilities(t *testing.T) {
 	ctx := context.Background()
 	g := testgw.New(t)
@@ -267,15 +267,17 @@ func TestCheckinReportsRevokeCapabilities(t *testing.T) {
 	a.Cycle(ctx)
 	var got []string
 	for _, c := range g.Checkins {
-		var h struct {
-			RevokeCapabilities []string `json:"revoke_capabilities"`
-		}
+		var h map[string]json.RawMessage
 		if err := json.Unmarshal(c.Req.Health, &h); err != nil {
 			t.Fatalf("health %s: %v", c.Req.Health, err)
 		}
-		got = append(got, strings.Join(h.RevokeCapabilities, ","))
+		raw, ok := h["revoke_capabilities"]
+		if !ok {
+			raw = []byte("absent")
+		}
+		got = append(got, string(raw))
 	}
-	if !slices.Equal(got, []string{"", "volumes", ""}) {
+	if !slices.Equal(got, []string{"absent", `["volumes"]`, "absent"}) {
 		t.Fatalf("capabilities %q", got)
 	}
 }

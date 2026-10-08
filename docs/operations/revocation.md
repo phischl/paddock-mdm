@@ -15,7 +15,26 @@ self-lock token of the dead man's switch is re-issued when that set changes. `pa
 change refuse a token with `volumes`, so the issuer adds them only for devices whose check-in reports
 `revoke_capabilities: ["volumes"]` (`paddock-revoke capabilities`); a device with an older `paddock-revoke` gets
 tokens without volumes, and its `paddock-revoke` erases every volume on a Lock as before. Update the `paddock-revoke`
-package before relying on restorable Locks of devices with more than one encrypted volume.
+package before relying on restorable Locks of devices with more than one encrypted volume. A check-in in which
+`paddockd` could not ask `paddock-revoke` (a timeout, a package upgrade in progress) reports nothing, and the server
+keeps the last reported value.
+
+### Limits and accepted residual risk
+
+- A token lists a volume only when the **newest** header generation of that volume is stored. While a re-escrow is
+  pending (after a keyslot change), the volume is left out of a Lock until the new header is stored; the Lock then
+  skips it (`skipped_not_escrowed`), so it stays readable. An older stored generation is not used, because it may no
+  longer open the volume (for example after `cryptsetup reencrypt`).
+- A device escrows the headers of at most **32** volumes; the worker refuses a header of a 33rd distinct volume
+  (`device.header_escrow_refused`, error code `too_many_volumes`), and a token carries at most 32 volumes, the first by
+  UUID. Volumes beyond them are skipped by a Lock.
+- Two volumes with the same LUKS UUID (a cloned header), or a volume with the root volume's UUID, are reported as
+  unresolved: neither is escrowed, and a revocation that meets them is incomplete.
+- **Residual risk, accepted:** the server cannot verify the content of a sealed header. A compromised device (root)
+  can therefore have a volume counted as escrowed with a forged header upload, or claim a false root volume UUID in
+  its check-in (which the server writes onto the root headers escrowed before PDK-009). A Lock then makes that
+  volume unrecoverable. It cannot add a volume that is not in `paddock-revoke`'s own `/etc/crypttab` selection, and
+  it cannot weaken a Destroy, which erases every volume regardless of the token.
 
 > **The revocation path is disabled** (`PADDOCK_REVOCATION_ENABLED=false`, the default) until a second person has
 > reviewed `agent/internal/revoke/` and `agent/cmd/paddock-revoke/` and the hardware protocol in

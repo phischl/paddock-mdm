@@ -121,23 +121,27 @@ func revokeReason(err error) string {
 	return "internal_error"
 }
 
-// runRevoke runs `paddock-revoke execute [args]` with the envelope on stdin. Exit 2 is a refusal with
-// {"refused": "<reason>"} on stdout; exit 0 an executed token (a real device reboots before it returns) or a stored
-// self-lock token.
 // capabilitiesTimeout bounds `paddock-revoke capabilities`.
 const capabilitiesTimeout = 10 * time.Second
 
 // refreshRevokeCapabilities reports what the installed paddock-revoke understands in the health report, so that the
 // revocation-issuer adds the volumes of a Lock only for a build that accepts them (PDK-009). paddockd only passes the
 // answer on: a false report can only make the issuer leave the volumes out (the build then erases the root volume
-// and, before PDK-009, every volume) or make an old build refuse the token; it never selects what is erased.
+// and, before PDK-009, every volume) or make an old build refuse the token; it never selects what is erased. A
+// failed call reports nothing, and the server keeps the last reported value (review round 1): a timeout or a package
+// upgrade in progress must not make the issuer replace a self-lock token.
 func (a *Agent) refreshRevokeCapabilities(ctx context.Context) {
 	caps, err := a.d.RevokeCapabilities(ctx)
+	var reported *[]string
 	if err != nil {
 		slog.DebugContext(ctx, "paddock-revoke reports no capabilities", "error", err)
-		caps = nil
+	} else {
+		if caps == nil {
+			caps = []string{}
+		}
+		reported = &caps
 	}
-	a.d.Health.Update(func(r *health.Report) { r.RevokeCapabilities = caps })
+	a.d.Health.Update(func(r *health.Report) { r.RevokeCapabilities = reported })
 }
 
 // revokeCapabilities runs `paddock-revoke capabilities`; a build before PDK-009 fails (unknown command).
@@ -161,6 +165,9 @@ func revokeCapabilities(ctx context.Context, binary string) ([]string, error) {
 	return c.Capabilities, nil
 }
 
+// runRevoke runs `paddock-revoke execute [args]` with the envelope on stdin. Exit 2 is a refusal with
+// {"refused": "<reason>"} on stdout; exit 0 an executed token (a real device reboots before it returns) or a stored
+// self-lock token.
 func runRevoke(ctx context.Context, binary string, envelope []byte, args ...string) (string, error) {
 	if _, err := os.Stat(binary); err != nil {
 		return "", errNotInstalled

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -11,9 +12,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // HeaderObjects reads sealed LUKS headers from the escrow bucket paddock-escrow (objectstore.Store); found is false
@@ -29,21 +33,28 @@ const HeaderUploadWindow = 15 * time.Minute
 // Escrow stores the secrets and LUKS headers devices escrow (worker, plan M4a decisions 11 and 12, M4b decisions 10
 // and 13). The caller's context carries a system principal of the device's organization.
 type Escrow struct {
+	runner  *ActionRunner
 	org     *db.OrgPool
 	headers HeaderObjects
 	now     func() time.Time
 }
 
 // NewEscrow creates the use case; headers may be nil where no header is verified.
-func NewEscrow(org *db.OrgPool, headers HeaderObjects) *Escrow {
-	return &Escrow{org: org, headers: headers, now: time.Now}
+func NewEscrow(runner *ActionRunner, org *db.OrgPool, headers HeaderObjects) *Escrow {
+	return &Escrow{runner: runner, org: org, headers: headers, now: time.Now}
 }
+
+// MaxHeaderVolumes is the number of distinct volumes a device may escrow headers of: the volumes a revocation token
+// carries at most (revocation.MaxVolumes, PDK-009 review round 1).
+const MaxHeaderVolumes = revocation.MaxVolumes
 
 // Store records an upload and returns the status the device polls: stored, pending for a header until its object is
 // verified, or failed for a generation that is not above the active administrator password or the last generation
-// of a LUKS kind. A repeated message reports the recorded status.
+// of a LUKS kind, and for a header of a volume beyond MaxHeaderVolumes (audited as device.header_escrow_refused). A
+// repeated message reports the recorded status.
 func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 	status := escrow.StatusFailed
+	refused := -1
 	err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		if cur, err := q.GetEscrowSecret(ctx, m.EscrowID); err == nil {
 			if cur.DeviceID == m.DeviceID && cur.Status != escrow.StatusFailed {
@@ -66,6 +77,16 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 		org, err := orgOf(ctx)
 		if err != nil {
 			return err
+		}
+		if m.Kind == escrow.KindLUKSHeader && m.Volume != nil {
+			v, err := q.DeviceHeaderVolumeKnown(ctx, pgstore.DeviceHeaderVolumeKnownParams{Volume: *m.Volume, DeviceID: m.DeviceID})
+			if err != nil {
+				return err
+			}
+			if !v.Known && int(v.Volumes) >= MaxHeaderVolumes {
+				refused = int(v.Volumes)
+				return nil
+			}
 		}
 		n, inserted := int64(0), escrow.StatusStored
 		if m.Kind == escrow.KindLUKSHeader {
@@ -90,7 +111,20 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 		}
 		return nil
 	})
-	return status, err
+	if err != nil || refused < 0 {
+		return status, err
+	}
+	spec := ActionSpec{
+		Code:   audit.CodeDeviceHeaderEscrowRefused,
+		Actor:  &audit.Actor{Type: audit.ActorDevice, ID: m.DeviceID.String()},
+		Target: &audit.Target{Type: "device", ID: m.DeviceID.String()},
+		Params: map[string]any{"volume": m.Volume.String(), "generation": m.Generation, "volumes": refused},
+	}
+	err = e.runner.RunTx(ctx, ScopeOrg, spec, func(context.Context, *pgstore.Queries, Recorder) error { return problem.TooManyVolumes })
+	if errors.Is(err, problem.TooManyVolumes) {
+		err = nil
+	}
+	return escrow.StatusFailed, err
 }
 
 // nullUUID is a column value of an optional UUID.

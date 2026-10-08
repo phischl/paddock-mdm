@@ -118,6 +118,23 @@ noname
 	}
 }
 
+// TestParseCrypttabSharedUUID (PDK-009, review round 1): two volumes with the same LUKS UUID (a cloned header) are
+// both unresolved, and so is a volume with the root volume's UUID; the other volumes stay.
+func TestParseCrypttabSharedUUID(t *testing.T) {
+	root := fakeDev(t, nil, "/dev/vda3", "/dev/vdb", "/dev/vdc", "/dev/vdd", "/dev/vde")
+	const shared, rootID = "1b6a3c1e-0000-4000-8000-0000000000ee", "1b6a3c1e-0000-4000-8000-0000000000aa"
+	tools := &isLuksTools{luks: []string{"/dev/vdb", "/dev/vdc", "/dev/vdd", "/dev/vde"},
+		uuids: map[string]string{"/dev/vda3": rootID, "/dev/vdb": shared, "/dev/vdc": "1b6a3c1e-0000-4000-8000-00000000000c",
+			"/dev/vdd": shared, "/dev/vde": rootID}}
+	crypttab := []byte("b /dev/vdb none luks\nc /dev/vdc none luks\nd /dev/vdd none luks\ne /dev/vde none luks\n")
+	got := ParseCrypttab(context.Background(), tools, root, "/dev/vda3", crypttab, time.Minute)
+	want := Crypttab{Root: "/dev/vda3", Volumes: []CrypttabVolume{{Header: "/dev/vdc", UUID: "1b6a3c1e-0000-4000-8000-00000000000c"}},
+		Unresolved: []string{"/dev/vdb", "/dev/vdd", "/dev/vde"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("crypttab %+v\nwant %+v", got, want)
+	}
+}
+
 // TestReadCrypttabMissing: without /etc/crypttab the root volume is the only volume.
 func TestReadCrypttabMissing(t *testing.T) {
 	root := fakeDev(t, nil, "/dev/nvme0n1p3")

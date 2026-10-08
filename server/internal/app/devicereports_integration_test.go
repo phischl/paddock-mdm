@@ -165,3 +165,36 @@ func TestKeyslotChangeRecordsTheVolume(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// TestRevokeCapabilitiesKept (PDK-009 review round 1, decision 4): a check-in without revoke_capabilities — the
+// device could not ask paddock-revoke — keeps the last reported value; a reported value replaces it.
+func TestRevokeCapabilitiesKept(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	ctx := context.Background()
+	caps := func(seq int64, health string) string {
+		t.Helper()
+		if err := h.reports.RecordStatus(systemCtx(org), ingest.Heartbeat{DeviceID: device, OrganizationID: org, Seq: seq,
+			ReceivedAt: time.Now(), Health: json.RawMessage(health)}); err != nil {
+			t.Fatal(err)
+		}
+		var out *string
+		if err := h.super.QueryRow(ctx, "SELECT (health -> 'revoke_capabilities')::text FROM device_status WHERE device_id = $1", device).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		if out == nil {
+			return "absent"
+		}
+		return *out
+	}
+	for i, c := range []struct{ health, want string }{
+		{`{"reconcile":"ok"}`, "absent"},
+		{`{"revoke_capabilities":["volumes"]}`, `["volumes"]`},
+		{`{"reconcile":"ok"}`, `["volumes"]`},
+		{`{"revoke_capabilities":[]}`, `[]`},
+	} {
+		if got := caps(int64(i+1), c.health); got != c.want {
+			t.Fatalf("check-in %d %s: %s, want %s", i+1, c.health, got, c.want)
+		}
+	}
+}

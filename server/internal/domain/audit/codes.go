@@ -93,6 +93,7 @@ const (
 
 	CodeAutoinstallGenerated       Code = "autoinstall.generated"
 	CodeDeviceTamperKeyslotChanged Code = "device.tamper_keyslot_changed"
+	CodeDeviceHeaderEscrowRefused  Code = "device.header_escrow_refused"
 	CodeDiskRecoveryKeyRevealed    Code = "disk.recovery_key_revealed"
 	CodeDiskHeaderDownloaded       Code = "disk.header_downloaded"
 
@@ -629,6 +630,13 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "volume is the LUKS UUID of the volume (absent for devices before PDK-009, which watch the root volume only); before and after list the kind of every keyslot (tpm2+pin, tpm2, recovery, password, or another token type).",
+	},
+	CodeDeviceHeaderEscrowRefused: {
+		Code: CodeDeviceHeaderEscrowRefused, Emitted: true,
+		Description: "The worker refused a LUKS header escrow of a device for a 33rd distinct volume: a revocation token carries at most 32 volumes (actor: the device).",
+		Params:      []string{"volume", "generation", "volumes"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_code too_many_volumes; volume is the refused volume's LUKS UUID, volumes the number of volumes the device already escrows. The device reports the escrow as failed and retries later.",
 	},
 	CodeDiskRecoveryKeyRevealed: {
 		Code: CodeDiskRecoveryKeyRevealed, Emitted: true,

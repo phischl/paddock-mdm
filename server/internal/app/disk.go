@@ -150,6 +150,10 @@ type Header struct {
 func (d *Disk) DownloadHeader(ctx context.Context, deviceID uuid.UUID, confirmHostname string, volume *uuid.UUID, generation int) (Header, error) {
 	spec := SpecDiskHeaderDownload
 	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
+	if volume != nil {
+		// Recorded with the request, so that a denied or failed download names the volume as well (review round 1).
+		spec.Params = map[string]any{"volume": volume.String()}
+	}
 	var out Header
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		want, legacy, err := headerVolume(ctx, q, deviceID, volume)

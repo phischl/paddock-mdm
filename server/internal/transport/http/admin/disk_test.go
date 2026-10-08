@@ -227,6 +227,15 @@ func TestDeviceDiskVolumes(t *testing.T) {
 		res.header.Get("X-Request-Id")).Scan(&param); err != nil || param != data {
 		t.Fatalf("audit volume %q: %v", param, err)
 	}
+	// Review round 1: a refused download is audited with the requested volume as well.
+	res = e.do(call{method: "POST", path: path + "/header", cookie: alice, body: map[string]any{"confirm_hostname": "x", "volume": data}})
+	if res.status != http.StatusBadRequest {
+		t.Fatalf("wrong hostname: %d", res.status)
+	}
+	if err := e.super.QueryRow(context.Background(), "SELECT params->>'volume' FROM action WHERE correlation_id = $1",
+		res.header.Get("X-Request-Id")).Scan(&param); err != nil || param != data {
+		t.Fatalf("audit volume of a refused download %q: %v", param, err)
+	}
 	// A generation of another volume, and a volume without headers, are not this volume's.
 	for _, b := range []map[string]any{
 		{"confirm_hostname": "lt-vols", "volume": data, "generation": 1},

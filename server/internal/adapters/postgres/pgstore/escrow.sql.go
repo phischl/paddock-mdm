@@ -61,6 +61,33 @@ func (q *Queries) ActiveEscrowGeneration(ctx context.Context, arg ActiveEscrowGe
 	return column_1, err
 }
 
+const deviceHeaderVolumeKnown = `-- name: DeviceHeaderVolumeKnown :one
+SELECT
+  coalesce(bool_or(e.volume = $1::uuid), false)::boolean AS known,
+  count(DISTINCT e.volume)::int AS volumes
+FROM escrow_secret e
+WHERE e.device_id = $2::uuid AND e.kind = 'luks_header' AND e.status <> 'failed' AND e.volume IS NOT NULL
+`
+
+type DeviceHeaderVolumeKnownParams struct {
+	Volume   uuid.UUID
+	DeviceID uuid.UUID
+}
+
+type DeviceHeaderVolumeKnownRow struct {
+	Known   bool
+	Volumes int32
+}
+
+// Whether volume already has a header generation that did not fail, and how many distinct volumes of the device do
+// (PDK-009, review round 1: at most 32 per device, the volumes a token can carry).
+func (q *Queries) DeviceHeaderVolumeKnown(ctx context.Context, arg DeviceHeaderVolumeKnownParams) (DeviceHeaderVolumeKnownRow, error) {
+	row := q.db.QueryRow(ctx, deviceHeaderVolumeKnown, arg.Volume, arg.DeviceID)
+	var i DeviceHeaderVolumeKnownRow
+	err := row.Scan(&i.Known, &i.Volumes)
+	return i, err
+}
+
 const finishEscrowHeader = `-- name: FinishEscrowHeader :execrows
 UPDATE escrow_secret SET status = $1 WHERE id = $2 AND status = 'pending'
 `
@@ -455,7 +482,7 @@ type SetRootHeaderVolumeParams struct {
 	DeviceID uuid.UUID
 }
 
-// The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00032).
+// The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00033).
 func (q *Queries) SetRootHeaderVolume(ctx context.Context, arg SetRootHeaderVolumeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setRootHeaderVolume, arg.Volume, arg.DeviceID)
 	if err != nil {
