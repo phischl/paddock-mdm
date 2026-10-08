@@ -7,8 +7,9 @@ import { useSessionStore } from './stores/session'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { pendingConfirm, settleConfirm } from './composables/useConfirm'
 import { attentionCount } from './lib/updates'
+import { portalLocales, type PortalLocale } from './i18n'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const session = useSessionStore()
 const showChrome = computed(() => !route.meta.public && session.me !== null)
@@ -26,6 +27,13 @@ watch(
   },
   { immediate: true },
 )
+
+// The language switch of the user menu stores the choice on the account (plan M6b decision 2).
+const languageFailed = ref(false)
+async function chooseLanguage(next: PortalLocale): Promise<void> {
+  if (next === locale.value) return
+  languageFailed.value = !(await session.setLocale(next))
+}
 
 // While a dialog is open the page behind it is inert, as aria-modal promises: no focus, no screen reader access.
 // Vuetify teleports dialogs to the body, outside the elements made inert here.
@@ -216,6 +224,33 @@ onBeforeUnmount(() => observer.disconnect())
           class="role"
           data-testid="user-role"
         >{{ roleLabel }}</span>
+        <v-menu>
+          <template #activator="{ props: menu }">
+            <v-btn
+              v-bind="menu"
+              variant="outlined"
+              :aria-label="t('app.languageMenu', { language: t('app.languages.' + locale) })"
+              data-testid="language-menu"
+            >
+              {{ t('app.languages.' + locale) }}
+            </v-btn>
+          </template>
+          <v-list
+            :aria-label="t('app.language')"
+            density="compact"
+          >
+            <v-list-item
+              v-for="l in portalLocales"
+              :key="l"
+              :active="l === locale"
+              :lang="l"
+              :data-testid="'language-' + l"
+              @click="chooseLanguage(l)"
+            >
+              <v-list-item-title>{{ t('app.languages.' + l) }}</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
         <v-btn
           color="surface"
           @click="session.logout()"
@@ -230,6 +265,12 @@ onBeforeUnmount(() => observer.disconnect())
     >
       <RouterView />
     </v-main>
+    <v-snackbar
+      v-model="languageFailed"
+      color="error"
+    >
+      {{ t('app.languageFailed') }}
+    </v-snackbar>
     <ConfirmDialog
       v-if="pendingConfirm"
       :model-value="true"

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api, type Me } from '../api/client'
+import { applyLocale, type PortalLocale } from '../i18n'
 
 export const useSessionStore = defineStore('session', () => {
   const me = ref<Me | null>(null)
@@ -18,10 +19,23 @@ export const useSessionStore = defineStore('session', () => {
     if (!loading.value) {
       loading.value = api.GET('/api/v1/me').then(({ data }) => {
         me.value = data ?? null
+        if (me.value) applyLocale(me.value.locale)
         return me.value
       })
     }
     return loading.value
+  }
+
+  /** Stores the administrator's language on the account and switches the portal to it; false if it failed. */
+  async function setLocale(locale: PortalLocale): Promise<boolean> {
+    const { data } = await api.PATCH('/api/v1/me', {
+      params: { header: { 'X-Paddock-CSRF': '1' } },
+      body: { locale },
+    })
+    if (!data) return false
+    me.value = { ...data, step_up: me.value?.step_up }
+    applyLocale(data.locale)
+    return true
   }
 
   async function logout(): Promise<void> {
@@ -30,5 +44,5 @@ export const useSessionStore = defineStore('session', () => {
     window.location.assign(data?.end_session_url ?? '/')
   }
 
-  return { me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, load, logout }
+  return { me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, load, setLocale, logout }
 })
