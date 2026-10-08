@@ -421,3 +421,25 @@ func TestOSVImportFileAudited(t *testing.T) {
 		t.Error("no platform.osv_imported failure event")
 	}
 }
+
+// TestOSVConcurrentImports: the worker's download and an operator's import at the same time both succeed, one after
+// the other, instead of one failing on the other's rows.
+func TestOSVConcurrentImports(t *testing.T) {
+	h := newOSVHarness(t)
+	data := osvZip(t)
+	errs := make(chan error, 2)
+	for _, etag := range []string{`"a"`, `"b"`} {
+		go func() {
+			_, err := h.osv.Import(systemPlatform(), etag, readZip(data))
+			errs <- err
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent import: %v", err)
+		}
+	}
+	if n := h.count(t, "SELECT count(*) FROM osv_ubuntu"); n != 8 {
+		t.Errorf("osv_ubuntu has %d rows, want 8", n)
+	}
+}
