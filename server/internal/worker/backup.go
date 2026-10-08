@@ -27,7 +27,7 @@ const backupLockKey = 0x7061646420626b70
 
 var metricBackupLastSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "paddock_backup_last_success_timestamp_seconds",
-	Help: "Last-modified time of the newest backup of each kind in the backup bucket (postgres, authentik, openbao, fleet); absent before the first.",
+	Help: "Last-modified time of the newest backup of each kind in the backup bucket (postgres, authentik, openbao, fleet); 0 before the first.",
 }, []string{"kind"})
 
 // BackupStore is the backup bucket: the worker's credential may list and write below openbao/ only.
@@ -102,16 +102,19 @@ func (b *Backups) Round(ctx context.Context) error {
 	return err
 }
 
-// ages sets the gauge of every kind that has a backup.
+// ages sets the gauge of every kind.
 func (b *Backups) ages(ctx context.Context) error {
 	for _, k := range backup.Kinds {
 		newest, found, err := b.store.Newest(ctx, k.Prefix)
 		if err != nil {
 			return fmt.Errorf("backup age %s: %w", k.Name, err)
 		}
+		// 0 without any backup, so that the stale alert also fires when a kind never ran.
+		value := 0.0
 		if found {
-			metricBackupLastSuccess.WithLabelValues(k.Name).Set(float64(newest.Unix()))
+			value = float64(newest.Unix())
 		}
+		metricBackupLastSuccess.WithLabelValues(k.Name).Set(value)
 	}
 	return nil
 }

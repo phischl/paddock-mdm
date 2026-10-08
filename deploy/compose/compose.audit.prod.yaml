@@ -40,6 +40,31 @@ services:
     # The network cp exists on the control-plane host only; the interconnect is reached through the host.
     networks: !override [audit-index, audit-store]
 
+  # The audit host's own Prometheus (`--profile observability`): the audit writer's metrics stay on this host; the
+  # control plane's Prometheus watches the audit queue (PaddockAuditWriterLag, PaddockAuditWriterNotConsuming).
+  prometheus-audit:
+    image: ${PROMETHEUS_IMAGE}
+    profiles: [observability]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./prometheus/scrape/audit.yml:/etc/prometheus/scrape/audit.yml:ro
+      - prometheus-audit-data:/prometheus
+    networks: [audit-index]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  prometheus-audit-data: {}
+
 secrets:
   internal_ca_bundle: { file: ./.secrets/internal-ca/bundle.crt }
   audit_postgres_tls_crt: { file: ./.secrets/tls/audit-postgres.crt }

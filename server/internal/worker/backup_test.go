@@ -108,6 +108,10 @@ func TestBackupsSkipsFreshSnapshotAndOtherReplicas(t *testing.T) {
 	if err := b.Round(context.Background()); err != nil || snap.calls != 0 {
 		t.Fatalf("lock held elsewhere: calls %d, %v", snap.calls, err)
 	}
+	// A kind without any backup reads 0, so that the stale alert fires for it too.
+	if got := testutil.ToFloat64(metricBackupLastSuccess.WithLabelValues("postgres")); got != 0 {
+		t.Fatalf("postgres without backup: gauge %v, want 0", got)
+	}
 }
 
 func TestBackupsSnapshotFailure(t *testing.T) {
