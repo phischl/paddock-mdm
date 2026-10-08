@@ -72,7 +72,9 @@ portal.
 - **Deleting a device group deletes everything scoped to it**: its managed files, units, package holds and profile
   assignments. Each of them must be a deletion in the plan. A document that deletes a group is refused when it leaves
   out one of those sections while the group still has items there (409 `in_use`), or when it still lists an item of
-  the group (422 `invalid_document`, naming the item).
+  the group (422 `invalid_document`, naming the item). A group that still has member devices is not deleted (409
+  `in_use`, with the number of members). This also applies to a rename, which is a deletion and a creation. Move the
+  devices to other groups in the portal first, because `paddock.yml` does not hold group membership.
 - Documents are limited to 1 MiB. A schema violation is answered with `invalid_document` and up to 20 paths.
 
 ## CI example

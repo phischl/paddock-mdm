@@ -278,4 +278,47 @@ func TestDeclarativeConfig(t *testing.T) {
 			t.Fatal("the group's file survived")
 		}
 	})
+
+	// PDK-014: a device group with member devices is not deleted; the members are moved in the portal first.
+	t.Run("device group with members", func(t *testing.T) {
+		seed := getConfig(t, admin.Portal)
+		seed["device_groups"] = append(seed["device_groups"].([]any), map[string]any{"name": "t2-members"})
+		configResultOf(t, putConfig(t, admin.Portal, seed, false))
+		res := call(t, admin.Portal, http.MethodGet, "/api/v1/device-groups?q=t2-members", nil)
+		var groups struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+		}
+		if err := res.JSON(&groups); err != nil || len(groups.Items) != 1 {
+			t.Fatalf("group t2-members: %v %s", err, res.Body)
+		}
+		res = call(t, admin.Portal, http.MethodPut, "/api/v1/devices/"+dev.DeviceID+"/groups", map[string]any{"device_group_ids": []string{groups.Items[0].ID}})
+		expectStatus(t, res, http.StatusOK, "")
+
+		doc := getConfig(t, admin.Portal)
+		var keep []any
+		for _, g := range doc["device_groups"].([]any) {
+			if g.(map[string]any)["name"] != "t2-members" {
+				keep = append(keep, g)
+			}
+		}
+		if keep == nil {
+			keep = []any{}
+		}
+		doc["device_groups"] = keep
+		for _, dryRun := range []bool{true, false} {
+			res := putConfig(t, admin.Portal, doc, dryRun)
+			expectStatus(t, res, http.StatusConflict, "in_use")
+			if !strings.Contains(string(res.Body), "member devices") {
+				t.Fatalf("dry run %v: %s", dryRun, res.Body)
+			}
+			if !dryRun {
+				expectOneEvent(t, admin.Portal, res.RequestID, "config.applied", "failure")
+			}
+		}
+		if listTotal(t, admin.Portal, "/api/v1/device-groups?q=t2-members") != 1 {
+			t.Fatal("the group with members was deleted")
+		}
+	})
 }

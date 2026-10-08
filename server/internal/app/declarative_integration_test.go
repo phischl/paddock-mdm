@@ -467,3 +467,47 @@ func TestDeclarativeMalformedExpectedPlanIsAudited(t *testing.T) {
 		t.Fatalf("actions %v", got)
 	}
 }
+
+// TestDeclarativeGroupWithMembers (PDK-014): a device group with member devices is not deleted, also not by a rename
+// (delete and create), neither in a dry run nor in an apply; the members must be moved in the portal first.
+func TestDeclarativeGroupWithMembers(t *testing.T) {
+	h := newConfigHarness(t)
+	admin := h.account(t, principal.RoleOrgAdmin, false)
+	ctx := principal.With(context.Background(), admin)
+	group, dev := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'lab')", []any{group, h.org}},
+		{"INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'h', 'active')", []any{dev, h.org}},
+		{"INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)", []any{h.org, group, dev}},
+	} {
+		if _, err := h.super.Exec(context.Background(), q.sql, q.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deleted := h.export(t, admin)
+	*deleted.DeviceGroups = []declarative.DeviceGroup{}
+	renamed := h.export(t, admin)
+	*renamed.DeviceGroups = []declarative.DeviceGroup{{Name: "lab2"}}
+	for name, d := range map[string]declarative.Document{"delete": deleted, "rename": renamed} {
+		got := h.during(t, func() {
+			if _, err := h.config.Plan(ctx, raw(t, d)); !errors.Is(err, problem.InUse) || !strings.Contains(err.Error(), `device group "lab" still has 1 member devices`) {
+				t.Errorf("%s dry run = %v", name, err)
+			}
+			if _, _, err := h.config.Apply(ctx, raw(t, d), ""); !errors.Is(err, problem.InUse) {
+				t.Errorf("%s apply = %v", name, err)
+			}
+		})
+		if len(got) != 1 || got[0] != "config.applied:failure:in_use" {
+			t.Errorf("%s: actions %v", name, got)
+		}
+	}
+	if n := h.count(t, "SELECT count(*) FROM device_group_member WHERE device_group_id = $1", group); n != 1 {
+		t.Fatal("the refused apply removed the membership")
+	}
+	if n := h.count(t, "SELECT count(*) FROM device_group WHERE organization_id = $1", h.org); n != 1 {
+		t.Fatal("the rename created the new group")
+	}
+}

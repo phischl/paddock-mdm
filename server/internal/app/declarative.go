@@ -28,6 +28,9 @@ import (
 type Declarative struct {
 	runner *ActionRunner
 	org    *db.OrgPool
+	// afterRead runs in the apply transaction after the configuration was read and before anything is written (tests
+	// of concurrent changes); nil outside tests.
+	afterRead func(ctx context.Context) error
 }
 
 // NewDeclarative creates the use cases.
@@ -115,6 +118,11 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 			return err
 		}
 		plan = declarative.Diff(st.doc, desired)
+		if d.afterRead != nil {
+			if err := d.afterRead(ctx); err != nil {
+				return err
+			}
+		}
 		sections := plan.SectionsOf()
 		if expectedPlan != "" && plan.SHA256() != expectedPlan {
 			return problem.PlanChanged.WithDetail("the plan differs from the confirmed plan " + expectedPlan + "; review the new plan and apply again")

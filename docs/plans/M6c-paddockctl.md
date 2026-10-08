@@ -597,3 +597,9 @@ Decided after review 1 of PDK-008; PDK-013 is folded into M6c.
 3. **`paddockctl` requires `https://`** for the admin API URL (decision 25); there is no exception and no flag.
 4. **SECURITY DEFINER search path.** Migration `00034_definer_search_path` sets `search_path = public, pg_temp` on
    `paddock_api_token_lookup` and `paddock_admin_bump_bundle_seq`; the committed migrations stay unchanged.
+5. **Device groups with members (PDK-014).** `PUT /api/v1/config` does not delete a device group that still has
+   member devices (409 `in_use`, naming the group and the member count), in dry runs and applies alike; a rename is
+   a deletion plus a creation and is refused the same way. Members are moved in the portal; `paddock.v1` does not
+   hold membership (decision 13). The deletion locks the group (`FOR UPDATE`) and re-checks under the lock that no
+   scoped file, unit, hold or assignment the plan does not delete references it (409 `in_use`), so rows committed
+   after the configuration was read are never removed outside the plan.
