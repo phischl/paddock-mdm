@@ -357,6 +357,101 @@ ci: lint test web ## Everything CI runs
 logs: ## Show logs of the stack
 	$(COMPOSE) --profile paddock logs --no-color --tail 300
 
+# --- Release (plan M6b decision 4, docs/operations/agent-releases.md "Server release") ----------------------------
+# The release workflow (.github/workflows/release.yml, tags v*.*.*) calls these targets. RELEASE_VERSION is the
+# version without the leading v. release-artifacts builds the two server images, the Debian packages and paddockd
+# for amd64 and arm64 (unsigned: the release keys stay offline, minisign), the SBOMs and SHA256SUMS into
+# dist/release/<version>/; PUSH=1 also pushes the images and records their digests. release-sign signs the pushed
+# images keyless with cosign (GitHub OIDC), attaches each SBOM as a signed attestation and signs SHA256SUMS; with
+# DRY_RUN=1 it checks its inputs and prints the cosign commands instead of running them.
+RELEASE_VERSION        ?=
+RELEASE_REGISTRY       ?= ghcr.io/phischl
+RELEASE_SERVER_REPO    ?= $(RELEASE_REGISTRY)/paddock-server
+RELEASE_COMPILER_REPO  ?= $(RELEASE_REGISTRY)/paddock-server-compiler
+RELEASE_DIR             = dist/release/$(RELEASE_VERSION)
+RELEASE_SOURCE         ?= https://github.com/phischl/paddock-mdm
+DOCKER_CONFIG_DIR      ?= $(HOME)/.docker
+RELEASE_IMAGES          = server=$(RELEASE_SERVER_REPO):$(RELEASE_VERSION) compiler=$(RELEASE_COMPILER_REPO):$(RELEASE_VERSION)
+
+SYFT_RUN   = docker run --rm -u $(UID):$(GID) --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp -e SYFT_CHECK_FOR_APP_UPDATE=false \
+	-v $(CURDIR)/$(RELEASE_DIR):/work -w /work $(SYFT_IMAGE)
+# cosign reads the registry login of the docker CLI and, in GitHub Actions, the OIDC token request variables.
+COSIGN_RUN = docker run --rm -u $(UID):$(GID) --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp -e DOCKER_CONFIG=/docker \
+	-e ACTIONS_ID_TOKEN_REQUEST_URL -e ACTIONS_ID_TOKEN_REQUEST_TOKEN -e SIGSTORE_ID_TOKEN \
+	-v $(DOCKER_CONFIG_DIR):/docker:ro -v $(CURDIR)/$(RELEASE_DIR):/work -w /work $(COSIGN_IMAGE)
+
+.PHONY: release-check
+release-check:
+	@echo "$(RELEASE_VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "usage: RELEASE_VERSION=x.y.z (without v)"; exit 2; }
+
+# The supervisor compiles in the release public key: a release must name the production key explicitly and must not
+# be built with the development key or with build tags.
+.PHONY: release-key-check
+release-key-check: release-check
+	@test "$(origin RELEASE_PUBLIC_KEY_FILE)" != file || { echo "set RELEASE_PUBLIC_KEY_FILE to the production release public key"; exit 2; }
+	@test -s "$(RELEASE_PUBLIC_KEY_FILE)" || { echo "missing $(RELEASE_PUBLIC_KEY_FILE)"; exit 2; }
+	@for dev in $(RELEASE_KEY_DIR)/minisign.pub $(RELEASE_KEY_DIR)/revoke-minisign.pub; do \
+		if [ -f "$$dev" ] && cmp -s "$$dev" "$(RELEASE_PUBLIC_KEY_FILE)"; then echo "$(RELEASE_PUBLIC_KEY_FILE) is a development key"; exit 2; fi; \
+	done
+	@test -z "$(TAGS)$(REVOKE_TAGS)" || { echo "a release is built without TAGS and REVOKE_TAGS"; exit 2; }
+
+.PHONY: release-artifacts
+release-artifacts: release-key-check ## Build the release RELEASE_VERSION into dist/release/<version>/: images (PUSH=1 pushes), unsigned debs and agent binaries, SBOMs, SHA256SUMS
+	rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
+	$(MAKE) --no-print-directory release-images
+	$(MAKE) --no-print-directory deb VERSION=$(RELEASE_VERSION) RELEASE_PUBLIC_KEY_FILE=$(RELEASE_PUBLIC_KEY_FILE) TAGS= REVOKE_TAGS=
+	@for f in bin/deb/*.deb; do b=$$(basename "$$f" .deb); cp "$$f" "$(RELEASE_DIR)/$$b-unsigned.deb"; done
+	@for arch in amd64 arm64; do cp bin/agent/$$arch/paddockd $(RELEASE_DIR)/paddockd_$(RELEASE_VERSION)_linux_$$arch-unsigned; done
+	$(MAKE) --no-print-directory release-sbom
+	cd $(RELEASE_DIR) && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name images.txt ! -name '*.sigstore.json' \
+		-printf '%f\n' | LC_ALL=C sort | xargs sha256sum >SHA256SUMS
+	@ls -1 $(RELEASE_DIR)
+
+.PHONY: release-images
+release-images: release-check
+	@for entry in $(RELEASE_IMAGES); do \
+		target=$${entry%%=*}; ref=$${entry#*=}; \
+		docker build $$([ "$$target" = compiler ] && echo --target compiler) -f $(COMPOSE_DIR)/Dockerfile \
+			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
+			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) --build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) \
+			--label org.opencontainers.image.source=$(RELEASE_SOURCE) \
+			--label org.opencontainers.image.version=$(RELEASE_VERSION) \
+			--label org.opencontainers.image.revision=$$(git rev-parse HEAD) \
+			--label org.opencontainers.image.licenses=MIT -t $$ref . || exit 1; \
+	done
+	@mkdir -p $(RELEASE_DIR) && : >$(RELEASE_DIR)/images.txt
+	@if [ -n "$(PUSH)" ]; then for entry in $(RELEASE_IMAGES); do ref=$${entry#*=}; \
+		docker push $$ref >/dev/null || exit 1; \
+		docker inspect --format '{{index .RepoDigests 0}}' $$ref >>$(RELEASE_DIR)/images.txt || exit 1; \
+	done; cat $(RELEASE_DIR)/images.txt; else echo "images built, not pushed (PUSH=1 pushes)"; fi
+
+# SPDX SBOM per image from a docker save archive (no Docker socket in the syft container).
+.PHONY: release-sbom
+release-sbom: release-check ## SPDX SBOM per release image with syft into dist/release/<version>/
+	@for entry in $(RELEASE_IMAGES); do \
+		target=$${entry%%=*}; ref=$${entry#*=}; name=$$(basename $${ref%:*}); \
+		docker save -o $(RELEASE_DIR)/$$name.tar $$ref || exit 1; \
+		$(SYFT_RUN) docker-archive:/work/$$name.tar --source-name $${ref%:*} --source-version $(RELEASE_VERSION) \
+			-o spdx-json=/work/$${name}_$(RELEASE_VERSION).spdx.json || { rm -f $(RELEASE_DIR)/$$name.tar $(RELEASE_DIR)/$${name}_$(RELEASE_VERSION).spdx.json; exit 1; }; \
+		rm -f $(RELEASE_DIR)/$$name.tar; echo "SBOM $(RELEASE_DIR)/$${name}_$(RELEASE_VERSION).spdx.json"; \
+	done
+
+.PHONY: release-sign
+release-sign: release-check ## Sign the pushed images and attest their SBOMs keyless with cosign, sign SHA256SUMS (DRY_RUN=1 prints the commands)
+	@test -s $(RELEASE_DIR)/SHA256SUMS || { echo "missing $(RELEASE_DIR)/SHA256SUMS: run make release-artifacts"; exit 2; }
+	@if [ -z "$(DRY_RUN)" ] && ! [ -s $(RELEASE_DIR)/images.txt ]; then echo "no pushed images: run make release-artifacts PUSH=1"; exit 2; fi
+	@set -e; run() { if [ -n "$(DRY_RUN)" ]; then echo "dry-run: cosign $$*"; else $(COSIGN_RUN) "$$@"; fi; }; \
+	for entry in $(RELEASE_IMAGES); do \
+		ref=$${entry#*=}; repo=$${ref%:*}; name=$$(basename $$repo); \
+		digest=$$(grep -F "$$repo@" $(RELEASE_DIR)/images.txt 2>/dev/null || true); \
+		if [ -z "$$digest" ]; then \
+			test -n "$(DRY_RUN)" || { echo "no digest of $$ref in images.txt"; exit 2; }; digest="$$repo@sha256:<digest after push>"; fi; \
+		test -s $(RELEASE_DIR)/$${name}_$(RELEASE_VERSION).spdx.json || { echo "missing SBOM of $$ref"; exit 2; }; \
+		run sign --yes "$$digest"; \
+		run attest --yes --type spdxjson --predicate /work/$${name}_$(RELEASE_VERSION).spdx.json "$$digest"; \
+	done; \
+	run sign-blob --yes --bundle /work/SHA256SUMS.sigstore.json /work/SHA256SUMS
+
 # --- Security scans (CI jobs `secrets` and `trivy`) --------------------------------------------------------------
 TRIVY_CACHE     ?= $(HOME)/.cache/trivy
 TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
