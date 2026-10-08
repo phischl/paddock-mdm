@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -289,6 +290,41 @@ func TestOSVEnrich(t *testing.T) {
 		}
 		if got := get(dev, "CVE-2026-11386"); got != (row{"high", "37.2ubuntu0.1", uaVector}) {
 			t.Errorf("stored finding %+v", got)
+		}
+	})
+	t.Run("lists by severity", func(t *testing.T) {
+		inventory := app.NewInventory(h.worker)
+		auditor := principal.With(context.Background(), principal.Principal{Kind: principal.KindAdmin, Display: "auditor",
+			Role: principal.RoleOrgAuditor, OrganizationID: org})
+		order := func(sort string) []string {
+			t.Helper()
+			res, err := inventory.DeviceVulnerabilities(auditor, noble, app.VulnerabilityQuery{Page: app.ListPage{Sort: sort, Limit: 10}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out []string
+			for _, r := range res.Items {
+				out = append(out, r.Severity+" "+r.Cve)
+			}
+			return out
+		}
+		if got, want := order("-severity"), []string{"high CVE-2024-6387", "high CVE-2026-11386", "medium CVE-2008-7320",
+			"low CVE-2008-5144", "low CVE-2014-3495", "unknown CVE-2099-0001"}; !slices.Equal(got, want) {
+			t.Errorf("-severity: %v, want %v", got, want)
+		}
+		if got, want := order("severity"), []string{"low CVE-2008-5144", "low CVE-2014-3495", "medium CVE-2008-7320",
+			"high CVE-2024-6387", "high CVE-2026-11386", "unknown CVE-2099-0001"}; !slices.Equal(got, want) {
+			t.Errorf("severity: %v, want %v", got, want)
+		}
+		res, err := inventory.Vulnerabilities(auditor, app.VulnerabilityQuery{Page: app.ListPage{Sort: "-severity", Limit: 10},
+			Severities: []string{"high"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Of CVE-2026-11386's findings (high on 24.04 and 26.04, unknown on 22.04 and without OS) the high one counts.
+		if len(res.Items) != 2 || res.Count != 2 || res.Items[1].Cve != "CVE-2026-11386" || res.Items[1].Severity != "high" ||
+			res.Items[1].CvssVector == nil || res.Items[1].FixedVersion == nil || res.Items[1].DeviceCount != 5 {
+			t.Errorf("high vulnerabilities %+v (count %d)", res.Items, res.Count)
 		}
 	})
 	t.Run("isolation", func(t *testing.T) {

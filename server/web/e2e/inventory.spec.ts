@@ -9,8 +9,9 @@ const devicesim = process.env.PADDOCK_E2E_DEVICESIM ?? '../../bin/devicesim'
 const csrf = { 'X-Paddock-CSRF': '1' }
 
 // Plan M5a decision 10: a device that reported its packages through Fleet shows them in its Software tab and on the
-// organization's Software page; the Vulnerabilities pages filter by severity (unknown included, Fleet free reports
-// no score) and the start page carries the vulnerability tile; accessible and without CSP violations.
+// organization's Software page; the Vulnerabilities pages filter and sort by severity (unknown included: Ubuntu has
+// not rated the CVE or its data is missing) and the start page carries the vulnerability tile; accessible and without
+// CSP violations.
 test('organization admin sees the software and vulnerabilities of devices', async ({ page, cleanup }) => {
   test.setTimeout(300_000)
   const csp = watchCSP(page)
@@ -65,6 +66,9 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL(/severity=unknown/)
   await expectAccessible(page)
+  // Plan M5c decision 5: the list sorts by severity (Ubuntu's priority).
+  await page.getByTestId('device-vulnerability-list').getByRole('columnheader', { name: 'Severity' }).click()
+  await expect(page).toHaveURL(/sort=severity/)
 
   // The organization's Software page counts the device.
   await page.goto('/device-groups')

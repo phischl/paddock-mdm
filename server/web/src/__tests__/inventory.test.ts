@@ -1,4 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { mount } from '@vue/test-utils'
+import { h } from 'vue'
+import { VApp } from 'vuetify/components'
+import CvssScore from '../components/CvssScore.vue'
+import { createPortalI18n } from '../i18n'
+import { vuetify } from '../plugins/vuetify'
 import { formatScore, hasVulnerabilities, hasVulnerabilitiesFilter, severities, severityFilter } from '../lib/inventory'
 import en from '../locales/en.json'
 
@@ -23,5 +29,21 @@ describe('inventory', () => {
     expect(formatScore(7)).toBe('7.0')
     expect(formatScore(null)).toBe('–')
     expect(formatScore(undefined)).toBe('–')
+  })
+
+  it('offers the CVSS vector of Ubuntu\'s data to pointer and keyboard users, and shows a plain score without one', () => {
+    const vector = 'CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H'
+    const render = (props: { score: number | null, vector: string | null }) =>
+      mount(() => h(VApp, null, { default: () => h(CvssScore, props) }), { global: { plugins: [createPortalI18n(), vuetify] } })
+    const withVector = render({ score: null, vector })
+    const cell = withVector.get('[data-testid="cvss-vector"]')
+    expect(cell.text()).toBe('–')
+    expect(cell.attributes('tabindex')).toBe('0')
+    expect(cell.attributes('aria-label')).toBe(`CVSS –, vector ${vector}`)
+    withVector.unmount()
+    const without = render({ score: 7.5, vector: null })
+    expect(without.find('[data-testid="cvss-vector"]').exists()).toBe(false)
+    expect(without.text()).toBe('7.5')
+    without.unmount()
   })
 })
