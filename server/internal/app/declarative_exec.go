@@ -44,6 +44,9 @@ func (ex *configExec) requireStepUp() error {
 
 func (ex *configExec) run(ctx context.Context, plan declarative.Plan) error {
 	ex.index = declarative.Index(ex.desired)
+	if err := ex.guardGroupDeletions(plan); err != nil {
+		return err
+	}
 	for _, c := range plan.Changes {
 		path := ex.path(c)
 		if err := ex.change(ctx, c); err != nil {
@@ -388,4 +391,84 @@ func (ex *configExec) loginSettings(ctx context.Context) error {
 		BootPinMinLength: int32(in.BootPinMinLength), //nolint:gosec // validated 6–32
 	})
 	return err
+}
+
+// scopedItem is an item of a group-scoped section: its device group and where it is.
+type scopedItem struct {
+	group *string
+	what  string // the item as an error names it
+	index int    // position in the document
+}
+
+// scopedItems returns whether the scoped section is present in d and its items.
+func scopedItems(d declarative.Document, section string) (bool, []scopedItem) {
+	var out []scopedItem
+	switch section {
+	case declarative.SectionManagedFiles:
+		if d.ManagedFiles == nil {
+			return false, nil
+		}
+		for i, f := range *d.ManagedFiles {
+			out = append(out, scopedItem{f.DeviceGroup, "managed file " + strconv.Quote(f.Path), i})
+		}
+	case declarative.SectionManagedUnits:
+		if d.ManagedUnits == nil {
+			return false, nil
+		}
+		for i, u := range *d.ManagedUnits {
+			out = append(out, scopedItem{u.DeviceGroup, "managed unit " + strconv.Quote(u.Unit), i})
+		}
+	case declarative.SectionPackageHolds:
+		if d.PackageHolds == nil {
+			return false, nil
+		}
+		for i, h := range *d.PackageHolds {
+			out = append(out, scopedItem{h.DeviceGroup, "package hold " + strconv.Quote(h.Package), i})
+		}
+	case declarative.SectionProfileAssignments:
+		if d.ProfileAssignments == nil {
+			return false, nil
+		}
+		for i, a := range *d.ProfileAssignments {
+			out = append(out, scopedItem{a.DeviceGroup, "assignment of profile " + strconv.Quote(a.Profile), i})
+		}
+	}
+	return true, out
+}
+
+// guardGroupDeletions makes every row that the deletion of a device group removes (its scoped files, units, holds and
+// assignments go with it, ON DELETE CASCADE) appear as a deletion in the plan, or refuses the whole apply (review 2 of
+// PDK-008): a section the document leaves out may not hold items of a deleted group (409 in_use), and a section it
+// includes may not list one (422 invalid_document), because the cascade would remove the item outside the plan.
+func (ex *configExec) guardGroupDeletions(plan declarative.Plan) error {
+	deleted := map[string]bool{}
+	for _, c := range plan.Changes {
+		if c.Section == declarative.SectionDeviceGroups && c.Action == declarative.ActionDelete {
+			deleted[ex.st.names[c.Key]] = true
+		}
+	}
+	if len(deleted) == 0 {
+		return nil
+	}
+	for _, s := range []string{declarative.SectionManagedFiles, declarative.SectionManagedUnits, declarative.SectionPackageHolds,
+		declarative.SectionProfileAssignments} {
+		present, listed := scopedItems(ex.desired, s)
+		if present {
+			for _, it := range listed {
+				if it.group != nil && deleted[*it.group] {
+					return problem.InvalidDocument.WithDetail(declarative.Path(s, it.index) + ": the " + it.what +
+						" belongs to device group " + strconv.Quote(*it.group) + ", which this document deletes")
+				}
+			}
+			continue
+		}
+		_, current := scopedItems(ex.st.doc, s)
+		for _, it := range current {
+			if it.group != nil && deleted[*it.group] {
+				return problem.InUse.WithDetail("/device_groups: device group " + strconv.Quote(*it.group) + " still has the " +
+					it.what + "; include the " + s + " section to delete it with the group, or keep the group")
+			}
+		}
+	}
+	return nil
 }

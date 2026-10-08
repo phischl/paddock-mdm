@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -39,6 +40,9 @@ var SpecConfigApply = ActionSpec{Code: audit.CodeConfigApplied, AllowedRoles: Ro
 
 // MaxDocumentBytes bounds a declarative configuration (plan M6c decision 16).
 const MaxDocumentBytes = 1 << 20
+
+// expectedPlanPattern is the form of expected_plan, a hex SHA-256.
+var expectedPlanPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // errDryRun rolls back the transaction of a dry run after the plan was executed in it.
 var errDryRun = errors.New("app: dry run")
@@ -97,6 +101,10 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 	spec := SpecConfigApply
 	spec.Params = map[string]any{"change_set_id": nil, "created": 0, "updated": 0, "deleted": 0, "sections": []string{}}
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		// Checked inside the action, so a malformed value is recorded like every other refused apply.
+		if expectedPlan != "" && !expectedPlanPattern.MatchString(expectedPlan) {
+			return problem.InvalidRequest.WithDetail("expected_plan must be 64 lowercase hex digits")
+		}
 		p, _ := principal.From(ctx)
 		desired, err := parseDocument(raw)
 		if err != nil {

@@ -219,4 +219,63 @@ func TestDeclarativeConfig(t *testing.T) {
 		}
 		expectOneEvent(t, admin.Portal, res.RequestID, "config.applied", "success")
 	})
+
+	// Review 2 of PDK-008: deleting a device group deletes its scoped items, so each must be a deletion in the plan.
+	t.Run("device group deletion", func(t *testing.T) {
+		seed := getConfig(t, admin.Portal)
+		seed["device_groups"] = append(seed["device_groups"].([]any), map[string]any{"name": "t2-lab"})
+		seed["managed_files"] = append(seed["managed_files"].([]any),
+			map[string]any{"path": "/etc/paddock-t2-lab.conf", "content": "lab", "device_group": "t2-lab"})
+		configResultOf(t, putConfig(t, admin.Portal, seed, false))
+		doc := getConfig(t, admin.Portal)
+		var keep []any
+		for _, g := range doc["device_groups"].([]any) {
+			if g.(map[string]any)["name"] != "t2-lab" {
+				keep = append(keep, g)
+			}
+		}
+		if keep == nil {
+			keep = []any{}
+		}
+
+		// The managed files section is left out: 409 in_use, nothing changed.
+		omitted := configDoc{"api_version": "paddock/v1", "kind": "OrganizationConfig", "device_groups": keep}
+		res := putConfig(t, admin.Portal, omitted, false)
+		expectStatus(t, res, http.StatusConflict, "in_use")
+		expectOneEvent(t, admin.Portal, res.RequestID, "config.applied", "failure")
+		// The section still lists the group's file: 422 invalid_document naming it.
+		listed := clone(t, doc)
+		listed["device_groups"] = keep
+		res = putConfig(t, admin.Portal, listed, false)
+		expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_document")
+		if !strings.Contains(string(res.Body), "/managed_files/") {
+			t.Fatalf("detail does not name the file: %s", res.Body)
+		}
+		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2-lab") != 1 {
+			t.Fatal("a refused apply changed something")
+		}
+
+		// The section is present without the file: the plan lists both deletions and the apply runs them.
+		var files []any
+		for _, f := range doc["managed_files"].([]any) {
+			if f.(map[string]any)["device_group"] != "t2-lab" {
+				files = append(files, f)
+			}
+		}
+		if files == nil {
+			files = []any{}
+		}
+		listed["managed_files"] = files
+		dry := configResultOf(t, putConfig(t, admin.Portal, listed, true))
+		if dry.Plan.Deleted != 2 {
+			t.Fatalf("plan deletes %d, want the group and its file", dry.Plan.Deleted)
+		}
+		res = putConfig(t, admin.Portal, listed, false)
+		if out := configResultOf(t, res); out.Plan.Deleted != 2 {
+			t.Fatalf("apply: %s", res.Body)
+		}
+		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2-lab") != 0 {
+			t.Fatal("the group's file survived")
+		}
+	})
 }

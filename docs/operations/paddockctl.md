@@ -69,6 +69,10 @@ portal.
   portal. Paths and units are checked as in the portal. One refused item aborts the whole apply, and the error names
   the document path (`/managed_files/2: …`). Nothing is applied. A dry run checks exactly the same and changes
   nothing.
+- **Deleting a device group deletes everything scoped to it**: its managed files, units, package holds and profile
+  assignments. Each of them must be a deletion in the plan. A document that deletes a group is refused when it leaves
+  out one of those sections while the group still has items there (409 `in_use`), or when it still lists an item of
+  the group (422 `invalid_document`, naming the item).
 - Documents are limited to 1 MiB. A schema violation is answered with `invalid_document` and up to 20 paths.
 
 ## CI example

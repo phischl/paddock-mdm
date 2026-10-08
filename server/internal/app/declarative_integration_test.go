@@ -362,3 +362,108 @@ func TestDeclarativeNamesWithSeparators(t *testing.T) {
 		t.Fatalf("%d assignments, want 1", n)
 	}
 }
+
+// TestDeclarativeGroupDeletionCascade (review 2 of PDK-008): deleting a device group removes its scoped files, units,
+// holds and assignments (ON DELETE CASCADE). Each of them must appear as a deletion in the plan, otherwise the whole
+// apply is refused: 409 in_use when their section is left out, 422 invalid_document when the document still lists
+// one (unchanged or updated).
+func TestDeclarativeGroupDeletionCascade(t *testing.T) {
+	h := newConfigHarness(t)
+	admin := h.account(t, principal.RoleOrgAdmin, false)
+	ctx := principal.With(context.Background(), admin)
+	seed := h.export(t, admin)
+	*seed.DeviceGroups = append(*seed.DeviceGroups, declarative.DeviceGroup{Name: "lab"})
+	*seed.PermissionProfiles = append(*seed.PermissionProfiles, declarative.PermissionProfile{Name: "p", Class: "none",
+		Commands: []string{}, RequirePassword: true, TimestampTimeoutMin: 5, Lecture: "once"})
+	*seed.ManagedFiles = append(*seed.ManagedFiles,
+		declarative.ManagedFile{Path: "/etc/lab.conf", DeviceGroup: strPtr("lab"), Mode: "0644", Owner: "root", Group: "root", Content: "lab"},
+		declarative.ManagedFile{Path: "/etc/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"})
+	*seed.ManagedUnits = append(*seed.ManagedUnits, declarative.ManagedUnit{Unit: "lab.service", DeviceGroup: strPtr("lab"), Enabled: true, Active: true})
+	*seed.PackageHolds = append(*seed.PackageHolds, declarative.PackageHold{Package: "vim", DeviceGroup: strPtr("lab")})
+	*seed.ProfileAssignments = append(*seed.ProfileAssignments, declarative.ProfileAssignment{Profile: "p",
+		Subject: declarative.Subject{Type: "global"}, DeviceGroup: strPtr("lab")})
+	if _, _, err := h.config.Apply(ctx, raw(t, seed), ""); err != nil {
+		t.Fatal(err)
+	}
+	rows := func() int {
+		return h.count(t, `SELECT (SELECT count(*) FROM device_group WHERE organization_id = $1) + (SELECT count(*) FROM managed_file WHERE organization_id = $1)
+			+ (SELECT count(*) FROM managed_unit WHERE organization_id = $1) + (SELECT count(*) FROM package_hold WHERE organization_id = $1)
+			+ (SELECT count(*) FROM profile_assignment WHERE organization_id = $1)`, h.org)
+	}
+	before := rows()
+	withoutLab := func() declarative.Document {
+		d := h.export(t, admin)
+		*d.DeviceGroups = []declarative.DeviceGroup{}
+		return d
+	}
+	refused := func(name string, d declarative.Document, want *problem.Error, path string) {
+		t.Helper()
+		got := h.during(t, func() {
+			if _, err := h.config.Plan(ctx, raw(t, d)); !errors.Is(err, want) || !strings.Contains(err.Error(), path) {
+				t.Errorf("%s dry run = %v, want %s naming %s", name, err, want.Code, path)
+			}
+			if _, _, err := h.config.Apply(ctx, raw(t, d), ""); !errors.Is(err, want) || !strings.Contains(err.Error(), path) {
+				t.Errorf("%s apply = %v, want %s naming %s", name, err, want.Code, path)
+			}
+		})
+		if len(got) != 1 || got[0] != "config.applied:failure:"+want.Code {
+			t.Errorf("%s: actions %v", name, got)
+		}
+		if rows() != before {
+			t.Fatalf("%s changed something", name)
+		}
+	}
+
+	// The scoped sections are left out: their rows would vanish outside the plan.
+	omitted := declarative.Document{APIVersion: declarative.APIVersion, Kind: declarative.Kind, DeviceGroups: &[]declarative.DeviceGroup{}}
+	refused("sections omitted", omitted, problem.InUse, `device group "lab"`)
+	onlyFiles := withoutLab()
+	onlyFiles.ManagedUnits, onlyFiles.PackageHolds, onlyFiles.ProfileAssignments = nil, nil, nil
+	*onlyFiles.ManagedFiles = []declarative.ManagedFile{{Path: "/etc/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"}}
+	refused("unit section omitted", onlyFiles, problem.InUse, `managed unit "lab.service"`)
+
+	// The document still lists an item of the deleted group, unchanged or updated.
+	unchanged := withoutLab()
+	refused("unchanged file", unchanged, problem.InvalidDocument, "/managed_files/")
+	updated := withoutLab()
+	for i, f := range *updated.ManagedFiles {
+		if f.DeviceGroup != nil {
+			(*updated.ManagedFiles)[i].Content = "changed"
+		}
+	}
+	refused("updated file", updated, problem.InvalidDocument, "/managed_files/")
+
+	// The sections are present without the group's items: the plan lists every deletion, and its hash covers them.
+	clean := withoutLab()
+	*clean.ManagedFiles = []declarative.ManagedFile{{Path: "/etc/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"}}
+	*clean.ManagedUnits = []declarative.ManagedUnit{}
+	*clean.PackageHolds = []declarative.PackageHold{}
+	*clean.ProfileAssignments = []declarative.ProfileAssignment{}
+	plan, err := h.config.Plan(ctx, raw(t, clean))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Deleted != 5 || plan.Created != 0 || plan.Updated != 0 {
+		t.Fatalf("plan %+v, want the group and its file, unit, hold and assignment deleted", plan)
+	}
+	if _, applied, err := h.config.Apply(ctx, raw(t, clean), plan.SHA256()); err != nil || applied.SHA256() != plan.SHA256() {
+		t.Fatalf("apply with the confirmed plan: %v", err)
+	}
+	if n := rows(); n != before-5 {
+		t.Fatalf("%d rows, want %d", n, before-5)
+	}
+}
+
+// TestDeclarativeMalformedExpectedPlanIsAudited (review 2 of PDK-008): a malformed expected_plan is one failure event.
+func TestDeclarativeMalformedExpectedPlanIsAudited(t *testing.T) {
+	h := newConfigHarness(t)
+	admin := h.account(t, principal.RoleOrgAdmin, false)
+	got := h.during(t, func() {
+		if _, _, err := h.config.Apply(principal.With(context.Background(), admin), raw(t, h.export(t, admin)), "XYZ"); !errors.Is(err, problem.InvalidRequest) {
+			t.Errorf("Apply = %v", err)
+		}
+	})
+	if len(got) != 1 || got[0] != "config.applied:failure:invalid_request" {
+		t.Fatalf("actions %v", got)
+	}
+}
