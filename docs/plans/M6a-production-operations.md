@@ -136,3 +136,10 @@ Decided on the implementer's questions during PDK-005; binding for steps 1–4.
    the fresh OpenBao container, which after `raft snapshot restore -force` is sealed with the original barrier and is
    unsealed with the original shares (verified on a throwaway OpenBao). `make restore-drill` requires the development
    stack with backups (`make up BACKUP=1`).
+10. **Review round 1 (2026-10-09).** The production control plane's file order is `compose.yaml`, `compose.prod.yaml`,
+    `compose.backup.yaml`, so that the backup overlay's worker secrets add to compose.prod.yaml's `secrets: !override`.
+    prod-check gains the item "secrets the services reference are mounted" (any `/run/secrets/` path in a variable or
+    as a DSN's `sslrootcert`), allows 80/443 for Caddy only, resolves symbolic links before the world-readable walk and
+    treats errors as findings; a static test renders the real Compose configurations. The restore drill's guard reads
+    `PADDOCK_ENV` from `.env` only and refuses with production secrets or a production overlay in the running stack.
+    Alert companions fire when the backup ages, OpenBao's health or the certificate expiries are never exported.

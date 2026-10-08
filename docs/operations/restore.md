@@ -35,8 +35,15 @@ Create three credentials with these policies (resources `arn:aws:s3:::paddock-ba
 | `backup_worker_*` | `s3:PutObject` below `openbao/`; `s3:ListBucket` (the backup age of every kind) |
 | `backup_fleet_*` | `s3:PutObject` below `fleet/` |
 
-Give `openbao/` and `fleet/` a lifecycle rule that expires objects after 30 days; pgBackRest keeps 14 full backups
-and the WAL they need. In development, `make up BACKUP=1` creates the bucket on the audit host's RustFS
+Operator steps for the bucket:
+
+1. **Enable versioning, with Object Lock off.** The worker's credential may overwrite objects below `openbao/` and
+   pgBackRest's may delete below `pgbackrest/` (it expires old backups itself). With versioning, an overwritten or
+   deleted object stays as a noncurrent version, so one compromised container cannot destroy every backup of its
+   kind. Object Lock stays off: pgBackRest must be able to expire.
+2. **Lifecycle rules:** expire noncurrent versions after 30 days (the window in which a destroyed backup can still be
+   recovered), and expire current objects below `openbao/` and `fleet/` after 30 days; pgBackRest keeps 14 full
+   backups and the WAL they need. In development, `make up BACKUP=1` creates the bucket on the audit host's RustFS
 (`deploy/compose/scripts/rustfs-backup-bootstrap.sh`) and reaches it through the TLS proxy `backup-s3-tls`
 (`compose.backup.dev.yaml`); run `make dev-secrets` first.
 

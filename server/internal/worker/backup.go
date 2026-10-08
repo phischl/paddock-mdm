@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,6 +30,13 @@ var metricBackupLastSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "paddock_backup_last_success_timestamp_seconds",
 	Help: "Last-modified time of the newest backup of each kind in the backup bucket (postgres, authentik, openbao, fleet); 0 before the first.",
 }, []string{"kind"})
+
+// metricBackupKinds lets an alert notice ages that are never exported, e.g. because listing the bucket fails from the
+// start (PaddockBackupAgeMissing).
+var metricBackupKinds = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "paddock_backup_kinds",
+	Help: "Number of backup kinds whose age the worker exports (0 without a backup configuration).",
+})
 
 // BackupStore is the backup bucket: the worker's credential may list and write below openbao/ only.
 type BackupStore interface {
@@ -63,6 +71,7 @@ func NewBackups(store BackupStore, snap Snapshotter, key []byte, lock LeaderLock
 
 // Run runs the round at start and then every backupRoundInterval until ctx ends.
 func (b *Backups) Run(ctx context.Context) error {
+	metricBackupKinds.Set(float64(len(backup.Kinds)))
 	tick := time.NewTicker(backupRoundInterval)
 	defer tick.Stop()
 	for {
@@ -77,11 +86,10 @@ func (b *Backups) Run(ctx context.Context) error {
 	}
 }
 
-// Round exports the backup ages and, on the replica holding the lock, takes a due OpenBao snapshot.
+// Round exports the backup ages and, on the replica holding the lock, takes a due OpenBao snapshot. A kind whose age
+// cannot be read neither hides the others nor stops the snapshot; all errors are returned together.
 func (b *Backups) Round(ctx context.Context) error {
-	if err := b.ages(ctx); err != nil {
-		return err
-	}
+	agesErr := b.ages(ctx)
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	_, err := b.lock.WithLeaderLock(sys, backupLockKey, func(ctx context.Context) error {
 		// Again under the lock: another replica may just have taken the snapshot.
@@ -99,15 +107,17 @@ func (b *Backups) Round(ctx context.Context) error {
 		slog.InfoContext(ctx, "OpenBao snapshot stored", "key", key)
 		return nil
 	})
-	return err
+	return errors.Join(agesErr, err)
 }
 
-// ages sets the gauge of every kind.
+// ages sets the gauge of every kind it can read and returns the errors of the others.
 func (b *Backups) ages(ctx context.Context) error {
+	var errs []error
 	for _, k := range backup.Kinds {
 		newest, found, err := b.store.Newest(ctx, k.Prefix)
 		if err != nil {
-			return fmt.Errorf("backup age %s: %w", k.Name, err)
+			errs = append(errs, fmt.Errorf("backup age %s: %w", k.Name, err))
+			continue
 		}
 		// 0 without any backup, so that the stale alert also fires when a kind never ran.
 		value := 0.0
@@ -116,7 +126,7 @@ func (b *Backups) ages(ctx context.Context) error {
 		}
 		metricBackupLastSuccess.WithLabelValues(k.Name).Set(value)
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // SnapshotOpenBao takes a snapshot, encrypts it and stores it; it returns the object key. `paddock-server backup

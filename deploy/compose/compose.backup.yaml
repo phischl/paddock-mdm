@@ -1,5 +1,6 @@
 # Backups of the control plane (plan M6a decisions 4–6, architecture §20, docs/operations/restore.md). Used on the
-# control-plane host together with compose.yaml and compose.prod.yaml (production) or with the development files and
+# control-plane host together with compose.yaml and compose.prod.yaml (production; this file comes last, so that its
+# secrets of paddock-worker add to the `!override` list of compose.prod.yaml) or with the development files and
 # compose.backup.dev.yaml (`make up BACKUP=1`, restore drill). Everything goes to one S3 bucket outside the
 # control-plane host (PADDOCK_BACKUP_S3_*), encrypted with the backup encryption key before it leaves the host:
 #   pgbackrest/   pgBackRest repository of the stanzas paddock and authentik (WAL archive + daily full, 14 kept)

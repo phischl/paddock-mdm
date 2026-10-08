@@ -104,6 +104,32 @@ groups:
         annotations:
           summary: "The certificate of {{ $labels.host }} expires within 14 days"
           description: "Caddy has not renewed it; check its ACME logs and that port 80 is reachable."
+      # "Never set" companions: a series that never appears (listing the bucket, the health request or the probe fails
+      # from the start) would keep the alerts above silent.
+      - alert: PaddockBackupAgeMissing
+        expr: max(paddock_backup_kinds) > (count(paddock_backup_last_success_timestamp_seconds) or vector(0))
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "The age of some backups is unknown"
+          description: "The worker exports the age of fewer backup kinds than configured; check its log and its backup bucket credential."
+      - alert: PaddockOpenBaoHealthMissing
+        expr: absent(paddock_openbao_reachable) and on() max(up{role="paddock-worker"}) == 1
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenBao's seal status is unknown"
+          description: "The worker runs but exports no OpenBao health."
+      - alert: PaddockCertificateExpiryMissing
+        expr: max(paddock_tls_probe_hosts) > (count(paddock_tls_certificate_expiry_timestamp_seconds) or vector(0))
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The expiry of some public certificates is unknown"
+          description: "The worker probes more hostnames than it exports a certificate expiry for."
       - alert: PaddockCertificateProbeFailing
         expr: max by (host) (paddock_tls_probe_success) == 0
         for: 1h

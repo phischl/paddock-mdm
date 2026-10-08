@@ -59,3 +59,17 @@ func TestOpsProbeCertificates(t *testing.T) {
 		t.Fatal("a failed probe keeps the last expiry")
 	}
 }
+
+// TestOpsProbeExportsHostCount: the number of probed hosts is exported, so that PaddockCertificateExpiryMissing can
+// notice expiries that never appear.
+func TestOpsProbeExportsHostCount(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	failing := func(context.Context, string) (time.Time, error) { return time.Time{}, errors.New("refused") }
+	if err := NewOpsProbe(fakeSeal{}, failing, []string{"a.example.org", "b.example.org"}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metricTLSProbeHosts); got != 2 {
+		t.Fatalf("paddock_tls_probe_hosts %v, want 2", got)
+	}
+}

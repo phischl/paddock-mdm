@@ -100,6 +100,7 @@ typecheck: ## Type-check every Go module (go vet, including tests) and the porta
 test: ## Unit and integration tests (requires Docker)
 	go test -count=1 $(UNIT_PACKAGES)
 	go test -count=1 -tags paddock_revoke_testtarget ./agent/internal/revoke/
+	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
 
 .PHONY: fuzz
@@ -148,7 +149,7 @@ ifeq ($(origin HOST),environment)
 HOST := controlplane
 endif
 HOST ?= controlplane
-PROD_FILES_controlplane := compose.yaml compose.backup.yaml compose.prod.yaml
+PROD_FILES_controlplane := compose.yaml compose.prod.yaml compose.backup.yaml
 PROD_FILES_audit        := compose.audit.yaml compose.audit.prod.yaml
 PROD_FILES               = $(PROD_FILES_$(HOST))
 comma                   := ,

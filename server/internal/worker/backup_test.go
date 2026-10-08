@@ -16,9 +16,13 @@ import (
 type fakeBackupStore struct {
 	newest map[string]time.Time
 	puts   map[string][]byte
+	fail   map[string]error
 }
 
 func (f *fakeBackupStore) Newest(_ context.Context, prefix string) (time.Time, bool, error) {
+	if err := f.fail[prefix]; err != nil {
+		return time.Time{}, false, err
+	}
 	var newest time.Time
 	found := false
 	for key, t := range f.newest {
@@ -124,5 +128,26 @@ func TestBackupsSnapshotFailure(t *testing.T) {
 	b, _ = newBackupsForTest(store, &fakeSnapshotter{}, fakeLock{}, now)
 	if _, err := b.SnapshotOpenBao(context.Background()); err == nil {
 		t.Fatal("an empty snapshot must fail")
+	}
+}
+
+// TestBackupsOneFailingKind is the regression of review 1 finding 4: an error on one kind neither hides the other
+// kinds' ages nor stops the OpenBao snapshot, and the round still reports it.
+func TestBackupsOneFailingKind(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	store := &fakeBackupStore{puts: map[string][]byte{},
+		newest: map[string]time.Time{"fleet/1.sql.gz.enc": now.Add(-time.Hour)},
+		fail:   map[string]error{"pgbackrest/backup/paddock/backup.info": errors.New("AccessDenied")}}
+	snap := &fakeSnapshotter{data: "s"}
+	b, _ := newBackupsForTest(store, snap, fakeLock{}, now)
+	err := b.Round(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "backup age postgres") {
+		t.Fatalf("expected the postgres error, got %v", err)
+	}
+	if snap.calls != 1 || len(store.puts) != 1 {
+		t.Fatalf("the snapshot must still run: calls %d, puts %d", snap.calls, len(store.puts))
+	}
+	if got := testutil.ToFloat64(metricBackupLastSuccess.WithLabelValues("fleet")); got != float64(now.Add(-time.Hour).Unix()) {
+		t.Fatalf("fleet age %v not exported", got)
 	}
 }
