@@ -160,3 +160,11 @@ that device.
 Troubleshooting on a device: `journalctl -u paddock-supervisor`, `readlink /opt/paddock/agent/current`,
 `/var/lib/paddock/state/update-result.json` (until the event is delivered), `/var/lib/paddock/state/probation.json`
 (during a probation).
+
+## GitHub release workflow
+
+`.github/workflows/release.yml` runs on tags `v*.*.*`. Before the first tag, set the repository variable
+`PADDOCK_RELEASE_PUBLIC_KEY` to the **complete two-line** production minisign public key (`untrusted comment:` line plus
+key line, as in the `.pub` file). The workflow refuses to run without it and `make release-key-check` refuses a
+development key. It pushes the server images, signs them keylessly, and creates a **draft** release with the unsigned
+agent artifacts; sign those offline as described above before publishing the release.
