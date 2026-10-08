@@ -40,6 +40,8 @@ describe('inventory', () => {
     expect(cell.text()).toBe('–')
     expect(cell.attributes('tabindex')).toBe('0')
     expect(cell.attributes('aria-label')).toBe(`CVSS –, vector ${vector}`)
+    // Vuetify keeps the closed tooltip's role=tooltip element in the page; it needs a name of its own (axe).
+    expect(document.querySelector('[role="tooltip"]')?.getAttribute('aria-label')).toBe(vector)
     withVector.unmount()
     const without = render({ score: 7.5, vector: null })
     expect(without.find('[data-testid="cvss-vector"]').exists()).toBe(false)
