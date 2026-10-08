@@ -20,6 +20,9 @@ commit and the package versions.
   `/opt/paddock/revoke/paddock-revoke version` prints the release version and that
   `/etc/paddock/revoke-test-target` does not exist.
 - A second computer for the portal.
+- **A second LUKS volume** on the laptop (M4c.1, PDK-009): after step 1, create a LUKS2 data volume on a spare
+  partition or USB disk with its own passphrase, add it to `/etc/crypttab` by `UUID=`, and put a test file on it.
+  Note its LUKS UUID (`cryptsetup luksUUID`).
 
 ## 1. Install the laptop with the Paddock autoinstall (TPM2+PIN)
 
@@ -28,7 +31,8 @@ commit and the package versions.
 2. At the first boot enter a boot PIN twice.
 
 **Expected:** the laptop reboots, asks for the PIN, starts with it. The device page shows the device as active, *Disk
-encryption* `compliant` with a stored recovery key and header generation. On the laptop
+encryption* `compliant` with a stored recovery key and header generation. After the data volume is added (prerequisites),
+*Disk encryption* lists **both** volumes, each with a stored header, and stays `compliant`. On the laptop
 `/etc/paddock/revoke-trust.json` exists (the revocation keys pinned at enrollment) and `/etc/paddock/revoke-enabled`
 exists (flag on).
 
@@ -46,6 +50,13 @@ exists (flag on).
   `revocation.requested`, `revocation.issued` and `device.revocation_confirmed`.
 - At the boot prompt the PIN is refused; the recovery key is refused; the install passphrase (if known) is refused.
   The disk does not unlock with anything.
+- The confirmation lists **both** volumes with `slots_after: 0` (the data volume was escrowed, so the Lock token listed
+  it); `skipped_not_escrowed` and `unresolved` are empty. From the live USB, the data volume does not unlock with its
+  passphrase.
+
+**2b. Lock skips a volume without a stored header.** Repeat steps 1–2 on a fresh installation, but add a second data
+volume right before the Lock, so its header is not stored yet. **Expected:** the confirmation reports that volume under
+`skipped_not_escrowed` and it still unlocks with its passphrase; root and the escrowed volume are erased.
 
 ## 3. Restore from the escrow with the recovery key (live USB)
 
@@ -137,6 +148,9 @@ tested in steps 1–5. Check every item and note the file and line you checked.
 | 8 | **Self-lock**: `Handle` only stores a self-lock token, never runs it; `SelfLock` runs only a self-lock token and only with an elapsed uptime ≥ its `period_days`. |
 | 9 | **No secrets in logs**: the token, the device key and keyslot material are never logged; refusals log the reason only. |
 | 10 | **Exit codes and output** (`main.go`): 0 executed or stored, 2 refused (nothing changed), 1 error; `paddockd` hands every envelope over once and reports refusals as `device.revocation_refused`. |
+| 12 | **Target selection** (`agent/internal/luks/crypttab.go`, `targets.go`): every `/etc/crypttab` LUKS entry is a target (`UUID=`, `PARTUUID=`, `/dev/…`, `header=` uses the detached header); plain/swap/tmp entries are skipped only with those options; anything unclassifiable is `unresolved` and makes `erased` false; paths outside `/dev` are rejected; volumes sharing a UUID (clones) stay targets. |
+| 13 | **Token volumes only narrow a Lock**: a Lock or self-lock erases root plus exactly the token's `volumes` that are in the device's own selection; shared-UUID volumes and, while the root UUID is unknown, every secondary are skipped; a **Destroy ignores `volumes` and erases every target**. `paddockd` cannot add a target. |
+| 14 | **Deadlines**: secondaries share one deadline (`SecondaryWithin`), commands have `WaitDelay`; root is always attempted afterwards with its own timeout; a hung root-UUID read never shrinks a Destroy. |
 | 11 | **Tests**: `go test ./agent/internal/revoke/` and `go test -tags paddock_revoke_testtarget ./agent/internal/revoke/` pass; the tests cover every refusal reason and the sequence order. |
 
 ## Sign-off
@@ -145,6 +159,7 @@ tested in steps 1–5. Check every item and note the file and line you checked.
 | --- | --- | --- | --- | --- |
 | 1 Install | | | | |
 | 2 Lock | | | | |
+| 2b Lock skips unescrowed volume | | | | |
 | 3 Restore | | | | |
 | 4 Destroy | | | | |
 | 5 Dead man's switch | | | | |
