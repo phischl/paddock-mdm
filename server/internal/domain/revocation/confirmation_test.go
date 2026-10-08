@@ -17,6 +17,13 @@ func TestParseConfirmation(t *testing.T) {
 	if !reflect.DeepEqual(got, want) || got.AllErased() {
 		t.Fatalf("extended confirmation %+v", got)
 	}
+	lock := ParseConfirmation([]byte(`{"erased":true,"slots_before":2,"slots_after":0,"volumes":[` +
+		`{"device":"/dev/vda3","uuid":"0d8f4c62-0000-4000-8000-0000000000aa","slots_before":2,"slots_after":0,"erased":true}],` +
+		`"skipped_not_escrowed":[{"device":"/dev/vdb1","uuid":"0d8f4c62-0000-4000-8000-0000000000bb"},{"device":"/dev/vdc"}]}`))
+	if len(lock.SkippedNotEscrowed) != 2 || lock.SkippedNotEscrowed[0].UUID != "0d8f4c62-0000-4000-8000-0000000000bb" ||
+		lock.Volumes[0].UUID == "" || !lock.AllErased() {
+		t.Fatalf("PDK-009 lock confirmation %+v", lock)
+	}
 	m4c := ParseConfirmation([]byte(`{"erased":true,"slots_before":2,"slots_after":0}`))
 	if !reflect.DeepEqual(m4c, Confirmation{Erased: true, SlotsBefore: 2}) || !m4c.AllErased() {
 		t.Fatalf("M4c confirmation %+v", m4c)
@@ -40,6 +47,8 @@ func TestAllErased(t *testing.T) {
 		"unknown slot count":  {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true, SlotsAfter: -1}}}, false},
 		"unresolved entries":  {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true}}, Unresolved: []string{"UUID=x"}}, false},
 		"unreadable crypttab": {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true}}, Unresolved: []string{"/etc/crypttab"}}, false},
+		"skipped by a lock": {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true}},
+			SkippedNotEscrowed: []SkippedVolume{{Device: "/dev/vdb1"}}}, true},
 	}
 	for name, c := range cases {
 		if got := c.c.AllErased(); got != c.want {

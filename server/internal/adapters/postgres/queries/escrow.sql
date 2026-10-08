@@ -47,10 +47,11 @@ WHERE device_id = @device_id AND kind = @kind AND status <> 'failed';
 
 -- name: InsertEscrowHeader :execrows
 -- A header generation waits as pending until the worker found its object.
+-- volume is the LUKS UUID of the volume (PDK-009); NULL for the root volume of an agent before PDK-009.
 INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
-                           nonce, sha256, size, created_at)
+                           nonce, sha256, size, created_at, volume)
 VALUES (@id, @organization_id, @device_id, 'luks_header', @generation, 'pending', @key_version, @object_key, @wrapped_dek,
-        @nonce, @sha256, @size, @created_at)
+        @nonce, @sha256, @size, @created_at, sqlc.narg(volume)::uuid)
 ON CONFLICT DO NOTHING;
 
 -- name: ListPendingEscrowHeaders :many
@@ -66,13 +67,20 @@ WHERE device_id = @device_id AND kind IN ('luks_recovery_key', 'luks_header')
 ORDER BY kind, generation DESC;
 
 -- name: LatestStoredEscrow :one
--- The newest stored generation of a LUKS kind, or the requested one (generation 0: the newest).
+-- The newest stored generation of a LUKS kind, or the requested one (generation 0: the newest), of volume (NULL for a
+-- recovery key); with legacy, headers without a volume count as well (the root volume's before PDK-009).
 SELECT * FROM escrow_secret
 WHERE device_id = @device_id AND kind = @kind AND status = 'stored'
   AND (@generation::int = 0 OR generation = @generation::int)
+  AND (volume IS NOT DISTINCT FROM sqlc.narg(volume)::uuid OR (@legacy::boolean AND volume IS NULL))
 ORDER BY generation DESC
 LIMIT 1;
 
 -- name: GetEscrowSecrets :many
 -- The escrows of one decryption of the escrow-reader, which checks their device and kind (plan M4b.1 decision 6).
 SELECT * FROM escrow_secret WHERE id = ANY(@ids::uuid[]);
+
+-- name: SetRootHeaderVolume :execrows
+-- The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00032).
+UPDATE escrow_secret SET volume = @volume::uuid
+WHERE device_id = @device_id AND kind = 'luks_header' AND volume IS NULL;

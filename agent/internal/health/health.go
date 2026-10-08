@@ -38,6 +38,9 @@ type Report struct {
 	// RebootRequired is set while a package asks for a reboot (/var/run/reboot-required, plan M5b decision 8);
 	// Paddock never reboots for updates.
 	RebootRequired bool `json:"reboot_required"`
+	// RevokeCapabilities are the token features the installed paddock-revoke understands (`paddock-revoke
+	// capabilities`; none for a build before PDK-009 or without paddock-revoke).
+	RevokeCapabilities []string `json:"revoke_capabilities,omitempty"`
 }
 
 // State is the current health, shared between the run loop (writer) and the socket server (reader).

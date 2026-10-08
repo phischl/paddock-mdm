@@ -1,7 +1,8 @@
 // Package revoke is paddock-revoke, the device side of Lock, Destroy and the dead man's switch (architecture §12.3,
 // plan M4c decisions 11–13). It verifies a revocation token against the pinned trust anchor and, only then, terminates
-// the user sessions, erases every keyslot of every LUKS volume (plan M4c.1), confirms the erasure to the server and
-// reboots.
+// the user sessions, erases every keyslot of every LUKS volume (plan M4c.1) — for a Lock only of the volumes whose
+// header escrow the signed token confirms, besides the root volume (PDK-009) —, confirms the erasure to the server
+// and reboots.
 //
 // Two-person rule (design contract 10): every change to this package and to agent/cmd/paddock-revoke needs the review
 // of a second person and a passed test on real hardware (docs/operations/revocation-acceptance.md).
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -93,7 +95,7 @@ type Revoker struct {
 	Now      func() time.Time
 	// ConfirmWithin replaces ConfirmTimeout (tests); zero keeps it.
 	ConfirmWithin time.Duration
-	// SecondaryWithin replaces SecondaryWithin (tests); zero keeps it.
+	// SecondaryWithin replaces the constant SecondaryWithin (tests); zero keeps it.
 	SecondaryWithin time.Duration
 }
 
@@ -102,23 +104,33 @@ type Revoker struct {
 // erased (plan M4c.1, review round 1).
 const SecondaryWithin = 2 * time.Minute
 
-// Erasure is the confirmation of a token; it is posted as the command result (plan M4c.1 decision 2). Erased is true
-// only if every volume was erased and has no keyslot left and no crypttab entry is unresolved; SlotsBefore and SlotsAfter are the sums over the volumes
-// (SlotsAfter -1 when a volume's count is unknown), kept for the confirmations of M4c.
+// Erasure is the confirmation of a token; it is posted as the command result (plan M4c.1 decision 2). Erased is
+// true only if every erased volume has no keyslot left and no crypttab entry is unresolved; SlotsBefore and
+// SlotsAfter are the sums over the volumes (SlotsAfter -1 when a volume's count is unknown), kept for the
+// confirmations of M4c. SkippedNotEscrowed are the volumes a Lock left alone because the token does not confirm
+// their header escrow (PDK-009); they do not make the erasure incomplete.
 type Erasure struct {
-	Erased      bool            `json:"erased"`
-	SlotsBefore int             `json:"slots_before"`
-	SlotsAfter  int             `json:"slots_after"`
-	Volumes     []VolumeErasure `json:"volumes"`
-	Unresolved  []string        `json:"unresolved,omitempty"`
+	Erased             bool            `json:"erased"`
+	SlotsBefore        int             `json:"slots_before"`
+	SlotsAfter         int             `json:"slots_after"`
+	Volumes            []VolumeErasure `json:"volumes"`
+	Unresolved         []string        `json:"unresolved,omitempty"`
+	SkippedNotEscrowed []SkippedVolume `json:"skipped_not_escrowed,omitempty"`
 }
 
 // VolumeErasure is the erasure of one LUKS volume.
 type VolumeErasure struct {
 	Device      string `json:"device"`
+	UUID        string `json:"uuid,omitempty"`
 	SlotsBefore int    `json:"slots_before"`
 	SlotsAfter  int    `json:"slots_after"` // -1: unknown, never reported as erased
 	Erased      bool   `json:"erased"`
+}
+
+// SkippedVolume is a volume a Lock did not erase; UUID is "" when cryptsetup reported none.
+type SkippedVolume struct {
+	Device string `json:"device"`
+	UUID   string `json:"uuid,omitempty"`
 }
 
 // Handle verifies a token paddockd handed over. A Lock or Destroy runs the binding sequence at once; a self-lock
@@ -164,6 +176,7 @@ func (r *Revoker) execute(ctx context.Context, tok *revocation.Token) (Erasure, 
 	if err != nil {
 		return Erasure{}, err
 	}
+	targets, skipped := restorable(tok, targets)
 	// Recorded before anything happens: a crash or a power loss in the sequence never leads to a second run of the
 	// token, and the 24 h limit counts from here.
 	if err := r.record(tok.CommandID); err != nil {
@@ -175,6 +188,7 @@ func (r *Revoker) execute(ctx context.Context, tok *revocation.Token) (Erasure, 
 	r.terminateSessions(ctx)
 	// (2) Erase every keyslot of every target, the root volume last, and verify that none is left.
 	result := r.erase(ctx, targets)
+	result.SkippedNotEscrowed = skipped
 	// (3) Post the confirmation ourselves, signed with the device key, and wait up to 20 s for the 202.
 	r.confirm(ctx, tok.CommandID, result)
 	// (4) Reboot regardless of the confirmation's outcome.
@@ -239,6 +253,28 @@ func (r *Revoker) check(ctx context.Context, tok *revocation.Token) (Targets, er
 	return targets, nil
 }
 
+// restorable returns the targets of a token: for a Destroy every target; for a Lock and a self-lock the root volume
+// and, of the other volumes, exactly those whose LUKS UUID the token lists, so that every erased volume can be
+// restored from its escrowed header (PDK-009). The other volumes are returned as skipped. The list comes only from
+// the token the revocation-issuer signed; nothing paddockd hands over decides what is erased.
+func restorable(tok *revocation.Token, tg Targets) (Targets, []SkippedVolume) {
+	if tok.Action == revocation.ActionDestroy || len(tg.Devices) == 0 {
+		return tg, nil
+	}
+	last := len(tg.Devices) - 1
+	out := Targets{UUIDs: tg.UUIDs, Unresolved: tg.Unresolved}
+	var skipped []SkippedVolume
+	for _, d := range tg.Devices[:last] {
+		if id := tg.UUIDs[d]; id != "" && slices.Contains(tok.Volumes, id) {
+			out.Devices = append(out.Devices, d)
+		} else {
+			skipped = append(skipped, SkippedVolume{Device: d, UUID: id})
+		}
+	}
+	out.Devices = append(out.Devices, tg.Devices[last])
+	return out, skipped
+}
+
 func verifyReason(err error) string {
 	switch {
 	case errors.Is(err, revocation.ErrWrongDevice):
@@ -280,6 +316,9 @@ func (r *Revoker) erase(ctx context.Context, tg Targets) Erasure {
 		within = r.SecondaryWithin
 	}
 	e.Volumes = append(r.eraseWithin(ctx, tg.Devices[:last], within), r.eraseVolume(ctx, tg.Devices[last]))
+	for i := range e.Volumes {
+		e.Volumes[i].UUID = tg.UUIDs[e.Volumes[i].Device]
+	}
 	for _, v := range e.Volumes {
 		e.SlotsBefore += v.SlotsBefore
 		if v.SlotsAfter < 0 || e.SlotsAfter < 0 {

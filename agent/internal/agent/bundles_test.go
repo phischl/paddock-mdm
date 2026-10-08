@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,6 +242,41 @@ func TestSessionLogins(t *testing.T) {
 	a.trackSessions(ctx)
 	if pending, _ := a.d.Spool.Pending(); len(pending) != 2 {
 		t.Fatalf("not reported again after 24 h: %+v", pending)
+	}
+}
+
+// TestCheckinReportsRevokeCapabilities (PDK-009): the check-in health carries what the installed paddock-revoke
+// understands; a build before PDK-009 (unknown command) and a missing paddock-revoke report none.
+func TestCheckinReportsRevokeCapabilities(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	binary := a.d.Layout.RevokeBinary()
+	a.Cycle(ctx)
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n[ \"$1\" = capabilities ] && echo '{\"capabilities\":[\"volumes\"]}' && exit 0\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil { //nolint:gosec // a test executable
+		t.Fatal(err)
+	}
+	a.Cycle(ctx)
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'usage' >&2\nexit 1\n"), 0o755); err != nil { //nolint:gosec // a test executable
+		t.Fatal(err)
+	}
+	a.Cycle(ctx)
+	var got []string
+	for _, c := range g.Checkins {
+		var h struct {
+			RevokeCapabilities []string `json:"revoke_capabilities"`
+		}
+		if err := json.Unmarshal(c.Req.Health, &h); err != nil {
+			t.Fatalf("health %s: %v", c.Req.Health, err)
+		}
+		got = append(got, strings.Join(h.RevokeCapabilities, ","))
+	}
+	if !slices.Equal(got, []string{"", "volumes", ""}) {
+		t.Fatalf("capabilities %q", got)
 	}
 }
 

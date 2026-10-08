@@ -73,7 +73,7 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 			n, err = q.InsertEscrowHeader(ctx, pgstore.InsertEscrowHeaderParams{
 				ID: m.EscrowID, OrganizationID: org, DeviceID: m.DeviceID, Generation: int32(m.Generation), //nolint:gosec // bounded above
 				KeyVersion: int32(m.KeyVersion), ObjectKey: &m.ObjectKey, WrappedDek: m.WrappedDEK, Nonce: m.Nonce, //nolint:gosec // bounded by the gateway
-				Sha256: &m.SHA256, Size: &m.Size, CreatedAt: m.ReceivedAt,
+				Sha256: &m.SHA256, Size: &m.Size, CreatedAt: m.ReceivedAt, Volume: nullUUID(m.Volume),
 			})
 		} else {
 			n, err = q.InsertEscrowSecret(ctx, pgstore.InsertEscrowSecretParams{
@@ -91,6 +91,14 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 		return nil
 	})
 	return status, err
+}
+
+// nullUUID is a column value of an optional UUID.
+func nullUUID(id *uuid.UUID) uuid.NullUUID {
+	if id == nil {
+		return uuid.NullUUID{}
+	}
+	return uuid.NullUUID{UUID: *id, Valid: true}
 }
 
 // statusPending is a header whose object the worker has not verified yet; devices see pending too.

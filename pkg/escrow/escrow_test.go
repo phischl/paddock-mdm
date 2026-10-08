@@ -110,7 +110,10 @@ func TestSealHeaderRoundTrip(t *testing.T) {
 }
 
 func TestHeaderObjectKey(t *testing.T) {
-	if k := HeaderObjectKey("o", "d", 3); k != "org/o/devices/d/luks-header/3.bin" {
+	if k := HeaderObjectKey("o", "d", "v", 3); k != "org/o/devices/d/luks-header/v/3.bin" {
+		t.Fatalf("key %q", k)
+	}
+	if k := HeaderObjectKey("o", "d", "", 3); k != "org/o/devices/d/luks-header/3.bin" {
 		t.Fatal(k)
 	}
 }

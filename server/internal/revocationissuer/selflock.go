@@ -20,7 +20,9 @@ import (
 // reconcileSelfLocks keeps one self-lock token per active device while the organization's dead man's switch is on
 // (plan M4c decision 15): no approvals and no limits, period_days in the token, valid a year and replaced 60 days
 // before it expires or when the period changes. Tokens of a switch that is off, of a period that changed or of a
-// device that is no longer active are cancelled and removed from cmd:<device_id>.
+// device that is no longer active, and those whose volumes no longer match the device's volumes with a confirmed
+// header escrow (PDK-009 decision 6), are cancelled and removed from cmd:<device_id>; the same round issues the
+// replacement.
 func (i *Issuer) reconcileSelfLocks(ctx context.Context) error {
 	now := i.now().UTC().Truncate(time.Second)
 	var enabled bool
@@ -70,17 +72,23 @@ func (i *Issuer) issueSelfLock(ctx context.Context, dev pgstore.ListDevicesWitho
 	}
 	var issued pgstore.RevocationRequest
 	org := dev.OrganizationID
-	err := i.runner.RunTx(ctx, app.ScopeOrg, p, func(ctx context.Context, q *pgstore.Queries, _ app.Recorder) error {
+	err := i.runner.RunTx(ctx, app.ScopeOrg, p, func(ctx context.Context, q *pgstore.Queries, rec app.Recorder) error {
 		expires := now.Add(domain.SelfLockLifetime)
+		volumes, err := lockVolumes(ctx, q, dev.ID)
+		if err != nil {
+			return err
+		}
+		rec.SetParam("volumes", len(volumes))
 		env, err := revocationsign.Sign(ctx, i.signer, revocation.Token{
 			CommandID: id.String(), DeviceID: dev.ID.String(), OrganizationID: org.String(), Action: revocation.ActionSelfLock,
-			IssuedAt: now, ExpiresAt: expires, RequestID: id.String(), PeriodDays: int(period),
+			IssuedAt: now, ExpiresAt: expires, RequestID: id.String(), PeriodDays: int(period), Volumes: volumeStrings(volumes),
 		})
 		if err != nil {
 			return err
 		}
 		issued, err = q.InsertSelfLock(ctx, pgstore.InsertSelfLockParams{
 			ID: id, OrganizationID: org, DeviceID: dev.ID, IssuedAt: now, ExpiresAt: &expires, Envelope: env, PeriodDays: &period,
+			Volumes: volumes,
 		})
 		return err
 	})

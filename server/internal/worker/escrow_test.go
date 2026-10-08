@@ -141,7 +141,7 @@ func TestEscrowLUKS(t *testing.T) {
 	object := []byte("sealed header")
 	sum := sha256.Sum256(object)
 	header := func(g int64, size int64, receivedAt time.Time) ingest.Escrow {
-		key := escrow.HeaderObjectKey(f.org.String(), device.String(), g)
+		key := escrow.HeaderObjectKey(f.org.String(), device.String(), "", g)
 		return ingest.Escrow{Kind: escrow.KindLUKSHeader, Generation: g, KeyVersion: 1, ObjectKey: key, WrappedDEK: []byte{1},
 			Nonce: make([]byte, 12), SHA256: hex.EncodeToString(sum[:]), Size: size, ReceivedAt: receivedAt}
 	}
@@ -154,8 +154,8 @@ func TestEscrowLUKS(t *testing.T) {
 			t.Fatalf("header %s before the round: %s", id, status(id))
 		}
 	}
-	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), 1), object)
-	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), 2), object)
+	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), "", 1), object)
+	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), "", 2), object)
 	if err := e.Round(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestEscrowLUKS(t *testing.T) {
 			t.Errorf("header %s: %s, want %s", id, got, want)
 		}
 	}
-	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), 4), object)
+	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), "", 4), object)
 	if err := e.Round(ctx); err != nil || status(waiting) != escrow.StatusStored {
 		t.Fatalf("late upload within the window: %v %s", err, status(waiting))
 	}
@@ -176,5 +176,24 @@ func TestEscrowLUKS(t *testing.T) {
 	}
 	if id := send(header(4, int64(len(object)), time.Time{})); status(id) != escrow.StatusFailed {
 		t.Fatalf("header generation 4 again: %s", status(id))
+	}
+
+	// PDK-009: a header of another volume is recorded with it, its generation above every volume's.
+	volume := uuid.MustParse("0d8f4c62-0000-4000-8000-0000000000bb")
+	data := header(5, int64(len(object)), time.Time{})
+	data.Volume, data.ObjectKey = &volume, escrow.HeaderObjectKey(f.org.String(), device.String(), volume.String(), 5)
+	vid := send(data)
+	objects.put(data.ObjectKey, object)
+	if err := e.Round(ctx); err != nil || status(vid) != escrow.StatusStored {
+		t.Fatalf("volume header: %v %s", err, status(vid))
+	}
+	var got uuid.NullUUID
+	if err := f.super.QueryRow(ctx, "SELECT volume FROM escrow_secret WHERE id = $1", vid).Scan(&got); err != nil || got.UUID != volume {
+		t.Fatalf("recorded volume %v: %v", got, err)
+	}
+	other := header(5, int64(len(object)), time.Time{})
+	other.Volume = &volume
+	if id := send(other); status(id) != escrow.StatusFailed {
+		t.Fatalf("generation 5 of another volume: %s", status(id))
 	}
 }

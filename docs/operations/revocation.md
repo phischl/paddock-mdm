@@ -1,10 +1,21 @@
 # Revocation: Lock and Destroy
 
 An organization administrator can **Lock** a device: every keyslot of its encrypted root volume and of every other
-LUKS volume listed in its `/etc/crypttab` (also through a detached `header=`) is erased and the device reboots; the
-escrowed LUKS header and recovery key restore the root volume (Paddock escrows no other volume). Two organization
-administrators can **Destroy** a device: a Lock whose escrow is deleted before the token is issued, so the data
-cannot be recovered (architecture §12.3, plans M4c and M4c.1).
+LUKS volume of its `/etc/crypttab` (also through a detached `header=`) **whose header Paddock escrowed** is erased
+and the device reboots; the escrowed headers restore every erased volume (the root volume with the recovery key, the
+others with their own passphrases or key files). A Lock is restorable by definition, so a volume without a confirmed
+header escrow is not erased and is reported as `skipped_not_escrowed`. Two organization administrators can
+**Destroy** a device: every encrypted volume is erased and the escrow is deleted before the token is issued, so the
+data cannot be recovered (architecture §12.3, plans M4c and M4c.1 with its amendment of 2026-10-08).
+
+Which volumes a Lock erases is decided by the revocation-issuer, not by the device agent: it writes the LUKS UUIDs of
+the device's volumes with a stored header into the signed Lock and self-lock token (`volumes`), and `paddock-revoke`
+erases the root volume plus exactly the volumes of its own `/etc/crypttab` selection whose UUID the token lists. A
+self-lock token of the dead man's switch is re-issued when that set changes. `paddock-revoke` builds before this
+change refuse a token with `volumes`, so the issuer adds them only for devices whose check-in reports
+`revoke_capabilities: ["volumes"]` (`paddock-revoke capabilities`); a device with an older `paddock-revoke` gets
+tokens without volumes, and its `paddock-revoke` erases every volume on a Lock as before. Update the `paddock-revoke`
+package before relying on restorable Locks of devices with more than one encrypted volume.
 
 > **The revocation path is disabled** (`PADDOCK_REVOCATION_ENABLED=false`, the default) until a second person has
 > reviewed `agent/internal/revoke/` and `agent/cmd/paddock-revoke/` and the hardware protocol in
@@ -58,18 +69,23 @@ as for a damaged header (`docs/operations/disk-recovery.md`):
 
 1. Make sure the reason for the Lock is resolved (the device is back with its owner, or with IT). The request on the
    *Revocations* page shows `confirmed` with the device's result (`slots_before`, `slots_after: 0`, and per volume
-   in `volumes`; the device page lists every volume and the crypttab entries the device could not erase with certainty; with
-   such entries the erasure is incomplete and the request `failed`). Restore
-   the root volume as below. Paddock escrows only the root volume: another erased volume can be restored only from a
-   header backup taken outside Paddock, otherwise its data is lost.
-2. Portal → device → *Disk encryption*: *Download header backup* (the newest stored generation was taken before the
-   Lock; the Lock does not escrow a new one) and *Show recovery key*. Both need a step-up and the typed hostname.
-3. Boot the device from a live USB system, find the LUKS partition (`lsblk -f`) and restore:
+   in `volumes`, each with its LUKS `uuid`; the device page lists every volume, the volumes the Lock skipped because
+   their header was not escrowed (they stay readable), and the crypttab entries the device could not erase with
+   certainty; with such entries the erasure is incomplete and the request `failed`). Restore every erased volume as
+   below.
+2. Portal → device → *Disk encryption*: *Download header of <device>* for each erased volume (the newest stored
+   generation was taken before the Lock; the Lock does not escrow a new one) and *Show recovery key*. Each needs a
+   step-up and the typed hostname. The file is `<hostname>-luks-header-<volume UUID>-<generation>.img` (a root volume
+   header escrowed before PDK-009 keeps `<hostname>-luks-header-<generation>.img`).
+3. Boot the device from a live USB system, find each LUKS partition (`lsblk -f`; `cryptsetup luksUUID` matches the
+   UUID in the file name) and restore:
 
    ```sh
-   cryptsetup luksHeaderRestore /dev/<partition> --header-backup-file <hostname>-luks-header-<generation>.img
-   cryptsetup open --test-passphrase /dev/<partition>   # type the recovery key: it must succeed
+   cryptsetup luksHeaderRestore /dev/<partition> --header-backup-file <hostname>-luks-header-<volume>-<generation>.img
+   cryptsetup open --test-passphrase /dev/<partition>   # root: type the recovery key; others: their passphrase
    ```
+
+   A volume with a detached header (`header=` in `/etc/crypttab`) is restored into that header file instead.
 
 4. Reboot without the live system. The restored header contains the keyslots of its generation again, including
    TPM2+PIN: the user's PIN unlocks the disk, or the recovery key at the PIN prompt (repeat it until the TPM attempts

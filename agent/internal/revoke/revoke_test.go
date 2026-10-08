@@ -177,6 +177,9 @@ func token(t *testing.T, key ed25519.PrivateKey, change func(*revocation.Token))
 	return env
 }
 
+// destroy makes a token a Destroy, which erases every volume (plan M4c.1).
+func destroy(tok *revocation.Token) { tok.Action = revocation.ActionDestroy }
+
 func revoker(sys *fakeSys, c *fakeConfirmer) *Revoker {
 	return &Revoker{Sys: sys, Confirm: c, DeviceID: device, Now: func() time.Time { return now }, ConfirmWithin: 2 * time.Second}
 }
@@ -210,7 +213,7 @@ func TestSequence(t *testing.T) {
 	}
 }
 
-// TestEveryVolume (plan M4c.1 decisions 1–3): every target is erased and verified, the root volume last; the
+// TestEveryVolume (plan M4c.1 decisions 1–3): a Destroy erases and verifies every target, the root volume last; the
 // confirmation lists every volume, and erased is true as every volume has no keyslot left. A LUKS1 volume is counted
 // from its text dump.
 func TestEveryVolume(t *testing.T) {
@@ -219,7 +222,7 @@ func TestEveryVolume(t *testing.T) {
 	sys.volumes["/dev/vdc"] = &fakeVolume{slots: 1, luks1: true}
 	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc", "/dev/vda3"}}
 	c := &fakeConfirmer{sys: sys}
-	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, destroy))
 	want := Erasure{Erased: true, SlotsBefore: 6, SlotsAfter: 0, Volumes: []VolumeErasure{
 		{Device: "/dev/vdb1", SlotsBefore: 3, SlotsAfter: 0, Erased: true},
 		{Device: "/dev/vdc", SlotsBefore: 1, SlotsAfter: 0, Erased: true},
@@ -256,7 +259,7 @@ func TestUnresolvedIsIncomplete(t *testing.T) {
 	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
 	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vda3"}, Unresolved: []string{CrypttabFile}}
 	c := &fakeConfirmer{sys: sys}
-	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, destroy))
 	t.Logf("per-volume results: %+v", e)
 	if err != nil || e.Erased || e.SlotsAfter != 0 || len(e.Volumes) != 2 || !e.Volumes[0].Erased || !e.Volumes[1].Erased ||
 		!slices.Equal(e.Unresolved, []string{CrypttabFile}) {
@@ -282,7 +285,7 @@ func TestHungSecondaryVolume(t *testing.T) {
 	r := revoker(sys, c)
 	r.SecondaryWithin = 100 * time.Millisecond
 	start := time.Now()
-	e, _, err := r.Handle(context.Background(), token(t, trustedKey, nil))
+	e, _, err := r.Handle(context.Background(), token(t, trustedKey, destroy))
 	t.Logf("per-volume results after %s: %+v", time.Since(start), e)
 	want := []VolumeErasure{
 		{Device: "/dev/vdb1", SlotsAfter: -1},
@@ -304,7 +307,7 @@ func TestOneVolumeLeftKeyslots(t *testing.T) {
 	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3, eraseFail: true}
 	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vda3"}}
 	c := &fakeConfirmer{sys: sys}
-	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, destroy))
 	t.Logf("per-volume results: %+v", e)
 	if err != nil || e.Erased || e.SlotsBefore != 5 || e.SlotsAfter != 3 || len(e.Volumes) != 2 ||
 		e.Volumes[0] != (VolumeErasure{Device: "/dev/vdb1", SlotsBefore: 3, SlotsAfter: 3}) ||
@@ -320,7 +323,7 @@ func TestOneVolumeLeftKeyslots(t *testing.T) {
 func TestUnknownKeyslotCount(t *testing.T) {
 	sys := newSys(t)
 	sys.targets = Targets{Devices: []string{"/dev/vdz", "/dev/vda3"}}
-	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, destroy))
 	if err != nil || e.Erased || e.SlotsAfter != -1 || e.Volumes[0].SlotsAfter != -1 || e.Volumes[0].Erased || !e.Volumes[1].Erased {
 		t.Fatalf("execute: %+v %v", e, err)
 	}
@@ -425,6 +428,103 @@ func TestSelfLockStoredThenRun(t *testing.T) {
 	e, err := r.SelfLock(context.Background(), env, 30*dayLength)
 	if err != nil || !e.Erased || sys.log[len(sys.log)-1] != "reboot" {
 		t.Fatalf("self-lock after its period: %+v %v %v", e, err, sys.log)
+	}
+}
+
+// LUKS UUIDs of the secondary volumes of the Lock tests.
+const (
+	uuidData = "1b6a3c1e-0000-4000-8000-00000000000b"
+	uuidHome = "1b6a3c1e-0000-4000-8000-00000000000c"
+)
+
+// lockTargets is a device with the root volume and three other volumes: data and home with a UUID, one without.
+func lockTargets(sys *fakeSys) {
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
+	sys.volumes["/dev/vdc1"] = &fakeVolume{slots: 1}
+	sys.volumes["/dev/vdd"] = &fakeVolume{slots: 1}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc1", "/dev/vdd", "/dev/vda3"},
+		UUIDs: map[string]string{"/dev/vdb1": uuidData, "/dev/vdc1": uuidHome}}
+}
+
+// erasures returns the devices luksErase ran on, in order.
+func erasures(sys *fakeSys) []string {
+	var out []string
+	for _, entry := range sys.log {
+		if d, ok := strings.CutPrefix(entry, "cryptsetup luksErase --batch-mode -- "); ok {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// TestLockErasesConfirmedVolumes (PDK-009 decision 6): a Lock erases the root volume and, of the other volumes,
+// exactly those whose UUID the signed token lists; the others — including a volume without a UUID and a UUID the
+// token lists that the device does not have — are reported as skipped_not_escrowed and do not make the Lock fail.
+func TestLockErasesConfirmedVolumes(t *testing.T) {
+	sys := newSys(t)
+	lockTargets(sys)
+	c := &fakeConfirmer{sys: sys}
+	env := token(t, trustedKey, func(k *revocation.Token) {
+		k.Volumes = []string{uuidData, "1b6a3c1e-0000-4000-8000-0000000000ff"}
+	})
+	e, _, err := revoker(sys, c).Handle(context.Background(), env)
+	t.Logf("lock results: %+v", e)
+	want := Erasure{Erased: true, SlotsBefore: 5, SlotsAfter: 0,
+		Volumes: []VolumeErasure{
+			{Device: "/dev/vdb1", UUID: uuidData, SlotsBefore: 3, SlotsAfter: 0, Erased: true},
+			{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true},
+		},
+		SkippedNotEscrowed: []SkippedVolume{{Device: "/dev/vdc1", UUID: uuidHome}, {Device: "/dev/vdd"}},
+	}
+	if err != nil || !reflect.DeepEqual(e, want) {
+		t.Fatalf("lock: %+v %v\nwant %+v", e, err, want)
+	}
+	if got := erasures(sys); !slices.Equal(got, []string{"/dev/vdb1", "/dev/vda3"}) {
+		t.Fatalf("erased %v", got)
+	}
+	if sys.volumes["/dev/vdc1"].slots != 1 || sys.volumes["/dev/vdd"].slots != 1 {
+		t.Fatal("a volume without a confirmed header escrow lost its keyslots")
+	}
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
+		!strings.Contains(string(c.results[0].Result), `"skipped_not_escrowed":[{"device":"/dev/vdc1","uuid":"`+uuidHome+`"},{"device":"/dev/vdd"}]`) {
+		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestLockWithoutVolumes (PDK-009): a Lock token without volumes — the root volume's escrow only, or an issuer
+// before PDK-009 — erases the root volume only.
+func TestLockWithoutVolumes(t *testing.T) {
+	sys := newSys(t)
+	lockTargets(sys)
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
+	if err != nil || !e.Erased || len(e.SkippedNotEscrowed) != 3 || !slices.Equal(erasures(sys), []string{"/dev/vda3"}) {
+		t.Fatalf("lock: %+v %v, erased %v", e, err, erasures(sys))
+	}
+}
+
+// TestDestroyErasesEveryVolume (PDK-009 decision 6): a Destroy erases every volume, whatever is escrowed.
+func TestDestroyErasesEveryVolume(t *testing.T) {
+	sys := newSys(t)
+	lockTargets(sys)
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, destroy))
+	if err != nil || !e.Erased || len(e.SkippedNotEscrowed) != 0 ||
+		!slices.Equal(erasures(sys), []string{"/dev/vdb1", "/dev/vdc1", "/dev/vdd", "/dev/vda3"}) {
+		t.Fatalf("destroy: %+v %v, erased %v", e, err, erasures(sys))
+	}
+}
+
+// TestSelfLockErasesConfirmedVolumes (PDK-009 decision 6): the dead man's switch is a restorable lock, too.
+func TestSelfLockErasesConfirmedVolumes(t *testing.T) {
+	sys := newSys(t)
+	lockTargets(sys)
+	r := revoker(sys, &fakeConfirmer{sys: sys})
+	env := token(t, trustedKey, func(k *revocation.Token) {
+		k.Action, k.PeriodDays, k.Volumes = revocation.ActionSelfLock, 30, []string{uuidData, uuidHome}
+	})
+	e, err := r.SelfLock(context.Background(), env, 30*dayLength)
+	if err != nil || !e.Erased || !reflect.DeepEqual(e.SkippedNotEscrowed, []SkippedVolume{{Device: "/dev/vdd"}}) ||
+		!slices.Equal(erasures(sys), []string{"/dev/vdb1", "/dev/vdc1", "/dev/vda3"}) {
+		t.Fatalf("self-lock: %+v %v, erased %v", e, err, erasures(sys))
 	}
 }
 

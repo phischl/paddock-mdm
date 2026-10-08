@@ -117,7 +117,7 @@ func (d *Disk) RevealRecoveryKey(ctx context.Context, deviceID uuid.UUID, confir
 	var generation int
 	var key string
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		s, err := d.confirmedEscrow(ctx, q, rec, deviceID, confirmHostname, escrow.KindLUKSRecoveryKey, 0)
+		s, err := d.confirmedEscrow(ctx, q, rec, deviceID, confirmHostname, escrow.KindLUKSRecoveryKey, uuid.NullUUID{}, false, 0)
 		if err != nil {
 			return err
 		}
@@ -135,23 +135,34 @@ func (d *Disk) RevealRecoveryKey(ctx context.Context, deviceID uuid.UUID, confir
 	return generation, key, nil
 }
 
-// Header is a decrypted LUKS header backup of a device.
+// Header is a decrypted LUKS header backup of a device; Volume is the LUKS UUID of its volume ("" for a root volume
+// header escrowed before PDK-009 whose UUID the device has not reported yet).
 type Header struct {
 	Hostname   string
+	Volume     string
 	Generation int
 	Data       []byte
 }
 
-// DownloadHeader decrypts a stored header generation of a device (0: the newest) under the same guards as the
-// recovery key (audited: disk.header_downloaded with the generation).
-func (d *Disk) DownloadHeader(ctx context.Context, deviceID uuid.UUID, confirmHostname string, generation int) (Header, error) {
+// DownloadHeader decrypts a stored header generation (0: the newest) of a LUKS volume of a device (nil: the root
+// volume) under the same guards as the recovery key (audited: disk.header_downloaded with the volume and the
+// generation, PDK-009 decision 5). Headers escrowed before PDK-009 count as the root volume's.
+func (d *Disk) DownloadHeader(ctx context.Context, deviceID uuid.UUID, confirmHostname string, volume *uuid.UUID, generation int) (Header, error) {
 	spec := SpecDiskHeaderDownload
 	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
 	var out Header
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		s, err := d.confirmedEscrow(ctx, q, rec, deviceID, confirmHostname, escrow.KindLUKSHeader, generation)
+		want, legacy, err := headerVolume(ctx, q, deviceID, volume)
 		if err != nil {
 			return err
+		}
+		s, err := d.confirmedEscrow(ctx, q, rec, deviceID, confirmHostname, escrow.KindLUKSHeader, want, legacy, generation)
+		if err != nil {
+			return err
+		}
+		if s.Volume.Valid {
+			out.Volume = s.Volume.UUID.String()
+			rec.SetParam("volume", out.Volume)
 		}
 		out.Hostname, out.Generation = confirmHostname, int(s.Generation)
 		out.Data, err = d.openHeader(ctx, s)
@@ -160,10 +171,30 @@ func (d *Disk) DownloadHeader(ctx context.Context, deviceID uuid.UUID, confirmHo
 	return out, err
 }
 
+// headerVolume is the volume a header download asks for and whether headers without a volume count: the root
+// volume's (the requested volume is nil or the root volume the device reports) includes them.
+func headerVolume(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, volume *uuid.UUID) (uuid.NullUUID, bool, error) {
+	root, known := uuid.UUID{}, false
+	status, err := q.GetDeviceStatus(ctx, deviceID)
+	switch {
+	case err == nil:
+		root, known = RootVolume(diskHealth(status.Health))
+	case !db.IsNoRows(err):
+		return uuid.NullUUID{}, false, err
+	}
+	switch {
+	case volume == nil && known:
+		return uuid.NullUUID{UUID: root, Valid: true}, true, nil
+	case volume == nil:
+		return uuid.NullUUID{}, true, nil
+	}
+	return uuid.NullUUID{UUID: *volume, Valid: true}, known && *volume == root, nil
+}
+
 // confirmedEscrow loads the device, records it as target, checks the typed hostname and returns the stored escrow
-// of kind (generation 0: the newest).
+// of kind and volume (generation 0: the newest; legacy: headers without a volume count as well).
 func (d *Disk) confirmedEscrow(ctx context.Context, q *pgstore.Queries, rec Recorder, deviceID uuid.UUID, confirmHostname, kind string,
-	generation int) (pgstore.EscrowSecret, error) {
+	volume uuid.NullUUID, legacy bool, generation int) (pgstore.EscrowSecret, error) {
 	dev, err := q.GetDevice(ctx, deviceID)
 	if err != nil {
 		return pgstore.EscrowSecret{}, notFound(err)
@@ -176,7 +207,8 @@ func (d *Disk) confirmedEscrow(ctx context.Context, q *pgstore.Queries, rec Reco
 	if generation < 0 || generation > 1<<31-1 {
 		return pgstore.EscrowSecret{}, problem.InvalidRequest.WithDetail("generation must be positive")
 	}
-	s, err := q.LatestStoredEscrow(ctx, pgstore.LatestStoredEscrowParams{DeviceID: deviceID, Kind: kind, Generation: int32(generation)}) //nolint:gosec // bounded above
+	s, err := q.LatestStoredEscrow(ctx, pgstore.LatestStoredEscrowParams{DeviceID: deviceID, Kind: kind,
+		Generation: int32(generation), Volume: volume, Legacy: legacy}) //nolint:gosec // bounded above
 	if db.IsNoRows(err) {
 		// After a Destroy the escrow is gone for good (plan M4c gate R2); before, it may still arrive.
 		destroyed, err := q.DeviceEscrowDestroyed(ctx, deviceID)

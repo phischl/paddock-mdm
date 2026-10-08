@@ -1,4 +1,4 @@
-import { api, problemCode, type DiskEncryption, type DiskEscrow, type DiskRecoveryKey, type DiskState } from '../api/client'
+import { api, problemCode, type DiskEncryption, type DiskEscrow, type DiskRecoveryKey, type DiskState, type DiskVolume } from '../api/client'
 import type { ListFilter } from './listQuery'
 
 /** The disk encryption states (plan M4b decision 8), from the least to the most complete. */
@@ -30,10 +30,14 @@ export interface HeaderFile {
   filename: string
 }
 
-/** Downloads the newest stored header (step-up and typed hostname); the file or the problem code. */
-export async function downloadHeader(id: string, hostname: string): Promise<HeaderFile | string> {
+/**
+ * Downloads the newest stored header of a volume (its LUKS UUID; null: the root volume) with step-up and typed
+ * hostname (PDK-009 decision 5); the file or the problem code.
+ */
+export async function downloadHeader(id: string, hostname: string, volume: string | null = null): Promise<HeaderFile | string> {
+  const body = volume ? { confirm_hostname: hostname, volume } : { confirm_hostname: hostname }
   const { data, error, response } = await api.POST('/api/v1/devices/{id}/disk/header', {
-    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } }, body: { confirm_hostname: hostname }, parseAs: 'blob',
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } }, body, parseAs: 'blob',
   })
   if (error || !data) return problemCode(error)
   return { blob: data as Blob, filename: headerFileName(response.headers.get('Content-Disposition'), hostname) }
@@ -58,4 +62,18 @@ export function saveFile(file: HeaderFile): void {
 /** The newest stored generation of a list of escrows (newest first), or null. */
 export function latestStored(escrows: DiskEscrow[]): DiskEscrow | null {
   return escrows.find((e) => e.status === 'stored') ?? null
+}
+
+/**
+ * The header generations of a volume (newest first): those with its UUID and, for the root volume, those without a
+ * volume (escrowed before PDK-009).
+ */
+export function volumeHeaders(headers: DiskEscrow[], v: DiskVolume): DiskEscrow[] {
+  return headers.filter((h) => (h.volume !== undefined && h.volume === v.uuid) || (v.root && h.volume === undefined))
+}
+
+/** The device a header belongs to, by its volume; the root volume's for a header without a volume. */
+export function headerDevice(h: DiskEscrow, volumes: DiskVolume[]): string {
+  const v = h.volume === undefined ? volumes.find((x) => x.root) : volumes.find((x) => x.uuid === h.volume)
+  return v?.device ?? h.volume ?? ''
 }

@@ -1,4 +1,5 @@
-// Package luks reads the LUKS2 metadata of the device's root volume and changes its keyslots with cryptsetup and
+// Package luks reads the LUKS metadata of the device's volumes (the root volume and those of /etc/crypttab, the
+// selection paddock-revoke shares) and changes the root volume's keyslots with cryptsetup and
 // systemd-cryptenroll (plan M4b, PoC M1 C7–C9). Secrets — the PIN, the recovery key, the unlock key file — never
 // appear on a command line or in an error: the PIN travels in the environment of systemd-cryptenroll, the recovery
 // key only in its standard output, which is never logged.
@@ -7,6 +8,8 @@ package luks
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,6 +133,46 @@ func Version(ctx context.Context, t Tools, device string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("luks: no version in the header of %s", device)
+}
+
+// Inventory is the keyslots of a LUKS1 or LUKS2 volume: its version, the kind of every keyslot (sorted; every
+// LUKS1 keyslot is a password) and the hex SHA-256 of its metadata, which tells whether the header changed since it
+// was escrowed (LUKS2: the JSON metadata, as Metadata.Raw; LUKS1: the text dump).
+type Inventory struct {
+	Version int
+	Kinds   []string
+	Digest  string
+}
+
+// Inspect reads the inventory of a volume other than the root volume (PDK-009): the JSON metadata of LUKS2, or the
+// text dump of a LUKS1 header, which has no JSON metadata.
+func Inspect(ctx context.Context, t Tools, device string) (Inventory, error) {
+	if m, err := Dump(ctx, t, device); err == nil {
+		return Inventory{Version: 2, Kinds: m.Kinds(), Digest: sha256Hex(m.Raw)}, nil
+	}
+	out, err := run(ctx, t, nil, "cryptsetup", "luksDump", "--", device)
+	if err != nil {
+		return Inventory{}, err
+	}
+	luks1, kinds := false, []string{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		switch {
+		case len(f) == 2 && f[0] == "Version:" && f[1] == "1":
+			luks1 = true
+		case len(f) == 4 && f[0] == "Key" && f[1] == "Slot" && f[3] == "ENABLED":
+			kinds = append(kinds, KindPassword)
+		}
+	}
+	if !luks1 {
+		return Inventory{}, fmt.Errorf("luks: no LUKS1 or LUKS2 metadata for %s", device)
+	}
+	return Inventory{Version: 1, Kinds: kinds, Digest: sha256Hex([]byte(out))}, nil
+}
+
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // Kinds returns the kind of every keyslot, sorted: a keyslot referenced by a systemd-tpm2 token is tpm2+pin (or

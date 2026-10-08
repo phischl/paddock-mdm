@@ -41,12 +41,32 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 		for _, v := range hb.SchemaVersions {
 			versions = append(versions, int32(v)) //nolint:gosec // the gateway bounds versions to 1–1000
 		}
-		return q.UpsertDeviceStatus(ctx, pgstore.UpsertDeviceStatusParams{
+		if err := q.UpsertDeviceStatus(ctx, pgstore.UpsertDeviceStatusParams{
 			DeviceID: hb.DeviceID, OrganizationID: hb.OrganizationID, LastContactAt: &at,
 			AppliedBundleVersion: &hb.AppliedBundleVersion, AgentVersion: &hb.AgentVersion, LastSeq: hb.Seq, Health: health,
 			SchemaVersions: versions,
-		})
+		}); err != nil {
+			return err
+		}
+		if root, ok := RootVolume(diskHealth(health)); ok {
+			_, err := q.SetRootHeaderVolume(ctx, pgstore.SetRootHeaderVolumeParams{Volume: root, DeviceID: hb.DeviceID})
+			return err
+		}
+		return nil
 	})
+}
+
+// RootVolume is the LUKS UUID of the root volume a device reports in health.disk (PDK-009).
+func RootVolume(d *protocol.DiskHealth) (uuid.UUID, bool) {
+	if d == nil {
+		return uuid.UUID{}, false
+	}
+	for _, v := range d.Volumes {
+		if id, err := uuid.Parse(v.UUID); v.Root && err == nil {
+			return id, true
+		}
+	}
+	return uuid.UUID{}, false
 }
 
 // QuarantineClone quarantines an active device whose sequence numbers diverged and records device.clone_suspected
@@ -239,7 +259,7 @@ func eventParams(ev protocol.Event) map[string]any {
 	}
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
 		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
-		"kind", "started_at", "finished_at", "result", "error"} {
+		"kind", "started_at", "finished_at", "result", "error", "volume"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}

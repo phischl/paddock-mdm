@@ -2,18 +2,19 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import type { DiskEncryption, DiskRecoveryKey } from '../api/client'
+import type { DiskEncryption, DiskRecoveryKey, DiskVolume } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
-import { downloadHeader, getDisk, latestStored, revealRecoveryKey, saveFile } from '../lib/disk'
+import { downloadHeader, getDisk, headerDevice, latestStored, revealRecoveryKey, saveFile, volumeHeaders } from '../lib/disk'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 
 /**
- * The disk encryption of a device (plan M4b decision 14): state, keyslots, escrowed generations, the last keyslot
- * change, and for organization administrators the recovery key and the header — each after a step-up and the typed
- * hostname. The recovery key lives only in this component while its dialog is open and is hidden after 60 s.
+ * The disk encryption of a device (plan M4b decision 14): state, keyslots, every LUKS volume (PDK-009), escrowed
+ * generations, the last keyslot change, and for organization administrators the recovery key and the header of each
+ * volume — each after a step-up and the typed hostname. The recovery key lives only in this component while its
+ * dialog is open and is hidden after 60 s.
  */
 const props = defineProps<{ deviceId: string; hostname: string }>()
 
@@ -38,6 +39,15 @@ let timer: ReturnType<typeof setInterval> | undefined
 const recovery = computed(() => (disk.value ? latestStored(disk.value.recovery_keys) : null))
 const header = computed(() => (disk.value ? latestStored(disk.value.headers) : null))
 const headers = computed(() => disk.value?.headers.slice(0, 5) ?? [])
+const volumes = computed(() => disk.value?.volumes ?? [])
+/** The volumes with a stored header to download; empty for a device that reports no volumes (before PDK-009). */
+const downloadable = computed(() => volumes.value.filter((v) => v.uuid && latestStored(volumeHeaders(disk.value?.headers ?? [], v))))
+
+function volumeText(v: DiskVolume): string {
+  if (!v.uuid) return t('devices.disk.volumeUnknown', { device: v.device })
+  return t('devices.disk.volumeFacts', { device: v.device, root: String(v.root), count: v.keyslots, version: v.luks_version ?? 2,
+    escrowed: String(v.escrowed) })
+}
 
 async function load(): Promise<void> {
   const d = await getDisk(props.deviceId)
@@ -45,15 +55,16 @@ async function load(): Promise<void> {
   else disk.value = d
 }
 
-/** Both actions start with a step-up; the page continues in resume() when the browser comes back. */
-function start(action: Action): void {
+/** Both actions start with a step-up; the page continues in resume() when the browser comes back. A header download
+ * carries the volume (null: the root volume). */
+function start(action: Action, volume: string | null = null): void {
   problem.value = ''
-  startStepUp(action, props.deviceId)
+  startStepUp(action, props.deviceId, volume)
 }
 
 async function resume(): Promise<void> {
   for (const action of ['disk-recovery-key', 'disk-header'] as Action[]) {
-    const resumed = resumeStepUp<null>(action, props.deviceId)
+    const resumed = resumeStepUp<string | null>(action, props.deviceId)
     if (!resumed) continue
     await router.replace(withoutStepUpParam())
     if (resumed.failed) {
@@ -61,7 +72,7 @@ async function resume(): Promise<void> {
       return
     }
     if (action === 'disk-recovery-key') await showRecoveryKey()
-    else await saveHeader()
+    else await saveHeader(typeof resumed.payload === 'string' ? resumed.payload : null)
     return
   }
 }
@@ -86,13 +97,14 @@ async function showRecoveryKey(): Promise<void> {
   }, 1000)
 }
 
-async function saveHeader(): Promise<void> {
+async function saveHeader(volume: string | null): Promise<void> {
+  const device = volumes.value.find((v) => volume ? v.uuid === volume : v.root)?.device ?? t('devices.disk.rootVolume')
   const confirmed = await confirm({
-    title: t('devices.disk.header.title'), message: t('devices.disk.header.confirm', { hostname: props.hostname }),
+    title: t('devices.disk.header.title'), message: t('devices.disk.header.confirm', { hostname: props.hostname, device }),
     confirmLabel: t('devices.disk.header.label'), destructive: true, requireTypedText: props.hostname,
   })
   if (!confirmed) return
-  const res = await downloadHeader(props.deviceId, props.hostname)
+  const res = await downloadHeader(props.deviceId, props.hostname, volume)
   if (typeof res === 'string') problem.value = res
   else saveFile(res)
 }
@@ -175,6 +187,26 @@ onBeforeUnmount(hide)
               {{ recovery ? t('devices.disk.escrowFacts', { generation: recovery.generation, at: formatDateTime(recovery.created_at, locale) }) : t('devices.disk.none') }}
             </td>
           </tr>
+          <tr v-if="volumes.length > 0 || disk.unresolved.length > 0">
+            <th scope="row">
+              {{ t('devices.disk.volumes') }}
+            </th>
+            <td data-testid="disk-volumes">
+              <div
+                v-for="(v, i) in volumes"
+                :key="'v' + i"
+                data-testid="disk-volume"
+              >
+                {{ volumeText(v) }}
+              </div>
+              <div
+                v-for="(source, i) in disk.unresolved"
+                :key="'u' + i"
+              >
+                {{ t('devices.disk.unresolved', { source }) }}
+              </div>
+            </td>
+          </tr>
           <tr>
             <th scope="row">
               {{ t('devices.disk.headers') }}
@@ -185,7 +217,12 @@ onBeforeUnmount(hide)
                 v-for="h in headers"
                 :key="h.generation"
               >
-                {{ t('devices.disk.headerFacts', { generation: h.generation, status: t('devices.disk.escrowStatuses.' + h.status), at: formatDateTime(h.created_at, locale) }) }}
+                <template v-if="volumes.length > 1">
+                  {{ t('devices.disk.headerVolumeFacts', { device: headerDevice(h, volumes), generation: h.generation, status: t('devices.disk.escrowStatuses.' + h.status), at: formatDateTime(h.created_at, locale) }) }}
+                </template>
+                <template v-else>
+                  {{ t('devices.disk.headerFacts', { generation: h.generation, status: t('devices.disk.escrowStatuses.' + h.status), at: formatDateTime(h.created_at, locale) }) }}
+                </template>
               </div>
             </td>
           </tr>
@@ -203,8 +240,19 @@ onBeforeUnmount(hide)
         >
           {{ t('devices.disk.recoveryKey.label') }}
         </v-btn>
+        <template v-if="downloadable.length > 0">
+          <v-btn
+            v-for="v in downloadable"
+            :key="v.uuid"
+            variant="outlined"
+            data-testid="disk-header"
+            @click="start('disk-header', v.root ? null : v.uuid ?? null)"
+          >
+            {{ t('devices.disk.header.volumeLabel', { device: v.device }) }}
+          </v-btn>
+        </template>
         <v-btn
-          v-if="header"
+          v-else-if="header"
           variant="outlined"
           data-testid="disk-header"
           @click="start('disk-header')"

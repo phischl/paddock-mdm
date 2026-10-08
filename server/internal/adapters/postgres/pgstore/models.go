@@ -268,6 +268,7 @@ type EscrowSecret struct {
 	Nonce          []byte
 	Sha256         *string
 	Size           *int64
+	Volume         uuid.NullUUID
 }
 
 type InstalledSoftware struct {
@@ -478,6 +479,7 @@ type RevocationRequest struct {
 	FinishedAt     *time.Time
 	Rejection      *string
 	Result         json.RawMessage
+	Volumes        []uuid.UUID
 }
 
 type UserGroup struct {

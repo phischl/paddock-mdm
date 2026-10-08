@@ -224,25 +224,44 @@ const (
 	DiskUnmanaged     = "unmanaged"       // encrypted, but not installed with the Paddock autoinstall
 	DiskTPMMissing    = "tpm_missing"     // no TPM 2.0: the disk keeps its passphrase
 	DiskTPMPINMissing = "tpm_pin_missing" // the boot PIN was skipped: the disk keeps its passphrase
-	DiskEscrowPending = "escrow_pending"  // recovery key, header or keyslot set not yet as required
-	DiskCompliant     = "compliant"       // TPM2+PIN and recovery key only, both escrowed with the current header
+	DiskEscrowPending = "escrow_pending"  // recovery key, a header or the keyslot set not yet as required
+	DiskCompliant     = "compliant"       // TPM2+PIN and recovery key only, escrowed with the current header of every volume
 )
 
 // DiskStates are the states in DiskHealth.
 var DiskStates = []string{DiskNotEncrypted, DiskUnmanaged, DiskTPMMissing, DiskTPMPINMissing, DiskEscrowPending, DiskCompliant}
 
 // DiskHealth is the disk encryption of the device in the check-in health (health.disk, plan M4b decision 8).
+// State, LUKSVersion, Tokens and Keyslots are those of the root volume; Volumes lists every LUKS volume, the root
+// volume first (PDK-009 decision 4), and Unresolved the /etc/crypttab entries that could not be classified.
 type DiskHealth struct {
-	State       string   `json:"state"`
-	LUKSVersion int      `json:"luks_version,omitempty"`
-	Tokens      []string `json:"tokens,omitempty"` // kind of every keyslot, sorted: tpm2+pin, recovery, password, …
-	Keyslots    int      `json:"keyslots"`
+	State       string       `json:"state"`
+	LUKSVersion int          `json:"luks_version,omitempty"`
+	Tokens      []string     `json:"tokens,omitempty"` // kind of every keyslot, sorted: tpm2+pin, recovery, password, …
+	Keyslots    int          `json:"keyslots"`
+	Volumes     []DiskVolume `json:"volumes,omitempty"`
+	Unresolved  []string     `json:"unresolved,omitempty"`
 }
 
-// TamperKeyslotChanged is the data of tamper.keyslot_changed: the keyslots of the root volume differ from those the
-// agent recorded (plan M4b decision 12). Before and After list the kind of every keyslot (tpm2+pin, recovery,
-// password, …), sorted.
+// DiskVolume is one LUKS volume in health.disk. Escrowed is true when the server stored a header of its current
+// keyslots; HeaderGeneration is the newest stored header generation of the volume (0: none).
+type DiskVolume struct {
+	UUID             string   `json:"uuid"`
+	Device           string   `json:"device"`
+	Root             bool     `json:"root,omitempty"`
+	LUKSVersion      int      `json:"luks_version,omitempty"`
+	Tokens           []string `json:"tokens,omitempty"`
+	Keyslots         int      `json:"keyslots"`
+	Escrowed         bool     `json:"escrowed"`
+	HeaderGeneration int64    `json:"header_generation,omitempty"`
+}
+
+// TamperKeyslotChanged is the data of tamper.keyslot_changed: the keyslots of a LUKS volume differ from those the
+// agent recorded (plan M4b decision 12, PDK-009 decision 3). Volume is the LUKS UUID of the volume ("" when the
+// root volume reported none); Before and After list the kind of every keyslot (tpm2+pin, recovery, password, …),
+// sorted.
 type TamperKeyslotChanged struct {
+	Volume string   `json:"volume,omitempty"`
 	Before []string `json:"before"`
 	After  []string `json:"after"`
 }

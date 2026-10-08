@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,11 +41,73 @@ type volume struct {
 	keyFile     string
 	installSlot int
 	failEnroll  bool
-	changes     []string // keyslot changes made through the tools
+	changes     []string               // keyslot changes made through the tools
+	extra       map[string]*dataVolume // the other volumes of /etc/crypttab by device
+}
+
+// LUKS UUIDs of the fixture's volumes.
+const (
+	rootUUID = "0d8f4c62-0000-4000-8000-0000000000aa"
+	dataUUID = "0d8f4c62-0000-4000-8000-0000000000bb"
+	oldUUID  = "0d8f4c62-0000-4000-8000-0000000000cc"
+)
+
+// dataVolume is a LUKS volume of /etc/crypttab other than the root volume: LUKS2 with password keyslots, or LUKS1
+// (text dump only). An empty uuid makes luksUUID fail.
+type dataVolume struct {
+	uuid  string
+	luks1 bool
+	slots int
+}
+
+func (d *dataVolume) command(line, device string, args []string) (string, string, int, error) {
+	switch {
+	case line == "cryptsetup isLuks -- "+device:
+		return "", "", 0, nil
+	case line == "cryptsetup luksUUID -- "+device && d.uuid != "":
+		return d.uuid + "\n", "", 0, nil
+	case line == "cryptsetup luksUUID -- "+device:
+		return "", "no UUID", 1, nil
+	case line == "cryptsetup luksDump --dump-json-metadata -- "+device && d.luks1:
+		return "", "Dump operation is not supported for this device type.", 1, nil
+	case line == "cryptsetup luksDump --dump-json-metadata -- "+device:
+		return d.dump(), "", 0, nil
+	case line == "cryptsetup luksDump -- "+device:
+		return d.dump(), "", 0, nil
+	case strings.HasPrefix(line, "cryptsetup luksHeaderBackup "+device+" --header-backup-file "):
+		return "", "", 0, os.WriteFile(args[3], []byte(d.dump()), 0o600)
+	}
+	return "", "unexpected", -1, errors.New("unexpected command " + line)
+}
+
+// dump is the LUKS2 JSON metadata or the LUKS1 text dump of the keyslots.
+func (d *dataVolume) dump() string {
+	if d.luks1 {
+		out := "LUKS header information for " + d.uuid + "\n\nVersion:       \t1\n"
+		for i := range 8 {
+			state := "DISABLED"
+			if i < d.slots {
+				state = "ENABLED"
+			}
+			out += fmt.Sprintf("Key Slot %d: %s\n", i, state)
+		}
+		return out
+	}
+	keyslots := map[string]any{}
+	for i := range d.slots {
+		keyslots[strconv.Itoa(i)] = map[string]any{"type": "luks2"}
+	}
+	b, _ := json.Marshal(map[string]any{"keyslots": keyslots, "tokens": map[string]any{}, "segments": map[string]any{}, "uuid": d.uuid})
+	return string(b)
 }
 
 func (v *volume) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
+	for device, d := range v.extra {
+		if slices.Contains(args, device) {
+			return d.command(line, device, args)
+		}
+	}
 	switch {
 	case name == "findmnt":
 		return "/dev/mapper/vg-root\n", "", 0, nil
@@ -54,6 +117,8 @@ func (v *volume) Command(_ context.Context, _ []string, name string, args ...str
 		return `{"blockdevices":[{"name":"/dev/mapper/vg-root","type":"lvm","fstype":"ext4","children":[{"name":"/dev/mapper/dm_crypt-0","type":"crypt","fstype":"LVM2_member","children":[{"name":"/dev/sda3","type":"part","fstype":"crypto_LUKS"}]}]}]}`, "", 0, nil
 	case line == "cryptsetup luksDump --dump-json-metadata -- /dev/sda3":
 		return v.metadata(), "", 0, nil
+	case line == "cryptsetup luksUUID -- /dev/sda3":
+		return rootUUID + "\n", "", 0, nil
 	case line == "cryptsetup open --test-passphrase --verbose --disable-external-tokens --key-file "+v.keyFile+" /dev/sda3":
 		if v.installSlot < 0 {
 			return "No usable token is available.\n", "No key available with this passphrase.", 2, nil
@@ -276,6 +341,149 @@ func TestLUKSToCompliant(t *testing.T) {
 	if h.LUKSVersion != 2 || h.Keyslots != 2 || !slices.Equal(h.Tokens, []string{"recovery", "tpm2+pin"}) {
 		t.Fatalf("health %+v", h)
 	}
+	// PDK-009: the root volume's headers carry its UUID, and health.disk lists it as escrowed.
+	for _, r := range f.server.of(escrow.KindLUKSHeader) {
+		if r.Volume != rootUUID {
+			t.Fatalf("root header without its volume: %+v", r)
+		}
+	}
+	want := []protocol.DiskVolume{{UUID: rootUUID, Device: "/dev/sda3", Root: true, LUKSVersion: 2,
+		Tokens: []string{"recovery", "tpm2+pin"}, Keyslots: 2, Escrowed: true, HeaderGeneration: 2}}
+	if !reflect.DeepEqual(h.Volumes, want) {
+		t.Fatalf("volumes %+v", h.Volumes)
+	}
+}
+
+// addVolume adds a LUKS volume to /etc/crypttab and the fixture's /dev.
+func (f *luksFixture) addVolume(device string, d *dataVolume) {
+	f.t.Helper()
+	if f.vol.extra == nil {
+		f.vol.extra = map[string]*dataVolume{}
+	}
+	f.vol.extra[device] = d
+	f.write(f.layout.Join(device), "")
+	crypttab, _ := os.ReadFile(f.layout.Join("/etc/crypttab"))
+	f.write(f.layout.Join("/etc/crypttab"), string(crypttab)+filepath.Base(device)+" "+device+" none luks\n")
+}
+
+// settle runs passes and polls until no escrow starts any more and returns the state.
+func (f *luksFixture) settle() string {
+	f.t.Helper()
+	s := f.pass()
+	for range 20 {
+		n := len(f.server.requests)
+		f.poll()
+		if s = f.pass(); len(f.server.requests) == n && s == f.pass() {
+			break
+		}
+	}
+	return s
+}
+
+// volumeHeaders returns the header escrows of volume.
+func (f *luksFixture) volumeHeaders(volume string) []escrow.Request {
+	var out []escrow.Request
+	for _, r := range f.server.of(escrow.KindLUKSHeader) {
+		if r.Volume == volume {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestLUKSEscrowsEveryVolume (PDK-009 decisions 1, 2 and 4): once the root volume is escrowed, the header of every
+// other LUKS volume of /etc/crypttab — LUKS2 and LUKS1 — is escrowed with its UUID, one at a time, with header
+// generations counted across all volumes; no recovery key is added to them and their keyslots stay untouched. The
+// device is compliant only when every volume is escrowed.
+func TestLUKSEscrowsEveryVolume(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.addVolume("/dev/vdb1", &dataVolume{uuid: dataUUID, slots: 2})
+	f.addVolume("/dev/vdc", &dataVolume{uuid: oldUUID, luks1: true, slots: 1})
+	// Before the root volume is done, no other header is escrowed.
+	f.pass()
+	if len(f.volumeHeaders(dataUUID))+len(f.volumeHeaders(oldUUID)) != 0 {
+		t.Fatal("another volume was escrowed before the root volume")
+	}
+	if s := f.settle(); s != protocol.DiskCompliant {
+		t.Fatalf("not compliant: %s %+v", s, f.st)
+	}
+	data, old := f.volumeHeaders(dataUUID), f.volumeHeaders(oldUUID)
+	if len(data) != 1 || len(old) != 1 || len(f.server.of(escrow.KindLUKSRecoveryKey)) != 1 {
+		t.Fatalf("escrows %+v", f.server.requests)
+	}
+	roots := f.volumeHeaders(rootUUID)
+	if data[0].Generation <= roots[len(roots)-1].Generation || old[0].Generation <= data[0].Generation {
+		t.Fatalf("generations: root %d, data %d, old %d", roots[len(roots)-1].Generation, data[0].Generation, old[0].Generation)
+	}
+	if string(f.openHeader(data[0])) != f.vol.extra["/dev/vdb1"].dump() {
+		t.Fatal("the escrowed header is not the data volume's")
+	}
+	h := f.m.Tick(context.Background(), f.keys, true)
+	got := map[string]protocol.DiskVolume{}
+	for _, v := range h.Volumes {
+		got[v.UUID] = v
+	}
+	if len(h.Volumes) != 3 || !h.Volumes[0].Root ||
+		!reflect.DeepEqual(got[dataUUID], protocol.DiskVolume{UUID: dataUUID, Device: "/dev/vdb1", LUKSVersion: 2, Tokens: []string{"password", "password"},
+			Keyslots: 2, Escrowed: true, HeaderGeneration: data[0].Generation}) ||
+		got[oldUUID].LUKSVersion != 1 || got[oldUUID].Keyslots != 1 || !got[oldUUID].Escrowed {
+		t.Fatalf("volumes %+v", h.Volumes)
+	}
+	if len(f.events) != 0 {
+		t.Fatalf("events %v", f.events)
+	}
+}
+
+// openHeader decrypts an escrowed header with the server's key.
+func (f *luksFixture) openHeader(req escrow.Request) []byte {
+	f.t.Helper()
+	wrapped, _ := base64.StdEncoding.DecodeString(req.WrappedDEK)
+	dek, err := rsa.DecryptOAEP(sha256.New(), nil, f.server.key, wrapped, nil)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	nonce, _ := base64.StdEncoding.DecodeString(req.Nonce)
+	header, err := escrow.OpenHeader(dek, nonce, req.EscrowID, f.server.objects[req.EscrowID])
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return header
+}
+
+// TestLUKSVolumeTamper (PDK-009 decision 3): a keyslot change on another volume is reported with its UUID, makes the
+// device escrow_pending, and its header is escrowed again.
+func TestLUKSVolumeTamper(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.addVolume("/dev/vdb1", &dataVolume{uuid: dataUUID, slots: 1})
+	if s := f.settle(); s != protocol.DiskCompliant {
+		t.Fatalf("not compliant: %s", s)
+	}
+	f.vol.extra["/dev/vdb1"].slots = 2 // someone adds a passphrase to the data volume
+	if s := f.pass(); s != protocol.DiskEscrowPending || len(f.events) != 1 || f.events[0].Type != protocol.EventTamperKeyslotChanged {
+		t.Fatalf("tamper: %s, events %v", s, f.events)
+	}
+	var data protocol.TamperKeyslotChanged
+	_ = json.Unmarshal(f.events[0].Data, &data)
+	if data.Volume != dataUUID || !slices.Equal(data.Before, []string{"password"}) || !slices.Equal(data.After, []string{"password", "password"}) {
+		t.Fatalf("tamper data %+v", data)
+	}
+	if s := f.settle(); s != protocol.DiskCompliant || len(f.volumeHeaders(dataUUID)) != 2 || len(f.events) != 1 {
+		t.Fatalf("after the re-escrow: %s, headers %d, events %d", s, len(f.volumeHeaders(dataUUID)), len(f.events))
+	}
+}
+
+// TestLUKSVolumeWithoutUUID (PDK-009 decision 4): a LUKS volume whose UUID cannot be read cannot be escrowed; it is
+// reported, and the device is not compliant.
+func TestLUKSVolumeWithoutUUID(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.addVolume("/dev/vdb1", &dataVolume{slots: 1})
+	if s := f.settle(); s != protocol.DiskEscrowPending {
+		t.Fatalf("state %s", s)
+	}
+	h := f.m.Tick(context.Background(), f.keys, true)
+	if len(h.Volumes) != 2 || !reflect.DeepEqual(h.Volumes[1], protocol.DiskVolume{Device: "/dev/vdb1"}) || len(f.volumeHeaders("")) != 0 {
+		t.Fatalf("volumes %+v", h.Volumes)
+	}
 }
 
 // checkHeader opens an escrowed header with the server's key.
@@ -321,7 +529,7 @@ func TestLUKSTamper(t *testing.T) {
 	}
 	var data protocol.TamperKeyslotChanged
 	_ = json.Unmarshal(f.events[0].Data, &data)
-	if !slices.Equal(data.Before, []string{"recovery", "tpm2+pin"}) || !slices.Equal(data.After, []string{"password", "recovery", "tpm2+pin"}) {
+	if data.Volume != rootUUID || !slices.Equal(data.Before, []string{"recovery", "tpm2+pin"}) || !slices.Equal(data.After, []string{"password", "recovery", "tpm2+pin"}) {
 		t.Fatalf("tamper data %+v", data)
 	}
 	if len(f.server.of(escrow.KindLUKSHeader)) != headers+1 {

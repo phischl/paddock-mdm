@@ -71,16 +71,29 @@ WHERE action IN ('lock','destroy') AND issued_at > @since::timestamptz;
 -- name: InsertSelfLock :one
 -- A self-lock token of the dead man's switch: no approvals, no limits (plan M4c decision 15).
 INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_at, approved_at, issued_at,
-                                expires_at, envelope, period_days)
+                                expires_at, envelope, period_days, volumes)
 VALUES (@id, @organization_id, @device_id, 'self_lock', 'issued', @issued_at, @issued_at, @issued_at, @expires_at,
-        @envelope, @period_days)
+        @envelope, @period_days, @volumes::uuid[])
 RETURNING *;
 
 -- name: IssueRevocationRequest :one
 UPDATE revocation_request SET status = 'issued', issued_at = @issued_at::timestamptz,
-  expires_at = @expires_at::timestamptz, envelope = @envelope
+  expires_at = @expires_at::timestamptz, envelope = @envelope, volumes = @volumes::uuid[]
 WHERE id = @id AND status = 'approved'
 RETURNING *;
+
+-- name: ListConfirmedHeaderVolumes :many
+-- The volumes of a device with a stored header (PDK-009 decision 6), sorted: a Lock erases exactly these besides the
+-- root volume. Headers without a volume (before PDK-009) are the root volume's, which a Lock erases anyway.
+SELECT DISTINCT volume::uuid AS volume FROM escrow_secret
+WHERE device_id = @device_id AND kind = 'luks_header' AND status = 'stored' AND volume IS NOT NULL
+ORDER BY 1;
+
+-- name: DeviceRevokeCapable :one
+-- Whether the device's paddock-revoke reported that it understands the volumes of a token (revoke_capabilities in
+-- the check-in health); builds before PDK-009 refuse such tokens.
+SELECT coalesce((SELECT (health -> 'revoke_capabilities') ? 'volumes' FROM device_status WHERE device_id = @device_id),
+                false)::boolean;
 
 -- name: ListApprovedRevocationRequests :many
 -- Approved requests the issuer has not handled yet (a lost message, a failed attempt).

@@ -35,6 +35,7 @@ commands:
                                   self-lock token for the dead man's switch; JSON on stdout,
                                   exit 0 executed or stored, 2 refused (nothing changed), 1 error
   execute --elapsed-seconds N     run the self-lock token on stdin after N seconds of uptime without contact
+  capabilities                    print the token features this build understands as JSON (for paddockd)
   version                         print the version
 `
 
@@ -58,6 +59,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) int {
 	switch args[0] {
 	case "version":
 		_, _ = fmt.Fprintln(stdout, buildinfo.Version)
+		return 0
+	case "capabilities":
+		// Lock and self-lock tokens with volumes (PDK-009): the issuer adds them only for builds that report this.
+		_ = json.NewEncoder(stdout).Encode(revocation.Capabilities{Capabilities: []string{revocation.CapabilityVolumes}})
 		return 0
 	case "execute":
 		fs := flag.NewFlagSet("execute", flag.ContinueOnError)

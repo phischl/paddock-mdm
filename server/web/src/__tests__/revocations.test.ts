@@ -34,10 +34,13 @@ describe('revocations', () => {
   it('reads the per-volume results of a confirmation and ignores malformed entries', () => {
     const volume = { device: '/dev/sda3', slots_before: 2, slots_after: 0, erased: true }
     expect(volumeResults(request({ result: { erased: true, volumes: [{ device: '/dev/sdb1' }, volume, 'x'], unresolved: ['UUID=gone', 3] } })))
-      .toEqual({ volumes: [volume], unresolved: ['UUID=gone'], incomplete: true })
-    expect(volumeResults(request({ result: { erased: true, slots_before: 2, slots_after: 0 } }))).toEqual({ volumes: [], unresolved: [], incomplete: false })
-    expect(volumeResults(request({ result: { volumes: 'all' } }))).toEqual({ volumes: [], unresolved: [], incomplete: false })
-    expect(volumeResults(request({}))).toEqual({ volumes: [], unresolved: [], incomplete: false })
+      .toEqual({ volumes: [volume], unresolved: ['UUID=gone'], skipped: [], incomplete: true })
+    expect(volumeResults(request({ result: { erased: true, slots_before: 2, slots_after: 0 } }))).toEqual({ volumes: [], unresolved: [], skipped: [], incomplete: false })
+    expect(volumeResults(request({ result: { volumes: 'all' } }))).toEqual({ volumes: [], unresolved: [], skipped: [], incomplete: false })
+    expect(volumeResults(request({}))).toEqual({ volumes: [], unresolved: [], skipped: [], incomplete: false })
+    // PDK-009: the volumes a Lock skipped, malformed ones ignored; they do not make the Lock incomplete.
+    expect(volumeResults(request({ result: { erased: true, skipped_not_escrowed: [{ device: '/dev/sdb1', uuid: 'u' }, { device: '/dev/sdc' }, { uuid: 1 }, 'x'] } })))
+      .toEqual({ volumes: [], unresolved: [], skipped: [{ device: '/dev/sdb1', uuid: 'u' }, { device: '/dev/sdc' }], incomplete: false })
   })
 
   it('parses the warning lead times', () => {

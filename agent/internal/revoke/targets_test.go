@@ -6,55 +6,23 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 )
 
-// fakeDev is a /dev tree below a temporary root with the udev links of /dev/disk, as relative symlinks like udev
-// creates them.
-func fakeDev(t *testing.T, links map[string]string, files ...string) string {
-	t.Helper()
-	root := t.TempDir()
-	for _, f := range files {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, f), nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for link, target := range links {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, link)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return root
+// crypttabTools answers cryptsetup isLuks with exit 0 for the paths in luks (exit 1 otherwise) and cryptsetup
+// luksUUID with the entry of uuids (exit 1 without one).
+type crypttabTools struct {
+	luks  []string
+	uuids map[string]string
 }
 
-// isLuksTools answers cryptsetup isLuks with exit 0 for the paths in luks and exit 1 for every other one, the exit
-// of cryptsetup for a plain volume and for an unreadable one alike. A path in hang blocks until release is closed,
-// whatever the context says (a command stuck in the kernel). It logs every call.
-type isLuksTools struct {
-	luks    []string
-	hang    []string
-	release chan struct{}
-	mu      sync.Mutex
-	log     []string
-}
-
-func (f *isLuksTools) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
-	f.mu.Lock()
-	f.log = append(f.log, name+" "+strings.Join(args, " "))
-	f.mu.Unlock()
+func (f *crypttabTools) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	path := args[len(args)-1]
-	for _, h := range f.hang {
-		if h == path {
-			<-f.release
+	if name == "cryptsetup" && args[0] == "luksUUID" {
+		if id, ok := f.uuids[path]; ok {
+			return id + "\n", "", 0, nil
 		}
+		return "", "", 1, nil
 	}
 	for _, l := range f.luks {
 		if name == "cryptsetup" && args[0] == "isLuks" && l == path {
@@ -64,134 +32,55 @@ func (f *isLuksTools) Command(_ context.Context, _ []string, name string, args .
 	return "", "", 1, nil
 }
 
-// TestVolumes (plan M4c.1 decisions 1 and 3, review round 1): a fake crypttab with the root volume, an extra LUKS
-// volume, a LUKS volume with a detached header, a plain swap, a volume whose isLuks fails with exit 1 without plain
-// options (an I/O error) and unresolvable entries. The extra volumes come first and the root volume last, each once;
-// the detached volume is erased through its header; the swap is no target; every other failure is unresolved.
-func TestVolumes(t *testing.T) {
-	root := fakeDev(t, map[string]string{
-		"/dev/disk/by-uuid/aaaa-root":     "../../vda3",
-		"/dev/disk/by-uuid/bbbb-data":     "../../vdb1",
-		"/dev/disk/by-partuuid/cccc-home": "../../vdc1",
-	}, "/dev/vda3", "/dev/vdb1", "/dev/vdc1", "/dev/vda2", "/dev/vdd", "/dev/vde", "/boot/luks/vault.img")
-	crypttab := []byte(`# <name> <device> <password> <options>
-dm_crypt-0 UUID=aaaa-root none luks,discard
-data UUID="bbbb-data" /etc/keys/data.key luks
-
-home PARTUUID=cccc-home none luks
-vault /dev/vdd none luks,header=/boot/luks/vault.img
-swap /dev/vda2 /dev/urandom swap,cipher=aes-xts-plain64
-broken /dev/vde none luks
-again /dev/disk/by-uuid/bbbb-data none luks
-gone UUID=dddd-gone none luks
-lostheader /dev/vdd none header=/boot/luks/missing.img
-label LABEL=backup none luks
-escape UUID=../../vdb1 none luks
-noname
-`)
-	tools := &isLuksTools{luks: []string{"/dev/vda3", "/dev/vdb1", "/dev/vdc1", "/boot/luks/vault.img"}}
-	got := volumes(context.Background(), tools, root, "/dev/vda3", crypttab, time.Minute)
-	want := Targets{
-		Devices: []string{"/dev/vdb1", "/dev/vdc1", "/boot/luks/vault.img", "/dev/vda3"},
-		Unresolved: []string{"/dev/vde", "UUID=dddd-gone", "/dev/vdd", "LABEL=backup", "UUID=../../vdb1",
-			"noname"},
+// fakeRoot is a temporary root with empty device files and an /etc/crypttab (none if crypttab is "").
+func fakeRoot(t *testing.T, crypttab string, devices ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, f := range devices {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, f), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	t.Logf("targets: %+v", got)
+	if crypttab != "" {
+		if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, CrypttabFile), []byte(crypttab), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// TestCrypttabTargets (plan M4c.1 decision 1, PDK-009): the targets are the volumes the shared selection of
+// agent/internal/luks finds, in crypttab order with the root volume last, with the LUKS UUID of every volume
+// cryptsetup reported one for; the root volume is a target once even when crypttab lists it.
+func TestCrypttabTargets(t *testing.T) {
+	root := fakeRoot(t, strings.Join([]string{
+		"dm_crypt-0 /dev/vda3 none luks", "data /dev/vdb1 none luks", "home /dev/vdc1 none luks", "label LABEL=x none luks", "",
+	}, "\n"), "/dev/vda3", "/dev/vdb1", "/dev/vdc1")
+	tools := &crypttabTools{luks: []string{"/dev/vda3", "/dev/vdb1", "/dev/vdc1"},
+		uuids: map[string]string{"/dev/vdb1": "1b6a3c1e-0000-4000-8000-00000000000b", "/dev/vda3": "1b6a3c1e-0000-4000-8000-00000000000a"}}
+	got := crypttabTargets(context.Background(), tools, root, "/dev/vda3")
+	want := Targets{Devices: []string{"/dev/vdb1", "/dev/vdc1", "/dev/vda3"},
+		UUIDs: map[string]string{"/dev/vdb1": "1b6a3c1e-0000-4000-8000-00000000000b"}, Unresolved: []string{"LABEL=x"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("targets %+v\nwant %+v", got, want)
 	}
-	for _, entry := range tools.log {
-		if !strings.HasPrefix(entry, "cryptsetup isLuks -- ") {
-			t.Fatalf("target selection ran %q", entry)
-		}
-	}
 }
 
-// TestVolumesWithoutCrypttab: without /etc/crypttab the root volume is the only target.
-func TestVolumesWithoutCrypttab(t *testing.T) {
-	root := fakeDev(t, nil, "/dev/nvme0n1p3")
-	got := crypttabTargets(context.Background(), &isLuksTools{}, root, "/dev/nvme0n1p3")
-	if !reflect.DeepEqual(got, Targets{Devices: []string{"/dev/nvme0n1p3"}}) {
-		t.Fatalf("targets %+v", got)
-	}
-}
-
-// TestUnreadableCrypttab (review round 1): an unreadable /etc/crypttab is reported as unresolved, and the root volume
-// is still a target.
-func TestUnreadableCrypttab(t *testing.T) {
-	root := fakeDev(t, nil, "/dev/vda3")
-	// A directory in place of the file: reading it fails with EISDIR, as an unreadable file would.
+// TestCrypttabTargetsUnreadable (review round 1): an unreadable /etc/crypttab is reported as unresolved, and the
+// root volume is still a target.
+func TestCrypttabTargetsUnreadable(t *testing.T) {
+	root := fakeRoot(t, "", "/dev/vda3")
 	if err := os.MkdirAll(filepath.Join(root, CrypttabFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got := crypttabTargets(context.Background(), &isLuksTools{}, root, "/dev/vda3")
+	got := crypttabTargets(context.Background(), &crypttabTools{}, root, "/dev/vda3")
 	if !reflect.DeepEqual(got, Targets{Devices: []string{"/dev/vda3"}, Unresolved: []string{CrypttabFile}}) {
 		t.Fatalf("targets %+v", got)
-	}
-}
-
-// TestVolumesHungDevice (review round 1): a device whose isLuks hangs beyond every timeout does not keep the root
-// volume from being a target; it and every entry after it are unresolved.
-func TestVolumesHungDevice(t *testing.T) {
-	root := fakeDev(t, nil, "/dev/vda3", "/dev/vdb", "/dev/vdc", "/dev/vdd")
-	tools := &isLuksTools{luks: []string{"/dev/vdb", "/dev/vdc", "/dev/vdd"}, hang: []string{"/dev/vdc"}, release: make(chan struct{})}
-	t.Cleanup(func() { close(tools.release) })
-	crypttab := []byte("b /dev/vdb none luks\nc /dev/vdc none luks\nd /dev/vdd none luks\n")
-	start := time.Now()
-	got := volumes(context.Background(), tools, root, "/dev/vda3", crypttab, 100*time.Millisecond)
-	if !reflect.DeepEqual(got, Targets{Devices: []string{"/dev/vdb", "/dev/vda3"}, Unresolved: []string{"/dev/vdc", "/dev/vdd"}}) ||
-		time.Since(start) > 5*time.Second {
-		t.Fatalf("targets %+v after %s", got, time.Since(start))
-	}
-}
-
-// TestResolveSource: only UUID=, PARTUUID= and /dev paths resolve, and never to a path outside /dev.
-func TestResolveSource(t *testing.T) {
-	root := fakeDev(t, map[string]string{
-		"/dev/disk/by-uuid/aaaa": "../../vda3",
-		"/dev/disk/by-uuid/out":  "../../../etc/passwd",
-		"/dev/mapper/dm_crypt-0": "../dm-0",
-	}, "/dev/vda3", "/dev/dm-0", "/etc/passwd")
-	cases := map[string]string{
-		"UUID=aaaa":              "/dev/vda3",
-		"UUID='aaaa'":            "/dev/vda3",
-		"/dev/disk/by-uuid/aaaa": "/dev/vda3",
-		"/dev/vda3":              "/dev/vda3",
-		"/dev/mapper/dm_crypt-0": "/dev/dm-0",
-		"UUID=out":               "",
-		"UUID=":                  "",
-		"UUID=a/../../../etc":    "",
-		"/dev/../etc/passwd":     "",
-		"/etc/passwd":            "",
-		"LABEL=aaaa":             "",
-		"UUID=missing":           "",
-	}
-	for source, want := range cases {
-		got, err := resolveSource(root, source)
-		if got != want || (want == "") != (err != nil) {
-			t.Errorf("%s: %q %v, want %q", source, got, err, want)
-		}
-	}
-}
-
-// TestResolveHeader: a detached header is a device like a source or an absolute file; relative paths and the
-// path:device form are unresolved.
-func TestResolveHeader(t *testing.T) {
-	root := fakeDev(t, map[string]string{"/dev/disk/by-uuid/hhhh": "../../vdh", "/boot/h.link": "luks/h.img"},
-		"/dev/vdh", "/boot/luks/h.img")
-	cases := map[string]string{
-		"/boot/luks/h.img":        "/boot/luks/h.img",
-		"/boot/h.link":            "/boot/luks/h.img",
-		"UUID=hhhh":               "/dev/vdh",
-		"/dev/vdh":                "/dev/vdh",
-		"luks/h.img":              "",
-		"/boot/luks/h.img:UUID=x": "",
-		"/boot/luks/missing.img":  "",
-	}
-	for header, want := range cases {
-		got, err := resolveHeader(root, header)
-		if got != want || (want == "") != (err != nil) {
-			t.Errorf("%s: %q %v, want %q", header, got, err, want)
-		}
 	}
 }

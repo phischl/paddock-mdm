@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/ingest"
 )
 
 // TestLoginStateRecordsTheLatestReport: login.* and sudo.* events are audited and the latest one per area is kept in
@@ -104,3 +105,63 @@ func TestLocalAdminRotatedActivatesTheGeneration(t *testing.T) {
 		t.Fatalf("last local admin state %q (%v)", state, err)
 	}
 }
+
+// TestRootVolumeOnLegacyHeaders (PDK-009 decision 1): headers escrowed without a volume belong to the root volume and
+// get its UUID with the first check-in that reports it; headers of other volumes keep theirs, and a check-in without
+// volumes changes nothing.
+func TestRootVolumeOnLegacyHeaders(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	ctx := context.Background()
+	const root, data = "0d8f4c62-0000-4000-8000-0000000000aa", "0d8f4c62-0000-4000-8000-0000000000bb"
+	for g, volume := range map[int]*string{1: nil, 2: nil, 3: ptr(data)} {
+		if _, err := h.super.Exec(ctx, `INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version,
+			object_key, wrapped_dek, nonce, sha256, size, volume) VALUES (gen_random_uuid(), $1, $2, 'luks_header', $3, 'stored', 1, 'k',
+			'\x01', '\x000000000000000000000000', $4, 1, $5)`, org, device, g, strings.Repeat("a", 64), volume); err != nil {
+			t.Fatal(err)
+		}
+	}
+	volumes := func() string {
+		t.Helper()
+		var out string
+		if err := h.super.QueryRow(ctx, `SELECT string_agg(coalesce(volume::text, '-'), ',' ORDER BY generation) FROM escrow_secret
+			WHERE device_id = $1`, device).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	status := func(seq int64, health string) {
+		t.Helper()
+		if err := h.reports.RecordStatus(systemCtx(org), ingest.Heartbeat{DeviceID: device, OrganizationID: org, Seq: seq,
+			ReceivedAt: time.Now(), Health: json.RawMessage(health)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status(1, `{"disk":{"state":"compliant","keyslots":2}}`)
+	if got := volumes(); got != "-,-,"+data {
+		t.Fatalf("without volumes: %s", got)
+	}
+	status(2, `{"disk":{"state":"compliant","keyslots":2,"volumes":[{"uuid":"`+data+`","device":"/dev/sdb1","keyslots":1,"escrowed":true},`+
+		`{"uuid":"`+root+`","device":"/dev/sda3","root":true,"keyslots":2,"escrowed":true}]}}`)
+	if got := volumes(); got != root+","+root+","+data {
+		t.Fatalf("after the root volume was reported: %s", got)
+	}
+}
+
+// TestKeyslotChangeRecordsTheVolume (PDK-009 decision 3): device.tamper_keyslot_changed carries the volume.
+func TestKeyslotChangeRecordsTheVolume(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	ev := protocol.Event{EventSeq: 1, Type: protocol.EventTamperKeyslotChanged, OccurredAt: time.Now().UTC(),
+		Data: json.RawMessage(`{"volume":"0d8f4c62-0000-4000-8000-0000000000bb","before":["password"],"after":["password","password"]}`)}
+	if fresh, err := h.reports.RecordEvent(systemCtx(org), device, ev); err != nil || !fresh {
+		t.Fatalf("event: fresh %v, %v", fresh, err)
+	}
+	var volume string
+	if err := h.super.QueryRow(context.Background(), `SELECT params ->> 'volume' FROM action WHERE organization_id = $1
+		AND code = 'device.tamper_keyslot_changed'`, org).Scan(&volume); err != nil || volume != "0d8f4c62-0000-4000-8000-0000000000bb" {
+		t.Fatalf("audit volume %q: %v", volume, err)
+	}
+}
+
+func ptr(s string) *string { return &s }

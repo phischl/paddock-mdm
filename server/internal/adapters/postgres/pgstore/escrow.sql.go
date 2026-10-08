@@ -80,7 +80,7 @@ func (q *Queries) FinishEscrowHeader(ctx context.Context, arg FinishEscrowHeader
 
 const getEscrowSecret = `-- name: GetEscrowSecret :one
 
-SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret WHERE id = $1
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size, volume FROM escrow_secret WHERE id = $1
 `
 
 // Escrowed secrets (plan M4a decisions 11 and 12).
@@ -103,12 +103,13 @@ func (q *Queries) GetEscrowSecret(ctx context.Context, id uuid.UUID) (EscrowSecr
 		&i.Nonce,
 		&i.Sha256,
 		&i.Size,
+		&i.Volume,
 	)
 	return i, err
 }
 
 const getEscrowSecrets = `-- name: GetEscrowSecrets :many
-SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret WHERE id = ANY($1::uuid[])
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size, volume FROM escrow_secret WHERE id = ANY($1::uuid[])
 `
 
 // The escrows of one decryption of the escrow-reader, which checks their device and kind (plan M4b.1 decision 6).
@@ -137,6 +138,7 @@ func (q *Queries) GetEscrowSecrets(ctx context.Context, ids []uuid.UUID) ([]Escr
 			&i.Nonce,
 			&i.Sha256,
 			&i.Size,
+			&i.Volume,
 		); err != nil {
 			return nil, err
 		}
@@ -150,9 +152,9 @@ func (q *Queries) GetEscrowSecrets(ctx context.Context, ids []uuid.UUID) ([]Escr
 
 const insertEscrowHeader = `-- name: InsertEscrowHeader :execrows
 INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
-                           nonce, sha256, size, created_at)
+                           nonce, sha256, size, created_at, volume)
 VALUES ($1, $2, $3, 'luks_header', $4, 'pending', $5, $6, $7,
-        $8, $9, $10, $11)
+        $8, $9, $10, $11, $12::uuid)
 ON CONFLICT DO NOTHING
 `
 
@@ -168,9 +170,11 @@ type InsertEscrowHeaderParams struct {
 	Sha256         *string
 	Size           *int64
 	CreatedAt      time.Time
+	Volume         uuid.NullUUID
 }
 
 // A header generation waits as pending until the worker found its object.
+// volume is the LUKS UUID of the volume (PDK-009); NULL for the root volume of an agent before PDK-009.
 func (q *Queries) InsertEscrowHeader(ctx context.Context, arg InsertEscrowHeaderParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertEscrowHeader,
 		arg.ID,
@@ -184,6 +188,7 @@ func (q *Queries) InsertEscrowHeader(ctx context.Context, arg InsertEscrowHeader
 		arg.Sha256,
 		arg.Size,
 		arg.CreatedAt,
+		arg.Volume,
 	)
 	if err != nil {
 		return 0, err
@@ -247,9 +252,10 @@ func (q *Queries) LatestEscrowGeneration(ctx context.Context, arg LatestEscrowGe
 }
 
 const latestStoredEscrow = `-- name: LatestStoredEscrow :one
-SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size, volume FROM escrow_secret
 WHERE device_id = $1 AND kind = $2 AND status = 'stored'
   AND ($3::int = 0 OR generation = $3::int)
+  AND (volume IS NOT DISTINCT FROM $4::uuid OR ($5::boolean AND volume IS NULL))
 ORDER BY generation DESC
 LIMIT 1
 `
@@ -258,11 +264,20 @@ type LatestStoredEscrowParams struct {
 	DeviceID   uuid.UUID
 	Kind       string
 	Generation int32
+	Volume     uuid.NullUUID
+	Legacy     bool
 }
 
-// The newest stored generation of a LUKS kind, or the requested one (generation 0: the newest).
+// The newest stored generation of a LUKS kind, or the requested one (generation 0: the newest), of volume (NULL for a
+// recovery key); with legacy, headers without a volume count as well (the root volume's before PDK-009).
 func (q *Queries) LatestStoredEscrow(ctx context.Context, arg LatestStoredEscrowParams) (EscrowSecret, error) {
-	row := q.db.QueryRow(ctx, latestStoredEscrow, arg.DeviceID, arg.Kind, arg.Generation)
+	row := q.db.QueryRow(ctx, latestStoredEscrow,
+		arg.DeviceID,
+		arg.Kind,
+		arg.Generation,
+		arg.Volume,
+		arg.Legacy,
+	)
 	var i EscrowSecret
 	err := row.Scan(
 		&i.ID,
@@ -280,12 +295,13 @@ func (q *Queries) LatestStoredEscrow(ctx context.Context, arg LatestStoredEscrow
 		&i.Nonce,
 		&i.Sha256,
 		&i.Size,
+		&i.Volume,
 	)
 	return i, err
 }
 
 const listDiskEscrows = `-- name: ListDiskEscrows :many
-SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size, volume FROM escrow_secret
 WHERE device_id = $1 AND kind IN ('luks_recovery_key', 'luks_header')
 ORDER BY kind, generation DESC
 `
@@ -316,6 +332,7 @@ func (q *Queries) ListDiskEscrows(ctx context.Context, deviceID uuid.UUID) ([]Es
 			&i.Nonce,
 			&i.Sha256,
 			&i.Size,
+			&i.Volume,
 		); err != nil {
 			return nil, err
 		}
@@ -328,7 +345,7 @@ func (q *Queries) ListDiskEscrows(ctx context.Context, deviceID uuid.UUID) ([]Es
 }
 
 const listLocalAdminSecrets = `-- name: ListLocalAdminSecrets :many
-SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size, volume FROM escrow_secret
 WHERE device_id = $1::uuid AND kind = 'admin_password'
   AND (status = 'active' OR (status = 'stored' AND generation > (
     SELECT coalesce(max(generation), 0) FROM escrow_secret a
@@ -362,6 +379,7 @@ func (q *Queries) ListLocalAdminSecrets(ctx context.Context, deviceID uuid.UUID)
 			&i.Nonce,
 			&i.Sha256,
 			&i.Size,
+			&i.Volume,
 		); err != nil {
 			return nil, err
 		}
@@ -374,7 +392,7 @@ func (q *Queries) ListLocalAdminSecrets(ctx context.Context, deviceID uuid.UUID)
 }
 
 const listPendingEscrowHeaders = `-- name: ListPendingEscrowHeaders :many
-SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size FROM escrow_secret WHERE status = 'pending' ORDER BY created_at, id LIMIT 100
+SELECT id, organization_id, device_id, kind, generation, status, ciphertext, key_version, created_at, activated_at, object_key, wrapped_dek, nonce, sha256, size, volume FROM escrow_secret WHERE status = 'pending' ORDER BY created_at, id LIMIT 100
 `
 
 func (q *Queries) ListPendingEscrowHeaders(ctx context.Context) ([]EscrowSecret, error) {
@@ -402,6 +420,7 @@ func (q *Queries) ListPendingEscrowHeaders(ctx context.Context) ([]EscrowSecret,
 			&i.Nonce,
 			&i.Sha256,
 			&i.Size,
+			&i.Volume,
 		); err != nil {
 			return nil, err
 		}
@@ -424,4 +443,23 @@ func (q *Queries) OrganizationHasActiveLocalAdmin(ctx context.Context) (bool, er
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const setRootHeaderVolume = `-- name: SetRootHeaderVolume :execrows
+UPDATE escrow_secret SET volume = $1::uuid
+WHERE device_id = $2 AND kind = 'luks_header' AND volume IS NULL
+`
+
+type SetRootHeaderVolumeParams struct {
+	Volume   uuid.UUID
+	DeviceID uuid.UUID
+}
+
+// The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00032).
+func (q *Queries) SetRootHeaderVolume(ctx context.Context, arg SetRootHeaderVolumeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setRootHeaderVolume, arg.Volume, arg.DeviceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

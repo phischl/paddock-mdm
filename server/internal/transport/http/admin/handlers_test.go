@@ -768,7 +768,8 @@ func TestOrganizationProvisioning(t *testing.T) {
 	}
 	e.expectEvent(invalid, "organization.created:failure:invalid_request")
 
-	list := e.do(call{method: "GET", path: "/api/platform/v1/organizations", cookie: root})
+	// Searched by slug: the shared test database holds the organizations of every package, more than one page.
+	list := e.do(call{method: "GET", path: "/api/platform/v1/organizations?q=" + slug, cookie: root})
 	if list.status != http.StatusOK || !strings.Contains(string(list.body), slug) {
 		t.Fatalf("list: %d", list.status)
 	}

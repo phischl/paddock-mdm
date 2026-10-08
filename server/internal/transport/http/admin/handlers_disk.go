@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/escrow"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
@@ -19,6 +20,7 @@ func (h *handlers) GetDeviceDisk(ctx context.Context, req adminapi.GetDeviceDisk
 	}
 	out := adminapi.GetDeviceDisk200JSONResponse{
 		Tokens: []string{}, RecoveryKeys: []adminapi.DiskEscrow{}, Headers: []adminapi.DiskEscrow{}, ReportedAt: utcPtr(s.ReportedAt),
+		Volumes: []adminapi.DiskVolume{}, Unresolved: []string{},
 	}
 	if d := s.Health; d != nil {
 		state := adminapi.DiskState(d.State)
@@ -29,6 +31,10 @@ func (h *handlers) GetDeviceDisk(ctx context.Context, req adminapi.GetDeviceDisk
 		if d.LUKSVersion != 0 {
 			out.LuksVersion = &d.LUKSVersion
 		}
+		for _, v := range d.Volumes {
+			out.Volumes = append(out.Volumes, toDiskVolume(v))
+		}
+		out.Unresolved = nonNil(d.Unresolved)
 	}
 	for _, e := range s.Escrows {
 		if e.Kind == escrow.KindLUKSHeader {
@@ -48,7 +54,27 @@ func (h *handlers) GetDeviceDisk(ctx context.Context, req adminapi.GetDeviceDisk
 }
 
 func toDiskEscrow(e pgstore.EscrowSecret) adminapi.DiskEscrow {
-	return adminapi.DiskEscrow{Generation: int(e.Generation), Status: adminapi.DiskEscrowStatus(e.Status), Size: e.Size, CreatedAt: e.CreatedAt.UTC()}
+	out := adminapi.DiskEscrow{Generation: int(e.Generation), Status: adminapi.DiskEscrowStatus(e.Status), Size: e.Size, CreatedAt: e.CreatedAt.UTC()}
+	if e.Volume.Valid {
+		out.Volume = &e.Volume.UUID
+	}
+	return out
+}
+
+// toDiskVolume maps a volume of health.disk (PDK-009 decision 4).
+func toDiskVolume(v protocol.DiskVolume) adminapi.DiskVolume {
+	out := adminapi.DiskVolume{Device: v.Device, Root: v.Root, Tokens: nonNil(v.Tokens), Keyslots: v.Keyslots, Escrowed: v.Escrowed}
+	if v.UUID != "" {
+		out.Uuid = &v.UUID
+	}
+	if v.LUKSVersion != 0 {
+		out.LuksVersion = &v.LUKSVersion
+	}
+	if v.HeaderGeneration > 0 && v.HeaderGeneration <= 1<<31-1 {
+		g := int(v.HeaderGeneration)
+		out.HeaderGeneration = &g
+	}
+	return out
 }
 
 func nonNil(s []string) []string {
@@ -71,14 +97,16 @@ func (h *handlers) DownloadDeviceHeader(ctx context.Context, req adminapi.Downlo
 	if req.Body.Generation != nil {
 		generation = *req.Body.Generation
 	}
-	header, err := h.disk.DownloadHeader(ctx, req.Id, req.Body.ConfirmHostname, generation)
+	header, err := h.disk.DownloadHeader(ctx, req.Id, req.Body.ConfirmHostname, req.Body.Volume, generation)
 	if err != nil {
 		return nil, err
 	}
+	filename := fmt.Sprintf("%s-luks-header-%d.img", header.Hostname, header.Generation)
+	if header.Volume != "" {
+		filename = fmt.Sprintf("%s-luks-header-%s-%d.img", header.Hostname, header.Volume, header.Generation)
+	}
 	// Hostnames are any printable text the device reported; FormatMediaType quotes or encodes them.
-	disposition := mime.FormatMediaType("attachment", map[string]string{
-		"filename": fmt.Sprintf("%s-luks-header-%d.img", header.Hostname, header.Generation),
-	})
+	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": filename})
 	return adminapi.DownloadDeviceHeader200ApplicationoctetStreamResponse{
 		Body: bytes.NewReader(header.Data), ContentLength: int64(len(header.Data)),
 		Headers: adminapi.DownloadDeviceHeader200ResponseHeaders{ContentDisposition: &disposition},

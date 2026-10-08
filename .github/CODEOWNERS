@@ -4,3 +4,5 @@
 # the real team when the repository moves to its organization.
 /agent/internal/revoke/     @paddock-mdm/revocation-reviewers
 /agent/cmd/paddock-revoke/  @paddock-mdm/revocation-reviewers
+# The crypttab volume selection paddock-revoke erases (shared with the luks reconciler, PDK-009).
+/agent/internal/luks/crypttab.go  @paddock-mdm/revocation-reviewers
