@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -27,7 +29,7 @@ func TestEscrowStore(t *testing.T) {
 	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-esc', 'active')", device, f.org); err != nil {
 		t.Fatal(err)
 	}
-	e := NewEscrow(app.NewEscrow(f.pool, nil), f.cache, f.pool, nil)
+	e := NewEscrow(app.NewEscrow(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool, nil), f.cache, f.pool, nil)
 	upload := func(id uuid.UUID, generation int64) (outcome, string) {
 		t.Helper()
 		body, _ := json.Marshal(ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: id, Kind: "admin_password",
@@ -101,7 +103,7 @@ func TestEscrowLUKS(t *testing.T) {
 		t.Fatal(err)
 	}
 	objects := &fakeObjects{objects: map[string][]byte{}}
-	e := NewEscrow(app.NewEscrow(f.pool, objects), f.cache, f.pool, platform)
+	e := NewEscrow(app.NewEscrow(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool, objects), f.cache, f.pool, platform)
 	status := func(id uuid.UUID) string {
 		t.Helper()
 		_, s, ok, err := f.cache.EscrowStatus(ctx, id)
@@ -195,5 +197,89 @@ func TestEscrowLUKS(t *testing.T) {
 	other.Volume = &volume
 	if id := send(other); status(id) != escrow.StatusFailed {
 		t.Fatalf("generation 5 of another volume: %s", status(id))
+	}
+
+	// Review round 1, decision 1: at most 32 distinct volumes per device. With 32 escrowed (the data volume and 31
+	// more, written directly), a header of a 33rd volume fails and is audited; a known volume is still accepted.
+	for i := 0; i < 31; i++ {
+		if _, err := f.super.Exec(ctx, `INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version,
+			object_key, wrapped_dek, nonce, sha256, size, volume) VALUES (gen_random_uuid(), $1, $2, 'luks_header', $3, 'stored', 1, 'k',
+			'\x01', '\x000000000000000000000000', $4, 1, $5)`, f.org, device, 100+i, hex.EncodeToString(sum[:]),
+			fmt.Sprintf("0d8f4c62-0000-4000-8000-%012d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extra := uuid.MustParse("0d8f4c62-0000-4000-8000-0000000000ff")
+	refused := header(200, int64(len(object)), time.Time{})
+	refused.Volume = &extra
+	refusedID := send(refused)
+	if status(refusedID) != escrow.StatusRefused {
+		t.Fatalf("33rd volume: %s", status(refusedID))
+	}
+	// Review round 3: a redelivered refusal reports refused again and is audited once.
+	refused.DeviceID, refused.OrganizationID, refused.EscrowID, refused.ReceivedAt = device, f.org, refusedID, time.Now()
+	again, _ := json.Marshal(refused)
+	if o := e.process(ctx, refusedID.String(), again); o != ack || status(refusedID) != escrow.StatusRefused {
+		t.Fatalf("redelivered refusal: %v %s", o, status(refusedID))
+	}
+	var outcome, code, param string
+	if err := f.super.QueryRow(ctx, `SELECT outcome, coalesce(error_code, ''), params ->> 'volume' FROM action
+		WHERE organization_id = $1 AND code = 'device.header_escrow_refused'`, f.org).Scan(&outcome, &code, &param); err != nil ||
+		outcome != "failure" || code != "too_many_volumes" || param != extra.String() {
+		t.Fatalf("audit %s %s %s: %v", outcome, code, param, err)
+	}
+	var audits int
+	if err := f.super.QueryRow(ctx, `SELECT count(*) FROM action WHERE organization_id = $1 AND code = 'device.header_escrow_refused'`,
+		f.org).Scan(&audits); err != nil || audits != 1 {
+		t.Fatalf("%d refusal audits: %v", audits, err)
+	}
+	known := header(201, int64(len(object)), time.Time{})
+	known.Volume = &volume
+	if id := send(known); status(id) != escrow.StatusPending {
+		t.Fatalf("a known volume beyond 32: %s", status(id))
+	}
+}
+
+// TestEscrowVolumeCapConcurrent (PDK-009 review round 3, decision E5): two workers storing headers of two new volumes
+// of a device that escrows 31 at the same time let exactly one through; the cap check holds a lock per device.
+func TestEscrowVolumeCapConcurrent(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	device := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-cap', 'active')", device, f.org); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("x"))
+	for i := 0; i < app.MaxHeaderVolumes-1; i++ {
+		if _, err := f.super.Exec(ctx, `INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version,
+			object_key, wrapped_dek, nonce, sha256, size, volume) VALUES (gen_random_uuid(), $1, $2, 'luks_header', $3, 'stored', 1, 'k',
+			'\x01', '\x000000000000000000000000', $4, 1, $5)`, f.org, device, i+1, hex.EncodeToString(sum[:]),
+			fmt.Sprintf("0d8f4c62-0000-4000-8000-%012d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := NewEscrow(app.NewEscrow(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool, nil), f.cache, f.pool, nil)
+	var wg sync.WaitGroup
+	ids := make([]uuid.UUID, 2)
+	for i := range ids {
+		volume := uuid.MustParse(fmt.Sprintf("0d8f4c62-0000-4000-8000-0000000001%02d", i))
+		ids[i] = uuid.Must(uuid.NewV7())
+		m := ingest.Escrow{DeviceID: device, OrganizationID: f.org, EscrowID: ids[i], Kind: escrow.KindLUKSHeader, Generation: int64(100 + i),
+			KeyVersion: 1, Volume: &volume, ObjectKey: "k", WrappedDEK: []byte{1}, Nonce: make([]byte, 12), SHA256: hex.EncodeToString(sum[:]),
+			Size: 1, ReceivedAt: time.Now()}
+		body, _ := json.Marshal(m)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if o := e.process(ctx, m.EscrowID.String(), body); o != ack {
+				t.Errorf("process: %v", o)
+			}
+		}()
+	}
+	wg.Wait()
+	var volumes int
+	if err := f.super.QueryRow(ctx, `SELECT count(DISTINCT volume) FROM escrow_secret WHERE device_id = $1 AND kind = 'luks_header'
+		AND status <> 'failed'`, device).Scan(&volumes); err != nil || volumes != app.MaxHeaderVolumes {
+		t.Fatalf("%d volumes escrowed (%v), want %d", volumes, err, app.MaxHeaderVolumes)
 	}
 }

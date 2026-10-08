@@ -20,9 +20,12 @@ WHERE r.action = 'self_lock' AND r.status IN ('issued','delivered')
        OR r.volumes <> CASE
          WHEN coalesce((SELECT (s.health -> 'revoke_capabilities') ? 'volumes' FROM device_status s
                         WHERE s.device_id = r.device_id), false)
-         THEN ARRAY(SELECT DISTINCT e.volume FROM escrow_secret e
-                    WHERE e.device_id = r.device_id AND e.kind = 'luks_header' AND e.status = 'stored'
-                      AND e.volume IS NOT NULL ORDER BY 1)
+         THEN ARRAY(SELECT newest.volume FROM (
+                      SELECT DISTINCT ON (e.volume) e.volume, e.status FROM escrow_secret e
+                      WHERE e.device_id = r.device_id AND e.kind = 'luks_header' AND e.status <> 'failed'
+                        AND e.volume IS NOT NULL
+                      ORDER BY e.volume, e.generation DESC) newest
+                    WHERE newest.status = 'stored' ORDER BY 1 LIMIT 32)
          ELSE '{}'::uuid[] END)
 RETURNING r.id, r.device_id
 `
@@ -41,8 +44,9 @@ type CancelSelfLocksRow struct {
 
 // Open self-lock tokens that no longer fit the settings: all of them when the switch is off, otherwise those of
 // another period, of a device that is no longer active, expiring before renew_before, or whose volumes differ from the
-// device's volumes with a confirmed header escrow (PDK-009; they are replaced). A device whose paddock-revoke does
-// not understand volumes keeps a token without them.
+// device's volumes with a confirmed header escrow (PDK-009; they are replaced). The set is that of
+// ListConfirmedHeaderVolumes (revocation.sql): newest generation stored, the first 32 by UUID. A device whose
+// paddock-revoke does not understand volumes keeps a token without them.
 func (q *Queries) CancelSelfLocks(ctx context.Context, arg CancelSelfLocksParams) ([]CancelSelfLocksRow, error) {
 	rows, err := q.db.Query(ctx, cancelSelfLocks,
 		arg.Now,

@@ -20,19 +20,29 @@ const CrypttabFile = "/etc/crypttab"
 // Crypttab is the outcome of reading /etc/crypttab: the root volume and every other LUKS volume, once each and in the
 // order of the file. paddock-revoke erases these volumes and the luks reconciler escrows their headers (plan M4c.1
 // decision 1, PDK-009): both read them here, so they always agree on the volumes. Unresolved lists the crypttab
-// sources that could not be classified with certainty (plan M4c.1 decision 3).
+// sources that could not be classified with certainty (plan M4c.1 decision 3). RootUUID is the LUKS UUID of the
+// root volume, "" when it could not be read in time; then a clone of the root volume cannot be recognized, and a Lock
+// must not erase any other volume (PDK-009 review round 3).
 type Crypttab struct {
 	Root       string // the root device, with every symlink followed
+	RootUUID   string
 	Volumes    []CrypttabVolume
 	Unresolved []string
 }
 
+// RootUUIDGrace is how long ParseCrypttab waits for the root volume's UUID after the entries are classified, within
+// its deadline; the entries never wait for it (review round 3).
+const RootUUIDGrace = 5 * time.Second
+
 // CrypttabVolume is a LUKS volume of /etc/crypttab other than the root volume. Header is the path cryptsetup reads
 // its LUKS header from: the source device, or the header= option of a detached header. UUID is its LUKS UUID, ""
-// when cryptsetup did not report one.
+// when cryptsetup did not report one. Shared marks a volume whose UUID another volume or the root volume has (a
+// cloned header, PDK-009 review round 2): it stays a volume to erase, but it is neither escrowed nor tracked, and a
+// Lock leaves it alone.
 type CrypttabVolume struct {
 	Header string
 	UUID   string
+	Shared bool
 }
 
 // errUnsupportedSource is a crypttab source that is neither UUID=, PARTUUID= nor a /dev path, or a header that is no
@@ -59,7 +69,14 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 	ctx, cancel := context.WithTimeout(ctx, within)
 	defer cancel()
 	// The entries are classified in a goroutine, so that a command stuck in the kernel cannot hold up the erasure of
-	// the root volume (plan M4c.1, review round 1); a result sent after the deadline is dropped.
+	// the root volume (plan M4c.1, review round 1); a result sent after the deadline is dropped. The root volume's UUID
+	// is read in a goroutine of its own: a hung read must neither hold up nor shrink the classified volumes, which a
+	// Destroy erases (review round 3).
+	rootUUID := make(chan string, 1)
+	go func() {
+		id, _ := UUID(ctx, t, c.Root)
+		rootUUID <- id
+	}()
 	results := make(chan classified, len(entries))
 	go func() {
 		for _, e := range entries {
@@ -77,7 +94,7 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 			for _, rest := range entries[i:] {
 				c.Unresolved = append(c.Unresolved, rest.source)
 			}
-			return c
+			return markSharedUUIDs(c, "")
 		}
 		switch {
 		case r.unresolved:
@@ -86,6 +103,32 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 		default:
 			c.Volumes = append(c.Volumes, r.volume)
 		}
+	}
+	grace := time.NewTimer(RootUUIDGrace)
+	defer grace.Stop()
+	select {
+	case c.RootUUID = <-rootUUID:
+	case <-grace.C:
+	case <-ctx.Done():
+	}
+	return markSharedUUIDs(c, c.RootUUID)
+}
+
+// markSharedUUIDs marks every volume whose LUKS UUID another volume or the root volume (rootUUID) has as Shared
+// (PDK-009, review round 2): a cloned header cannot be told apart by its UUID, so it cannot be escrowed or tracked,
+// but it is still erased by a Destroy.
+func markSharedUUIDs(c Crypttab, rootUUID string) Crypttab {
+	count := map[string]int{}
+	if rootUUID != "" {
+		count[rootUUID]++
+	}
+	for _, v := range c.Volumes {
+		if v.UUID != "" {
+			count[v.UUID]++
+		}
+	}
+	for i, v := range c.Volumes {
+		c.Volumes[i].Shared = v.UUID != "" && count[v.UUID] > 1
 	}
 	return c
 }

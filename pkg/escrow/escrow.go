@@ -69,6 +69,10 @@ const (
 	StatusPending = "pending"
 	StatusStored  = "stored"
 	StatusFailed  = "failed"
+	// StatusRefused is a header the server will not store: the device escrows the headers of the most volumes a
+	// revocation token carries already (PDK-009, review round 2). The device does not try that volume again for a
+	// while; agents before PDK-009 treat it as not yet stored and start over after their wait.
+	StatusRefused = "refused"
 )
 
 // Request is the body of POST /v1/escrow. Secrets (admin_password, luks_recovery_key) carry Ciphertext; a header

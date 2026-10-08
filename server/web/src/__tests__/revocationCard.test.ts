@@ -40,6 +40,7 @@ const requests: RevocationRequest[] = [
       erased: true, slots_before: 2, slots_after: 0,
       volumes: [{ device: '/dev/sda3', uuid: '0d8f4c62-0000-4000-8000-0000000000aa', slots_before: 2, slots_after: 0, erased: true }],
       skipped_not_escrowed: [{ device: '/dev/sdb1', uuid: '0d8f4c62-0000-4000-8000-0000000000bb' }, { device: '/dev/sdc1' }, { bogus: 1 }],
+      shared_uuid: ['/dev/sdc1'],
     },
   },
 ]
@@ -81,6 +82,7 @@ describe('revocation card', () => {
       '/dev/sda3: 2 keyslots erased',
       '/dev/sdb1: not erased, its header was not escrowed (the volume stays readable)',
       '/dev/sdc1: not erased, its header was not escrowed (the volume stays readable)',
+      '/dev/sdc1: shares its LUKS UUID with another volume',
     ])
     // Both failed requests are marked incomplete; the M4c confirmation and the Lock with skipped volumes are not.
     const incomplete = [...document.querySelectorAll('p')].filter((p) => p.textContent?.includes('Incomplete: not every encrypted volume'))

@@ -3649,6 +3649,8 @@ components:
         keyslots: { type: integer }
         escrowed: { type: boolean, description: A header of the current keyslots is stored. }
         header_generation: { type: integer, description: The newest stored header generation of the volume. }
+        shared_uuid: { type: boolean, description: "Another volume or the root volume has the same LUKS UUID (a cloned header): not escrowed; a Destroy erases it, a Lock does not." }
+        refused: { type: boolean, description: "The server refused the header: the device escrows the most volumes a revocation token carries (32)." }
     DiskEncryption:
       type: object
       required: [state, tokens, keyslots, recovery_keys, headers, volumes, unresolved]

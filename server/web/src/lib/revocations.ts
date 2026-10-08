@@ -112,6 +112,8 @@ export interface VolumeResults {
   volumes: VolumeResult[]
   unresolved: string[]
   skipped: SkippedVolume[]
+  /** Devices whose LUKS UUID another volume has (PDK-009 review round 2); they do not make an erasure incomplete. */
+  shared: string[]
   incomplete: boolean
 }
 
@@ -123,7 +125,9 @@ export function volumeResults(r: RevocationRequest): VolumeResults {
   const volumes = raw.filter(isVolumeResult)
   const unresolved = rawUnresolved.filter((s): s is string => typeof s === 'string')
   const skipped = rawSkipped.filter(isSkippedVolume)
-  return { volumes, unresolved, skipped, incomplete: unresolved.length > 0 || volumes.some((v) => !v.erased) }
+  const rawShared = Array.isArray(r.result?.shared_uuid) ? r.result.shared_uuid as unknown[] : []
+  const shared = rawShared.filter((s): s is string => typeof s === 'string')
+  return { volumes, unresolved, skipped, shared, incomplete: unresolved.length > 0 || volumes.some((v) => !v.erased) }
 }
 
 function isSkippedVolume(v: unknown): v is SkippedVolume {
