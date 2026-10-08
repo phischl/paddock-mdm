@@ -50,6 +50,8 @@ func command(ctx context.Context, name string, args ...string) (string, int, err
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed tools; arguments are UIDs and fixed flags
+	// A killed loginctl or systemctl must not hold up the sequence with its pipes (plan M4c.1, review round 1).
+	cmd.WaitDelay = 5 * time.Second
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()

@@ -37,6 +37,8 @@ type fakeVolume struct {
 	slots     int
 	luks1     bool // only the text dump of a LUKS1 header, no JSON metadata
 	eraseFail bool
+	// hang blocks luksErase until it is closed, whatever the context says (a disk stuck in the kernel).
+	hang chan struct{}
 }
 
 // fakeSys is a device with two keyslots on its root volume /dev/vda3, the marker and the trust anchor; it logs every
@@ -91,6 +93,10 @@ func (s *fakeSys) Command(_ context.Context, _ []string, name string, args ...st
 		}
 		return out.String(), "", 0, nil
 	case args[0] == "luksErase":
+		if v.hang != nil {
+			<-v.hang
+			return "", "killed", -1, errors.New("signal: killed")
+		}
 		if v.eraseFail {
 			return "", "erase failed", 1, nil
 		}
@@ -205,16 +211,16 @@ func TestSequence(t *testing.T) {
 }
 
 // TestEveryVolume (plan M4c.1 decisions 1–3): every target is erased and verified, the root volume last; the
-// confirmation lists every volume and the unresolved crypttab entries, and erased is true as every volume has no
-// keyslot left. A LUKS1 volume is counted from its text dump.
+// confirmation lists every volume, and erased is true as every volume has no keyslot left. A LUKS1 volume is counted
+// from its text dump.
 func TestEveryVolume(t *testing.T) {
 	sys := newSys(t)
 	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
 	sys.volumes["/dev/vdc"] = &fakeVolume{slots: 1, luks1: true}
-	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc", "/dev/vda3"}, Unresolved: []string{"UUID=0000-gone"}}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc", "/dev/vda3"}}
 	c := &fakeConfirmer{sys: sys}
 	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
-	want := Erasure{Erased: true, SlotsBefore: 6, SlotsAfter: 0, Unresolved: []string{"UUID=0000-gone"}, Volumes: []VolumeErasure{
+	want := Erasure{Erased: true, SlotsBefore: 6, SlotsAfter: 0, Volumes: []VolumeErasure{
 		{Device: "/dev/vdb1", SlotsBefore: 3, SlotsAfter: 0, Erased: true},
 		{Device: "/dev/vdc", SlotsBefore: 1, SlotsAfter: 0, Erased: true},
 		{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true},
@@ -240,6 +246,54 @@ func TestEveryVolume(t *testing.T) {
 	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
 		json.Unmarshal(c.results[0].Result, &posted) != nil || !reflect.DeepEqual(posted, want) {
 		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestUnresolvedIsIncomplete (plan M4c.1 decision 3, review round 1): an unresolved crypttab entry does not stop the
+// erasure of the others, but the revocation is not erased and is confirmed as failed.
+func TestUnresolvedIsIncomplete(t *testing.T) {
+	sys := newSys(t)
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vda3"}, Unresolved: []string{CrypttabFile}}
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
+	t.Logf("per-volume results: %+v", e)
+	if err != nil || e.Erased || e.SlotsAfter != 0 || len(e.Volumes) != 2 || !e.Volumes[0].Erased || !e.Volumes[1].Erased ||
+		!slices.Equal(e.Unresolved, []string{CrypttabFile}) {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandFailed ||
+		!strings.Contains(string(c.results[0].Result), `"erased":false`) ||
+		!strings.Contains(string(c.results[0].Result), `"unresolved":["/etc/crypttab"]`) {
+		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestHungSecondaryVolume (review round 1): a secondary volume whose erasure hangs beyond every timeout gets the shared
+// deadline; the root volume is erased all the same, and the hung volume is reported with an unknown count.
+func TestHungSecondaryVolume(t *testing.T) {
+	sys := newSys(t)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3, hang: hang}
+	sys.volumes["/dev/vdc1"] = &fakeVolume{slots: 1}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc1", "/dev/vda3"}}
+	c := &fakeConfirmer{sys: sys}
+	r := revoker(sys, c)
+	r.SecondaryWithin = 100 * time.Millisecond
+	start := time.Now()
+	e, _, err := r.Handle(context.Background(), token(t, trustedKey, nil))
+	t.Logf("per-volume results after %s: %+v", time.Since(start), e)
+	want := []VolumeErasure{
+		{Device: "/dev/vdb1", SlotsAfter: -1},
+		{Device: "/dev/vdc1", SlotsAfter: -1},
+		{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true},
+	}
+	if err != nil || e.Erased || e.SlotsAfter != -1 || !reflect.DeepEqual(e.Volumes, want) || time.Since(start) > 5*time.Second {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+	if sys.volumes["/dev/vda3"].slots != 0 || len(c.results) != 1 || c.results[0].Status != protocol.CommandFailed {
+		t.Fatalf("root keyslots %d, confirmation %+v", sys.volumes["/dev/vda3"].slots, c.results)
 	}
 }
 

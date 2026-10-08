@@ -3,8 +3,8 @@ package revocation
 import "encoding/json"
 
 // Confirmation is the result paddock-revoke posts before its reboot (plan M4c decision 10, extended additively by
-// plan M4c.1 decision 2): the sums over the erased volumes, each volume, and the crypttab entries it could not
-// resolve. A confirmation of M4c has no volumes.
+// plan M4c.1 decision 2): the sums over the reported volumes, each volume, and the crypttab entries it could not
+// erase with certainty. A confirmation of M4c has no volumes.
 type Confirmation struct {
 	Erased      bool                 `json:"erased"`
 	SlotsBefore int                  `json:"slots_before"`
@@ -30,10 +30,10 @@ func ParseConfirmation(raw []byte) Confirmation {
 	return c
 }
 
-// AllErased reports whether the device erased every volume: the device says so and no volume it lists contradicts
-// it by a keyslot left or a failed erasure (plan M4c.1 decision 2).
+// AllErased reports whether the device erased every volume: the device says so, no volume it lists contradicts it by
+// a keyslot left or a failed erasure, and no crypttab entry is unresolved (plan M4c.1 decision 2, review round 1).
 func (c Confirmation) AllErased() bool {
-	if !c.Erased {
+	if !c.Erased || len(c.Unresolved) > 0 {
 		return false
 	}
 	for _, v := range c.Volumes {

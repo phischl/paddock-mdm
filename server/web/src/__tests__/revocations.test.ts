@@ -34,10 +34,10 @@ describe('revocations', () => {
   it('reads the per-volume results of a confirmation and ignores malformed entries', () => {
     const volume = { device: '/dev/sda3', slots_before: 2, slots_after: 0, erased: true }
     expect(volumeResults(request({ result: { erased: true, volumes: [{ device: '/dev/sdb1' }, volume, 'x'], unresolved: ['UUID=gone', 3] } })))
-      .toEqual({ volumes: [volume], unresolved: ['UUID=gone'] })
-    expect(volumeResults(request({ result: { erased: true, slots_before: 2, slots_after: 0 } }))).toEqual({ volumes: [], unresolved: [] })
-    expect(volumeResults(request({ result: { volumes: 'all' } }))).toEqual({ volumes: [], unresolved: [] })
-    expect(volumeResults(request({}))).toEqual({ volumes: [], unresolved: [] })
+      .toEqual({ volumes: [volume], unresolved: ['UUID=gone'], incomplete: true })
+    expect(volumeResults(request({ result: { erased: true, slots_before: 2, slots_after: 0 } }))).toEqual({ volumes: [], unresolved: [], incomplete: false })
+    expect(volumeResults(request({ result: { volumes: 'all' } }))).toEqual({ volumes: [], unresolved: [], incomplete: false })
+    expect(volumeResults(request({}))).toEqual({ volumes: [], unresolved: [], incomplete: false })
   })
 
   it('parses the warning lead times', () => {

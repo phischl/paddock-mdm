@@ -5,21 +5,22 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fakeDev is a /dev tree below a temporary root with the udev links of /dev/disk, as relative symlinks like udev
 // creates them.
-func fakeDev(t *testing.T, links map[string]string, devices ...string) string {
+func fakeDev(t *testing.T, links map[string]string, files ...string) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, d := range devices {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, d)), 0o755); err != nil {
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(root, d), nil, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, f), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -34,47 +35,66 @@ func fakeDev(t *testing.T, links map[string]string, devices ...string) string {
 	return root
 }
 
-// isLuksTools answers cryptsetup isLuks for the devices in luks (exit 0) and every other device (exit 1); it logs
-// every call.
+// isLuksTools answers cryptsetup isLuks with exit 0 for the paths in luks and exit 1 for every other one, the exit
+// of cryptsetup for a plain volume and for an unreadable one alike. A path in hang blocks until release is closed,
+// whatever the context says (a command stuck in the kernel). It logs every call.
 type isLuksTools struct {
-	luks []string
-	log  []string
+	luks    []string
+	hang    []string
+	release chan struct{}
+	mu      sync.Mutex
+	log     []string
 }
 
 func (f *isLuksTools) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
+	f.mu.Lock()
 	f.log = append(f.log, name+" "+strings.Join(args, " "))
-	if name == "cryptsetup" && args[0] == "isLuks" && slices.Contains(f.luks, args[len(args)-1]) {
-		return "", "", 0, nil
+	f.mu.Unlock()
+	path := args[len(args)-1]
+	for _, h := range f.hang {
+		if h == path {
+			<-f.release
+		}
+	}
+	for _, l := range f.luks {
+		if name == "cryptsetup" && args[0] == "isLuks" && l == path {
+			return "", "", 0, nil
+		}
 	}
 	return "", "", 1, nil
 }
 
-// TestVolumes (plan M4c.1 decisions 1 and 3): a fake crypttab with the root volume, an extra LUKS volume, a plain
-// dm-crypt swap and an unresolvable entry. The extra volume comes first and the root volume last, each once; the swap
-// is no target; the unresolvable entries are reported and do not stop the others.
+// TestVolumes (plan M4c.1 decisions 1 and 3, review round 1): a fake crypttab with the root volume, an extra LUKS
+// volume, a LUKS volume with a detached header, a plain swap, a volume whose isLuks fails with exit 1 without plain
+// options (an I/O error) and unresolvable entries. The extra volumes come first and the root volume last, each once;
+// the detached volume is erased through its header; the swap is no target; every other failure is unresolved.
 func TestVolumes(t *testing.T) {
 	root := fakeDev(t, map[string]string{
 		"/dev/disk/by-uuid/aaaa-root":     "../../vda3",
 		"/dev/disk/by-uuid/bbbb-data":     "../../vdb1",
 		"/dev/disk/by-partuuid/cccc-home": "../../vdc1",
-	}, "/dev/vda3", "/dev/vdb1", "/dev/vdc1", "/dev/vda2")
+	}, "/dev/vda3", "/dev/vdb1", "/dev/vdc1", "/dev/vda2", "/dev/vdd", "/dev/vde", "/boot/luks/vault.img")
 	crypttab := []byte(`# <name> <device> <password> <options>
 dm_crypt-0 UUID=aaaa-root none luks,discard
 data UUID="bbbb-data" /etc/keys/data.key luks
 
 home PARTUUID=cccc-home none luks
+vault /dev/vdd none luks,header=/boot/luks/vault.img
 swap /dev/vda2 /dev/urandom swap,cipher=aes-xts-plain64
+broken /dev/vde none luks
 again /dev/disk/by-uuid/bbbb-data none luks
 gone UUID=dddd-gone none luks
+lostheader /dev/vdd none header=/boot/luks/missing.img
 label LABEL=backup none luks
 escape UUID=../../vdb1 none luks
 noname
 `)
-	tools := &isLuksTools{luks: []string{"/dev/vda3", "/dev/vdb1", "/dev/vdc1"}}
-	got := volumes(context.Background(), tools, "/dev/vda3", crypttab, func(s string) (string, error) { return resolveSource(root, s) })
+	tools := &isLuksTools{luks: []string{"/dev/vda3", "/dev/vdb1", "/dev/vdc1", "/boot/luks/vault.img"}}
+	got := volumes(context.Background(), tools, root, "/dev/vda3", crypttab, time.Minute)
 	want := Targets{
-		Devices:    []string{"/dev/vdb1", "/dev/vdc1", "/dev/vda3"},
-		Unresolved: []string{"UUID=dddd-gone", "LABEL=backup", "UUID=../../vdb1", "noname"},
+		Devices: []string{"/dev/vdb1", "/dev/vdc1", "/boot/luks/vault.img", "/dev/vda3"},
+		Unresolved: []string{"/dev/vde", "UUID=dddd-gone", "/dev/vdd", "LABEL=backup", "UUID=../../vdb1",
+			"noname"},
 	}
 	t.Logf("targets: %+v", got)
 	if !reflect.DeepEqual(got, want) {
@@ -90,9 +110,38 @@ noname
 // TestVolumesWithoutCrypttab: without /etc/crypttab the root volume is the only target.
 func TestVolumesWithoutCrypttab(t *testing.T) {
 	root := fakeDev(t, nil, "/dev/nvme0n1p3")
-	got := volumes(context.Background(), &isLuksTools{}, "/dev/nvme0n1p3", nil, func(s string) (string, error) { return resolveSource(root, s) })
+	got := crypttabTargets(context.Background(), &isLuksTools{}, root, "/dev/nvme0n1p3")
 	if !reflect.DeepEqual(got, Targets{Devices: []string{"/dev/nvme0n1p3"}}) {
 		t.Fatalf("targets %+v", got)
+	}
+}
+
+// TestUnreadableCrypttab (review round 1): an unreadable /etc/crypttab is reported as unresolved, and the root volume
+// is still a target.
+func TestUnreadableCrypttab(t *testing.T) {
+	root := fakeDev(t, nil, "/dev/vda3")
+	// A directory in place of the file: reading it fails with EISDIR, as an unreadable file would.
+	if err := os.MkdirAll(filepath.Join(root, CrypttabFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := crypttabTargets(context.Background(), &isLuksTools{}, root, "/dev/vda3")
+	if !reflect.DeepEqual(got, Targets{Devices: []string{"/dev/vda3"}, Unresolved: []string{CrypttabFile}}) {
+		t.Fatalf("targets %+v", got)
+	}
+}
+
+// TestVolumesHungDevice (review round 1): a device whose isLuks hangs beyond every timeout does not keep the root
+// volume from being a target; it and every entry after it are unresolved.
+func TestVolumesHungDevice(t *testing.T) {
+	root := fakeDev(t, nil, "/dev/vda3", "/dev/vdb", "/dev/vdc", "/dev/vdd")
+	tools := &isLuksTools{luks: []string{"/dev/vdb", "/dev/vdc", "/dev/vdd"}, hang: []string{"/dev/vdc"}, release: make(chan struct{})}
+	t.Cleanup(func() { close(tools.release) })
+	crypttab := []byte("b /dev/vdb none luks\nc /dev/vdc none luks\nd /dev/vdd none luks\n")
+	start := time.Now()
+	got := volumes(context.Background(), tools, root, "/dev/vda3", crypttab, 100*time.Millisecond)
+	if !reflect.DeepEqual(got, Targets{Devices: []string{"/dev/vdb", "/dev/vda3"}, Unresolved: []string{"/dev/vdc", "/dev/vdd"}}) ||
+		time.Since(start) > 5*time.Second {
+		t.Fatalf("targets %+v after %s", got, time.Since(start))
 	}
 }
 
@@ -121,6 +170,28 @@ func TestResolveSource(t *testing.T) {
 		got, err := resolveSource(root, source)
 		if got != want || (want == "") != (err != nil) {
 			t.Errorf("%s: %q %v, want %q", source, got, err, want)
+		}
+	}
+}
+
+// TestResolveHeader: a detached header is a device like a source or an absolute file; relative paths and the
+// path:device form are unresolved.
+func TestResolveHeader(t *testing.T) {
+	root := fakeDev(t, map[string]string{"/dev/disk/by-uuid/hhhh": "../../vdh", "/boot/h.link": "luks/h.img"},
+		"/dev/vdh", "/boot/luks/h.img")
+	cases := map[string]string{
+		"/boot/luks/h.img":        "/boot/luks/h.img",
+		"/boot/h.link":            "/boot/luks/h.img",
+		"UUID=hhhh":               "/dev/vdh",
+		"/dev/vdh":                "/dev/vdh",
+		"luks/h.img":              "",
+		"/boot/luks/h.img:UUID=x": "",
+		"/boot/luks/missing.img":  "",
+	}
+	for header, want := range cases {
+		got, err := resolveHeader(root, header)
+		if got != want || (want == "") != (err != nil) {
+			t.Errorf("%s: %q %v, want %q", header, got, err, want)
 		}
 	}
 }
