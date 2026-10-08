@@ -183,6 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Two declarative applies (`PUT /api/v1/config`, `paddockctl apply`) in the same organization at the same time could deadlock, and PostgreSQL rolled one back (an audited failure). Applies and dry runs of an organization now run one after another; the second one plans against the first one's result.
 - The attention count in the portal navigation is no longer a live region, so screen readers do not announce it on every page change; its label still names the number of open conditions.
 - An organization administrator who opens another page while the start page is still deciding stays there instead of being sent to the attention list a moment later.
 - Portal lists announce their loading state to assistive technology: the table is marked busy while a request runs and its loading bar is named *Loading results*.

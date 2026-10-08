@@ -77,6 +77,9 @@ func (d *Declarative) Plan(ctx context.Context, raw []byte) (declarative.Plan, e
 	}
 	var plan declarative.Plan
 	err = d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if err := q.LockConfigApply(ctx); err != nil {
+			return err
+		}
 		st, err := loadConfig(ctx, q)
 		if err != nil {
 			return err
@@ -111,6 +114,9 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 		p, _ := principal.From(ctx)
 		desired, err := parseDocument(raw)
 		if err != nil {
+			return err
+		}
+		if err := q.LockConfigApply(ctx); err != nil {
 			return err
 		}
 		st, err := loadConfig(ctx, q)

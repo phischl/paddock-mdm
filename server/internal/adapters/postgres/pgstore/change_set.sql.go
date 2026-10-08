@@ -57,7 +57,6 @@ func (q *Queries) GetChangeSet(ctx context.Context, id uuid.UUID) (ChangeSet, er
 }
 
 const insertChangeSet = `-- name: InsertChangeSet :exec
-
 INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections, plan)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
@@ -74,7 +73,6 @@ type InsertChangeSetParams struct {
 	Plan           json.RawMessage
 }
 
-// Change sets of the declarative configuration (plan M6c decision 17).
 func (q *Queries) InsertChangeSet(ctx context.Context, arg InsertChangeSetParams) error {
 	_, err := q.db.Exec(ctx, insertChangeSet,
 		arg.ID,
@@ -146,4 +144,17 @@ func (q *Queries) ListChangeSets(ctx context.Context, arg ListChangeSetsParams) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockConfigApply = `-- name: LockConfigApply :exec
+
+SELECT pg_advisory_xact_lock(hashtextextended('config_apply:' || current_setting('paddock.org_id'), 0))
+`
+
+// Change sets of the declarative configuration (plan M6c decision 17).
+// Serializes the declarative applies and dry runs of the transaction's organization (PDK-016): two concurrent applies
+// would otherwise take device group locks in different orders and deadlock. Released at the end of the transaction.
+func (q *Queries) LockConfigApply(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockConfigApply)
+	return err
 }
