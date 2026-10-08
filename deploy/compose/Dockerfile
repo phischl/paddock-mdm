@@ -22,6 +22,7 @@ COPY cli/go.mod cli/go.sum cli/
 COPY pkg/go.mod pkg/go.sum pkg/
 COPY server/go.mod server/go.sum server/
 COPY test/acceptance/go.mod test/acceptance/go.sum test/acceptance/
+COPY test/load/go.mod test/load/
 COPY test/system/go.mod test/system/go.sum test/system/
 RUN --mount=type=cache,target=/go/pkg/mod cd server && go mod download
 COPY pkg/ pkg/

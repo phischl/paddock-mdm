@@ -6,7 +6,14 @@
     "signedInAs": "Signed in as {name}",
     "logout": "Sign out",
     "mainNavigation": "Main navigation",
-    "error": "Something went wrong. Please try again."
+    "error": "Something went wrong. Please try again.",
+    "language": "Language",
+    "languageMenu": "Choose the language (current: {language})",
+    "languages": {
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "languageFailed": "The language could not be saved."
   },
   "nav": {
     "deviceGroups": "Device groups",

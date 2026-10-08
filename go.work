@@ -8,5 +8,6 @@ use (
 	./pkg
 	./server
 	./test/acceptance
+	./test/load
 	./test/system
 )
