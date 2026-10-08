@@ -249,6 +249,10 @@ up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock r
 down: ## Stop the stack (pass V=1 to delete volumes)
 	$(COMPOSE) --profile paddock --profile observability down $(if $(V),-v,)
 
+.PHONY: restore-drill
+restore-drill: ## Restore drill on the development stack (started with make up BACKUP=1): backup, loss, restore, RTO; destroys the databases' volumes
+	$(COMPOSE_DIR)/scripts/restore-drill.sh
+
 .PHONY: bao-bootstrap
 bao-bootstrap: ## Initialize and unseal OpenBao, create keys, policies and AppRoles (development)
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh

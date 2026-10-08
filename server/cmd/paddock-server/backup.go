@@ -50,7 +50,8 @@ func loadBackup(l *config.Loader, baoAddr string) (*backupConfig, error) {
 }
 
 // runBackup implements `paddock-server backup openbao` (a snapshot now, after key operations; run in the worker
-// container) and `paddock-server backup decrypt <in> <out>` (restore, docs/operations/restore.md).
+// container) and `paddock-server backup decrypt <in> <out|->` (restore, docs/operations/restore.md; "-" writes to
+// stdout).
 func runBackup(ctx context.Context, l *config.Loader, args []string) error {
 	switch {
 	case len(args) == 1 && args[0] == "openbao":
@@ -83,6 +84,10 @@ func runBackup(ctx context.Context, l *config.Loader, args []string) error {
 		}
 		plain, err := backup.Open(key, sealed)
 		if err != nil {
+			return err
+		}
+		if args[2] == "-" {
+			_, err = os.Stdout.Write(plain)
 			return err
 		}
 		return os.WriteFile(args[2], plain, 0o600) //nolint:gosec // the operator names the output file on the command line

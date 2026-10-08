@@ -27,7 +27,7 @@ commands:
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD
   osv import <file>
   backup openbao
-  backup decrypt <in> <out>
+  backup decrypt <in> <out|->
   prod-check [--host controlplane|audit] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
   healthcheck
 
