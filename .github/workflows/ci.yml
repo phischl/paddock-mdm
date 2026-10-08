@@ -64,9 +64,9 @@ jobs:
   acceptance:
     needs: [lint, test, web, secrets, trivy]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 130
     env:
-      ACCEPTANCE_TIMEOUT: 50m # GitHub runners are slower than development machines
+      ACCEPTANCE_TIMEOUT: 90m # GitHub runners are slower than development machines
     steps:
       - uses: actions/checkout@v7
         with:
