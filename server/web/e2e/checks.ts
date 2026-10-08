@@ -3,6 +3,8 @@ import AxeBuilder from '@axe-core/playwright'
 
 /** Fails on serious or critical axe violations. */
 export async function expectAccessible(page: Page): Promise<void> {
+  // A loading list dims its rows and headers; axe would judge that transient state instead of the page.
+  await expect(page.locator('[aria-busy="true"]')).toHaveCount(0)
   // Check the settled page: transitions (dialogs fading in) start a frame after the triggering click, so wait for
   // two frames, then for every finite animation; endless ones (loaders) never finish.
   await page.evaluate(async () => {

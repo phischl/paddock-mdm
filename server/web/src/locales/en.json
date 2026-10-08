@@ -55,7 +55,8 @@
     "range": "{total, plural, =0 {No results} one {{from, number}–{to, number} of # result} other {{from, number}–{to, number} of # results}}",
     "rangeCapped": "{from, number}–{to, number} of {total, number}+ results",
     "cappedHint": "More than {total, number} results match. Narrow the search or filters to see all of them.",
-    "noResults": "No results match the search or filters."
+    "noResults": "No results match the search or filters.",
+    "loading": "Loading results"
   },
   "confirm": {
     "typeToConfirm": "Type {text} to confirm"

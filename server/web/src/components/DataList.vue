@@ -212,11 +212,22 @@ defineExpose({ reload: load })
       :sort-by="sortBy"
       must-sort
       :loading="loading"
+      :aria-busy="loading"
       hide-default-footer
       class="table"
       @update:sort-by="onSort"
       v-on="rowClickable ? { 'click:row': (_: Event, row: { item: T }) => emit('row-click', row.item) } : {}"
     >
+      <template #loader="{ color, isActive }">
+        <v-progress-linear
+          :active="isActive"
+          :color="color"
+          :aria-label="t('list.loading')"
+          absolute
+          height="2"
+          indeterminate
+        />
+      </template>
       <template #no-data>
         {{ t(hasCriteria ? 'list.noResults' : 'common.empty') }}
       </template>
