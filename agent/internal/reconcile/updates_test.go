@@ -74,6 +74,9 @@ func TestUpdatesApply(t *testing.T) {
 	if dropIn := fileContent(t, sys, reconcile.UpgradeTimerDropIn); !strings.Contains(dropIn, "OnCalendar=\nOnCalendar=*-*-* 03:00\nRandomizedDelaySec=60m\n") {
 		t.Errorf("drop-in:\n%s", dropIn)
 	}
+	if svc := fileContent(t, sys, reconcile.SecurityServiceDropIn); !strings.Contains(svc, "[Service]\nEnvironment=LC_ALL=C\n") {
+		t.Errorf("unattended-upgrades service drop-in:\n%s", svc)
+	}
 	if pins := fileContent(t, sys, reconcile.PinFile); !strings.Contains(pins, "Package: openssl\nPin: version 3.0.13-0ubuntu3.4\nPin-Priority: 1001\n") ||
 		strings.Contains(pins, "libstdc") {
 		t.Errorf("pins:\n%s", pins)
@@ -132,6 +135,31 @@ func TestUpdatesReleasesOnlyItsOwnHolds(t *testing.T) {
 	}
 	if calls := sys.TakeCalls(); !slices.Contains(calls, "apt-mark unhold -- curl") || slices.ContainsFunc(calls, func(c string) bool { return strings.Contains(c, "zsh") }) {
 		t.Errorf("calls %v", calls)
+	}
+}
+
+// TestUpdatesLeavesLocalHoldsAlone (review 1): a package held locally before the organization holds it stays held
+// when the organization releases it; only holds Paddock set are released.
+func TestUpdatesLeavesLocalHoldsAlone(t *testing.T) {
+	sys, u, _ := updatesFixture(t)
+	ctx := context.Background()
+	sys.Held["curl"] = true
+	held := updatesResource(t, func(s *bundle.UpdatesSpec) { s.Holds = []bundle.Hold{{Package: "curl"}, {Package: "wget"}} })
+	if res := u.Apply(ctx, held); res.Status != reconcile.Changed {
+		t.Fatalf("%+v", res)
+	}
+	if changes, err := u.Plan(ctx, held); err != nil || len(changes) != 0 {
+		t.Fatalf("plan after apply %v %v", changes, err)
+	}
+	sys.TakeCalls()
+	if res := u.Apply(ctx, updatesResource(t, nil)); res.Status != reconcile.Changed {
+		t.Fatalf("%+v", res)
+	}
+	if !sys.Held["curl"] || sys.Held["wget"] {
+		t.Fatalf("after the release: held %v", sys.Held)
+	}
+	if calls := sys.TakeCalls(); !slices.Contains(calls, "apt-mark unhold -- wget") || slices.ContainsFunc(calls, func(c string) bool { return strings.Contains(c, "curl") }) {
+		t.Fatalf("calls %v", calls)
 	}
 }
 

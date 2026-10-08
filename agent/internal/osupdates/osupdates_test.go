@@ -47,7 +47,7 @@ func TestRunRegular(t *testing.T) {
 		}
 		return "", 0, nil
 	}
-	r := RunRegular(context.Background(), apt, now, func() bool { return true })
+	r := RunRegular(context.Background(), apt, noDpkg, now, func() bool { return true })
 	if r.Kind != protocol.UpdatesKindRegular || r.Result != protocol.UpdatesResultOK || r.Upgraded != 3 || len(r.HeldBack) != 2 ||
 		!r.RebootRequired || !r.FinishedAt.After(r.StartedAt) {
 		t.Fatalf("%+v", r)
@@ -59,12 +59,42 @@ func TestRunRegular(t *testing.T) {
 	}
 }
 
+func noDpkg(context.Context, time.Duration, ...string) (string, int, error) { return "", 0, nil }
+
+// TestRunRegularRecoversDpkgAndIgnoresCancellation (review 1): a cancelled context does not stop apt, and an
+// interrupted installation is finished with dpkg --configure -a before the run is retried.
+func TestRunRegularRecoversDpkgAndIgnoresCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	interrupted := true
+	var calls []string
+	apt := func(ctx context.Context, _ time.Duration, args ...string) (string, int, error) {
+		if ctx.Err() != nil {
+			t.Error("apt ran with a cancelled context")
+		}
+		calls = append(calls, args[len(args)-1])
+		if interrupted {
+			return "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.\n", 100, nil
+		}
+		return distUpgrade, 0, nil
+	}
+	dpkg := func(_ context.Context, _ time.Duration, args ...string) (string, int, error) {
+		calls = append(calls, "dpkg "+strings.Join(args, " "))
+		interrupted = false
+		return "", 0, nil
+	}
+	r := RunRegular(ctx, apt, dpkg, time.Now, func() bool { return false })
+	if r.Result != protocol.UpdatesResultOK || r.Upgraded != 3 || !slices.Equal(calls, []string{"update", "dpkg --configure -a", "update", "dist-upgrade"}) {
+		t.Fatalf("%+v %q", r, calls)
+	}
+}
+
 func TestRunRegularFailures(t *testing.T) {
 	now := time.Now
 	failing := func(_ context.Context, _ time.Duration, args ...string) (string, int, error) {
 		return "E: Failed to fetch http://archive.ubuntu.com/ubuntu\n", 100, nil
 	}
-	if r := RunRegular(context.Background(), failing, now, func() bool { return false }); r.Result != protocol.UpdatesResultFailed ||
+	if r := RunRegular(context.Background(), failing, noDpkg, now, func() bool { return false }); r.Result != protocol.UpdatesResultFailed ||
 		!strings.Contains(r.Error, "apt-get update: exit 100: E: Failed to fetch") {
 		t.Fatalf("%+v", r)
 	}
@@ -74,13 +104,13 @@ func TestRunRegularFailures(t *testing.T) {
 		}
 		return "", 0, nil
 	}
-	if r := RunRegular(context.Background(), timeout, now, func() bool { return false }); r.Result != protocol.UpdatesResultTimeout {
+	if r := RunRegular(context.Background(), timeout, noDpkg, now, func() bool { return false }); r.Result != protocol.UpdatesResultTimeout {
 		t.Fatalf("%+v", r)
 	}
 	long := func(context.Context, time.Duration, ...string) (string, int, error) {
 		return strings.Repeat("x", 1000), 1, nil
 	}
-	if r := RunRegular(context.Background(), long, now, func() bool { return false }); len(r.Error) > maxError {
+	if r := RunRegular(context.Background(), long, noDpkg, now, func() bool { return false }); len(r.Error) > maxError {
 		t.Fatalf("error of %d bytes", len(r.Error))
 	}
 }

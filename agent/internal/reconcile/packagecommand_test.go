@@ -42,3 +42,14 @@ func TestPackageCommandKillsTheProcessGroup(t *testing.T) {
 		t.Fatalf("normal run: %q %d %v", out, exit, err)
 	}
 }
+
+// TestPackageCommandRunsInTheCLocale (review 1): apt's output is parsed, so it must not be translated in the
+// device's locale.
+func TestPackageCommandRunsInTheCLocale(t *testing.T) {
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	out, exit, err := reconcile.PackageCommand(context.Background(), time.Minute, "sh", "-c", "echo $LC_ALL $DEBIAN_FRONTEND")
+	if err != nil || exit != 0 || out != "C noninteractive\n" {
+		t.Fatalf("%q %d %v", out, exit, err)
+	}
+}

@@ -2,6 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,14 +52,18 @@ func (s *Staleness) Evaluate(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, c := range candidates {
 		current := ""
 		if c.OpenKind != nil {
 			current = *c.OpenKind
 		}
 		if c.State != device.StateActive {
-			if err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error { return clearStale(ctx, q, c.ID, now) }); err != nil {
+			if err := s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+				_, err := clearStale(ctx, q, c.ID, now)
 				return err
+			}); err != nil {
+				errs = append(errs, s.deviceFailed(ctx, c.ID, err))
 			}
 			continue
 		}
@@ -68,14 +75,21 @@ func (s *Staleness) Evaluate(ctx context.Context, now time.Time) error {
 			continue
 		}
 		if err := s.transition(ctx, c.ID, *c.LastContactAt, current, want, settings, now); err != nil {
-			return err
+			errs = append(errs, s.deviceFailed(ctx, c.ID, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
-// transition moves a device from level from to level to, audited once: the claim re-reads the open alert in the
-// event's transaction and records nothing when another round got there first.
+// deviceFailed logs a device whose evaluation failed; the round goes on with the other devices.
+func (s *Staleness) deviceFailed(ctx context.Context, id uuid.UUID, err error) error {
+	slog.WarnContext(ctx, "staleness of a device not evaluated; retried next round", "device_id", id, "error", err)
+	return fmt.Errorf("device %s: %w", id, err)
+}
+
+// transition moves a device from level from to level to, audited once: the claim re-reads the open alert and the
+// last contact in the event's transaction and records nothing when another round got there first or the device
+// checked in meanwhile.
 func (s *Staleness) transition(ctx context.Context, id uuid.UUID, last time.Time, from, to string, settings UpdateSettings, now time.Time) error {
 	spec := ActionSpec{
 		Code: staleCodes[to], Target: &audit.Target{Type: "device", ID: id.String()},
@@ -97,8 +111,16 @@ func (s *Staleness) transition(ctx context.Context, id uuid.UUID, last time.Time
 		if err != nil || open != from {
 			return false, err
 		}
+		last, err := q.GetDeviceLastContact(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		if last == nil || updates.StaleLevel(*last, now, settings.StalenessWarningH, settings.StalenessCriticalH, s.unit) != to {
+			return false, nil
+		}
 		if to == updates.StaleNone {
-			return true, clearStale(ctx, q, id, now)
+			cleared, err := clearStale(ctx, q, id, now)
+			return cleared == 1, err
 		}
 		if _, err := q.ClearDeviceAlerts(ctx, pgstore.ClearDeviceAlertsParams{DeviceID: id, Now: now}); err != nil {
 			return false, err
@@ -121,9 +143,11 @@ func (s *Staleness) transition(ctx context.Context, id uuid.UUID, last time.Time
 	return err
 }
 
-func clearStale(ctx context.Context, q *pgstore.Queries, id uuid.UUID, now time.Time) error {
-	if _, err := q.ClearDeviceAlerts(ctx, pgstore.ClearDeviceAlertsParams{DeviceID: id, Now: now}); err != nil {
-		return err
+// clearStale clears the open alert and the presumed lost mark of a device and returns the number of cleared alerts.
+func clearStale(ctx context.Context, q *pgstore.Queries, id uuid.UUID, now time.Time) (int64, error) {
+	n, err := q.ClearDeviceAlerts(ctx, pgstore.ClearDeviceAlertsParams{DeviceID: id, Now: now})
+	if err != nil {
+		return 0, err
 	}
-	return q.ClearPresumedLost(ctx, id)
+	return n, q.ClearPresumedLost(ctx, id)
 }

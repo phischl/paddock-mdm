@@ -207,11 +207,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	if a.d.Sys != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.runInstalls(ctx)
-		}()
+		// Not waited for: an installation in progress outlives the run loop (runInstalls).
+		a.requeueInstalls()
+		go a.runInstalls(ctx)
 	}
 	logins := make(chan localadmin.Login, 16)
 	if a.d.FollowLogins != nil {

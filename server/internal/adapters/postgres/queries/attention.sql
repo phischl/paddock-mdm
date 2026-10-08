@@ -13,7 +13,7 @@ ORDER BY
   CASE WHEN @sort::text = '-kind' THEN kind END DESC,
   CASE WHEN @sort::text = 'hostname' THEN hostname END ASC,
   CASE WHEN @sort::text = '-hostname' THEN hostname END DESC,
-  device_id, kind
+  id
 LIMIT @max_rows OFFSET @skip_rows;
 
 -- name: CountAttention :one

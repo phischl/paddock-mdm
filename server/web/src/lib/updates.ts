@@ -166,17 +166,13 @@ export const attentionFilter: ListFilter = {
   options: attentionKinds.map((value) => ({ value, title: 'attention.kinds.' + value })),
 }
 
-/** A row of the attention list with its key: a device may have several conditions. */
-export type AttentionRow = Attention & { key: string }
-
 /** One page of the attention list for DataList. */
-export async function listAttention(p: ListParams): Promise<Page<AttentionRow>> {
-  const page = listPage(
+export async function listAttention(p: ListParams): Promise<Page<Attention>> {
+  return listPage(
     await api.GET('/api/v1/attention', {
       params: { query: { page: p.page, page_size: p.page_size, sort: p.sort as AttentionSort, q: p.q, kind: p.kind as AttentionKind[] } },
     }),
   )
-  return { ...page, items: page.items.map((a) => ({ ...a, key: a.device_id + '/' + a.kind })) }
 }
 
 /** The number of open conditions (navigation badge, landing page); 0 when the list cannot be read. */

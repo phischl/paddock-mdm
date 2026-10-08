@@ -3047,7 +3047,7 @@ components:
     AttentionSort:
       name: sort
       in: query
-      description: Sort field; "-" prefix sorts descending. The device and the kind are the tie-breaker.
+      description: Sort field; "-" prefix sorts descending. The row id is the tie-breaker.
       schema:
         type: string
         enum: [since, -since, kind, -kind, hostname, -hostname]
@@ -3857,8 +3857,9 @@ components:
              login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired]
     Attention:
       type: object
-      required: [kind, device_id, hostname, since, detail]
+      required: [id, kind, device_id, hostname, since, detail]
       properties:
+        id: { type: string, description: "Unique key of the row: the kind and its source (alert, device or revocation request)." }
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
         hostname: { type: string }

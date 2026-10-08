@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -48,7 +49,7 @@ func (s *Staleness) Run(ctx context.Context) error {
 	}
 }
 
-// Round evaluates the devices of every organization.
+// Round evaluates the devices of every organization; a failing organization does not stop the others.
 func (s *Staleness) Round(ctx context.Context) error {
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
 	_, err := s.platform.WithLeaderLock(sys, stalenessLockKey, func(ctx context.Context) error {
@@ -56,12 +57,13 @@ func (s *Staleness) Round(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		var errs []error
 		for _, org := range orgs {
 			if err := s.staleness.Evaluate(systemContext(ctx, org, "staleness-round"), s.now()); err != nil {
-				return fmt.Errorf("organization %s: %w", org, err)
+				errs = append(errs, fmt.Errorf("organization %s: %w", org, err))
 			}
 		}
-		return nil
+		return errors.Join(errs...)
 	})
 	return err
 }

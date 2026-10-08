@@ -2410,6 +2410,8 @@ export interface components {
         /** @enum {string} */
         AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired";
         Attention: {
+            /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
+            id: string;
             kind: components["schemas"]["AttentionKind"];
             /** Format: uuid */
             device_id: string;
@@ -3152,7 +3154,7 @@ export interface components {
         DeviceStateFilter: components["schemas"]["DeviceState"][];
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
-        /** @description Sort field; "-" prefix sorts descending. The device and the kind are the tie-breaker. */
+        /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
         /** @description Only definitions scoped to this device group. */
         DeviceGroupFilter: string;
@@ -5055,7 +5057,7 @@ export interface operations {
                 /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
                 page?: components["parameters"]["Page"];
                 page_size?: components["parameters"]["PageSize"];
-                /** @description Sort field; "-" prefix sorts descending. The device and the kind are the tie-breaker. */
+                /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
                 sort?: components["parameters"]["AttentionSort"];
                 /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
                 q?: components["parameters"]["Search"];
