@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// TestParseConfirmation: the extended confirmation of M4c.1 with its volumes and unresolved entries, and the
-// confirmation of M4c without them.
+// TestParseConfirmation: the extended confirmation of M4c.1 with its volumes and an unresolved entry (so not erased),
+// and the confirmation of M4c without them.
 func TestParseConfirmation(t *testing.T) {
 	got := ParseConfirmation([]byte(`{"erased":true,"slots_before":5,"slots_after":0,"volumes":[` +
 		`{"device":"/dev/vdb1","slots_before":3,"slots_after":0,"erased":true},` +
@@ -14,7 +14,7 @@ func TestParseConfirmation(t *testing.T) {
 	want := Confirmation{Erased: true, SlotsBefore: 5, Volumes: []VolumeConfirmation{
 		{Device: "/dev/vdb1", SlotsBefore: 3, Erased: true}, {Device: "/dev/vda3", SlotsBefore: 2, Erased: true},
 	}, Unresolved: []string{"UUID=gone"}}
-	if !reflect.DeepEqual(got, want) || !got.AllErased() {
+	if !reflect.DeepEqual(got, want) || got.AllErased() {
 		t.Fatalf("extended confirmation %+v", got)
 	}
 	m4c := ParseConfirmation([]byte(`{"erased":true,"slots_before":2,"slots_after":0}`))
@@ -26,8 +26,8 @@ func TestParseConfirmation(t *testing.T) {
 	}
 }
 
-// TestAllErased (plan M4c.1 decision 2): erased only if every volume has no keyslot left, whatever the top level
-// claims.
+// TestAllErased (plan M4c.1 decision 2, review round 1): erased only if every volume has no keyslot left and nothing
+// is unresolved, whatever the top level claims.
 func TestAllErased(t *testing.T) {
 	cases := map[string]struct {
 		c    Confirmation
@@ -38,7 +38,8 @@ func TestAllErased(t *testing.T) {
 		"a volume kept slots": {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true}, {Erased: true, SlotsAfter: 1}}}, false},
 		"a volume failed":     {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: false}, {Erased: true}}}, false},
 		"unknown slot count":  {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true, SlotsAfter: -1}}}, false},
-		"unresolved entries":  {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true}}, Unresolved: []string{"UUID=x"}}, true},
+		"unresolved entries":  {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true}}, Unresolved: []string{"UUID=x"}}, false},
+		"unreadable crypttab": {Confirmation{Erased: true, Volumes: []VolumeConfirmation{{Erased: true}}, Unresolved: []string{"/etc/crypttab"}}, false},
 	}
 	for name, c := range cases {
 		if got := c.c.AllErased(); got != c.want {

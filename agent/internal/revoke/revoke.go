@@ -93,10 +93,17 @@ type Revoker struct {
 	Now      func() time.Time
 	// ConfirmWithin replaces ConfirmTimeout (tests); zero keeps it.
 	ConfirmWithin time.Duration
+	// SecondaryWithin replaces SecondaryWithin (tests); zero keeps it.
+	SecondaryWithin time.Duration
 }
 
+// SecondaryWithin bounds the erasure of all volumes before the root volume together; with SelectWithin the volumes
+// other than the root volume take at most 3 minutes, so a hung secondary disk cannot keep the root volume from being
+// erased (plan M4c.1, review round 1).
+const SecondaryWithin = 2 * time.Minute
+
 // Erasure is the confirmation of a token; it is posted as the command result (plan M4c.1 decision 2). Erased is true
-// only if every volume was erased and has no keyslot left; SlotsBefore and SlotsAfter are the sums over the volumes
+// only if every volume was erased and has no keyslot left and no crypttab entry is unresolved; SlotsBefore and SlotsAfter are the sums over the volumes
 // (SlotsAfter -1 when a volume's count is unknown), kept for the confirmations of M4c.
 type Erasure struct {
 	Erased      bool            `json:"erased"`
@@ -260,12 +267,20 @@ func (r *Revoker) terminateSessions(ctx context.Context) {
 	}
 }
 
-// erase erases every target in order and sums the results; a volume that fails does not stop the others.
+// erase erases every target in order and sums the results; a volume that fails does not stop the others. The
+// volumes before the root volume share SecondaryWithin; the root volume is attempted afterwards in any case.
 func (r *Revoker) erase(ctx context.Context, tg Targets) Erasure {
-	e := Erasure{Erased: len(tg.Devices) > 0, Volumes: make([]VolumeErasure, 0, len(tg.Devices)), Unresolved: tg.Unresolved}
-	for _, device := range tg.Devices {
-		v := r.eraseVolume(ctx, device)
-		e.Volumes = append(e.Volumes, v)
+	e := Erasure{Erased: len(tg.Devices) > 0 && len(tg.Unresolved) == 0, Unresolved: tg.Unresolved}
+	if len(tg.Devices) == 0 {
+		return e
+	}
+	last := len(tg.Devices) - 1
+	within := SecondaryWithin
+	if r.SecondaryWithin > 0 {
+		within = r.SecondaryWithin
+	}
+	e.Volumes = append(r.eraseWithin(ctx, tg.Devices[:last], within), r.eraseVolume(ctx, tg.Devices[last]))
+	for _, v := range e.Volumes {
 		e.SlotsBefore += v.SlotsBefore
 		if v.SlotsAfter < 0 || e.SlotsAfter < 0 {
 			e.SlotsAfter = -1
@@ -275,6 +290,38 @@ func (r *Revoker) erase(ctx context.Context, tg Targets) Erasure {
 		e.Erased = e.Erased && v.Erased
 	}
 	return e
+}
+
+// eraseWithin erases devices in order until within has passed. The erasure runs in a goroutine, so that a command
+// stuck in the kernel (uninterruptible, beyond its WaitDelay) cannot hold up the root volume; a volume not finished
+// in time is reported with an unknown keyslot count.
+func (r *Revoker) eraseWithin(ctx context.Context, devices []string, within time.Duration) []VolumeErasure {
+	out := make([]VolumeErasure, len(devices))
+	for i, d := range devices {
+		out[i] = VolumeErasure{Device: d, SlotsAfter: -1}
+	}
+	if len(devices) == 0 {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
+	results := make(chan VolumeErasure, len(devices))
+	go func() {
+		for _, d := range devices {
+			if ctx.Err() != nil {
+				return
+			}
+			results <- r.eraseVolume(ctx, d)
+		}
+	}()
+	for i := range devices {
+		select {
+		case out[i] = <-results:
+		case <-ctx.Done():
+			return out
+		}
+	}
+	return out
 }
 
 // eraseVolume runs `cryptsetup luksErase` on device and counts the keyslots before and after.

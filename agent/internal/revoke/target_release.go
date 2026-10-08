@@ -26,14 +26,7 @@ func (o OS) Targets(ctx context.Context) (Targets, error) {
 	if err != nil {
 		return Targets{}, err
 	}
-	crypttab, err := os.ReadFile(o.path(CrypttabFile))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		// The root volume is still erased; the unreadable list is reported instead of its entries.
-		return Targets{Devices: []string{v.Device}, Unresolved: []string{CrypttabFile}}, nil
-	}
-	return volumes(ctx, o.OS, v.Device, crypttab, func(source string) (string, error) {
-		return resolveSource(o.Root, source)
-	}), nil
+	return crypttabTargets(ctx, o.OS, o.Root, v.Device), nil
 }
 
 // Reboot implements System.

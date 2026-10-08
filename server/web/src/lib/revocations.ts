@@ -97,20 +97,23 @@ export interface VolumeResult {
   erased: boolean
 }
 
-/** The per-volume results of a request's confirmation and the crypttab entries the device could not resolve. */
+/**
+ * The per-volume results of a request's confirmation and the crypttab entries the device could not erase with
+ * certainty; incomplete when an entry is unresolved or a volume was not erased (plan M4c.1, review round 1).
+ */
 export interface VolumeResults {
   volumes: VolumeResult[]
   unresolved: string[]
+  incomplete: boolean
 }
 
 /** Reads the per-volume results from a request's confirmation; both lists are empty for confirmations before M4c.1. */
 export function volumeResults(r: RevocationRequest): VolumeResults {
-  const volumes = Array.isArray(r.result?.volumes) ? r.result.volumes as unknown[] : []
-  const unresolved = Array.isArray(r.result?.unresolved) ? r.result.unresolved as unknown[] : []
-  return {
-    volumes: volumes.filter(isVolumeResult),
-    unresolved: unresolved.filter((s): s is string => typeof s === 'string'),
-  }
+  const raw = Array.isArray(r.result?.volumes) ? r.result.volumes as unknown[] : []
+  const rawUnresolved = Array.isArray(r.result?.unresolved) ? r.result.unresolved as unknown[] : []
+  const volumes = raw.filter(isVolumeResult)
+  const unresolved = rawUnresolved.filter((s): s is string => typeof s === 'string')
+  return { volumes, unresolved, incomplete: unresolved.length > 0 || volumes.some((v) => !v.erased) }
 }
 
 function isVolumeResult(v: unknown): v is VolumeResult {

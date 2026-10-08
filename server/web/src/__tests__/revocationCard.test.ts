@@ -24,12 +24,21 @@ const requests: RevocationRequest[] = [
       ],
     },
   },
+  {
+    // A device that reports the same device twice must not break the list.
+    ...base, id: 'r3', status: 'failed', result: {
+      erased: false, slots_before: 2, slots_after: 0, unresolved: ['/etc/crypttab', '/etc/crypttab'], volumes: [
+        { device: '/dev/sda3', slots_before: 1, slots_after: 0, erased: true },
+        { device: '/dev/sda3', slots_before: 1, slots_after: 0, erased: true },
+      ],
+    },
+  },
   { ...base, id: 'r2', status: 'confirmed', result: { erased: true, slots_before: 2, slots_after: 0 } },
 ]
 
 vi.mock('../lib/revocations', async (original) => ({
   ...(await original<typeof import('../lib/revocations')>()),
-  listRevocations: () => () => Promise.resolve({ items: requests, page: 1, page_size: 10, total: 2, total_capped: false, sort: '-requested_at' }),
+  listRevocations: () => () => Promise.resolve({ items: requests, page: 1, page_size: 10, total: 3, total_capped: false, sort: '-requested_at' }),
 }))
 
 describe('revocation card', () => {
@@ -48,13 +57,21 @@ describe('revocation card', () => {
     await flushPromises()
     const lists = document.querySelectorAll('[aria-label="Encrypted volumes"]')
     // A confirmation from before M4c.1 has no volumes and shows no list.
-    expect(lists).toHaveLength(1)
+    expect(lists).toHaveLength(2)
     expect([...lists[0].querySelectorAll('li')].map((li) => li.textContent?.trim())).toEqual([
       '/dev/sdb1: not erased, 3 keyslots left',
       '/dev/sdc1: not erased, the remaining keyslots are unknown',
       '/dev/sda3: 2 keyslots erased',
-      'UUID=0000-gone: listed in /etc/crypttab but not found on the device, not erased',
+      'UUID=0000-gone: listed in /etc/crypttab but not erased with certainty',
     ])
+    expect([...lists[1].querySelectorAll('li')].map((li) => li.textContent?.trim())).toEqual([
+      '/dev/sda3: 1 keyslot erased', '/dev/sda3: 1 keyslot erased',
+      '/etc/crypttab: listed in /etc/crypttab but not erased with certainty',
+      '/etc/crypttab: listed in /etc/crypttab but not erased with certainty',
+    ])
+    // Both failed requests are marked incomplete; the M4c confirmation is not.
+    const incomplete = [...document.querySelectorAll('p')].filter((p) => p.textContent?.includes('Incomplete: not every encrypted volume'))
+    expect(incomplete).toHaveLength(2)
     wrapper.unmount()
   })
 })

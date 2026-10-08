@@ -201,6 +201,13 @@ onMounted(async () => {
                 {{ t('devices.revocation.timelineSteps.' + s.step, { at: formatDateTime(s.at, locale) }) }}
               </li>
             </ol>
+            <p
+              v-if="volumeResults(r).incomplete"
+              class="incomplete"
+              data-testid="revocation-incomplete"
+            >
+              {{ t('devices.revocation.incomplete') }}
+            </p>
             <ul
               v-if="volumeResults(r).volumes.length > 0 || volumeResults(r).unresolved.length > 0"
               class="volumes"
@@ -208,14 +215,14 @@ onMounted(async () => {
               data-testid="revocation-volumes"
             >
               <li
-                v-for="v in volumeResults(r).volumes"
-                :key="v.device"
+                v-for="(v, i) in volumeResults(r).volumes"
+                :key="'v' + i + ':' + v.device"
               >
                 {{ volumeText(v) }}
               </li>
               <li
-                v-for="source in volumeResults(r).unresolved"
-                :key="source"
+                v-for="(source, i) in volumeResults(r).unresolved"
+                :key="'u' + i + ':' + source"
               >
                 {{ t('devices.revocation.volume.unresolved', { source }) }}
               </li>

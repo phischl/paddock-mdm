@@ -582,11 +582,12 @@
         "finished": "Ended {at}"
       },
       "volumes": "Encrypted volumes",
+      "incomplete": "Incomplete: not every encrypted volume of the device is known to be erased.",
       "volume": {
         "erased": "{device}: {before, plural, one {# keyslot} other {# keyslots}} erased",
         "notErased": "{device}: not erased, {after, plural, one {# keyslot} other {# keyslots}} left",
         "unknown": "{device}: not erased, the remaining keyslots are unknown",
-        "unresolved": "{source}: listed in /etc/crypttab but not found on the device, not erased"
+        "unresolved": "{source}: listed in /etc/crypttab but not erased with certainty"
       }
     },
     "presumedLost": "Presumed lost since {at}"

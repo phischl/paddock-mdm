@@ -2494,7 +2494,7 @@ export interface components {
             finished_at?: string;
             /** @description Why the revocation-issuer rejected or failed it, e.g. limit_admin_hour. */
             rejection?: string;
-            /** @description The device's confirmation: erased (true only if every LUKS volume has no keyslot left), slots_before and slots_after (sums over the volumes), volumes (one {device, slots_before, slots_after, erased} per erased volume, the root volume last) and unresolved (the crypttab entries the device could not resolve; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
+            /** @description The device's confirmation: erased (true only if every LUKS volume has no keyslot left and unresolved is empty), slots_before and slots_after (sums over the reported volumes), volumes (one {device, slots_before, slots_after, erased} per reported volume, failed ones included, the root volume last) and unresolved (the crypttab entries the device could not erase with certainty; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
             result?: {
                 [key: string]: unknown;
             };
