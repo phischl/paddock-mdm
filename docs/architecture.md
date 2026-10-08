@@ -732,7 +732,7 @@ source exchange) → redelivered after 5 s. Poison messages end in `dlq.<queue>`
 ### 8.3 Valkey
 
 Valkey (BSD-3-Clause) is a **cache and coordination store, never a source of truth**: everything
-except nonces can be rebuilt from PostgreSQL (`paddockctl admin rebuild-cache`). Only core commands
+except nonces can be rebuilt from PostgreSQL (`paddock-server admin rebuild-cache`). Only core commands
 are used (strings, hashes, `SET NX EX/PX`, `MGET`, `EXPIRE`), no modules, so ElastiCache for Valkey
 is a drop-in target.
 
@@ -1707,10 +1707,17 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
   `-` for descending), `q` (search), documented filters; response `{items, page, page_size, total, total_capped, sort}`;
   depth limited to 10 000 rows. ADR [0018](adr/0018-list-and-dialog-conventions.md).
 - Declarative configuration: `PUT /api/v1/config` accepts the organization's full or partial declarative
-  document (`paddock.yml` schema `api/schema/paddock.v1.json`); `POST /api/v1/config:plan` returns the diff
+  document (`paddock.yml` schema `api/schema/paddock.v1.json`); `PUT /api/v1/config?dry_run=true` returns the diff
   without applying. Portal forms and `paddockctl apply -f paddock.yml` call the **same** endpoints, which
   is how "the portal writes through the same path" is realized (ADR 0011).
 - Idempotency: all POSTs that create commands or revocations require `Idempotency-Key`.
+
+> **Amendment 2026-10-08 (M6c):** the dry run is `PUT /api/v1/config?dry_run=true` (no `:verb` endpoints,
+> root `CLAUDE.md`). The restore commands (`admin recompile --all`, `rebuild-cache`, `bump-bundle-seq`) are
+> `paddock-server admin …` subcommands run on the host in the worker container, not `paddockctl` commands: they
+> run while api and compiler are down and would otherwise need a standing platform-scope token. API tokens are
+> organization-scoped, never exceed the creator's role, expire after at most 365 days and need a step-up to
+> create. Plan: `docs/plans/M6c-paddockctl.md`.
 
 ### 17.2 Device API
 
@@ -1771,14 +1778,14 @@ Strictly separate from the audit log.
 | PostgreSQL `paddock`, Authentik DB | pgBackRest, continuous WAL archive + daily full to a separate bucket | 5 min | 4 h |
 | OpenBao | Raft snapshot every 6 h and after every key operation, encrypted, to the backup bucket; unseal shares offline | 6 h (keys change rarely) | 4 h |
 | Escrow bucket | bucket versioning + replication to the backup site | 15 min | 4 h |
-| Bundles bucket | not backed up; recompiled from PostgreSQL (`paddockctl admin recompile --all`) | – | 1 h |
+| Bundles bucket | not backed up; recompiled from PostgreSQL (`paddock-server admin recompile --all`) | – | 1 h |
 | RabbitMQ | not backed up; quorum queues replicated on 3 nodes; devices re-send heartbeats and spooled events; definitions (exchanges, queues, users) are code (`paddock-server provision rabbitmq`) | – | – |
-| Valkey | not backed up; rebuilt from PostgreSQL (`paddockctl admin rebuild-cache`) | – | 15 min |
+| Valkey | not backed up; rebuilt from PostgreSQL (`paddock-server admin rebuild-cache`) | – | 15 min |
 | Fleet MySQL | daily dump; rebuildable from devices within 24 h | 24 h | 8 h |
 | Audit store | **excluded** from routine restore; protected by WORM + replica | – | – |
 
 **Restore rule:** after a PostgreSQL restore, `device.bundle_seq` could go backwards and devices would
-reject new bundles as downgrades. The restore runbook therefore runs `paddockctl admin bump-bundle-seq
+reject new bundles as downgrades. The restore runbook therefore runs `paddock-server admin bump-bundle-seq
 --by 1000000` before the compiler starts. A restore drill is part of the release checklist (quarterly).
 
 ---
