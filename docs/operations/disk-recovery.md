@@ -98,7 +98,7 @@ device asks for the recovery key. Re-enroll TPM2+PIN as in step 3.
   `paddock-escrow` under `org/<organization>/devices/<device>/luks-header/<volume UUID>/<generation>.bin`; the key
   is chosen by the server. Root volume headers escrowed before PDK-009 stay under
   `org/<organization>/devices/<device>/luks-header/<generation>.bin` (no copy); the database gives them the root
-  volume's UUID with the device's first check-in that reports it (migration `00033`). The worker marks a generation
+  volume's UUID with the device's first check-in that reports it (migration `00035`). The worker marks a generation
   `stored` once the object has the announced size and SHA-256 (it fails after 15 minutes without the object). A
   device escrows the headers of at most 32 volumes; a header of a 33rd is refused (`device.header_escrow_refused`,
   escrow status `refused`), shown as *header not escrowed* on the card, and not uploaded again for 24 hours unless

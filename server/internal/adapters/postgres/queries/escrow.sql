@@ -104,6 +104,6 @@ FROM escrow_secret e
 WHERE e.device_id = @device_id::uuid AND e.kind = 'luks_header' AND e.status <> 'failed' AND e.volume IS NOT NULL;
 
 -- name: SetRootHeaderVolume :execrows
--- The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00033).
+-- The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00035).
 UPDATE escrow_secret SET volume = @volume::uuid
 WHERE device_id = @device_id AND kind = 'luks_header' AND volume IS NULL;
