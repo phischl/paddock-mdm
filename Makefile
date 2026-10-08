@@ -50,8 +50,10 @@ lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-licenses ## Run
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
-# dev dependency) must carry a license of the allow list; anything else fails with the package name. Paddock's own
-# packages are MIT (LICENSE). Bundled container images: docs/compliance/third-party.md.
+# dev dependency, its JSON evaluated as SPDX expressions by scripts/check-licenses.ts: AND needs every license allowed,
+# OR one) must carry a license of the allow list; anything else fails with the package name. go-licenses resolves
+# the imports for linux/amd64 only. Paddock's own packages are MIT (LICENSE). Bundled container images:
+# docs/compliance/third-party.md.
 GO_LICENSES_VERSION := v2.0.1
 ALLOWED_LICENSES    := MIT ISC BSD-2-Clause BSD-3-Clause Apache-2.0 MPL-2.0 BlueOak-1.0.0 0BSD CC0-1.0 Python-2.0 Unlicense
 
@@ -66,9 +68,9 @@ lint-licenses: ## License gate: Go and npm production dependencies against the a
 					--ignore github.com/phischl/paddock-mdm \
 					--allowed_licenses=$(subst $(space),$(comma),$(ALLOWED_LICENSES)); done'
 	@if [ -f $(WEB_DIR)/package.json ]; then \
-		$(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && \
-			npx license-checker-rseidelsohn --production --excludePrivatePackages --summary \
-				--onlyAllow "$(subst $(space),;,$(ALLOWED_LICENSES))"'; \
+		$(NODE_RUN) sh -c 'set -e; npm ci --no-audit --no-fund >/dev/null; \
+			npx license-checker-rseidelsohn --production --excludePrivatePackages --json --out /tmp/licenses.json; \
+			node scripts/check-licenses.ts /tmp/licenses.json "$(subst $(space),;,$(ALLOWED_LICENSES))"'; \
 	else echo "lint-licenses: no portal yet, skipped"; fi
 
 # Prometheus configuration and alert rules (plan M6a decision 8): promtool check config, check rules and the rule tests
@@ -125,6 +127,7 @@ test: ## Unit and integration tests (requires Docker)
 	go test -count=1 $(UNIT_PACKAGES)
 	go test -count=1 -tags paddock_revoke_testtarget ./agent/internal/revoke/
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
+	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
 
 .PHONY: fuzz
@@ -348,10 +351,20 @@ e2e: ## Run Playwright end-to-end tests against the running stack (PADDOCK_E2E_S
 LOAD_DIR := bin/load
 COUNT    ?= 10000
 SCENARIO ?= checkin
+# Never against production (PDK-006 review 1): load-guard.sh refuses unless the running gateway of the project paddock
+# is not PADDOCK_ENV=production and the checkout is a development one.
+LOAD_GUARD = gw=$$(docker ps -q --filter label=com.docker.compose.project=paddock \
+		--filter label=com.docker.compose.service=paddock-gateway | head -1); \
+	gw_env=$$([ -n "$$gw" ] && docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $$gw | \
+		sed -n 's/^PADDOCK_ENV=//p' | tail -1); \
+	bash $(COMPOSE_DIR)/scripts/load-guard.sh $(COMPOSE_DIR) "$$gw_env" $$(docker ps -a \
+		--filter label=com.docker.compose.project=paddock --format '{{.Label "com.docker.compose.project.config_files"}}' | \
+		tr ',' '\n' | sort -u)
 
 .PHONY: load-identities
 load-identities: ## Enroll COUNT load test devices with the enrollment configurations CONFIGS (auto-approving tokens) into bin/load/identities.json
 	@test -n "$(CONFIGS)" || { echo "usage: make load-identities CONFIGS='token-1.json token-2.json …' [COUNT=10000]"; exit 2; }
+	@$(LOAD_GUARD)
 	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/identities ./test/load/cmd/identities
 	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
 		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
@@ -360,6 +373,7 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 .PHONY: load-test
 load-test: ## Run the k6 scenario SCENARIO=checkin|ingest against the running stack (RATE, VUS, WARMUP, DURATION, EVENTS_PER_S, BATCH, DRAIN)
 	@test -s $(LOAD_DIR)/identities.json || { echo "missing $(LOAD_DIR)/identities.json: run make load-identities"; exit 2; }
+	@$(LOAD_GUARD)
 	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR)/test/load/k6:/scripts:ro -v $(CURDIR)/$(LOAD_DIR):/data \
 		-e IDENTITIES=/data/identities.json \
 		$(foreach v,RATE VUS WARMUP DURATION EVENTS_PER_S BATCH DRAIN GATEWAY_URL PROMETHEUS_URL,$(if $($(v)),-e $(v)='$($(v))',)) \
@@ -399,14 +413,19 @@ COSIGN_RUN = docker run --rm -u $(UID):$(GID) --tmpfs /tmp:rw,mode=1777 -e HOME=
 release-check:
 	@echo "$(RELEASE_VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "usage: RELEASE_VERSION=x.y.z (without v)"; exit 2; }
 
-# The supervisor compiles in the release public key: a release must name the production key explicitly and must not
-# be built with the development key or with build tags.
+# The supervisor compiles in the release public key (line 2 of the minisign file): a release must name the production
+# key explicitly, line 2 must be a minisign Ed25519 public key (42 bytes, "Ed"), and it must not be the development
+# key's line 2 (whatever the comment line) nor be built with build tags.
 .PHONY: release-key-check
 release-key-check: release-check
 	@test "$(origin RELEASE_PUBLIC_KEY_FILE)" != file || { echo "set RELEASE_PUBLIC_KEY_FILE to the production release public key"; exit 2; }
 	@test -s "$(RELEASE_PUBLIC_KEY_FILE)" || { echo "missing $(RELEASE_PUBLIC_KEY_FILE)"; exit 2; }
-	@for dev in $(RELEASE_KEY_DIR)/minisign.pub $(RELEASE_KEY_DIR)/revoke-minisign.pub; do \
-		if [ -f "$$dev" ] && cmp -s "$$dev" "$(RELEASE_PUBLIC_KEY_FILE)"; then echo "$(RELEASE_PUBLIC_KEY_FILE) is a development key"; exit 2; fi; \
+	@key=$$(sed -n 2p "$(RELEASE_PUBLIC_KEY_FILE)" | tr -d '\r'); \
+	{ echo "$$key" | grep -Eq '^[A-Za-z0-9+/]{56}$$' && [ "$$(echo "$$key" | base64 -d 2>/dev/null | wc -c)" -eq 42 ] && \
+		[ "$$(echo "$$key" | base64 -d 2>/dev/null | head -c 2)" = Ed ]; } || \
+		{ echo "$(RELEASE_PUBLIC_KEY_FILE): line 2 is not a minisign Ed25519 public key"; exit 2; }; \
+	for dev in $(RELEASE_KEY_DIR)/minisign.pub $(RELEASE_KEY_DIR)/revoke-minisign.pub; do \
+		if [ -f "$$dev" ] && [ "$$(sed -n 2p "$$dev" | tr -d '\r')" = "$$key" ]; then echo "$(RELEASE_PUBLIC_KEY_FILE) is a development key"; exit 2; fi; \
 	done
 	@test -z "$(TAGS)$(REVOKE_TAGS)" || { echo "a release is built without TAGS and REVOKE_TAGS"; exit 2; }
 
@@ -415,8 +434,8 @@ release-artifacts: release-key-check ## Build the release RELEASE_VERSION into d
 	rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
 	$(MAKE) --no-print-directory release-images
 	$(MAKE) --no-print-directory deb VERSION=$(RELEASE_VERSION) RELEASE_PUBLIC_KEY_FILE=$(RELEASE_PUBLIC_KEY_FILE) TAGS= REVOKE_TAGS=
-	@for f in bin/deb/*.deb; do b=$$(basename "$$f" .deb); cp "$$f" "$(RELEASE_DIR)/$$b-unsigned.deb"; done
-	@for arch in amd64 arm64; do cp bin/agent/$$arch/paddockd $(RELEASE_DIR)/paddockd_$(RELEASE_VERSION)_linux_$$arch-unsigned; done
+	@for f in bin/deb/*.deb; do b=$$(basename "$$f" .deb); cp "$$f" "$(RELEASE_DIR)/$$b-unsigned.deb" || exit 1; done
+	@for arch in amd64 arm64; do cp bin/agent/$$arch/paddockd $(RELEASE_DIR)/paddockd_$(RELEASE_VERSION)_linux_$$arch-unsigned || exit 1; done
 	$(MAKE) --no-print-directory release-sbom
 	cd $(RELEASE_DIR) && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name images.txt ! -name '*.sigstore.json' \
 		-printf '%f\n' | LC_ALL=C sort | xargs sha256sum >SHA256SUMS

@@ -13,8 +13,8 @@ dependency whose license is not in the allow list:
 
 | Scope | Checked by | Covers |
 | --- | --- | --- |
-| Go modules | `go-licenses check` (v2.0.1, run with `go run` in the pinned Go image) | every package imported by every workspace module (`server`, `agent`, `pkg`, `test/acceptance`, `test/system`), tests included; Paddock's own packages are skipped (MIT) |
-| npm | `license-checker-rseidelsohn --production` (dev dependency of the portal) | every production dependency of the portal, which is compiled into `paddock-server` |
+| Go modules | `go-licenses check` (v2.0.1, run with `go run` in the pinned Go image) | every package imported by the non-test code of every workspace module (`server`, `agent`, `cli`, `pkg`, `test/acceptance`, `test/load`, `test/system`); test-only imports are not checked; imports are resolved for linux/amd64 only, so an import that only an arm64 build uses is not checked; Paddock's own packages are skipped (MIT) |
+| npm | `license-checker-rseidelsohn --production --json` (dev dependency of the portal), evaluated by `server/web/scripts/check-licenses.ts` | every production dependency of the portal, which is compiled into `paddock-server`; each license is read as an SPDX expression: `AND` needs every license allowed, `OR` one; `SEE LICENSE IN …`, `UNKNOWN`, guessed and missing licenses fail |
 
 Run `cd server && go run github.com/google/go-licenses/v2@v2.0.1 report --ignore github.com/phischl/paddock-mdm ./...`
 or `npx license-checker-rseidelsohn --production` in `server/web` for the full per-package list of a release.

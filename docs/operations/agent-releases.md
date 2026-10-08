@@ -92,6 +92,11 @@ A tag `v<version>` runs the release workflow (`.github/workflows/release.yml`, p
    workflow's GitHub OIDC identity, Sigstore's public good instance; no key to keep), attaches its SBOM as a signed
    SPDX attestation, and signs `SHA256SUMS` (`SHA256SUMS.sigstore.json`).
 
+`PUSH=1` pushes the `:<version>` tags before `release-sign` runs, so a run that fails between the two leaves
+unsigned images under the release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and
+consumers verify the signature (`cosign verify`, below) instead of trusting the tag, so an unsigned image fails
+verification. Re-run the release, or delete the tags, before announcing it.
+
 The workflow attaches the files to a **draft** GitHub release. Debian packages and agent binaries carry the suffix
 `-unsigned`: CI never holds the release keys, so they are not releasable as they are. Locally, the same targets run
 with images that are only built (`PUSH` unset) and `make release-sign DRY_RUN=1`, which checks the inputs and
