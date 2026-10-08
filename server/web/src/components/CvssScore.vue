@@ -2,7 +2,11 @@
 import { useI18n } from 'vue-i18n'
 import { formatScore } from '../lib/inventory'
 
-/** A CVSS score with the CVSS vector of Ubuntu's data as tooltip (plan M5c decision 5); keyboard users focus it. */
+/**
+ * A CVSS score with the CVSS vector of Ubuntu's data as tooltip (plan M5c decision 5); keyboard users focus it. Vuetify
+ * puts role=tooltip on the overlay, which stays in the page while its content is hidden, so it carries the vector as
+ * its name.
+ */
 defineProps<{ score: number | null | undefined, vector: string | null | undefined }>()
 const { t } = useI18n()
 </script>
@@ -11,6 +15,7 @@ const { t } = useI18n()
   <v-tooltip
     v-if="vector"
     :text="vector"
+    :aria-label="vector"
     location="top"
   >
     <template #activator="{ props: activator }">
