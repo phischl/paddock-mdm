@@ -1329,6 +1329,13 @@ Escrow objects live in a separate bucket `paddock-escrow` (versioning on, **no**
 can delete them), keys `org/<org>/devices/<dev>/luks-header/<generation>.bin`. Headers (16 MiB) are uploaded by the
 device with a short-lived presigned PUT issued by the gateway, not through the queue.
 
+> **Amendment 2026-10-08 (PDK-009):** every LUKS volume listed in `/etc/crypttab` is escrowed, not only root:
+> keys `org/<org>/devices/<dev>/luks-header/<volume_uuid>/<generation>.bin` (root objects escrowed earlier stay
+> readable under their old key), generations count across a device's volumes, and only root gets a Paddock recovery
+> key. A device is `compliant` only when every volume is escrowed. Lock and `self_lock` tokens carry the confirmed
+> volume UUIDs (`volumes`); `paddock-revoke` erases root plus exactly those and reports the rest as
+> `skipped_not_escrowed`, so a Lock stays restorable. Destroy erases every volume and deletes all escrowed headers.
+
 **A14 (decided 2026-10-05):** boot PIN (TPM2+PIN, set at installation) **and** Hello PIN (login) — both. The separate UX
 test is replaced by the pilot feedback of the reference deployment.
 
