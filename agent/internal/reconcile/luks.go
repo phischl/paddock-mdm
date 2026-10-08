@@ -63,10 +63,12 @@ type LUKS struct {
 	// Background runs the inventory of the volumes of /etc/crypttab; nil runs it in a goroutine (tests run it inline).
 	Background func(func())
 
-	// mu guards scanning and scan, which the background inventory writes.
+	// mu guards scanning, scan and fresh, which the background inventory writes. fresh is set by a completed scan
+	// and cleared by the pass that uses it for escrows.
 	mu       sync.Mutex
 	scanning bool
 	scan     *volumeScan
+	fresh    bool
 
 	pending  *luksEscrow
 	health   *protocol.DiskHealth
@@ -82,14 +84,19 @@ type volumeScan struct {
 	errs     map[string]error
 }
 
-// startScan starts an inventory of the volumes of /etc/crypttab unless one is still running (a hung disk keeps at
-// most one cryptsetup waiting), and returns the last completed one, nil before the first.
-func (m *LUKS) startScan(ctx context.Context, rootDevice string) *volumeScan {
+// startScan returns the last completed inventory of the volumes of /etc/crypttab (nil before the first) and whether
+// it is fresh: completed since the last pass that used one, with no scan in flight. Only a fresh inventory may be used
+// for header escrows (review round 4): a stale one may name devices that were renumbered since, or a disk that hangs
+// now. A pass that finds no scan in flight and no fresh inventory starts a scan (at most one runs, so a hung disk
+// keeps at most one cryptsetup waiting); a pass that uses a fresh inventory consumes it, so the next pass scans again.
+func (m *LUKS) startScan(ctx context.Context, rootDevice string) (*volumeScan, bool) {
 	m.mu.Lock()
-	last, running := m.scan, m.scanning
-	m.scanning = true
+	start := !m.scanning && !m.fresh
+	if start {
+		m.scanning = true
+	}
 	m.mu.Unlock()
-	if !running {
+	if start {
 		run := m.Background
 		if run == nil {
 			run = func(fn func()) { go fn() }
@@ -97,14 +104,17 @@ func (m *LUKS) startScan(ctx context.Context, rootDevice string) *volumeScan {
 		run(func() {
 			s := scanVolumes(ctx, m.Tools, m.Layout.Root, rootDevice)
 			m.mu.Lock()
-			m.scan, m.scanning = s, false
+			m.scan, m.scanning, m.fresh = s, false, true
 			m.mu.Unlock()
 		})
-		m.mu.Lock()
-		last = m.scan
-		m.mu.Unlock()
 	}
-	return last
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	fresh := m.fresh && !m.scanning
+	if fresh {
+		m.fresh = false
+	}
+	return m.scan, fresh
 }
 
 // scanVolumes classifies /etc/crypttab and inventories every volume that can be escrowed.
@@ -217,7 +227,7 @@ func (m *LUKS) volumes(ctx context.Context, rootDevice string, root luks.Metadat
 	h.Volumes = []protocol.DiskVolume{{UUID: m.rootUUID, Device: rootDevice, Root: true, LUKSVersion: 2, Tokens: h.Tokens,
 		Keyslots: h.Keyslots, Escrowed: rootEscrowed, HeaderGeneration: m.State.HeaderStored}}
 	ready := rootEscrowed && m.State.RecoveryStored > 0
-	scan := m.startScan(ctx, rootDevice)
+	scan, fresh := m.startScan(ctx, rootDevice)
 	if scan == nil || scan.crypttab.RootUUID == "" {
 		// No inventory of the other volumes yet (or it hangs), or the root volume's UUID is unknown, so that a clone
 		// of it cannot be recognized: nothing is escrowed, and the disk is not reported compliant (review round 3).
@@ -248,7 +258,7 @@ func (m *LUKS) volumes(ctx context.Context, rootDevice string, root luks.Metadat
 		dv.LUKSVersion, dv.Tokens, dv.Keyslots, dv.HeaderGeneration = inv.Version, inv.Kinds, len(inv.Kinds), st.HeaderStored
 		dv.Escrowed = st.HeaderStored > 0 && st.HeaderDigest == inv.Digest && !m.pendingFor(v.UUID)
 		dv.Refused = m.refused(st)
-		if !dv.Escrowed && !dv.Refused && ready && m.pending == nil {
+		if !dv.Escrowed && !dv.Refused && ready && fresh && m.pending == nil {
 			if err := m.escrowHeader(ctx, v.Header, v.UUID, false, inv.Digest, keys); err != nil {
 				slog.ErrorContext(ctx, "LUKS header escrow failed; retrying at the next pass", "device", v.Header, "volume", v.UUID, "error", err)
 			}
@@ -464,6 +474,14 @@ func (m *LUKS) escrowHeader(ctx context.Context, device, volume string, root boo
 	}
 	file := filepath.Join(dir, "luks-header-"+id+".img")
 	err = luks.HeaderBackup(ctx, m.Tools, device, file)
+	if err == nil && volume != "" {
+		// The device path comes from an inventory: if the disks were renumbered since, the backup is another
+		// volume's, which must never be escrowed under this one (review round 4).
+		if got, uerr := luks.UUID(ctx, m.Tools, file); uerr != nil || got != volume {
+			_ = os.Remove(file)
+			return fmt.Errorf("the header backup of %s is not volume %s (it is %q, %v); discarded until the next inventory", device, volume, got, uerr)
+		}
+	}
 	header, rerr := os.ReadFile(file) //nolint:gosec // a file this function named
 	_ = os.Remove(file)
 	if err == nil {
