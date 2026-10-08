@@ -80,7 +80,16 @@ LIMIT 1;
 -- The escrows of one decryption of the escrow-reader, which checks their device and kind (plan M4b.1 decision 6).
 SELECT * FROM escrow_secret WHERE id = ANY(@ids::uuid[]);
 
+-- name: DeviceHeaderVolumeKnown :one
+-- Whether volume already has a header generation that did not fail, and how many distinct volumes of the device do
+-- (PDK-009, review round 1: at most 32 per device, the volumes a token can carry).
+SELECT
+  coalesce(bool_or(e.volume = @volume::uuid), false)::boolean AS known,
+  count(DISTINCT e.volume)::int AS volumes
+FROM escrow_secret e
+WHERE e.device_id = @device_id::uuid AND e.kind = 'luks_header' AND e.status <> 'failed' AND e.volume IS NOT NULL;
+
 -- name: SetRootHeaderVolume :execrows
--- The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00032).
+-- The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00033).
 UPDATE escrow_secret SET volume = @volume::uuid
 WHERE device_id = @device_id AND kind = 'luks_header' AND volume IS NULL;

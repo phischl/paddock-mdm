@@ -26,6 +26,7 @@ export const auditCodes = [
   'device.enrolled',
   'device.escrow_destroyed',
   'device.groups_changed',
+  'device.header_escrow_refused',
   'device.install_now_requested',
   'device.login_applied',
   'device.login_apply_failed',

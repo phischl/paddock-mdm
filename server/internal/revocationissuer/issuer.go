@@ -388,7 +388,8 @@ func (i *Issuer) sign(ctx context.Context, q *pgstore.Queries, rec app.Recorder,
 }
 
 // lockVolumes are the volumes besides the root volume a Lock or self-lock token of device lets paddock-revoke erase:
-// those with a stored header (PDK-009 decision 6), sorted. A device whose paddock-revoke does not report the volumes
+// those whose newest header generation is stored (PDK-009 decision 6, review round 1), at most
+// revocation.MaxVolumes, sorted. A device whose paddock-revoke does not report the volumes
 // capability gets none: such a build refuses a token with volumes. The list comes from the escrow the worker verified,
 // never from what paddockd hands to paddock-revoke.
 func lockVolumes(ctx context.Context, q *pgstore.Queries, device uuid.UUID) ([]uuid.UUID, error) {
@@ -396,12 +397,11 @@ func lockVolumes(ctx context.Context, q *pgstore.Queries, device uuid.UUID) ([]u
 	if err != nil || !capable {
 		return []uuid.UUID{}, err
 	}
+	// The query takes at most revocation.MaxVolumes, the first by UUID (review round 1): a device can never block its
+	// Lock with more volumes; fewer volumes only shrink it.
 	volumes, err := q.ListConfirmedHeaderVolumes(ctx, device)
 	if err != nil {
 		return nil, err
-	}
-	if len(volumes) > revocation.MaxVolumes {
-		return nil, fmt.Errorf("device %s has %d escrowed volumes, more than a token carries", device, len(volumes))
 	}
 	if volumes == nil {
 		volumes = []uuid.UUID{}

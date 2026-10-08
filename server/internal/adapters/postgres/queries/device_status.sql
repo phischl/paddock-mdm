@@ -1,5 +1,7 @@
 -- Worker heartbeat materialization (plan M2a decision 12); an older heartbeat never overwrites a newer one.
 -- name: UpsertDeviceStatus :exec
+-- A health without revoke_capabilities keeps the last reported value: the device could not ask paddock-revoke this
+-- time (PDK-009, review round 1), which must not change the volumes of its tokens.
 INSERT INTO device_status (device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health,
                            schema_versions)
 VALUES (@device_id, @organization_id, @last_contact_at, @applied_bundle_version, @agent_version, @last_seq, @health,
@@ -7,7 +9,11 @@ VALUES (@device_id, @organization_id, @last_contact_at, @applied_bundle_version,
 ON CONFLICT (device_id) DO UPDATE
 SET last_contact_at = EXCLUDED.last_contact_at, applied_bundle_version = EXCLUDED.applied_bundle_version,
     agent_version = EXCLUDED.agent_version, last_seq = greatest(device_status.last_seq, EXCLUDED.last_seq),
-    health = EXCLUDED.health, schema_versions = EXCLUDED.schema_versions
+    health = CASE
+      WHEN NOT (EXCLUDED.health ? 'revoke_capabilities') AND device_status.health ? 'revoke_capabilities'
+      THEN EXCLUDED.health || jsonb_build_object('revoke_capabilities', device_status.health -> 'revoke_capabilities')
+      ELSE EXCLUDED.health END,
+    schema_versions = EXCLUDED.schema_versions
 WHERE device_status.last_contact_at IS NULL OR device_status.last_contact_at <= EXCLUDED.last_contact_at;
 
 -- name: ListDeviceSeqs :many

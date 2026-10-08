@@ -57,3 +57,14 @@ erases, not only the root volume. Binding:
    which is added to CODEOWNERS); commit marked `needs second review`.
 8. This amendment; `docs/operations/revocation.md` and `disk-recovery.md` are updated. Architecture §12.4 (object key)
    is amended by the architect.
+
+Review round 1 (architect, 2026-10-08):
+- At most 32 distinct volumes per device: the worker refuses a header of a 33rd (`device.header_escrow_refused`,
+  `too_many_volumes`); tokens carry at most 32, the first by UUID, in the issuer and in the self-lock reconciliation
+  alike; never an error that blocks a Lock.
+- Duplicate LUKS UUIDs in the crypttab selection (also the root volume's) are unresolved for every volume that has
+  them; they are neither escrowed nor tracked.
+- A token lists a volume only when its newest header generation (that did not fail) is stored.
+- A failed `paddock-revoke capabilities` call reports nothing; the server keeps the last reported value.
+- Migration renumbered to `00033` (M5c has 00029, M6c 00030–00032).
+- Residual risk (forged escrow, false root UUID) named in `docs/operations/revocation.md`.

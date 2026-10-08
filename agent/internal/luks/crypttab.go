@@ -60,8 +60,11 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 	defer cancel()
 	// The entries are classified in a goroutine, so that a command stuck in the kernel cannot hold up the erasure of
 	// the root volume (plan M4c.1, review round 1); a result sent after the deadline is dropped.
+	rootUUID := make(chan string, 1)
 	results := make(chan classified, len(entries))
 	go func() {
+		id, _ := UUID(ctx, t, c.Root)
+		rootUUID <- id
 		for _, e := range entries {
 			if ctx.Err() != nil {
 				return
@@ -69,15 +72,26 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 			results <- classify(ctx, t, root, e)
 		}
 	}()
+	var sources []string
+	unresolved := func(from int) Crypttab {
+		for _, rest := range entries[from:] {
+			c.Unresolved = append(c.Unresolved, rest.source)
+		}
+		return c
+	}
+	var rootID string
+	select {
+	case rootID = <-rootUUID:
+	case <-ctx.Done():
+		return unresolved(0)
+	}
 	for i, e := range entries {
 		var r classified
 		select {
 		case r = <-results:
 		case <-ctx.Done():
-			for _, rest := range entries[i:] {
-				c.Unresolved = append(c.Unresolved, rest.source)
-			}
-			return c
+			c = withoutSharedUUIDs(c, sources, rootID)
+			return unresolved(i)
 		}
 		switch {
 		case r.unresolved:
@@ -85,8 +99,34 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 		case r.skip, r.volume.Header == c.Root, slices.ContainsFunc(c.Volumes, func(v CrypttabVolume) bool { return v.Header == r.volume.Header }):
 		default:
 			c.Volumes = append(c.Volumes, r.volume)
+			sources = append(sources, e.source)
 		}
 	}
+	return withoutSharedUUIDs(c, sources, rootID)
+}
+
+// withoutSharedUUIDs reports every volume whose LUKS UUID another volume or the root volume (rootUUID) has as
+// unresolved (PDK-009, review round 1): a cloned header cannot be told apart by its UUID, so it is neither escrowed
+// nor tracked, and a revocation that meets it is incomplete. sources are the crypttab sources of c.Volumes.
+func withoutSharedUUIDs(c Crypttab, sources []string, rootUUID string) Crypttab {
+	count := map[string]int{}
+	if rootUUID != "" {
+		count[rootUUID]++
+	}
+	for _, v := range c.Volumes {
+		if v.UUID != "" {
+			count[v.UUID]++
+		}
+	}
+	var kept []CrypttabVolume
+	for i, v := range c.Volumes {
+		if v.UUID != "" && count[v.UUID] > 1 {
+			c.Unresolved = append(c.Unresolved, sources[i])
+			continue
+		}
+		kept = append(kept, v)
+	}
+	c.Volumes = kept
 	return c
 }
 
