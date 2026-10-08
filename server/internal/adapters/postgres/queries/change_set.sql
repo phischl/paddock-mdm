@@ -1,5 +1,10 @@
 -- Change sets of the declarative configuration (plan M6c decision 17).
 
+-- name: LockConfigApply :exec
+-- Serializes the declarative applies and dry runs of the transaction's organization (PDK-016): two concurrent applies
+-- would otherwise take device group locks in different orders and deadlock. Released at the end of the transaction.
+SELECT pg_advisory_xact_lock(hashtextextended('config_apply:' || current_setting('paddock.org_id'), 0));
+
 -- name: InsertChangeSet :exec
 INSERT INTO change_set (id, organization_id, actor, source, created_n, updated_n, deleted_n, sections, plan)
 VALUES (@id, @organization_id, @actor, @source, @created_n, @updated_n, @deleted_n, @sections, @plan);
