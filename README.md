@@ -85,4 +85,4 @@ docs/                    architecture, ADRs, plans, operations runbooks, complia
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
