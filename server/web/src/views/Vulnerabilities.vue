@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import CvssScore from '../components/CvssScore.vue'
 import DataList from '../components/DataList.vue'
 import SeverityChip from '../components/SeverityChip.vue'
 import VulnerabilityTile from '../components/VulnerabilityTile.vue'
 import type { Vulnerability } from '../api/client'
-import { formatScore, listVulnerabilities, severityFilter } from '../lib/inventory'
+import { listVulnerabilities, severityFilter } from '../lib/inventory'
 import type { ListColumn } from '../lib/listQuery'
 
 const { t } = useI18n()
 const columns: ListColumn[] = [
   { key: 'cve', title: 'inventory.cve', sortable: true },
-  { key: 'severity', title: 'inventory.severity' },
+  { key: 'severity', title: 'inventory.severity', sortable: true },
   { key: 'cvss_score', title: 'inventory.cvss', sortable: true },
   { key: 'device_count', title: 'inventory.devices', sortable: true },
   { key: 'fixed_version', title: 'inventory.fixedVersion' },
@@ -42,7 +43,10 @@ const columns: ListColumn[] = [
         <SeverityChip :severity="item.severity" />
       </template>
       <template #[`item.cvss_score`]="{ item }: { item: Vulnerability }">
-        {{ formatScore(item.cvss_score) }}
+        <CvssScore
+          :score="item.cvss_score"
+          :vector="item.cvss_vector"
+        />
       </template>
       <template #[`item.fixed_version`]="{ item }: { item: Vulnerability }">
         {{ item.fixed_version ?? '–' }}

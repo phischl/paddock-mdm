@@ -1342,8 +1342,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * @description Roles: org_admin, org_operator, org_auditor. The CVEs matched to the device's packages. Fleet free reports no
-         *     CVSS score, severity or fixed version: those findings have severity unknown and no score.
+         * @description Roles: org_admin, org_operator, org_auditor. The CVEs matched to the device's packages, with Ubuntu's priority,
+         *     fixed version and CVSS vector for the device's release (ADR 0020). Fleet free reports no CVSS score: a finding
+         *     Ubuntu has no priority for has severity unknown.
          */
         get: operations["listDeviceVulnerabilities"];
         put?: never;
@@ -1379,8 +1380,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * @description Roles: org_admin, org_operator, org_auditor. The organization's vulnerabilities per CVE: the highest score and
-         *     severity of its findings, the affected devices and a fixed version if known.
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's vulnerabilities per CVE: the finding with the
+         *     highest severity, then score (its fixed version and CVSS vector, if known), and the affected devices.
          */
         get: operations["listVulnerabilities"];
         put?: never;
@@ -2522,7 +2523,8 @@ export interface components {
             sort: string;
         };
         /**
-         * @description From the CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without score.
+         * @description Ubuntu's priority for the release of the device (negligible counts as low; ADR 0020); without one, from the
+         *     CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without either.
          * @enum {string}
          */
         Severity: "critical" | "high" | "medium" | "low" | "unknown";
@@ -2553,7 +2555,10 @@ export interface components {
              */
             cvss_score: number | null;
             severity: components["schemas"]["Severity"];
+            /** @description The version that fixes the CVE in the device's release; null while there is none or it is unknown. */
             fixed_version: string | null;
+            /** @description CVSS vector from Ubuntu's data (v3, else v4); null where unknown. */
+            cvss_vector: string | null;
             /** Format: date-time */
             first_seen_at: string;
         };
@@ -2592,6 +2597,7 @@ export interface components {
             severity: components["schemas"]["Severity"];
             device_count: number;
             fixed_version: string | null;
+            cvss_vector: string | null;
         };
         VulnerabilityPage: {
             items: components["schemas"]["Vulnerability"][];
@@ -3128,15 +3134,15 @@ export interface components {
         OrganizationSort: "slug" | "-slug" | "name" | "-name" | "created_at" | "-created_at" | "status" | "-status";
         /** @description Sort field; "-" prefix sorts descending. Name, version and source are the tie-breakers. */
         DeviceSoftwareSort: "name" | "-name" | "version" | "-version";
-        /** @description Sort field; "-" prefix sorts descending. Findings without score sort last in both directions. CVE, package name and version are the tie-breakers. */
-        FindingSort: "cvss_score" | "-cvss_score" | "cve" | "-cve";
+        /** @description Sort field; "-" prefix sorts descending. Findings without score or severity sort last in both directions. CVE, package name and version are the tie-breakers. */
+        FindingSort: "cvss_score" | "-cvss_score" | "severity" | "-severity" | "cve" | "-cve";
         /** @description Sort field; "-" prefix sorts descending. Name and version are the tie-breakers. */
         SoftwareSort: "name" | "-name" | "version" | "-version" | "device_count" | "-device_count";
-        /** @description Sort field; "-" prefix sorts descending. CVEs without score sort last in both directions. The CVE is the tie-breaker. */
-        VulnerabilitySort: "cvss_score" | "-cvss_score" | "cve" | "-cve" | "device_count" | "-device_count";
+        /** @description Sort field; "-" prefix sorts descending. CVEs without score or severity sort last in both directions. The CVE is the tie-breaker. */
+        VulnerabilitySort: "cvss_score" | "-cvss_score" | "severity" | "-severity" | "cve" | "-cve" | "device_count" | "-device_count";
         /** @description Sort field; "-" prefix sorts descending. Device ID, package name and version are the tie-breakers. */
         VulnerableDeviceSort: "hostname" | "-hostname";
-        /** @description Repeatable. unknown selects findings without severity (Fleet free reports none). */
+        /** @description Repeatable. unknown selects findings without severity (no Ubuntu priority and no score). */
         SeverityFilter: components["schemas"]["Severity"][];
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
@@ -5760,11 +5766,11 @@ export interface operations {
                 /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
                 page?: components["parameters"]["Page"];
                 page_size?: components["parameters"]["PageSize"];
-                /** @description Sort field; "-" prefix sorts descending. Findings without score sort last in both directions. CVE, package name and version are the tie-breakers. */
+                /** @description Sort field; "-" prefix sorts descending. Findings without score or severity sort last in both directions. CVE, package name and version are the tie-breakers. */
                 sort?: components["parameters"]["FindingSort"];
                 /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
                 q?: components["parameters"]["Search"];
-                /** @description Repeatable. unknown selects findings without severity (Fleet free reports none). */
+                /** @description Repeatable. unknown selects findings without severity (no Ubuntu priority and no score). */
                 severity?: components["parameters"]["SeverityFilter"];
             };
             header?: never;
@@ -5829,11 +5835,11 @@ export interface operations {
                 /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
                 page?: components["parameters"]["Page"];
                 page_size?: components["parameters"]["PageSize"];
-                /** @description Sort field; "-" prefix sorts descending. CVEs without score sort last in both directions. The CVE is the tie-breaker. */
+                /** @description Sort field; "-" prefix sorts descending. CVEs without score or severity sort last in both directions. The CVE is the tie-breaker. */
                 sort?: components["parameters"]["VulnerabilitySort"];
                 /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
                 q?: components["parameters"]["Search"];
-                /** @description Repeatable. unknown selects findings without severity (Fleet free reports none). */
+                /** @description Repeatable. unknown selects findings without severity (no Ubuntu priority and no score). */
                 severity?: components["parameters"]["SeverityFilter"];
             };
             header?: never;

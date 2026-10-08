@@ -2123,10 +2123,11 @@ paths:
       operationId: listDeviceVulnerabilities
       tags: [inventory]
       description: |
-        Roles: org_admin, org_operator, org_auditor. The CVEs matched to the device's packages. Fleet free reports no
-        CVSS score, severity or fixed version: those findings have severity unknown and no score.
+        Roles: org_admin, org_operator, org_auditor. The CVEs matched to the device's packages, with Ubuntu's priority,
+        fixed version and CVSS vector for the device's release (ADR 0020). Fleet free reports no CVSS score: a finding
+        Ubuntu has no priority for has severity unknown.
       x-paddock-list:
-        sort: [cvss_score, cve]
+        sort: [cvss_score, severity, cve]
         default_sort: -cve
         search: [cve, software_name]
         filters: [severity]
@@ -2179,10 +2180,10 @@ paths:
       operationId: listVulnerabilities
       tags: [inventory]
       description: |
-        Roles: org_admin, org_operator, org_auditor. The organization's vulnerabilities per CVE: the highest score and
-        severity of its findings, the affected devices and a fixed version if known.
+        Roles: org_admin, org_operator, org_auditor. The organization's vulnerabilities per CVE: the finding with the
+        highest severity, then score (its fixed version and CVSS vector, if known), and the affected devices.
       x-paddock-list:
-        sort: [cvss_score, cve, device_count]
+        sort: [cvss_score, severity, cve, device_count]
         default_sort: -cve
         search: [cve]
         filters: [severity]
@@ -2941,10 +2942,10 @@ components:
     FindingSort:
       name: sort
       in: query
-      description: Sort field; "-" prefix sorts descending. Findings without score sort last in both directions. CVE, package name and version are the tie-breakers.
+      description: Sort field; "-" prefix sorts descending. Findings without score or severity sort last in both directions. CVE, package name and version are the tie-breakers.
       schema:
         type: string
-        enum: [cvss_score, -cvss_score, cve, -cve]
+        enum: [cvss_score, -cvss_score, severity, -severity, cve, -cve]
         default: -cve
     SoftwareSort:
       name: sort
@@ -2957,10 +2958,10 @@ components:
     VulnerabilitySort:
       name: sort
       in: query
-      description: Sort field; "-" prefix sorts descending. CVEs without score sort last in both directions. The CVE is the tie-breaker.
+      description: Sort field; "-" prefix sorts descending. CVEs without score or severity sort last in both directions. The CVE is the tie-breaker.
       schema:
         type: string
-        enum: [cvss_score, -cvss_score, cve, -cve, device_count, -device_count]
+        enum: [cvss_score, -cvss_score, severity, -severity, cve, -cve, device_count, -device_count]
         default: -cve
     VulnerableDeviceSort:
       name: sort
@@ -2973,7 +2974,7 @@ components:
     SeverityFilter:
       name: severity
       in: query
-      description: Repeatable. unknown selects findings without severity (Fleet free reports none).
+      description: Repeatable. unknown selects findings without severity (no Ubuntu priority and no score).
       style: form
       explode: true
       schema:
@@ -3960,7 +3961,9 @@ components:
     Severity:
       type: string
       enum: [critical, high, medium, low, unknown]
-      description: From the CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without score.
+      description: |
+        Ubuntu's priority for the release of the device (negligible counts as low; ADR 0020); without one, from the
+        CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without either.
     InstalledSoftware:
       type: object
       required: [name, version, source]
@@ -3982,14 +3985,15 @@ components:
         sort: { type: string, description: Applied sort. }
     VulnerabilityFinding:
       type: object
-      required: [cve, software_name, software_version, cvss_score, severity, fixed_version, first_seen_at]
+      required: [cve, software_name, software_version, cvss_score, severity, fixed_version, cvss_vector, first_seen_at]
       properties:
         cve: { type: string }
         software_name: { type: string }
         software_version: { type: string }
         cvss_score: { type: number, format: double, nullable: true, description: CVSS v3 base score; null where unknown. }
         severity: { $ref: "#/components/schemas/Severity" }
-        fixed_version: { type: string, nullable: true }
+        fixed_version: { type: string, nullable: true, description: "The version that fixes the CVE in the device's release; null while there is none or it is unknown." }
+        cvss_vector: { type: string, nullable: true, description: "CVSS vector from Ubuntu's data (v3, else v4); null where unknown." }
         first_seen_at: { type: string, format: date-time }
     VulnerabilityFindingPage:
       type: object
@@ -4025,13 +4029,14 @@ components:
         sort: { type: string, description: Applied sort. }
     Vulnerability:
       type: object
-      required: [cve, cvss_score, severity, device_count, fixed_version]
+      required: [cve, cvss_score, severity, device_count, fixed_version, cvss_vector]
       properties:
         cve: { type: string }
         cvss_score: { type: number, format: double, nullable: true }
         severity: { $ref: "#/components/schemas/Severity" }
         device_count: { type: integer }
         fixed_version: { type: string, nullable: true }
+        cvss_vector: { type: string, nullable: true }
     VulnerabilityPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

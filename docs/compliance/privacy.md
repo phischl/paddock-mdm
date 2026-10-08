@@ -79,15 +79,16 @@ device's organization (row-level security, `docs/operations/fleet.md`):
 | --- | --- |
 | `device_inventory_ref` | Fleet's host ID, last seen, OS version, fleetd (or osquery) version |
 | `installed_software` | name, version and source of each installed package |
-| `vulnerability_finding` | CVE, package name and version, first seen; CVSS score, severity and fixed version where the inventory system knows them (Fleet free does not) |
+| `vulnerability_finding` | CVE, package name and version, first seen; CVSS score where the inventory system knows it (Fleet free does not); severity, fixed version and CVSS vector from Ubuntu's data for the device's release |
 | `inventory_policy_result` | pass or fail per policy, when it last changed |
 
 Hosts that map to no device or to several are never stored. Serial numbers, hardware details, disk space and uptime
 stay in Fleet; Paddock does not copy them.
 
-Limitation: Fleet free matches CVEs but reports no CVSS score, severity or fixed version. Paddock shows these findings
-with severity "unknown"; no additional data is collected from devices to fill the gap. A later milestone adds a
-server-side severity source.
+Fleet free matches CVEs but reports no CVSS score, severity or fixed version. Paddock fills severity and fixed version
+from Ubuntu's public vulnerability data (OSV), which the server downloads (`docs/operations/vulnerability-data.md`):
+the request carries no device, organization or inventory data, devices never contact OSV, and no additional data is
+collected from devices. Findings Ubuntu has not rated show severity "unknown".
 
 Organization members see the stored inventory of their organization's devices in the portal (*Software* and
 *Vulnerabilities*); reading it is not audited. Fleet's own UI and API are not published; only platform operators reach
