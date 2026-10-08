@@ -1,5 +1,5 @@
 -- Header escrow of every LUKS volume (PDK-009, plan M4c.1 amendment 2026-10-08). Forward-only: there is no Down
--- migration.
+-- migration. Number 00033 stays unused: the M6 integration moved this migration behind M6c's 00034.
 -- escrow_secret.volume is the LUKS UUID of the volume a header generation belongs to. Headers escrowed before carry
 -- none: they are the root volume's, their object keys (org/<org>/devices/<dev>/luks-header/<generation>.bin) stay as
 -- recorded, and the worker sets the root volume's UUID on them with the device's first check-in that reports it;

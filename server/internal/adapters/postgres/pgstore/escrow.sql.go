@@ -539,7 +539,7 @@ type SetRootHeaderVolumeParams struct {
 	DeviceID uuid.UUID
 }
 
-// The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00033).
+// The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00035).
 func (q *Queries) SetRootHeaderVolume(ctx context.Context, arg SetRootHeaderVolumeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setRootHeaderVolume, arg.Volume, arg.DeviceID)
 	if err != nil {

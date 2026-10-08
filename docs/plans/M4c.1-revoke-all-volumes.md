@@ -65,7 +65,8 @@ Review round 1 (architect, 2026-10-08):
 - Duplicate LUKS UUIDs in the crypttab selection (also the root volume's): corrected in review round 2, see below.
 - A token lists a volume only when its newest header generation (that did not fail) is stored.
 - A failed `paddock-revoke capabilities` call reports nothing; the server keeps the last reported value.
-- Migration renumbered to `00033` (M5c has 00029, M6c 00030–00032).
+- Migration renumbered to `00033` (M5c has 00029, M6c 00030–00032); at the M6 integration renumbered to `00035`
+  (M6c also has 00034; 00033 stays unused).
 - Residual risk (forged escrow, false root UUID) named in `docs/operations/revocation.md`.
 
 Review round 2 (architect, 2026-10-08):
