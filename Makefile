@@ -382,7 +382,7 @@ logs: ## Show logs of the stack
 RELEASE_VERSION        ?=
 RELEASE_REGISTRY       ?= ghcr.io/phischl
 RELEASE_SERVER_REPO    ?= $(RELEASE_REGISTRY)/paddock-server
-RELEASE_COMPILER_REPO  ?= $(RELEASE_REGISTRY)/paddock-server-compiler
+RELEASE_COMPILER_REPO  ?= $(RELEASE_REGISTRY)/paddock-compiler
 RELEASE_DIR             = dist/release/$(RELEASE_VERSION)
 RELEASE_SOURCE         ?= https://github.com/phischl/paddock-mdm
 DOCKER_CONFIG_DIR      ?= $(HOME)/.docker
