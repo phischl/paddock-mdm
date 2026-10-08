@@ -33,12 +33,27 @@ dump() {
   echo "fleet backup: dumped $(basename "$out")"
 }
 
+# migrated reports whether Fleet created its schema: on a fresh installation the service starts with fleet-mysql, before
+# Fleet's migrations, and a dump then would be an empty database that counts as the day's backup.
+migrated() {
+  printf '[client]\nuser=root\npassword=%s\n' "$(cat "$FLEET_MYSQL_ROOT_PASSWORD_FILE")" >/tmp/my.cnf
+  chmod 600 /tmp/my.cnf
+  local n
+  n="$(mysql --defaults-extra-file=/tmp/my.cnf -h fleet-mysql -N -B -e \
+    "select count(*) from information_schema.tables where table_schema = 'fleet' and table_name = 'migration_status_tables'" \
+    2>/dev/null || echo 0)"
+  rm -f /tmp/my.cnf
+  [[ "$n" == 1 ]]
+}
+
 case "${1:-serve}" in
   once) dump ;;
   serve)
     while true; do
       last="$(cat "$STATE" 2>/dev/null || echo 0)"
-      if (($(date +%s) - last >= 86400)); then
+      if ! migrated; then
+        echo "fleet backup: Fleet's schema is not there yet; retrying in 10 minutes" >&2
+      elif (($(date +%s) - last >= 86400)); then
         dump || echo "fleet backup: dump failed; retrying in 10 minutes" >&2
       fi
       sleep 600

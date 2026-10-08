@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `fleet-backup` no longer takes its first daily dump before Fleet created its schema: on a fresh installation the
+  first dump was an empty database that counted as the day's Fleet backup for 24 hours.
+
 ## [0.1.0] - 2026-10-08
 
 First public release (prepared, not tagged yet: the product owner sets the date when tagging `v0.1.0`). Paddock
