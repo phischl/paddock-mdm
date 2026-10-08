@@ -55,6 +55,10 @@ var (
 	SettingLocked       = &Error{Code: "setting_locked", Status: http.StatusConflict}
 	PathNotAllowed      = &Error{Code: "path_not_allowed", Status: http.StatusUnprocessableEntity}
 	UnitNotAllowed      = &Error{Code: "unit_not_allowed", Status: http.StatusUnprocessableEntity}
+	// Update management (plan M5b decisions 1 and 3).
+	InvalidSchedule = &Error{Code: "invalid_schedule", Status: http.StatusUnprocessableEntity}
+	PackageOnHold   = &Error{Code: "package_on_hold", Status: http.StatusConflict}
+	TooManyDevices  = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
 	// Identity and privileges (plan M3a).
 	UsernameTaken          = &Error{Code: "username_taken", Status: http.StatusConflict}
 	DomainTaken            = &Error{Code: "domain_taken", Status: http.StatusConflict}

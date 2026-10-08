@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, expectAdminStartPage, watchCSP } from './checks'
 import { test } from './cleanup'
 
 // The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
@@ -9,8 +9,9 @@ const devicesim = process.env.PADDOCK_E2E_DEVICESIM ?? '../../bin/devicesim'
 const csrf = { 'X-Paddock-CSRF': '1' }
 
 // Plan M5a decision 10: a device that reported its packages through Fleet shows them in its Software tab and on the
-// organization's Software page; the Vulnerabilities pages filter by severity (unknown included, Fleet free reports
-// no score) and the start page carries the vulnerability tile; accessible and without CSP violations.
+// organization's Software page; the Vulnerabilities pages filter and sort by severity (unknown included: Ubuntu has
+// not rated the CVE or its data is missing) and the start page carries the vulnerability tile; accessible and without
+// CSP violations.
 test('organization admin sees the software and vulnerabilities of devices', async ({ page, cleanup }) => {
   test.setTimeout(300_000)
   const csp = watchCSP(page)
@@ -22,7 +23,7 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   cleanup.remove('/api/v1/enrollment-tokens', tokenName)
 
   // The start page tile counts devices with critical or high findings and those with findings of unknown severity.
-  await expect(page).toHaveURL(/\/device-groups$/)
+  await expectAdminStartPage(page)
   const tile = page.getByTestId('vulnerability-tile')
   await expect(tile.getByRole('link', { name: /critical or high findings/ })).toBeVisible()
   await expect(tile.getByRole('link', { name: /findings of unknown severity/ })).toBeVisible()
@@ -65,6 +66,9 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   await page.keyboard.press('Escape')
   await expect(page).toHaveURL(/severity=unknown/)
   await expectAccessible(page)
+  // Plan M5c decision 5: the list sorts by severity (Ubuntu's priority).
+  await page.getByTestId('device-vulnerability-list').getByRole('columnheader', { name: 'Severity' }).click()
+  await expect(page).toHaveURL(/sort=severity/)
 
   // The organization's Software page counts the device.
   await page.goto('/device-groups')

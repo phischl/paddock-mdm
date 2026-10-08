@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
 	"github.com/phischl/paddock-mdm/pkg/dsse"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/sudoers"
@@ -238,5 +239,56 @@ func TestVerifyVersions(t *testing.T) {
 	b, err := VerifyVersions(env, trust(), device, org, 0, []int{SchemaVersion, SchemaVersion2})
 	if err != nil || b.SchemaVersion != SchemaVersion2 {
 		t.Fatalf("VerifyVersions: %v, %v", b, err)
+	}
+}
+
+func TestValidSchedule(t *testing.T) {
+	for s, want := range map[string]bool{
+		"Sat 04:00": true, "Mon,Thu 12:30": true, "02:00": true, "Sun 23:59": true,
+		"Sat 4:00": false, "Sat 24:00": false, "Sat,Sat 04:00": false, "sat 04:00": false, "Mon..Fri 04:00": false,
+		"*-*-* 04:00": false, "Sat  04:00": false, "Sat 04:00\nExecStart=x": false, "": false, "Sat": false,
+	} {
+		if got := ValidSchedule(s); got != want {
+			t.Errorf("ValidSchedule(%q) = %v", s, got)
+		}
+	}
+}
+
+func TestValidPackageAndVersion(t *testing.T) {
+	for p, want := range map[string]bool{"openssl": true, "libc6": true, "g++": true, "libstdc++6": true, "x": false,
+		"-o": false, "Openssl": false, "open ssl": false, "": false, "a\nb": false} {
+		if got := ValidPackage(p); got != want {
+			t.Errorf("ValidPackage(%q) = %v", p, got)
+		}
+	}
+	for v, want := range map[string]bool{"3.0.13-0ubuntu3.4": true, "1:2.3~rc1+b2": true, "": false, "1.0 2": false, "1.0\n": false} {
+		if got := ValidPackageVersion(v); got != want {
+			t.Errorf("ValidPackageVersion(%q) = %v", v, got)
+		}
+	}
+}
+
+func TestUpdatesResourceGolden(t *testing.T) {
+	v := "3.0.13-0ubuntu3.4"
+	r, err := UpdatesResource(UpdatesSpec{SecurityDailyAt: "03:00", RegularSchedule: "Sat 04:00", RegularUpdatesEnabled: true,
+		MaxRandomDelayMin: 60, Holds: []Hold{{Package: "linux-generic"}, {Package: "openssl", Version: &v}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"holds":[{"package":"linux-generic","version":null},{"package":"openssl","version":"3.0.13-0ubuntu3.4"}],` +
+		`"max_random_delay_min":60,"regular_schedule":"Sat 04:00","regular_updates_enabled":true,"security_daily_at":"03:00"}`
+	got, err := canonicaljson.Marshal(r.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ID != "updates" || r.Type != TypeUpdates || string(got) != want {
+		t.Errorf("resource %s/%s spec\n%s\nwant\n%s", r.ID, r.Type, got, want)
+	}
+	empty, _ := UpdatesResource(UpdatesSpec{SecurityDailyAt: "03:00", RegularSchedule: "02:00"})
+	if !bytes.Contains(empty.Spec, []byte(`"holds":[]`)) {
+		t.Errorf("nil holds not encoded as []: %s", empty.Spec)
+	}
+	if err := ValidateUpdates(UpdatesSpec{SecurityDailyAt: "03:00", RegularSchedule: "Sat 04:00", Holds: []Hold{{Package: "-o"}}}); err == nil {
+		t.Error("ValidateUpdates accepted an option as package")
 	}
 }

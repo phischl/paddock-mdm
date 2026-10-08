@@ -94,7 +94,8 @@ SELECT count(*) FROM (
     SELECT DISTINCT ON (f.cve) f.cve, coalesce(f.severity, 'unknown') AS severity
     FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
     WHERE $1::text IS NULL OR f.cve ILIKE $1::text ESCAPE '\'
-    ORDER BY f.cve, f.cvss_score DESC NULLS LAST
+    ORDER BY f.cve, CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 END DESC NULLS LAST,
+      f.cvss_score DESC NULLS LAST
   ) vulnerabilities
   WHERE $2::text[] IS NULL OR severity = ANY($2::text[])
   LIMIT $3
@@ -364,16 +365,22 @@ func (q *Queries) ListDeviceSoftware(ctx context.Context, arg ListDeviceSoftware
 }
 
 const listDeviceVulnerabilities = `-- name: ListDeviceVulnerabilities :many
-SELECT cve, software_name, software_version, cvss_score, coalesce(severity, 'unknown')::text AS severity, fixed_version,
-       first_seen_at
-FROM vulnerability_finding
-WHERE device_id = $1
-  AND ($2::text IS NULL OR cve ILIKE $2::text ESCAPE '\'
-       OR software_name ILIKE $2::text ESCAPE '\')
-  AND ($3::text[] IS NULL OR coalesce(severity, 'unknown') = ANY($3::text[]))
+SELECT cve, software_name, software_version, cvss_score, coalesce(label, 'unknown')::text AS severity, fixed_version,
+       cvss_vector, first_seen_at
+FROM (
+  SELECT cve, software_name, software_version, cvss_score, severity AS label, fixed_version, cvss_vector, first_seen_at,
+         CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 END AS severity
+  FROM vulnerability_finding
+  WHERE device_id = $1
+    AND ($2::text IS NULL OR cve ILIKE $2::text ESCAPE '\'
+         OR software_name ILIKE $2::text ESCAPE '\')
+    AND ($3::text[] IS NULL OR coalesce(severity, 'unknown') = ANY($3::text[]))
+) findings
 ORDER BY
   CASE WHEN $4::text = 'cvss_score' THEN cvss_score END ASC,
   CASE WHEN $4::text = '-cvss_score' THEN cvss_score END DESC NULLS LAST,
+  CASE WHEN $4::text = 'severity' THEN severity END ASC,
+  CASE WHEN $4::text = '-severity' THEN severity END DESC NULLS LAST,
   CASE WHEN $4::text = 'cve' THEN cve END ASC,
   CASE WHEN $4::text = '-cve' THEN cve END DESC,
   cve, software_name, software_version
@@ -396,10 +403,13 @@ type ListDeviceVulnerabilitiesRow struct {
 	CvssScore       *float64
 	Severity        string
 	FixedVersion    *string
+	CvssVector      *string
 	FirstSeenAt     time.Time
 }
 
-// Severity "unknown" selects findings without severity (Fleet free reports none); unknown scores sort last both ways.
+// Severity "unknown" selects findings without severity (no Ubuntu priority and no score); unknown scores and
+// severities sort last both ways. In ORDER BY, severity is the inner query's rank (critical highest): names inside an
+// expression resolve to input columns, not to the output column of the same name.
 func (q *Queries) ListDeviceVulnerabilities(ctx context.Context, arg ListDeviceVulnerabilitiesParams) ([]ListDeviceVulnerabilitiesRow, error) {
 	rows, err := q.db.Query(ctx, listDeviceVulnerabilities,
 		arg.DeviceID,
@@ -423,6 +433,7 @@ func (q *Queries) ListDeviceVulnerabilities(ctx context.Context, arg ListDeviceV
 			&i.CvssScore,
 			&i.Severity,
 			&i.FixedVersion,
+			&i.CvssVector,
 			&i.FirstSeenAt,
 		); err != nil {
 			return nil, err
@@ -507,19 +518,23 @@ func (q *Queries) ListSoftware(ctx context.Context, arg ListSoftwareParams) ([]L
 }
 
 const listVulnerabilities = `-- name: ListVulnerabilities :many
-SELECT cve, cvss_score, severity, device_count, fixed_version FROM (
-  SELECT DISTINCT ON (f.cve) f.cve, f.cvss_score, coalesce(f.severity, 'unknown')::text AS severity,
+SELECT cve, cvss_score, label AS severity, device_count, fixed_version, cvss_vector FROM (
+  SELECT DISTINCT ON (f.cve) f.cve, f.cvss_score, coalesce(f.severity, 'unknown')::text AS label,
+         CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 END AS severity,
          (SELECT count(DISTINCT g.device_id) FROM vulnerability_finding g
             JOIN device gd ON gd.id = g.device_id AND gd.state IN ('active','quarantined') WHERE g.cve = f.cve)::int AS device_count,
-         f.fixed_version
+         f.fixed_version, f.cvss_vector
   FROM vulnerability_finding f JOIN device d ON d.id = f.device_id AND d.state IN ('active','quarantined')
   WHERE $1::text IS NULL OR f.cve ILIKE $1::text ESCAPE '\'
-  ORDER BY f.cve, f.cvss_score DESC NULLS LAST, f.fixed_version NULLS LAST
+  ORDER BY f.cve, CASE f.severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 END DESC NULLS LAST, f.cvss_score DESC NULLS LAST,
+    f.fixed_version NULLS LAST
 ) vulnerabilities
-WHERE $2::text[] IS NULL OR severity = ANY($2::text[])
+WHERE $2::text[] IS NULL OR label = ANY($2::text[])
 ORDER BY
   CASE WHEN $3::text = 'cvss_score' THEN cvss_score END ASC,
   CASE WHEN $3::text = '-cvss_score' THEN cvss_score END DESC NULLS LAST,
+  CASE WHEN $3::text = 'severity' THEN severity END ASC,
+  CASE WHEN $3::text = '-severity' THEN severity END DESC NULLS LAST,
   CASE WHEN $3::text = 'cve' THEN cve END ASC,
   CASE WHEN $3::text = '-cve' THEN cve END DESC,
   CASE WHEN $3::text = 'device_count' THEN device_count END ASC,
@@ -542,10 +557,12 @@ type ListVulnerabilitiesRow struct {
 	Severity     string
 	DeviceCount  int32
 	FixedVersion *string
+	CvssVector   *string
 }
 
-// Vulnerabilities of the organization per CVE: the finding with the highest score (its severity and fixed version, if
-// the inventory system knows them) and the number of affected devices.
+// Vulnerabilities of the organization per CVE: the finding with the highest severity, then score (its fixed version
+// and CVSS vector, if known) and the number of affected devices; CountVulnerabilities picks the same finding. In ORDER
+// BY, severity is the rank (see ListDeviceVulnerabilities).
 func (q *Queries) ListVulnerabilities(ctx context.Context, arg ListVulnerabilitiesParams) ([]ListVulnerabilitiesRow, error) {
 	rows, err := q.db.Query(ctx, listVulnerabilities,
 		arg.QPattern,
@@ -567,6 +584,7 @@ func (q *Queries) ListVulnerabilities(ctx context.Context, arg ListVulnerabiliti
 			&i.Severity,
 			&i.DeviceCount,
 			&i.FixedVersion,
+			&i.CvssVector,
 		); err != nil {
 			return nil, err
 		}
@@ -710,13 +728,15 @@ func (q *Queries) UpsertPolicyResult(ctx context.Context, arg UpsertPolicyResult
 }
 
 const upsertVulnerabilityFindings = `-- name: UpsertVulnerabilityFindings :exec
-INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, cvss_score, severity, fixed_version)
+INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, cvss_score, severity, fixed_version,
+                                   fleet_severity, fleet_fixed_version)
 SELECT $1, $2, k.cve, k.name, k.version, NULLIF(k.cvss, -1)::numeric(3,1), NULLIF(k.severity, ''),
-       NULLIF(k.fixed, '')
+       NULLIF(k.fixed, ''), NULLIF(k.severity, ''), NULLIF(k.fixed, '')
 FROM (SELECT unnest($3::text[]) AS cve, unnest($4::text[]) AS name, unnest($5::text[]) AS version,
              unnest($6::float8[]) AS cvss, unnest($7::text[]) AS severity, unnest($8::text[]) AS fixed) k
 ON CONFLICT (device_id, cve, software_name, software_version) DO UPDATE
-  SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version
+  SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version,
+      fleet_severity = EXCLUDED.fleet_severity, fleet_fixed_version = EXCLUDED.fleet_fixed_version, cvss_vector = NULL
 `
 
 type UpsertVulnerabilityFindingsParams struct {
@@ -730,7 +750,8 @@ type UpsertVulnerabilityFindingsParams struct {
 	Fixed          []string
 }
 
-// The arrays are parallel; cvss -1 and empty strings stand for unknown values.
+// The arrays are parallel; cvss -1 and empty strings stand for unknown values. The CVSS vector comes from Ubuntu's
+// data only: the enrichment in the same transaction sets it again (plan M5c decision 2).
 func (q *Queries) UpsertVulnerabilityFindings(ctx context.Context, arg UpsertVulnerabilityFindingsParams) error {
 	_, err := q.db.Exec(ctx, upsertVulnerabilityFindings,
 		arg.DeviceID,

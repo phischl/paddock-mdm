@@ -105,6 +105,8 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventRevocationRefused:         audit.CodeDeviceRevocationRefused,
 
 	protocol.EventTamperServiceStopped: audit.CodeDeviceTamperServiceStopped,
+
+	protocol.EventUpdatesRun: audit.CodeDeviceUpdatesRun,
 }
 
 // RecordEvent records one device event as an audit event with the device as actor, once per (device, event_seq).
@@ -141,7 +143,7 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 				})
 			}
 		}
-		if area := loginStateArea(ev.Type); area != "" && err == nil {
+		if area := loginStateArea(ev.Type, spec.Params); area != "" && err == nil {
 			err = setLoginState(ctx, q, deviceID, org, area, ev, spec.Params)
 		}
 		if g, ok := spec.Params["generation"].(int64); ok && ev.Type == protocol.EventLocalAdminRotated && err == nil && g > 0 && g <= 1<<31-1 {
@@ -177,8 +179,16 @@ func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UU
 
 // loginStateArea is the area of device_status.login_state an event updates: "login" for login.*, "sudo" for
 // sudo.* (plan M3b decision 17), "local_admin" for the outcome of a rotation (plan M4a decision 17), "disk" for a
-// keyslot change (plan M4b decision 14), "" for every other event.
-func loginStateArea(typ string) string {
+// keyslot change (plan M4b decision 14), "updates_regular" or "updates_security" for the last run of that kind (plan
+// M5b decision 12), "" for every other event.
+func loginStateArea(typ string, params map[string]any) string {
+	if typ == protocol.EventUpdatesRun {
+		switch kind := params["kind"]; kind {
+		case protocol.UpdatesKindRegular, protocol.UpdatesKindSecurity:
+			return "updates_" + kind.(string)
+		}
+		return ""
+	}
 	if typ == protocol.EventLocalAdminRotated || typ == protocol.EventLocalAdminRotationFailed {
 		return "local_admin"
 	}
@@ -222,19 +232,22 @@ func eventParams(ev protocol.Event) map[string]any {
 	if json.Unmarshal(ev.Data, &data) != nil {
 		return params
 	}
-	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq", "sessions_locked", "sessions_terminated", "generation"} {
+	for _, key := range []string{"bundle_version", "changed", "count", "from_seq", "to_seq", "sessions_locked", "sessions_terminated", "generation", "upgraded"} {
 		if v, ok := data[key].(float64); ok {
 			params[key] = int64(v)
 		}
 	}
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
-		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit"} {
+		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
+		"kind", "started_at", "finished_at", "result", "error"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}
 	}
-	if v, ok := data["removed"].(bool); ok {
-		params["removed"] = v
+	for _, key := range []string{"removed", "reboot_required"} {
+		if v, ok := data[key].(bool); ok {
+			params[key] = v
+		}
 	}
 	if changed, ok := data["changed"].([]any); ok { // login.applied: what changed
 		params["changed"] = boundedStrings(changed)
@@ -250,7 +263,7 @@ func eventParams(ev protocol.Event) map[string]any {
 	if ids, ok := data["resource_ids"].([]any); ok {
 		params["resource_ids"] = boundedStrings(ids)
 	}
-	for _, key := range []string{"before", "after"} { // tamper.keyslot_changed: keyslot kinds
+	for _, key := range []string{"before", "after", "held_back"} { // keyslot kinds, packages kept back
 		if kinds, ok := data[key].([]any); ok {
 			params[key] = boundedStrings(kinds)
 		}

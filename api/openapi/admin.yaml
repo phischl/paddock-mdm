@@ -35,6 +35,7 @@ tags:
   - name: settings
   - name: revocation
   - name: inventory
+  - name: updates
   - name: audit
   - name: platform
 paths:
@@ -1325,6 +1326,270 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/settings/updates:
+    get:
+      operationId: getUpdateSettings
+      tags: [settings]
+      description: "Roles: org_admin, org_operator, org_auditor. The update settings (plan M5b decisions 1 and 9); the defaults until changed."
+      responses:
+        "200":
+          description: The update settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateSettings" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updateUpdateSettings
+      tags: [settings]
+      description: |
+        Roles: org_admin. Replaces the update settings: security_daily_at (HH:MM, local device time),
+        regular_schedule (a subset of systemd OnCalendar: optional comma-separated weekdays Mon…Sun, then HH:MM; anything
+        else is 422 invalid_schedule), regular_updates_enabled, max_random_delay_min (0–720), staleness_warning_h (1–720)
+        and staleness_critical_h (above the warning, at most 2160; 400 invalid_request otherwise). Every device is
+        recompiled.
+      x-paddock-audit: settings.updates_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateSettingsUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateSettings" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/package-holds:
+    get:
+      operationId: listPackageHolds
+      tags: [updates]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      x-paddock-list:
+        sort: [package, created_at, updated_at]
+        default_sort: package
+        search: [package]
+        filters: [device_group_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/PackageHoldSort"
+        - $ref: "#/components/parameters/Search"
+        - $ref: "#/components/parameters/DeviceGroupFilter"
+      responses:
+        "200":
+          description: One page of package holds.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackageHoldPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createPackageHold
+      tags: [updates]
+      description: |
+        Roles: org_admin, org_operator. Holds a package for every device of the organization or of a device group:
+        without a version the installed version is kept (apt-mark hold), with a version it is pinned (apt preferences,
+        Pin-Priority 1001). Held packages are left out of security and regular updates, and install-now refuses them.
+        A package held twice in one scope is 409 already_exists.
+      x-paddock-audit: package_hold.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PackageHoldCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackageHold" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/package-holds/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getPackageHold
+      tags: [updates]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The package hold.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackageHold" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updatePackageHold
+      tags: [updates]
+      description: "Roles: org_admin, org_operator. Replaces version and reason; the package and the scope are fixed."
+      x-paddock-audit: package_hold.updated
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PackageHoldUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackageHold" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deletePackageHold
+      tags: [updates]
+      description: "Roles: org_admin, org_operator. The devices release the hold with their next bundle."
+      x-paddock-audit: package_hold.deleted
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "204":
+          description: Deleted.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/attention:
+    get:
+      operationId: listAttention
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The conditions that need an administrator, one row per open
+        condition of a device (plan M5b decision 11): staleness warning and critical (the organization's thresholds),
+        presumed lost, quarantined (clone suspected), disk encryption not compliant, agent not the current release,
+        the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days.
+        Read-only; the actions are the device's own (retire, release quarantine, lock).
+      x-paddock-list:
+        sort: [since, kind, hostname]
+        default_sort: -since
+        search: [hostname]
+        filters: [kind]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AttentionSort"
+        - $ref: "#/components/parameters/Search"
+        - name: kind
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AttentionKind" }
+      responses:
+        "200":
+          description: One page of conditions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttentionPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/install-now:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: installNowOnDevice
+      tags: [updates]
+      description: |
+        Roles: org_admin, org_operator. Issues the command install_now (valid 24 hours) to an active device: the agent
+        installs the packages, or upgrades installed ones, at its next check-in. A package held for the device is 409
+        package_on_hold and no command is issued; another device state is 409 invalid_state.
+      x-paddock-audit: device.install_now_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InstallNowRequest" }
+      responses:
+        "202":
+          description: The issued command.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceCommand" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/device-groups/{id}/install-now:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: installNowOnDeviceGroup
+      tags: [updates]
+      description: |
+        Roles: org_admin, org_operator. Issues install_now to every active device of the group, one command per device.
+        More than 500 active devices is 422 too_many_devices; a package held for any of them is 409 package_on_hold;
+        then no command is issued.
+      x-paddock-audit: device.install_now_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InstallNowRequest" }
+      responses:
+        "202":
+          description: The number of issued commands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstallNowGroupResult" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/updates:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getDeviceUpdates
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The update state of the device (plan M5b decision 12): its last
+        security and regular update runs, whether a reboot is pending, the holds that apply to it and the packages held
+        with different versions (the smallest version wins).
+      responses:
+        "200":
+          description: The update state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceUpdates" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api/v1/devices/{id}/login-assignment:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -1858,10 +2123,11 @@ paths:
       operationId: listDeviceVulnerabilities
       tags: [inventory]
       description: |
-        Roles: org_admin, org_operator, org_auditor. The CVEs matched to the device's packages. Fleet free reports no
-        CVSS score, severity or fixed version: those findings have severity unknown and no score.
+        Roles: org_admin, org_operator, org_auditor. The CVEs matched to the device's packages, with Ubuntu's priority,
+        fixed version and CVSS vector for the device's release (ADR 0020). Fleet free reports no CVSS score: a finding
+        Ubuntu has no priority for has severity unknown.
       x-paddock-list:
-        sort: [cvss_score, cve]
+        sort: [cvss_score, severity, cve]
         default_sort: -cve
         search: [cve, software_name]
         filters: [severity]
@@ -1914,10 +2180,10 @@ paths:
       operationId: listVulnerabilities
       tags: [inventory]
       description: |
-        Roles: org_admin, org_operator, org_auditor. The organization's vulnerabilities per CVE: the highest score and
-        severity of its findings, the affected devices and a fixed version if known.
+        Roles: org_admin, org_operator, org_auditor. The organization's vulnerabilities per CVE: the finding with the
+        highest severity, then score (its fixed version and CVSS vector, if known), and the affected devices.
       x-paddock-list:
-        sort: [cvss_score, cve, device_count]
+        sort: [cvss_score, severity, cve, device_count]
         default_sort: -cve
         search: [cve]
         filters: [severity]
@@ -2676,10 +2942,10 @@ components:
     FindingSort:
       name: sort
       in: query
-      description: Sort field; "-" prefix sorts descending. Findings without score sort last in both directions. CVE, package name and version are the tie-breakers.
+      description: Sort field; "-" prefix sorts descending. Findings without score or severity sort last in both directions. CVE, package name and version are the tie-breakers.
       schema:
         type: string
-        enum: [cvss_score, -cvss_score, cve, -cve]
+        enum: [cvss_score, -cvss_score, severity, -severity, cve, -cve]
         default: -cve
     SoftwareSort:
       name: sort
@@ -2692,10 +2958,10 @@ components:
     VulnerabilitySort:
       name: sort
       in: query
-      description: Sort field; "-" prefix sorts descending. CVEs without score sort last in both directions. The CVE is the tie-breaker.
+      description: Sort field; "-" prefix sorts descending. CVEs without score or severity sort last in both directions. The CVE is the tie-breaker.
       schema:
         type: string
-        enum: [cvss_score, -cvss_score, cve, -cve, device_count, -device_count]
+        enum: [cvss_score, -cvss_score, severity, -severity, cve, -cve, device_count, -device_count]
         default: -cve
     VulnerableDeviceSort:
       name: sort
@@ -2708,7 +2974,7 @@ components:
     SeverityFilter:
       name: severity
       in: query
-      description: Repeatable. unknown selects findings without severity (Fleet free reports none).
+      description: Repeatable. unknown selects findings without severity (no Ubuntu priority and no score).
       style: form
       explode: true
       schema:
@@ -2771,6 +3037,22 @@ components:
       schema:
         type: array
         items: { $ref: "#/components/schemas/DeviceState" }
+    PackageHoldSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [package, -package, created_at, -created_at, updated_at, -updated_at]
+        default: package
+    AttentionSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The row id is the tie-breaker.
+      schema:
+        type: string
+        enum: [since, -since, kind, -kind, hostname, -hostname]
+        default: -since
     DeviceGroupFilter:
       name: device_group_id
       in: query
@@ -3249,7 +3531,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/Device"
         - type: object
-          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor, presumed_self_locked_at]
+          required: [groups, identity_keys, logins_suspended, login_assignment, schema_versions, login_management, login_status, sudo_flavor, presumed_self_locked_at, presumed_lost_at]
           properties:
             groups:
               type: array
@@ -3279,6 +3561,13 @@ components:
               description: |
                 Since when the device is presumed to have locked itself: it has been silent for longer than the
                 organization's dead man's switch period while the switch is on (plan M4c decision 17); null otherwise.
+            presumed_lost_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: |
+                Since when the device is presumed lost: it has been silent for longer than the organization's critical
+                staleness threshold (plan M5b decision 10); null otherwise, cleared by its next contact.
     DeviceLoginStatus:
       type: object
       description: The latest login.* and sudo.* report of the device's agent (plan M3b decision 17).
@@ -3405,7 +3694,7 @@ components:
       enum: [pending, delivered, succeeded, failed, expired, cancelled]
     DeviceCommandType:
       type: string
-      enum: [rotate_admin_password, delete_self_lock]
+      enum: [rotate_admin_password, delete_self_lock, install_now]
     DeviceCommand:
       type: object
       required: [id, device_id, type, status, issued_at, expires_at]
@@ -3450,6 +3739,147 @@ components:
           type: array
           items: { type: integer }
         updated_at: { type: string, format: date-time }
+    UpdateSettingsUpdate:
+      type: object
+      required: [security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h]
+      additionalProperties: false
+      properties:
+        security_daily_at: { type: string, maxLength: 5, description: "HH:MM, local device time." }
+        regular_schedule: { type: string, maxLength: 64, description: "e.g. \"Sat 04:00\", \"Mon,Thu 12:30\", \"02:00\" (every day)." }
+        regular_updates_enabled: { type: boolean }
+        max_random_delay_min: { type: integer }
+        staleness_warning_h: { type: integer }
+        staleness_critical_h: { type: integer }
+    UpdateSettings:
+      type: object
+      required: [security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h]
+      properties:
+        security_daily_at: { type: string }
+        regular_schedule: { type: string }
+        regular_updates_enabled: { type: boolean }
+        max_random_delay_min: { type: integer }
+        staleness_warning_h: { type: integer }
+        staleness_critical_h: { type: integer }
+        updated_at: { type: string, format: date-time }
+    PackageHold:
+      type: object
+      required: [id, device_group_id, package, version, reason, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        device_group_id: { type: string, format: uuid, nullable: true, description: null = every device. }
+        package: { type: string }
+        version: { type: string, nullable: true, description: null = the installed version is kept. }
+        reason: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PackageHoldCreate:
+      type: object
+      required: [package]
+      additionalProperties: false
+      properties:
+        device_group_id: { type: string, format: uuid, description: Omit for every device of the organization. }
+        package: { type: string, maxLength: 128, description: "^[a-z0-9][a-z0-9+.-]+$" }
+        version: { type: string, maxLength: 128, nullable: true, description: "^[A-Za-z0-9.+:~-]+$; omit or null to keep the installed version." }
+        reason: { type: string, maxLength: 500 }
+    PackageHoldUpdate:
+      type: object
+      required: [version, reason]
+      additionalProperties: false
+      properties:
+        version: { type: string, maxLength: 128, nullable: true, description: null keeps the installed version. }
+        reason: { type: string, maxLength: 500 }
+    PackageHoldPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PackageHold" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    InstallNowRequest:
+      type: object
+      required: [packages]
+      additionalProperties: false
+      properties:
+        packages:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { type: string, maxLength: 128 }
+    InstallNowGroupResult:
+      type: object
+      required: [commands]
+      properties:
+        commands: { type: integer, description: "Commands issued, one per active device of the group." }
+    DeviceUpdateHold:
+      type: object
+      required: [package, version, device_group_id]
+      properties:
+        package: { type: string }
+        version: { type: string, nullable: true }
+        device_group_id: { type: string, format: uuid, nullable: true, description: null = organization-wide. }
+    DeviceUpdateConflict:
+      type: object
+      required: [package, versions, chosen]
+      properties:
+        package: { type: string }
+        versions:
+          type: array
+          items: { type: string, nullable: true }
+        chosen: { type: string, nullable: true }
+    DeviceUpdates:
+      type: object
+      required: [last_security_run, last_regular_run, reboot_required, holds, conflicts]
+      properties:
+        last_security_run:
+          description: Latest updates.run of kind security; null until reported.
+          allOf:
+            - $ref: "#/components/schemas/DeviceReport"
+          nullable: true
+        last_regular_run:
+          description: Latest updates.run of kind regular; null until reported.
+          allOf:
+            - $ref: "#/components/schemas/DeviceReport"
+          nullable: true
+        reboot_required: { type: boolean, description: The last check-in reported a pending reboot; Paddock never reboots for updates. }
+        holds:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceUpdateHold" }
+        conflicts:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceUpdateConflict" }
+    AttentionKind:
+      type: string
+      enum: [stale_warning, stale_critical, presumed_lost, quarantined, disk_not_compliant, agent_outdated,
+             login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired]
+    Attention:
+      type: object
+      required: [id, kind, device_id, hostname, since, detail]
+      properties:
+        id: { type: string, description: "Unique key of the row: the kind and its source (alert, device or revocation request)." }
+        kind: { $ref: "#/components/schemas/AttentionKind" }
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact). }
+        detail:
+          type: string
+          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; *_apply_failed: the stage; revocation_*: action:status; otherwise empty."
+    AttentionPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Attention" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     RevocationAction:
       type: string
       enum: [lock, destroy, self_lock]
@@ -3531,7 +3961,9 @@ components:
     Severity:
       type: string
       enum: [critical, high, medium, low, unknown]
-      description: From the CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without score.
+      description: |
+        Ubuntu's priority for the release of the device (negligible counts as low; ADR 0020); without one, from the
+        CVSS v3 base score (critical ≥ 9, high ≥ 7, medium ≥ 4, low > 0); unknown without either.
     InstalledSoftware:
       type: object
       required: [name, version, source]
@@ -3553,14 +3985,15 @@ components:
         sort: { type: string, description: Applied sort. }
     VulnerabilityFinding:
       type: object
-      required: [cve, software_name, software_version, cvss_score, severity, fixed_version, first_seen_at]
+      required: [cve, software_name, software_version, cvss_score, severity, fixed_version, cvss_vector, first_seen_at]
       properties:
         cve: { type: string }
         software_name: { type: string }
         software_version: { type: string }
         cvss_score: { type: number, format: double, nullable: true, description: CVSS v3 base score; null where unknown. }
         severity: { $ref: "#/components/schemas/Severity" }
-        fixed_version: { type: string, nullable: true }
+        fixed_version: { type: string, nullable: true, description: "The version that fixes the CVE in the device's release; null while there is none or it is unknown." }
+        cvss_vector: { type: string, nullable: true, description: "CVSS vector from Ubuntu's data (v3, else v4); null where unknown." }
         first_seen_at: { type: string, format: date-time }
     VulnerabilityFindingPage:
       type: object
@@ -3596,13 +4029,14 @@ components:
         sort: { type: string, description: Applied sort. }
     Vulnerability:
       type: object
-      required: [cve, cvss_score, severity, device_count, fixed_version]
+      required: [cve, cvss_score, severity, device_count, fixed_version, cvss_vector]
       properties:
         cve: { type: string }
         cvss_score: { type: number, format: double, nullable: true }
         severity: { $ref: "#/components/schemas/Severity" }
         device_count: { type: integer }
         fixed_version: { type: string, nullable: true }
+        cvss_vector: { type: string, nullable: true }
     VulnerabilityPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

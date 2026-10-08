@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useTheme } from 'vuetify'
 import { useSessionStore } from './stores/session'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { pendingConfirm, settleConfirm } from './composables/useConfirm'
+import { attentionCount } from './lib/updates'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -15,6 +16,16 @@ const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : '
 // The symbol variant follows the theme (plan M4c step 0b); the files are copied from docs/assets/logo/ at build time.
 const theme = useTheme()
 const logo = computed(() => (theme.current.value.dark ? '/paddock-symbol-dark.svg' : '/paddock-symbol-light.svg'))
+
+// The number of open conditions on the attention list, refreshed on every navigation (plan M5b decision 11).
+const attention = ref(0)
+watch(
+  () => [route.fullPath, session.canReadGroups] as const,
+  async ([, canRead]) => {
+    attention.value = canRead ? await attentionCount() : 0
+  },
+  { immediate: true },
+)
 
 // While a dialog is open the page behind it is inert, as aria-modal promises: no focus, no screen reader access.
 // Vuetify teleports dialogs to the body, outside the elements made inert here.
@@ -56,6 +67,25 @@ onBeforeUnmount(() => observer.disconnect())
         class="main-nav"
         :aria-label="t('app.mainNavigation')"
       >
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/attention"
+          variant="text"
+          data-testid="nav-attention"
+        >
+          {{ t('nav.attention') }}
+          <!-- Vuetify makes a badge a polite live region; this count changes on every navigation and is not news. -->
+          <v-badge
+            v-if="attention > 0"
+            :content="attention"
+            color="error"
+            inline
+            :aria-label="t('nav.attentionCount', { count: attention })"
+            role="img"
+            aria-live="off"
+            data-testid="attention-count"
+          />
+        </v-btn>
         <v-btn
           v-if="session.canReadGroups"
           to="/devices"
@@ -107,6 +137,13 @@ onBeforeUnmount(() => observer.disconnect())
         </v-btn>
         <v-btn
           v-if="session.canReadGroups"
+          to="/package-holds"
+          variant="text"
+        >
+          {{ t('nav.packageHolds') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
           to="/users"
           variant="text"
         >
@@ -132,6 +169,13 @@ onBeforeUnmount(() => observer.disconnect())
           variant="text"
         >
           {{ t('nav.loginSettings') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/settings/updates"
+          variant="text"
+        >
+          {{ t('nav.updateSettings') }}
         </v-btn>
         <v-btn
           v-if="session.canDelete"

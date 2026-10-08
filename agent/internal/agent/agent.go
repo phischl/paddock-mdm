@@ -88,6 +88,9 @@ type Agent struct {
 	// ticketAccepted is set by a check-in that accepted a time ticket: the loop restarts the dead man's switch ticks
 	// from it, so that the count reaches each lead time at a tick, not up to a tick later (gate R6).
 	ticketAccepted bool
+	// installJobs feeds the install worker, installDone returns its results to the loop (plan M5b decision 7).
+	installJobs chan installJob
+	installDone chan installDone
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -143,7 +146,7 @@ func New(d Deps) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Agent{d: d, st: st}
+	a := &Agent{d: d, st: st, installJobs: make(chan installJob, installQueue), installDone: make(chan installDone, installQueue)}
 	a.localAdmin = &localadmin.Manager{Sys: d.Accounts, Escrow: escrowClient{a}, State: &a.st.LocalAdmin, Save: a.persist,
 		Emit: a.event, Result: a.commandResult, Now: d.Now}
 	if d.LUKS != nil {
@@ -154,6 +157,7 @@ func New(d Deps) (*Agent, error) {
 		a.d.Commands = commands.New(commands.Handlers(map[string]commands.Handler{
 			command.TypeRotateAdminPassword: a.rotateCommand,
 			command.TypeDeleteSelfLock:      a.deleteSelfLock,
+			command.TypeInstallNow:          a.installNowCommand,
 		}), d.Now)
 	}
 	if a.d.Spool == nil {
@@ -183,6 +187,7 @@ func New(d Deps) (*Agent, error) {
 	}
 	a.refreshHealth()
 	a.loadCurrent()
+	a.reportInterruptedInstalls()
 	return a, nil
 }
 
@@ -201,6 +206,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer wg.Wait()
 	if err := a.waitActive(ctx); err != nil {
 		return err
+	}
+	if a.d.Sys != nil {
+		// Not waited for: an installation in progress outlives the run loop (runInstalls).
+		go a.runInstalls(ctx)
 	}
 	logins := make(chan localadmin.Login, 16)
 	if a.d.FollowLogins != nil {
@@ -232,6 +241,9 @@ func (a *Agent) loop(ctx context.Context, logins <-chan localadmin.Login) error 
 		case <-drift.C:
 			a.drift(ctx)
 			a.tickLUKS(ctx, true)
+			a.reportUpdateRuns(ctx)
+		case d := <-a.installDone:
+			a.finishInstall(d)
 		case <-sessionPoll.C:
 			a.trackSessions(ctx)
 		case <-dms.C:
@@ -325,9 +337,11 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	return afterSuccess(resp.NextCheckinS, a.d.Rand())
 }
 
-// checkinRequest carries the health report, which includes the device's sudo flavor (shown on the device detail).
+// checkinRequest carries the health report, which includes the device's sudo flavor (shown on the device detail) and a
+// pending reboot.
 func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	a.refreshSudoFlavor(ctx)
+	a.refreshRebootRequired()
 	health, err := json.Marshal(a.d.Health.Report())
 	if err != nil {
 		health = nil

@@ -112,6 +112,20 @@ const (
 	// Inventory (plan M5a decisions 5 and 8): the mutual watch of agent and fleetd.
 	CodeDeviceTamperServiceStopped  Code = "device.tamper_service_stopped"
 	CodeDeviceTamperAgentNotRunning Code = "device.tamper_agent_not_running"
+	// Update management (plan M5b decisions 1–3 and 6).
+	CodeSettingsUpdatesChanged    Code = "settings.updates_changed"
+	CodePackageHoldCreated        Code = "package_hold.created"
+	CodePackageHoldUpdated        Code = "package_hold.updated"
+	CodePackageHoldDeleted        Code = "package_hold.deleted"
+	CodeDeviceInstallNowRequested Code = "device.install_now_requested"
+	CodeDeviceUpdatesRun          Code = "device.updates_run"
+	// Staleness (plan M5b decision 10).
+	CodeDeviceStaleWarning  Code = "device.stale_warning"
+	CodeDeviceStaleCritical Code = "device.stale_critical"
+	CodeDeviceStaleCleared  Code = "device.stale_cleared"
+
+	CodePlatformOSVStale    Code = "platform.osv_stale"
+	CodePlatformOSVImported Code = "platform.osv_imported"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -134,6 +148,7 @@ var deviceEventParams = []string{
 	"from_version", "outcome", "count", "from_seq", "to_seq", "stage", "message", "username", "sessions_locked",
 	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
 	"generation", "service", "at", "field", "before", "after", "unit",
+	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error",
 }
 
 var registry = map[Code]Definition{
@@ -726,6 +741,80 @@ var registry = map[Code]Definition{
 		Params:      []string{"policy", "last_contact_at"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per failure; the policy passing again ends it.",
+	},
+	CodeSettingsUpdatesChanged: {
+		Code: CodeSettingsUpdatesChanged, Emitted: true,
+		Description: "An organization administrator changed the update settings: the time of the daily security updates, the schedule of regular updates, the random delay and the staleness thresholds.",
+		Params: []string{"security_daily_at", "regular_schedule", "regular_updates_enabled", "max_random_delay_min",
+			"staleness_warning_h", "staleness_critical_h"},
+		Outcomes: adminOutcomes,
+		Note:     "failure with invalid_schedule for a schedule outside the accepted subset.",
+	},
+	CodePackageHoldCreated: {
+		Code: CodePackageHoldCreated, Emitted: true,
+		Description: "A package was held for the organization or a device group, optionally pinned to a version.",
+		Params:      []string{"package", "version", "device_group_id", "reason"},
+		Outcomes:    adminOutcomes,
+	},
+	CodePackageHoldUpdated: {
+		Code: CodePackageHoldUpdated, Emitted: true,
+		Description: "The version or the reason of a package hold changed.",
+		Params:      []string{"package", "version", "device_group_id", "reason", "old_version"},
+		Outcomes:    adminOutcomes,
+	},
+	CodePackageHoldDeleted: {
+		Code: CodePackageHoldDeleted, Emitted: true,
+		Description: "A package hold was removed; devices may upgrade the package again.",
+		Params:      []string{"package", "version", "device_group_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceInstallNowRequested: {
+		Code: CodeDeviceInstallNowRequested, Emitted: true,
+		Description: "An administrator or operator issued the command install_now to a device or to the active devices of a device group.",
+		Params:      []string{"packages", "hostname", "command_id", "device_count"},
+		Outcomes:    adminOutcomes,
+		Note:        "failure with package_on_hold when a package is held for one of the devices; no command is issued then.",
+	},
+	CodeDeviceUpdatesRun: {
+		Code: CodeDeviceUpdatesRun, Emitted: true,
+		Description: "A device finished a run of regular updates (paddock-updates.timer) or of the daily security updates (unattended-upgrades) (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "result is ok, failed or timeout; reboot_required is reported, Paddock never reboots for updates.",
+	},
+	CodeDeviceStaleWarning: {
+		Code: CodeDeviceStaleWarning, Emitted: true,
+		Description: "A device has not contacted Paddock for longer than the organization's staleness warning threshold (actor: system).",
+		Params:      []string{"last_contact_at", "threshold_h"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per crossing; the device's next contact ends it with device.stale_cleared.",
+	},
+	CodeDeviceStaleCritical: {
+		Code: CodeDeviceStaleCritical, Emitted: true,
+		Description: "A device has not contacted Paddock for longer than the organization's critical staleness threshold: it is presumed lost and listed on the attention page (actor: system).",
+		Params:      []string{"last_contact_at", "threshold_h"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per crossing; the device's next contact ends it with device.stale_cleared.",
+	},
+	CodeDeviceStaleCleared: {
+		Code: CodeDeviceStaleCleared, Emitted: true,
+		Description: "A device that was stale contacted Paddock again; its staleness alert and the presumed lost mark are cleared (actor: system).",
+		Params:      []string{"last_contact_at", "previous"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodePlatformOSVStale: {
+		Code: CodePlatformOSVStale, Emitted: true,
+		Description: "Ubuntu's vulnerability data (OSV) has not been updated successfully for 3 days; findings keep the last data (actor: system, platform pseudo-organization).",
+		Params:      []string{"last_success_at", "last_error"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per stale period; the next successful download or import ends it. last_success_at is missing if no download ever succeeded.",
+	},
+	CodePlatformOSVImported: {
+		Code: CodePlatformOSVImported, Emitted: true,
+		Description: "An operator imported Ubuntu's vulnerability data (OSV) from a file with paddock-server osv import (actor: system osv-import, platform pseudo-organization).",
+		Params:      []string{"records", "entries", "data_version"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "The file path is not recorded. data_version is the version of the data after a successful import.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

@@ -95,3 +95,27 @@ func TestRevocationEnabled(t *testing.T) {
 		}
 	}
 }
+
+// TestStalenessUnit: thresholds count hours; minutes only in development (plan M5b decision 9).
+func TestStalenessUnit(t *testing.T) {
+	for _, tc := range []struct {
+		env, value string
+		want       time.Duration
+		fails      bool
+	}{
+		{"production", "", time.Hour, false},
+		{"production", "hour", time.Hour, false},
+		{"development", "minute", time.Minute, false},
+		{"production", "minute", time.Hour, true},
+		{"development", "second", time.Hour, true},
+	} {
+		vars := map[string]string{}
+		if tc.value != "" {
+			vars["PADDOCK_STALENESS_UNIT"] = tc.value
+		}
+		l := NewLoaderFrom(vars)
+		if got := StalenessUnit(l, Common{Env: tc.env}); got != tc.want || (l.Err() != nil) != tc.fails {
+			t.Errorf("%s %q: %s, %v", tc.env, tc.value, got, l.Err())
+		}
+	}
+}

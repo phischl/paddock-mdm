@@ -38,6 +38,8 @@ type Deps struct {
 	Revocations   *app.Revocations
 	DMS           *app.DMS
 	Inventory     *app.Inventory
+	Updates       *app.Updates
+	Attention     *app.Attention
 	Runner        *app.ActionRunner
 	Keys          *Keyring
 	OIDC          *OIDC
@@ -116,6 +118,12 @@ var privileged = map[string]struct {
 	"POST /api/v1/revocation-requests/{id}/reject":                         {app.ScopeOrg, app.SpecRevocationReject},
 	"POST /api/v1/revocation-requests/{id}/cancel":                         {app.ScopeOrg, app.SpecRevocationCancel},
 	"PUT /api/v1/settings/dms":                                             {app.ScopeOrg, app.SpecDMSUpdate},
+	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
+	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
+	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
+	"DELETE /api/v1/package-holds/{id}":                                    {app.ScopeOrg, app.SpecPackageHoldDelete},
+	"POST /api/v1/devices/{id}/install-now":                                {app.ScopeOrg, app.SpecInstallNow},
+	"POST /api/v1/device-groups/{id}/install-now":                          {app.ScopeOrg, app.SpecInstallNow},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -139,7 +147,7 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, now: d.Now,
+		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

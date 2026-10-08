@@ -80,6 +80,14 @@ export type VulnerableDevice = components['schemas']['VulnerableDevice']
 export type VulnerableDeviceSort = components['parameters']['VulnerableDeviceSort']
 export type VulnerabilitySummary = components['schemas']['VulnerabilitySummary']
 export type Severity = components['schemas']['Severity']
+export type UpdateSettings = components['schemas']['UpdateSettings']
+export type UpdateSettingsUpdate = components['schemas']['UpdateSettingsUpdate']
+export type PackageHold = components['schemas']['PackageHold']
+export type PackageHoldSort = components['parameters']['PackageHoldSort']
+export type DeviceUpdates = components['schemas']['DeviceUpdates']
+export type Attention = components['schemas']['Attention']
+export type AttentionKind = components['schemas']['AttentionKind']
+export type AttentionSort = components['parameters']['AttentionSort']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

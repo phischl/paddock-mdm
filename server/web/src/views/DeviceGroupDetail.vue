@@ -3,16 +3,29 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import InstallNowDialog from '../components/InstallNowDialog.vue'
 import { api, problemCode, type Device, type DeviceGroup } from '../api/client'
 import { listGroupDevices, stateFilter } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
+import { installNowGroup } from '../lib/updates'
+import { useSessionStore } from '../stores/session'
 
 const { t, locale } = useI18n()
 const route = useRoute()
 const problemText = useProblemText()
+const session = useSessionStore()
 const id = computed(() => String(route.params.id))
+const installOpen = ref(false)
+const notice = ref('')
+
+async function install(packages: string[]): Promise<{ problem: string; detail?: string } | null> {
+  const res = await installNowGroup(id.value, packages)
+  if (typeof res !== 'number') return res
+  notice.value = t('updates.installNow.requestedGroup', { count: res })
+  return null
+}
 const group = ref<DeviceGroup | null>(null)
 const problem = ref('')
 onMounted(async () => {
@@ -45,7 +58,23 @@ const columns: ListColumn[] = [
       {{ problemText(problem) }}
     </p>
     <template v-if="group">
-      <h1>{{ group.name }}</h1>
+      <div class="page-header">
+        <h1>{{ group.name }}</h1>
+        <v-btn
+          v-if="session.canWrite"
+          color="primary"
+          data-testid="group-install-now"
+          @click="installOpen = true"
+        >
+          {{ t('updates.installNow.label') }}
+        </v-btn>
+      </div>
+      <p
+        v-if="notice"
+        role="status"
+      >
+        {{ notice }}
+      </p>
       <p class="summary">
         {{ group.description }}
       </p>
@@ -74,6 +103,11 @@ const columns: ListColumn[] = [
           {{ formatDateTime(item.enrolled_at, locale) }}
         </template>
       </DataList>
+      <InstallNowDialog
+        v-model="installOpen"
+        :title="t('updates.installNow.titleGroup', { name: group.name })"
+        :install="install"
+      />
     </template>
   </section>
 </template>

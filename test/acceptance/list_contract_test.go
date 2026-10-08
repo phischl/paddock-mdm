@@ -163,12 +163,16 @@ func TestListContract(t *testing.T) {
 				}
 				keys := make([]string, len(page.Items))
 				for i, it := range page.Items {
-					keys[i] = fmt.Sprint(it[field])
+					keys[i] = rankKey(field, fmt.Sprint(it[field]))
 				}
 				if s[0] == '-' {
 					reverse(keys, nullsLast[field])
 				}
-				if err := order.ascending(keys, prop.Value); err != nil {
+				schema := prop.Value
+				if _, ok := ranks[field]; ok {
+					schema = openapi3.NewIntegerSchema()
+				}
+				if err := order.ascending(keys, schema); err != nil {
 					t.Errorf("sort=%s: %v", s, err)
 				}
 				t.Logf("sort=%s: %d of %d items in order", s, len(page.Items), page.Total)
@@ -267,8 +271,26 @@ func (c *collation) ascending(keys []string, prop *openapi3.Schema) error {
 const nullKey = "<nil>"
 
 // nullsLast are the sort fields whose missing values sort last in both directions: findings without CVSS score
-// (Fleet free reports none) stay below the scored ones also when sorted by descending score.
-var nullsLast = map[string]bool{"cvss_score": true}
+// (Fleet free reports none) stay below the scored ones also when sorted by descending score, findings of unknown
+// severity below the rated ones.
+var nullsLast = map[string]bool{"cvss_score": true, "severity": true}
+
+// ranks are the sort fields that order by rank rather than by value, lowest first (plan M5c decision 5); the values
+// missing from a rank are the field's missing values.
+var ranks = map[string][]string{"severity": {"low", "medium", "high", "critical"}}
+
+// rankKey turns the value of a ranked field into its rank, or nullKey for an unranked value (unknown); other fields'
+// values stay.
+func rankKey(field, value string) string {
+	order, ok := ranks[field]
+	if !ok {
+		return value
+	}
+	if i := slices.Index(order, value); i >= 0 {
+		return strconv.Itoa(i)
+	}
+	return nullKey
+}
 
 // reverse turns the keys of a descending sort into ascending order; with nullsLast, only the values before the first
 // null are reversed, so a null before a value stays there and fails the order check.

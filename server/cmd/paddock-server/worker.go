@@ -8,6 +8,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/fleet"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/osvfeed"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
@@ -39,6 +40,15 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	fleetToken := l.SecretFile("PADDOCK_FLEET_TOKEN_FILE")
 	fleetPublicURL := l.Required("PADDOCK_FLEET_PUBLIC_URL")
 	inventoryEvery := l.Duration("PADDOCK_INVENTORY_SYNC_INTERVAL", worker.DefaultInventorySyncInterval)
+	// Ubuntu's vulnerability data (ADR 0020, plan M5c decision 1); development stacks download every interval from the
+	// fixture server of gate O1 instead of once a day.
+	osvURL := l.String("PADDOCK_OSV_UBUNTU_URL", osvfeed.DefaultURL)
+	osvEvery := l.Duration("PADDOCK_OSV_SYNC_INTERVAL", 0)
+	if osvEvery != 0 && (osvEvery < 0 || !common.Development()) {
+		l.Invalid("PADDOCK_OSV_SYNC_INTERVAL", "only allowed with PADDOCK_ENV=development, and positive")
+	}
+	// Development stacks count the staleness thresholds in minutes (plan M5b decision 9, gate U4).
+	stalenessUnit := config.StalenessUnit(l, common)
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -49,9 +59,9 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	defer pool.Close()
 	// The platform pool serves the rollout round (agent releases are platform data, plan M2b decision 19) and the host
 	// mapping of the inventory round (plan M5a decision 6), and holds the advisory locks of the rollout, the two
-	// identity, the dead man's switch and the inventory rounds for their whole duration; two more connections are left
-	// for those rounds' own queries and the readiness check.
-	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 7})
+	// identity, the dead man's switch, the inventory and the osv-sync rounds for their whole duration; two more
+	// connections are left for those rounds' own queries and the readiness check.
+	platformPool, err := db.NewPlatformPool(ctx, platformDSN, db.Options{ApplicationName: "paddock-worker-platform", MaxConns: 8})
 	if err != nil {
 		return err
 	}
@@ -83,12 +93,15 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	escrowStore := worker.NewEscrow(app.NewEscrow(pool, escrowObjects), cache, pool, platformPool)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
+	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
+		min(worker.StalenessInterval, stalenessUnit/4))
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
 		platformPool, inventoryEvery)
+	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
 	slog.InfoContext(ctx, "worker starting")
 
 	return runAll(ctx,
@@ -113,11 +126,13 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		escrowStore.Run,
 		cacheSync.Run,
 		dms.Run,
+		staleness.Run,
 		rollouts.Run,
 		identity.RunSync,
 		identity.RunReconcile,
 		identity.RunBrandFlows,
 		inventory.RunSettings,
 		inventory.RunSync,
+		osvSync.Run,
 	)
 }

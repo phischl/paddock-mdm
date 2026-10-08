@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
@@ -39,6 +40,8 @@ const (
 	TypeSystemdUnit = "systemd_unit"
 	TypeLogin       = "login" // schema v2
 	TypeSudo        = "sudo"  // schema v2
+	// TypeUpdates is the type and ID of the resource the agent makes of the updates section (plan M5b decision 4).
+	TypeUpdates = "updates"
 )
 
 // Bundle is the desired state of one device.
@@ -61,6 +64,9 @@ type Bundle struct {
 	// Inventory enrolls the device into the inventory system (schema v2 only, plan M5a decision 4). Agents that do
 	// not know it ignore the field.
 	Inventory *Inventory `json:"inventory,omitempty"`
+	// Updates configures security updates, regular updates and package holds (schema v2 only, plan M5b decision 4).
+	// It is a section, not a resource, so agents that do not know it ignore it instead of rejecting the bundle.
+	Updates *UpdatesSpec `json:"updates,omitempty"`
 }
 
 // Inventory is fleetd's installation and enrollment. The enroll secret only lets a host enroll into Fleet; Paddock
@@ -211,6 +217,99 @@ type SudoSpec struct {
 	PrivilegedGroups   []string        `json:"privileged_groups"`
 	SudoersDAllowlist  []string        `json:"sudoers_d_allowlist"`
 	BreakGlassAccounts []string        `json:"break_glass_accounts"`
+}
+
+// UpdatesSpec is the updates section (plan M5b decision 4): the schedule of daily
+// security updates (unattended-upgrades, local device time) and of regular updates (paddock-updates.timer), and the
+// packages held on the device.
+type UpdatesSpec struct {
+	SecurityDailyAt       string `json:"security_daily_at"` // HH:MM, see ValidTimeOfDay
+	RegularSchedule       string `json:"regular_schedule"`  // see ValidSchedule
+	RegularUpdatesEnabled bool   `json:"regular_updates_enabled"`
+	MaxRandomDelayMin     int    `json:"max_random_delay_min"`
+	Holds                 []Hold `json:"holds"` // sorted by package
+}
+
+// Hold is a held package: Version nil holds the installed version (apt-mark hold), a version pins it (apt
+// preferences, Pin-Priority 1001).
+type Hold struct {
+	Package string  `json:"package"`
+	Version *string `json:"version"`
+}
+
+// MaxRandomDelayMin bounds UpdatesSpec.MaxRandomDelayMin.
+const MaxRandomDelayMin = 720
+
+var (
+	packageName    = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+$`)
+	packageVersion = regexp.MustCompile(`^[A-Za-z0-9.+:~-]+$`)
+	timeOfDay      = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
+	weekdays       = []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+)
+
+// maxPackageField bounds package names and versions.
+const maxPackageField = 128
+
+// ValidPackage reports whether name is a Debian package name; it becomes an argument of apt-mark and apt-get and a
+// line of apt and unattended-upgrades configuration on the device.
+func ValidPackage(name string) bool {
+	return len(name) <= maxPackageField && packageName.MatchString(name)
+}
+
+// ValidPackageVersion reports whether v is a Debian package version.
+func ValidPackageVersion(v string) bool {
+	return len(v) <= maxPackageField && packageVersion.MatchString(v)
+}
+
+// ValidTimeOfDay reports whether s is a time of day HH:MM (24 h).
+func ValidTimeOfDay(s string) bool { return timeOfDay.MatchString(s) }
+
+// ValidSchedule reports whether s is in the subset of systemd OnCalendar expressions Paddock accepts (plan M5b
+// decision 1): an optional comma-separated list of distinct weekdays (Mon … Sun) followed by HH:MM, e.g. "Sat 04:00",
+// "Mon,Thu 12:30" or "02:00" (every day).
+func ValidSchedule(s string) bool {
+	days, at, ok := strings.Cut(s, " ")
+	if !ok {
+		return ValidTimeOfDay(s)
+	}
+	if !ValidTimeOfDay(at) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, d := range strings.Split(days, ",") {
+		if !slices.Contains(weekdays, d) || seen[d] {
+			return false
+		}
+		seen[d] = true
+	}
+	return true
+}
+
+// ValidateUpdates checks every field of an updates spec.
+func ValidateUpdates(s UpdatesSpec) error {
+	switch {
+	case !ValidTimeOfDay(s.SecurityDailyAt):
+		return fmt.Errorf("bundle: invalid security_daily_at %q", s.SecurityDailyAt)
+	case !ValidSchedule(s.RegularSchedule):
+		return fmt.Errorf("bundle: invalid regular_schedule %q", s.RegularSchedule)
+	case s.MaxRandomDelayMin < 0 || s.MaxRandomDelayMin > MaxRandomDelayMin:
+		return fmt.Errorf("bundle: invalid max_random_delay_min %d", s.MaxRandomDelayMin)
+	}
+	for _, h := range s.Holds {
+		if !ValidPackage(h.Package) || (h.Version != nil && !ValidPackageVersion(*h.Version)) {
+			return fmt.Errorf("bundle: invalid hold %q", h.Package)
+		}
+	}
+	return nil
+}
+
+// UpdatesResource turns the updates section into the resource the agent plans and applies. Nil holds are encoded as
+// an empty list.
+func UpdatesResource(s UpdatesSpec) (Resource, error) {
+	if s.Holds == nil {
+		s.Holds = []Hold{}
+	}
+	return resource(TypeUpdates, TypeUpdates, s)
 }
 
 // FileResource builds a file resource; ContentSHA256 is computed from Content.

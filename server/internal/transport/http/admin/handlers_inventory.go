@@ -12,9 +12,9 @@ import (
 // List definitions of the inventory endpoints (plan M5a decision 9); they match x-paddock-list.
 var (
 	deviceSoftwareList   = listing.Spec{Sort: []string{"name", "version"}, DefaultSort: "name"}
-	findingList          = listing.Spec{Sort: []string{"cvss_score", "cve"}, DefaultSort: "-cve"}
+	findingList          = listing.Spec{Sort: []string{"cvss_score", "severity", "cve"}, DefaultSort: "-cve"}
 	softwareList         = listing.Spec{Sort: []string{"name", "version", "device_count"}, DefaultSort: "name"}
-	vulnerabilityList    = listing.Spec{Sort: []string{"cvss_score", "cve", "device_count"}, DefaultSort: "-cve"}
+	vulnerabilityList    = listing.Spec{Sort: []string{"cvss_score", "severity", "cve", "device_count"}, DefaultSort: "-cve"}
 	vulnerableDeviceList = listing.Spec{Sort: []string{"hostname"}, DefaultSort: "hostname"}
 )
 
@@ -61,7 +61,8 @@ func (h *handlers) ListDeviceVulnerabilities(ctx context.Context, req adminapi.L
 func toFinding(r pgstore.ListDeviceVulnerabilitiesRow) adminapi.VulnerabilityFinding {
 	return adminapi.VulnerabilityFinding{
 		Cve: r.Cve, SoftwareName: r.SoftwareName, SoftwareVersion: r.SoftwareVersion, CvssScore: r.CvssScore,
-		Severity: adminapi.Severity(r.Severity), FixedVersion: r.FixedVersion, FirstSeenAt: r.FirstSeenAt.UTC(),
+		Severity: adminapi.Severity(r.Severity), FixedVersion: r.FixedVersion, CvssVector: r.CvssVector,
+		FirstSeenAt: r.FirstSeenAt.UTC(),
 	}
 }
 
@@ -101,7 +102,7 @@ func (h *handlers) ListVulnerabilities(ctx context.Context, req adminapi.ListVul
 	items := make([]adminapi.Vulnerability, len(res.Items))
 	for i, r := range res.Items {
 		items[i] = adminapi.Vulnerability{Cve: r.Cve, CvssScore: r.CvssScore, Severity: adminapi.Severity(r.Severity),
-			DeviceCount: int(r.DeviceCount), FixedVersion: r.FixedVersion}
+			DeviceCount: int(r.DeviceCount), FixedVersion: r.FixedVersion, CvssVector: r.CvssVector}
 	}
 	return adminapi.ListVulnerabilities200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }

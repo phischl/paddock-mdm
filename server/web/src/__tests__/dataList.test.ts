@@ -168,4 +168,15 @@ describe('DataList', () => {
     const { w } = await mountList('/list', fetch)
     expect(w.find('p[role="alert"]').text()).toBe('You are not allowed to do this.')
   })
+
+  it('marks the table busy and names the loading bar while a request runs', async () => {
+    let resolve: (page: Page<Row>) => void = () => undefined
+    const fetch = vi.fn(() => new Promise<Page<Row>>((r) => { resolve = r }))
+    const { w } = await mountList('/list', fetch)
+    expect(w.find('.table').attributes('aria-busy')).toBe('true')
+    expect(w.find('.table [role="progressbar"][aria-hidden="false"]').attributes('aria-label')).toBe('Loading results')
+    resolve(pageOf({ page: 1, page_size: 25, sort: 'name' }, 3))
+    await flushPromises()
+    expect(w.find('.table').attributes('aria-busy')).toBe('false')
+  })
 })
