@@ -79,3 +79,27 @@ Alertmanager/Grafana bundling; multi-region.
 ## 6. Stop conditions
 pgBackRest cannot archive to the S3 endpoint (RustFS) — then report; any need to weaken a production default; M0 §11
 S2/S6/S7/S8.
+
+## Amendment 2026-10-08 (architect)
+Decided on the implementer's questions during PDK-005; binding for steps 1–4.
+
+1. **Links between the hosts (decision 1).** The audit host reaches RabbitMQ and OpenBao on the control plane, the
+   control plane reaches the audit PostgreSQL (read-only role). These endpoints are published only on
+   `${PADDOCK_INTERCONNECT_ADDR}`, the host's address on a private interconnect the operator provides (VPN or private
+   network), never on `0.0.0.0`. Every link between the hosts MUST use TLS: `amqps` on 5671 only (no 5672 on the
+   interconnect), PostgreSQL `sslmode=verify-full` for the audit reader, OpenBao over TLS. Each host generates its own
+   internal CA at install (`make prod-secrets HOST=…`); the CA certificates (public) are exchanged, so each side
+   trusts both (`internal-ca/bundle.crt`) and no CA key leaves its host. `prod-check` FAILs on a plaintext cross-host
+   link and on any published port other than 80/443 that is not bound to `${PADDOCK_INTERCONNECT_ADDR}`.
+2. **Audit bucket check (decision 2).** Runs on the audit host with `make prod-check HOST=audit ONLINE=1`, using the
+   writer credential, which gains the read-only permission `s3:GetBucketObjectLockConfiguration`. Offline the item is
+   "not checked" and reported as FAIL on the audit host; the control plane has no such item.
+3. **Development release key (decision 2).** FAIL when the matching minisign secret key (`<name>.key`) lies next to
+   the configured public key, and when the configured key equals a key `make dev-release-key` produced
+   (`.secrets/release/*.pub`) if that file is known on the host. Production public keys live in
+   `.secrets/release-production/`.
+4. **Secret files (decision 2).** World-readable means any user of the host can read the file: it has the read bit
+   for others and every directory above it lets others pass (a 0644 file in the 0700 secrets directory is private).
+   An empty secret file counts as missing.
+5. The production settings template is `deploy/compose/prod.env.example`; `make prod-check` runs from source in the
+   pinned Go image, so production hosts need no Go toolchain.

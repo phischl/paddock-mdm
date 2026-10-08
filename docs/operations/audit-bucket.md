@@ -37,7 +37,8 @@ aws --endpoint-url "$ENDPOINT" s3api get-object-lock-configuration --bucket padd
 ```
 
 Then create the writer credential with a policy that allows only `s3:PutObject`, `s3:PutObjectRetention`,
-`s3:GetObject`, `s3:GetObjectRetention` on `arn:aws:s3:::paddock-audit/*` and `s3:ListBucket` on
+`s3:GetObject`, `s3:GetObjectRetention` on `arn:aws:s3:::paddock-audit/*` and `s3:ListBucket` and
+`s3:GetBucketObjectLockConfiguration` (read-only; `make prod-check HOST=audit ONLINE=1` verifies the bucket with it) on
 `arn:aws:s3:::paddock-audit` (RustFS: `rc admin policy create`, `rc admin user add`, `rc admin policy attach`; see the
 development script for the exact policy document). No operator account receives `s3:DeleteObject`,
 `s3:BypassGovernanceRetention` or `s3:PutBucketPolicy` on this bucket.

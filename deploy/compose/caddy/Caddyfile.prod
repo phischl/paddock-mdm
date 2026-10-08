@@ -1,0 +1,69 @@
+{
+	# Production (compose.prod.yaml, plan M6a decision 1): certificates from a public ACME CA (HTTP-01 on port 80),
+	# one per hostname. The routes match caddy/Caddyfile of the development stack, without `tls internal`.
+	email {$PADDOCK_ACME_EMAIL}
+	admin 127.0.0.1:2019
+}
+
+# The portal and admin API SHOULD be limited to an IP allow list or VPN (architecture §4.1):
+# PADDOCK_ADMIN_ALLOWED_CIDRS, space-separated (default: every address).
+admin.{$PADDOCK_DOMAIN} {
+	@denied not remote_ip {$PADDOCK_ADMIN_ALLOWED_CIDRS}
+	respond @denied 403
+	reverse_proxy paddock-api:8080
+}
+
+auth.{$PADDOCK_DOMAIN} {
+	reverse_proxy authentik-server:9000
+}
+
+device.{$PADDOCK_DOMAIN} {
+	reverse_proxy paddock-gateway:8081
+}
+
+# Bundles are served only through presigned GET URLs (architecture §7.3); everything else is refused at the edge.
+# Agent packages are public (plan M4b decision 1): /packages/… maps to the anonymously readable packages/ prefix of
+# paddock-agent-artifacts.
+bundles.{$PADDOCK_DOMAIN} {
+	@packages {
+		method GET HEAD
+		path /packages/*
+	}
+	handle @packages {
+		rewrite * /paddock-agent-artifacts{path}
+		reverse_proxy rustfs:9000
+	}
+	@read {
+		method GET HEAD
+		path /paddock-bundles/* /paddock-agent-artifacts/*
+	}
+	handle @read {
+		reverse_proxy rustfs:9000
+	}
+	# Devices upload escrowed LUKS headers with presigned PUTs (plan M4b decision 10); the signature fixes the key.
+	@escrow {
+		method PUT
+		path /paddock-escrow/org/*
+	}
+	handle @escrow {
+		reverse_proxy rustfs:9000
+	}
+	handle {
+		respond 403
+	}
+}
+
+# Fleet (plan M5a decision 1, architecture §4.1): only the device endpoints of osquery and fleetd are published.
+fleet.{$PADDOCK_DOMAIN} {
+	@carve path /api/osquery/carve/* /api/v1/osquery/carve/*
+	handle @carve {
+		respond 404
+	}
+	@device path /api/osquery/* /api/v1/osquery/* /api/fleet/orbit/*
+	handle @device {
+		reverse_proxy fleet:8080
+	}
+	handle {
+		respond 404
+	}
+}

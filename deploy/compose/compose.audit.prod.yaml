@@ -1,0 +1,46 @@
+# Production overrides of the audit host (plan M6a decision 1, architecture §4.1): `docker compose -p paddock
+# -f compose.audit.yaml -f compose.audit.prod.yaml`. The audit domain has its own credentials; the control plane
+# reaches only audit-postgres with the read-only role, over TLS (sslmode=verify-full) on the interconnect address.
+# The audit writer reaches RabbitMQ (amqps) and OpenBao (TLS) on the control plane's interconnect address.
+
+x-paddock-prod:
+  interconnect_addr: ${PADDOCK_INTERCONNECT_ADDR:?set PADDOCK_INTERCONNECT_ADDR in .env}
+  revocation_accepted: ${PADDOCK_REVOCATION_ACCEPTED:-no}
+
+services:
+  audit-postgres:
+    # PostgreSQL refuses a key file that others can read; the entrypoint copies the bind-mounted key with mode 0600
+    # for the postgres user before it starts the server with TLS.
+    command:
+      - sh
+      - -c
+      - >-
+        install -d -m 700 -o postgres -g postgres /var/run/postgresql/tls &&
+        install -m 600 -o postgres -g postgres /run/secrets/audit_postgres_tls_key /var/run/postgresql/tls/server.key &&
+        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_min_protocol_version=TLSv1.2
+        -c ssl_cert_file=/run/secrets/audit_postgres_tls_crt -c ssl_key_file=/var/run/postgresql/tls/server.key
+    secrets: [audit_postgres_tls_crt, audit_postgres_tls_key]
+    ports:
+      # The api's read-only audit view (paddock_audit_reader).
+      - "${PADDOCK_INTERCONNECT_ADDR}:5432:5432"
+
+  paddock-audit-migrate:
+    environment:
+      PADDOCK_ENV: production
+
+  paddock-audit-writer:
+    environment:
+      PADDOCK_ENV: production
+      PADDOCK_AMQP_URL: amqps://${PADDOCK_CONTROLPLANE_ADDR:?set PADDOCK_CONTROLPLANE_ADDR in .env}:5671/paddock
+      PADDOCK_OPENBAO_ADDR: https://${PADDOCK_CONTROLPLANE_ADDR}:8200
+      BAO_CACERT: /run/secrets/internal_ca_bundle
+      # amqps verifies RabbitMQ's certificate against the internal CAs.
+      SSL_CERT_FILE: /run/secrets/internal_ca_bundle
+    secrets: [internal_ca_bundle]
+    # The network cp exists on the control-plane host only; the interconnect is reached through the host.
+    networks: !override [audit-index, audit-store]
+
+secrets:
+  internal_ca_bundle: { file: ./.secrets/internal-ca/bundle.crt }
+  audit_postgres_tls_crt: { file: ./.secrets/tls/audit-postgres.crt }
+  audit_postgres_tls_key: { file: ./.secrets/tls/audit-postgres.key }
