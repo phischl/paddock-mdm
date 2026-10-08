@@ -110,7 +110,8 @@ func TestReportUpdateRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	exit := start.Add(5 * time.Minute)
-	sys.Shows[reconcile.SecurityUnit] = "ActiveExitTimestamp=@" + strconv.FormatInt(exit.Unix(), 10) + "\nResult=success\n"
+	sys.Shows[reconcile.SecurityUnit] = "ExecMainStartTimestamp=@" + strconv.FormatInt(start.Unix(), 10) +
+		"\nExecMainExitTimestamp=@" + strconv.FormatInt(exit.Unix(), 10) + "\nResult=success\n"
 
 	a.reportUpdateRuns(ctx)
 	a.reportUpdateRuns(ctx) // nothing new
@@ -129,7 +130,8 @@ func TestReportUpdateRuns(t *testing.T) {
 		t.Fatalf("runs %+v", runs)
 	}
 	// A failed unit is a failed run.
-	sys.Shows[reconcile.SecurityUnit] = "ActiveExitTimestamp=@" + strconv.FormatInt(exit.Unix()+86400, 10) + "\nResult=exit-code\n"
+	sys.Shows[reconcile.SecurityUnit] = "ExecMainStartTimestamp=@" + strconv.FormatInt(exit.Unix()+86000, 10) +
+		"\nExecMainExitTimestamp=@" + strconv.FormatInt(exit.Unix()+86400, 10) + "\nResult=exit-code\n"
 	a.reportUpdateRuns(ctx)
 	a.Cycle(ctx)
 	last := g.Events[len(g.Events)-1]

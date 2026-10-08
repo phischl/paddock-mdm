@@ -108,13 +108,34 @@ func TestParseUnattendedLog(t *testing.T) {
 	}
 }
 
-func TestParseUnitExit(t *testing.T) {
-	at, result, ok := ParseUnitExit("ActiveExitTimestamp=@1791443000\nResult=success\n")
-	if !ok || result != "success" || at.Unix() != 1791443000 {
-		t.Fatalf("%s %s %v", at, result, ok)
+func TestParseUnitRun(t *testing.T) {
+	u, ok := ParseUnitRun("ExecMainStartTimestamp=@1791442900\nExecMainExitTimestamp=@1791443000\nResult=success\n")
+	if !ok || u.Result != "success" || u.Exited.Unix() != 1791443000 || u.Started.Unix() != 1791442900 {
+		t.Fatalf("%+v %v", u, ok)
 	}
-	if _, _, ok := ParseUnitExit("ActiveExitTimestamp=\nResult=success\n"); ok {
+	if _, ok := ParseUnitRun("ExecMainStartTimestamp=\nExecMainExitTimestamp=\nResult=success\n"); ok {
 		t.Fatal("a unit that never ran")
+	}
+}
+
+// TestSecurityRun: only a log run that began during the unit's run counts; an older one in the log does not.
+func TestSecurityRun(t *testing.T) {
+	start := time.Date(2026, 10, 8, 3, 20, 0, 0, time.Local)
+	log := []byte(start.Add(-5*24*time.Hour).Format("2006-01-02 15:04:05") + ",000 INFO Starting unattended upgrades script\n" +
+		start.Add(-5*24*time.Hour).Format("2006-01-02 15:04:05") + ",500 INFO Packages that will be upgraded: a b c\n")
+	unit := UnitRun{Started: start.UTC(), Exited: start.Add(time.Minute).UTC(), Result: "success"}
+	if r := SecurityRun(unit, log, true); r.Upgraded != 0 || !r.StartedAt.Equal(unit.Started) || !r.FinishedAt.Equal(unit.Exited) ||
+		!r.RebootRequired || r.Result != protocol.UpdatesResultOK {
+		t.Fatalf("stale log run attributed: %+v", r)
+	}
+	log = append(log, []byte(start.Format("2006-01-02 15:04:05")+",100 INFO Starting unattended upgrades script\n"+
+		start.Format("2006-01-02 15:04:05")+",500 INFO Packages that will be upgraded: libssl3t64\n")...)
+	if r := SecurityRun(unit, log, false); r.Upgraded != 1 {
+		t.Fatalf("current log run: %+v", r)
+	}
+	unit.Result = "exit-code"
+	if r := SecurityRun(unit, nil, false); r.Result != protocol.UpdatesResultFailed || r.Error != "apt-daily-upgrade.service: exit-code" {
+		t.Fatalf("failed unit: %+v", r)
 	}
 }
 

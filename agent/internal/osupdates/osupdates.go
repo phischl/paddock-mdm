@@ -142,21 +142,59 @@ func logLine(line string) (time.Time, string, string, bool) {
 	return at.UTC(), f[2], f[3], true
 }
 
-// ParseUnitExit reads `systemctl show --timestamp=unix -p ActiveExitTimestamp,Result <unit>`: when the unit's last
-// run ended and its result. ok is false before the first run.
-func ParseUnitExit(out string) (exited time.Time, result string, ok bool) {
+// UnitRun is the last run of a unit: when its main process started and exited, and its result.
+type UnitRun struct {
+	Started, Exited time.Time
+	Result          string
+}
+
+// ParseUnitRun reads `systemctl show --timestamp=unix -p ExecMainStartTimestamp,ExecMainExitTimestamp,Result <unit>`
+// (apt-daily-upgrade.service is a oneshot, which never becomes active, so it has no ActiveExitTimestamp). ok is false
+// before the first run ended.
+func ParseUnitRun(out string) (run UnitRun, ok bool) {
+	unix := func(v string) time.Time {
+		if sec, err := strconv.ParseInt(strings.TrimPrefix(v, "@"), 10, 64); err == nil && sec > 0 {
+			return time.Unix(sec, 0).UTC()
+		}
+		return time.Time{}
+	}
 	for line := range strings.Lines(out) {
 		k, v, _ := strings.Cut(strings.TrimSpace(line), "=")
 		switch k {
-		case "ActiveExitTimestamp":
-			if sec, err := strconv.ParseInt(strings.TrimPrefix(v, "@"), 10, 64); err == nil && sec > 0 {
-				exited, ok = time.Unix(sec, 0).UTC(), true
-			}
+		case "ExecMainStartTimestamp":
+			run.Started = unix(v)
+		case "ExecMainExitTimestamp":
+			run.Exited = unix(v)
 		case "Result":
-			result = v
+			run.Result = v
 		}
 	}
-	return exited, result, ok
+	return run, !run.Exited.IsZero()
+}
+
+// logSlack is how much earlier than the unit's start a run in the unattended-upgrades log may begin and still belong
+// to it (clock granularity of systemd's timestamps).
+const logSlack = time.Minute
+
+// SecurityRun is the report of the last run of apt-daily-upgrade.service: the counts of the unattended-upgrades log
+// run that began during it, or none (apt.systemd.daily may decide not to run unattended-upgrades at all), the unit's
+// times, and failed when the unit failed.
+func SecurityRun(unit UnitRun, log []byte, rebootRequired bool) protocol.UpdatesRun {
+	run, found := ParseUnattendedLog(log)
+	if !found || run.StartedAt.Before(unit.Started.Add(-logSlack)) || run.StartedAt.After(unit.Exited) {
+		run = protocol.UpdatesRun{Kind: protocol.UpdatesKindSecurity, HeldBack: []string{}, Result: protocol.UpdatesResultOK}
+	}
+	if !unit.Started.IsZero() {
+		run.StartedAt = unit.Started
+	}
+	run.FinishedAt, run.RebootRequired = unit.Exited, rebootRequired
+	if unit.Result != "success" {
+		run.Result = protocol.UpdatesResultFailed
+		if run.Error == "" {
+			run.Error = "apt-daily-upgrade.service: " + unit.Result
+		}
+	}
+	return run
 }
 
 // RebootRequired reports whether a package asked for a reboot (/var/run/reboot-required).
