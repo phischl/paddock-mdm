@@ -189,6 +189,20 @@ onBeforeUnmount(() => observer.disconnect())
           {{ t('nav.dms') }}
         </v-btn>
         <v-btn
+          v-if="session.canReadGroups"
+          to="/api-tokens"
+          variant="text"
+        >
+          {{ t('nav.apiTokens') }}
+        </v-btn>
+        <v-btn
+          v-if="session.canReadGroups"
+          to="/change-sets"
+          variant="text"
+        >
+          {{ t('nav.changeSets') }}
+        </v-btn>
+        <v-btn
           v-if="session.canReadAudit"
           to="/audit"
           variant="text"

@@ -28,7 +28,9 @@
     "attention": "Attention",
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
-    "updateSettings": "Updates"
+    "updateSettings": "Updates",
+    "apiTokens": "API tokens",
+    "changeSets": "Change sets"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -625,6 +627,70 @@
     "copy": "Copy",
     "copied": "Copied to the clipboard.",
     "done": "Done"
+  },
+  "apiTokens": {
+    "title": "API tokens",
+    "summary": "API tokens let automation such as paddockctl act in this organization with one role. Everything a token does is in the audit log under its name.",
+    "create": "Create API token",
+    "createTitle": "New API token",
+    "nameHint": "Letters, digits, spaces, dots, underscores and hyphens; at most 64 characters.",
+    "nameInvalid": "The name must start with a letter or digit and have at most 64 characters of letters, digits, spaces, '.', '_' and '-'.",
+    "role": "Role",
+    "roles": {
+      "org_admin": "Organization administrator",
+      "org_operator": "Operator",
+      "org_auditor": "Auditor"
+    },
+    "roleAboveCeiling": "The role exceeds your own role.",
+    "expires": "Expires",
+    "expiryTooSoon": "The token must be valid for at least 1 hour.",
+    "expiryTooLate": "The token can be valid for at most 365 days.",
+    "prefix": "Prefix",
+    "status": "Status",
+    "statuses": {
+      "active": "Active",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "createdBy": "Created by",
+    "lastUsed": "Last used",
+    "neverUsed": "Never",
+    "secret": "API token",
+    "shownOnce": "This is the only time the token is shown. Copy it now and store it like a password; Paddock keeps only a hash of it.",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke API token",
+    "revokeConfirm": "Revoke the API token {name}? Requests made with it are refused from now on.",
+    "revokeLabel": "Revoke {name}"
+  },
+  "changeSets": {
+    "title": "Change sets",
+    "summary": "Every configuration applied with paddockctl or PUT /api/v1/config that changed something, with its plan.",
+    "appliedAt": "Applied",
+    "actor": "By",
+    "source": "Source",
+    "sources": {
+      "session": "Portal session",
+      "api_token": "API token"
+    },
+    "created": "Created",
+    "updated": "Updated",
+    "deleted": "Deleted",
+    "details": "Details",
+    "detailsLabel": "Details of the change set of {at}",
+    "detailsTitle": "Change set",
+    "detailsSummary": "Applied by {actor} on {at}.",
+    "section": "Section",
+    "key": "Item",
+    "action": "Change",
+    "actions": {
+      "create": "Created",
+      "update": "Updated",
+      "delete": "Deleted"
+    },
+    "field": "Field",
+    "before": "Before",
+    "after": "After",
+    "close": "Close"
   },
   "managed": {
     "scope": "Applies to",
