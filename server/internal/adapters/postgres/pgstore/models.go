@@ -499,14 +499,16 @@ type UserGroupMember struct {
 }
 
 type VulnerabilityFinding struct {
-	DeviceID        uuid.UUID
-	OrganizationID  uuid.UUID
-	Cve             string
-	SoftwareName    string
-	SoftwareVersion string
-	CvssScore       *float64
-	Severity        *string
-	FixedVersion    *string
-	FirstSeenAt     time.Time
-	CvssVector      *string
+	DeviceID          uuid.UUID
+	OrganizationID    uuid.UUID
+	Cve               string
+	SoftwareName      string
+	SoftwareVersion   string
+	CvssScore         *float64
+	Severity          *string
+	FixedVersion      *string
+	FirstSeenAt       time.Time
+	CvssVector        *string
+	FleetSeverity     *string
+	FleetFixedVersion *string
 }

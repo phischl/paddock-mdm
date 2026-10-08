@@ -10,6 +10,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/osv"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
@@ -34,7 +35,8 @@ func runOSV(ctx context.Context, l *config.Loader, args []string) error {
 	}
 	defer pool.Close()
 	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "osv-import"})
-	st, err := app.NewOSV(nil, nil, pool).Import(sys, "", func(fn func(osv.Entry) error) (osv.Stats, error) { return osv.Read(f, fn) })
+	runner := app.NewActionRunner(nil, pool, httpx.RequestID)
+	st, err := app.NewOSV(runner, nil, pool).ImportFile(sys, func(fn func(osv.Entry) error) (osv.Stats, error) { return osv.Read(f, fn) })
 	if err != nil {
 		return fmt.Errorf("import %s: %w", args[1], err)
 	}
