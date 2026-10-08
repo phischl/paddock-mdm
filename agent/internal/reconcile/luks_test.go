@@ -61,8 +61,9 @@ type dataVolume struct {
 	slots int
 	// hang blocks isLuks until it is closed, whatever the context says (a disk stuck in the kernel); isLuks counts
 	// the calls.
-	hang   chan struct{}
-	isLuks atomic.Int32
+	hang    chan struct{}
+	isLuks  atomic.Int32
+	backups atomic.Int32 // luksHeaderBackup calls
 }
 
 func (d *dataVolume) command(line, device string, args []string) (string, string, int, error) {
@@ -84,6 +85,7 @@ func (d *dataVolume) command(line, device string, args []string) (string, string
 	case line == "cryptsetup luksDump -- "+device:
 		return d.dump(), "", 0, nil
 	case strings.HasPrefix(line, "cryptsetup luksHeaderBackup "+device+" --header-backup-file "):
+		d.backups.Add(1)
 		return "", "", 0, os.WriteFile(args[3], []byte(d.dump()), 0o600)
 	}
 	return "", "unexpected", -1, errors.New("unexpected command " + line)
@@ -112,6 +114,19 @@ func (d *dataVolume) dump() string {
 
 func (v *volume) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
+	if file, ok := strings.CutPrefix(line, "cryptsetup luksUUID -- "); ok && strings.HasSuffix(file, ".img") {
+		// A header backup: the UUID of the volume whose header it holds (a data volume's dump names its UUID).
+		data, err := os.ReadFile(file) //nolint:gosec // a backup file of the test layout
+		if err != nil {
+			return "", "no such file", 1, nil
+		}
+		for _, d := range v.extra {
+			if d.uuid != "" && bytes.Contains(data, []byte(d.uuid)) {
+				return d.uuid + "\n", "", 0, nil
+			}
+		}
+		return rootUUID + "\n", "", 0, nil
+	}
 	for device, d := range v.extra {
 		if slices.Contains(args, device) {
 			return d.command(line, device, args)
@@ -799,5 +814,71 @@ func TestLUKSHungVolumeKeepsTicking(t *testing.T) {
 			t.Fatal("the inventory was never used after the disk answered")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestLUKSRenumberedVolume (PDK-009 review round 4): when the disks were renumbered between the inventory and the
+// escrow (X and Y swapped their device paths), the header backup is Y's: it is discarded, nothing is escrowed under X,
+// and the next inventory escrows each volume with its own header.
+func TestLUKSRenumberedVolume(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	if s := f.settle(); s != protocol.DiskCompliant {
+		t.Fatalf("root not compliant: %s", s)
+	}
+	f.addVolume("/dev/vdb1", &dataVolume{uuid: dataUUID, slots: 1})
+	f.addVolume("/dev/vdc1", &dataVolume{uuid: oldUUID, slots: 2})
+	swap := true
+	f.m.Background = func(fn func()) {
+		fn()
+		if swap {
+			f.vol.extra["/dev/vdb1"], f.vol.extra["/dev/vdc1"] = f.vol.extra["/dev/vdc1"], f.vol.extra["/dev/vdb1"]
+			swap = false
+		}
+	}
+	h := f.m.Tick(context.Background(), f.keys, true)
+	if n := len(f.volumeHeaders(dataUUID)) + len(f.volumeHeaders(oldUUID)); n != 0 || h.State == protocol.DiskCompliant {
+		t.Fatalf("escrowed %d headers from a renumbered device, state %s", n, h.State)
+	}
+	if s := f.settle(); s != protocol.DiskCompliant {
+		t.Fatalf("after a new inventory: %s", s)
+	}
+	for _, volume := range []string{dataUUID, oldUUID} {
+		headers := f.volumeHeaders(volume)
+		if len(headers) != 1 || !bytes.Contains(f.openHeader(headers[0]), []byte(volume)) {
+			t.Fatalf("volume %s: %d headers, or another volume's header", volume, len(headers))
+		}
+	}
+}
+
+// TestLUKSNoEscrowWhileScanning (PDK-009 review round 4, real goroutine path): while an inventory is in flight —
+// here a hung one — no header is backed up, whatever the last completed inventory says; once it completes, its result
+// is used for the escrow.
+func TestLUKSNoEscrowWhileScanning(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	if s := f.settle(); s != protocol.DiskCompliant {
+		t.Fatalf("root not compliant: %s", s)
+	}
+	hang := make(chan struct{})
+	data := &dataVolume{uuid: dataUUID, slots: 1, hang: hang}
+	f.addVolume("/dev/vdb1", data)
+	f.m.Background = nil
+	for range 10 {
+		f.m.Tick(context.Background(), f.keys, true)
+		f.poll()
+	}
+	if n := data.backups.Load(); n != 0 || len(f.volumeHeaders(dataUUID)) != 0 {
+		t.Fatalf("%d header backups while the inventory hangs", n)
+	}
+	close(hang)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(f.volumeHeaders(dataUUID)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the completed inventory was never used for the escrow")
+		}
+		f.m.Tick(context.Background(), f.keys, true)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := data.backups.Load(); n != 1 {
+		t.Fatalf("%d header backups, want 1", n)
 	}
 }

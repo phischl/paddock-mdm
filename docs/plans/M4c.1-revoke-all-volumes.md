@@ -89,3 +89,10 @@ Review round 3 (architect, 2026-10-08; exception to the two-round limit, finding
   The agent loop never blocks on it.
 - A redelivered refused upload with the same `escrow_id` writes no second refusal audit.
 - The 32-volume cap check takes a transaction-level advisory lock per device.
+
+Review round 4 (architect, 2026-10-08; `agent/internal/reconcile/luks.go` only):
+- Before a header backup is sealed, its LUKS UUID (`cryptsetup luksUUID <file>`) must equal the volume's; on a
+  mismatch (renumbered devices) the backup is discarded, nothing is escrowed for that volume, and a new inventory
+  follows.
+- No header escrow while an inventory is in flight: escrows run only right after a completed inventory, against its
+  result.
