@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -125,6 +126,9 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 func (ex *configExec) deviceGroup(ctx context.Context, c declarative.Change) error {
 	if c.Action == declarative.ActionDelete {
 		if err := ex.requireAdmin("delete device groups"); err != nil {
+			return err
+		}
+		if err := ex.lockedGroupIsEmpty(ctx, c); err != nil {
 			return err
 		}
 		n, err := ex.q.DeleteDeviceGroup(ctx, ex.id(c))
@@ -393,6 +397,33 @@ func (ex *configExec) loginSettings(ctx context.Context) error {
 	return err
 }
 
+// lockedGroupIsEmpty locks the device group a change deletes (FOR UPDATE: the portal's inserts of scoped rows and
+// members take FOR KEY SHARE on it and wait) and refuses the deletion with in_use while the group still has member
+// devices (PDK-014) or scoped rows. The planned deletions of its items ran before, so a scoped row here was added
+// after the configuration was read, and the cascade would remove it outside the plan (review 3 of PDK-008).
+func (ex *configExec) lockedGroupIsEmpty(ctx context.Context, c declarative.Change) error {
+	id, name := ex.id(c), strconv.Quote(ex.st.names[c.Key])
+	if _, err := ex.q.LockDeviceGroup(ctx, id); err != nil {
+		return notFound(err)
+	}
+	members, err := ex.q.CountDeviceGroupMembers(ctx, id)
+	if err != nil {
+		return err
+	}
+	if members > 0 {
+		return problem.InUse.WithDetail(fmt.Sprintf("device group %s still has %d member devices; move them to other groups in the portal first", name, members))
+	}
+	scoped, err := ex.q.CountDeviceGroupScopedRows(ctx, id)
+	if err != nil {
+		return err
+	}
+	if scoped > 0 {
+		return problem.InUse.WithDetail(fmt.Sprintf("device group %s has %d managed files, units, package holds or profile assignments that "+
+			"the plan does not delete (added after the configuration was read); review the plan again", name, scoped))
+	}
+	return nil
+}
+
 // scopedItem is an item of a group-scoped section: its device group and where it is.
 type scopedItem struct {
 	group *string
@@ -436,10 +467,12 @@ func scopedItems(d declarative.Document, section string) (bool, []scopedItem) {
 	return true, out
 }
 
-// guardGroupDeletions makes every row that the deletion of a device group removes (its scoped files, units, holds and
+// guardGroupDeletions makes every scoped row that the deletion of a device group removes (its files, units, holds and
 // assignments go with it, ON DELETE CASCADE) appear as a deletion in the plan, or refuses the whole apply (review 2 of
 // PDK-008): a section the document leaves out may not hold items of a deleted group (409 in_use), and a section it
-// includes may not list one (422 invalid_document), because the cascade would remove the item outside the plan.
+// includes may not list one (422 invalid_document), because the cascade would remove the item outside the plan. It
+// checks the configuration as read; lockedGroupIsEmpty checks again under the group's lock and refuses groups that
+// still have member devices, which paddock.v1 does not hold (PDK-014).
 func (ex *configExec) guardGroupDeletions(plan declarative.Plan) error {
 	deleted := map[string]bool{}
 	for _, c := range plan.Changes {
