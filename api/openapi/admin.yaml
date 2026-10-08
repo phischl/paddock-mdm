@@ -3155,7 +3155,7 @@ components:
           allOf:
             - $ref: "#/components/schemas/MeOrganization"
           nullable: true
-        locale: { type: string, enum: [en] }
+        locale: { type: string, enum: [en, de] }
         revocation_enabled:
           type: boolean
           description: |
@@ -3182,7 +3182,7 @@ components:
       required: [locale]
       additionalProperties: false
       properties:
-        locale: { type: string, enum: [en] }
+        locale: { type: string, enum: [en, de] }
     DeviceGroup:
       type: object
       required: [id, name, description, created_at, updated_at]

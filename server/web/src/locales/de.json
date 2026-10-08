@@ -1,0 +1,1067 @@
+{
+  "app": {
+    "name": "Paddock",
+    "skipToContent": "Zum Inhalt springen",
+    "loading": "Wird geladen …",
+    "signedInAs": "Angemeldet als {name}",
+    "logout": "Abmelden",
+    "mainNavigation": "Hauptnavigation",
+    "error": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
+    "language": "Sprache",
+    "languageMenu": "Sprache wählen (aktuell: {language})",
+    "languages": {
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "languageFailed": "Die Sprache konnte nicht gespeichert werden."
+  },
+  "nav": {
+    "deviceGroups": "Gerätegruppen",
+    "audit": "Audit-Protokoll",
+    "organizations": "Organisationen",
+    "devices": "Geräte",
+    "enrollmentTokens": "Registrierungstoken",
+    "managedFiles": "Verwaltete Dateien",
+    "managedUnits": "Verwaltete Units",
+    "agentReleases": "Agent-Releases",
+    "users": "Benutzer",
+    "userGroups": "Gruppen",
+    "permissionProfiles": "Berechtigungsprofile",
+    "loginSettings": "Anmeldung & Rechte",
+    "revocations": "Widerrufe",
+    "dms": "Totmannschalter",
+    "software": "Software",
+    "vulnerabilities": "Schwachstellen",
+    "attention": "Handlungsbedarf",
+    "attentionCount": "{count, plural, one {# offener Befund} other {# offene Befunde}}",
+    "packageHolds": "Zurückgehaltene Pakete",
+    "updateSettings": "Updates"
+  },
+  "roles": {
+    "org_admin": "Organisationsadministrator",
+    "org_operator": "Operator",
+    "org_auditor": "Auditor",
+    "platform_admin": "Plattformadministrator"
+  },
+  "common": {
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "create": "Anlegen",
+    "edit": "Bearbeiten",
+    "delete": "Löschen",
+    "actions": "Aktionen",
+    "name": "Name",
+    "description": "Beschreibung",
+    "createdAt": "Angelegt",
+    "updatedAt": "Geändert",
+    "empty": "Noch keine Einträge."
+  },
+  "list": {
+    "search": "Suche",
+    "pageSize": "Einträge pro Seite",
+    "range": "{total, plural, =0 {Keine Ergebnisse} one {{from, number}–{to, number} von # Ergebnis} other {{from, number}–{to, number} von # Ergebnissen}}",
+    "rangeCapped": "{from, number}–{to, number} von über {total, number} Ergebnissen",
+    "cappedHint": "Mehr als {total, number} Ergebnisse passen. Schränken Sie Suche oder Filter ein, um alle zu sehen.",
+    "noResults": "Keine Ergebnisse passen zu Suche oder Filtern.",
+    "loading": "Ergebnisse werden geladen"
+  },
+  "confirm": {
+    "typeToConfirm": "Geben Sie zur Bestätigung {text} ein"
+  },
+  "deviceGroups": {
+    "title": "Gerätegruppen",
+    "count": "{count, plural, =0 {Keine Gerätegruppen} one {# Gerätegruppe} other {# Gerätegruppen}}",
+    "create": "Gerätegruppe anlegen",
+    "createTitle": "Neue Gerätegruppe",
+    "editTitle": "Gerätegruppe bearbeiten",
+    "deleteTitle": "Gerätegruppe löschen",
+    "deleteConfirm": "Die Gerätegruppe {name} löschen? Das kann nicht rückgängig gemacht werden.",
+    "editLabel": "{name} bearbeiten",
+    "deleteLabel": "{name} löschen",
+    "back": "Zurück zu den Gerätegruppen",
+    "members": "Geräte in dieser Gruppe"
+  },
+  "validation": {
+    "nameRequired": "Geben Sie einen Namen ein.",
+    "nameTooLong": "Der Name darf höchstens 100 Zeichen lang sein.",
+    "descriptionTooLong": "Die Beschreibung darf höchstens 1000 Zeichen lang sein.",
+    "slugInvalid": "Verwenden Sie 3 bis 32 Kleinbuchstaben, Ziffern und Bindestriche; Anfang und Ende sind ein Buchstabe oder eine Ziffer.",
+    "orgNameRequired": "Geben Sie einen Namen mit höchstens 200 Zeichen ein.",
+    "maxUsesInvalid": "Geben Sie eine Zahl von 1 bis 1000 ein.",
+    "pathInvalid": "Geben Sie einen absoluten Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ ein.",
+    "modeInvalid": "Geben Sie vier Oktalziffern ohne Sonderbits ein, zum Beispiel 0644.",
+    "ownerInvalid": "Besitzer und Gruppe sind Benutzer- und Gruppennamen in Kleinbuchstaben.",
+    "contentTooLarge": "Der Inhalt darf höchstens 64 KiB groß sein.",
+    "unitInvalid": "Geben Sie einen Unit-Namen ein, der auf .service, .timer, .socket oder .path endet."
+  },
+  "problems": {
+    "name_taken": "Ein Eintrag mit diesem Namen existiert bereits.",
+    "slug_taken": "Dieser Slug ist bereits vergeben.",
+    "forbidden": "Dazu sind Sie nicht berechtigt.",
+    "not_found": "Dieser Eintrag existiert nicht mehr.",
+    "upstream_unavailable": "Der Identitätsanbieter ist nicht erreichbar. Die Organisation wurde gespeichert und kann erneut eingerichtet werden.",
+    "range_too_large": "Der Zeitraum darf höchstens 92 Tage umfassen.",
+    "page_out_of_range": "Diese Seite liegt zu weit zurück. Schränken Sie Suche oder Filter ein.",
+    "invalid_request": "Die Anfrage war ungültig.",
+    "internal": "Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.",
+    "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
+    "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
+    "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
+    "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der geschützten Bereiche.",
+    "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
+    "username_taken": "Dieser Benutzername ist bereits vergeben.",
+    "domain_taken": "Eine dieser Domains gehört zu einer anderen Organisation.",
+    "attribute_owned_upstream": "Das wird im Quellverzeichnis verwaltet und kann in Paddock nicht geändert werden.",
+    "invalid_command": "Ein Befehl ist nicht erlaubt: Verwenden Sie einen absoluten Pfad mit optionalen Argumenten, ohne ALL, !, # und die Zeichen , : = \\ ^ $ * ? [ ].",
+    "setting_locked": "Diese Einstellung kann nicht mehr geändert werden: Geräte verwenden sie bereits.",
+    "step_up_required": "Bestätigen Sie Ihre Identität, um fortzufahren.",
+    "step_up_failed": "Die Identitätsbestätigung ist fehlgeschlagen. Versuchen Sie es erneut mit Ihrem eigenen Konto.",
+    "revocation_disabled": "Der Widerruf ist in dieser Installation nicht aktiviert (Abnahme ausstehend).",
+    "revocation_frozen": "Sie können 24 Stunden lang keine Widerrufe anfordern oder freigeben, weil Sie ein Widerrufslimit überschritten haben.",
+    "revocation_rejected": "Der Widerruf wurde abgelehnt.",
+    "invalid_schedule": "Der Zeitplan ist ungültig: Verwenden Sie Wochentage (Mon … Sun, durch Kommas getrennt) und HH:MM, z. B. „Sat 04:00“.",
+    "package_on_hold": "Ein Paket wird zurückgehalten: Das Zurückhalten hat Vorrang vor einer Sofortinstallation.",
+    "too_many_devices": "Die Gruppe hat mehr als 500 aktive Geräte: Installieren Sie auf kleineren Gruppen."
+  },
+  "audit": {
+    "title": "Audit-Protokoll",
+    "from": "Von",
+    "to": "Bis",
+    "code": "Ereignis",
+    "time": "Zeit",
+    "event": "Ereignis",
+    "outcome": "Ergebnis",
+    "actor": "Akteur",
+    "actorType": "Art des Akteurs",
+    "actorTypes": {
+      "admin": "Administrator",
+      "platform_admin": "Plattformadministrator",
+      "system": "System",
+      "anonymous": "Anonym",
+      "device": "Gerät"
+    },
+    "outcomes": {
+      "success": "Erfolg",
+      "failure": "Fehlschlag",
+      "denied": "Verweigert",
+      "unknown": "Unbekannt"
+    },
+    "admin": {
+      "login": "{actor} hat sich angemeldet"
+    },
+    "organization": {
+      "created": "{actor} hat die Organisation {slug} angelegt",
+      "domains_changed": "{actor} hat die Domains von {slug} festgelegt"
+    },
+    "device_group": {
+      "created": "{actor} hat die Gerätegruppe {name} angelegt",
+      "updated": "{actor} hat die Gerätegruppe {name} geändert",
+      "deleted": "{actor} hat die Gerätegruppe {name} gelöscht"
+    },
+    "enrollment_token": {
+      "created": "{actor} hat das Registrierungstoken {name} angelegt",
+      "revoked": "{actor} hat das Registrierungstoken {name} widerrufen"
+    },
+    "device": {
+      "enrolled": "Das Gerät {hostname} hat sich registriert",
+      "approved": "{actor} hat das Gerät {hostname} freigegeben",
+      "rejected": "{actor} hat das Gerät {hostname} abgelehnt",
+      "quarantine_released": "{actor} hat das Gerät {hostname} aus der Quarantäne entlassen",
+      "retired": "{actor} hat das Gerät {hostname} außer Betrieb genommen",
+      "groups_changed": "{actor} hat die Gerätegruppen von {hostname} geändert",
+      "clone_suspected": "Das Gerät {hostname} wurde unter Quarantäne gestellt, weil seine Identität geklont zu sein scheint",
+      "bundle_applied": "Das Gerät {target} hat Bundle {bundle_version, number} angewendet",
+      "bundle_rejected": "Das Gerät {target} hat ein Bundle abgelehnt",
+      "config_drift_corrected": "Das Gerät {target} hat eine lokale Änderung korrigiert",
+      "agent_updated": "Das Gerät {target} hat seinen Agent auf {version} aktualisiert",
+      "agent_update_failed": "Das Gerät {target} hat Agent {version} abgelehnt ({outcome})",
+      "agent_rolled_back": "Das Gerät {target} hat Agent {version} auf {from_version} zurückgesetzt",
+      "agent_events_dropped": "Das Gerät {target} hat {count, number} Ereignisse verworfen, während der Server nicht erreichbar war",
+      "login_assignment_changed": "{actor} hat geändert, wer sich an {hostname} anmelden darf",
+      "logins_suspended": "{actor} hat die Anmeldungen an {hostname} ausgesetzt",
+      "logins_resumed": "{actor} hat die Anmeldungen an {hostname} wieder zugelassen",
+      "bundle_render_failed": "Ein neues Bundle für {target} wurde blockiert: Die sudo-Rechte von {username} haben die Prüfung nicht bestanden",
+      "bundle_entry_omitted": "Das Bundle für {target} lässt die sudo-Rechte von {username} aus: Ein Berechtigungsprofil enthält einen Befehl, der nicht mehr erlaubt ist",
+      "login_applied": "Das Gerät {target} hat seine Anmeldekonfiguration angewendet",
+      "login_apply_failed": "Das Gerät {target} konnte seine Anmeldekonfiguration nicht anwenden (Schritt {stage})",
+      "user_lock_applied": "Das Gerät {target} hat den gesperrten Benutzer {username} blockiert",
+      "logins_suspension_applied": "Das Gerät {target} hat Verzeichnisanmeldungen ausgesetzt und {sessions_terminated, number} Sitzungen beendet",
+      "sudo_apply_failed": "Das Gerät {target} konnte die sudo-Rechte nicht anwenden",
+      "sudo_user_unresolved": "Das Gerät {target} kennt {username} noch nicht; die sudo-Rechte gelten nach der ersten Anmeldung",
+      "tamper_sudo_group_member": "Das Gerät {target} hat {username} aus der privilegierten Gruppe {group} entfernt",
+      "tamper_sudoers_d_file": "Das Gerät {target} hat die unerwartete sudoers-Datei {file} in Quarantäne verschoben",
+      "tamper_sudoers_changed": "Das Gerät {target} hat eine Änderung an /etc/sudoers festgestellt",
+      "tamper_protected_file_changed": "Das Gerät {target} hat eine Änderung an der geschützten Datei {file} festgestellt",
+      "tamper_local_admin_changed": "Das Gerät {target} hat eine Änderung an seinem lokalen Administratorkonto festgestellt ({field})",
+      "tamper_keyslot_changed": "Das Gerät {target} hat eine Änderung an den Keyslots seiner Festplatte festgestellt",
+      "tamper_service_stopped": "Das Gerät {target} hat den gestoppten Dienst {unit} festgestellt und neu gestartet",
+      "tamper_agent_not_running": "fleetd meldet, dass der Paddock-Agent auf {target} nicht läuft",
+      "revocation_trust_pinned_tofu": "Das Gerät {target} hat die Widerrufsschlüssel seines ersten Bundles, das sie enthielt, festgeschrieben (Trust on First Use)",
+      "escrow_destroyed": "Die in der Treuhand-Ablage hinterlegten Festplattenschlüssel von {hostname} wurden vernichtet und die Vernichtung des Geräts wurde ausgestellt",
+      "revocation_confirmed": "Das Gerät {target} hat bestätigt, dass seine Keyslots gelöscht sind",
+      "revocation_refused": "Das Gerät {target} hat einen Widerruf abgelehnt ({reason})",
+      "presumed_self_locked": "Das Gerät {target} hat Paddock länger als die Frist des Totmannschalters nicht erreicht und hat sich vermutlich selbst gesperrt",
+      "install_now_requested": "{actor} hat {target} beauftragt, {packages} sofort zu installieren",
+      "updates_run": "Das Gerät {target} hat seine {kind, select, security {Sicherheitsupdates} regular {regulären Updates} other {Updates ({kind})}} abgeschlossen: {result, select, ok {{upgraded, number} Pakete aktualisiert} timeout {Zeitüberschreitung} other {fehlgeschlagen}}",
+      "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
+      "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
+      "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert"
+    },
+    "revocation": {
+      "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
+      "approved": "{actor} hat die Vernichtung von {hostname} freigegeben",
+      "rejected": "{actor} hat die Anforderung {action, select, lock {der Sperre} destroy {der Vernichtung} other {des Widerrufs}} von {hostname} abgelehnt",
+      "cancelled": "{actor} hat die Anforderung {action, select, lock {der Sperre} destroy {der Vernichtung} other {des Widerrufs}} von {hostname} zurückgezogen",
+      "issued": "{action, select, lock {Die Sperre} destroy {Die Vernichtung} self_lock {Die Selbstsperre} other {Der Widerruf}} von {hostname} wurde ausgestellt",
+      "issue_refused": "Der Widerrufsaussteller hat sich geweigert, einen Widerruf von {hostname} auszustellen ({reason})",
+      "limit_exceeded": "Der Widerrufsaussteller hat einen Widerruf von {hostname} abgelehnt: Ein Widerrufslimit wurde überschritten ({reason})"
+    },
+    "disk": {
+      "recovery_key_revealed": "{actor} hat den Wiederherstellungsschlüssel der Festplatte von {hostname} angezeigt",
+      "header_downloaded": "{actor} hat den LUKS-Header von {hostname} heruntergeladen"
+    },
+    "autoinstall": {
+      "generated": "{actor} hat eine Paddock-Autoinstallation für Ubuntu {release} mit Agent {agent_version} erzeugt"
+    },
+    "agent_release": {
+      "created": "{actor} hat das Agent-Release {version} angelegt",
+      "artifact_uploaded": "{kind, select, deb {{actor} hat das {arch}-Paket {name} des Agent-Releases {version} hochgeladen} other {{actor} hat das {arch}-Binary des Agent-Releases {version} hochgeladen}}",
+      "published": "{actor} hat das Agent-Release {version} veröffentlicht"
+    },
+    "platform": {
+      "osv_stale": "Die Schwachstellendaten von Ubuntu wurden seit 3 Tagen nicht aktualisiert"
+    },
+    "agent_rollout": {
+      "started": "{actor} hat das Rollout von Agent {version} gestartet",
+      "advanced": "Das Rollout von Agent {version} hat {percent, number} % der Geräte erreicht",
+      "halted": "Das Rollout von Agent {version} wurde angehalten",
+      "resumed": "{actor} hat das Rollout von Agent {version} fortgesetzt",
+      "completed": "Das Rollout von Agent {version} wurde abgeschlossen"
+    },
+    "managed_file": {
+      "created": "{actor} hat die verwaltete Datei {path} definiert",
+      "updated": "{actor} hat die verwaltete Datei {path} geändert",
+      "deleted": "{actor} hat die verwaltete Datei {path} gelöscht"
+    },
+    "managed_unit": {
+      "created": "{actor} hat die verwaltete Unit {unit} definiert",
+      "updated": "{actor} hat die verwaltete Unit {unit} geändert",
+      "deleted": "{actor} hat die verwaltete Unit {unit} gelöscht"
+    },
+    "user": {
+      "created": "{actor} hat den Benutzer {username} angelegt",
+      "updated": "{actor} hat den Benutzer {username} geändert",
+      "deleted": "{actor} hat den Benutzer {username} gelöscht",
+      "locked": "{actor} hat den Benutzer {username} gesperrt",
+      "unlocked": "{actor} hat den Benutzer {username} entsperrt",
+      "synced_added": "Der synchronisierte Benutzer {username} wurde hinzugefügt",
+      "synced_removed": "Der synchronisierte Benutzer {username} wurde entfernt"
+    },
+    "user_group": {
+      "created": "{actor} hat die Gruppe {name} angelegt",
+      "updated": "{actor} hat die Gruppe {old_name} in {name} umbenannt",
+      "deleted": "{actor} hat die Gruppe {name} gelöscht",
+      "member_added": "{actor} hat {user} zur Gruppe {group} hinzugefügt (höchste Rechte {effective_class_before} → {effective_class_after})",
+      "member_removed": "{actor} hat {user} aus der Gruppe {group} entfernt (höchste Rechte {effective_class_before} → {effective_class_after})"
+    },
+    "settings": {
+      "login_changed": "{actor} hat die Anmeldeeinstellungen geändert",
+      "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
+      "updates_changed": "{actor} hat die Update-Einstellungen geändert"
+    },
+    "package_hold": {
+      "created": "{actor} hält das Paket {package} zurück",
+      "updated": "{actor} hat das Zurückhalten des Pakets {package} geändert",
+      "deleted": "{actor} hat das Paket {package} freigegeben"
+    },
+    "permission_profile": {
+      "created": "{actor} hat das Berechtigungsprofil {name} angelegt",
+      "updated": "{actor} hat das Berechtigungsprofil {name} geändert",
+      "deleted": "{actor} hat das Berechtigungsprofil {name} gelöscht"
+    },
+    "profile_assignment": {
+      "created": "{actor} hat das Berechtigungsprofil {profile} zugewiesen",
+      "updated": "{actor} hat die Geräte einer Zuweisung von {profile} geändert",
+      "deleted": "{actor} hat eine Zuweisung von {profile} entfernt"
+    },
+    "local_admin": {
+      "rotation_requested": "{actor} hat ein neues Passwort des lokalen Administrators für {hostname} angefordert",
+      "revealed": "{actor} hat das Passwort des lokalen Administrators von {hostname} angezeigt",
+      "rotated": "Das Gerät {target} hat das Passwort {generation, number} des lokalen Administrators gesetzt",
+      "rotation_failed": "Das Gerät {target} konnte das Passwort seines lokalen Administrators nicht rotieren ({reason})",
+      "login": "Der lokale Administrator hat sich an {target} angemeldet ({service})"
+    }
+  },
+  "organizations": {
+    "title": "Organisationen",
+    "create": "Organisation anlegen",
+    "createTitle": "Neue Organisation",
+    "slug": "Slug",
+    "status": "Status",
+    "statuses": {
+      "provisioning": "Wird eingerichtet",
+      "active": "Aktiv",
+      "provisioning_failed": "Einrichtung fehlgeschlagen",
+      "suspended": "Ausgesetzt"
+    }
+  },
+  "agentReleases": {
+    "title": "Agent-Releases",
+    "uploadHint": "Releases werden mit make agent-release gebaut, signiert und hochgeladen; ihre Rollouts starten, halten Sie hier an und setzen sie fort.",
+    "back": "Zurück zu den Agent-Releases",
+    "heading": "Agent {version}",
+    "version": "Version",
+    "status": "Status",
+    "statuses": {
+      "draft": "Entwurf",
+      "published": "Veröffentlicht"
+    },
+    "rollout": "Rollout",
+    "rolloutStatus": "Rollout-Status",
+    "rolloutStatuses": {
+      "running": "Läuft",
+      "halted": "Angehalten",
+      "completed": "Abgeschlossen"
+    },
+    "noRollout": "Nicht ausgerollt",
+    "artifacts": "Artefakte",
+    "packages": "Debian-Pakete",
+    "noPackages": "Keine Debian-Pakete; mit diesem Release können keine Geräte über die Paddock-Autoinstallation installiert werden.",
+    "package": "Paket",
+    "createdBy": "Angelegt",
+    "createdFacts": "{at} von {by}",
+    "publishedAt": "Veröffentlicht",
+    "arch": "Architektur",
+    "sha256": "SHA-256",
+    "size": "Größe",
+    "bytes": "{size, number} Byte",
+    "uploadedAt": "Hochgeladen",
+    "haltedReason": "Angehalten, weil",
+    "wave": "Aktuelle Welle",
+    "waveFacts": "Welle {wave, number} von {waves, number} ({percent} % der Geräte) seit {since}",
+    "waves": "Wellen",
+    "thresholds": "Regeln",
+    "thresholdFacts": "Jede Welle dauert mindestens {minutes, number} Minuten; das Rollout hält an, wenn {min, number} Geräte oder {percent, number} % der Geräte in den bisherigen Wellen fehlschlagen, je nachdem, was mehr ist.",
+    "devices": "Geräte",
+    "countFacts": "{eligible, number} in den bisherigen Wellen, {updated, number} aktualisiert, {failed, number} fehlgeschlagen",
+    "actions": {
+      "start": {
+        "label": "Rollout starten",
+        "title": "Rollout starten?",
+        "confirm": "Agent {version} wird 1 %, 10 %, 50 % und schließlich allen Geräten angeboten, eine Welle pro Tag, und hält automatisch an, wenn zu viele Geräte fehlschlagen."
+      },
+      "halt": {
+        "label": "Rollout anhalten",
+        "title": "Rollout anhalten?",
+        "confirm": "Agent {version} wird keinen weiteren Geräten angeboten. Bereits aktualisierte Geräte behalten ihn."
+      },
+      "resume": {
+        "label": "Rollout fortsetzen",
+        "title": "Rollout fortsetzen?",
+        "confirm": "Agent {version} wird den Geräten der aktuellen Welle erneut angeboten."
+      }
+    }
+  },
+  "loginDenied": {
+    "title": "Zugriff verweigert",
+    "not_authorized": "Ihr Konto ist für das Paddock-Portal nicht berechtigt. Bitten Sie Ihren Administrator, Sie genau einer Paddock-Administratorgruppe hinzuzufügen.",
+    "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
+    "retry": "Erneut anmelden"
+  },
+  "notFound": {
+    "title": "Seite nicht gefunden",
+    "back": "Zur Startseite"
+  },
+  "devices": {
+    "title": "Geräte",
+    "back": "Zurück zu den Geräten",
+    "hostname": "Hostname",
+    "state": "Zustand",
+    "states": {
+      "pending": "Wartet auf Freigabe",
+      "active": "Aktiv",
+      "quarantined": "In Quarantäne",
+      "rejected": "Abgelehnt",
+      "retired": "Außer Betrieb"
+    },
+    "group": "Gerätegruppe",
+    "lastContact": "Letzter Kontakt",
+    "never": "Nie",
+    "bundleVersion": "Bundle-Version",
+    "versions": "{applied, number} angewendet, {latest, number} aktuell",
+    "agentVersion": "Agent-Version",
+    "enrolledAt": "Registriert",
+    "identity": "Identität",
+    "id": "Geräte-ID",
+    "hardwareUuid": "Hardware-UUID",
+    "osRelease": "Betriebssystem",
+    "identityKey": "Identitätsschlüssel",
+    "keyFacts": "{id}… ({protection}, {status})",
+    "groups": "Gerätegruppen",
+    "groupsSaved": "Gerätegruppen gespeichert.",
+    "effectiveConfig": "Wirksame Konfiguration",
+    "conflict": "{resource} wird {count, plural, one {von einer weiteren Gerätegruppe} other {von # weiteren Gerätegruppen}} definiert; es gilt die Definition mit der kleinsten ID.",
+    "actions": {
+      "approve": {
+        "label": "Freigeben",
+        "title": "Gerät freigeben",
+        "confirm": "{hostname} freigeben? Das Gerät wird aktiv und erhält seine Konfiguration."
+      },
+      "reject": {
+        "label": "Ablehnen",
+        "title": "Gerät ablehnen",
+        "confirm": "{hostname} ablehnen? Seine Identität wird widerrufen; das Gerät muss sich erneut registrieren."
+      },
+      "release-quarantine": {
+        "label": "Aus Quarantäne entlassen",
+        "title": "Aus Quarantäne entlassen",
+        "confirm": "{hostname} aus der Quarantäne entlassen? Tun Sie das nur, wenn Sie sicher sind, dass die Identität nicht geklont wurde."
+      },
+      "retire": {
+        "label": "Außer Betrieb nehmen",
+        "title": "Gerät außer Betrieb nehmen",
+        "confirm": "{hostname} außer Betrieb nehmen? Seine Identität wird dauerhaft widerrufen und es erhält keine Konfiguration mehr. Das kann nicht rückgängig gemacht werden."
+      }
+    },
+    "login": {
+      "title": "Anmeldung",
+      "agentTooOld": "Der Agent auf diesem Gerät ist für die Anmeldeverwaltung zu alt: Anmeldungen und sudo-Rechte werden erst nach seinem Update verwaltet.",
+      "suspendedHint": "Verzeichnisanmeldungen sind auf diesem Gerät ausgesetzt. Notfallkonten funktionieren weiterhin.",
+      "assignmentHint": "Wer sich anmelden darf. Lassen Sie beide Felder leer, um allen Benutzern der Organisation die Anmeldung zu erlauben.",
+      "users": "Benutzer",
+      "groups": "Gruppen",
+      "saved": "Anmeldezuweisung gespeichert.",
+      "suspend": {
+        "label": "Anmeldungen aussetzen",
+        "title": "Anmeldungen aussetzen",
+        "confirm": "Verzeichnisanmeldungen an {hostname} aussetzen? Offene Sitzungen von Verzeichnisbenutzern werden beim nächsten Check-in des Geräts beendet."
+      },
+      "resume": {
+        "label": "Anmeldungen zulassen",
+        "title": "Anmeldungen zulassen",
+        "confirm": "Verzeichnisanmeldungen an {hostname} wieder zulassen?"
+      }
+    },
+    "sudo": {
+      "title": "Wirksame sudo-Rechte",
+      "caption": "Benutzer mit sudo-Rechten auf diesem Gerät",
+      "none": "Niemand hat sudo-Rechte auf diesem Gerät.",
+      "rootEquivalent": "{username} hat auf diesem Gerät faktisch Root-Rechte: {commands}",
+      "sudoRsLecture": "Ein eigener sudo-Hinweistext wird von sudo-rs nicht unterstützt; Benutzer sehen den Standardhinweis."
+    },
+    "report": {
+      "title": "Letzte Berichte des Agents",
+      "caption": "Der letzte Anmelde- und sudo-Bericht des Geräts",
+      "area": "Bereich",
+      "report": "Bericht",
+      "at": "Gemeldet am",
+      "areas": {
+        "login": "Anmeldung",
+        "sudo": "Sudo"
+      },
+      "none": "Noch kein Bericht",
+      "events": {
+        "login_applied": "Anmeldekonfiguration angewendet: {changed}",
+        "login_apply_failed": "Anmeldekonfiguration in Schritt {stage} fehlgeschlagen: {message}",
+        "sudo_apply_failed": "Die sudo-Rechte von {username} konnten nicht angewendet werden: {message}",
+        "sudo_apply_failed_config": "Die sudo-Konfiguration hat ihre Prüfung nicht bestanden: {message}",
+        "sudo_user_unresolved": "{username} hat sudo-Rechte, ist auf dem Gerät aber noch nicht bekannt"
+      }
+    },
+    "sudoFlavor": "sudo-Implementierung",
+    "sudoFlavors": {
+      "classic": "sudo",
+      "sudo-rs": "sudo-rs"
+    },
+    "localAdmin": {
+      "title": "Lokaler Administrator",
+      "account": "Konto",
+      "active": "Aktives Passwort",
+      "pending": "Wartet auf das Gerät",
+      "none": "noch keines",
+      "lastRotated": "Letzte Rotation",
+      "nextRotation": "Nächste Rotation",
+      "overdue": "Die Rotation ist überfällig: Das Gerät hat den Server seit dem Fälligkeitstermin nicht erreicht.",
+      "lastError": "Rotation auf Passwort {generation, number} fehlgeschlagen {at}: {reason}",
+      "errors": {
+        "escrow_timeout": "Der Server hat das neue Passwort nicht rechtzeitig gespeichert; das bisherige bleibt gültig",
+        "escrow_failed": "Der Server hat das Speichern des neuen Passworts abgelehnt; das bisherige bleibt gültig",
+        "apply_failed": "Das Gerät konnte das neue Passwort nicht setzen; das bisherige bleibt gültig"
+      },
+      "reveal": {
+        "label": "Passwort anzeigen",
+        "title": "Passwort des lokalen Administrators anzeigen",
+        "confirm": "Das Passwort von {hostname} wird angezeigt und die Anzeige wird im Audit-Protokoll erfasst."
+      },
+      "revealed": {
+        "title": "Passwort von {username}",
+        "hint": "Das Passwort wird in {seconds, number} Sekunden ausgeblendet.",
+        "generation": "Passwort {generation, number} ({state})",
+        "states": {
+          "active": "aktiv",
+          "pending": "vom Gerät noch nicht bestätigt"
+        },
+        "copy": "Kopieren",
+        "copied": "Kopiert",
+        "close": "Ausblenden"
+      },
+      "rotate": {
+        "label": "Jetzt rotieren",
+        "title": "Passwort des lokalen Administrators rotieren",
+        "confirm": "{hostname} setzt ein neues Passwort, sobald es den Server das nächste Mal erreicht; das aktuelle Passwort funktioniert dann nicht mehr.",
+        "requested": "Das Gerät rotiert das Passwort bei seinem nächsten Check-in."
+      }
+    },
+    "disk": {
+      "title": "Festplattenverschlüsselung",
+      "state": "Festplattenverschlüsselung",
+      "states": {
+        "not_encrypted": "Nicht verschlüsselt",
+        "unmanaged": "Verschlüsselt, nicht verwaltet",
+        "tpm_missing": "Kein TPM: nur Passphrase",
+        "tpm_pin_missing": "Boot-PIN übersprungen",
+        "escrow_pending": "Wird eingerichtet",
+        "compliant": "Konform"
+      },
+      "notReported": "Noch nicht gemeldet",
+      "keyslots": "Keyslots",
+      "keyslotFacts": "{count, plural, one {# Keyslot} other {# Keyslots}} ({kinds}), LUKS {version, number}",
+      "reportedAt": "Gemeldet",
+      "recoveryKeyRow": "Wiederherstellungsschlüssel",
+      "headers": "Header-Sicherungen",
+      "volumes": "Verschlüsselte Volumes",
+      "volumeFacts": "{device}{root, select, true { (Root)} other {}}: {count, plural, one {# Keyslot} other {# Keyslots}}, LUKS {version, number}, {escrowed, select, true {Header in der Treuhand-Ablage} other {Header noch nicht in der Treuhand-Ablage}}",
+      "rootVolume": "das Root-Volume",
+      "volumeUnknown": "{device}: nicht inventarisiert, seine LUKS-UUID ist unbekannt",
+      "unresolved": "{source}: in /etc/crypttab eingetragen, aber nicht zugeordnet; nicht in der Treuhand-Ablage",
+      "headerVolumeFacts": "{device}, Generation {generation, number}: {status}, {at}",
+      "none": "noch keine",
+      "escrowFacts": "Generation {generation, number}, hinterlegt {at}",
+      "headerFacts": "Generation {generation, number}: {status}, {at}",
+      "escrowStatuses": {
+        "pending": "wartet auf den Upload",
+        "stored": "hinterlegt",
+        "failed": "fehlgeschlagen"
+      },
+      "keyslotChange": "Die Keyslots wurden {at} außerhalb von Paddock geändert: Aus {before} wurde {after}. Der Header wurde erneut hinterlegt.",
+      "recoveryKey": {
+        "label": "Wiederherstellungsschlüssel anzeigen",
+        "title": "Wiederherstellungsschlüssel der Festplatte anzeigen",
+        "confirm": "Der Wiederherstellungsschlüssel von {hostname} wird angezeigt und im Audit-Protokoll erfasst. Wer ihn kennt, kann die Festplatte entsperren."
+      },
+      "header": {
+        "label": "Header-Sicherung herunterladen",
+        "volumeLabel": "Header von {device} herunterladen",
+        "title": "LUKS-Header-Sicherung herunterladen",
+        "confirm": "Die neueste Header-Sicherung von {device} auf {hostname} wird heruntergeladen und der Download im Audit-Protokoll erfasst."
+      },
+      "revealed": {
+        "title": "Wiederherstellungsschlüssel von {hostname}",
+        "hint": "Der Schlüssel wird in {seconds, number} Sekunden ausgeblendet.",
+        "usage": "Geben Sie bei der Abfrage der Boot-PIN den Wiederherstellungsschlüssel statt der PIN ein; wiederholen Sie das, bis die Festplatte entsperrt ist (das Gerät verbraucht zuerst seine PIN-Versuche).",
+        "generation": "Wiederherstellungsschlüssel {generation, number}",
+        "copy": "Kopieren",
+        "copied": "Kopiert",
+        "close": "Ausblenden"
+      }
+    },
+    "revocation": {
+      "title": "Sperre und Vernichtung",
+      "hint": "Eine Sperre löscht jeden Keyslot des Root-Volumes und jedes anderen verschlüsselten Volumes, dessen Header Paddock in der Treuhand-Ablage hinterlegt hat, und startet das Gerät neu; jedes Volume lässt sich aus seinem hinterlegten Header wiederherstellen (das Root-Volume mit dem Wiederherstellungsschlüssel, die anderen mit ihren eigenen Passphrasen). Verschlüsselte Volumes ohne hinterlegten Header werden bei einer Sperre nicht gelöscht. Eine Vernichtung löscht jedes verschlüsselte Volume und die Treuhand-Ablage, sodass die Daten nicht wiederhergestellt werden können; ein zweiter Administrator muss sie freigeben.",
+      "reason": "Grund",
+      "reasonHint": "Wird den Administratoren angezeigt und mit der Anforderung gespeichert.",
+      "lock": {
+        "label": "Gerät sperren",
+        "title": "Gerät sperren",
+        "confirm": "Das Gerät {hostname} löscht bei seinem nächsten Check-in jeden Keyslot seines Root-Volumes und seiner anderen verschlüsselten Volumes mit hinterlegtem Header und startet neu. Niemand kann sie entsperren, bis ein Administrator sie mit den hinterlegten Headern wiederherstellt."
+      },
+      "destroy": {
+        "label": "Gerät vernichten",
+        "title": "Gerät vernichten",
+        "confirm": "Die hinterlegten Header und der Wiederherstellungsschlüssel von {hostname} werden gelöscht und das Gerät löscht jeden Keyslot jedes verschlüsselten Volumes. Seine Daten können nicht wiederhergestellt werden. Ein zweiter Administrator muss diese Anforderung freigeben, bevor etwas geschieht."
+      },
+      "requested": {
+        "lock": "Die Sperre wurde angefordert. Das Gerät sperrt sich bei seinem nächsten Check-in.",
+        "destroy": "Die Vernichtung wurde angefordert. Sie wartet auf der Seite Widerrufe auf die Freigabe durch einen zweiten Administrator."
+      },
+      "presumedSelfLocked": "Das Gerät hat Paddock seit vor {at} nicht erreicht und hat sich vermutlich selbst gesperrt (Totmannschalter).",
+      "timeline": "Widerrufe dieses Geräts",
+      "steps": "Fortschritt",
+      "timelineSteps": {
+        "requested": "Angefordert {at}",
+        "approved": "Freigegeben {at}",
+        "issued": "Ausgestellt {at}",
+        "delivered": "An das Gerät übermittelt {at}",
+        "confirmed": "Keyslots gelöscht, vom Gerät bestätigt {at}",
+        "finished": "Beendet {at}"
+      },
+      "volumes": "Verschlüsselte Volumes",
+      "incomplete": "Unvollständig: Nicht von jedem verschlüsselten Volume des Geräts ist bekannt, dass es gelöscht ist.",
+      "volume": {
+        "erased": "{device}: {before, plural, one {# Keyslot} other {# Keyslots}} gelöscht",
+        "notErased": "{device}: nicht gelöscht, {after, plural, one {# Keyslot} other {# Keyslots}} übrig",
+        "unknown": "{device}: nicht gelöscht, die verbleibenden Keyslots sind unbekannt",
+        "unresolved": "{source}: in /etc/crypttab eingetragen, aber nicht sicher gelöscht",
+        "skipped": "{device}: nicht gelöscht, sein Header war nicht hinterlegt (das Volume bleibt lesbar)"
+      }
+    },
+    "presumedLost": "Vermutlich verloren seit {at}"
+  },
+  "tokens": {
+    "title": "Registrierungstoken",
+    "create": "Registrierungstoken anlegen",
+    "createTitle": "Neues Registrierungstoken",
+    "validity": "Gültig für",
+    "days": "{count, plural, one {# Tag} other {# Tage}}",
+    "maxUses": "Höchstzahl an Geräten",
+    "group": "Registrierte Geräte hinzufügen zu",
+    "noGroup": "Keine Gerätegruppe",
+    "autoApprove": "Registrierte Geräte automatisch freigeben",
+    "status": "Status",
+    "statuses": {
+      "active": "Aktiv",
+      "revoked": "Widerrufen",
+      "expired": "Abgelaufen",
+      "exhausted": "Aufgebraucht"
+    },
+    "uses": "Verwendungen",
+    "usesOf": "{uses, number} von {max, number}",
+    "expiresAt": "Läuft ab",
+    "revoke": "Widerrufen",
+    "revokeTitle": "Registrierungstoken widerrufen",
+    "revokeConfirm": "Das Registrierungstoken {name} widerrufen? Geräte können sich damit nicht mehr registrieren.",
+    "revokeLabel": "{name} widerrufen",
+    "shownOnce": "Diese Registrierungskonfiguration enthält das Token. Sie wird nur jetzt angezeigt: Kopieren Sie sie und geben Sie sie wie ein Passwort weiter.",
+    "config": "Registrierungskonfiguration",
+    "copy": "Kopieren",
+    "copied": "In die Zwischenablage kopiert.",
+    "done": "Fertig"
+  },
+  "managed": {
+    "scope": "Gilt für",
+    "allDevices": "Alle Geräte",
+    "editLabel": "{name} bearbeiten",
+    "deleteLabel": "{name} löschen",
+    "files": {
+      "title": "Verwaltete Dateien",
+      "create": "Verwaltete Datei anlegen",
+      "createTitle": "Neue verwaltete Datei",
+      "editTitle": "Verwaltete Datei bearbeiten",
+      "deleteTitle": "Verwaltete Datei löschen",
+      "deleteConfirm": "{name} nicht mehr verwalten? Die Geräte behalten die Datei unverändert.",
+      "path": "Pfad",
+      "pathHint": "Unterhalb von /etc/, /usr/local/etc/ oder /opt/; geschützte Systempfade sind nicht erlaubt.",
+      "mode": "Modus",
+      "owner": "Besitzer",
+      "group": "Gruppe",
+      "content": "Inhalt"
+    },
+    "units": {
+      "title": "Verwaltete Units",
+      "create": "Verwaltete Unit anlegen",
+      "createTitle": "Neue verwaltete Unit",
+      "editTitle": "Verwaltete Unit bearbeiten",
+      "deleteTitle": "Verwaltete Unit löschen",
+      "deleteConfirm": "{name} nicht mehr verwalten? Die Geräte behalten die Unit unverändert.",
+      "unit": "Unit",
+      "enabled": "Beim Systemstart aktiviert",
+      "active": "Läuft",
+      "wanted": "Sollzustand",
+      "wantedState": "{enabled, select, true {aktiviert} other {deaktiviert}}, {active, select, true {läuft} other {gestoppt}}"
+    }
+  },
+  "users": {
+    "title": "Benutzer",
+    "create": "Lokalen Benutzer anlegen",
+    "createTitle": "Neuer lokaler Benutzer",
+    "editTitle": "Benutzer bearbeiten",
+    "back": "Zurück zu den Benutzern",
+    "username": "Benutzername",
+    "usernameHint": "Name und eine der Domains der Organisation, zum Beispiel dave@example.org.",
+    "usernameInvalid": "Geben Sie einen Benutzernamen wie dave@example.org ein.",
+    "displayName": "Anzeigename",
+    "email": "E-Mail",
+    "source": "Herkunft",
+    "sources": {
+      "local": "Lokal",
+      "synced": "Synchronisiert"
+    },
+    "lockState": "Sperre",
+    "locked": "Gesperrt",
+    "notLocked": "Nicht gesperrt",
+    "lockedSince": "Gesperrt seit {at}",
+    "lockIncomplete": "Die Sperre ist unvollständig: Authentik hat sie nicht bestätigt, daher fehlt möglicherweise die Abmeldung des Benutzers. Die Geräte des Benutzers weisen ihn bereits ab.",
+    "retryLock": "Sperre wiederholen",
+    "groups": "Gruppen",
+    "recoveryLink": "Passwort-Link",
+    "linkShownOnce": "Geben Sie {username} diesen Einmal-Link: Er setzt das Passwort und ist 24 Stunden gültig. Er wird nur jetzt angezeigt.",
+    "syncedHint": "Dieser Benutzer wird aus einem Quellverzeichnis synchronisiert: Name, E-Mail und Passwort werden dort verwaltet. Sperre, Gruppen und Berechtigungen werden hier verwaltet.",
+    "lock": "Sperren",
+    "lockTitle": "Benutzer sperren",
+    "lockConfirm": "{username} sperren? Online-Anmeldungen schlagen sofort fehl, und die Geräte des Benutzers sperren beim nächsten Check-in seine Sitzungen und weisen Anmeldungen ab.",
+    "unlock": "Entsperren",
+    "unlockTitle": "Benutzer entsperren",
+    "unlockConfirm": "{username} entsperren? Der Benutzer meldet sich erneut mit dem Gerätecode an und richtet eine neue PIN ein.",
+    "deleteTitle": "Benutzer löschen",
+    "deleteConfirm": "{username} mit allen Gruppenmitgliedschaften und Berechtigungen löschen? Das kann nicht rückgängig gemacht werden."
+  },
+  "userGroups": {
+    "title": "Gruppen",
+    "create": "Gruppe anlegen",
+    "import": "Gruppe aus dem Quellverzeichnis importieren",
+    "createTitle": "Neue Gruppe",
+    "importTitle": "Gruppe aus dem Quellverzeichnis importieren",
+    "importAction": "Importieren",
+    "back": "Zurück zu den Gruppen",
+    "slug": "Slug",
+    "slugHint": "Teil des Gruppennamens, den die Geräte sehen; kann später nicht geändert werden.",
+    "slugInvalid": "Verwenden Sie 2 bis 42 Kleinbuchstaben, Ziffern und Bindestriche; Anfang und Ende sind ein Buchstabe oder eine Ziffer.",
+    "authentikName": "Name auf den Geräten",
+    "sources": {
+      "local": "Lokal",
+      "synced": "Importiert"
+    },
+    "upstreamGroup": "Gruppe im Quellverzeichnis",
+    "importHint": "Ihre Mitglieder aus dieser Organisation werden alle paar Minuten übernommen.",
+    "upstreamRequired": "Wählen Sie die zu importierende Gruppe.",
+    "rename": "Umbenennen",
+    "deleteTitle": "Gruppe löschen",
+    "deleteConfirm": "Die Gruppe {name} mit ihren Anmelde- und Berechtigungszuweisungen löschen? Das kann nicht rückgängig gemacht werden.",
+    "mirrorHint": "Die Mitglieder dieser Gruppe werden aus dem Quellverzeichnis übernommen und können hier nicht geändert werden.",
+    "members": "Mitglieder",
+    "addMember": "Mitglied hinzufügen",
+    "add": "Hinzufügen",
+    "remove": "Entfernen",
+    "removeTitle": "Mitglied entfernen",
+    "removeConfirm": "{username} aus {group} entfernen? Der Benutzer verliert die Anmeldungen und Berechtigungen der Gruppe.",
+    "removeLabel": "{username} entfernen"
+  },
+  "profiles": {
+    "title": "Berechtigungsprofile",
+    "create": "Profil anlegen",
+    "createTitle": "Neues Berechtigungsprofil",
+    "editTitle": "Berechtigungsprofil bearbeiten",
+    "back": "Zurück zu den Berechtigungsprofilen",
+    "class": "Klasse",
+    "classes": {
+      "none": "Keine",
+      "restricted": "Eingeschränkt",
+      "full": "Voll"
+    },
+    "classHints": {
+      "none": "Keine sudo-Rechte.",
+      "restricted": "sudo nur für die aufgeführten Befehle.",
+      "full": "sudo für jeden Befehl (root)."
+    },
+    "commands": "Befehle",
+    "commandsHint": "Ein absoluter Befehl pro Zeile, mit optionalen Argumenten.",
+    "commandsRequired": "Geben Sie mindestens einen Befehl ein.",
+    "requirePassword": "Nach dem Passwort fragen",
+    "timeout": "Passwort gemerkt für (Minuten)",
+    "timeoutInvalid": "Geben Sie 0 bis 60 Minuten ein.",
+    "lecture": "Hinweis",
+    "lectures": {
+      "always": "Jedes Mal",
+      "once": "Beim ersten Mal",
+      "never": "Nie"
+    },
+    "rootEquivalentBadge": "root-gleichwertig",
+    "invalidBadge": "ungültig",
+    "invalidProfile": "Diese Befehle sind nicht mehr erlaubt: {commands}. Benutzer, für die das Profil gilt, erhalten auf ihren Geräten keine sudo-Rechte, bis Sie diese Befehle bearbeiten oder entfernen.",
+    "commandCount": "{count, plural, =0 {–} one {# Befehl} other {# Befehle}}",
+    "rootEquivalentProfile": "Diese Befehle geben Root-Rechte weiter, allein oder zusammen: {commands}. Geräte behandeln dieses Profil wie volle Rechte.",
+    "rootEquivalentEffective": "Die kombinierten Befehle geben Root-Rechte weiter: {commands}. Das wird als volle Rechte gemeldet.",
+    "fullTitle": "Volle Rechte vergeben",
+    "fullConfirm": "{name} mit vollen sudo-Rechten anlegen? Jeder, dem es zugewiesen wird, erhält Root-Rechte auf seinen Geräten.",
+    "toFullConfirm": "{name} volle sudo-Rechte geben? Jeder, dem es zugewiesen ist, erhält Root-Rechte auf seinen Geräten.",
+    "assignFullConfirm": "{name} zuweisen, das volle sudo-Rechte vergibt? Das Ziel erhält Root-Rechte auf den betroffenen Geräten.",
+    "deleteTitle": "Berechtigungsprofil löschen",
+    "deleteConfirm": "{name} löschen? Profile, die noch zugewiesen sind, können nicht gelöscht werden.",
+    "scalars": "Einstellungen",
+    "scalarFacts": "Passwortabfrage: {password, select, true {ja} other {nein}}; gemerkt für {timeout, number} min; Hinweis: {lecture}",
+    "assignments": "Zuweisungen",
+    "subjectType": "Zugewiesen an",
+    "subjectTypes": {
+      "global": "Alle",
+      "group": "Gruppe",
+      "user": "Benutzer"
+    },
+    "assignedTo": "Ziel",
+    "scope": "Geräte",
+    "assign": "Zuweisen",
+    "unassign": "Entfernen",
+    "unassignTitle": "Zuweisung entfernen",
+    "unassignConfirm": "{name} von {subject} entfernen? Die damit vergebenen Rechte werden mit dem nächsten Bundle entfernt.",
+    "unassignLabel": "Zuweisung an {subject} entfernen",
+    "everyone": "Alle",
+    "effectiveTitle": "Wirksames sudo-Profil",
+    "onDevice": "Auf Gerät",
+    "noDevice": "Beliebiges Gerät (keine Gerätegruppe)",
+    "classReported": "{class} (gemeldet als {reported})",
+    "derivation": "Woher jedes Recht stammt",
+    "granted": "Recht",
+    "profile": "Profil",
+    "noAssignment": "Kein Profil gilt.",
+    "derived": {
+      "class": "Klasse {value}",
+      "command": "Befehl {item}",
+      "scalar": "{item}: {value}"
+    },
+    "allCommands": "Alle Befehle"
+  },
+  "loginSettings": {
+    "title": "Anmeldung & Rechte",
+    "updatedAt": "Zuletzt geändert {at}",
+    "login": "Geräteanmeldung",
+    "helloEnabled": "Hello-PIN erlauben",
+    "pinLength": "Mindestlänge der PIN",
+    "sessionAction": "Wenn ein Benutzer gesperrt wird",
+    "sessionActions": {
+      "lock_screen": "Sitzungen des Benutzers sperren",
+      "terminate": "Sitzungen des Benutzers beenden (nicht gespeicherte Arbeit geht verloren)"
+    },
+    "sessionActionHint": "Was Geräte mit den offenen Sitzungen eines gesperrten Benutzers tun.",
+    "breakGlass": "Notfallkonten",
+    "breakGlassHint": "Lokale Konten, eines pro Zeile, die Paddock nie einschränkt.",
+    "notice": "Anmeldehinweis",
+    "noticeHint": "Wird auf dem Anmeldebildschirm, auf Textkonsolen und vor SSH-Anmeldungen jedes Geräts angezeigt. Leer lassen für keinen Hinweis.",
+    "privileges": "Rechte",
+    "allowlist": "In /etc/sudoers.d erlaubte Dateien",
+    "allowlistHint": "Ein Dateiname pro Zeile; jede andere Datei dort verschiebt der Agent.",
+    "lecture": "sudo-Hinweis",
+    "lectureHint": "Wird von sudo entsprechend der Hinweis-Einstellung jedes Profils angezeigt.",
+    "localAdmin": "Lokaler Administrator",
+    "localAdminUsername": "Kontoname",
+    "localAdminUsernameHint": "Paddock legt dieses Konto auf jedem Gerät an und rotiert sein Passwort. Der Name kann nicht mehr geändert werden, sobald ein Gerät ihn verwendet.",
+    "rotationDays": "Passwort rotieren alle … Tage",
+    "rotateAfterReveal": "Rotieren … Stunden nach einer Anzeige",
+    "rotateAfterRevealHint": "Leer lassen, um ein angezeigtes Passwort bis zur nächsten regulären Rotation zu behalten.",
+    "diskEncryption": "Festplattenverschlüsselung",
+    "bootPinLength": "Mindestlänge der Boot-PIN",
+    "bootPinLengthHint": "Die Boot-PIN entsperrt die Festplatte bei jedem Start. Mit der Paddock-Autoinstallation installierte Geräte fragen sie beim ersten Start ab; ab jetzt erzeugte Autoinstallationen verwenden diese Länge.",
+    "saved": "Anmeldeeinstellungen gespeichert."
+  },
+  "commands": {
+    "title": "Befehle",
+    "type": "Befehl",
+    "status": "Status",
+    "issuedAt": "Ausgestellt",
+    "expiresAt": "Läuft ab",
+    "types": {
+      "rotate_admin_password": "Passwort des lokalen Administrators rotieren",
+      "delete_self_lock": "Token des Totmannschalters löschen",
+      "install_now": "Pakete sofort installieren"
+    },
+    "statuses": {
+      "pending": "Ausstehend",
+      "delivered": "Übermittelt",
+      "succeeded": "Erfolgreich",
+      "failed": "Fehlgeschlagen",
+      "expired": "Abgelaufen",
+      "cancelled": "Abgebrochen"
+    }
+  },
+  "revocations": {
+    "title": "Widerrufe",
+    "hint": "Anforderungen von Sperren, Vernichtungen und des Totmannschalters der Organisation. Eine Vernichtung wartet hier auf einen zweiten Administrator, der sie freigibt oder ablehnt; wer sie angefordert hat, kann sie zurückziehen.",
+    "disabled": "Der Widerruf ist in dieser Installation nicht aktiviert (Abnahme ausstehend).",
+    "hostname": "Gerät",
+    "action": "Aktion",
+    "status": "Status",
+    "requestedAt": "Angefordert",
+    "requestedBy": "Angefordert von",
+    "reason": "Grund",
+    "deadMansSwitch": "Totmannschalter",
+    "actions": {
+      "lock": "Sperre",
+      "destroy": "Vernichtung",
+      "self_lock": "Selbstsperre"
+    },
+    "statuses": {
+      "requested": "Wartet auf Freigabe",
+      "approved": "Freigegeben",
+      "issued": "Ausgestellt",
+      "delivered": "Übermittelt",
+      "confirmed": "Bestätigt",
+      "failed": "Fehlgeschlagen",
+      "rejected": "Abgelehnt",
+      "cancelled": "Zurückgezogen",
+      "expired": "Abgelaufen"
+    },
+    "review": {
+      "approve": {
+        "label": "Freigeben",
+        "title": "Vernichtung freigeben",
+        "confirm": "Der hinterlegte Header und der Wiederherstellungsschlüssel von {hostname} werden gelöscht und das Gerät löscht jeden Keyslot seiner Festplatte. Seine Daten können nicht wiederhergestellt werden.",
+        "done": "Die Vernichtung von {hostname} wurde freigegeben."
+      },
+      "reject": {
+        "label": "Ablehnen",
+        "title": "Vernichtung ablehnen",
+        "confirm": "Die Vernichtung von {hostname} wird abgelehnt; mit dem Gerät geschieht nichts.",
+        "done": "Die Vernichtung von {hostname} wurde abgelehnt."
+      },
+      "cancel": {
+        "label": "Anforderung zurückziehen",
+        "title": "Vernichtung zurückziehen",
+        "confirm": "Ihre Anforderung, {hostname} zu vernichten, wird zurückgezogen; mit dem Gerät geschieht nichts.",
+        "done": "Die Vernichtung von {hostname} wurde zurückgezogen."
+      }
+    }
+  },
+  "dms": {
+    "title": "Totmannschalter",
+    "warning": "Ist Paddock länger als diese Frist nicht erreichbar, sperrt sich jedes Gerät mit eingeschaltetem Schalter selbst.",
+    "enabled": "Totmannschalter einschalten",
+    "period": "Frist (Tage)",
+    "periodHint": "Tage Betriebszeit ohne Kontakt zu Paddock, nach denen sich ein Gerät selbst sperrt.",
+    "periodInvalid": "Geben Sie eine ganze Zahl von Tagen von {min} bis {max} ein.",
+    "shortPeriod": "Fristen unter {days} Tagen sperren Geräte, die nur eine Weile offline sind, zum Beispiel während eines Urlaubs.",
+    "warnDays": "Warnungen (Tage vorher)",
+    "warnDaysHint": "Durch Kommas getrennt, zum Beispiel 3, 1: So viele Tage, bevor sich das Gerät selbst sperrt, sieht der Benutzer eine Warnung.",
+    "warnDaysInvalid": "Geben Sie bis zu fünf ganze Zahlen von Tagen ein, jede mindestens 1 und kürzer als die Frist.",
+    "saved": "Die Einstellungen wurden gespeichert. Die Geräte erhalten sie bei ihrem nächsten Check-in.",
+    "confirm": {
+      "title": "Totmannschalter einschalten",
+      "message": "Jedes Gerät der Organisation sperrt sich nach {days, plural, one {# Tag} other {# Tagen}} Betriebszeit ohne Kontakt zu Paddock selbst, auch wenn Paddock selbst ausgefallen ist. Ein gesperrtes Gerät muss mit seinem hinterlegten Header und dem Wiederherstellungsschlüssel wiederhergestellt werden.",
+      "label": "Einschalten"
+    }
+  },
+  "inventory": {
+    "deviceTabs": "Gerätebereiche",
+    "tabs": {
+      "details": "Details",
+      "software": "Software",
+      "vulnerabilities": "Schwachstellen"
+    },
+    "softwareTitle": "Software",
+    "vulnerabilitiesTitle": "Schwachstellen",
+    "softwareHint": "Pakete der Systempaketverwaltung, wie fleetd sie bei der letzten Inventarsynchronisation gemeldet hat.",
+    "severityHint": "Der Schweregrad ist die Priorität von Ubuntu für das Release des Geräts, „Behoben in“ die Version, die die Schwachstelle dort behebt. Schwachstellen, die Ubuntu noch nicht bewertet hat, haben einen unbekannten Schweregrad.",
+    "package": "Paket",
+    "version": "Version",
+    "source": "Quelle",
+    "devices": "Geräte",
+    "cve": "CVE",
+    "cvss": "CVSS",
+    "cvssVector": "CVSS {score}, Vektor {vector}",
+    "severity": "Schweregrad",
+    "severities": {
+      "critical": "Kritisch",
+      "high": "Hoch",
+      "medium": "Mittel",
+      "low": "Niedrig",
+      "unknown": "Unbekannt"
+    },
+    "fixedVersion": "Behoben in",
+    "firstSeen": "Zuerst gesehen",
+    "packageVersion": "{name} {version}",
+    "hasVulnerabilities": "Zugeordnete CVEs",
+    "withVulnerabilities": "Mit zugeordneten CVEs",
+    "withoutVulnerabilities": "Ohne zugeordnete CVEs",
+    "backToVulnerabilities": "Zurück zu den Schwachstellen",
+    "nvdLink": "Details in der National Vulnerability Database",
+    "tile": {
+      "title": "Schwachstellen",
+      "criticalHigh": "{count, plural, =0 {Kein Gerät hat kritische oder hohe Befunde} one {# Gerät hat kritische oder hohe Befunde} other {# Geräte haben kritische oder hohe Befunde}}",
+      "unknown": "{count, plural, =0 {Kein Gerät hat Befunde mit unbekanntem Schweregrad} one {# Gerät hat Befunde mit unbekanntem Schweregrad} other {# Geräte haben Befunde mit unbekanntem Schweregrad}}"
+    }
+  },
+  "updates": {
+    "settings": {
+      "title": "Updates",
+      "security": "Tägliche Sicherheitsupdates",
+      "securityDailyAt": "Uhrzeit der Sicherheitsupdates",
+      "securityDailyAtHint": "HH:MM in der Ortszeit des Geräts; Geräte installieren nur Updates aus der Security-Pocket, zurückgehaltene Pakete ausgenommen.",
+      "regular": "Reguläre Updates",
+      "regularEnabled": "Reguläre Updates ausführen",
+      "regularSchedule": "Zeitplan",
+      "regularScheduleHint": "Wochentage und Uhrzeit, z. B. „Sat 04:00“, „Mon,Thu 12:30“ oder „02:00“ für jeden Tag.",
+      "maxRandomDelay": "Zufällige Verzögerung (Minuten)",
+      "maxRandomDelayHint": "Geräte starten bis zu so viele Minuten später, damit nicht alle gleichzeitig herunterladen (0–720).",
+      "staleness": "Geräte ohne Kontakt",
+      "stalenessWarning": "Warnung nach (Stunden ohne Kontakt)",
+      "stalenessCritical": "Kritisch nach (Stunden ohne Kontakt)",
+      "stalenessCriticalHint": "Ein kritisches Gerät gilt als vermutlich verloren und erscheint auf der Seite Handlungsbedarf.",
+      "timeInvalid": "Geben Sie eine Uhrzeit als HH:MM ein.",
+      "scheduleInvalid": "Verwenden Sie Wochentage (Mon … Sun, durch Kommas getrennt) und HH:MM, z. B. „Sat 04:00“.",
+      "delayInvalid": "Geben Sie eine ganze Zahl von 0 bis 720 ein.",
+      "warningInvalid": "Geben Sie eine ganze Zahl von 1 bis 720 ein.",
+      "criticalInvalid": "Geben Sie eine ganze Zahl über dem Warnwert und höchstens 2160 ein.",
+      "saved": "Update-Einstellungen gespeichert."
+    },
+    "holds": {
+      "title": "Zurückgehaltene Pakete",
+      "summary": "Zurückgehaltene Pakete werden bei Sicherheits- und regulären Updates ausgelassen und können nicht sofort installiert werden. Ohne Version behält ein Gerät die installierte Version; mit Version wird es auf diese festgelegt.",
+      "create": "Paket zurückhalten",
+      "createTitle": "Paket zurückhalten",
+      "editTitle": "Zurückhalten ändern",
+      "package": "Paket",
+      "version": "Version",
+      "versionHint": "Leer lassen, um die installierte Version zu behalten.",
+      "installedVersion": "installierte Version",
+      "reason": "Grund",
+      "packageInvalid": "Geben Sie einen Debian-Paketnamen ein: Kleinbuchstaben, Ziffern, +, . und -.",
+      "versionInvalid": "Geben Sie eine Debian-Version ein: Buchstaben, Ziffern, ., +, :, ~ und -.",
+      "reasonInvalid": "Höchstens 500 Zeichen.",
+      "deleteTitle": "Paket freigeben?",
+      "deleteConfirm": "Geräte dürfen {name} bei ihren nächsten Updates wieder aktualisieren."
+    },
+    "installNow": {
+      "label": "Sofort installieren",
+      "titleDevice": "Pakete auf {hostname} installieren",
+      "titleGroup": "Pakete auf den Geräten von {name} installieren",
+      "explanation": "Die Geräte installieren die Pakete bei ihrem nächsten Check-in oder aktualisieren sie, wenn sie bereits installiert sind.",
+      "packages": "Pakete",
+      "packagesHint": "Bis zu {max} Paketnamen, getrennt durch Leerzeichen oder Kommas.",
+      "countInvalid": "Geben Sie 1 bis {max} Paketnamen ein.",
+      "submit": "Installieren",
+      "requested": "Das Gerät installiert die Pakete bei seinem nächsten Check-in.",
+      "requestedGroup": "{count, plural, =0 {Die Gruppe hat kein aktives Gerät.} one {# Gerät installiert die Pakete bei seinem nächsten Check-in.} other {# Geräte installieren die Pakete bei ihrem nächsten Check-in.}}"
+    },
+    "device": {
+      "title": "Updates",
+      "lastSecurity": "Letzte Sicherheitsupdates",
+      "lastRegular": "Letzte reguläre Updates",
+      "noRun": "Noch keine gemeldet",
+      "run": "{result, select, ok {{upgraded, plural, one {# Paket aktualisiert} other {# Pakete aktualisiert}}} timeout {Zeitüberschreitung} other {Fehlgeschlagen}} – {at}",
+      "heldBack": "Zurückgestellt",
+      "holds": "Zurückgehaltene Pakete",
+      "noHolds": "Keine",
+      "rebootRequired": "Das Gerät braucht einen Neustart, um seine Updates abzuschließen. Paddock startet Geräte nie für Updates neu.",
+      "conflict": "{package} wird mit unterschiedlichen Versionen zurückgehalten ({versions}); das Gerät behält {chosen}."
+    }
+  },
+  "attention": {
+    "title": "Handlungsbedarf",
+    "summary": "Geräte, die einen Administrator brauchen, eine Zeile pro offenem Befund. Öffnen Sie das Gerät, um es außer Betrieb zu nehmen, zu sperren oder freizugeben.",
+    "kind": "Befund",
+    "since": "Seit",
+    "detail": "Detail",
+    "open": "{hostname} öffnen",
+    "kinds": {
+      "stale_warning": "Ohne Kontakt (Warnung)",
+      "stale_critical": "Ohne Kontakt (kritisch)",
+      "presumed_lost": "Vermutlich verloren",
+      "quarantined": "In Quarantäne (Klon vermutet)",
+      "disk_not_compliant": "Festplattenverschlüsselung nicht konform",
+      "agent_outdated": "Agent veraltet",
+      "login_apply_failed": "Anmeldekonfiguration fehlgeschlagen",
+      "sudo_apply_failed": "sudo-Konfiguration fehlgeschlagen",
+      "revocation_pending": "Sperre oder Vernichtung wartet",
+      "revocation_expired": "Sperre oder Vernichtung abgelaufen"
+    },
+    "action": {
+      "stale_warning": "Gerät öffnen",
+      "stale_critical": "Gerät öffnen",
+      "presumed_lost": "Außer Betrieb nehmen, sperren oder behalten",
+      "quarantined": "Freigeben oder außer Betrieb nehmen",
+      "disk_not_compliant": "Gerät öffnen",
+      "agent_outdated": "Gerät öffnen",
+      "login_apply_failed": "Gerät öffnen",
+      "sudo_apply_failed": "Gerät öffnen",
+      "revocation_pending": "Gerät öffnen",
+      "revocation_expired": "Gerät öffnen"
+    }
+  }
+}

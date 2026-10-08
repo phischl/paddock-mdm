@@ -693,11 +693,14 @@ func TestRoleBoundaries(t *testing.T) {
 	if m.Organization == nil || m.Organization.Id != e.acme || m.Role != adminapi.MeRoleOrgAdmin {
 		t.Fatalf("org /me: %s", me.body)
 	}
-	locale := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "en"}})
-	if locale.status != http.StatusOK {
-		t.Fatalf("set locale: %d", locale.status)
+	for _, l := range []string{"de", "en"} {
+		locale := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": l}})
+		locale.decode(t, &m)
+		if locale.status != http.StatusOK || string(m.Locale) != l {
+			t.Fatalf("set locale %s: %d %s", l, locale.status, locale.body)
+		}
 	}
-	bad := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "de"}, skipReqCheck: true})
+	bad := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "fr"}, skipReqCheck: true})
 	if bad.status != http.StatusBadRequest {
 		t.Fatalf("unsupported locale: %d", bad.status)
 	}

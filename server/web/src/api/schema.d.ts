@@ -1784,7 +1784,7 @@ export interface components {
             role: "org_admin" | "org_operator" | "org_auditor" | "platform_admin";
             organization: components["schemas"]["MeOrganization"] | null;
             /** @enum {string} */
-            locale: "en";
+            locale: "en" | "de";
             /**
              * @description PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
              *     dead man's switch answer 403 revocation_disabled.
@@ -1806,7 +1806,7 @@ export interface components {
         };
         MeUpdate: {
             /** @enum {string} */
-            locale: "en";
+            locale: "en" | "de";
         };
         DeviceGroup: {
             /** Format: uuid */

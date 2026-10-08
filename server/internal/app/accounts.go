@@ -252,8 +252,8 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 	return me, unauthenticatedIfGone(err)
 }
 
-// SupportedLocales are the catalogs of the portal (M0: English only).
-var SupportedLocales = []string{"en"}
+// SupportedLocales are the catalogs of the portal (plan M6b decision 2: English and German).
+var SupportedLocales = []string{"en", "de"}
 
 // UpdateLocale stores the administrator's locale.
 func (a *Accounts) UpdateLocale(ctx context.Context, locale string) (Me, error) {
