@@ -78,7 +78,8 @@ func NewOSV(o *app.OSV, source OSVSource, org *db.OrgPool, platform *db.Platform
 func (o *OSV) Run(ctx context.Context) error {
 	interval := osvRoundInterval
 	if o.every > 0 {
-		interval = min(interval, o.every)
+		// Half the interval: a round that comes a moment too early for its download does not delay it by a whole one.
+		interval = min(interval, max(o.every/2, time.Second))
 	}
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
