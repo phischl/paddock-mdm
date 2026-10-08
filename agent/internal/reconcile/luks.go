@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
@@ -61,7 +62,13 @@ type LUKS struct {
 	pending  *luksEscrow
 	health   *protocol.DiskHealth
 	rootUUID string // the LUKS UUID of the root volume in the current pass ("" when cryptsetup reported none)
+	// volumeSet identifies the volumes of /etc/crypttab of the last pass (their UUIDs, sorted).
+	volumeSet string
 }
+
+// RefusedRetry is how long the agent does not escrow a volume again whose header the server refused, unless the
+// volumes of /etc/crypttab change (PDK-009 review round 2).
+const RefusedRetry = 24 * time.Hour
 
 // CrypttabWithin bounds the classification of /etc/crypttab in a pass (as paddock-revoke's SelectWithin).
 const CrypttabWithin = time.Minute
@@ -153,8 +160,15 @@ func (m *LUKS) volumes(ctx context.Context, rootDevice string, root luks.Metadat
 	ready := rootEscrowed && m.State.RecoveryStored > 0
 	ct := luks.ReadCrypttab(ctx, m.Tools, m.Layout.Root, rootDevice, CrypttabWithin)
 	h.Unresolved = ct.Unresolved
+	m.volumeSet = volumeSet(ct)
 	for _, v := range ct.Volumes {
 		dv := protocol.DiskVolume{UUID: v.UUID, Device: v.Header}
+		if v.Shared {
+			// A cloned header cannot be told apart by its UUID: it is neither escrowed nor tracked (review round 2).
+			dv.SharedUUID = true
+			h.Volumes = append(h.Volumes, dv)
+			continue
+		}
 		inv, err := luks.Inspect(ctx, m.Tools, v.Header)
 		if err != nil || v.UUID == "" {
 			slog.WarnContext(ctx, "LUKS volume not inventoried", "device", v.Header, "uuid", v.UUID, "error", err)
@@ -165,7 +179,8 @@ func (m *LUKS) volumes(ctx context.Context, rootDevice string, root luks.Metadat
 		m.watchVolume(v.UUID, st, inv.Kinds)
 		dv.LUKSVersion, dv.Tokens, dv.Keyslots, dv.HeaderGeneration = inv.Version, inv.Kinds, len(inv.Kinds), st.HeaderStored
 		dv.Escrowed = st.HeaderStored > 0 && st.HeaderDigest == inv.Digest && !m.pendingFor(v.UUID)
-		if !dv.Escrowed && ready && m.pending == nil {
+		dv.Refused = m.refused(st)
+		if !dv.Escrowed && !dv.Refused && ready && m.pending == nil {
 			if err := m.escrowHeader(ctx, v.Header, v.UUID, false, inv.Digest, keys); err != nil {
 				slog.ErrorContext(ctx, "LUKS header escrow failed; retrying at the next pass", "device", v.Header, "volume", v.UUID, "error", err)
 			}
@@ -202,6 +217,26 @@ func (m *LUKS) watchVolume(uuid string, st *state.LUKSVolume, kinds []string) {
 	}
 	st.Keyslots = kinds
 	m.save()
+}
+
+// refused reports whether the server refused the volume's header within RefusedRetry while /etc/crypttab lists the
+// same volumes.
+func (m *LUKS) refused(st *state.LUKSVolume) bool {
+	return st.RefusedAt != nil && m.Now().Before(st.RefusedAt.Add(RefusedRetry)) && st.RefusedSet == m.volumeSet
+}
+
+// volumeSet identifies the volumes of a crypttab selection: their UUIDs (or headers without one), sorted.
+func volumeSet(ct luks.Crypttab) string {
+	ids := make([]string, 0, len(ct.Volumes))
+	for _, v := range ct.Volumes {
+		id := v.UUID
+		if id == "" {
+			id = v.Header
+		}
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return strings.Join(ids, ",")
 }
 
 // pendingFor reports whether a header escrow of volume waits for the server.
@@ -451,9 +486,15 @@ func (m *LUKS) poll(ctx context.Context) bool {
 			m.State.HeaderStored, m.State.HeaderDigest = p.generation, p.digest
 		default:
 			st := m.volumeState(p.volume)
-			st.HeaderStored, st.HeaderDigest = p.generation, p.digest
+			st.HeaderStored, st.HeaderDigest, st.RefusedAt, st.RefusedSet = p.generation, p.digest, nil, ""
 		}
 		slog.InfoContext(ctx, "LUKS escrow stored", "kind", p.kind, "volume", p.volume, "generation", p.generation)
+	case err == nil && status == escrow.StatusRefused && !p.root:
+		st := m.volumeState(p.volume)
+		at := now
+		st.RefusedAt, st.RefusedSet = &at, m.volumeSet
+		slog.WarnContext(ctx, "the server refused the LUKS header: the device escrows the most volumes a revocation token carries; not retried for a day",
+			"volume", p.volume, "generation", p.generation)
 	case err == nil && status == escrow.StatusFailed, !now.Before(p.deadline):
 		slog.WarnContext(ctx, "LUKS escrow not stored; starting over", "kind", p.kind, "generation", p.generation, "status", status)
 	default:

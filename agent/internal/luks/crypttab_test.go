@@ -118,8 +118,8 @@ noname
 	}
 }
 
-// TestParseCrypttabSharedUUID (PDK-009, review round 1): two volumes with the same LUKS UUID (a cloned header) are
-// both unresolved, and so is a volume with the root volume's UUID; the other volumes stay.
+// TestParseCrypttabSharedUUID (PDK-009, review round 2): two volumes with the same LUKS UUID (a cloned header) and a
+// volume with the root volume's UUID stay volumes, marked Shared; nothing is unresolved.
 func TestParseCrypttabSharedUUID(t *testing.T) {
 	root := fakeDev(t, nil, "/dev/vda3", "/dev/vdb", "/dev/vdc", "/dev/vdd", "/dev/vde")
 	const shared, rootID = "1b6a3c1e-0000-4000-8000-0000000000ee", "1b6a3c1e-0000-4000-8000-0000000000aa"
@@ -128,8 +128,12 @@ func TestParseCrypttabSharedUUID(t *testing.T) {
 			"/dev/vdd": shared, "/dev/vde": rootID}}
 	crypttab := []byte("b /dev/vdb none luks\nc /dev/vdc none luks\nd /dev/vdd none luks\ne /dev/vde none luks\n")
 	got := ParseCrypttab(context.Background(), tools, root, "/dev/vda3", crypttab, time.Minute)
-	want := Crypttab{Root: "/dev/vda3", Volumes: []CrypttabVolume{{Header: "/dev/vdc", UUID: "1b6a3c1e-0000-4000-8000-00000000000c"}},
-		Unresolved: []string{"/dev/vdb", "/dev/vdd", "/dev/vde"}}
+	want := Crypttab{Root: "/dev/vda3", Volumes: []CrypttabVolume{
+		{Header: "/dev/vdb", UUID: shared, Shared: true},
+		{Header: "/dev/vdc", UUID: "1b6a3c1e-0000-4000-8000-00000000000c"},
+		{Header: "/dev/vdd", UUID: shared, Shared: true},
+		{Header: "/dev/vde", UUID: rootID, Shared: true},
+	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("crypttab %+v\nwant %+v", got, want)
 	}

@@ -695,3 +695,57 @@ func TestLUKSWipesOnlyRecordedKeyslots(t *testing.T) {
 		t.Fatalf("without a keyslot for the install passphrase: changes %v, state %+v", g.vol.changes, g.st)
 	}
 }
+
+// TestLUKSRootCloneNotEscrowed (PDK-009 review round 2): a volume with the root volume's UUID is reported as
+// shared_uuid, neither escrowed nor tracked, and keeps the device from being compliant.
+func TestLUKSRootCloneNotEscrowed(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.addVolume("/dev/vdb", &dataVolume{uuid: rootUUID, slots: 2})
+	if s := f.settle(); s != protocol.DiskEscrowPending {
+		t.Fatalf("state %s", s)
+	}
+	f.vol.extra["/dev/vdb"].slots = 3
+	h := f.m.Tick(context.Background(), f.keys, true)
+	if len(h.Volumes) != 2 || !reflect.DeepEqual(h.Volumes[1], protocol.DiskVolume{UUID: rootUUID, Device: "/dev/vdb", SharedUUID: true}) ||
+		len(f.events) != 0 || len(f.st.Volumes) != 0 {
+		t.Fatalf("volumes %+v, events %v, state %+v", h.Volumes, f.events, f.st.Volumes)
+	}
+	for _, r := range f.server.of(escrow.KindLUKSHeader) {
+		if f.server.objects[r.EscrowID] != nil && string(f.openHeader(r)) == f.vol.extra["/dev/vdb"].dump() {
+			t.Fatal("the clone's header was escrowed")
+		}
+	}
+}
+
+// TestLUKSRefusedVolume (PDK-009 review round 2): after the server refused a volume's header (too many volumes), the
+// agent does not upload it again for a day, unless the volumes of /etc/crypttab change.
+func TestLUKSRefusedVolume(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.addVolume("/dev/vdb1", &dataVolume{uuid: dataUUID, slots: 1})
+	f.server.answer = func(r escrow.Request) string {
+		if r.Volume == dataUUID {
+			return escrow.StatusRefused
+		}
+		return escrow.StatusStored
+	}
+	if s := f.settle(); s != protocol.DiskEscrowPending || len(f.volumeHeaders(dataUUID)) != 1 {
+		t.Fatalf("state %s, data headers %d", s, len(f.volumeHeaders(dataUUID)))
+	}
+	if h := f.m.Tick(context.Background(), f.keys, true); !h.Volumes[1].Refused {
+		t.Fatalf("volumes %+v", h.Volumes)
+	}
+	f.now = f.now.Add(reconcile.RefusedRetry - time.Minute)
+	if f.settle(); len(f.volumeHeaders(dataUUID)) != 1 {
+		t.Fatalf("uploaded again within a day: %d", len(f.volumeHeaders(dataUUID)))
+	}
+	// Another volume appears: the set changed, the refused volume is tried again.
+	f.addVolume("/dev/vdc1", &dataVolume{uuid: oldUUID, slots: 1})
+	if f.settle(); len(f.volumeHeaders(dataUUID)) != 2 {
+		t.Fatalf("not tried again after a crypttab change: %d", len(f.volumeHeaders(dataUUID)))
+	}
+	// A day after the last refusal it is tried again as well.
+	f.now = f.now.Add(reconcile.RefusedRetry + time.Minute)
+	if f.settle(); len(f.volumeHeaders(dataUUID)) != 3 {
+		t.Fatalf("not tried again after a day: %d", len(f.volumeHeaders(dataUUID)))
+	}
+}

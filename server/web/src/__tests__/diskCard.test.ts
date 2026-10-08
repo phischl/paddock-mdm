@@ -26,6 +26,8 @@ const disk: DiskEncryption = {
     { uuid: '0d8f4c62-0000-4000-8000-0000000000cc', device: '/dev/sdc1', root: false, luks_version: 1, keyslots: 1,
       tokens: ['password'], escrowed: false },
     { device: '/dev/sdd', root: false, keyslots: 0, tokens: [], escrowed: false },
+    { uuid: '0d8f4c62-0000-4000-8000-0000000000aa', device: '/dev/sde', root: false, keyslots: 0, tokens: [], escrowed: false, shared_uuid: true },
+    { uuid: '0d8f4c62-0000-4000-8000-0000000000dd', device: '/dev/sdf', root: false, keyslots: 1, tokens: ['password'], escrowed: false, refused: true },
   ],
   unresolved: ['LABEL=backup'],
 }
@@ -53,6 +55,8 @@ describe('disk encryption card', () => {
       '/dev/sdb1: 1 keyslot, LUKS 2, header escrowed',
       '/dev/sdc1: 1 keyslot, LUKS 1, header not escrowed yet',
       '/dev/sdd: not inventoried, its LUKS UUID is unknown',
+      '/dev/sde: shares its LUKS UUID with another volume (a cloned header); not escrowed, a Lock leaves it readable, a Destroy erases it',
+      '/dev/sdf: header not escrowed, the device already escrows 32 volumes',
       'LABEL=backup: listed in /etc/crypttab but not classified; not escrowed',
     ])
     expect([...document.querySelectorAll('[data-testid="disk-header"]')].map((b) => b.textContent?.trim())).toEqual([

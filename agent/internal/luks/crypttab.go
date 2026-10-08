@@ -29,10 +29,13 @@ type Crypttab struct {
 
 // CrypttabVolume is a LUKS volume of /etc/crypttab other than the root volume. Header is the path cryptsetup reads
 // its LUKS header from: the source device, or the header= option of a detached header. UUID is its LUKS UUID, ""
-// when cryptsetup did not report one.
+// when cryptsetup did not report one. Shared marks a volume whose UUID another volume or the root volume has (a
+// cloned header, PDK-009 review round 2): it stays a volume to erase, but it is neither escrowed nor tracked, and a
+// Lock leaves it alone.
 type CrypttabVolume struct {
 	Header string
 	UUID   string
+	Shared bool
 }
 
 // errUnsupportedSource is a crypttab source that is neither UUID=, PARTUUID= nor a /dev path, or a header that is no
@@ -72,7 +75,6 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 			results <- classify(ctx, t, root, e)
 		}
 	}()
-	var sources []string
 	unresolved := func(from int) Crypttab {
 		for _, rest := range entries[from:] {
 			c.Unresolved = append(c.Unresolved, rest.source)
@@ -90,7 +92,7 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 		select {
 		case r = <-results:
 		case <-ctx.Done():
-			c = withoutSharedUUIDs(c, sources, rootID)
+			c = markSharedUUIDs(c, rootID)
 			return unresolved(i)
 		}
 		switch {
@@ -99,16 +101,15 @@ func ParseCrypttab(ctx context.Context, t Tools, root, rootDevice string, cryptt
 		case r.skip, r.volume.Header == c.Root, slices.ContainsFunc(c.Volumes, func(v CrypttabVolume) bool { return v.Header == r.volume.Header }):
 		default:
 			c.Volumes = append(c.Volumes, r.volume)
-			sources = append(sources, e.source)
 		}
 	}
-	return withoutSharedUUIDs(c, sources, rootID)
+	return markSharedUUIDs(c, rootID)
 }
 
-// withoutSharedUUIDs reports every volume whose LUKS UUID another volume or the root volume (rootUUID) has as
-// unresolved (PDK-009, review round 1): a cloned header cannot be told apart by its UUID, so it is neither escrowed
-// nor tracked, and a revocation that meets it is incomplete. sources are the crypttab sources of c.Volumes.
-func withoutSharedUUIDs(c Crypttab, sources []string, rootUUID string) Crypttab {
+// markSharedUUIDs marks every volume whose LUKS UUID another volume or the root volume (rootUUID) has as Shared
+// (PDK-009, review round 2): a cloned header cannot be told apart by its UUID, so it cannot be escrowed or tracked,
+// but it is still erased by a Destroy.
+func markSharedUUIDs(c Crypttab, rootUUID string) Crypttab {
 	count := map[string]int{}
 	if rootUUID != "" {
 		count[rootUUID]++
@@ -118,15 +119,9 @@ func withoutSharedUUIDs(c Crypttab, sources []string, rootUUID string) Crypttab 
 			count[v.UUID]++
 		}
 	}
-	var kept []CrypttabVolume
 	for i, v := range c.Volumes {
-		if v.UUID != "" && count[v.UUID] > 1 {
-			c.Unresolved = append(c.Unresolved, sources[i])
-			continue
-		}
-		kept = append(kept, v)
+		c.Volumes[i].Shared = v.UUID != "" && count[v.UUID] > 1
 	}
-	c.Volumes = kept
 	return c
 }
 

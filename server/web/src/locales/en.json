@@ -527,6 +527,8 @@
       "volumeFacts": "{device}{root, select, true { (root)} other {}}: {count, plural, one {# keyslot} other {# keyslots}}, LUKS {version, number}, {escrowed, select, true {header escrowed} other {header not escrowed yet}}",
       "rootVolume": "the root volume",
       "volumeUnknown": "{device}: not inventoried, its LUKS UUID is unknown",
+      "volumeShared": "{device}: shares its LUKS UUID with another volume (a cloned header); not escrowed, a Lock leaves it readable, a Destroy erases it",
+      "volumeRefused": "{device}: header not escrowed, the device already escrows 32 volumes",
       "unresolved": "{source}: listed in /etc/crypttab but not classified; not escrowed",
       "headerVolumeFacts": "{device}, generation {generation, number}: {status}, {at}",
       "none": "none yet",
@@ -596,7 +598,8 @@
         "notErased": "{device}: not erased, {after, plural, one {# keyslot} other {# keyslots}} left",
         "unknown": "{device}: not erased, the remaining keyslots are unknown",
         "unresolved": "{source}: listed in /etc/crypttab but not erased with certainty",
-        "skipped": "{device}: not erased, its header was not escrowed (the volume stays readable)"
+        "skipped": "{device}: not erased, its header was not escrowed (the volume stays readable)",
+        "shared": "{device}: shares its LUKS UUID with another volume"
       }
     },
     "presumedLost": "Presumed lost since {at}"

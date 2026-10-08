@@ -2249,6 +2249,10 @@ export interface components {
             escrowed: boolean;
             /** @description The newest stored header generation of the volume. */
             header_generation?: number;
+            /** @description Another volume or the root volume has the same LUKS UUID (a cloned header): not escrowed; a Destroy erases it, a Lock does not. */
+            shared_uuid?: boolean;
+            /** @description The server refused the header: the device escrows the most volumes a revocation token carries (32). */
+            refused?: boolean;
         };
         DiskEncryption: {
             /** @description Null until the device reports its disk. */

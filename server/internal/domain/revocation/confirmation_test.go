@@ -19,8 +19,10 @@ func TestParseConfirmation(t *testing.T) {
 	}
 	lock := ParseConfirmation([]byte(`{"erased":true,"slots_before":2,"slots_after":0,"volumes":[` +
 		`{"device":"/dev/vda3","uuid":"0d8f4c62-0000-4000-8000-0000000000aa","slots_before":2,"slots_after":0,"erased":true}],` +
-		`"skipped_not_escrowed":[{"device":"/dev/vdb1","uuid":"0d8f4c62-0000-4000-8000-0000000000bb"},{"device":"/dev/vdc"}]}`))
+		`"skipped_not_escrowed":[{"device":"/dev/vdb1","uuid":"0d8f4c62-0000-4000-8000-0000000000bb"},{"device":"/dev/vdc"}],` +
+		`"shared_uuid":["/dev/vdc"]}`))
 	if len(lock.SkippedNotEscrowed) != 2 || lock.SkippedNotEscrowed[0].UUID != "0d8f4c62-0000-4000-8000-0000000000bb" ||
+		len(lock.SharedUUID) != 1 ||
 		lock.Volumes[0].UUID == "" || !lock.AllErased() {
 		t.Fatalf("PDK-009 lock confirmation %+v", lock)
 	}

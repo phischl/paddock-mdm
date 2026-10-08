@@ -72,6 +72,18 @@ func TestCrypttabTargets(t *testing.T) {
 	}
 }
 
+// TestCrypttabTargetsShared (PDK-009 review round 2): a clone of the root volume stays a target, listed as shared.
+func TestCrypttabTargetsShared(t *testing.T) {
+	root := fakeRoot(t, "clone /dev/vdb none luks\n", "/dev/vda3", "/dev/vdb")
+	const rootID = "1b6a3c1e-0000-4000-8000-00000000000a"
+	tools := &crypttabTools{luks: []string{"/dev/vdb"}, uuids: map[string]string{"/dev/vda3": rootID, "/dev/vdb": rootID}}
+	got := crypttabTargets(context.Background(), tools, root, "/dev/vda3")
+	want := Targets{Devices: []string{"/dev/vdb", "/dev/vda3"}, UUIDs: map[string]string{"/dev/vdb": rootID}, Shared: []string{"/dev/vdb"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("targets %+v\nwant %+v", got, want)
+	}
+}
+
 // TestCrypttabTargetsUnreadable (review round 1): an unreadable /etc/crypttab is reported as unresolved, and the
 // root volume is still a target.
 func TestCrypttabTargetsUnreadable(t *testing.T) {

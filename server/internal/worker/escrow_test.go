@@ -212,7 +212,7 @@ func TestEscrowLUKS(t *testing.T) {
 	extra := uuid.MustParse("0d8f4c62-0000-4000-8000-0000000000ff")
 	refused := header(200, int64(len(object)), time.Time{})
 	refused.Volume = &extra
-	if id := send(refused); status(id) != escrow.StatusFailed {
+	if id := send(refused); status(id) != escrow.StatusRefused {
 		t.Fatalf("33rd volume: %s", status(id))
 	}
 	var outcome, code, param string
