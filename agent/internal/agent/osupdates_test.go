@@ -143,9 +143,9 @@ func TestReportUpdateRuns(t *testing.T) {
 	}
 }
 
-// TestInstallNowSurvivesARestart (review 1): an accepted install_now is kept in the agent state until it finished;
-// a new agent on the same state runs it again and reports it.
-func TestInstallNowSurvivesARestart(t *testing.T) {
+// TestInstallNowInterruptedByARestart (review 2): an accepted install_now is kept in the agent state until it
+// finished; a new agent on the same state reports it as failed with reason interrupted, runs nothing and forgets it.
+func TestInstallNowInterruptedByARestart(t *testing.T) {
 	g := testgw.New(t)
 	a := newAgent(t, g)
 	withSystem(t, a)
@@ -162,18 +162,23 @@ func TestInstallNowSurvivesARestart(t *testing.T) {
 	b.d.Layout = a.d.Layout
 	b.st = st
 	sys := withSystem(t, b)
-	b.requeueInstalls()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go b.runInstalls(ctx)
-	select {
-	case d := <-b.installDone:
-		b.finishInstall(d)
-	case <-time.After(5 * time.Second):
-		t.Fatal("requeued job did not run")
+	b.reportInterruptedInstalls()
+	if len(b.installJobs) != 0 || sys.Packages["htop"] || len(sys.TakeCalls()) != 0 {
+		t.Fatal("an interrupted job was run")
 	}
-	if !sys.Packages["htop"] || len(b.st.PendingInstalls) != 0 || len(b.st.CommandResults) != 1 || b.st.CommandResults[0].CommandID != "c-restart" {
-		t.Fatalf("installed %v, pending %+v, results %+v", sys.Packages["htop"], b.st.PendingInstalls, b.st.CommandResults)
+	st, err = state.Load(b.d.Layout.State())
+	if err != nil || len(st.PendingInstalls) != 0 || len(st.CommandResults) != 1 {
+		t.Fatalf("state %+v %v", st, err)
+	}
+	r := st.CommandResults[0]
+	var res command.InstallNowResult
+	if err := json.Unmarshal(r.Result, &res); err != nil || r.CommandID != "c-restart" || r.Status != protocol.CommandFailed ||
+		res.Reason != "interrupted" || !slices.Equal(res.Failed, []string{"htop"}) {
+		t.Fatalf("result %+v %s %v", r, r.Result, err)
+	}
+	b.Cycle(context.Background())
+	if got, ok := g.Results["c-restart"]; !ok || got.Status != protocol.CommandFailed {
+		t.Fatalf("results %+v", g.Results)
 	}
 }
 

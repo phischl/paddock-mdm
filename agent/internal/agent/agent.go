@@ -187,6 +187,7 @@ func New(d Deps) (*Agent, error) {
 	}
 	a.refreshHealth()
 	a.loadCurrent()
+	a.reportInterruptedInstalls()
 	return a, nil
 }
 
@@ -208,7 +209,6 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if a.d.Sys != nil {
 		// Not waited for: an installation in progress outlives the run loop (runInstalls).
-		a.requeueInstalls()
 		go a.runInstalls(ctx)
 	}
 	logins := make(chan localadmin.Login, 16)
