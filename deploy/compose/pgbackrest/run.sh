@@ -137,9 +137,23 @@ case "${1:-serve}" in
     log=$((16#${start:8:8}))
     seg=$((16#${start:16:8}))
     n=0
+    # The newest segment the repository holds: staging must reach it, else recovery would end early without an error.
+    max="$(pgb info --output=json | grep -o '"max":"[0-9A-F]\{24\}"' | tail -1 | cut -d'"' -f4)"
+    last=""
     while true; do
       name="$(printf '%s%08X%08X' "$tli" "$log" "$seg")"
-      pgb archive-get "$name" "$restore_dir/$name" >/dev/null 2>&1 || break
+      rc=0
+      pgb archive-get "$name" "$restore_dir/$name" >"$restore_dir/.archive-get.log" 2>&1 || rc=$?
+      # archive-get exits 1 when the segment is not in the repository: the end of the archive. Any other error (S3,
+      # decryption) fails the restore instead of ending it early.
+      if ((rc == 1)); then
+        break
+      elif ((rc != 0)); then
+        cat "$restore_dir/.archive-get.log" >&2
+        echo "pgbackrest: archive-get $name failed (exit $rc); the restore is incomplete" >&2
+        exit 1
+      fi
+      last="$name"
       n=$((n + 1))
       seg=$((seg + 1))
       # 16 MB segments: 256 per log file.
@@ -148,7 +162,12 @@ case "${1:-serve}" in
         log=$((log + 1))
       fi
     done
-    echo "restored $STANZA from backup $label; staged $n WAL segments from $start"
+    rm -f "$restore_dir/.archive-get.log"
+    if [[ -n "$max" && "${max:0:8}" == "$tli" && "$last" < "$max" ]]; then
+      echo "pgbackrest: staged WAL up to ${last:-nothing}, but the archive holds up to $max; the restore is incomplete" >&2
+      exit 1
+    fi
+    echo "restored $STANZA from backup $label; staged $n WAL segments from $start to ${last:-none}"
     ;;
   *)
     echo "usage: paddock-pgbackrest serve|backup|flush|info|restore" >&2

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Development bootstrap of the backup bucket (plan M6a decision 4): bucket paddock-backup on the audit host's RustFS,
-# without Object Lock, and one credential per writer (the same policies docs/operations/restore.md gives for
+# versioned without Object Lock, and one credential per writer (the same policies docs/operations/restore.md gives for
 # production):
 #   pgbackrest  everything below pgbackrest/ (pgBackRest expires old backups itself), read below openbao/ and fleet/
 #               (the restore uses this credential), list
 #   worker      write below openbao/, list (backup age of every kind)
 #   fleet       write below fleet/
-# Idempotent. Usage: rustfs-backup-bootstrap.sh [project] (default paddock; the restore drill uses its own project).
+# Idempotent. Usage: rustfs-backup-bootstrap.sh [Compose project] (default paddock).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,6 +44,8 @@ else
   aws s3api create-bucket --bucket "$BUCKET" >/dev/null
   echo "created bucket $BUCKET"
 fi
+# Overwritten or deleted backups stay as noncurrent versions (docs/operations/restore.md, "Backup bucket").
+aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
 
 LIST="{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\",\"s3:GetBucketLocation\"],\"Resource\":[\"arn:aws:s3:::$BUCKET\"]}"
 # policy <name> <statement>...: creates or replaces the policy.

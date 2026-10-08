@@ -35,6 +35,11 @@ var (
 		Name: "paddock_tls_probe_success",
 		Help: "1 when the last TLS handshake with the public hostname returned a certificate, else 0.",
 	}, []string{"host"})
+	// metricTLSProbeHosts lets an alert notice expiries that are never exported (PaddockCertificateExpiryMissing).
+	metricTLSProbeHosts = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "paddock_tls_probe_hosts",
+		Help: "Number of public hostnames whose certificate expiry the worker probes.",
+	})
 )
 
 // SealStatus reads OpenBao's seal status (bao.Client.Sealed).
@@ -60,6 +65,7 @@ func NewOpsProbe(bao SealStatus, expiry CertExpiry, hosts []string) *OpsProbe {
 
 // Run probes until ctx ends.
 func (p *OpsProbe) Run(ctx context.Context) error {
+	metricTLSProbeHosts.Set(float64(len(p.hosts)))
 	baoTick := time.NewTicker(openBaoProbeInterval)
 	defer baoTick.Stop()
 	tlsTick := time.NewTicker(tlsProbeInterval)

@@ -48,8 +48,9 @@ func newFixture(t *testing.T) *fixture {
 		Prod: prodcheck.Prod{InterconnectAddr: interconnect, RevocationAccepted: "no"},
 		Secrets: map[string]prodcheck.Secret{
 			"db_paddock_api_url":          {File: write("db_paddock_api_url", "postgres://api:pw@postgres:5432/paddock", 0o644)},
-			"db_paddock_audit_reader_url": {File: write("db_paddock_audit_reader_url", "postgres://r:pw@10.0.0.2:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_crt", 0o644)},
+			"db_paddock_audit_reader_url": {File: write("db_paddock_audit_reader_url", "postgres://r:pw@10.0.0.2:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle", 0o644)},
 			"release_public_key":          {File: write("release-production/minisign.pub", "untrusted comment: prod\nRWQPROD\n", 0o644)},
+			"internal_ca_bundle":          {File: write("internal-ca/bundle.crt", "-----BEGIN CERTIFICATE-----\n", 0o644)},
 		},
 		Services: map[string]prodcheck.Service{
 			"caddy": {
@@ -71,6 +72,7 @@ func newFixture(t *testing.T) *fixture {
 				},
 				Secrets: []prodcheck.ServiceSecret{
 					{Source: "db_paddock_api_url"}, {Source: "db_paddock_audit_reader_url"}, {Source: "release_public_key"},
+					{Source: "internal_ca_bundle", Target: "/run/secrets/internal_ca_bundle"},
 				},
 			},
 		},
@@ -116,8 +118,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 9 {
-		t.Fatalf("expected 9 items:\n%s", out)
+	if strings.Count(out, "PASS") != 10 {
+		t.Fatalf("expected 10 items:\n%s", out)
 	}
 }
 

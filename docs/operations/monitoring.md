@@ -54,6 +54,9 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockBackupStale` | the newest backup of a kind (postgres, authentik, openbao, fleet) is older than 26 hours (`docs/operations/restore.md`) | critical |
 | `PaddockCertificateExpiry` | a public certificate expires within 14 days | warning |
 | `PaddockCertificateProbeFailing` | the certificate of a public hostname cannot be read for an hour | warning |
+| `PaddockBackupAgeMissing` | the worker exports the age of fewer backup kinds than `paddock_backup_kinds` for an hour (e.g. listing the bucket fails from the start) | critical |
+| `PaddockOpenBaoHealthMissing` | the worker is up but exports no `paddock_openbao_reachable` for an hour | critical |
+| `PaddockCertificateExpiryMissing` | fewer certificate expiries than `paddock_tls_probe_hosts` for an hour | warning |
 
 `make lint-prometheus` checks the configuration and the rules with `promtool` and runs the rule tests of
 `prometheus/alerts_test.yml`.
@@ -62,7 +65,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 
 | Metric | Exported by |
 | --- | --- |
-| `paddock_backup_last_success_timestamp_seconds{kind}` | worker: last-modified time of the newest object of each kind in the backup bucket, 0 before the first |
+| `paddock_backup_last_success_timestamp_seconds{kind}`, `paddock_backup_kinds` | worker: last-modified time of the newest object of each kind in the backup bucket, 0 before the first; a kind that cannot be listed keeps its last value, the others are still exported |
 | `paddock_openbao_sealed`, `paddock_openbao_reachable` | worker: OpenBao's `sys/health` every 30 s |
-| `paddock_tls_certificate_expiry_timestamp_seconds{host}`, `paddock_tls_probe_success{host}` | worker: TLS handshake with Caddy for each name of `PADDOCK_TLS_PROBE_HOSTS` every 15 minutes (production; Caddy exports no certificate metrics) |
+| `paddock_tls_certificate_expiry_timestamp_seconds{host}`, `paddock_tls_probe_success{host}`, `paddock_tls_probe_hosts` | worker: TLS handshake with Caddy for each name of `PADDOCK_TLS_PROBE_HOSTS` every 15 minutes (production; Caddy exports no certificate metrics) |
 | `paddock_osv_stale`, `paddock_osv_last_success_timestamp_seconds` | worker (M5c) |

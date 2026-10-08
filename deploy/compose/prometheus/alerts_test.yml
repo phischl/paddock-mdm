@@ -121,3 +121,70 @@ tests:
             exp_annotations:
               summary: "The certificate of admin.example.org expires within 14 days"
               description: "Caddy has not renewed it; check its ACME logs and that port 80 is reachable."
+
+  - name: series that are never set
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_kinds{role="paddock-worker"}'
+        values: "4x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", role="paddock-worker"}'
+        values: "0x70"
+      - series: 'up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x70"
+      - series: 'paddock_tls_probe_hosts{role="paddock-worker"}'
+        values: "5x70"
+      - series: 'paddock_tls_certificate_expiry_timestamp_seconds{host="admin.example.org", role="paddock-worker"}'
+        values: "9999999999x70"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PaddockBackupAgeMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockBackupAgeMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The age of some backups is unknown"
+              description: "The worker exports the age of fewer backup kinds than configured; check its log and its backup bucket credential."
+      - eval_time: 65m
+        alertname: PaddockOpenBaoHealthMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "OpenBao's seal status is unknown"
+              description: "The worker runs but exports no OpenBao health."
+      - eval_time: 65m
+        alertname: PaddockCertificateExpiryMissing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "The expiry of some public certificates is unknown"
+              description: "The worker probes more hostnames than it exports a certificate expiry for."
+
+  - name: complete series and a host without a worker stay silent
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_kinds{role="paddock-worker"}'
+        values: "4x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="postgres", role="paddock-worker"}'
+        values: "1x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="authentik", role="paddock-worker"}'
+        values: "1x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="openbao", role="paddock-worker"}'
+        values: "1x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", role="paddock-worker"}'
+        values: "1x70"
+      - series: 'paddock_tls_probe_hosts{role="paddock-worker"}'
+        values: "0x70"
+      - series: 'up{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "1x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockBackupAgeMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockOpenBaoHealthMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockCertificateExpiryMissing
+        exp_alerts: []

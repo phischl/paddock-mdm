@@ -129,14 +129,13 @@ if [[ "$HOST" == controlplane ]]; then
     secret "rabbitmq_${user}_password"
   done
   mkdir -p "$SECRETS_DIR/rabbitmq"
-  definitions="$(sed -e "s|@PROVISIONER_PASSWORD@|$(read_secret rabbitmq_provisioner_password)|" \
-      -e "s|@RELAY_PASSWORD@|$(read_secret rabbitmq_relay_password)|" \
-      -e "s|@AUDIT_WRITER_PASSWORD@|$(read_secret rabbitmq_audit_writer_password)|" \
-      -e "s|@GATEWAY_PASSWORD@|$(read_secret rabbitmq_gateway_password)|" \
-      -e "s|@WORKER_PASSWORD@|$(read_secret rabbitmq_worker_password)|" \
-      -e "s|@COMPILER_PASSWORD@|$(read_secret rabbitmq_compiler_password)|" \
-      -e "s|@REVOCATION_ISSUER_PASSWORD@|$(read_secret rabbitmq_revocation_issuer_password)|" \
-      "$COMPOSE_DIR/rabbitmq/definitions.json.tmpl")"
+  # Substituted in bash, so that no password appears on a command line (ps).
+  definitions="$(<"$COMPOSE_DIR/rabbitmq/definitions.json.tmpl")"
+  for user in provisioner relay audit_writer gateway worker compiler revocation_issuer; do
+    placeholder_name="@${user^^}_PASSWORD@"
+    password="$(read_secret "rabbitmq_${user}_password")"
+    definitions="${definitions//"$placeholder_name"/"$password"}"
+  done
   if [[ "$definitions" != "$(cat "$SECRETS_DIR/rabbitmq/definitions.json" 2>/dev/null)" ]]; then
     printf '%s\n' "$definitions" >"$SECRETS_DIR/rabbitmq/definitions.json"
     chmod 644 "$SECRETS_DIR/rabbitmq/definitions.json"

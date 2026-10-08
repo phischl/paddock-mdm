@@ -9,9 +9,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-require_development
-
 PROJECT=paddock
+# Stricter than require_development: .env only, no production secrets, no production overlay in the running stack.
+mapfile -t running_files < <(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
+  --format '{{.Label "com.docker.compose.project.config_files"}}' | tr ',' '\n' | sort -u)
+"$here/restore-drill-guard.sh" "$COMPOSE_DIR" "${running_files[@]}"
 REPO_ROOT="$(cd "$COMPOSE_DIR/../.." && pwd)"
 export PADDOCK_BACKUP_S3_ENDPOINT="${PADDOCK_BACKUP_S3_ENDPOINT:-https://backup-s3-tls:9443}"
 BUCKET="${PADDOCK_BACKUP_S3_BUCKET:-paddock-backup}"

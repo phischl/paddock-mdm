@@ -6,7 +6,7 @@ ADR 0016). The development stack (`make up`, `docs/operations/local-dev.md`) is 
 
 | Host | Compose files | Runs |
 | --- | --- | --- |
-| Control plane | `compose.yaml` + `compose.backup.yaml` + `compose.prod.yaml` | Caddy, the Paddock roles, PostgreSQL, RabbitMQ, Valkey, OpenBao, RustFS (bundles, escrow, artifacts), Authentik, Fleet |
+| Control plane | `compose.yaml` + `compose.prod.yaml` + `compose.backup.yaml` | Caddy, the Paddock roles, PostgreSQL, RabbitMQ, Valkey, OpenBao, RustFS (bundles, escrow, artifacts), Authentik, Fleet |
 | Audit domain | `compose.audit.yaml` + `compose.audit.prod.yaml` | audit writer, audit PostgreSQL, RustFS with the WORM audit bucket |
 
 The audit domain has its own credentials (separation of duties). The control plane holds only RabbitMQ's publish
@@ -80,8 +80,8 @@ Define a shell helper per host for the commands below:
 ```sh
 # control plane
 pc() { docker compose --project-directory deploy/compose -p paddock --env-file deploy/compose/versions.env \
-  --env-file deploy/compose/.env -f deploy/compose/compose.yaml -f deploy/compose/compose.backup.yaml \
-  -f deploy/compose/compose.prod.yaml "$@"; }
+  --env-file deploy/compose/.env -f deploy/compose/compose.yaml -f deploy/compose/compose.prod.yaml \
+  -f deploy/compose/compose.backup.yaml "$@"; }
 # audit host
 pa() { docker compose --project-directory deploy/compose -p paddock --env-file deploy/compose/versions.env \
   --env-file deploy/compose/.env -f deploy/compose/compose.audit.yaml -f deploy/compose/compose.audit.prod.yaml "$@"; }
@@ -129,8 +129,9 @@ pa --profile paddock --profile observability up -d
 configuration; `PADDOCK_ENV` other than `production`; development-only variables (`PADDOCK_STEPUP_WINDOW`,
 `PADDOCK_STEPUP_MAX_AUTH_AGE`, `PADDOCK_STALENESS_UNIT`, `PADDOCK_REAPER_THRESHOLD`, `PADDOCK_OSV_SYNC_INTERVAL`,
 `PADDOCK_TEST_*`); `PADDOCK_REVOCATION_ENABLED=true` without `PADDOCK_REVOCATION_ACCEPTED=yes`; a secret file that is
-missing, empty or readable by every user of the host; a published port other than 80/443 that is not bound to
-`PADDOCK_INTERCONNECT_ADDR`; a link between the hosts without TLS; `tls internal` in the Caddyfile or no ACME e-mail;
+missing, empty or readable by every user of the host (symbolic links resolved); a path below `/run/secrets/` that a
+service names (in a variable or as the `sslrootcert` of a DSN) without mounting that secret; 80/443 published by any
+service but Caddy, or another published port that is not bound to `PADDOCK_INTERCONNECT_ADDR`; a link between the hosts without TLS; `tls internal` in the Caddyfile or no ACME e-mail;
 the development release key (its secret key next to the public key, or the key of `make dev-release-key`); and, on the
 audit host with `ONLINE=1`, an audit bucket without Object Lock COMPLIANCE of at least 400 days.
 

@@ -124,6 +124,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		checkDevVariables(c),
 		checkRevocation(c),
 		checkSecretFiles(c),
+		checkMountedReferences(c),
 		checkPorts(c),
 		checkTLSLinks(c),
 	}
@@ -273,31 +274,97 @@ func checkSecretFiles(c Config) Result {
 			f = append(f, fmt.Sprintf("%s: missing (%s)", name, sec.File))
 		case fi.IsDir() || fi.Size() == 0:
 			f = append(f, fmt.Sprintf("%s: empty (%s)", name, sec.File))
-		case worldReadable(sec.File, fi):
-			f = append(f, fmt.Sprintf("%s: readable by every user of the host (%s)", name, sec.File))
+		default:
+			if readable, err := worldReadable(sec.File); err != nil {
+				f = append(f, fmt.Sprintf("%s: cannot check who can read it (%s): %v", name, sec.File, err))
+			} else if readable {
+				f = append(f, fmt.Sprintf("%s: readable by every user of the host (%s)", name, sec.File))
+			}
 		}
 	}
 	return result("secret files present, not empty and not world-readable", f)
 }
 
 // worldReadable reports whether any local user can read the file: it is readable by others and every directory above
-// it lets others pass. A file of mode 0644 in a 0700 directory is private (the secrets directory's layout).
-func worldReadable(path string, fi os.FileInfo) bool {
-	if fi.Mode().Perm()&0o004 == 0 {
-		return false
+// it lets others pass. A file of mode 0644 in a 0700 directory is private (the secrets directory's layout). Symbolic
+// links are resolved first, so that the walk checks the directories that really hold the file; an error is returned,
+// never taken as private.
+func worldReadable(path string) (bool, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false, err
 	}
-	dir := filepath.Dir(path)
+	fi, err := os.Lstat(resolved)
+	if err != nil {
+		return false, err
+	}
+	if fi.Mode().Perm()&0o004 == 0 {
+		return false, nil
+	}
+	dir := filepath.Dir(resolved)
 	for {
-		di, err := os.Stat(dir)
-		if err != nil || di.Mode().Perm()&0o001 == 0 {
-			return false
+		di, err := os.Lstat(dir)
+		if err != nil {
+			return false, err
+		}
+		if di.Mode().Perm()&0o001 == 0 {
+			return false, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return true
+			return true, nil
 		}
 		dir = parent
 	}
+}
+
+// checkMountedReferences fails every path below /run/secrets/ that a service names, in a variable or as the
+// sslrootcert of a DSN file, without mounting that secret: such a role cannot start.
+func checkMountedReferences(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		s := c.Services[name]
+		for k, v := range s.Environment {
+			if v == nil {
+				continue
+			}
+			path := strings.TrimSpace(*v)
+			if strings.HasPrefix(path, "/run/secrets/") && secretFile(c, s, path) == "" {
+				f = append(f, fmt.Sprintf("%s: %s names %s, which is not mounted", name, k, path))
+				continue
+			}
+			if !isDSNVar(k) {
+				continue
+			}
+			if root := dsnRootCert(c, s, path); strings.HasPrefix(root, "/run/secrets/") && secretFile(c, s, root) == "" {
+				f = append(f, fmt.Sprintf("%s: the DSN of %s names sslrootcert %s, which is not mounted", name, k, root))
+			}
+		}
+	}
+	return result("secrets the services reference are mounted", f)
+}
+
+// isDSNVar reports whether the variable names a database DSN file.
+func isDSNVar(k string) bool {
+	return strings.HasPrefix(k, "PADDOCK_") && strings.Contains(k, "DB") && strings.HasSuffix(k, "_URL_FILE")
+}
+
+// dsnRootCert returns the sslrootcert of the DSN file a service sees at containerPath ("" if none or unreadable;
+// checkTLSLinks reports an unreadable DSN file).
+func dsnRootCert(c Config, s Service, containerPath string) string {
+	file := secretFile(c, s, containerPath)
+	if file == "" {
+		return ""
+	}
+	b, err := os.ReadFile(file) //nolint:gosec // the path comes from the operator's Compose configuration
+	if err != nil {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSpace(string(b)))
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("sslrootcert")
 }
 
 func checkPorts(c Config) Result {
@@ -309,7 +376,8 @@ func checkPorts(c Config) Result {
 	}
 	for _, name := range sortedServices(c) {
 		for _, p := range c.Services[name].Ports {
-			if p.Published == "80" || p.Published == "443" {
+			// 80 and 443 are public, and only Caddy may hold them.
+			if name == "caddy" && (p.Published == "80" || p.Published == "443") {
 				continue
 			}
 			if addr == "" || p.HostIP != addr {
@@ -344,7 +412,7 @@ func checkTLSLinks(c Config) Result {
 			}
 		}
 		for k, v := range s.Environment {
-			if v == nil || !strings.HasPrefix(k, "PADDOCK_") || !strings.Contains(k, "DB") || !strings.HasSuffix(k, "_URL_FILE") {
+			if v == nil || !isDSNVar(k) {
 				continue
 			}
 			if problem := dsnProblem(c, s, *v, local); problem != "" {
@@ -367,11 +435,12 @@ func checkTLSLinks(c Config) Result {
 func dsnProblem(c Config, s Service, containerPath string, local func(string) bool) string {
 	file := secretFile(c, s, containerPath)
 	if file == "" {
+		// checkMountedReferences reports the missing mount.
 		return ""
 	}
 	b, err := os.ReadFile(file) //nolint:gosec // the path comes from the operator's Compose configuration
 	if err != nil {
-		return ""
+		return "cannot be read"
 	}
 	u, err := url.Parse(strings.TrimSpace(string(b)))
 	if err != nil {
