@@ -26,6 +26,8 @@ type handlers struct {
 	devices  *app.Devices
 	managed  *app.ManagedConfig
 	releases *app.AgentReleases
+	// apiTokens are the API tokens of plan M6c.
+	apiTokens *app.APITokens
 
 	users         *app.Users
 	userGroups    *app.UserGroups
@@ -88,6 +90,9 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 	}
 	if me.Organization != nil {
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name}
+	}
+	if me.APIToken != nil {
+		out.ApiToken = &adminapi.MeApiToken{Id: me.APIToken.ID, Name: me.APIToken.Name, ExpiresAt: me.APIToken.ExpiresAt.UTC()}
 	}
 	return out
 }

@@ -248,6 +248,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/api-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listApiTokens"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator; requires a step-up within the last 5 minutes (403 step_up_required), so an
+         *     API token cannot create tokens. The role may not be above the creator's: org_admin creates any organization
+         *     role, org_operator creates org_operator and org_auditor (403 forbidden). expires_at lies between 1 hour and
+         *     365 days ahead. The response carries the secret exactly once; only its SHA-256 is stored.
+         */
+        post: operations["createApiToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getApiToken"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-tokens/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin (any token of the organization), org_operator (only tokens it created; otherwise 403
+         *     forbidden). A request made with an API token cannot revoke (403 forbidden). The token is refused from its
+         *     next request on. Revoking a revoked token is 409 invalid_state.
+         */
+        post: operations["revokeApiToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autoinstall": {
         parameters: {
             query?: never;
@@ -1789,6 +1854,15 @@ export interface components {
              */
             revocation_enabled: boolean;
             step_up?: components["schemas"]["MeStepUp"];
+            api_token?: components["schemas"]["MeApiToken"];
+        };
+        /** @description The API token the request authenticated with; absent for sessions. */
+        MeApiToken: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            expires_at: string;
         };
         /** @description Development only (PADDOCK_ENV=development; absent in production): the session's last step-up and the step-up timing the server applies, for the acceptance gates. */
         MeStepUp: {
@@ -1971,7 +2045,7 @@ export interface components {
         /** @enum {string} */
         AuditOutcome: "success" | "failure" | "denied" | "unknown";
         /** @enum {string} */
-        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous" | "device";
+        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous" | "device" | "api_token";
         AuditActor: {
             type: string;
             id?: string;
@@ -2088,6 +2162,61 @@ export interface components {
         };
         EnrollmentTokenPage: {
             items: components["schemas"]["EnrollmentToken"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @enum {string} */
+        ApiTokenRole: "org_admin" | "org_operator" | "org_auditor";
+        /** @enum {string} */
+        ApiTokenStatus: "active" | "expired" | "revoked";
+        ApiToken: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description The first 12 characters of the secret (pdk_ and 8). */
+            prefix: string;
+            role: components["schemas"]["ApiTokenRole"];
+            status: components["schemas"]["ApiTokenStatus"];
+            created_by: components["schemas"]["ApiTokenCreator"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /**
+             * Format: date-time
+             * @description Last request made with the token, updated at most once per minute.
+             */
+            last_used_at: string | null;
+            /** Format: date-time */
+            revoked_at: string | null;
+        };
+        ApiTokenCreator: {
+            /** Format: uuid */
+            id: string;
+            display: string;
+        };
+        ApiTokenCreate: {
+            name: string;
+            role: components["schemas"]["ApiTokenRole"];
+            /**
+             * Format: date-time
+             * @description Between 1 hour and 365 days ahead.
+             */
+            expires_at: string;
+        };
+        ApiTokenCreated: {
+            token: components["schemas"]["ApiToken"];
+            /** @description Shown once; keep it like a password. */
+            secret: string;
+        };
+        ApiTokenPage: {
+            items: components["schemas"]["ApiToken"][];
             page: number;
             page_size: number;
             /** @description Matching items, counted up to 10000. */
@@ -3148,6 +3277,8 @@ export interface components {
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
+        /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
+        ApiTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at" | "last_used_at" | "-last_used_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         ManagedFileSort: "path" | "-path" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -3688,6 +3819,125 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    listApiTokens: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
+                sort?: components["parameters"]["ApiTokenSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["ApiTokenStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of API tokens. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiTokenPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createApiToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiTokenCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiTokenCreated"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getApiToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The API token (without secret). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    revokeApiToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     generateAutoinstall: {

@@ -124,6 +124,21 @@ func (p *OrgPool) ResolveSlug(ctx context.Context, slug string) (uuid.UUID, erro
 	return id, err
 }
 
+// LookupAPIToken finds the API token with the SHA-256 hash of its secret before an organization context exists
+// (bearer authentication, plan M6c decision 9). It runs only the SECURITY DEFINER function paddock_api_token_lookup,
+// which reveals nothing but the token's own row of an active organization; ok is false when there is none.
+func (p *OrgPool) LookupAPIToken(ctx context.Context, hash []byte) (row pgstore.LookupApiTokenRow, ok bool, err error) {
+	err = inTx(ctx, p.p, nil, func(tx pgx.Tx) error {
+		var err error
+		row, err = pgstore.New(tx).LookupApiToken(ctx, hash)
+		return err
+	})
+	if IsNoRows(err) {
+		return row, false, nil
+	}
+	return row, err == nil, err
+}
+
 // OrganizationIDs lists every organization ID before an organization context exists, for the cache loops of worker
 // and compiler. It runs only the SECURITY DEFINER function paddock_organization_ids; all organization data is
 // then read with InOrg.

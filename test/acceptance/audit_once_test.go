@@ -127,6 +127,66 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "device_group.deleted", "failure")
 		}},
 	},
+	// Each creation signs in on its own: a step-up changes the session it runs in (plan M6c decision 4).
+	"POST /api/v1/api-tokens": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			stepUp(t, alice, env.Alice, true)
+			res := postAPIToken(t, alice, apiTokenName("audit"), "org_auditor", 2*time.Hour)
+			expectStatus(t, res, http.StatusCreated, "")
+			removeCreated(t, alice, "/api/v1/api-tokens", res)
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.created", "success")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := postAPIToken(t, login(t, env.Alice), apiTokenName("audit"), "org_auditor", 2*time.Hour)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.created", "denied")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			stepUp(t, alice, env.Alice, true)
+			res := postAPIToken(t, alice, apiTokenName("audit"), "org_auditor", 400*24*time.Hour)
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.created", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := postAPIToken(t, w.bob, apiTokenName("audit"), "org_auditor", 2*time.Hour)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.created", "denied")
+		}},
+	},
+	"POST /api/v1/api-tokens/{id}/revoke": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			res := call(t, alice, http.MethodPost, "/api/v1/api-tokens/"+createAPIToken(t, alice, env.Alice, "org_auditor").Token.ID+"/revoke", nil)
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "success")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPost, "/api/v1/api-tokens/not-a-uuid/revoke", nil)
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			res := call(t, w.bob, http.MethodPost, "/api/v1/api-tokens/"+createAPIToken(t, alice, env.Alice, "org_auditor").Token.ID+"/revoke", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "denied")
+		}},
+		{"not found", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPost, "/api/v1/api-tokens/"+uuid.NewString()+"/revoke", nil)
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "failure")
+		}},
+		{"conflict", func(t *testing.T, w *auditWorld) {
+			alice := login(t, env.Alice)
+			id := createAPIToken(t, alice, env.Alice, "org_auditor").Token.ID
+			expectStatus(t, call(t, alice, http.MethodPost, "/api/v1/api-tokens/"+id+"/revoke", nil), http.StatusOK, "")
+			res := call(t, alice, http.MethodPost, "/api/v1/api-tokens/"+id+"/revoke", nil)
+			expectStatus(t, res, http.StatusConflict, "invalid_state")
+			expectOneEvent(t, w.alice, res.RequestID, "api_token.revoked", "failure")
+		}},
+	},
 	"POST /api/platform/v1/organizations": {
 		{"success", func(t *testing.T, w *auditWorld) {
 			res := call(t, w.root, http.MethodPost, "/api/platform/v1/organizations", newOrg())

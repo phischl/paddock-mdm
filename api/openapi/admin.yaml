@@ -8,6 +8,9 @@ info:
 
     - All errors are RFC 9457 problem details (`application/problem+json`) with `code` and `instance` (request ID).
     - Mutating requests require the header `X-Paddock-CSRF: 1` (otherwise 403 `csrf_missing`).
+    - Requests authenticate with the portal session cookie or with an API token (`Authorization: Bearer pdk_…`,
+      plan M6c decision 9). A token acts in its organization with the role it carries; API token requests send
+      `X-Paddock-CSRF: 1` on mutating requests, too.
     - The organization is never part of a path: it comes from the session only. Resources of other organizations
       answer 404 `not_found`, exactly like missing resources.
     - Operations that are privileged actions carry `x-paddock-audit: <code>`; each attempt produces exactly one
@@ -23,11 +26,13 @@ servers:
   - url: https://admin.paddock.localhost:8443
 security:
   - session: []
+  - bearer: []
 tags:
   - name: auth
   - name: me
   - name: device-groups
   - name: enrollment-tokens
+  - name: api-tokens
   - name: devices
   - name: managed-config
   - name: users
@@ -436,6 +441,108 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/api-tokens:
+    get:
+      operationId: listApiTokens
+      tags: [api-tokens]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      x-paddock-list:
+        sort: [name, created_at, expires_at, last_used_at]
+        default_sort: name
+        search: [name]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ApiTokenSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ApiTokenStatus" }
+      responses:
+        "200":
+          description: One page of API tokens.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiTokenPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createApiToken
+      tags: [api-tokens]
+      description: |
+        Roles: org_admin, org_operator; requires a step-up within the last 5 minutes (403 step_up_required), so an
+        API token cannot create tokens. The role may not be above the creator's: org_admin creates any organization
+        role, org_operator creates org_operator and org_auditor (403 forbidden). expires_at lies between 1 hour and
+        365 days ahead. The response carries the secret exactly once; only its SHA-256 is stored.
+      x-paddock-audit: api_token.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiTokenCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiTokenCreated" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/api-tokens/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getApiToken
+      tags: [api-tokens]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The API token (without secret).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiToken" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/api-tokens/{id}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: revokeApiToken
+      tags: [api-tokens]
+      description: |
+        Roles: org_admin (any token of the organization), org_operator (only tokens it created; otherwise 403
+        forbidden). A request made with an API token cannot revoke (403 forbidden). The token is refused from its
+        next request on. Revoking a revoked token is 409 invalid_state.
+      x-paddock-audit: api_token.revoked
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiToken" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
 
   /api/v1/autoinstall:
     post:
@@ -2868,6 +2975,10 @@ components:
       type: apiKey
       in: cookie
       name: paddock_session
+    bearer:
+      type: http
+      scheme: bearer
+      description: An API token secret (pdk_ and 43 characters), plan M6c decision 9.
   parameters:
     Csrf:
       name: X-Paddock-CSRF
@@ -2996,6 +3107,14 @@ components:
         type: string
         enum: [name, -name, created_at, -created_at, expires_at, -expires_at]
         default: -created_at
+    ApiTokenSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, created_at, -created_at, expires_at, -expires_at, last_used_at, -last_used_at]
+        default: name
     ManagedFileSort:
       name: sort
       in: query
@@ -3161,6 +3280,16 @@ components:
             dead man's switch answer 403 revocation_disabled.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
+        api_token:
+          $ref: "#/components/schemas/MeApiToken"
+    MeApiToken:
+      type: object
+      description: The API token the request authenticated with; absent for sessions.
+      required: [id, name, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        expires_at: { type: string, format: date-time }
     MeStepUp:
       type: object
       description: >-
@@ -3359,7 +3488,7 @@ components:
       enum: [success, failure, denied, unknown]
     AuditActorType:
       type: string
-      enum: [admin, platform_admin, system, anonymous, device]
+      enum: [admin, platform_admin, system, anonymous, device, api_token]
     AuditActor:
       type: object
       required: [type, step_up]
@@ -3484,6 +3613,62 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/EnrollmentToken" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ApiTokenRole:
+      type: string
+      enum: [org_admin, org_operator, org_auditor]
+    ApiTokenStatus:
+      type: string
+      enum: [active, expired, revoked]
+    ApiToken:
+      type: object
+      required: [id, name, prefix, role, status, created_by, created_at, expires_at, last_used_at, revoked_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        prefix: { type: string, description: The first 12 characters of the secret (pdk_ and 8). }
+        role: { $ref: "#/components/schemas/ApiTokenRole" }
+        status: { $ref: "#/components/schemas/ApiTokenStatus" }
+        created_by: { $ref: "#/components/schemas/ApiTokenCreator" }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last request made with the token, updated at most once per minute.
+        revoked_at: { type: string, format: date-time, nullable: true }
+    ApiTokenCreator:
+      type: object
+      required: [id, display]
+      properties:
+        id: { type: string, format: uuid }
+        display: { type: string }
+    ApiTokenCreate:
+      type: object
+      required: [name, role, expires_at]
+      additionalProperties: false
+      properties:
+        name: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' }
+        role: { $ref: "#/components/schemas/ApiTokenRole" }
+        expires_at: { type: string, format: date-time, description: Between 1 hour and 365 days ahead. }
+    ApiTokenCreated:
+      type: object
+      required: [token, secret]
+      properties:
+        token: { $ref: "#/components/schemas/ApiToken" }
+        secret: { type: string, description: "Shown once; keep it like a password." }
+    ApiTokenPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ApiToken" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }

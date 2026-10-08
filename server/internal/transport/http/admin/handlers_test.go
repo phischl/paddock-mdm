@@ -330,6 +330,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 	d := admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
 		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, nil, "https://device.test"),
+		APITokens:     app.NewAPITokens(runner, orgPool),
 		Devices:       app.NewDevices(runner, orgPool),
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, idp),
@@ -768,7 +769,7 @@ func TestOrganizationProvisioning(t *testing.T) {
 	}
 	e.expectEvent(invalid, "organization.created:failure:invalid_request")
 
-	list := e.do(call{method: "GET", path: "/api/platform/v1/organizations", cookie: root})
+	list := e.do(call{method: "GET", path: "/api/platform/v1/organizations?q=" + slug, cookie: root})
 	if list.status != http.StatusOK || !strings.Contains(string(list.body), slug) {
 		t.Fatalf("list: %d", list.status)
 	}

@@ -125,6 +125,11 @@ const (
 	CodeDeviceStaleCleared  Code = "device.stale_cleared"
 
 	CodePlatformOSVStale Code = "platform.osv_stale"
+
+	// API tokens (plan M6c decisions 4, 5 and 9).
+	CodeAPITokenCreated   Code = "api_token.created"
+	CodeAPITokenRevoked   Code = "api_token.revoked"
+	CodeAPITokenUseDenied Code = "api_token.use_denied" //nolint:gosec // an audit code, not a credential
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -807,6 +812,27 @@ var registry = map[Code]Definition{
 		Params:      []string{"last_success_at", "last_error"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stale period; the next successful download or import ends it. last_success_at is missing if no download ever succeeded.",
+	},
+	CodeAPITokenCreated: {
+		Code: CodeAPITokenCreated, Emitted: true,
+		Description: "An organization administrator or operator created an API token. The token secret is never recorded.",
+		Params:      []string{"name", "role", "expires_at", "prefix"},
+		Outcomes:    adminOutcomes,
+		Note:        "Requires a fresh step-up: denied with step_up_required without one (an API token never has one, so a token cannot create tokens); denied with forbidden for a role above the creator's.",
+	},
+	CodeAPITokenRevoked: {
+		Code: CodeAPITokenRevoked, Emitted: true,
+		Description: "An API token was revoked; it is refused from its next request on.",
+		Params:      []string{"name", "role", "created_by"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for an operator revoking another administrator's token and for a request made with an API token.",
+	},
+	CodeAPITokenUseDenied: {
+		Code: CodeAPITokenUseDenied, Emitted: true,
+		Description: "A request authenticated with a revoked or expired API token was refused (actor: anonymous, with the token's name).",
+		Params:      []string{"name", "reason"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "reason is revoked or expired. Unknown or malformed secrets are not recorded.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,
