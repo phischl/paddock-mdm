@@ -123,6 +123,8 @@ const (
 	CodeDeviceStaleWarning  Code = "device.stale_warning"
 	CodeDeviceStaleCritical Code = "device.stale_critical"
 	CodeDeviceStaleCleared  Code = "device.stale_cleared"
+
+	CodePlatformOSVStale Code = "platform.osv_stale"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -798,6 +800,13 @@ var registry = map[Code]Definition{
 		Description: "A device that was stale contacted Paddock again; its staleness alert and the presumed lost mark are cleared (actor: system).",
 		Params:      []string{"last_contact_at", "previous"},
 		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodePlatformOSVStale: {
+		Code: CodePlatformOSVStale, Emitted: true,
+		Description: "Ubuntu's vulnerability data (OSV) has not been updated successfully for 3 days; findings keep the last data (actor: system, platform pseudo-organization).",
+		Params:      []string{"last_success_at", "last_error"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per stale period; the next successful download or import ends it. last_success_at is missing if no download ever succeeded.",
 	},
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,

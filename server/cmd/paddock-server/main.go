@@ -25,6 +25,7 @@ commands:
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD
+  osv import <file>
   healthcheck
 
 Commands separated by a lone "+" run one after another; the first failure stops the chain.
@@ -86,6 +87,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runServe(ctx, l, common, args[1:])
 	case "audit":
 		err = runAudit(ctx, l, common, args[1:])
+	case "osv":
+		err = runOSV(ctx, l, args[1:])
 	case "provision":
 		if len(args) != 2 || args[1] != "rabbitmq" {
 			err = errUsage

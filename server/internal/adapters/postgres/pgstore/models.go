@@ -358,6 +358,34 @@ type OrganizationUpdateSetting struct {
 	UpdatedBy             uuid.NullUUID
 }
 
+type OsvSyncState struct {
+	Source         string
+	Etag           string
+	DataVersion    int64
+	Entries        int32
+	LastSuccessAt  *time.Time
+	LastAttemptAt  *time.Time
+	LastError      string
+	StaleAlertedAt *time.Time
+	CreatedAt      time.Time
+}
+
+type OsvUbuntu struct {
+	Cve          string
+	Release      string
+	Package      string
+	Priority     string
+	FixedVersion *string
+	CvssVector   *string
+	Modified     *time.Time
+}
+
+type OsvUbuntuBinary struct {
+	Release    string
+	BinaryName string
+	Package    string
+}
+
 type Outbox struct {
 	ID             int64
 	OrganizationID uuid.UUID
@@ -480,4 +508,5 @@ type VulnerabilityFinding struct {
 	Severity        *string
 	FixedVersion    *string
 	FirstSeenAt     time.Time
+	CvssVector      *string
 }

@@ -221,6 +221,9 @@
       "artifact_uploaded": "{kind, select, deb {{actor} uploaded the {arch} package {name} of agent release {version}} other {{actor} uploaded the {arch} binary of agent release {version}}}",
       "published": "{actor} published the agent release {version}"
     },
+    "platform": {
+      "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days"
+    },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
       "advanced": "The rollout of agent {version} moved to {percent, number} % of the devices",

@@ -23,6 +23,8 @@ func TestRLSLint(t *testing.T) {
 		"goose_db_version": true, "organization": true, "platform_admin": true,
 		// Platform data of agent releases (plan M2b decision 19), role paddock_platform only.
 		"agent_release": true, "agent_artifact": true, "agent_rollout": true, "agent_package": true,
+		// Ubuntu's vulnerability data (plan M5c decision 1), platform data without organization data.
+		"osv_ubuntu": true, "osv_ubuntu_binary": true, "osv_sync_state": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
