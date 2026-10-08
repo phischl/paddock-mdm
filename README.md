@@ -19,14 +19,12 @@ and German.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/devices-dark.png">
     <img src="docs/assets/screenshots/devices-light.png" alt="The device list of the Paddock portal" width="800">
   </picture>
 </p>
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/audit-dark.png">
     <img src="docs/assets/screenshots/audit-light.png" alt="The audit log of the Paddock portal" width="800">
   </picture>
 </p>

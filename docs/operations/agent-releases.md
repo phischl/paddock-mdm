@@ -83,7 +83,7 @@ bootstrap `deploy/compose/scripts/rustfs-bundles-bootstrap.sh` sets it).
 A tag `v<version>` runs the release workflow (`.github/workflows/release.yml`, plan M6b decision 4). It calls
 
 1. `make release-artifacts RELEASE_VERSION=<version> PUSH=1 RELEASE_PUBLIC_KEY_FILE=<production release public key>`:
-   builds `ghcr.io/phischl/paddock-server:<version>` and `ghcr.io/phischl/paddock-server-compiler:<version>` (OCI
+   builds `ghcr.io/phischl/paddock-server:<version>` and `ghcr.io/phischl/paddock-compiler:<version>` (OCI
    labels for source, version, revision and license), pushes them and records their digests in `images.txt`,
    builds the Debian packages and the agent binaries for amd64 and arm64 with the production public key compiled
    into `paddock-supervisor`, writes an SPDX SBOM per image with `syft` and `SHA256SUMS` over all files, all into

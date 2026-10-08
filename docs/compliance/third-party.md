@@ -49,7 +49,7 @@ digests are pinned in `deploy/compose/versions.env`.
 | Image | Contents | Licenses |
 | --- | --- | --- |
 | `ghcr.io/phischl/paddock-server` | `paddock-server` (MIT, with the dependencies above) on `gcr.io/distroless/static-debian12` | MIT; the distroless base holds Debian's `base-files`, `netbase`, `tzdata` and `ca-certificates` under their Debian licenses (`/usr/share/doc/*/copyright` in the image) |
-| `ghcr.io/phischl/paddock-server-compiler` | `paddock-server` on `debian` slim with the `sudo` package (for `visudo`) | MIT; Debian packages under their own licenses, `sudo` under the ISC-style sudo license |
+| `ghcr.io/phischl/paddock-compiler` | `paddock-server` on `debian` slim with the `sudo` package (for `visudo`) | MIT; Debian packages under their own licenses, `sudo` under the ISC-style sudo license |
 | `paddock-pgbackrest` (built locally, not published) | Debian slim with the `pgbackrest` package | pgBackRest MIT; Debian packages under their own licenses |
 
 Every published image carries an SBOM (SPDX, generated with `syft`) as a release asset and as a signed cosign
