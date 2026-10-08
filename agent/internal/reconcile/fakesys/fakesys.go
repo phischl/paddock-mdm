@@ -65,6 +65,10 @@ type System struct {
 	// outputs of sudo binaries (default: classic sudo).
 	Links        map[string]string
 	SudoVersions map[string]string
+	// Held are the packages apt-mark holds.
+	Held map[string]bool
+	// Shows are the answers of `systemctl show … <unit>` by unit.
+	Shows map[string]string
 }
 
 // Session is a fake logind session.
@@ -79,7 +83,7 @@ type Session struct {
 func New() *System {
 	return &System{
 		Files: map[string]*File{}, Units: map[string]*Unit{}, Packages: map[string]bool{}, Versions: map[string]string{},
-		Passwd: map[string]int{}, Members: map[string][]string{},
+		Passwd: map[string]int{}, Members: map[string][]string{}, Held: map[string]bool{}, Shows: map[string]string{},
 		Users: map[string]int{"root": 0, "nobody": 65534}, Groups: map[string]int{"root": 0, "adm": 4},
 	}
 }
@@ -164,7 +168,16 @@ func (s *System) Systemctl(_ context.Context, args ...string) (string, int, erro
 	defer s.mu.Unlock()
 	if len(args) == 1 && args[0] == "daemon-reload" {
 		s.Calls = append(s.Calls, "systemctl daemon-reload")
+		// Unit files below /etc/systemd/system become known units.
+		for path := range s.Files {
+			if dir, name := filepath.Split(path); dir == "/etc/systemd/system/" && s.Units[name] == nil {
+				s.Units[name] = &Unit{State: "disabled"}
+			}
+		}
 		return "", 0, nil
+	}
+	if len(args) > 2 && args[0] == "show" {
+		return s.Shows[args[len(args)-1]], 0, nil
 	}
 	if len(args) != 2 {
 		return "", 1, fmt.Errorf("fake systemctl: unsupported %v", args)
@@ -276,6 +289,34 @@ func (s *System) AptGet(_ context.Context, args ...string) (string, int, error) 
 		for _, p := range words[1:] {
 			s.Packages[p] = true
 			s.Versions[p] = s.AptVersion
+		}
+	}
+	return "", 0, nil
+}
+
+// AptMark implements reconcile.System for showhold, hold and unhold (Held); FailCmd makes a call fail.
+func (s *System) AptMark(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(args) == 1 && args[0] == "showhold" {
+		var held []string
+		for p := range s.Held {
+			held = append(held, p)
+		}
+		sort.Strings(held)
+		return strings.Join(held, "\n") + "\n", 0, nil
+	}
+	cmd := "apt-mark " + strings.Join(args, " ")
+	s.Calls = append(s.Calls, cmd)
+	if cmd == s.FailCmd || len(args) < 3 || args[1] != "--" {
+		return "E: failure\n", 100, nil
+	}
+	for _, p := range args[2:] {
+		s.Held[p] = args[0] == "hold"
+	}
+	if args[0] == "unhold" {
+		for _, p := range args[2:] {
+			delete(s.Held, p)
 		}
 	}
 	return "", 0, nil

@@ -123,8 +123,11 @@ func TestLifetime(t *testing.T) {
 	if d, ok := Lifetime(TypeDeleteSelfLock); !ok || d != 30*24*time.Hour {
 		t.Fatalf("delete_self_lock: %v %v", d, ok)
 	}
-	if _, ok := Lifetime("install_now"); ok {
-		t.Fatal("install_now is not a type of this release")
+	if d, ok := Lifetime(TypeInstallNow); !ok || d != 24*time.Hour {
+		t.Fatalf("install_now: %v %v", d, ok)
+	}
+	if _, ok := Lifetime("collect_status"); ok {
+		t.Fatal("collect_status is not a type of this release")
 	}
 }
 

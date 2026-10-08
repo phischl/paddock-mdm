@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, expectAdminStartPage, watchCSP } from './checks'
 import { test } from './cleanup'
 
 // The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
@@ -22,7 +22,7 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   cleanup.remove('/api/v1/enrollment-tokens', tokenName)
 
   // The start page tile counts devices with critical or high findings and those with findings of unknown severity.
-  await expect(page).toHaveURL(/\/device-groups$/)
+  await expectAdminStartPage(page)
   const tile = page.getByTestId('vulnerability-tile')
   await expect(tile.getByRole('link', { name: /critical or high findings/ })).toBeVisible()
   await expect(tile.getByRole('link', { name: /findings of unknown severity/ })).toBeVisible()

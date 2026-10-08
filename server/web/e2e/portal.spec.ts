@@ -1,12 +1,12 @@
 import { expect, type Page } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, expectAdminStartPage, watchCSP } from './checks'
 import { test } from './cleanup'
 
 test('organization admin manages a device group and sees the audit trail', async ({ page, cleanup }) => {
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
-  await expect(page).toHaveURL(/\/device-groups$/)
+  await expectAdminStartPage(page)
   await expect(page.getByTestId('user-role')).toHaveText('Organization administrator')
   await expectAccessible(page)
 

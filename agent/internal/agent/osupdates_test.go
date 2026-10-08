@@ -1,0 +1,140 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/phischl/paddock-mdm/agent/internal/osupdates"
+	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
+	"github.com/phischl/paddock-mdm/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/command"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
+)
+
+// TestInstallNow (plan M5b decision 7): the command is executed by the install worker, an installed package is only
+// upgraded, a missing one installed, and the result is sent at the next check-in.
+func TestInstallNow(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	sys.Packages["curl"], sys.Versions["curl"] = true, "8.5.0-1"
+	sys.AptVersion = "2.0-1"
+	a.current = &bundle.Bundle{SchemaVersion: 2, Keys: testgw.CommandKeys()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.runInstalls(ctx)
+	now := time.Now().UTC()
+	params, _ := json.Marshal(command.InstallNowParams{Packages: []string{"curl", "htop"}})
+	g.Mu.Lock()
+	g.Checkin.Commands = []json.RawMessage{testgw.SignedCommand(t, command.Command{CommandID: "0190f000-0000-7000-8000-0000000000d1",
+		DeviceID: testgw.DeviceID, OrganizationID: testgw.OrgID, Type: command.TypeInstallNow, Params: params, IssuedAt: now, ExpiresAt: now.Add(time.Hour)})}
+	g.Mu.Unlock()
+	a.Cycle(ctx)
+	g.Mu.Lock()
+	g.Checkin.Commands = nil
+	g.Mu.Unlock()
+	select {
+	case d := <-a.installDone:
+		a.finishInstall(d)
+	case <-time.After(5 * time.Second):
+		t.Fatal("install worker did not finish")
+	}
+	a.Cycle(ctx)
+	r, ok := g.Results["0190f000-0000-7000-8000-0000000000d1"]
+	if !ok || r.Status != protocol.CommandSucceeded {
+		t.Fatalf("results %+v", g.Results)
+	}
+	var res command.InstallNowResult
+	if err := json.Unmarshal(r.Result, &res); err != nil || !slices.Equal(res.Installed, []string{"curl", "htop"}) || len(res.Failed) != 0 {
+		t.Fatalf("result %s %v", r.Result, err)
+	}
+	calls := sys.TakeCalls()
+	if !slices.Contains(calls, "apt-get update") || !slices.Contains(calls, "apt-get install curl") || !slices.Contains(calls, "apt-get install htop") {
+		t.Fatalf("calls %v", calls)
+	}
+}
+
+func TestInstallNowRefusesInvalidPackages(t *testing.T) {
+	a := newAgent(t, testgw.New(t))
+	withSystem(t, a)
+	params, _ := json.Marshal(command.InstallNowParams{Packages: []string{"-oAPT::Update::Pre-Invoke::=x"}})
+	if status, result := a.installNowCommand(context.Background(), &command.Command{CommandID: "c", Params: params}); status != protocol.CommandFailed ||
+		result["reason"] != "invalid_params" {
+		t.Fatalf("%s %v", status, result)
+	}
+	if len(a.installJobs) != 0 {
+		t.Fatal("queued an invalid command")
+	}
+}
+
+func TestInstallPackagesFailure(t *testing.T) {
+	a := newAgent(t, testgw.New(t))
+	sys := withSystem(t, a)
+	sys.FailCmd = "apt-get install"
+	status, result := installPackages(context.Background(), sys, []string{"htop"}, func() bool { return true })
+	if status != protocol.CommandFailed || result["reboot_required"] != true {
+		t.Fatalf("%s %v", status, result)
+	}
+	if failed, _ := result["failed"].([]any); len(failed) != 1 || failed[0] != "htop" {
+		t.Fatalf("result %v", result)
+	}
+}
+
+// TestReportUpdateRuns (plan M5b decision 6): the regular run's result file and a finished apt-daily-upgrade.service
+// each become one updates.run event.
+func TestReportUpdateRuns(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	ctx := context.Background()
+	finished := time.Date(2026, 10, 10, 4, 12, 0, 0, time.UTC)
+	if err := osupdates.WriteResult(a.d.Layout, protocol.UpdatesRun{Kind: protocol.UpdatesKindRegular, StartedAt: finished.Add(-10 * time.Minute),
+		FinishedAt: finished, Upgraded: 3, HeldBack: []string{}, Result: protocol.UpdatesResultOK}); err != nil {
+		t.Fatal(err)
+	}
+	log := a.d.Layout.UnattendedLog()
+	if err := os.MkdirAll(filepath.Dir(log), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 10, 10, 3, 20, 0, 0, time.Local)
+	data := start.Format("2006-01-02 15:04:05") + ",000 INFO Starting unattended upgrades script\n" +
+		start.Format("2006-01-02 15:04:05") + ",500 INFO Packages that will be upgraded: libssl3t64\n"
+	if err := os.WriteFile(log, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exit := start.Add(5 * time.Minute)
+	sys.Shows[reconcile.SecurityUnit] = "ActiveExitTimestamp=@" + strconv.FormatInt(exit.Unix(), 10) + "\nResult=success\n"
+
+	a.reportUpdateRuns(ctx)
+	a.reportUpdateRuns(ctx) // nothing new
+	a.Cycle(ctx)
+	var runs []protocol.UpdatesRun
+	for _, e := range g.Events {
+		if e.Type == protocol.EventUpdatesRun {
+			var r protocol.UpdatesRun
+			_ = json.Unmarshal(e.Data, &r)
+			runs = append(runs, r)
+		}
+	}
+	if len(runs) != 2 || runs[0].Kind != protocol.UpdatesKindRegular || runs[0].Upgraded != 3 ||
+		runs[1].Kind != protocol.UpdatesKindSecurity || runs[1].Upgraded != 1 || !runs[1].FinishedAt.Equal(exit.UTC()) ||
+		!runs[1].StartedAt.Equal(start.UTC()) || runs[1].Result != protocol.UpdatesResultOK {
+		t.Fatalf("runs %+v", runs)
+	}
+	// A failed unit is a failed run.
+	sys.Shows[reconcile.SecurityUnit] = "ActiveExitTimestamp=@" + strconv.FormatInt(exit.Unix()+86400, 10) + "\nResult=exit-code\n"
+	a.reportUpdateRuns(ctx)
+	a.Cycle(ctx)
+	last := g.Events[len(g.Events)-1]
+	var r protocol.UpdatesRun
+	if _ = json.Unmarshal(last.Data, &r); last.Type != protocol.EventUpdatesRun || r.Result != protocol.UpdatesResultFailed {
+		t.Fatalf("last event %s %+v", last.Type, r)
+	}
+}

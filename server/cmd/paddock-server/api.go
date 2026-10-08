@@ -158,6 +158,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Disk:          app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
 		Revocations:   app.NewRevocations(runner, orgPool, stepUpTokens, revocationEnabled),
 		DMS:           app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
+		Updates:       app.NewUpdates(runner, orgPool),
+		Attention:     app.NewAttention(orgPool),
 		Inventory:     app.NewInventory(orgPool),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development()),

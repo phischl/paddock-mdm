@@ -437,3 +437,38 @@ func TestInventorySection(t *testing.T) {
 		t.Fatalf("after a new fleetd package: version %d→%d, inventory %+v", before, b.BundleVersion, b.Inventory)
 	}
 }
+
+// TestUpdatesSection (plan M5b decision 4): v2 bundles carry the organization's update schedule and the holds of the
+// organization and the device's groups, one per package (the smallest version wins); v1 bundles never get it.
+func TestUpdatesSection(t *testing.T) {
+	w := newWorld(t)
+	g1, g2 := w.g1, w.g2
+	in, out, v1 := w.v2Device("{1,2}", g1, g2), w.v2Device("{1,2}"), w.v2Device("{1}", g1)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if u := w.fetch(out).Updates; u == nil || u.SecurityDailyAt != "03:00" || u.RegularSchedule != "Sat 04:00" || !u.RegularUpdatesEnabled ||
+		u.MaxRandomDelayMin != 60 || u.Holds == nil || len(u.Holds) != 0 {
+		t.Fatalf("defaults %+v", u)
+	}
+	w.exec(`INSERT INTO organization_update_settings (organization_id, security_daily_at, regular_schedule, regular_updates_enabled,
+		max_random_delay_min) VALUES ($1, '02:30', 'Mon,Thu 12:30', false, 0)`, w.org)
+	hold := func(group any, pkg string, version any) {
+		w.exec("INSERT INTO package_hold (id, organization_id, device_group_id, package, version) VALUES ($1, $2, $3, $4, $5)",
+			uuid.Must(uuid.NewV7()), w.org, group, pkg, version)
+	}
+	hold(nil, "linux-generic", nil)
+	hold(g1, "openssl", "3.0.13-0ubuntu3.4")
+	hold(g2, "openssl", "3.0.13-0ubuntu3.1")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	u := w.fetch(in).Updates
+	if u == nil || u.SecurityDailyAt != "02:30" || u.RegularSchedule != "Mon,Thu 12:30" || u.RegularUpdatesEnabled || u.MaxRandomDelayMin != 0 ||
+		len(u.Holds) != 2 || u.Holds[0].Package != "linux-generic" || u.Holds[0].Version != nil ||
+		u.Holds[1].Package != "openssl" || *u.Holds[1].Version != "3.0.13-0ubuntu3.1" {
+		t.Fatalf("updates of the member %+v", u)
+	}
+	if u := w.fetch(out).Updates; len(u.Holds) != 1 || u.Holds[0].Package != "linux-generic" {
+		t.Fatalf("updates of the non-member %+v", u)
+	}
+	if b := w.fetch(v1); b.Updates != nil {
+		t.Fatalf("v1 bundle with updates %+v", b.Updates)
+	}
+}

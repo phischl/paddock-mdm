@@ -6,6 +6,7 @@ import DataList from '../components/DataList.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
 import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
 import RevocationCard from '../components/RevocationCard.vue'
+import UpdatesCard from '../components/UpdatesCard.vue'
 import DeviceTabs from '../components/DeviceTabs.vue'
 import type { DeviceCommand } from '../api/client'
 import { useDeviceDetailPage } from '../lib/deviceDetailPage'
@@ -123,7 +124,14 @@ function groupName(id: string | null | undefined): string {
             <th scope="row">
               {{ t('devices.lastContact') }}
             </th>
-            <td>{{ device.last_contact_at ? formatDateTime(device.last_contact_at, locale) : t('devices.never') }}</td>
+            <td>
+              {{ device.last_contact_at ? formatDateTime(device.last_contact_at, locale) : t('devices.never') }}
+              <span
+                v-if="device.presumed_lost_at"
+                class="presumed-lost"
+                data-testid="device-presumed-lost"
+              >{{ t('devices.presumedLost', { at: formatDateTime(device.presumed_lost_at, locale) }) }}</span>
+            </td>
           </tr>
           <tr>
             <th scope="row">
@@ -163,6 +171,13 @@ function groupName(id: string | null | undefined): string {
       <DiskEncryptionCard
         :device-id="device.id"
         :hostname="device.hostname"
+      />
+
+      <UpdatesCard
+        :device-id="device.id"
+        :hostname="device.hostname"
+        :active="device.state === 'active'"
+        @changed="commandList?.reload()"
       />
 
       <RevocationCard

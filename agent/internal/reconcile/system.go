@@ -156,6 +156,22 @@ func (o OS) AptGet(ctx context.Context, args ...string) (string, int, error) {
 	return packageCommand(ctx, PackageTimeout, "apt-get", args...)
 }
 
+// AptGetWithin runs apt-get like AptGet with another timeout (`paddockd updates run`, plan M5b decision 6).
+func (o OS) AptGetWithin(ctx context.Context, timeout time.Duration, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return packageCommand(ctx, timeout, "apt-get", args...)
+}
+
+// AptMark implements System.
+func (o OS) AptMark(ctx context.Context, args ...string) (string, int, error) {
+	if o.testRoot() {
+		return "", -1, errTestRoot
+	}
+	return command(ctx, "apt-mark", args...)
+}
+
 // Dpkg implements System.
 func (o OS) Dpkg(ctx context.Context, args ...string) (string, int, error) {
 	if o.testRoot() {

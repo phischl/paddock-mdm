@@ -4,8 +4,9 @@ import { useConfirm } from '../composables/useConfirm'
 import { allGroups } from './devices'
 
 /**
- * Dialog state of the managed files and units pages: one dialog for create (target null) and edit, delete after a
- * modal confirmation. save and remove return null or a problem code; reload refreshes the list.
+ * Dialog state of the pages of group-scoped definitions (managed files and units, package holds): one dialog for
+ * create (target null) and edit, delete after a modal confirmation. save and remove return null or a problem code;
+ * reload refreshes the list.
  */
 export function useManagedPage<T extends { id: string }, I>(opts: {
   save: (id: string | null, input: I) => Promise<string | null>

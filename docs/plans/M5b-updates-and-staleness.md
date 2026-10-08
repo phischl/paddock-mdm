@@ -46,6 +46,8 @@ critical level, audited, and listed on an "attention" page together with other c
    `{security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, holds: [{package, version|null}]}`
    (holds merged per device: organization-wide plus the device's groups; same package with different versions in two
    groups → the lexicographically smallest version wins and the device detail shows the conflict).
+   Amendment 2026-10-08 (architect): delivered as optional top-level section `updates`, not as a resource, so pre-M5b
+   agents keep applying bundles.
 5. **Agent `updates` reconciler** (apply order: after `file`/`systemd_unit`, before `login`):
    - writes `/etc/apt/apt.conf.d/52paddock-unattended` (`Unattended-Upgrade::Allowed-Origins` = `${distro_id}:${distro_codename}-security`,
      `Unattended-Upgrade::Package-Blacklist` = held packages, `Unattended-Upgrade::Automatic-Reboot "false"`) and a
