@@ -72,6 +72,7 @@ test('organization admin requests and cancels revocations of a device', async ({
   const destroy = page.getByRole('dialog', { name: 'Destroy the device' })
   await expect(destroy).toContainText('A second administrator must approve this request')
   await destroy.getByTestId('confirm-typed').locator('input').fill(hostname)
+  await expect(destroy.getByRole('button', { name: 'Destroy device' })).toBeEnabled()
   await destroy.getByRole('button', { name: 'Destroy device' }).click()
   await expect(card.getByTestId('revocation-requested')).toContainText('waits for the approval of a second administrator')
   await expect(card.getByTestId('revocation-timeline').getByRole('row').filter({ hasText: 'Destroy' })).toContainText('Requested')
