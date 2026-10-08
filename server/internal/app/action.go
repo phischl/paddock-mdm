@@ -361,6 +361,30 @@ func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
 	return recorded, nil
 }
 
+// RecordOnceRefusal is RecordOnce for an event refused with refusal (recorded with its outcome and error code):
+// claim inserts the natural key in the same transaction, and a key that existed records nothing.
+func (r *ActionRunner) RecordOnceRefusal(ctx context.Context, spec ActionSpec, refusal error,
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return false, problem.Unauthenticated
+	}
+	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
+	recorded := false
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		fresh, err := claim(ctx, q)
+		if err != nil || !fresh {
+			return err
+		}
+		recorded = true
+		return r.insertFinished(ctx, q, rec, refusal)
+	})
+	if err != nil {
+		return false, err
+	}
+	return recorded, nil
+}
+
 // RecordRejected records a privileged action that was rejected before its use case ran (malformed request, missing
 // CSRF header): exactly one event, denied when the principal may not perform the action at all, otherwise with the
 // rejection's outcome. It returns the error to send to the client.

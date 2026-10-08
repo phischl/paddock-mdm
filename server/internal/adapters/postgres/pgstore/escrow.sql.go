@@ -61,6 +61,33 @@ func (q *Queries) ActiveEscrowGeneration(ctx context.Context, arg ActiveEscrowGe
 	return column_1, err
 }
 
+const deviceHeaderVolumeKnown = `-- name: DeviceHeaderVolumeKnown :one
+SELECT
+  coalesce(bool_or(e.volume = $1::uuid), false)::boolean AS known,
+  count(DISTINCT e.volume)::int AS volumes
+FROM escrow_secret e
+WHERE e.device_id = $2::uuid AND e.kind = 'luks_header' AND e.status <> 'failed' AND e.volume IS NOT NULL
+`
+
+type DeviceHeaderVolumeKnownParams struct {
+	Volume   uuid.UUID
+	DeviceID uuid.UUID
+}
+
+type DeviceHeaderVolumeKnownRow struct {
+	Known   bool
+	Volumes int32
+}
+
+// Whether volume already has a header generation that did not fail, and how many distinct volumes of the device do
+// (PDK-009, review round 1: at most 32 per device, the volumes a token can carry).
+func (q *Queries) DeviceHeaderVolumeKnown(ctx context.Context, arg DeviceHeaderVolumeKnownParams) (DeviceHeaderVolumeKnownRow, error) {
+	row := q.db.QueryRow(ctx, deviceHeaderVolumeKnown, arg.Volume, arg.DeviceID)
+	var i DeviceHeaderVolumeKnownRow
+	err := row.Scan(&i.Known, &i.Volumes)
+	return i, err
+}
+
 const finishEscrowHeader = `-- name: FinishEscrowHeader :execrows
 UPDATE escrow_secret SET status = $1 WHERE id = $2 AND status = 'pending'
 `
@@ -224,6 +251,52 @@ func (q *Queries) InsertEscrowSecret(ctx context.Context, arg InsertEscrowSecret
 		arg.Ciphertext,
 		arg.KeyVersion,
 		arg.CreatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertRefusedEscrowHeader = `-- name: InsertRefusedEscrowHeader :execrows
+INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
+                           nonce, sha256, size, created_at, volume)
+VALUES ($1, $2, $3, 'luks_header', $4, 'failed', $5, $6, $7,
+        $8, $9, $10, $11, $12::uuid)
+ON CONFLICT DO NOTHING
+`
+
+type InsertRefusedEscrowHeaderParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Generation     int32
+	KeyVersion     int32
+	ObjectKey      *string
+	WrappedDek     []byte
+	Nonce          []byte
+	Sha256         *string
+	Size           *int64
+	CreatedAt      time.Time
+	Volume         uuid.UUID
+}
+
+// A header refused for the volume cap, recorded as failed so that a redelivered message is not audited again; failed
+// rows count neither for the cap nor for a token.
+func (q *Queries) InsertRefusedEscrowHeader(ctx context.Context, arg InsertRefusedEscrowHeaderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertRefusedEscrowHeader,
+		arg.ID,
+		arg.OrganizationID,
+		arg.DeviceID,
+		arg.Generation,
+		arg.KeyVersion,
+		arg.ObjectKey,
+		arg.WrappedDek,
+		arg.Nonce,
+		arg.Sha256,
+		arg.Size,
+		arg.CreatedAt,
+		arg.Volume,
 	)
 	if err != nil {
 		return 0, err
@@ -432,6 +505,17 @@ func (q *Queries) ListPendingEscrowHeaders(ctx context.Context) ([]EscrowSecret,
 	return items, nil
 }
 
+const lockDeviceHeaderVolumes = `-- name: LockDeviceHeaderVolumes :exec
+SELECT pg_advisory_xact_lock(hashtextextended('escrow_volumes:' || CAST($1::uuid AS text), 0))
+`
+
+// Serializes the volume cap check of a device's header escrows across workers (PDK-009 review round 3); released at
+// the end of the transaction.
+func (q *Queries) LockDeviceHeaderVolumes(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockDeviceHeaderVolumes, deviceID)
+	return err
+}
+
 const organizationHasActiveLocalAdmin = `-- name: OrganizationHasActiveLocalAdmin :one
 SELECT EXISTS (SELECT 1 FROM escrow_secret WHERE kind = 'admin_password' AND status = 'active')
 `
@@ -455,7 +539,7 @@ type SetRootHeaderVolumeParams struct {
 	DeviceID uuid.UUID
 }
 
-// The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00032).
+// The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00033).
 func (q *Queries) SetRootHeaderVolume(ctx context.Context, arg SetRootHeaderVolumeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setRootHeaderVolume, arg.Volume, arg.DeviceID)
 	if err != nil {

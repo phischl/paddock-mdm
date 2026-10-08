@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,11 +59,20 @@ type dataVolume struct {
 	uuid  string
 	luks1 bool
 	slots int
+	// hang blocks isLuks until it is closed, whatever the context says (a disk stuck in the kernel); isLuks counts
+	// the calls.
+	hang    chan struct{}
+	isLuks  atomic.Int32
+	backups atomic.Int32 // luksHeaderBackup calls
 }
 
 func (d *dataVolume) command(line, device string, args []string) (string, string, int, error) {
 	switch {
 	case line == "cryptsetup isLuks -- "+device:
+		d.isLuks.Add(1)
+		if d.hang != nil {
+			<-d.hang
+		}
 		return "", "", 0, nil
 	case line == "cryptsetup luksUUID -- "+device && d.uuid != "":
 		return d.uuid + "\n", "", 0, nil
@@ -75,6 +85,7 @@ func (d *dataVolume) command(line, device string, args []string) (string, string
 	case line == "cryptsetup luksDump -- "+device:
 		return d.dump(), "", 0, nil
 	case strings.HasPrefix(line, "cryptsetup luksHeaderBackup "+device+" --header-backup-file "):
+		d.backups.Add(1)
 		return "", "", 0, os.WriteFile(args[3], []byte(d.dump()), 0o600)
 	}
 	return "", "unexpected", -1, errors.New("unexpected command " + line)
@@ -103,6 +114,19 @@ func (d *dataVolume) dump() string {
 
 func (v *volume) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	line := strings.Join(append([]string{name}, args...), " ")
+	if file, ok := strings.CutPrefix(line, "cryptsetup luksUUID -- "); ok && strings.HasSuffix(file, ".img") {
+		// A header backup: the UUID of the volume whose header it holds (a data volume's dump names its UUID).
+		data, err := os.ReadFile(file) //nolint:gosec // a backup file of the test layout
+		if err != nil {
+			return "", "no such file", 1, nil
+		}
+		for _, d := range v.extra {
+			if d.uuid != "" && bytes.Contains(data, []byte(d.uuid)) {
+				return d.uuid + "\n", "", 0, nil
+			}
+		}
+		return rootUUID + "\n", "", 0, nil
+	}
 	for device, d := range v.extra {
 		if slices.Contains(args, device) {
 			return d.command(line, device, args)
@@ -265,7 +289,8 @@ func newLUKSFixture(t *testing.T, slots ...string) *luksFixture {
 			raw, _ := json.Marshal(data)
 			f.events = append(f.events, protocol.Event{Type: typ, Data: raw})
 		},
-		Now: func() time.Time { return f.now }, TPM2Present: func() bool { return f.tpm }}
+		Now: func() time.Time { return f.now }, TPM2Present: func() bool { return f.tpm },
+		Background: func(fn func()) { fn() }}
 	return f
 }
 
@@ -693,5 +718,167 @@ func TestLUKSWipesOnlyRecordedKeyslots(t *testing.T) {
 	g.vol.installSlot = -1
 	if g.pass(); len(g.vol.changes) != 0 || g.st.PassphraseSlot != nil || len(g.server.requests) != 0 {
 		t.Fatalf("without a keyslot for the install passphrase: changes %v, state %+v", g.vol.changes, g.st)
+	}
+}
+
+// TestLUKSRootCloneNotEscrowed (PDK-009 review round 2): a volume with the root volume's UUID is reported as
+// shared_uuid, neither escrowed nor tracked, and keeps the device from being compliant.
+func TestLUKSRootCloneNotEscrowed(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.addVolume("/dev/vdb", &dataVolume{uuid: rootUUID, slots: 2})
+	if s := f.settle(); s != protocol.DiskEscrowPending {
+		t.Fatalf("state %s", s)
+	}
+	f.vol.extra["/dev/vdb"].slots = 3
+	h := f.m.Tick(context.Background(), f.keys, true)
+	if len(h.Volumes) != 2 || !reflect.DeepEqual(h.Volumes[1], protocol.DiskVolume{UUID: rootUUID, Device: "/dev/vdb", SharedUUID: true}) ||
+		len(f.events) != 0 || len(f.st.Volumes) != 0 {
+		t.Fatalf("volumes %+v, events %v, state %+v", h.Volumes, f.events, f.st.Volumes)
+	}
+	for _, r := range f.server.of(escrow.KindLUKSHeader) {
+		if f.server.objects[r.EscrowID] != nil && string(f.openHeader(r)) == f.vol.extra["/dev/vdb"].dump() {
+			t.Fatal("the clone's header was escrowed")
+		}
+	}
+}
+
+// TestLUKSRefusedVolume (PDK-009 review round 2): after the server refused a volume's header (too many volumes), the
+// agent does not upload it again for a day, unless the volumes of /etc/crypttab change.
+func TestLUKSRefusedVolume(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	f.addVolume("/dev/vdb1", &dataVolume{uuid: dataUUID, slots: 1})
+	f.server.answer = func(r escrow.Request) string {
+		if r.Volume == dataUUID {
+			return escrow.StatusRefused
+		}
+		return escrow.StatusStored
+	}
+	if s := f.settle(); s != protocol.DiskEscrowPending || len(f.volumeHeaders(dataUUID)) != 1 {
+		t.Fatalf("state %s, data headers %d", s, len(f.volumeHeaders(dataUUID)))
+	}
+	if h := f.m.Tick(context.Background(), f.keys, true); !h.Volumes[1].Refused {
+		t.Fatalf("volumes %+v", h.Volumes)
+	}
+	f.now = f.now.Add(reconcile.RefusedRetry - time.Minute)
+	if f.settle(); len(f.volumeHeaders(dataUUID)) != 1 {
+		t.Fatalf("uploaded again within a day: %d", len(f.volumeHeaders(dataUUID)))
+	}
+	// Another volume appears: the set changed, the refused volume is tried again.
+	f.addVolume("/dev/vdc1", &dataVolume{uuid: oldUUID, slots: 1})
+	if f.settle(); len(f.volumeHeaders(dataUUID)) != 2 {
+		t.Fatalf("not tried again after a crypttab change: %d", len(f.volumeHeaders(dataUUID)))
+	}
+	// A day after the last refusal it is tried again as well.
+	f.now = f.now.Add(reconcile.RefusedRetry + time.Minute)
+	if f.settle(); len(f.volumeHeaders(dataUUID)) != 3 {
+		t.Fatalf("not tried again after a day: %d", len(f.volumeHeaders(dataUUID)))
+	}
+}
+
+// TestLUKSHungVolumeKeepsTicking (PDK-009 review round 3, design contract 8): a crypttab volume whose cryptsetup hangs
+// never holds up the agent loop. The inventory of the other volumes runs in the background, at most once at a time;
+// until it completes the root volume is reported alone and nothing else is escrowed, and the result is used once it
+// arrives.
+func TestLUKSHungVolumeKeepsTicking(t *testing.T) {
+	f := newLUKSFixture(t, "recovery", "tpm2+pin")
+	f.m.Background = nil
+	hang := make(chan struct{})
+	data := &dataVolume{uuid: dataUUID, slots: 1, hang: hang}
+	f.addVolume("/dev/vdb1", data)
+	if err := os.Remove(f.layout.InstallPassphrase()); err != nil { // no install passphrase: no keyslot change
+		t.Fatal(err)
+	}
+	for range 5 {
+		start := time.Now()
+		h := f.m.Tick(context.Background(), f.keys, true)
+		if time.Since(start) > time.Second || h == nil || len(h.Volumes) != 1 || h.State == protocol.DiskCompliant {
+			t.Fatalf("tick took %s, health %+v", time.Since(start), h)
+		}
+	}
+	for wait := time.Now().Add(5 * time.Second); data.isLuks.Load() == 0 && time.Now().Before(wait); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	for range 5 {
+		f.m.Tick(context.Background(), f.keys, true)
+	}
+	if n := data.isLuks.Load(); n != 1 {
+		t.Fatalf("%d inventories of the hung volume started, want 1", n)
+	}
+	close(hang)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if h := f.m.Tick(context.Background(), f.keys, true); len(h.Volumes) == 2 && h.Volumes[1].UUID == dataUUID {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the inventory was never used after the disk answered")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestLUKSRenumberedVolume (PDK-009 review round 4): when the disks were renumbered between the inventory and the
+// escrow (X and Y swapped their device paths), the header backup is Y's: it is discarded, nothing is escrowed under X,
+// and the next inventory escrows each volume with its own header.
+func TestLUKSRenumberedVolume(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	if s := f.settle(); s != protocol.DiskCompliant {
+		t.Fatalf("root not compliant: %s", s)
+	}
+	f.addVolume("/dev/vdb1", &dataVolume{uuid: dataUUID, slots: 1})
+	f.addVolume("/dev/vdc1", &dataVolume{uuid: oldUUID, slots: 2})
+	swap := true
+	f.m.Background = func(fn func()) {
+		fn()
+		if swap {
+			f.vol.extra["/dev/vdb1"], f.vol.extra["/dev/vdc1"] = f.vol.extra["/dev/vdc1"], f.vol.extra["/dev/vdb1"]
+			swap = false
+		}
+	}
+	h := f.m.Tick(context.Background(), f.keys, true)
+	if n := len(f.volumeHeaders(dataUUID)) + len(f.volumeHeaders(oldUUID)); n != 0 || h.State == protocol.DiskCompliant {
+		t.Fatalf("escrowed %d headers from a renumbered device, state %s", n, h.State)
+	}
+	if s := f.settle(); s != protocol.DiskCompliant {
+		t.Fatalf("after a new inventory: %s", s)
+	}
+	for _, volume := range []string{dataUUID, oldUUID} {
+		headers := f.volumeHeaders(volume)
+		if len(headers) != 1 || !bytes.Contains(f.openHeader(headers[0]), []byte(volume)) {
+			t.Fatalf("volume %s: %d headers, or another volume's header", volume, len(headers))
+		}
+	}
+}
+
+// TestLUKSNoEscrowWhileScanning (PDK-009 review round 4, real goroutine path): while an inventory is in flight —
+// here a hung one — no header is backed up, whatever the last completed inventory says; once it completes, its result
+// is used for the escrow.
+func TestLUKSNoEscrowWhileScanning(t *testing.T) {
+	f := newLUKSFixture(t, "password", "tpm2+pin")
+	if s := f.settle(); s != protocol.DiskCompliant {
+		t.Fatalf("root not compliant: %s", s)
+	}
+	hang := make(chan struct{})
+	data := &dataVolume{uuid: dataUUID, slots: 1, hang: hang}
+	f.addVolume("/dev/vdb1", data)
+	f.m.Background = nil
+	for range 10 {
+		f.m.Tick(context.Background(), f.keys, true)
+		f.poll()
+	}
+	if n := data.backups.Load(); n != 0 || len(f.volumeHeaders(dataUUID)) != 0 {
+		t.Fatalf("%d header backups while the inventory hangs", n)
+	}
+	close(hang)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(f.volumeHeaders(dataUUID)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the completed inventory was never used for the escrow")
+		}
+		f.m.Tick(context.Background(), f.keys, true)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := data.backups.Load(); n != 1 {
+		t.Fatalf("%d header backups, want 1", n)
 	}
 }

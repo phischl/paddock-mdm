@@ -15,7 +15,39 @@ self-lock token of the dead man's switch is re-issued when that set changes. `pa
 change refuse a token with `volumes`, so the issuer adds them only for devices whose check-in reports
 `revoke_capabilities: ["volumes"]` (`paddock-revoke capabilities`); a device with an older `paddock-revoke` gets
 tokens without volumes, and its `paddock-revoke` erases every volume on a Lock as before. Update the `paddock-revoke`
-package before relying on restorable Locks of devices with more than one encrypted volume.
+package before relying on restorable Locks of devices with more than one encrypted volume. A check-in in which
+`paddockd` could not ask `paddock-revoke` (a timeout, a package upgrade in progress) reports nothing, and the server
+keeps the last reported value. After a **downgrade** of `paddock-revoke` to a build before this change, the server
+therefore still holds the capability: Lock and self-lock tokens with volumes are refused by the old build
+(`device.revocation_refused`, reason `malformed`, nothing erased — fail-safe) until `paddock-revoke` is upgraded again
+and the device reports its capabilities anew.
+
+### Limits and accepted residual risk
+
+- A token lists a volume only when the **newest** header generation of that volume is stored. While a re-escrow is
+  pending (after a keyslot change), the volume is left out of a Lock until the new header is stored; the Lock then
+  skips it (`skipped_not_escrowed`), so it stays readable. An older stored generation is not used, because it may no
+  longer open the volume (for example after `cryptsetup reencrypt`).
+- A device escrows the headers of at most **32** volumes; the worker refuses a header of a 33rd distinct volume
+  (`device.header_escrow_refused`, error code `too_many_volumes`), and a token carries at most 32 volumes, the first by
+  UUID. Volumes beyond them are skipped by a Lock. After a refusal the agent does not upload that volume's header
+  again for 24 hours, unless the volumes of `/etc/crypttab` change.
+- Volumes with the same LUKS UUID as another volume or as the root volume (a cloned header) stay volumes to erase,
+  but their headers cannot be told apart, so they are neither escrowed nor tracked for keyslot changes. They are
+  reported as `shared_uuid` in `health.disk` and in the confirmation (not as unresolved, so they do not make an
+  erasure incomplete): a **Destroy erases them**, a Lock skips them (`skipped_not_escrowed`), and they stay readable
+  after a Lock.
+- If `paddock-revoke` cannot read the root volume's LUKS UUID (the read fails or hangs), it cannot recognize a clone
+  of the root volume: a Lock or self-lock then erases the root volume only and reports every other volume as
+  `skipped_not_escrowed`. A Destroy is not affected: it erases every classified volume and the root volume; the
+  root UUID is read separately and never holds up or shrinks it. The agent escrows no other volume while the root
+  UUID is unknown, and inventories the other volumes in the background, one run at a time, so that a hung disk
+  never holds up the agent.
+- **Residual risk, accepted:** the server cannot verify the content of a sealed header. A compromised device (root)
+  can therefore have a volume counted as escrowed with a forged header upload, or claim a false root volume UUID in
+  its check-in (which the server writes onto the root headers escrowed before PDK-009). A Lock then makes that
+  volume unrecoverable. It cannot add a volume that is not in `paddock-revoke`'s own `/etc/crypttab` selection, and
+  it cannot weaken a Destroy, which erases every volume regardless of the token.
 
 > **The revocation path is disabled** (`PADDOCK_REVOCATION_ENABLED=false`, the default) until a second person has
 > reviewed `agent/internal/revoke/` and `agent/cmd/paddock-revoke/` and the hardware protocol in

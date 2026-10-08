@@ -57,3 +57,42 @@ erases, not only the root volume. Binding:
    which is added to CODEOWNERS); commit marked `needs second review`.
 8. This amendment; `docs/operations/revocation.md` and `disk-recovery.md` are updated. Architecture §12.4 (object key)
    is amended by the architect.
+
+Review round 1 (architect, 2026-10-08):
+- At most 32 distinct volumes per device: the worker refuses a header of a 33rd (`device.header_escrow_refused`,
+  `too_many_volumes`); tokens carry at most 32, the first by UUID, in the issuer and in the self-lock reconciliation
+  alike; never an error that blocks a Lock.
+- Duplicate LUKS UUIDs in the crypttab selection (also the root volume's): corrected in review round 2, see below.
+- A token lists a volume only when its newest header generation (that did not fail) is stored.
+- A failed `paddock-revoke capabilities` call reports nothing; the server keeps the last reported value.
+- Migration renumbered to `00033` (M5c has 00029, M6c 00030–00032).
+- Residual risk (forged escrow, false root UUID) named in `docs/operations/revocation.md`.
+
+Review round 2 (architect, 2026-10-08):
+- Volumes with a shared LUKS UUID, including a clone of the root volume, stay erase targets; the crypttab selection
+  marks them `Shared`. They are neither escrowed nor tamper-tracked, are reported as `shared_uuid` in `health.disk`
+  and in the confirmation (not as unresolved; they do not make `erased` false), are erased by a Destroy and skipped
+  by a Lock (`skipped_not_escrowed`).
+- After a `too_many_volumes` refusal (escrow status `refused`) the agent does not escrow that volume again for 24 h
+  or until its crypttab volume set changes.
+- After a `paddock-revoke` downgrade, Locks with volumes are refused (fail-safe) until the device reports its
+  capabilities again after the upgrade; documented in `docs/operations/revocation.md`.
+
+Review round 3 (architect, 2026-10-08; exception to the two-round limit, findings in the revocation path):
+- The crypttab entries are classified first, each within the shared deadline; the root UUID is read separately and
+  never blocks or shrinks a Destroy, which erases every classified LUKS entry plus root even when the root-UUID read
+  fails or hangs. Shared marking only affects a Lock.
+- While the root UUID is unknown, a Lock or self-lock skips every secondary volume (`skipped_not_escrowed`) and erases
+  root only.
+- In `paddockd` the crypttab classification (with the inventory of the volumes) runs at most once at a time in its
+  own goroutine; the reconciler uses the last completed result and skips the multi-volume work while none exists.
+  The agent loop never blocks on it.
+- A redelivered refused upload with the same `escrow_id` writes no second refusal audit.
+- The 32-volume cap check takes a transaction-level advisory lock per device.
+
+Review round 4 (architect, 2026-10-08; `agent/internal/reconcile/luks.go` only):
+- Before a header backup is sealed, its LUKS UUID (`cryptsetup luksUUID <file>`) must equal the volume's; on a
+  mismatch (renumbered devices) the backup is discarded, nothing is escrowed for that volume, and a new inventory
+  follows.
+- No header escrow while an inventory is in flight: escrows run only right after a completed inventory, against its
+  result.

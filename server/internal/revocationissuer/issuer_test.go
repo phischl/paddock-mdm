@@ -650,3 +650,69 @@ func TestSelfLockFollowsVolumes(t *testing.T) {
 		t.Fatal("the replaced token stays in cmd:<device_id>")
 	}
 }
+
+// TestLockVolumesCapped (PDK-009 review round 1, decision 1): with more than 32 volumes — rows the worker would refuse,
+// written here directly — a Lock carries the first 32 by UUID and is issued, and the self-lock token carries the same
+// 32 and is not replaced round after round.
+func TestLockVolumesCapped(t *testing.T) {
+	w := newWorld(t, true)
+	dev := w.device()
+	w.capable(dev)
+	var want []string
+	for i := 0; i < 33; i++ {
+		v := fmt.Sprintf("0d8f4c62-0000-4000-8000-%012d", i)
+		w.escrowHeader(dev, v, i+1, "stored")
+		if i < revocation.MaxVolumes {
+			want = append(want, v)
+		}
+	}
+	id := w.lock(dev, w.alice)
+	w.issue(id)
+	if s, _ := w.status(id); s != "issued" {
+		t.Fatalf("status %s", s)
+	}
+	tok, err := revocation.Verify(w.commands.put[id].Envelope, w.trust, dev.String(), time.Now())
+	if err != nil || !slices.Equal(tok.Volumes, want) {
+		t.Fatalf("lock token: %d volumes, %v", len(tok.Volumes), err)
+	}
+	w.exec("INSERT INTO organization_dms_settings (organization_id, enabled, period_days) VALUES ($1, true, 14)", w.org)
+	ctx := context.Background()
+	var first uuid.UUID
+	for round := 0; round < 3; round++ {
+		if err := w.issuer.Round(ctx); err != nil {
+			t.Fatal(err)
+		}
+		locks := w.selfLocks(dev)
+		if len(locks) != 1 {
+			t.Fatalf("round %d: self-locks %v", round, locks)
+		}
+		for id := range locks {
+			if round > 0 && id != first {
+				t.Fatalf("round %d replaced the self-lock token", round)
+			}
+			first = id
+		}
+	}
+	tok, err = revocation.Verify(w.commands.put[first].Envelope, w.trust, dev.String(), time.Now())
+	if err != nil || !slices.Equal(tok.Volumes, want) {
+		t.Fatalf("self-lock token: %d volumes, %v", len(tok.Volumes), err)
+	}
+}
+
+// TestLockVolumesNewestStored (PDK-009 review round 1, decision 3): a volume whose newest header generation is
+// pending is left out until it is stored; a failed newest generation does not count.
+func TestLockVolumesNewestStored(t *testing.T) {
+	w := newWorld(t, true)
+	dev := w.device()
+	w.capable(dev)
+	w.escrowHeader(dev, volData, 1, "stored")
+	w.escrowHeader(dev, volData, 2, "pending")
+	w.escrowHeader(dev, volHome, 3, "stored")
+	w.escrowHeader(dev, volHome, 4, "failed")
+	id := w.lock(dev, w.alice)
+	w.issue(id)
+	tok, err := revocation.Verify(w.commands.put[id].Envelope, w.trust, dev.String(), time.Now())
+	if err != nil || !slices.Equal(tok.Volumes, []string{volHome}) {
+		t.Fatalf("token %+v %v", tok, err)
+	}
+}

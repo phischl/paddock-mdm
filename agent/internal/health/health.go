@@ -39,8 +39,9 @@ type Report struct {
 	// Paddock never reboots for updates.
 	RebootRequired bool `json:"reboot_required"`
 	// RevokeCapabilities are the token features the installed paddock-revoke understands (`paddock-revoke
-	// capabilities`; none for a build before PDK-009 or without paddock-revoke).
-	RevokeCapabilities []string `json:"revoke_capabilities,omitempty"`
+	// capabilities`); nil — not reported — when the call failed (a build before PDK-009, no paddock-revoke, a
+	// timeout); the server then keeps the last reported value.
+	RevokeCapabilities *[]string `json:"revoke_capabilities,omitempty"`
 }
 
 // State is the current health, shared between the run loop (writer) and the socket server (reader).

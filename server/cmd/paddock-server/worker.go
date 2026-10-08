@@ -102,7 +102,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	deviceCommands := app.NewDeviceCommands(pool)
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache)
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
-	escrowStore := worker.NewEscrow(app.NewEscrow(pool, escrowObjects), cache, pool, platformPool)
+	escrowStore := worker.NewEscrow(app.NewEscrow(runner, pool, escrowObjects), cache, pool, platformPool)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
 	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,

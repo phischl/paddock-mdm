@@ -683,13 +683,20 @@ func (q *Queries) ListApprovedRevocationRequests(ctx context.Context) ([]uuid.UU
 }
 
 const listConfirmedHeaderVolumes = `-- name: ListConfirmedHeaderVolumes :many
-SELECT DISTINCT volume::uuid AS volume FROM escrow_secret
-WHERE device_id = $1 AND kind = 'luks_header' AND status = 'stored' AND volume IS NOT NULL
+SELECT newest.volume::uuid AS volume FROM (
+  SELECT DISTINCT ON (e.volume) e.volume, e.status FROM escrow_secret e
+  WHERE e.device_id = $1 AND e.kind = 'luks_header' AND e.status <> 'failed' AND e.volume IS NOT NULL
+  ORDER BY e.volume, e.generation DESC
+) newest
+WHERE newest.status = 'stored'
 ORDER BY 1
+LIMIT 32
 `
 
-// The volumes of a device with a stored header (PDK-009 decision 6), sorted: a Lock erases exactly these besides the
-// root volume. Headers without a volume (before PDK-009) are the root volume's, which a Lock erases anyway.
+// The volumes of a device whose newest header generation that did not fail is stored (PDK-009 decision 6, review
+// round 1: a pending re-escrow leaves the volume out until it is stored), the first 32 by UUID: a Lock erases exactly
+// these besides the root volume. Headers without a volume (before PDK-009) are the root volume's, which a Lock erases
+// anyway. CancelSelfLocks (dms.sql) computes the same set; keep both alike.
 func (q *Queries) ListConfirmedHeaderVolumes(ctx context.Context, deviceID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listConfirmedHeaderVolumes, deviceID)
 	if err != nil {

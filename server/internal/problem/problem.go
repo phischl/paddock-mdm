@@ -59,6 +59,9 @@ var (
 	InvalidSchedule = &Error{Code: "invalid_schedule", Status: http.StatusUnprocessableEntity}
 	PackageOnHold   = &Error{Code: "package_on_hold", Status: http.StatusConflict}
 	TooManyDevices  = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
+	// TooManyVolumes is the error code of a header escrow for a 33rd distinct volume of a device (PDK-009, review
+	// round 1); recorded by the worker, never sent over HTTP.
+	TooManyVolumes = &Error{Code: "too_many_volumes", Status: http.StatusConflict}
 	// Identity and privileges (plan M3a).
 	UsernameTaken          = &Error{Code: "username_taken", Status: http.StatusConflict}
 	DomainTaken            = &Error{Code: "domain_taken", Status: http.StatusConflict}

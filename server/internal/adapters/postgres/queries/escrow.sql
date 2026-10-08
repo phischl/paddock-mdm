@@ -80,7 +80,30 @@ LIMIT 1;
 -- The escrows of one decryption of the escrow-reader, which checks their device and kind (plan M4b.1 decision 6).
 SELECT * FROM escrow_secret WHERE id = ANY(@ids::uuid[]);
 
+-- name: LockDeviceHeaderVolumes :exec
+-- Serializes the volume cap check of a device's header escrows across workers (PDK-009 review round 3); released at
+-- the end of the transaction.
+SELECT pg_advisory_xact_lock(hashtextextended('escrow_volumes:' || CAST(@device_id::uuid AS text), 0));
+
+-- name: InsertRefusedEscrowHeader :execrows
+-- A header refused for the volume cap, recorded as failed so that a redelivered message is not audited again; failed
+-- rows count neither for the cap nor for a token.
+INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
+                           nonce, sha256, size, created_at, volume)
+VALUES (@id, @organization_id, @device_id, 'luks_header', @generation, 'failed', @key_version, @object_key, @wrapped_dek,
+        @nonce, @sha256, @size, @created_at, @volume::uuid)
+ON CONFLICT DO NOTHING;
+
+-- name: DeviceHeaderVolumeKnown :one
+-- Whether volume already has a header generation that did not fail, and how many distinct volumes of the device do
+-- (PDK-009, review round 1: at most 32 per device, the volumes a token can carry).
+SELECT
+  coalesce(bool_or(e.volume = @volume::uuid), false)::boolean AS known,
+  count(DISTINCT e.volume)::int AS volumes
+FROM escrow_secret e
+WHERE e.device_id = @device_id::uuid AND e.kind = 'luks_header' AND e.status <> 'failed' AND e.volume IS NOT NULL;
+
 -- name: SetRootHeaderVolume :execrows
--- The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00032).
+-- The root volume's UUID on its headers escrowed before PDK-009, once the device reports it (migration 00033).
 UPDATE escrow_secret SET volume = @volume::uuid
 WHERE device_id = @device_id AND kind = 'luks_header' AND volume IS NULL;

@@ -213,7 +213,10 @@ paths:
                 type: object
                 required: [status]
                 properties:
-                  status: { type: string, enum: [pending, stored, failed] }
+                  status:
+                    type: string
+                    enum: [pending, stored, failed, refused]
+                    description: "refused: a luks_header of a 33rd distinct volume of the device (PDK-009); not retried for 24 h."
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }

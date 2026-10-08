@@ -98,8 +98,12 @@ device asks for the recovery key. Re-enroll TPM2+PIN as in step 3.
   `paddock-escrow` under `org/<organization>/devices/<device>/luks-header/<volume UUID>/<generation>.bin`; the key
   is chosen by the server. Root volume headers escrowed before PDK-009 stay under
   `org/<organization>/devices/<device>/luks-header/<generation>.bin` (no copy); the database gives them the root
-  volume's UUID with the device's first check-in that reports it (migration `00032`). The worker marks a generation `stored` once the object has the announced size and SHA-256 (it fails
-  after 15 minutes without the object).
+  volume's UUID with the device's first check-in that reports it (migration `00033`). The worker marks a generation
+  `stored` once the object has the announced size and SHA-256 (it fails after 15 minutes without the object). A
+  device escrows the headers of at most 32 volumes; a header of a 33rd is refused (`device.header_escrow_refused`,
+  escrow status `refused`), shown as *header not escrowed* on the card, and not uploaded again for 24 hours unless
+  the volumes of `/etc/crypttab` change. A volume with the LUKS UUID of another volume or of the root volume (a cloned
+  header) is shown as sharing its UUID: it is not escrowed, and the device is not `compliant`.
 - The bucket keeps every version and has no Object Lock, so a Destroy can delete it. Credentials: the gateway's
   bundles credential may only `s3:PutObject` below `org/*/devices/*/luks-header/*`; the worker and the api have
   read-only credentials (`PADDOCK_ESCROW_S3_*`). Only the `paddock-escrow-reader` role can unwrap the header key,

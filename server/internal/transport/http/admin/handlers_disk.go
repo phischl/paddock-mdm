@@ -64,6 +64,12 @@ func toDiskEscrow(e pgstore.EscrowSecret) adminapi.DiskEscrow {
 // toDiskVolume maps a volume of health.disk (PDK-009 decision 4).
 func toDiskVolume(v protocol.DiskVolume) adminapi.DiskVolume {
 	out := adminapi.DiskVolume{Device: v.Device, Root: v.Root, Tokens: nonNil(v.Tokens), Keyslots: v.Keyslots, Escrowed: v.Escrowed}
+	if v.SharedUUID {
+		out.SharedUuid = &v.SharedUUID
+	}
+	if v.Refused {
+		out.Refused = &v.Refused
+	}
 	if v.UUID != "" {
 		out.Uuid = &v.UUID
 	}
