@@ -26,6 +26,8 @@ commands:
   audit seal [--day YYYY-MM-DD]
   audit verify --org <id> --from YYYY-MM-DD --to YYYY-MM-DD
   osv import <file>
+  backup openbao
+  backup decrypt <in> <out>
   prod-check [--host controlplane|audit] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
   healthcheck
 
@@ -90,6 +92,8 @@ func runOne(ctx context.Context, args []string) int {
 		err = runAudit(ctx, l, common, args[1:])
 	case "osv":
 		err = runOSV(ctx, l, args[1:])
+	case "backup":
+		err = runBackup(ctx, l, args[1:])
 	case "prod-check":
 		err = runProdCheck(ctx, args[1:], os.Stdin, os.Stdout)
 	case "provision":

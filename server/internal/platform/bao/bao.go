@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -300,6 +301,18 @@ func (c *Client) KV(ctx context.Context, path string) (map[string]string, error)
 		}
 	}
 	return out, nil
+}
+
+// RaftSnapshot writes a snapshot of the integrated Raft storage to w (AppRole paddock-backup: read on
+// sys/storage/raft/snapshot, plan M6a decision 5). The snapshot holds the storage encrypted with OpenBao's barrier key.
+func (c *Client) RaftSnapshot(ctx context.Context, w io.Writer) error {
+	if err := c.ensureToken(ctx); err != nil {
+		return err
+	}
+	if err := c.api.Sys().RaftSnapshotWithContext(ctx, w); err != nil {
+		return fmt.Errorf("bao: raft snapshot: %w", err)
+	}
+	return nil
 }
 
 func toInt(v any) (int, error) {

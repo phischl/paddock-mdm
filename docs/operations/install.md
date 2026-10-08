@@ -6,7 +6,7 @@ ADR 0016). The development stack (`make up`, `docs/operations/local-dev.md`) is 
 
 | Host | Compose files | Runs |
 | --- | --- | --- |
-| Control plane | `compose.yaml` + `compose.prod.yaml` | Caddy, the Paddock roles, PostgreSQL, RabbitMQ, Valkey, OpenBao, RustFS (bundles, escrow, artifacts), Authentik, Fleet |
+| Control plane | `compose.yaml` + `compose.backup.yaml` + `compose.prod.yaml` | Caddy, the Paddock roles, PostgreSQL, RabbitMQ, Valkey, OpenBao, RustFS (bundles, escrow, artifacts), Authentik, Fleet |
 | Audit domain | `compose.audit.yaml` + `compose.audit.prod.yaml` | audit writer, audit PostgreSQL, RustFS with the WORM audit bucket |
 
 The audit domain has its own credentials (separation of duties). The control plane holds only RabbitMQ's publish
@@ -76,7 +76,8 @@ Define a shell helper per host for the commands below:
 ```sh
 # control plane
 pc() { docker compose --project-directory deploy/compose -p paddock --env-file deploy/compose/versions.env \
-  --env-file deploy/compose/.env -f deploy/compose/compose.yaml -f deploy/compose/compose.prod.yaml "$@"; }
+  --env-file deploy/compose/.env -f deploy/compose/compose.yaml -f deploy/compose/compose.backup.yaml \
+  -f deploy/compose/compose.prod.yaml "$@"; }
 # audit host
 pa() { docker compose --project-directory deploy/compose -p paddock --env-file deploy/compose/versions.env \
   --env-file deploy/compose/.env -f deploy/compose/compose.audit.yaml -f deploy/compose/compose.audit.prod.yaml "$@"; }
@@ -143,7 +144,12 @@ audit host with `ONLINE=1`, an audit bucket without Object Lock COMPLIANCE of at
 
 ## 9. Backups
 
-Backups and the restore drill are described in `docs/operations/restore.md`.
+The control plane's configuration includes `compose.backup.yaml`: pgBackRest for both PostgreSQL databases, OpenBao
+snapshots and Fleet dumps, all encrypted, to the backup bucket of `PADDOCK_BACKUP_S3_*` outside this host. Before
+section 7, create the bucket and its three credentials as `docs/operations/restore.md` "Backup bucket" describes,
+write them to `.secrets/backup_{pgbackrest,worker,fleet}_{access,secret}_key`, and store a copy of
+`.secrets/backup_encryption_key` offline with the custodians. After the start check that `pc run --rm --no-deps
+pgbackrest info` lists a full backup. The restore runbook and the quarterly restore drill are in the same document.
 
 ## 10. Upgrade procedure
 

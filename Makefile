@@ -18,9 +18,15 @@ IMAGE         ?= paddock-server:dev
 UID           := $(shell id -u)
 GID           := $(shell id -g)
 
+# BACKUP=1 adds the backups (plan M6a; compose.backup.yaml with the development wiring of compose.backup.dev.yaml).
+BACKUP_FILES := $(if $(BACKUP),-f $(COMPOSE_DIR)/compose.backup.yaml -f $(COMPOSE_DIR)/compose.backup.dev.yaml,)
+ifneq ($(BACKUP),)
+export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
+endif
+
 COMPOSE := docker compose --project-directory $(COMPOSE_DIR) -p paddock \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
-	-f $(COMPOSE_DIR)/compose.yaml -f $(COMPOSE_DIR)/compose.audit.yaml -f $(COMPOSE_DIR)/compose.dev.yaml
+	-f $(COMPOSE_DIR)/compose.yaml -f $(COMPOSE_DIR)/compose.audit.yaml -f $(COMPOSE_DIR)/compose.dev.yaml $(BACKUP_FILES)
 
 NODE_RUN := docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 	-v $(CURDIR):/src -w /src/$(WEB_DIR) $(NODE_IMAGE)
@@ -134,7 +140,7 @@ ifeq ($(origin HOST),environment)
 HOST := controlplane
 endif
 HOST ?= controlplane
-PROD_FILES_controlplane := compose.yaml compose.prod.yaml
+PROD_FILES_controlplane := compose.yaml compose.backup.yaml compose.prod.yaml
 PROD_FILES_audit        := compose.audit.yaml compose.audit.prod.yaml
 PROD_FILES               = $(PROD_FILES_$(HOST))
 comma                   := ,
@@ -220,13 +226,14 @@ agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd,
 		$$(for f in bin/deb/*.deb bin/fleetd/*.deb; do printf -- '--deb %s ' "$$f"; done)
 
 .PHONY: up
-up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy
-	$(COMPOSE) up -d
+up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy (BACKUP=1: with backups)
+	$(COMPOSE) up -d $(if $(BACKUP),--build,)
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
+	$(if $(BACKUP),$(COMPOSE_DIR)/scripts/rustfs-backup-bootstrap.sh,)
 	$(COMPOSE) --profile paddock up -d --build
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh --profile paddock
 
@@ -297,8 +304,9 @@ logs: ## Show logs of the stack
 TRIVY_CACHE     ?= $(HOME)/.cache/trivy
 TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-progress
 COMPILER_IMAGE  ?= paddock-compiler:dev
+PGBACKREST_IMAGE ?= paddock-pgbackrest:dev
 
-.PHONY: scan scan-secrets scan-fs scan-images image-compiler
+.PHONY: scan scan-secrets scan-fs scan-images image-compiler image-pgbackrest
 scan: scan-secrets scan-fs scan-images ## Run gitleaks (full history) and trivy (filesystem and images)
 
 scan-secrets: ## gitleaks over the full git history (false positives: .gitleaksignore)
@@ -316,9 +324,13 @@ image-compiler: ## Build the compiler container image
 		--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
 		--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) -t $(COMPILER_IMAGE) .
 
-scan-images: image image-compiler ## trivy: OS packages and Go binaries in the built images
+image-pgbackrest: ## Build the pgBackRest image of the backups (compose.backup.yaml)
+	docker build -f $(COMPOSE_DIR)/pgbackrest/Dockerfile \
+		--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) -t $(PGBACKREST_IMAGE) .
+
+scan-images: image image-compiler image-pgbackrest ## trivy: OS packages and Go binaries in the built images
 	mkdir -p $(TRIVY_CACHE)
-	for img in $(IMAGE) $(COMPILER_IMAGE); do \
+	for img in $(IMAGE) $(COMPILER_IMAGE) $(PGBACKREST_IMAGE); do \
 		docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(TRIVY_CACHE):/root/.cache/trivy \
 			$(TRIVY_IMAGE) image $(TRIVY_ARGS) $$img || exit 1; \
 	done
