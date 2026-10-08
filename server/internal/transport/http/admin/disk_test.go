@@ -186,7 +186,8 @@ func TestDeviceDiskVolumes(t *testing.T) {
 	const root, data = "0d8f4c62-0000-4000-8000-0000000000aa", "0d8f4c62-0000-4000-8000-0000000000bb"
 	health := `{"disk":{"state":"compliant","luks_version":2,"tokens":["recovery","tpm2+pin"],"keyslots":2,"volumes":[` +
 		`{"uuid":"` + root + `","device":"/dev/sda3","root":true,"luks_version":2,"tokens":["recovery","tpm2+pin"],"keyslots":2,"escrowed":true,"header_generation":2},` +
-		`{"uuid":"` + data + `","device":"/dev/sdb1","luks_version":2,"tokens":["password"],"keyslots":1,"escrowed":true,"header_generation":3}],` +
+		`{"uuid":"` + data + `","device":"/dev/sdb1","luks_version":2,"tokens":["password"],"keyslots":1,"escrowed":true,"header_generation":3},` +
+		`{"uuid":"` + root + `","device":"/dev/sdc","keyslots":0,"escrowed":false,"shared_uuid":true}],` +
 		`"unresolved":["LABEL=backup"]}}`
 	if _, err := e.super.Exec(context.Background(), `INSERT INTO device_status (device_id, organization_id, last_contact_at, health)
 		VALUES ($1, $2, now(), $3)`, device, e.acme, health); err != nil {
@@ -197,7 +198,8 @@ func TestDeviceDiskVolumes(t *testing.T) {
 
 	var disk adminapi.DiskEncryption
 	e.do(call{method: "GET", path: path, cookie: alice}).decode(t, &disk)
-	if len(disk.Volumes) != 2 || !disk.Volumes[0].Root || disk.Volumes[1].Uuid == nil || *disk.Volumes[1].Uuid != data ||
+	if len(disk.Volumes) != 3 || !disk.Volumes[0].Root || disk.Volumes[2].SharedUuid == nil || !*disk.Volumes[2].SharedUuid ||
+		disk.Volumes[1].SharedUuid != nil || disk.Volumes[1].Uuid == nil || *disk.Volumes[1].Uuid != data ||
 		disk.Volumes[1].Device != "/dev/sdb1" || !disk.Volumes[1].Escrowed || strings.Join(disk.Unresolved, ",") != "LABEL=backup" ||
 		len(disk.Headers) != 2 || disk.Headers[0].Volume == nil || disk.Headers[0].Volume.String() != data || disk.Headers[1].Volume != nil {
 		raw, _ := json.Marshal(disk)

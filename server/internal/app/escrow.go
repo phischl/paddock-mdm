@@ -50,8 +50,8 @@ const MaxHeaderVolumes = revocation.MaxVolumes
 
 // Store records an upload and returns the status the device polls: stored, pending for a header until its object is
 // verified, or failed for a generation that is not above the active administrator password or the last generation
-// of a LUKS kind, and for a header of a volume beyond MaxHeaderVolumes (audited as device.header_escrow_refused). A
-// repeated message reports the recorded status.
+// of a LUKS kind, or refused for a header of a volume beyond MaxHeaderVolumes (audited as
+// device.header_escrow_refused). A repeated message reports the recorded status.
 func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 	status := escrow.StatusFailed
 	refused := -1
@@ -124,7 +124,7 @@ func (e *Escrow) Store(ctx context.Context, m ingest.Escrow) (string, error) {
 	if errors.Is(err, problem.TooManyVolumes) {
 		err = nil
 	}
-	return escrow.StatusFailed, err
+	return escrow.StatusRefused, err
 }
 
 // nullUUID is a column value of an optional UUID.

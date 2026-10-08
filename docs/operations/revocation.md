@@ -17,7 +17,10 @@ change refuse a token with `volumes`, so the issuer adds them only for devices w
 tokens without volumes, and its `paddock-revoke` erases every volume on a Lock as before. Update the `paddock-revoke`
 package before relying on restorable Locks of devices with more than one encrypted volume. A check-in in which
 `paddockd` could not ask `paddock-revoke` (a timeout, a package upgrade in progress) reports nothing, and the server
-keeps the last reported value.
+keeps the last reported value. After a **downgrade** of `paddock-revoke` to a build before this change, the server
+therefore still holds the capability: Lock and self-lock tokens with volumes are refused by the old build
+(`device.revocation_refused`, reason `malformed`, nothing erased — fail-safe) until `paddock-revoke` is upgraded again
+and the device reports its capabilities anew.
 
 ### Limits and accepted residual risk
 
@@ -27,9 +30,13 @@ keeps the last reported value.
   longer open the volume (for example after `cryptsetup reencrypt`).
 - A device escrows the headers of at most **32** volumes; the worker refuses a header of a 33rd distinct volume
   (`device.header_escrow_refused`, error code `too_many_volumes`), and a token carries at most 32 volumes, the first by
-  UUID. Volumes beyond them are skipped by a Lock.
-- Two volumes with the same LUKS UUID (a cloned header), or a volume with the root volume's UUID, are reported as
-  unresolved: neither is escrowed, and a revocation that meets them is incomplete.
+  UUID. Volumes beyond them are skipped by a Lock. After a refusal the agent does not upload that volume's header
+  again for 24 hours, unless the volumes of `/etc/crypttab` change.
+- Volumes with the same LUKS UUID as another volume or as the root volume (a cloned header) stay volumes to erase,
+  but their headers cannot be told apart, so they are neither escrowed nor tracked for keyslot changes. They are
+  reported as `shared_uuid` in `health.disk` and in the confirmation (not as unresolved, so they do not make an
+  erasure incomplete): a **Destroy erases them**, a Lock skips them (`skipped_not_escrowed`), and they stay readable
+  after a Lock.
 - **Residual risk, accepted:** the server cannot verify the content of a sealed header. A compromised device (root)
   can therefore have a volume counted as escrowed with a forged header upload, or claim a false root volume UUID in
   its check-in (which the server writes onto the root headers escrowed before PDK-009). A Lock then makes that

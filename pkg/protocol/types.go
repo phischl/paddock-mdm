@@ -254,6 +254,11 @@ type DiskVolume struct {
 	Keyslots         int      `json:"keyslots"`
 	Escrowed         bool     `json:"escrowed"`
 	HeaderGeneration int64    `json:"header_generation,omitempty"`
+	// SharedUUID marks a volume whose LUKS UUID another volume or the root volume has (a cloned header): it is
+	// neither escrowed nor tracked; a Destroy erases it, a Lock does not (PDK-009 review round 2).
+	SharedUUID bool `json:"shared_uuid,omitempty"`
+	// Refused marks a volume whose header the server refused (more volumes than a token carries).
+	Refused bool `json:"refused,omitempty"`
 }
 
 // TamperKeyslotChanged is the data of tamper.keyslot_changed: the keyslots of a LUKS volume differ from those the

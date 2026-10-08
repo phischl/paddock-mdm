@@ -528,6 +528,49 @@ func TestSelfLockErasesConfirmedVolumes(t *testing.T) {
 	}
 }
 
+// rootClone is a device whose /dev/vdb is a clone of the root volume: same LUKS UUID, marked shared, and a data
+// volume.
+func rootClone(sys *fakeSys) {
+	const rootID = "1b6a3c1e-0000-4000-8000-0000000000aa"
+	sys.volumes["/dev/vdb"] = &fakeVolume{slots: 2}
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
+	sys.targets = Targets{Devices: []string{"/dev/vdb", "/dev/vdb1", "/dev/vda3"},
+		UUIDs: map[string]string{"/dev/vdb": rootID, "/dev/vdb1": uuidData}, Shared: []string{"/dev/vdb"}}
+}
+
+// TestDestroyErasesRootClone (PDK-009 review round 2): a Destroy erases a volume that shares the root volume's UUID,
+// reports it as shared_uuid, and the erasure is complete.
+func TestDestroyErasesRootClone(t *testing.T) {
+	sys := newSys(t)
+	rootClone(sys)
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, destroy))
+	if err != nil || !e.Erased || !slices.Equal(erasures(sys), []string{"/dev/vdb", "/dev/vdb1", "/dev/vda3"}) ||
+		!slices.Equal(e.SharedUUID, []string{"/dev/vdb"}) || sys.volumes["/dev/vdb"].slots != 0 {
+		t.Fatalf("destroy: %+v %v, erased %v", e, err, erasures(sys))
+	}
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
+		!strings.Contains(string(c.results[0].Result), `"shared_uuid":["/dev/vdb"]`) {
+		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestLockSkipsRootClone (PDK-009 review round 2): a Lock never erases a volume with a shared UUID, even when the
+// token lists that UUID (its header cannot be escrowed); it is skipped, and the Lock is complete.
+func TestLockSkipsRootClone(t *testing.T) {
+	sys := newSys(t)
+	rootClone(sys)
+	env := token(t, trustedKey, func(k *revocation.Token) {
+		k.Volumes = []string{uuidData, "1b6a3c1e-0000-4000-8000-0000000000aa"}
+	})
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), env)
+	if err != nil || !e.Erased || !slices.Equal(erasures(sys), []string{"/dev/vdb1", "/dev/vda3"}) ||
+		!reflect.DeepEqual(e.SkippedNotEscrowed, []SkippedVolume{{Device: "/dev/vdb", UUID: "1b6a3c1e-0000-4000-8000-0000000000aa"}}) ||
+		!slices.Equal(e.SharedUUID, []string{"/dev/vdb"}) || sys.volumes["/dev/vdb"].slots != 2 {
+		t.Fatalf("lock: %+v %v, erased %v", e, err, erasures(sys))
+	}
+}
+
 // TestSecondTokenRefused: after a revocation every token is refused for 24 h, the same token for ever.
 func TestSecondTokenRefused(t *testing.T) {
 	sys := newSys(t)

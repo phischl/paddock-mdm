@@ -45,6 +45,8 @@ const downloadable = computed(() => volumes.value.filter((v) => v.uuid && latest
 
 function volumeText(v: DiskVolume): string {
   if (!v.uuid) return t('devices.disk.volumeUnknown', { device: v.device })
+  if (v.shared_uuid) return t('devices.disk.volumeShared', { device: v.device })
+  if (v.refused) return t('devices.disk.volumeRefused', { device: v.device })
   return t('devices.disk.volumeFacts', { device: v.device, root: String(v.root), count: v.keyslots, version: v.luks_version ?? 2,
     escrowed: String(v.escrowed) })
 }

@@ -17,12 +17,15 @@ const SelectWithin = time.Minute
 
 // Targets are the LUKS volumes of the device: every other LUKS volume of /etc/crypttab first, the root volume last
 // (plan M4c.1 decision 1). UUIDs holds the LUKS UUID of a device in Devices as far as cryptsetup reported it; a Lock
-// erases a volume other than the root volume only if its UUID is one the token lists (PDK-009). Unresolved lists the
-// crypttab sources that could not be erased with certainty; they are reported in the confirmation, do not stop the
-// erasure of the others (decision 3) and make it incomplete.
+// erases a volume other than the root volume only if its UUID is one the token lists (PDK-009). Shared lists the
+// devices in Devices whose UUID another volume or the root volume has (a cloned header): a Destroy erases them, a Lock
+// never, as their header cannot be escrowed (review round 2). Unresolved lists the crypttab sources that could not be
+// erased with certainty; they are reported in the confirmation, do not stop the erasure of the others (decision 3)
+// and make it incomplete.
 type Targets struct {
 	Devices    []string
 	UUIDs      map[string]string
+	Shared     []string
 	Unresolved []string
 }
 
@@ -38,6 +41,9 @@ func targetsOf(c luks.Crypttab) Targets {
 	tg := Targets{Unresolved: c.Unresolved}
 	for _, v := range c.Volumes {
 		tg.Devices = append(tg.Devices, v.Header)
+		if v.Shared {
+			tg.Shared = append(tg.Shared, v.Header)
+		}
 		if v.UUID != "" {
 			if tg.UUIDs == nil {
 				tg.UUIDs = map[string]string{}

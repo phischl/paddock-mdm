@@ -13,6 +13,9 @@ type Confirmation struct {
 	Volumes            []VolumeConfirmation `json:"volumes"`
 	Unresolved         []string             `json:"unresolved"`
 	SkippedNotEscrowed []SkippedVolume      `json:"skipped_not_escrowed"`
+	// SharedUUID are the devices whose LUKS UUID another volume or the root volume has (PDK-009 review round 2); a
+	// Destroy erases them, a Lock skips them. They do not make the erasure incomplete.
+	SharedUUID []string `json:"shared_uuid"`
 }
 
 // VolumeConfirmation is the erasure of one LUKS volume of the device.

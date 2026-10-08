@@ -62,9 +62,18 @@ Review round 1 (architect, 2026-10-08):
 - At most 32 distinct volumes per device: the worker refuses a header of a 33rd (`device.header_escrow_refused`,
   `too_many_volumes`); tokens carry at most 32, the first by UUID, in the issuer and in the self-lock reconciliation
   alike; never an error that blocks a Lock.
-- Duplicate LUKS UUIDs in the crypttab selection (also the root volume's) are unresolved for every volume that has
-  them; they are neither escrowed nor tracked.
+- Duplicate LUKS UUIDs in the crypttab selection (also the root volume's): corrected in review round 2, see below.
 - A token lists a volume only when its newest header generation (that did not fail) is stored.
 - A failed `paddock-revoke capabilities` call reports nothing; the server keeps the last reported value.
 - Migration renumbered to `00033` (M5c has 00029, M6c 00030–00032).
 - Residual risk (forged escrow, false root UUID) named in `docs/operations/revocation.md`.
+
+Review round 2 (architect, 2026-10-08):
+- Volumes with a shared LUKS UUID, including a clone of the root volume, stay erase targets; the crypttab selection
+  marks them `Shared`. They are neither escrowed nor tamper-tracked, are reported as `shared_uuid` in `health.disk`
+  and in the confirmation (not as unresolved; they do not make `erased` false), are erased by a Destroy and skipped
+  by a Lock (`skipped_not_escrowed`).
+- After a `too_many_volumes` refusal (escrow status `refused`) the agent does not escrow that volume again for 24 h
+  or until its crypttab volume set changes.
+- After a `paddock-revoke` downgrade, Locks with volumes are refused (fail-safe) until the device reports its
+  capabilities again after the upgrade; documented in `docs/operations/revocation.md`.

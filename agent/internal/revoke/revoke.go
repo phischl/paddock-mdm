@@ -108,7 +108,9 @@ const SecondaryWithin = 2 * time.Minute
 // true only if every erased volume has no keyslot left and no crypttab entry is unresolved; SlotsBefore and
 // SlotsAfter are the sums over the volumes (SlotsAfter -1 when a volume's count is unknown), kept for the
 // confirmations of M4c. SkippedNotEscrowed are the volumes a Lock left alone because the token does not confirm
-// their header escrow (PDK-009); they do not make the erasure incomplete.
+// their header escrow (PDK-009); they do not make the erasure incomplete. SharedUUID lists the devices whose LUKS UUID
+// another volume or the root volume has (review round 2): a Destroy erases them, a Lock skips them; they do not make
+// the erasure incomplete either.
 type Erasure struct {
 	Erased             bool            `json:"erased"`
 	SlotsBefore        int             `json:"slots_before"`
@@ -116,6 +118,7 @@ type Erasure struct {
 	Volumes            []VolumeErasure `json:"volumes"`
 	Unresolved         []string        `json:"unresolved,omitempty"`
 	SkippedNotEscrowed []SkippedVolume `json:"skipped_not_escrowed,omitempty"`
+	SharedUUID         []string        `json:"shared_uuid,omitempty"`
 }
 
 // VolumeErasure is the erasure of one LUKS volume.
@@ -188,7 +191,7 @@ func (r *Revoker) execute(ctx context.Context, tok *revocation.Token) (Erasure, 
 	r.terminateSessions(ctx)
 	// (2) Erase every keyslot of every target, the root volume last, and verify that none is left.
 	result := r.erase(ctx, targets)
-	result.SkippedNotEscrowed = skipped
+	result.SkippedNotEscrowed, result.SharedUUID = skipped, targets.Shared
 	// (3) Post the confirmation ourselves, signed with the device key, and wait up to 20 s for the 202.
 	r.confirm(ctx, tok.CommandID, result)
 	// (4) Reboot regardless of the confirmation's outcome.
@@ -254,18 +257,19 @@ func (r *Revoker) check(ctx context.Context, tok *revocation.Token) (Targets, er
 }
 
 // restorable returns the targets of a token: for a Destroy every target; for a Lock and a self-lock the root volume
-// and, of the other volumes, exactly those whose LUKS UUID the token lists, so that every erased volume can be
-// restored from its escrowed header (PDK-009). The other volumes are returned as skipped. The list comes only from
-// the token the revocation-issuer signed; nothing paddockd hands over decides what is erased.
+// and, of the other volumes, exactly those whose LUKS UUID the token lists and that share it with no other volume,
+// so that every erased volume can be restored from its escrowed header (PDK-009). The other volumes are returned as
+// skipped. The list comes only from the token the revocation-issuer signed; nothing paddockd hands over decides what
+// is erased.
 func restorable(tok *revocation.Token, tg Targets) (Targets, []SkippedVolume) {
 	if tok.Action == revocation.ActionDestroy || len(tg.Devices) == 0 {
 		return tg, nil
 	}
 	last := len(tg.Devices) - 1
-	out := Targets{UUIDs: tg.UUIDs, Unresolved: tg.Unresolved}
+	out := Targets{UUIDs: tg.UUIDs, Shared: tg.Shared, Unresolved: tg.Unresolved}
 	var skipped []SkippedVolume
 	for _, d := range tg.Devices[:last] {
-		if id := tg.UUIDs[d]; id != "" && slices.Contains(tok.Volumes, id) {
+		if id := tg.UUIDs[d]; id != "" && !slices.Contains(tg.Shared, d) && slices.Contains(tok.Volumes, id) {
 			out.Devices = append(out.Devices, d)
 		} else {
 			skipped = append(skipped, SkippedVolume{Device: d, UUID: id})

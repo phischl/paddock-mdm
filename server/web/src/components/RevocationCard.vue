@@ -209,7 +209,7 @@ onMounted(async () => {
               {{ t('devices.revocation.incomplete') }}
             </p>
             <ul
-              v-if="volumeResults(r).volumes.length > 0 || volumeResults(r).unresolved.length > 0 || volumeResults(r).skipped.length > 0"
+              v-if="volumeResults(r).volumes.length > 0 || volumeResults(r).unresolved.length > 0 || volumeResults(r).skipped.length > 0 || volumeResults(r).shared.length > 0"
               class="volumes"
               :aria-label="t('devices.revocation.volumes')"
               data-testid="revocation-volumes"
@@ -232,6 +232,12 @@ onMounted(async () => {
                 data-testid="revocation-skipped"
               >
                 {{ t('devices.revocation.volume.skipped', { device: v.device }) }}
+              </li>
+              <li
+                v-for="(device, i) in volumeResults(r).shared"
+                :key="'h' + i + ':' + device"
+              >
+                {{ t('devices.revocation.volume.shared', { device }) }}
               </li>
             </ul>
           </td>
