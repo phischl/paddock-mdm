@@ -88,8 +88,10 @@ func (d *Declarative) Plan(ctx context.Context, raw []byte) (declarative.Plan, e
 }
 
 // Apply applies raw in one transaction (audited: config.applied) and records a change set unless the plan is empty.
-// It returns the change set ID (uuid.Nil without changes) and the plan.
-func (d *Declarative) Apply(ctx context.Context, raw []byte) (uuid.UUID, declarative.Plan, error) {
+// It returns the change set ID (uuid.Nil without changes) and the plan. expectedPlan, when not empty, is the SHA-256 of
+// the plan the client confirmed (plan M6c amendment 2026-10-08): a different plan is refused with plan_changed and
+// nothing is applied, so a deletion that appeared after the dry run is never applied unconfirmed.
+func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string) (uuid.UUID, declarative.Plan, error) {
 	var id uuid.UUID
 	var plan declarative.Plan
 	spec := SpecConfigApply
@@ -106,6 +108,9 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte) (uuid.UUID, declara
 		}
 		plan = declarative.Diff(st.doc, desired)
 		sections := plan.SectionsOf()
+		if expectedPlan != "" && plan.SHA256() != expectedPlan {
+			return problem.PlanChanged.WithDetail("the plan differs from the confirmed plan " + expectedPlan + "; review the new plan and apply again")
+		}
 		rec.SetParam("created", plan.Created)
 		rec.SetParam("updated", plan.Updated)
 		rec.SetParam("deleted", plan.Deleted)
@@ -252,7 +257,8 @@ func normalize(doc *declarative.Document) {
 // configState is the current configuration and the IDs behind its natural keys.
 type configState struct {
 	doc        declarative.Document
-	ids        map[string]map[string]uuid.UUID // section → key → ID
+	ids        map[string]map[string]uuid.UUID // section → key (declarative.Key.String) → ID
+	names      map[string]string               // key of a device group or profile → its name
 	groups     map[string]uuid.UUID            // device group name → ID
 	profiles   map[string]pgstore.PermissionProfile
 	userGroups map[string]uuid.UUID // slug → ID
@@ -261,7 +267,7 @@ type configState struct {
 
 // loadConfig reads the organization's configuration in document form.
 func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
-	st := configState{ids: map[string]map[string]uuid.UUID{}, groups: map[string]uuid.UUID{},
+	st := configState{ids: map[string]map[string]uuid.UUID{}, names: map[string]string{}, groups: map[string]uuid.UUID{},
 		profiles: map[string]pgstore.PermissionProfile{}, userGroups: map[string]uuid.UUID{}, users: map[string]uuid.UUID{}}
 	for _, s := range declarative.Sections() {
 		st.ids[s] = map[string]uuid.UUID{}
@@ -290,7 +296,8 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	for _, g := range groups {
 		names[g.ID], st.groups[g.Name] = g.Name, g.ID
 		item := declarative.DeviceGroup{Name: g.Name, Description: g.Description}
-		st.ids[declarative.SectionDeviceGroups][item.Key()] = g.ID
+		st.ids[declarative.SectionDeviceGroups][item.Key().String()] = g.ID
+		st.names[item.Key().String()] = g.Name
 		dgs = append(dgs, item)
 	}
 	doc.DeviceGroups = &dgs
@@ -316,7 +323,8 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 		}
 		item := declarative.PermissionProfile{Name: p.Name, Class: p.Class, Commands: cmds, RequirePassword: p.RequirePassword,
 			TimestampTimeoutMin: int(p.TimestampTimeoutMin), Lecture: p.Lecture}
-		st.ids[declarative.SectionPermissionProfiles][item.Key()] = p.ID
+		st.ids[declarative.SectionPermissionProfiles][item.Key().String()] = p.ID
+		st.names[item.Key().String()] = p.Name
 		pps = append(pps, item)
 	}
 	doc.PermissionProfiles = &pps
@@ -329,7 +337,7 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	for _, f := range files {
 		item := declarative.ManagedFile{Path: f.Path, DeviceGroup: groupName(f.DeviceGroupID), Mode: f.Mode, Owner: f.Owner,
 			Group: f.Grp, Content: f.Content}
-		st.ids[declarative.SectionManagedFiles][item.Key()] = f.ID
+		st.ids[declarative.SectionManagedFiles][item.Key().String()] = f.ID
 		mfs = append(mfs, item)
 	}
 	doc.ManagedFiles = &mfs
@@ -341,7 +349,7 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	mus := make([]declarative.ManagedUnit, 0, len(units))
 	for _, u := range units {
 		item := declarative.ManagedUnit{Unit: u.Unit, DeviceGroup: groupName(u.DeviceGroupID), Enabled: u.Enabled, Active: u.Active}
-		st.ids[declarative.SectionManagedUnits][item.Key()] = u.ID
+		st.ids[declarative.SectionManagedUnits][item.Key().String()] = u.ID
 		mus = append(mus, item)
 	}
 	doc.ManagedUnits = &mus
@@ -353,7 +361,7 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	phs := make([]declarative.PackageHold, 0, len(holds))
 	for _, h := range holds {
 		item := declarative.PackageHold{Package: h.Package, Version: h.Version, DeviceGroup: groupName(h.DeviceGroupID), Reason: h.Reason}
-		st.ids[declarative.SectionPackageHolds][item.Key()] = h.ID
+		st.ids[declarative.SectionPackageHolds][item.Key().String()] = h.ID
 		phs = append(phs, item)
 	}
 	doc.PackageHolds = &phs
@@ -388,7 +396,7 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 			subject.Username = usernames[a.SubjectID.UUID]
 		}
 		item := declarative.ProfileAssignment{Profile: byID[a.ProfileID], Subject: subject, DeviceGroup: groupName(a.DeviceGroupID)}
-		st.ids[declarative.SectionProfileAssignments][item.Key()] = a.ID
+		st.ids[declarative.SectionProfileAssignments][item.Key().String()] = a.ID
 		pas = append(pas, item)
 	}
 	doc.ProfileAssignments = &pas

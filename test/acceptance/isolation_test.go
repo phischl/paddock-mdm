@@ -91,6 +91,36 @@ func TestOrganizationIsolation(t *testing.T) {
 		})
 	}
 
+	// AC3 of plan M6c: an acme API token gets 404 for the globex resources of the new endpoint families and sees none
+	// of globex in its lists and configuration.
+	t.Run("api token", func(t *testing.T) {
+		freshStepUp(t, w.alice, env.Alice)
+		res := postAPIToken(t, w.alice, apiTokenName("acme isolation"), "org_admin", 2*time.Hour)
+		expectStatus(t, res, http.StatusCreated, "")
+		removeCreated(t, w.alice, "/api/v1/api-tokens", res)
+		var tok apiTokenCreated
+		if err := res.JSON(&tok); err != nil {
+			t.Fatal(err)
+		}
+		token := tokenPortal(t, tok.Secret)
+		for _, r := range []struct{ method, path string }{
+			{http.MethodGet, "/api/v1/api-tokens/" + w.globexAPIToken},
+			{http.MethodPost, "/api/v1/api-tokens/" + w.globexAPIToken + "/revoke"},
+			{http.MethodGet, "/api/v1/change-sets/" + w.globexChangeSet},
+			{http.MethodGet, "/api/v1/device-groups/" + w.globexDeviceGroup},
+		} {
+			res := call(t, token, r.method, r.path, nil)
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+		}
+		for _, path := range []string{"/api/v1/api-tokens?page_size=100", "/api/v1/change-sets?page_size=100", "/api/v1/config"} {
+			res := call(t, token, http.MethodGet, path, nil)
+			expectStatus(t, res, http.StatusOK, "")
+			if leaked := containsAny(res.Body, w.globexIDs); leaked != "" {
+				t.Fatalf("GET %s with an acme token contains globex ID %s", path, leaked)
+			}
+		}
+	})
+
 	// Searches and filters of every list find globex data as carol but never as alice.
 	for path := range collectionGETs(doc) {
 		if !strings.HasPrefix(path, "/api/v1/") {

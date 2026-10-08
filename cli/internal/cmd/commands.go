@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/oasdiff/yaml"
 
+	"github.com/phischl/paddock-mdm/cli/internal/client"
 	"github.com/phischl/paddock-mdm/cli/internal/render"
 	"github.com/phischl/paddock-mdm/cli/internal/schema"
 )
@@ -116,6 +118,7 @@ type applyResult struct {
 	DryRun      bool        `json:"dry_run"`
 	ChangeSetID *string     `json:"change_set_id"`
 	Plan        render.Plan `json:"plan"`
+	PlanSHA256  string      `json:"plan_sha256"`
 }
 
 func runApply(ctx context.Context, e Env, args []string) error {
@@ -155,8 +158,18 @@ func runApply(ctx context.Context, e Env, args []string) error {
 		}
 		return &refusedError{msg: fmt.Sprintf("plan deletes %d resources; re-run with --yes", plan.Plan.Deleted)}
 	}
+	// The apply carries the plan that was shown (and confirmed with --yes): if the configuration changed meanwhile, the
+	// server refuses it and applies nothing (plan M6c amendment 2026-10-08).
 	var applied applyResult
-	if err := c.Do(ctx, http.MethodPut, "/api/v1/config", nil, doc, &applied); err != nil {
+	query := url.Values{}
+	if plan.PlanSHA256 != "" {
+		query.Set("expected_plan", plan.PlanSHA256)
+	}
+	var problem *client.Problem
+	if err := c.Do(ctx, http.MethodPut, "/api/v1/config", query, doc, &applied); errors.As(err, &problem) && problem.Code == "plan_changed" {
+		return &refusedError{msg: "the configuration changed since the plan above was computed; nothing was applied. " +
+			"Run paddockctl apply again to review the new plan."}
+	} else if err != nil {
 		return err
 	}
 	if g.output == "json" {

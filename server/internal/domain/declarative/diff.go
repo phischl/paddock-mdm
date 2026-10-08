@@ -2,6 +2,7 @@ package declarative
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -56,6 +57,17 @@ type FieldChange struct {
 	After  any    `json:"after"`
 }
 
+// SHA256 is the hex SHA-256 of the plan's JSON encoding: the value a client confirms with expected_plan (plan M6c
+// amendment 2026-10-08). The encoding is deterministic: the changes are in application order and every value is a
+// string, number, boolean, list of strings or null.
+func (p Plan) SHA256() string {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(raw))
+}
+
 // SectionsOf returns the sections a plan changes, in application order.
 func (p Plan) SectionsOf() []string {
 	out := []string{}
@@ -74,7 +86,7 @@ type field struct {
 
 // entry is one item of a section: its key, its fields and its position in the document.
 type entry struct {
-	key    string
+	key    Key
 	fields []field
 	index  int
 }
@@ -108,7 +120,7 @@ func section(d Document, name string) (bool, []entry) {
 	return false, nil
 }
 
-func entries[T any](items *[]T, key func(T) string, fields func(T) []field) (bool, []entry) {
+func entries[T any](items *[]T, key func(T) Key, fields func(T) []field) (bool, []entry) {
 	if items == nil {
 		return false, nil
 	}
@@ -119,7 +131,7 @@ func entries[T any](items *[]T, key func(T) string, fields func(T) []field) (boo
 	return true, out
 }
 
-// Index maps every section of d to the position of each key in the document (paths of error messages).
+// Index maps every section of d to the position of each key (Key.String) in the document (paths of error messages).
 func Index(d Document) map[string]map[string]int {
 	out := map[string]map[string]int{}
 	for _, s := range Sections() {
@@ -129,7 +141,7 @@ func Index(d Document) map[string]map[string]int {
 		}
 		out[s] = map[string]int{}
 		for _, e := range items {
-			out[s][e.key] = e.index
+			out[s][e.key.String()] = e.index
 		}
 	}
 	return out
@@ -140,10 +152,10 @@ func Duplicates(d Document) *ValidationError {
 	var out []Violation
 	for _, s := range Sections() {
 		_, items := section(d, s)
-		seen := map[string]bool{}
+		seen := map[Key]bool{}
 		for _, e := range items {
 			if seen[e.key] && len(out) < MaxViolations {
-				out = append(out, Violation{Path: Path(s, e.index), Message: "duplicate key " + strconv.Quote(e.key)})
+				out = append(out, Violation{Path: Path(s, e.index), Message: "duplicate key " + e.key.String()})
 			}
 			seen[e.key] = true
 		}
@@ -178,13 +190,13 @@ func Diff(current, desired Document) Plan {
 			continue
 		}
 		_, have := section(current, s)
-		keep := map[string]bool{}
+		keep := map[Key]bool{}
 		for _, e := range want {
 			keep[e.key] = true
 		}
 		for _, e := range sorted(have) {
 			if !keep[e.key] {
-				plan.Changes = append(plan.Changes, Change{Section: s, Key: e.key, Action: ActionDelete, Fields: changed(e.fields, nil)})
+				plan.Changes = append(plan.Changes, Change{Section: s, Key: e.key.String(), Action: ActionDelete, Fields: changed(e.fields, nil)})
 				plan.Deleted++
 			}
 		}
@@ -195,7 +207,7 @@ func Diff(current, desired Document) Plan {
 			continue
 		}
 		_, have := section(current, s)
-		byKey := map[string]entry{}
+		byKey := map[Key]entry{}
 		for _, e := range have {
 			byKey[e.key] = e
 		}
@@ -203,11 +215,11 @@ func Diff(current, desired Document) Plan {
 			old, exists := byKey[e.key]
 			switch {
 			case !exists && !isSettings(s):
-				plan.Changes = append(plan.Changes, Change{Section: s, Key: e.key, Action: ActionCreate, Fields: changed(nil, e.fields)})
+				plan.Changes = append(plan.Changes, Change{Section: s, Key: e.key.String(), Action: ActionCreate, Fields: changed(nil, e.fields)})
 				plan.Created++
 			default:
 				if fc := changed(old.fields, e.fields); len(fc) > 0 {
-					plan.Changes = append(plan.Changes, Change{Section: s, Key: e.key, Action: ActionUpdate, Fields: fc})
+					plan.Changes = append(plan.Changes, Change{Section: s, Key: e.key.String(), Action: ActionUpdate, Fields: fc})
 					plan.Updated++
 				}
 			}
@@ -222,9 +234,9 @@ func sorted(items []entry) []entry {
 	out := slices.Clone(items)
 	slices.SortStableFunc(out, func(a, b entry) int {
 		switch {
-		case a.key < b.key:
+		case a.key.String() < b.key.String():
 			return -1
-		case a.key > b.key:
+		case a.key.String() > b.key.String():
 			return 1
 		}
 		return 0
@@ -258,12 +270,51 @@ func changed(before, after []field) []FieldChange {
 	return out
 }
 
-// scoped prefixes a key with the device group of a group-scoped item.
-func scoped(group *string, key string) string {
-	if group == nil {
-		return key
+// Key is the natural key of an item, compared as a tuple of its parts: names may contain any character, so the parts
+// are never joined into one string (review 1 of PDK-008). Group is the device group of a group-scoped item
+// (HasGroup false: every device of the organization); Subject parts belong to profile assignments only.
+type Key struct {
+	scoped, assignment bool
+	HasGroup           bool
+	Group, Name        string
+	SubjectType        string
+	Subject            string // slug or username; "" for global
+}
+
+// String is the key as plans show it: the JSON array of its parts, every part quoted, the device group null for every
+// device and the subject null for global, e.g. ["laptops"], [null,"/etc/motd"], ["lab","ops","group","devs"]; "" for settings.
+func (k Key) String() string {
+	if k == (Key{}) {
+		return "" // a settings section has no key
 	}
-	return *group + ":" + key
+	var parts []any
+	if k.scoped {
+		if k.HasGroup {
+			parts = append(parts, k.Group)
+		} else {
+			parts = append(parts, nil)
+		}
+	}
+	parts = append(parts, k.Name)
+	if k.assignment {
+		parts = append(parts, k.SubjectType)
+		if k.Subject == "" {
+			parts = append(parts, nil)
+		} else {
+			parts = append(parts, k.Subject)
+		}
+	}
+	raw, _ := json.Marshal(parts) // strings and nil always encode
+	return string(raw)
+}
+
+// scopedKey is the key of a group-scoped item.
+func scopedKey(group *string, name string) Key {
+	k := Key{scoped: true, Name: name}
+	if group != nil {
+		k.HasGroup, k.Group = true, *group
+	}
+	return k
 }
 
 func optional[T any](v *T) any {
@@ -285,38 +336,38 @@ func ContentSummary(content string) string {
 	return fmt.Sprintf("sha256:%x (%d bytes)", sha256.Sum256([]byte(content)), len(content))
 }
 
-// Key is the natural key of a device group.
-func (g DeviceGroup) Key() string { return g.Name }
+// Key is the natural key of a device group: its name.
+func (g DeviceGroup) Key() Key { return Key{Name: g.Name} }
 
 func (g DeviceGroup) fields() []field {
 	return []field{{"name", g.Name}, {"description", g.Description}}
 }
 
-// Key is the natural key of a permission profile.
-func (p PermissionProfile) Key() string { return p.Name }
+// Key is the natural key of a permission profile: its name.
+func (p PermissionProfile) Key() Key { return Key{Name: p.Name} }
 
 func (p PermissionProfile) fields() []field {
 	return []field{{"name", p.Name}, {"class", p.Class}, {"commands", list(p.Commands)}, {"require_password", p.RequirePassword},
 		{"timestamp_timeout_min", p.TimestampTimeoutMin}, {"lecture", p.Lecture}}
 }
 
-// Key is the natural key of a managed file: "<device group>:<path>", or the path for every device.
-func (f ManagedFile) Key() string { return scoped(f.DeviceGroup, f.Path) }
+// Key is the natural key of a managed file: device group and path.
+func (f ManagedFile) Key() Key { return scopedKey(f.DeviceGroup, f.Path) }
 
 func (f ManagedFile) fields() []field {
 	return []field{{"path", f.Path}, {"device_group", optional(f.DeviceGroup)}, {"mode", f.Mode}, {"owner", f.Owner},
 		{"group", f.Group}, {"content", ContentSummary(f.Content)}}
 }
 
-// Key is the natural key of a managed unit: "<device group>:<unit>", or the unit for every device.
-func (u ManagedUnit) Key() string { return scoped(u.DeviceGroup, u.Unit) }
+// Key is the natural key of a managed unit: device group and unit.
+func (u ManagedUnit) Key() Key { return scopedKey(u.DeviceGroup, u.Unit) }
 
 func (u ManagedUnit) fields() []field {
 	return []field{{"unit", u.Unit}, {"device_group", optional(u.DeviceGroup)}, {"enabled", u.Enabled}, {"active", u.Active}}
 }
 
-// Key is the natural key of a package hold: "<device group>:<package>", or the package for every device.
-func (h PackageHold) Key() string { return scoped(h.DeviceGroup, h.Package) }
+// Key is the natural key of a package hold: device group and package.
+func (h PackageHold) Key() Key { return scopedKey(h.DeviceGroup, h.Package) }
 
 func (h PackageHold) fields() []field {
 	return []field{{"package", h.Package}, {"version", optional(h.Version)}, {"device_group", optional(h.DeviceGroup)},
@@ -334,9 +385,17 @@ func (s Subject) String() string {
 	return s.Type
 }
 
-// Key is the natural key of a profile assignment: "[<device group>:]<profile> for <subject>".
-func (a ProfileAssignment) Key() string {
-	return scoped(a.DeviceGroup, a.Profile+" for "+a.Subject.String())
+// Key is the natural key of a profile assignment: device group, profile and subject.
+func (a ProfileAssignment) Key() Key {
+	k := scopedKey(a.DeviceGroup, a.Profile)
+	k.assignment, k.SubjectType = true, a.Subject.Type
+	switch a.Subject.Type {
+	case SubjectGroup:
+		k.Subject = a.Subject.Slug
+	case SubjectUser:
+		k.Subject = a.Subject.Username
+	}
+	return k
 }
 
 func (a ProfileAssignment) fields() []field {

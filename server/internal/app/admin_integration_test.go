@@ -127,3 +127,17 @@ func TestAdminRebuildCache(t *testing.T) {
 		t.Fatalf("%d failed rebuild events, want 1", n)
 	}
 }
+
+// TestM6cDefinerFunctionsSearchPath: the SECURITY DEFINER functions of M6c search pg_temp last (migration 00034).
+func TestM6cDefinerFunctionsSearchPath(t *testing.T) {
+	_, super, _ := adminHarness(t)
+	for _, fn := range []string{"paddock_api_token_lookup", "paddock_admin_bump_bundle_seq"} {
+		var config []string
+		if err := super.QueryRow(context.Background(), "SELECT proconfig FROM pg_proc WHERE proname = $1", fn).Scan(&config); err != nil {
+			t.Fatal(err)
+		}
+		if len(config) != 1 || config[0] != "search_path=public, pg_temp" {
+			t.Errorf("%s proconfig %v", fn, config)
+		}
+	}
+}

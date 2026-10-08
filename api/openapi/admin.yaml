@@ -572,6 +572,9 @@ paths:
         A schema violation is 422 invalid_document listing up to 20 "path: message" pairs. With dry_run=true the
         plan is computed and checked the same way but nothing is applied and nothing is audited. An apply with
         changes records a change set; one without changes records the event with zeros and no change set.
+        expected_plan (plan M6c amendment 2026-10-08) is the plan_sha256 of a dry run the client confirmed: when the
+        plan computed now differs, the apply is refused with 412 plan_changed (audited as failure) and nothing is
+        applied.
       x-paddock-audit: config.applied
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -579,6 +582,10 @@ paths:
           in: query
           description: Compute and check the plan without applying it.
           schema: { type: boolean, default: false }
+        - name: expected_plan
+          in: query
+          description: plan_sha256 of the confirmed dry run; a different plan is refused with 412 plan_changed.
+          schema: { type: string, pattern: '^[0-9a-f]{64}$' }
       requestBody:
         required: true
         content:
@@ -594,6 +601,7 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+        "412": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
   /api/v1/change-sets:
     get:
@@ -3764,9 +3772,12 @@ components:
         after: { nullable: true, description: Value after; null for deletions. }
     ConfigApplyResult:
       type: object
-      required: [dry_run, change_set_id, plan]
+      required: [dry_run, change_set_id, plan, plan_sha256]
       properties:
         dry_run: { type: boolean }
+        plan_sha256:
+          type: string
+          description: Hex SHA-256 of the plan's canonical JSON; send it as expected_plan to apply exactly this plan.
         change_set_id: { type: string, format: uuid, nullable: true, description: Null for dry runs and empty plans. }
         plan: { $ref: "#/components/schemas/ConfigPlan" }
     ChangeSetSource:

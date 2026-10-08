@@ -196,3 +196,49 @@ func TestAPITokenListAndIsolation(t *testing.T) {
 		t.Fatalf("expiry too soon: %d %s", r.status, r.body)
 	}
 }
+
+// TestAPITokenBearerIsolation is AC3 of plan M6c: an acme token asking for globex resources of every new endpoint
+// family gets 404 not_found, and its lists and its configuration show nothing of globex.
+func TestAPITokenBearerIsolation(t *testing.T) {
+	e := newEnv(t)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	carol := e.session(e.globex, principal.RoleOrgAdmin)
+	acme := e.createAPIToken("acme", alice, "acme ci", adminapi.ApiTokenRoleOrgAdmin)
+	globexToken := e.createAPIToken("globex", carol, "globex ci", adminapi.ApiTokenRoleOrgAdmin)
+	doc := map[string]any{"api_version": "paddock/v1", "kind": "OrganizationConfig",
+		"device_groups": []any{map[string]any{"name": "globex-secret-group"}}}
+	r := e.do(call{method: "PUT", path: "/api/v1/config", cookie: carol, body: doc})
+	var applied adminapi.ConfigApplyResult
+	r.decode(t, &applied)
+	if r.status != http.StatusOK || applied.ChangeSetId == nil {
+		t.Fatalf("globex apply: %d %s", r.status, r.body)
+	}
+	globexIDs := []string{globexToken.Token.Id.String(), applied.ChangeSetId.String()}
+
+	for _, c := range []call{
+		{method: "GET", path: "/api/v1/api-tokens/" + globexToken.Token.Id.String()},
+		{method: "POST", path: "/api/v1/api-tokens/" + globexToken.Token.Id.String() + "/revoke"},
+		{method: "GET", path: "/api/v1/change-sets/" + applied.ChangeSetId.String()},
+	} {
+		c.headers = bearer(acme.Secret)
+		r := e.do(c)
+		if r.status != http.StatusNotFound || r.problemCode(t) != "not_found" {
+			t.Fatalf("%s %s with an acme token: %d %s", c.method, c.path, r.status, r.body)
+		}
+	}
+	for _, path := range []string{"/api/v1/api-tokens?page_size=100", "/api/v1/change-sets?page_size=100", "/api/v1/config"} {
+		r := e.do(call{method: "GET", path: path, headers: bearer(acme.Secret)})
+		if r.status != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, r.status, r.body)
+		}
+		for _, leak := range append(globexIDs, "globex-secret-group", "globex ci") {
+			if strings.Contains(string(r.body), leak) {
+				t.Fatalf("GET %s with an acme token shows globex's %s", path, leak)
+			}
+		}
+	}
+	// The globex token is still active: the refused revoke changed nothing.
+	if r := e.do(call{method: "GET", path: "/api/v1/api-tokens/" + globexToken.Token.Id.String(), cookie: carol}); !strings.Contains(string(r.body), `"status":"active"`) {
+		t.Fatalf("globex token after the refused revoke: %s", r.body)
+	}
+}

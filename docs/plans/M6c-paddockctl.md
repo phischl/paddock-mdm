@@ -580,3 +580,20 @@ of large organizations load the compiler — accepted; restore-only.
    (CLAUDE.md forbids `:verb`); §8.3 and §20 `paddockctl admin …` → `paddock-server admin …`; §17.3 unchanged.
 5. DMS and identity excluded from `paddock.v1` (decision 13) — default yes.
 6. Expiry maximum 365 days and minimum 1 hour (decision 6) — default yes.
+
+## Amendment 2026-10-08 (architect)
+Decided after review 1 of PDK-008; PDK-013 is folded into M6c.
+
+1. **Plan precondition (decision 26, risk R2).** Every `PUT /api/v1/config` answer carries `plan_sha256`, the hex
+   SHA-256 of the plan's JSON encoding (`declarative.Plan.SHA256`). `PUT /api/v1/config` takes the optional query
+   parameter `expected_plan` (64 lowercase hex digits; anything else is 400 `invalid_request`): when the plan computed
+   in the apply transaction has another hash, the apply is refused with **412 `plan_changed`**, recorded as one
+   `config.applied` failure, and nothing is applied. `paddockctl apply` sends the `plan_sha256` of its dry run with
+   the apply; on `plan_changed` it exits with code 3 and tells the user to re-run. A deletion that appears between
+   the dry run and the apply is therefore never applied unconfirmed. Gate T3 and the exactly-once cases cover 412.
+2. **Natural keys (decisions 14, 15).** Keys are tuples of their parts (`declarative.Key`), never joined strings;
+   `Change.key` is the JSON array of the quoted parts with `null` for "every device" and for the global subject, for
+   example `[null,"/etc/motd"]` or `["laptops","ops","group","devs"]`, and `""` for settings sections.
+3. **`paddockctl` requires `https://`** for the admin API URL (decision 25); there is no exception and no flag.
+4. **SECURITY DEFINER search path.** Migration `00034_definer_search_path` sets `search_path = public, pg_temp` on
+   `paddock_api_token_lookup` and `paddock_admin_bump_bundle_seq`; the committed migrations stay unchanged.

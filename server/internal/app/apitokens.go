@@ -142,12 +142,13 @@ func (a *APITokens) Revoke(ctx context.Context, id uuid.UUID) (pgstore.ApiTokenL
 	spec.Target = &audit.Target{Type: "api_token", ID: id.String()}
 	err := a.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		p, _ := principal.From(ctx)
-		if p.APITokenID != uuid.Nil {
-			return problem.Forbidden.WithDetail("an API token cannot revoke API tokens")
-		}
+		// The lookup comes first, so another organization's token is not_found for every caller (AC3).
 		var err error
 		if tok, err = q.GetApiToken(ctx, id); err != nil {
 			return notFound(err)
+		}
+		if p.APITokenID != uuid.Nil {
+			return problem.Forbidden.WithDetail("an API token cannot revoke API tokens")
 		}
 		rec.SetTarget(audit.Target{Type: "api_token", ID: id.String(), Display: tok.Name})
 		rec.SetParam("name", tok.Name)
