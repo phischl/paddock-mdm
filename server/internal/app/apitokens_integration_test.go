@@ -94,15 +94,15 @@ func (h tokenHarness) lastUsed(t *testing.T, id uuid.UUID) *time.Time {
 	return at
 }
 
-// TestAPITokenRLSFailsClosed: without an organization context the api role reads no API token at all — the query
-// fails instead of returning rows (CLAUDE.md, organization isolation).
-func TestAPITokenRLSFailsClosed(t *testing.T) {
+// TestM6cTablesFailClosed: without an organization context the api role reads no API token and no change set at
+// all — the query fails instead of returning rows (CLAUDE.md, organization isolation).
+func TestM6cTablesFailClosed(t *testing.T) {
 	conn, err := pgx.Connect(context.Background(), pgtest.SharedPaddock(t).API)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	for _, table := range []string{"api_token", "api_token_listed"} {
+	for _, table := range []string{"api_token", "api_token_listed", "change_set"} {
 		var n int
 		if err := conn.QueryRow(context.Background(), "SELECT count(*) FROM "+table).Scan(&n); err == nil {
 			t.Errorf("%s readable without paddock.org_id (%d rows)", table, n)

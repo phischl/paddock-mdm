@@ -1,0 +1,115 @@
+{
+  "changes": [
+    {
+      "section": "managed_files",
+      "key": "/etc/motd",
+      "action": "delete",
+      "fields": [
+        {
+          "name": "path",
+          "before": "/etc/motd",
+          "after": null
+        },
+        {
+          "name": "device_group",
+          "before": null,
+          "after": null
+        },
+        {
+          "name": "mode",
+          "before": "0644",
+          "after": null
+        },
+        {
+          "name": "owner",
+          "before": "root",
+          "after": null
+        },
+        {
+          "name": "group",
+          "before": "root",
+          "after": null
+        },
+        {
+          "name": "content",
+          "before": "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824 (5 bytes)",
+          "after": null
+        }
+      ]
+    },
+    {
+      "section": "device_groups",
+      "key": "laptops",
+      "action": "delete",
+      "fields": [
+        {
+          "name": "name",
+          "before": "laptops",
+          "after": null
+        },
+        {
+          "name": "description",
+          "before": "",
+          "after": null
+        }
+      ]
+    },
+    {
+      "section": "device_groups",
+      "key": "notebooks",
+      "action": "create",
+      "fields": [
+        {
+          "name": "name",
+          "before": null,
+          "after": "notebooks"
+        },
+        {
+          "name": "description",
+          "before": null,
+          "after": ""
+        }
+      ]
+    },
+    {
+      "section": "managed_files",
+      "key": "/etc/motd.d/paddock",
+      "action": "create",
+      "fields": [
+        {
+          "name": "path",
+          "before": null,
+          "after": "/etc/motd.d/paddock"
+        },
+        {
+          "name": "device_group",
+          "before": null,
+          "after": null
+        },
+        {
+          "name": "mode",
+          "before": null,
+          "after": "0644"
+        },
+        {
+          "name": "owner",
+          "before": null,
+          "after": "root"
+        },
+        {
+          "name": "group",
+          "before": null,
+          "after": "root"
+        },
+        {
+          "name": "content",
+          "before": null,
+          "after": "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824 (5 bytes)"
+        }
+      ]
+    }
+  ],
+  "created": 2,
+  "updated": 0,
+  "deleted": 2
+}

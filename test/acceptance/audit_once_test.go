@@ -155,6 +155,32 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "api_token.created", "denied")
 		}},
 	},
+	// The documents carry acme's update settings only, so an apply neither changes nor deletes anything that the
+	// concurrent cases use (plan M6c decision 14: absent sections are untouched).
+	"PUT /api/v1/config": {
+		{"success", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPut, "/api/v1/config", settingsOnlyConfig(t, w.alice))
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "config.applied", "success")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			doc := settingsOnlyConfig(t, w.alice)
+			doc["managed_files"] = []any{map[string]any{"path": "/etc/a3.conf", "content": "", "mode": "999"}}
+			res := call(t, w.alice, http.MethodPut, "/api/v1/config", doc)
+			expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_document")
+			expectOneEvent(t, w.alice, res.RequestID, "config.applied", "failure")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPut, "/api/v1/config", settingsOnlyConfig(t, w.alice))
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "config.applied", "denied")
+		}},
+		{"malformed body", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPut, "/api/v1/config", []byte("{"))
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneEvent(t, w.alice, res.RequestID, "config.applied", "failure")
+		}},
+	},
 	"POST /api/v1/api-tokens/{id}/revoke": {
 		{"success", func(t *testing.T, w *auditWorld) {
 			alice := login(t, env.Alice)

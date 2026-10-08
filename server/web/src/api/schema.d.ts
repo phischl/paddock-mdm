@@ -313,6 +313,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's declarative configuration as a paddock.v1
+         *     document (api/schema/paddock.v1.json) with every section present, in the key order of the schema.
+         */
+        get: operations["getConfig"];
+        /**
+         * @description Roles: org_admin, org_operator. Applies a paddock.v1 document (at most 1 MiB) in one transaction: a present
+         *     section is authoritative (items not listed are deleted), absent sections are untouched. The rules of the
+         *     per-resource endpoints apply unchanged and abort the whole apply with their problem code, the document path
+         *     in the detail: deleting device groups and changing settings need org_admin (403 forbidden), assigning a full
+         *     profile or changing a profile to full needs a step-up (403 step_up_required; an API token never has one).
+         *     A schema violation is 422 invalid_document listing up to 20 "path: message" pairs. With dry_run=true the
+         *     plan is computed and checked the same way but nothing is applied and nothing is audited. An apply with
+         *     changes records a change set; one without changes records the event with zeros and no change set.
+         */
+        put: operations["applyConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something. */
+        get: operations["listChangeSets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getChangeSet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autoinstall": {
         parameters: {
             query?: never;
@@ -2171,6 +2237,77 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /** @description A paddock.v1 document; its schema is api/schema/paddock.v1.json (JSON Schema draft 2020-12, also printed by paddockctl schema), which the server validates every document against. */
+        ConfigDocument: {
+            [key: string]: unknown;
+        };
+        ConfigPlan: {
+            /** @description In application order; deletions first. */
+            changes: components["schemas"]["ConfigChange"][];
+            created: number;
+            updated: number;
+            deleted: number;
+        };
+        ConfigChange: {
+            /** @description A section of the document, settings as settings.login and settings.updates. */
+            section: string;
+            /** @description The natural key of the item; empty for settings. */
+            key: string;
+            /** @enum {string} */
+            action: "create" | "update" | "delete";
+            /** @description Changed fields; every field for creations and deletions. File content is shown as its SHA-256. */
+            fields: components["schemas"]["ConfigFieldChange"][];
+        };
+        ConfigFieldChange: {
+            name: string;
+            /** @description Value before; null for creations. */
+            before: unknown;
+            /** @description Value after; null for deletions. */
+            after: unknown;
+        };
+        ConfigApplyResult: {
+            dry_run: boolean;
+            /**
+             * Format: uuid
+             * @description Null for dry runs and empty plans.
+             */
+            change_set_id: string | null;
+            plan: components["schemas"]["ConfigPlan"];
+        };
+        /** @enum {string} */
+        ChangeSetSource: "session" | "api_token";
+        ChangeSetActor: {
+            type: string;
+            id?: string;
+            display: string;
+        };
+        ChangeSetSummary: {
+            created: number;
+            updated: number;
+            deleted: number;
+            sections: string[];
+        };
+        ChangeSet: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            applied_at: string;
+            actor: components["schemas"]["ChangeSetActor"];
+            source: components["schemas"]["ChangeSetSource"];
+            summary: components["schemas"]["ChangeSetSummary"];
+            plan: components["schemas"]["ConfigPlan"];
+        };
+        ChangeSetPage: {
+            items: components["schemas"]["ChangeSet"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         /** @enum {string} */
         ApiTokenRole: "org_admin" | "org_operator" | "org_auditor";
         /** @enum {string} */
@@ -3277,6 +3414,8 @@ export interface components {
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        ChangeSetSort: "applied_at" | "-applied_at";
         /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
         ApiTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at" | "last_used_at" | "-last_used_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -3938,6 +4077,121 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    getConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The configuration document. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigDocument"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    applyConfig: {
+        parameters: {
+            query?: {
+                /** @description Compute and check the plan without applying it. */
+                dry_run?: boolean;
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigDocument"];
+            };
+        };
+        responses: {
+            /** @description The plan, applied unless dry_run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigApplyResult"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listChangeSets: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["ChangeSetSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                source?: components["schemas"]["ChangeSetSource"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of change sets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSetPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getChangeSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The change set with its plan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSet"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
         };
     };
     generateAutoinstall: {

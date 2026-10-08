@@ -331,6 +331,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
 		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, nil, "https://device.test"),
 		APITokens:     app.NewAPITokens(runner, orgPool),
+		Declarative:   app.NewDeclarative(runner, orgPool),
 		Devices:       app.NewDevices(runner, orgPool),
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, idp),

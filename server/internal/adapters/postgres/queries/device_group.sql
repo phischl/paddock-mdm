@@ -40,3 +40,7 @@ RETURNING *;
 
 -- name: DeleteDeviceGroup :execrows
 DELETE FROM device_group WHERE id = @id;
+
+-- Declarative configuration (plan M6c decision 16): every device group of the organization.
+-- name: ListAllDeviceGroups :many
+SELECT * FROM device_group ORDER BY name, id;

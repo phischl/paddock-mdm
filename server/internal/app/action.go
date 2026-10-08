@@ -64,6 +64,9 @@ type Recorder interface {
 	// PriorityStateChanged is StateChanged on the compiler's priority lane (user lock and unlock, login suspension,
 	// architecture §9.5).
 	PriorityStateChanged(scope string, id uuid.UUID)
+	// ForcedStateChanged is StateChanged for a recompile that publishes a new bundle version even for devices whose
+	// content did not change (paddock-server admin recompile --all, plan M6c decision 19).
+	ForcedStateChanged(scope string, id uuid.UUID)
 	// CommandIssued queues the command.issued message of a device command inserted by the action; like a state
 	// change it is written to the outbox only when the action succeeds (plan M4a decision 2).
 	CommandIssued(id uuid.UUID)
@@ -149,6 +152,10 @@ func (r *recorder) StateChanged(scope string, id uuid.UUID) {
 
 func (r *recorder) PriorityStateChanged(scope string, id uuid.UUID) {
 	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id, Priority: true})
+}
+
+func (r *recorder) ForcedStateChanged(scope string, id uuid.UUID) {
+	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id, Force: true})
 }
 
 func (r *recorder) CommandIssued(id uuid.UUID) { r.commands = append(r.commands, id) }
