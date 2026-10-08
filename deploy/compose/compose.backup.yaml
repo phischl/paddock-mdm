@@ -1,0 +1,161 @@
+# Backups of the control plane (plan M6a decisions 4–6, architecture §20, docs/operations/restore.md). Used on the
+# control-plane host together with compose.yaml and compose.prod.yaml (production) or with the development files and
+# compose.backup.dev.yaml (`make up BACKUP=1`, restore drill). Everything goes to one S3 bucket outside the
+# control-plane host (PADDOCK_BACKUP_S3_*), encrypted with the backup encryption key before it leaves the host:
+#   pgbackrest/   pgBackRest repository of the stanzas paddock and authentik (WAL archive + daily full, 14 kept)
+#   openbao/      Raft snapshots of OpenBao, every 6 h (paddock-worker)
+#   fleet/        daily dumps of Fleet's MySQL
+#
+# PostgreSQL runs in its own image without pgBackRest: archive_command copies every WAL file into a spool volume that
+# the pgbackrest service pushes to the repository within seconds. The path contains "pgbackrest", which pgBackRest's
+# own check requires of archive_command.
+
+x-backup-s3: &backup-s3
+  PADDOCK_BACKUP_S3_ENDPOINT: ${PADDOCK_BACKUP_S3_ENDPOINT:?set PADDOCK_BACKUP_S3_ENDPOINT (https URL of the backup S3 endpoint)}
+  PADDOCK_BACKUP_S3_BUCKET: ${PADDOCK_BACKUP_S3_BUCKET:-paddock-backup}
+  PADDOCK_BACKUP_S3_REGION: ${PADDOCK_BACKUP_S3_REGION:-us-east-1}
+
+services:
+  postgres:
+    command:
+      - sh
+      - -c
+      - >-
+        install -d -o postgres -g postgres -m 700 /pgbackrest-spool/paddock &&
+        exec docker-entrypoint.sh postgres -c archive_mode=on -c archive_timeout=60
+        -c 'archive_command=cp %p /pgbackrest-spool/paddock/.%f && mv /pgbackrest-spool/paddock/.%f /pgbackrest-spool/paddock/%f'
+    volumes:
+      - pgbackrest-spool-paddock:/pgbackrest-spool/paddock
+      - postgres-socket:/var/run/postgresql
+
+  authentik-postgres:
+    command:
+      - sh
+      - -c
+      - >-
+        install -d -o postgres -g postgres -m 700 /pgbackrest-spool/authentik &&
+        exec docker-entrypoint.sh postgres -c archive_mode=on -c archive_timeout=60
+        -c 'archive_command=cp %p /pgbackrest-spool/authentik/.%f && mv /pgbackrest-spool/authentik/.%f /pgbackrest-spool/authentik/%f'
+    volumes:
+      - pgbackrest-spool-authentik:/pgbackrest-spool/authentik
+      - authentik-postgres-socket:/var/run/postgresql
+
+  # One pgBackRest container per database: pgBackRest needs the data directory at the path the server reports.
+  pgbackrest: &pgbackrest
+    image: ${PADDOCK_PGBACKREST_IMAGE:-paddock-pgbackrest:dev}
+    build:
+      context: ../..
+      dockerfile: deploy/compose/pgbackrest/Dockerfile
+      args:
+        COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
+    restart: unless-stopped
+    command: ["serve"]
+    read_only: true
+    tmpfs: [/tmp]
+    environment: &pgbackrest-env
+      <<: *backup-s3
+      PADDOCK_BACKUP_STANZA: paddock
+      PADDOCK_BACKUP_S3_CA_FILE: ${PADDOCK_BACKUP_S3_CA_FILE:-}
+      PADDOCK_BACKUP_S3_ACCESS_KEY_FILE: /run/secrets/backup_pgbackrest_access_key
+      PADDOCK_BACKUP_S3_SECRET_KEY_FILE: /run/secrets/backup_pgbackrest_secret_key
+      PADDOCK_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
+    secrets: [backup_pgbackrest_access_key, backup_pgbackrest_secret_key, backup_encryption_key]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - postgres-socket:/var/run/postgresql
+      - pgbackrest-spool-paddock:/pgbackrest-spool/paddock
+      - pgbackrest-state-paddock:/var/lib/pgbackrest
+    networks: [cp]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pgbackrest-authentik:
+    <<: *pgbackrest
+    environment:
+      <<: *pgbackrest-env
+      PADDOCK_BACKUP_STANZA: authentik
+      # The superuser of the Authentik database (POSTGRES_USER of authentik-postgres).
+      PADDOCK_BACKUP_PG_USER: authentik
+    volumes:
+      - authentik-postgres-data:/var/lib/postgresql/data
+      - authentik-postgres-socket:/var/run/postgresql
+      - pgbackrest-spool-authentik:/pgbackrest-spool/authentik
+      - pgbackrest-state-authentik:/var/lib/pgbackrest
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+
+  fleet-backup:
+    image: ${FLEET_MYSQL_IMAGE}
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "/paddock/backup.sh"]
+    command: ["serve"]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      PADDOCK_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
+      FLEET_MYSQL_ROOT_PASSWORD_FILE: /run/secrets/fleet_mysql_root_password
+    secrets: [backup_encryption_key, fleet_mysql_root_password]
+    volumes:
+      - ./fleet/backup.sh:/paddock/backup.sh:ro
+      - fleet-dumps:/dumps
+    networks: [fleet]
+    depends_on:
+      fleet-mysql:
+        condition: service_healthy
+
+  fleet-backup-upload:
+    image: ${AWS_CLI_IMAGE}
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "/paddock/backup-upload.sh"]
+    command: ["serve"]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      <<: *backup-s3
+      HOME: /tmp
+      PADDOCK_BACKUP_S3_CA_FILE: ${PADDOCK_BACKUP_S3_CA_FILE:-}
+      PADDOCK_BACKUP_S3_ACCESS_KEY_FILE: /run/secrets/backup_fleet_access_key
+      PADDOCK_BACKUP_S3_SECRET_KEY_FILE: /run/secrets/backup_fleet_secret_key
+    secrets: [backup_fleet_access_key, backup_fleet_secret_key]
+    volumes:
+      - ./fleet/backup-upload.sh:/paddock/backup-upload.sh:ro
+      - fleet-dumps:/dumps
+    networks: [cp]
+
+  # OpenBao snapshots every 6 h and the backup age of every kind (paddock_backup_last_success_timestamp_seconds).
+  paddock-worker:
+    environment:
+      <<: *backup-s3
+      PADDOCK_BACKUP_S3_ACCESS_KEY_FILE: /run/secrets/backup_worker_access_key
+      PADDOCK_BACKUP_S3_SECRET_KEY_FILE: /run/secrets/backup_worker_secret_key
+      PADDOCK_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
+      PADDOCK_BACKUP_OPENBAO_ROLE_ID_FILE: /run/secrets/approle_backup_role_id
+      PADDOCK_BACKUP_OPENBAO_SECRET_ID_FILE: /run/secrets/approle_backup_secret_id
+    secrets:
+      - backup_worker_access_key
+      - backup_worker_secret_key
+      - backup_encryption_key
+      - approle_backup_role_id
+      - approle_backup_secret_id
+
+volumes:
+  postgres-socket: {}
+  authentik-postgres-socket: {}
+  pgbackrest-spool-paddock: {}
+  pgbackrest-spool-authentik: {}
+  pgbackrest-state-paddock: {}
+  pgbackrest-state-authentik: {}
+  fleet-dumps: {}
+
+secrets:
+  backup_encryption_key: { file: ./.secrets/backup_encryption_key }
+  backup_pgbackrest_access_key: { file: ./.secrets/backup_pgbackrest_access_key }
+  backup_pgbackrest_secret_key: { file: ./.secrets/backup_pgbackrest_secret_key }
+  backup_worker_access_key: { file: ./.secrets/backup_worker_access_key }
+  backup_worker_secret_key: { file: ./.secrets/backup_worker_secret_key }
+  backup_fleet_access_key: { file: ./.secrets/backup_fleet_access_key }
+  backup_fleet_secret_key: { file: ./.secrets/backup_fleet_secret_key }
+  approle_backup_role_id: { file: ./.secrets/approle/paddock-backup/role_id }
+  approle_backup_secret_id: { file: ./.secrets/approle/paddock-backup/secret_id }

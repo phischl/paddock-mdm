@@ -152,7 +152,15 @@ if [[ "$HOST" == controlplane ]]; then
   secret fleet_enroll_secret
   placeholder fleet_api_token
 
-  for role in paddock-api paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer; do
+  # Backups (docs/operations/restore.md): the encryption key MUST also be kept offline with the custodians, else a
+  # lost host takes the means to read its backups with it. The bucket credentials come from the backup S3 provider.
+  secret backup_encryption_key "$(head -c 32 /dev/urandom | base64 -w0)"
+  for role in pgbackrest worker fleet; do
+    placeholder "backup_${role}_access_key"
+    placeholder "backup_${role}_secret_key"
+  done
+
+  for role in paddock-api paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer paddock-backup; do
     placeholder "approle/$role/role_id"
     placeholder "approle/$role/secret_id"
   done

@@ -84,15 +84,20 @@ bao policy write paddock-revocation-issuer - <<'EOF'
 path "transit/sign/revocation-signing" { capabilities = ["update"] }
 path "transit/keys/revocation-signing" { capabilities = ["read"] }
 EOF
+# Raft snapshots for the backup and nothing else (plan M6a decision 5; used by paddock-worker).
+bao policy write paddock-backup - <<'EOF'
+path "sys/storage/raft/snapshot" { capabilities = ["read"] }
+EOF
 for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader \
-  paddock-revocation-issuer; do
+  paddock-revocation-issuer paddock-backup; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h
 done
 ```
 
 Deliver role ID and secret ID of each AppRole to the host of the role (control plane: `paddock-api`,
 `paddock-compiler`, `paddock-worker`, `paddock-escrow-reader` to the escrow-reader and never to the api,
-`paddock-revocation-issuer` to the revocation-issuer and to no other role; audit host: `paddock-audit-writer`) as files referenced by
+`paddock-revocation-issuer` to the revocation-issuer and to no other role, `paddock-backup` to the worker as
+`approle/paddock-backup/`; audit host: `paddock-audit-writer`) as files referenced by
 `PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`:
 
 ```sh
@@ -100,7 +105,7 @@ bao read -field=role_id auth/approle/role/paddock-api/role-id
 bao write -f -field=secret_id auth/approle/role/paddock-api/secret-id
 ```
 
-Finally revoke the root token (`bao token revoke -self`). A new root token can be generated later only with three
+Then take the first snapshot (section 5) and finally revoke the root token (`bao token revoke -self`). A new root token can be generated later only with three
 custodians (`bao operator generate-root`).
 
 ## 2. Unseal after a restart
@@ -155,3 +160,13 @@ bao kv put secret/paddock/session current="$(head -c 32 /dev/urandom | base64 -w
 
 The `api` role reloads the keys within 10 minutes; sessions encrypted with the previous key keep working until they
 expire (8 h at most). Rotate monthly (architecture §9.6).
+
+## 5. Snapshots after key operations
+
+`paddock-worker` takes an encrypted Raft snapshot every 6 hours (`docs/operations/restore.md`). Key operations are
+manual (`bao` CLI), so after every one of them (a new or rotated Transit key, new policies or AppRoles, rotated session
+keys or secret IDs) take a snapshot at once, so that a restore never brings back an older key state:
+
+```sh
+docker compose … run --rm --no-deps paddock-worker backup openbao
+```

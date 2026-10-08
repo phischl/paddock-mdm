@@ -147,5 +147,6 @@ Fleet's round intervals are environment variables of the `fleet` service: `FLEET
 
 ## Backups
 
-Back up `fleet-mysql` daily (`mysqldump`); everything in it can be rebuilt from the devices within a day
+`fleet-backup` dumps `fleet-mysql` daily (`mysqldump`, encrypted) and `fleet-backup-upload` copies the dump to the
+backup bucket (`docs/operations/restore.md`); everything in it can be rebuilt from the devices within a day
 (architecture §20).

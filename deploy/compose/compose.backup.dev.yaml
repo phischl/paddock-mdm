@@ -1,0 +1,47 @@
+# Development wiring of compose.backup.yaml (`make up BACKUP=1`, restore drill): the backup bucket paddock-backup lives
+# on the audit host's RustFS (plan M6a decision 4), which speaks plain HTTP. pgBackRest speaks TLS only, so it reaches
+# RustFS through backup-s3-tls, a Caddy reverse proxy with a certificate of its own internal CA; the worker and the
+# Fleet dump reach RustFS directly. Never use this file in production.
+services:
+  backup-s3-tls:
+    image: ${CADDY_IMAGE}
+    restart: unless-stopped
+    # The proxy keeps the Host header, so the S3 signatures stay valid. It copies its root certificate to a volume
+    # pgBackRest reads, because Caddy's own PKI directory is private to root.
+    command:
+      - sh
+      - -c
+      - >-
+        caddy reverse-proxy --from https://backup-s3-tls:9443 --to http://audit-rustfs:9000 --internal-certs &
+        until [ -s /data/caddy/pki/authorities/local/root.crt ]; do sleep 1; done;
+        install -m 644 /data/caddy/pki/authorities/local/root.crt /ca/root.crt; wait
+    volumes:
+      - backup-s3-tls-data:/data
+      - backup-s3-ca:/ca
+    networks: [cp, audit-store]
+
+  pgbackrest: &pgbackrest-dev
+    environment:
+      PADDOCK_BACKUP_S3_ENDPOINT: https://backup-s3-tls:9443
+      PADDOCK_BACKUP_S3_CA_FILE: /backup-s3-ca/root.crt
+    volumes:
+      - backup-s3-ca:/backup-s3-ca:ro
+    depends_on:
+      backup-s3-tls:
+        condition: service_started
+
+  pgbackrest-authentik: *pgbackrest-dev
+
+  fleet-backup-upload:
+    environment:
+      PADDOCK_BACKUP_S3_ENDPOINT: http://audit-rustfs:9000
+    networks: [audit-store]
+
+  paddock-worker:
+    environment:
+      PADDOCK_BACKUP_S3_ENDPOINT: http://audit-rustfs:9000
+    networks: [audit-store]
+
+volumes:
+  backup-s3-tls-data: {}
+  backup-s3-ca: {}

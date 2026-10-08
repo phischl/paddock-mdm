@@ -103,3 +103,15 @@ Decided on the implementer's questions during PDK-005; binding for steps 1–4.
    An empty secret file counts as missing.
 5. The production settings template is `deploy/compose/prod.env.example`; `make prod-check` runs from source in the
    pinned Go image, so production hosts need no Go toolchain.
+6. **Backups (decisions 4–6), as implemented in step 2.** pgBackRest speaks TLS only and cannot run inside the
+   PostgreSQL image, so: `archive_command` copies each WAL file into a spool volume (the path contains "pgbackrest",
+   which pgBackRest's own check requires) and one `pgbackrest` container per database (`pgbackrest`,
+   `pgbackrest-authentik`; pgBackRest needs the data directory at the path the server reports) pushes it every 2 s and
+   takes the daily full. `restore` stages the archived WAL next to the data directory for PostgreSQL's
+   `restore_command`. The repository, the OpenBao snapshots and the Fleet dumps are encrypted with
+   `backup_encryption_key` before they leave the host. The development stack reaches the audit host's RustFS through
+   the Caddy TLS proxy `backup-s3-tls` (`compose.backup.dev.yaml`, `make up BACKUP=1`). The Fleet dump is uploaded by a
+   second container in the pinned AWS CLI image, because the MySQL image's curl cannot sign S3 uploads. The worker's
+   backup credential may write below `openbao/` and list the bucket. OpenBao key operations are manual `bao` CLI
+   operations outside Paddock, so "after key operations" is a runbook step (`paddock-server backup openbao`,
+   `docs/operations/openbao.md` section 5) besides the 6-hourly snapshot.

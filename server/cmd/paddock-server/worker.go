@@ -52,6 +52,10 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	if err := l.Err(); err != nil {
 		return err
 	}
+	backups, err := loadBackup(l, baoCfg.Addr)
+	if err != nil {
+		return err
+	}
 	pool, err := db.NewOrgPool(ctx, dsn, db.Options{ApplicationName: "paddock-worker", MaxConns: 8})
 	if err != nil {
 		return err
@@ -104,7 +108,11 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
 	slog.InfoContext(ctx, "worker starting")
 
-	return runAll(ctx,
+	jobs := []func(context.Context) error{}
+	if backups != nil {
+		jobs = append(jobs, worker.NewBackups(backups.store, backups.snap, backups.key, platformPool).Run)
+	}
+	return runAll(ctx, append(jobs,
 		func(ctx context.Context) error {
 			return ops.Serve(ctx, common.OpsAddr, func(ctx context.Context) error {
 				var notConnected error
@@ -134,5 +142,5 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		inventory.RunSettings,
 		inventory.RunSync,
 		osvSync.Run,
-	)
+	)...)
 }
