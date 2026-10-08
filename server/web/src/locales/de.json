@@ -170,9 +170,9 @@
       "applied": "{actor} hat eine Konfiguration angewendet ({created} erstellt, {updated} geändert, {deleted} gelöscht)"
     },
     "api_token": {
-      "created": "{actor} hat das API-Token {name} ({role}) erstellt",
+      "created": "{actor} hat das API-Token {name} ({role}) angelegt",
       "revoked": "{actor} hat das API-Token {name} widerrufen",
-      "use_denied": "Eine Anfrage mit dem API-Token {name} ({reason}) wurde abgelehnt"
+      "use_denied": "Eine Anfrage mit dem {reason, select, revoked {widerrufenen} expired {abgelaufenen} other {ungültigen}} API-Token {name} wurde abgelehnt"
     },
     "device": {
       "enrolled": "Das Gerät {hostname} hat sich registriert",
@@ -658,8 +658,8 @@
   },
   "apiTokens": {
     "title": "API-Tokens",
-    "summary": "Mit API-Tokens handeln Automatisierungen wie paddockctl in dieser Organisation mit einer Rolle. Alles, was ein Token tut, steht unter seinem Namen im Audit-Log.",
-    "create": "API-Token erstellen",
+    "summary": "Mit API-Tokens handeln Automatisierungen wie paddockctl in dieser Organisation mit einer Rolle. Alles, was ein Token tut, steht unter seinem Namen im Audit-Protokoll.",
+    "create": "API-Token anlegen",
     "createTitle": "Neues API-Token",
     "nameHint": "Buchstaben, Ziffern, Leerzeichen, Punkte, Unterstriche und Bindestriche; höchstens 64 Zeichen.",
     "nameInvalid": "Der Name muss mit einem Buchstaben oder einer Ziffer beginnen und darf höchstens 64 Zeichen aus Buchstaben, Ziffern, Leerzeichen, „.“, „_“ und „-“ haben.",
