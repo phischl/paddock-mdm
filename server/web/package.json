@@ -35,6 +35,7 @@
     "eslint": "10.12.0",
     "eslint-plugin-vue": "10.11.1",
     "jsdom": "30.1.1",
+    "license-checker-rseidelsohn": "5.0.1",
     "openapi-typescript": "7.13.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.71.0",

@@ -45,7 +45,30 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web lint-prometheus ## Run all linters, govulncheck and the server image build
+lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-licenses ## Run all linters, govulncheck, the license gate and the server image build
+
+# License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
+# go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
+# dev dependency) must carry a license of the allow list; anything else fails with the package name. Paddock's own
+# packages are MIT (LICENSE). Bundled container images: docs/compliance/third-party.md.
+GO_LICENSES_VERSION := v2.0.1
+ALLOWED_LICENSES    := MIT ISC BSD-2-Clause BSD-3-Clause Apache-2.0 MPL-2.0 BlueOak-1.0.0 0BSD CC0-1.0 Python-2.0 Unlicense
+
+.PHONY: lint-licenses
+lint-licenses: ## License gate: Go and npm production dependencies against the allow list
+	docker run --rm -v $(CURDIR):/src -w /src \
+		-v paddock-gomod:/go/pkg/mod -v paddock-golicenses-cache:/root/.cache \
+		-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false \
+		$(GO_BUILD_IMAGE) sh -c 'set -e; \
+			for m in $(GO_MODULES); do echo "go-licenses $$m"; cd /src/$$m; \
+				go run github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION) check ./... \
+					--ignore github.com/phischl/paddock-mdm \
+					--allowed_licenses=$(subst $(space),$(comma),$(ALLOWED_LICENSES)); done'
+	@if [ -f $(WEB_DIR)/package.json ]; then \
+		$(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && \
+			npx license-checker-rseidelsohn --production --excludePrivatePackages --summary \
+				--onlyAllow "$(subst $(space),;,$(ALLOWED_LICENSES))"'; \
+	else echo "lint-licenses: no portal yet, skipped"; fi
 
 # Prometheus configuration and alert rules (plan M6a decision 8): promtool check config, check rules and the rule tests
 # of alerts_test.yml, in the pinned Prometheus image.
