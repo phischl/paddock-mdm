@@ -1014,8 +1014,8 @@ export interface paths {
          * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
          *     needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
          *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
-         *     Requests a Lock: every keyslot of the device's encrypted root volume is erased and the device reboots; it
-         *     stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
+         *     Requests a Lock: every keyslot of every LUKS volume of the device is erased and the device reboots; its
+         *     root volume stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
          *     the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
          *     administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
          *     open Lock, 409 invalid_state unless the device is active or quarantined.
@@ -2494,7 +2494,7 @@ export interface components {
             finished_at?: string;
             /** @description Why the revocation-issuer rejected or failed it, e.g. limit_admin_hour. */
             rejection?: string;
-            /** @description The device's confirmation, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
+            /** @description The device's confirmation: erased (true only if every LUKS volume has no keyslot left), slots_before and slots_after (sums over the volumes), volumes (one {device, slots_before, slots_after, erased} per erased volume, the root volume last) and unresolved (the crypttab entries the device could not resolve; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
             result?: {
                 [key: string]: unknown;
             };

@@ -16,18 +16,18 @@ import (
 // in minutes (plan M4c gate R6).
 const dayLength = time.Minute
 
-// RootDevice implements System for test builds: the LUKS device named in TestTargetFile (a secondary disk of a test
-// VM), never the root volume.
-func (o OS) RootDevice(context.Context) (string, error) {
+// Targets implements System for test builds: only the LUKS device named in TestTargetFile (a secondary disk of a
+// test VM), never the root volume and never the volumes of /etc/crypttab (plan M4c.1 decision 1).
+func (o OS) Targets(context.Context) (Targets, error) {
 	data, err := os.ReadFile(o.path(TestTargetFile))
 	if err != nil {
-		return "", err
+		return Targets{}, err
 	}
 	device := strings.TrimSpace(string(data))
 	if !strings.HasPrefix(device, "/dev/") {
-		return "", errors.New("revoke: the test target is no device path")
+		return Targets{}, errors.New("revoke: the test target is no device path")
 	}
-	return device, nil
+	return Targets{Devices: []string{device}}, nil
 }
 
 // Reboot implements System for test builds: it writes the time it would reboot to WouldRebootFile.

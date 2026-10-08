@@ -89,6 +89,37 @@ export function timeline(r: RevocationRequest): TimelineStep[] {
   return steps
 }
 
+/** The erasure of one LUKS volume in a device's confirmation (plan M4c.1 decision 2). */
+export interface VolumeResult {
+  device: string
+  slots_before: number
+  slots_after: number
+  erased: boolean
+}
+
+/** The per-volume results of a request's confirmation and the crypttab entries the device could not resolve. */
+export interface VolumeResults {
+  volumes: VolumeResult[]
+  unresolved: string[]
+}
+
+/** Reads the per-volume results from a request's confirmation; both lists are empty for confirmations before M4c.1. */
+export function volumeResults(r: RevocationRequest): VolumeResults {
+  const volumes = Array.isArray(r.result?.volumes) ? r.result.volumes as unknown[] : []
+  const unresolved = Array.isArray(r.result?.unresolved) ? r.result.unresolved as unknown[] : []
+  return {
+    volumes: volumes.filter(isVolumeResult),
+    unresolved: unresolved.filter((s): s is string => typeof s === 'string'),
+  }
+}
+
+function isVolumeResult(v: unknown): v is VolumeResult {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return typeof o.device === 'string' && typeof o.slots_before === 'number' && typeof o.slots_after === 'number'
+    && typeof o.erased === 'boolean'
+}
+
 /** The dead man's switch settings; the problem code on failure. */
 export async function getDMS(): Promise<DMSSettings | string> {
   const { data, error } = await api.GET('/api/v1/settings/dms')

@@ -21,7 +21,7 @@ func TestReleaseRefusesTestTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	var refusal *Refusal
-	if _, err := (OS{Root: root}).RootDevice(context.Background()); !errors.As(err, &refusal) || refusal.Reason != ReasonTestTarget {
+	if _, err := (OS{Root: root}).Targets(context.Background()); !errors.As(err, &refusal) || refusal.Reason != ReasonTestTarget {
 		t.Fatalf("release build with a test target: %v", err)
 	}
 }

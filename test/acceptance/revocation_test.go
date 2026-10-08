@@ -210,17 +210,23 @@ func TestRevocationLockAndDestroy(t *testing.T) {
 		t.Fatalf("lock token %+v", tok)
 	}
 	waitRevocation(t, a1.portal, lock.ID, time.Minute, "delivered")
+	// The confirmation of plan M4c.1 decision 2: every volume, the root volume last, and an unresolved crypttab entry.
 	confirmation, err := locked.CommandResult(testContext(t, time.Minute), tok.CommandID, protocol.CommandSucceeded,
-		json.RawMessage(`{"erased":true,"slots_before":2,"slots_after":0}`))
+		json.RawMessage(`{"erased":true,"slots_before":5,"slots_after":0,"volumes":[`+
+			`{"device":"/dev/sdb1","slots_before":3,"slots_after":0,"erased":true},`+
+			`{"device":"/dev/sda3","slots_before":2,"slots_after":0,"erased":true}],"unresolved":["UUID=0000-gone"]}`))
 	if err != nil || confirmation.Status != http.StatusAccepted {
 		t.Fatalf("confirmation: %v HTTP %d %s", err, confirmation.Status, confirmation.Body)
 	}
 	confirmed := waitRevocation(t, a1.portal, lock.ID, time.Minute, "confirmed")
-	if !strings.Contains(string(confirmed.Result), `"slots_after":0`) {
+	if !strings.Contains(string(confirmed.Result), `"slots_after":0`) ||
+		!strings.Contains(string(confirmed.Result), `{"device":"/dev/sdb1","erased":true,"slots_after":0,"slots_before":3}`) ||
+		!strings.Contains(string(confirmed.Result), `"unresolved":["UUID=0000-gone"]`) {
 		t.Fatalf("confirmed result %s", confirmed.Result)
 	}
 	idx := auditIndex(t)
-	expectOneIndexEvent(t, idx, org, "code = 'device.revocation_confirmed' AND params->>'request_id' = $1", lock.ID,
+	expectOneIndexEvent(t, idx, org, "code = 'device.revocation_confirmed' AND params->>'request_id' = $1 AND "+
+		"params->>'erased' = 'true' AND params->>'volumes' = '2' AND params->>'unresolved' = '1'", lock.ID,
 		"device.revocation_confirmed", "success", auditPollTimeout)
 	// Lock keeps the escrow: the device stays restorable.
 	var disk struct {

@@ -553,7 +553,7 @@
     },
     "revocation": {
       "title": "Lock and Destroy",
-      "hint": "Lock erases every keyslot of the disk and reboots the device; it can be restored with the escrowed header and recovery key. Destroy also deletes the escrow, so the data cannot be recovered; a second administrator must approve it.",
+      "hint": "Lock erases every keyslot of the device's encrypted volumes and reboots the device; the root volume can be restored with the escrowed header and recovery key, other encrypted volumes only from a header backup taken outside Paddock. Destroy also deletes the escrow, so the data cannot be recovered; a second administrator must approve it.",
       "reason": "Reason",
       "reasonHint": "Shown to the administrators and kept with the request.",
       "lock": {
@@ -580,6 +580,13 @@
         "delivered": "Delivered to the device {at}",
         "confirmed": "Keyslots erased, confirmed by the device {at}",
         "finished": "Ended {at}"
+      },
+      "volumes": "Encrypted volumes",
+      "volume": {
+        "erased": "{device}: {before, plural, one {# keyslot} other {# keyslots}} erased",
+        "notErased": "{device}: not erased, {after, plural, one {# keyslot} other {# keyslots}} left",
+        "unknown": "{device}: not erased, the remaining keyslots are unknown",
+        "unresolved": "{source}: listed in /etc/crypttab but not found on the device, not erased"
       }
     },
     "presumedLost": "Presumed lost since {at}"
