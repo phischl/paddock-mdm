@@ -728,14 +728,15 @@ func (q *Queries) UpsertPolicyResult(ctx context.Context, arg UpsertPolicyResult
 }
 
 const upsertVulnerabilityFindings = `-- name: UpsertVulnerabilityFindings :exec
-INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, cvss_score, severity, fixed_version)
+INSERT INTO vulnerability_finding (device_id, organization_id, cve, software_name, software_version, cvss_score, severity, fixed_version,
+                                   fleet_severity, fleet_fixed_version)
 SELECT $1, $2, k.cve, k.name, k.version, NULLIF(k.cvss, -1)::numeric(3,1), NULLIF(k.severity, ''),
-       NULLIF(k.fixed, '')
+       NULLIF(k.fixed, ''), NULLIF(k.severity, ''), NULLIF(k.fixed, '')
 FROM (SELECT unnest($3::text[]) AS cve, unnest($4::text[]) AS name, unnest($5::text[]) AS version,
              unnest($6::float8[]) AS cvss, unnest($7::text[]) AS severity, unnest($8::text[]) AS fixed) k
 ON CONFLICT (device_id, cve, software_name, software_version) DO UPDATE
   SET cvss_score = EXCLUDED.cvss_score, severity = EXCLUDED.severity, fixed_version = EXCLUDED.fixed_version,
-      cvss_vector = NULL
+      fleet_severity = EXCLUDED.fleet_severity, fleet_fixed_version = EXCLUDED.fleet_fixed_version, cvss_vector = NULL
 `
 
 type UpsertVulnerabilityFindingsParams struct {

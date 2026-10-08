@@ -88,6 +88,7 @@ export const auditCodes = [
   'permission_profile.updated',
   'platform.bundle_seq_bumped',
   'platform.cache_rebuilt',
+  'platform.osv_imported',
   'platform.osv_stale',
   'profile_assignment.created',
   'profile_assignment.deleted',

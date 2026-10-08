@@ -236,7 +236,8 @@
     "platform": {
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
       "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
-      "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)"
+      "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
+      "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -992,6 +993,7 @@
     "softwareTitle": "Software",
     "vulnerabilitiesTitle": "Vulnerabilities",
     "softwareHint": "Packages of the system package managers as fleetd reported them at the last inventory sync.",
+    "severityHintOrganization": "Severity is Ubuntu's priority, the highest among the CVE's findings; \"Fixed in\" is the version that fixes it for the Ubuntu release of that finding; other releases can have other versions. Vulnerabilities Ubuntu has not rated yet have unknown severity.",
     "severityHint": "Severity is Ubuntu's priority for the device's release, \"Fixed in\" the version that fixes it there. Vulnerabilities Ubuntu has not rated yet have unknown severity.",
     "package": "Package",
     "version": "Version",
