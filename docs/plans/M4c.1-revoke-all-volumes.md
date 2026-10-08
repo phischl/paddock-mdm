@@ -77,3 +77,15 @@ Review round 2 (architect, 2026-10-08):
   or until its crypttab volume set changes.
 - After a `paddock-revoke` downgrade, Locks with volumes are refused (fail-safe) until the device reports its
   capabilities again after the upgrade; documented in `docs/operations/revocation.md`.
+
+Review round 3 (architect, 2026-10-08; exception to the two-round limit, findings in the revocation path):
+- The crypttab entries are classified first, each within the shared deadline; the root UUID is read separately and
+  never blocks or shrinks a Destroy, which erases every classified LUKS entry plus root even when the root-UUID read
+  fails or hangs. Shared marking only affects a Lock.
+- While the root UUID is unknown, a Lock or self-lock skips every secondary volume (`skipped_not_escrowed`) and erases
+  root only.
+- In `paddockd` the crypttab classification (with the inventory of the volumes) runs at most once at a time in its
+  own goroutine; the reconciler uses the last completed result and skips the multi-volume work while none exists.
+  The agent loop never blocks on it.
+- A redelivered refused upload with the same `escrow_id` writes no second refusal audit.
+- The 32-volume cap check takes a transaction-level advisory lock per device.

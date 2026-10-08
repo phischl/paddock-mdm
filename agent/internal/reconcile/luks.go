@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
@@ -47,7 +48,8 @@ type LUKSEscrow interface {
 // never another keyslot of the same kind (plan M4b.1 decision 3). Once the root volume is escrowed, it escrows the
 // header of every other LUKS volume of /etc/crypttab — the volumes paddock-revoke erases — and escrows it again after
 // a keyslot change (PDK-009 decisions 1–3); it never changes their keyslots and adds no recovery key to them. It is
-// used by one goroutine (the agent's run loop).
+// used by one goroutine (the agent's run loop); only the inventory of the other volumes runs in the background, one at
+// a time, so that a hung disk never holds up the loop (review round 3).
 type LUKS struct {
 	Tools  luks.Tools
 	Layout paths.Layout
@@ -58,12 +60,69 @@ type LUKS struct {
 	Emit        func(typ string, data any)
 	Now         func() time.Time
 	TPM2Present func() bool
+	// Background runs the inventory of the volumes of /etc/crypttab; nil runs it in a goroutine (tests run it inline).
+	Background func(func())
+
+	// mu guards scanning and scan, which the background inventory writes.
+	mu       sync.Mutex
+	scanning bool
+	scan     *volumeScan
 
 	pending  *luksEscrow
 	health   *protocol.DiskHealth
 	rootUUID string // the LUKS UUID of the root volume in the current pass ("" when cryptsetup reported none)
 	// volumeSet identifies the volumes of /etc/crypttab of the last pass (their UUIDs, sorted).
 	volumeSet string
+}
+
+// volumeScan is a completed inventory of the volumes of /etc/crypttab: the selection and, per header, its keyslots.
+type volumeScan struct {
+	crypttab luks.Crypttab
+	inv      map[string]luks.Inventory
+	errs     map[string]error
+}
+
+// startScan starts an inventory of the volumes of /etc/crypttab unless one is still running (a hung disk keeps at
+// most one cryptsetup waiting), and returns the last completed one, nil before the first.
+func (m *LUKS) startScan(ctx context.Context, rootDevice string) *volumeScan {
+	m.mu.Lock()
+	last, running := m.scan, m.scanning
+	m.scanning = true
+	m.mu.Unlock()
+	if !running {
+		run := m.Background
+		if run == nil {
+			run = func(fn func()) { go fn() }
+		}
+		run(func() {
+			s := scanVolumes(ctx, m.Tools, m.Layout.Root, rootDevice)
+			m.mu.Lock()
+			m.scan, m.scanning = s, false
+			m.mu.Unlock()
+		})
+		m.mu.Lock()
+		last = m.scan
+		m.mu.Unlock()
+	}
+	return last
+}
+
+// scanVolumes classifies /etc/crypttab and inventories every volume that can be escrowed.
+func scanVolumes(ctx context.Context, t luks.Tools, root, rootDevice string) *volumeScan {
+	s := &volumeScan{crypttab: luks.ReadCrypttab(ctx, t, root, rootDevice, CrypttabWithin),
+		inv: map[string]luks.Inventory{}, errs: map[string]error{}}
+	for _, v := range s.crypttab.Volumes {
+		if v.Shared || v.UUID == "" {
+			continue
+		}
+		inv, err := luks.Inspect(ctx, t, v.Header)
+		if err != nil {
+			s.errs[v.Header] = err
+			continue
+		}
+		s.inv[v.Header] = inv
+	}
+	return s
 }
 
 // RefusedRetry is how long the agent does not escrow a volume again whose header the server refused, unless the
@@ -158,7 +217,16 @@ func (m *LUKS) volumes(ctx context.Context, rootDevice string, root luks.Metadat
 	h.Volumes = []protocol.DiskVolume{{UUID: m.rootUUID, Device: rootDevice, Root: true, LUKSVersion: 2, Tokens: h.Tokens,
 		Keyslots: h.Keyslots, Escrowed: rootEscrowed, HeaderGeneration: m.State.HeaderStored}}
 	ready := rootEscrowed && m.State.RecoveryStored > 0
-	ct := luks.ReadCrypttab(ctx, m.Tools, m.Layout.Root, rootDevice, CrypttabWithin)
+	scan := m.startScan(ctx, rootDevice)
+	if scan == nil || scan.crypttab.RootUUID == "" {
+		// No inventory of the other volumes yet (or it hangs), or the root volume's UUID is unknown, so that a clone
+		// of it cannot be recognized: nothing is escrowed, and the disk is not reported compliant (review round 3).
+		if h.State == protocol.DiskCompliant {
+			h.State = protocol.DiskEscrowPending
+		}
+		return
+	}
+	ct := scan.crypttab
 	h.Unresolved = ct.Unresolved
 	m.volumeSet = volumeSet(ct)
 	for _, v := range ct.Volumes {
@@ -169,9 +237,9 @@ func (m *LUKS) volumes(ctx context.Context, rootDevice string, root luks.Metadat
 			h.Volumes = append(h.Volumes, dv)
 			continue
 		}
-		inv, err := luks.Inspect(ctx, m.Tools, v.Header)
-		if err != nil || v.UUID == "" {
-			slog.WarnContext(ctx, "LUKS volume not inventoried", "device", v.Header, "uuid", v.UUID, "error", err)
+		inv, ok := scan.inv[v.Header]
+		if !ok {
+			slog.WarnContext(ctx, "LUKS volume not inventoried", "device", v.Header, "uuid", v.UUID, "error", scan.errs[v.Header])
 			h.Volumes = append(h.Volumes, dv)
 			continue
 		}

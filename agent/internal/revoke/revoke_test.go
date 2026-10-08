@@ -571,6 +571,61 @@ func TestLockSkipsRootClone(t *testing.T) {
 	}
 }
 
+// TestRootUUIDUnknown (PDK-009 review round 3): when the root volume's luksUUID fails or hangs, a Destroy still
+// erases every classified volume, also a clone of the root volume, and a Lock or self-lock erases the root volume
+// only, skipping every other volume — even those the token lists.
+func TestRootUUIDUnknown(t *testing.T) {
+	const rootID = "1b6a3c1e-0000-4000-8000-0000000000aa"
+	root := fakeRoot(t, "clone /dev/vdb none luks\ndata /dev/vdb1 none luks\n", "/dev/vda3", "/dev/vdb", "/dev/vdb1")
+	failing := &crypttabTools{luks: []string{"/dev/vdb", "/dev/vdb1"}, uuids: map[string]string{"/dev/vdb": rootID, "/dev/vdb1": uuidData}}
+	hung := &crypttabTools{luks: []string{"/dev/vdb", "/dev/vdb1"},
+		uuids: map[string]string{"/dev/vdb": rootID, "/dev/vdb1": uuidData, "/dev/vda3": rootID}, hang: "/dev/vda3", release: make(chan struct{})}
+	t.Cleanup(func() { close(hung.release) })
+	for name, tools := range map[string]*crypttabTools{"fails": failing, "hangs": hung} {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			targets := crypttabTargets(context.Background(), tools, root, "/dev/vda3")
+			if !targets.RootUnknown || !slices.Equal(targets.Devices, []string{"/dev/vdb", "/dev/vdb1", "/dev/vda3"}) ||
+				time.Since(start) > luks.RootUUIDGrace+2*time.Second {
+				t.Fatalf("targets %+v after %s", targets, time.Since(start))
+			}
+			for _, action := range []string{revocation.ActionDestroy, revocation.ActionLock, revocation.ActionSelfLock} {
+				sys := newSys(t)
+				sys.volumes["/dev/vdb"] = &fakeVolume{slots: 2}
+				sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 1}
+				sys.targets = targets
+				r := revoker(sys, &fakeConfirmer{sys: sys})
+				env := token(t, trustedKey, func(k *revocation.Token) {
+					k.Action = action
+					if action != revocation.ActionDestroy {
+						k.Volumes = []string{uuidData, rootID}
+					}
+					if action == revocation.ActionSelfLock {
+						k.PeriodDays = 30
+					}
+				})
+				var e Erasure
+				var err error
+				if action == revocation.ActionSelfLock {
+					e, err = r.SelfLock(context.Background(), env, 30*dayLength)
+				} else {
+					e, _, err = r.Handle(context.Background(), env)
+				}
+				want := []string{"/dev/vda3"}
+				if action == revocation.ActionDestroy {
+					want = []string{"/dev/vdb", "/dev/vdb1", "/dev/vda3"}
+				}
+				if err != nil || !e.Erased || !slices.Equal(erasures(sys), want) {
+					t.Fatalf("%s: %+v %v, erased %v", action, e, err, erasures(sys))
+				}
+				if action != revocation.ActionDestroy && len(e.SkippedNotEscrowed) != 2 {
+					t.Fatalf("%s skipped %+v", action, e.SkippedNotEscrowed)
+				}
+			}
+		})
+	}
+}
+
 // TestSecondTokenRefused: after a revocation every token is refused for 24 h, the same token for ever.
 func TestSecondTokenRefused(t *testing.T) {
 	sys := newSys(t)

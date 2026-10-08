@@ -22,11 +22,14 @@ const SelectWithin = time.Minute
 // never, as their header cannot be escrowed (review round 2). Unresolved lists the crypttab sources that could not be
 // erased with certainty; they are reported in the confirmation, do not stop the erasure of the others (decision 3)
 // and make it incomplete.
+// RootUnknown is set when the root volume's UUID could not be read: a clone of it cannot be recognized, so a Lock
+// erases the root volume only (review round 3); a Destroy is not affected.
 type Targets struct {
-	Devices    []string
-	UUIDs      map[string]string
-	Shared     []string
-	Unresolved []string
+	Devices     []string
+	UUIDs       map[string]string
+	Shared      []string
+	Unresolved  []string
+	RootUnknown bool
 }
 
 // crypttabTargets reads /etc/crypttab below root through the volume selection the luks reconciler escrows with
@@ -38,7 +41,7 @@ func crypttabTargets(ctx context.Context, t luks.Tools, root, rootDevice string)
 
 // targetsOf orders the volumes of /etc/crypttab as targets: the other volumes in crypttab order, the root last.
 func targetsOf(c luks.Crypttab) Targets {
-	tg := Targets{Unresolved: c.Unresolved}
+	tg := Targets{Unresolved: c.Unresolved, RootUnknown: c.RootUUID == ""}
 	for _, v := range c.Volumes {
 		tg.Devices = append(tg.Devices, v.Header)
 		if v.Shared {

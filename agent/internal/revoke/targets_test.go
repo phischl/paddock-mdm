@@ -14,10 +14,16 @@ import (
 type crypttabTools struct {
 	luks  []string
 	uuids map[string]string
+	// hang blocks luksUUID of this path until release is closed, whatever the context says.
+	hang    string
+	release chan struct{}
 }
 
 func (f *crypttabTools) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	path := args[len(args)-1]
+	if f.hang != "" && path == f.hang && args[0] == "luksUUID" {
+		<-f.release
+	}
 	if name == "cryptsetup" && args[0] == "luksUUID" {
 		if id, ok := f.uuids[path]; ok {
 			return id + "\n", "", 0, nil
@@ -92,7 +98,7 @@ func TestCrypttabTargetsUnreadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := crypttabTargets(context.Background(), &crypttabTools{}, root, "/dev/vda3")
-	if !reflect.DeepEqual(got, Targets{Devices: []string{"/dev/vda3"}, Unresolved: []string{CrypttabFile}}) {
+	if !reflect.DeepEqual(got, Targets{Devices: []string{"/dev/vda3"}, Unresolved: []string{CrypttabFile}, RootUnknown: true}) {
 		t.Fatalf("targets %+v", got)
 	}
 }

@@ -258,6 +258,52 @@ func (q *Queries) InsertEscrowSecret(ctx context.Context, arg InsertEscrowSecret
 	return result.RowsAffected(), nil
 }
 
+const insertRefusedEscrowHeader = `-- name: InsertRefusedEscrowHeader :execrows
+INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
+                           nonce, sha256, size, created_at, volume)
+VALUES ($1, $2, $3, 'luks_header', $4, 'failed', $5, $6, $7,
+        $8, $9, $10, $11, $12::uuid)
+ON CONFLICT DO NOTHING
+`
+
+type InsertRefusedEscrowHeaderParams struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Generation     int32
+	KeyVersion     int32
+	ObjectKey      *string
+	WrappedDek     []byte
+	Nonce          []byte
+	Sha256         *string
+	Size           *int64
+	CreatedAt      time.Time
+	Volume         uuid.UUID
+}
+
+// A header refused for the volume cap, recorded as failed so that a redelivered message is not audited again; failed
+// rows count neither for the cap nor for a token.
+func (q *Queries) InsertRefusedEscrowHeader(ctx context.Context, arg InsertRefusedEscrowHeaderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertRefusedEscrowHeader,
+		arg.ID,
+		arg.OrganizationID,
+		arg.DeviceID,
+		arg.Generation,
+		arg.KeyVersion,
+		arg.ObjectKey,
+		arg.WrappedDek,
+		arg.Nonce,
+		arg.Sha256,
+		arg.Size,
+		arg.CreatedAt,
+		arg.Volume,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const latestEscrowGeneration = `-- name: LatestEscrowGeneration :one
 
 SELECT coalesce(max(generation), 0)::int FROM escrow_secret
@@ -457,6 +503,17 @@ func (q *Queries) ListPendingEscrowHeaders(ctx context.Context) ([]EscrowSecret,
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockDeviceHeaderVolumes = `-- name: LockDeviceHeaderVolumes :exec
+SELECT pg_advisory_xact_lock(hashtextextended('escrow_volumes:' || CAST($1::uuid AS text), 0))
+`
+
+// Serializes the volume cap check of a device's header escrows across workers (PDK-009 review round 3); released at
+// the end of the transaction.
+func (q *Queries) LockDeviceHeaderVolumes(ctx context.Context, deviceID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockDeviceHeaderVolumes, deviceID)
+	return err
 }
 
 const organizationHasActiveLocalAdmin = `-- name: OrganizationHasActiveLocalAdmin :one
