@@ -97,6 +97,16 @@ groups:
         annotations:
           summary: "No {{ $labels.kind }} backup for more than 26 hours"
           description: "The newest {{ $labels.kind }} backup in the backup bucket is older than 26 hours (docs/operations/restore.md)."
+      # The RPO of the continuous WAL archive is minutes (archive_timeout 60 s, pushed every 2 s); the daily backup
+      # alert above would notice a stalled archive only after a day.
+      - alert: PaddockWALArchiveLag
+        expr: time() - max by (stanza) (paddock_backup_wal_last_archived_timestamp_seconds) > 15 * 60
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The WAL archive of {{ $labels.stanza }} lags by more than 15 minutes"
+          description: "No WAL segment of the {{ $labels.stanza }} database has reached the backup bucket for 15 minutes; check the pgbackrest container and its spool volume (docs/operations/restore.md)."
       - alert: PaddockCertificateExpiry
         expr: min by (host) (paddock_tls_certificate_expiry_timestamp_seconds) - time() < 14 * 86400
         labels:
@@ -114,6 +124,14 @@ groups:
         annotations:
           summary: "The age of some backups is unknown"
           description: "The worker exports the age of fewer backup kinds than configured; check its log and its backup bucket credential."
+      - alert: PaddockWALArchiveLagMissing
+        expr: max(paddock_backup_wal_stanzas) > (count(paddock_backup_wal_last_archived_timestamp_seconds) or vector(0))
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The WAL archive lag of some databases is unknown"
+          description: "The worker exports the WAL archive age of fewer stanzas than configured; check its log and its backup bucket credential."
       - alert: PaddockOpenBaoHealthMissing
         expr: absent(paddock_openbao_reachable) and on() max(up{role="paddock-worker"}) == 1
         for: 1h
