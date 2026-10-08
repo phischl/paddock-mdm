@@ -36,6 +36,7 @@ build: ## Build ./paddock-server for the host
 .PHONY: gen
 gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code document
 	cd server && go generate ./...
+	cd cli && go generate ./...
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
@@ -226,11 +227,24 @@ dev-seed: ## Create organizations acme and globex and assign the dev users
 # Guard against hangs; suite ~35 min since M4c. Slower machines (CI runners) raise ACCEPTANCE_TIMEOUT.
 ACCEPTANCE_TIMEOUT ?= 45m
 
+# paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.
+PADDOCKCTL_LDFLAGS = -s -w -X main.version=$(VERSION)
+
+.PHONY: paddockctl
+paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ (VERSION)
+	@for arch in amd64 arm64; do \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "$(PADDOCKCTL_LDFLAGS)" \
+			-o bin/paddockctl/$$arch/paddockctl ./cli/cmd/paddockctl || exit 1; \
+	done
+	@echo "built bin/paddockctl/{amd64,arm64}/paddockctl $(VERSION)"
+
 .PHONY: acceptance
 # The exactly-once gate checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check); they run in
 # parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8).
 acceptance: ## Run acceptance gates against the running stack (optional T=<regex>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT)
-	go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... $(if $(T),-run '$(T)',) -v
+	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
+	PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
+		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... $(if $(T),-run '$(T)',) -v
 
 .PHONY: system-test
 system-test: ## Run the agent system tests on the VirtualBox VMs against the running stack (VM=<vm|all>, optional T=<regex>)

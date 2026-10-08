@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/oasdiff/yaml"
+
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
 )
 
@@ -249,5 +251,31 @@ func TestSchemaCopyIsCurrent(t *testing.T) {
 	}
 	if !bytes.Equal(declarative.Schema, want) {
 		t.Fatal("server/internal/domain/declarative/paddock.v1.json differs from api/schema/paddock.v1.json: run make gen")
+	}
+}
+
+// TestExampleIsValid: examples/paddock.yml passes the schema and decodes with every section present.
+func TestExampleIsValid(t *testing.T) {
+	raw, err := os.ReadFile("../../../../examples/paddock.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := yaml.YAMLToJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := declarative.ValidateJSON(doc); err != nil {
+		t.Fatalf("examples/paddock.yml violates the schema: %v", err)
+	}
+	d, err := declarative.Decode(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Settings == nil || d.Settings.Login == nil || d.Settings.Updates == nil || d.DeviceGroups == nil || d.PermissionProfiles == nil ||
+		d.ManagedFiles == nil || d.ManagedUnits == nil || d.PackageHolds == nil || d.ProfileAssignments == nil {
+		t.Fatalf("the example lacks a section: %+v", d)
+	}
+	if declarative.Duplicates(d) != nil {
+		t.Fatal("the example has duplicate keys")
 	}
 }
