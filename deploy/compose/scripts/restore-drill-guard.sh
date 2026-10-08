@@ -5,13 +5,14 @@
 # Exits 0 only for a development checkout: PADDOCK_ENV=development in <compose dir>/.env (the process environment does
 # not count, so `PADDOCK_ENV=development make restore-drill` cannot pass on a production host), no production secrets
 # (.secrets/release-production/, .secrets/internal-ca/ca.key) and no production overlay among the running stack's files.
+# load-guard.sh reuses it for the load test; GUARD_ACTION names the refused action in the message.
 set -euo pipefail
 
 dir="${1:?usage: restore-drill-guard.sh <compose dir> [compose file]...}"
 shift
 
 refuse() {
-  echo "refusing the restore drill: $*" >&2
+  echo "refusing ${GUARD_ACTION:-the restore drill}: $*" >&2
   exit 1
 }
 

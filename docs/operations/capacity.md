@@ -4,6 +4,13 @@ Measured load figures of the device control plane against the non-functional req
 §2.3, plan M6b decision 1). Size a production control plane from these figures and re-measure on your own hardware
 with the same scenarios before a large rollout.
 
+> **Never run the load test against a production installation.** It runs only on a dedicated test stack. It enrolls
+> thousands of devices into a real organization, and an `ingest` run writes millions of audit events into WORM
+> objects that nobody can delete before their retention ends. `make load-identities` and `make load-test` refuse when
+> the running gateway has `PADDOCK_ENV=production` or the checkout carries production markers (the checks of the
+> restore drill: `PADDOCK_ENV=development` in `deploy/compose/.env`, no production secrets, no production overlay),
+> and `test/load/cmd/identities` requires an explicit `--server`.
+
 | Requirement | Target |
 | --- | --- |
 | N1 check-in | 1 000 check-ins/s against **one** gateway replica, p99 latency < 200 ms, error rate < 0.1 % |

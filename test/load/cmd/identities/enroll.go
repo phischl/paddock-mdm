@@ -45,9 +45,7 @@ func readConfigs(files []string, server string) ([]protocol.EnrollmentConfig, er
 		if cfg.Token == "" {
 			return nil, fmt.Errorf("%s: no token", f)
 		}
-		if server != "" {
-			cfg.ServerURL = server
-		}
+		cfg.ServerURL = server
 		cfgs = append(cfgs, cfg)
 	}
 	return cfgs, nil

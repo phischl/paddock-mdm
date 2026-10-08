@@ -164,8 +164,19 @@ func TestFailsOnEnrollmentThatIsNotApproved(t *testing.T) {
 
 func TestRefusesTooFewConfigurations(t *testing.T) {
 	dir := t.TempDir()
-	err := run(context.Background(), []string{"--config", writeConfig(t, dir, "a.json", "tok"), "--count", "1001"})
+	err := run(context.Background(), []string{"--config", writeConfig(t, dir, "a.json", "tok"), "--count", "1001",
+		"--server", "http://paddock-gateway:8081"})
 	if err == nil || !strings.Contains(err.Error(), "need 2 configurations") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestRequiresServer (PDK-006 review 1): without --server the tool refuses instead of enrolling into the
+// configuration's server_url, which may be a production installation.
+func TestRequiresServer(t *testing.T) {
+	dir := t.TempDir()
+	err := run(context.Background(), []string{"--config", writeConfig(t, dir, "a.json", "tok"), "--count", "1"})
+	if err == nil || !strings.Contains(err.Error(), "--server URL") {
 		t.Fatalf("err = %v", err)
 	}
 }

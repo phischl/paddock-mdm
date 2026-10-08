@@ -35,7 +35,7 @@ func run(ctx context.Context, args []string) error {
 	fs.Var(&configs, "config", "enrollment configuration (JSON file) of an auto-approving token; repeat for more tokens")
 	count := fs.Int("count", 10000, "number of devices to enroll")
 	perConfig := fs.Int("per-config", 1000, "devices per enrollment configuration (at most the token's maximum uses)")
-	server := fs.String("server", "", "device API base URL instead of the configurations' server_url, e.g. http://paddock-gateway:8081")
+	server := fs.String("server", "", "device API base URL of the test stack, required (never the configurations' server_url), e.g. http://paddock-gateway:8081")
 	caFile := fs.String("ca-file", "", "PEM file with the CA that signed the device API's certificate (https only)")
 	forwardedFor := fs.Bool("forwarded-for", false, "send a distinct X-Forwarded-For address per device (only when talking to the gateway directly)")
 	concurrency := fs.Int("concurrency", 32, "parallel enrollments")
@@ -44,8 +44,10 @@ func run(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if len(configs) == 0 || *count < 1 || *perConfig < 1 || *concurrency < 1 {
-		return errors.New("usage: identities --config <enrollment-config.json> [--config …] [--count N] [--server URL] [--out FILE]")
+	// No fallback to the configurations' server_url, which names the installation that issued the token: the load test
+	// must never enroll thousands of devices into a production installation by accident.
+	if len(configs) == 0 || *server == "" || *count < 1 || *perConfig < 1 || *concurrency < 1 {
+		return errors.New("usage: identities --config <enrollment-config.json> [--config …] --server URL [--count N] [--out FILE]")
 	}
 	if *count > len(configs)**perConfig {
 		return fmt.Errorf("%d devices need %d configurations of %d uses, got %d", *count, (*count+*perConfig-1) / *perConfig, *perConfig, len(configs))
