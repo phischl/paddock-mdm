@@ -94,6 +94,13 @@ var Kinds = []Kind{
 	{Name: "fleet", Prefix: "fleet/"},
 }
 
+// WALStanzas are the pgBackRest stanzas whose WAL is archived continuously (compose.backup.yaml).
+var WALStanzas = []string{"paddock", "authentik"}
+
+// WALArchivePrefix is the key prefix of a stanza's WAL archive: below it pgBackRest keeps one directory per archive ID
+// (<PostgreSQL version>-<n>), in it one directory per timeline and log (16 hex digits) holding the segments.
+func WALArchivePrefix(stanza string) string { return "pgbackrest/archive/" + stanza + "/" }
+
 // OpenBaoPrefix is the key prefix of the OpenBao snapshots.
 const OpenBaoPrefix = "openbao/"
 

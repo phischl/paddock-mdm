@@ -188,3 +188,62 @@ tests:
       - eval_time: 65m
         alertname: PaddockCertificateExpiryMissing
         exp_alerts: []
+
+  # PDK-015: the paddock archive stops at 10m (lag > 15 min from 26m on), authentik keeps archiving.
+  - name: a stalled WAL archive fires after 15 minutes of lag for 10 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+        values: "0+60x10 600x50"
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="authentik", role="paddock-worker"}'
+        values: "0+60x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PaddockWALArchiveLag
+        exp_alerts: []
+      - eval_time: 34m
+        alertname: PaddockWALArchiveLag
+        exp_alerts: []
+      - eval_time: 37m
+        alertname: PaddockWALArchiveLag
+        exp_alerts:
+          - exp_labels: { severity: critical, stanza: paddock }
+            exp_annotations:
+              summary: "The WAL archive of paddock lags by more than 15 minutes"
+              description: "No WAL segment of the paddock database has reached the backup bucket for 15 minutes; check the pgbackrest container and its spool volume (docs/operations/restore.md)."
+
+  - name: a WAL archive age that is never set
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_wal_stanzas{role="paddock-worker"}'
+        values: "2x60"
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+        values: "0+60x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PaddockWALArchiveLagMissing
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: PaddockWALArchiveLagMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The WAL archive lag of some databases is unknown"
+              description: "The worker exports the WAL archive age of fewer stanzas than configured; check its log and its backup bucket credential."
+
+  - name: complete WAL archive ages stay silent
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_wal_stanzas{role="paddock-worker"}'
+        values: "2x60"
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+        values: "0+60x60"
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="authentik", role="paddock-worker"}'
+        values: "0+60x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: PaddockWALArchiveLagMissing
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: PaddockWALArchiveLag
+        exp_alerts: []

@@ -121,6 +121,54 @@ func (s *Store) Newest(ctx context.Context, prefix string) (newest time.Time, fo
 	return newest, found, nil
 }
 
+// ListQuery selects one page of ListObjectsV2: the keys below Prefix that sort after StartAfter, grouped at Delimiter
+// when it is set. Token continues a truncated page.
+type ListQuery struct {
+	Prefix, Delimiter, StartAfter, Token string
+}
+
+// ListedObject is an object of a ListPage.
+type ListedObject struct {
+	Key          string
+	LastModified time.Time
+}
+
+// ListPage is one page of ListObjectsV2 in key order; Next is the token of the next page, empty on the last one.
+type ListPage struct {
+	Prefixes []string
+	Objects  []ListedObject
+	Next     string
+}
+
+// ListPage returns one page (at most 1000 entries) of q. It needs s3:ListBucket only.
+func (s *Store) ListPage(ctx context.Context, q ListQuery) (ListPage, error) {
+	in := &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: &q.Prefix}
+	if q.Delimiter != "" {
+		in.Delimiter = &q.Delimiter
+	}
+	if q.StartAfter != "" {
+		in.StartAfter = &q.StartAfter
+	}
+	if q.Token != "" {
+		in.ContinuationToken = &q.Token
+	}
+	out, err := s.client.ListObjectsV2(ctx, in)
+	if err != nil {
+		return ListPage{}, err
+	}
+	var page ListPage
+	for _, p := range out.CommonPrefixes {
+		page.Prefixes = append(page.Prefixes, aws.ToString(p.Prefix))
+	}
+	for _, o := range out.Contents {
+		page.Objects = append(page.Objects, ListedObject{Key: aws.ToString(o.Key), LastModified: aws.ToTime(o.LastModified)})
+	}
+	if aws.ToBool(out.IsTruncated) {
+		page.Next = aws.ToString(out.NextContinuationToken)
+	}
+	return page, nil
+}
+
 // List returns the keys below prefix.
 func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 	var keys []string
