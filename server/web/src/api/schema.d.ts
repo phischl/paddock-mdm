@@ -1276,8 +1276,10 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns a stored LUKS header
-         *     backup of the device, decrypted (the newest generation unless generation is given), as the file
-         *     <hostname>-luks-header-<generation>.img for cryptsetup luksHeaderRestore; confirm_hostname must equal the
+         *     backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest
+         *     generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img
+         *     (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup
+         *     luksHeaderRestore; confirm_hostname must equal the
          *     device's hostname. 409 invalid_state when no such generation is stored, 404 not_found once a Destroy of the
          *     device was issued.
          */
@@ -2210,7 +2212,8 @@ export interface components {
         /**
          * @description Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
          *     with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
-         *     header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, both escrowed).
+         *     a header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, escrowed with the
+         *     current header of every LUKS volume, PDK-009).
          * @enum {string}
          */
         DiskState: "not_encrypted" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "escrow_pending" | "compliant";
@@ -2223,8 +2226,29 @@ export interface components {
              * @description Headers: bytes of the sealed object.
              */
             size?: number;
+            /**
+             * Format: uuid
+             * @description Headers: the LUKS UUID of the volume (PDK-009). Absent on a root volume header escrowed before PDK-009 until the device reports its root volume's UUID.
+             */
+            volume?: string;
             /** Format: date-time */
             created_at: string;
+        };
+        /** @description A LUKS volume of the device as its last check-in reports it (PDK-009 decision 4). */
+        DiskVolume: {
+            /** @description LUKS UUID; absent when the device could not read it. */
+            uuid?: string;
+            /** @description The device or detached header file, e.g. /dev/sdb1. */
+            device: string;
+            root: boolean;
+            luks_version?: number;
+            /** @description Kind of every keyslot, sorted. */
+            tokens: string[];
+            keyslots: number;
+            /** @description A header of the current keyslots is stored. */
+            escrowed: boolean;
+            /** @description The newest stored header generation of the volume. */
+            header_generation?: number;
         };
         DiskEncryption: {
             /** @description Null until the device reports its disk. */
@@ -2239,7 +2263,12 @@ export interface components {
              */
             reported_at?: string;
             recovery_keys: components["schemas"]["DiskEscrow"][];
+            /** @description Header generations of every volume, newest first; volume tells them apart. */
             headers: components["schemas"]["DiskEscrow"][];
+            /** @description Every LUKS volume of the device, the root volume first (empty until the device reports them). */
+            volumes: components["schemas"]["DiskVolume"][];
+            /** @description /etc/crypttab entries the device could not classify; they are not escrowed. */
+            unresolved: string[];
             last_keyslot_change?: {
                 /** Format: date-time */
                 at: string;
@@ -2255,6 +2284,11 @@ export interface components {
             confirm_hostname: string;
             /** @description Header generation; the newest stored one if absent. */
             generation?: number;
+            /**
+             * Format: uuid
+             * @description LUKS UUID of the volume (PDK-009); the root volume if absent.
+             */
+            volume?: string;
         };
         LocalAdminRevealRequest: {
             confirm_hostname: string;

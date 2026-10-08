@@ -13,11 +13,20 @@ RETURNING *;
 
 -- name: CancelSelfLocks :many
 -- Open self-lock tokens that no longer fit the settings: all of them when the switch is off, otherwise those of
--- another period, of a device that is no longer active, or expiring before renew_before (they are replaced).
+-- another period, of a device that is no longer active, expiring before renew_before, or whose volumes differ from the
+-- device's volumes with a confirmed header escrow (PDK-009; they are replaced). A device whose paddock-revoke does
+-- not understand volumes keeps a token without them.
 UPDATE revocation_request r SET status = 'cancelled', finished_at = @now::timestamptz
 WHERE r.action = 'self_lock' AND r.status IN ('issued','delivered')
   AND (NOT @enabled::boolean OR r.period_days <> @period_days::int OR r.expires_at <= @renew_before::timestamptz
-       OR NOT EXISTS (SELECT 1 FROM device d WHERE d.id = r.device_id AND d.state = 'active'))
+       OR NOT EXISTS (SELECT 1 FROM device d WHERE d.id = r.device_id AND d.state = 'active')
+       OR r.volumes <> CASE
+         WHEN coalesce((SELECT (s.health -> 'revoke_capabilities') ? 'volumes' FROM device_status s
+                        WHERE s.device_id = r.device_id), false)
+         THEN ARRAY(SELECT DISTINCT e.volume FROM escrow_secret e
+                    WHERE e.device_id = r.device_id AND e.kind = 'luks_header' AND e.status = 'stored'
+                      AND e.volume IS NOT NULL ORDER BY 1)
+         ELSE '{}'::uuid[] END)
 RETURNING r.id, r.device_id;
 
 -- name: ListDevicesWithoutSelfLock :many

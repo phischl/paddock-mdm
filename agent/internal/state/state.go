@@ -85,6 +85,17 @@ type LUKS struct {
 	// keyslot of the agent's current recovery key. Only these slots are ever removed (plan M4b.1 decision 3).
 	PassphraseSlot *int `json:"passphrase_slot,omitempty"`
 	RecoverySlot   *int `json:"recovery_slot,omitempty"`
+	// Volumes are the LUKS volumes of /etc/crypttab other than the root volume, by LUKS UUID (PDK-009). Their header
+	// generations share the counter HeaderAttempted with the root volume.
+	Volumes map[string]*LUKSVolume `json:"volumes,omitempty"`
+}
+
+// LUKSVolume is the persistent state of a LUKS volume other than the root volume: the keyslot kinds recorded last
+// (sorted), and the highest header generation the server stored with the digest of the metadata it was taken from.
+type LUKSVolume struct {
+	Keyslots     []string `json:"keyslots,omitempty"`
+	HeaderStored int64    `json:"header_stored,omitempty"`
+	HeaderDigest string   `json:"header_digest,omitempty"`
 }
 
 // LocalAdmin is the persistent state of the managed local administrator. The password itself is never stored.

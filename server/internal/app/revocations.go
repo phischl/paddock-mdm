@@ -379,7 +379,7 @@ func (r *RevocationReports) Finish(ctx context.Context, res ingest.CommandResult
 		Target: &audit.Target{Type: "device", ID: res.DeviceID.String()},
 		Params: map[string]any{"request_id": res.CommandID.String(), "status": res.Status, "erased": c.AllErased(),
 			"slots_before": c.SlotsBefore, "slots_after": c.SlotsAfter, "volumes": len(c.Volumes),
-			"unresolved": len(c.Unresolved)},
+			"unresolved": len(c.Unresolved), "skipped_not_escrowed": len(c.SkippedNotEscrowed)},
 	}
 	open := false
 	if err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diskStateFilter, diskStates, headerFileName, latestStored } from '../lib/disk'
+import { diskStateFilter, diskStates, headerDevice, headerFileName, latestStored, volumeHeaders } from '../lib/disk'
 import en from '../locales/en.json'
 
 describe('disk encryption', () => {
@@ -17,6 +17,20 @@ describe('disk encryption', () => {
       { generation: 1, status: 'stored', created_at: at },
     ])?.generation).toBe(2)
     expect(latestStored([{ generation: 1, status: 'failed', created_at: at }])).toBeNull()
+  })
+
+  it('assigns the header generations to their volumes; those without a volume are the root volume\'s (PDK-009)', () => {
+    const at = '2026-10-06T10:00:00Z'
+    const root = { uuid: 'r', device: '/dev/sda3', root: true, keyslots: 2, tokens: [], escrowed: true }
+    const data = { uuid: 'd', device: '/dev/sdb1', root: false, keyslots: 1, tokens: [], escrowed: true }
+    const headers = [
+      { generation: 4, status: 'stored' as const, created_at: at, volume: 'd' },
+      { generation: 3, status: 'stored' as const, created_at: at, volume: 'r' },
+      { generation: 1, status: 'stored' as const, created_at: at },
+    ]
+    expect(volumeHeaders(headers, root).map((h) => h.generation)).toEqual([3, 1])
+    expect(volumeHeaders(headers, data).map((h) => h.generation)).toEqual([4])
+    expect(headers.map((h) => headerDevice(h, [root, data]))).toEqual(['/dev/sdb1', '/dev/sda3', '/dev/sda3'])
   })
 
   it('filters by every state, each with a label', () => {

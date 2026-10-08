@@ -147,7 +147,7 @@ var deviceEventParams = []string{
 	"from_version", "outcome", "count", "from_seq", "to_seq", "stage", "message", "username", "sessions_locked",
 	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
 	"generation", "service", "at", "field", "before", "after", "unit",
-	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error",
+	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
 }
 
 var registry = map[Code]Definition{
@@ -625,10 +625,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperKeyslotChanged: {
 		Code: CodeDeviceTamperKeyslotChanged, Emitted: true,
-		Description: "A device found the keyslots of its encrypted root volume changed outside Paddock; it escrows the header again (actor: the device).",
+		Description: "A device found the keyslots of one of its encrypted volumes changed outside Paddock; it escrows that volume's header again (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "before and after list the kind of every keyslot (tpm2+pin, tpm2, recovery, password, or another token type).",
+		Note:        "volume is the LUKS UUID of the volume (absent for devices before PDK-009, which watch the root volume only); before and after list the kind of every keyslot (tpm2+pin, tpm2, recovery, password, or another token type).",
 	},
 	CodeDiskRecoveryKeyRevealed: {
 		Code: CodeDiskRecoveryKeyRevealed, Emitted: true,
@@ -639,7 +639,8 @@ var registry = map[Code]Definition{
 	CodeDiskHeaderDownloaded: {
 		Code: CodeDiskHeaderDownloaded, Emitted: true,
 		Description: "An organization administrator downloaded an escrowed LUKS header of a device after a step-up.",
-		Params:      []string{"hostname", "generation"},
+		Params:      []string{"hostname", "volume", "generation"},
+		Note:        "volume is the LUKS UUID of the header's volume; absent for a root volume header escrowed before PDK-009 whose UUID the device has not reported yet.",
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceRevocationTrustPinnedTOFU: {
@@ -676,8 +677,9 @@ var registry = map[Code]Definition{
 	CodeRevocationIssued: {
 		Code: CodeRevocationIssued, Emitted: true,
 		Description: "The revocation-issuer verified the step-up proofs and the limits of a Lock or a self-lock and signed the device-bound revocation token (actor: system).",
-		Params:      []string{"action", "hostname", "request_id", "requested_by", "expires_at"},
+		Params:      []string{"action", "hostname", "request_id", "requested_by", "expires_at", "volumes"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "volumes counts the volumes besides the root volume the token lets the device erase: those with a confirmed header escrow, so that the lock stays restorable (always 0 for a device whose paddock-revoke predates PDK-009).",
 	},
 	CodeDeviceEscrowDestroyed: {
 		Code: CodeDeviceEscrowDestroyed, Emitted: true,
@@ -703,9 +705,9 @@ var registry = map[Code]Definition{
 	CodeDeviceRevocationConfirmed: {
 		Code: CodeDeviceRevocationConfirmed, Emitted: true,
 		Description: "A device confirmed a revocation before its forced reboot: every keyslot of every LUKS volume of the device is erased (actor: the device).",
-		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "volumes", "unresolved", "status"},
+		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "volumes", "unresolved", "skipped_not_escrowed", "status"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "status failed means the device reported that the erasure did not complete. erased is true only if every volume has no keyslot left and no crypttab entry is unresolved; slots_before and slots_after are sums over the reported volumes, volumes counts the reported volumes (failed ones included) and unresolved the crypttab entries the device could not erase with certainty (both 0 for devices before M4c.1).",
+		Note:        "status failed means the device reported that the erasure did not complete. erased is true only if every volume has no keyslot left and no crypttab entry is unresolved; slots_before and slots_after are sums over the reported volumes, volumes counts the reported volumes (failed ones included) and unresolved the crypttab entries the device could not erase with certainty (both 0 for devices before M4c.1); skipped_not_escrowed counts the volumes a Lock left alone because their header escrow was not confirmed (PDK-009).",
 	},
 	CodeDeviceRevocationRefused: {
 		Code: CodeDeviceRevocationRefused, Emitted: true,

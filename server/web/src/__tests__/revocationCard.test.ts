@@ -34,6 +34,14 @@ const requests: RevocationRequest[] = [
     },
   },
   { ...base, id: 'r2', status: 'confirmed', result: { erased: true, slots_before: 2, slots_after: 0 } },
+  {
+    // PDK-009: a Lock leaves the volumes without an escrowed header alone; it is complete all the same.
+    ...base, id: 'r4', status: 'confirmed', result: {
+      erased: true, slots_before: 2, slots_after: 0,
+      volumes: [{ device: '/dev/sda3', uuid: '0d8f4c62-0000-4000-8000-0000000000aa', slots_before: 2, slots_after: 0, erased: true }],
+      skipped_not_escrowed: [{ device: '/dev/sdb1', uuid: '0d8f4c62-0000-4000-8000-0000000000bb' }, { device: '/dev/sdc1' }, { bogus: 1 }],
+    },
+  },
 ]
 
 vi.mock('../lib/revocations', async (original) => ({
@@ -57,7 +65,7 @@ describe('revocation card', () => {
     await flushPromises()
     const lists = document.querySelectorAll('[aria-label="Encrypted volumes"]')
     // A confirmation from before M4c.1 has no volumes and shows no list.
-    expect(lists).toHaveLength(2)
+    expect(lists).toHaveLength(3)
     expect([...lists[0].querySelectorAll('li')].map((li) => li.textContent?.trim())).toEqual([
       '/dev/sdb1: not erased, 3 keyslots left',
       '/dev/sdc1: not erased, the remaining keyslots are unknown',
@@ -69,7 +77,12 @@ describe('revocation card', () => {
       '/etc/crypttab: listed in /etc/crypttab but not erased with certainty',
       '/etc/crypttab: listed in /etc/crypttab but not erased with certainty',
     ])
-    // Both failed requests are marked incomplete; the M4c confirmation is not.
+    expect([...lists[2].querySelectorAll('li')].map((li) => li.textContent?.trim())).toEqual([
+      '/dev/sda3: 2 keyslots erased',
+      '/dev/sdb1: not erased, its header was not escrowed (the volume stays readable)',
+      '/dev/sdc1: not erased, its header was not escrowed (the volume stays readable)',
+    ])
+    // Both failed requests are marked incomplete; the M4c confirmation and the Lock with skipped volumes are not.
     const incomplete = [...document.querySelectorAll('p')].filter((p) => p.textContent?.includes('Incomplete: not every encrypted volume'))
     expect(incomplete).toHaveLength(2)
     wrapper.unmount()

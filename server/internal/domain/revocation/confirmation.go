@@ -4,21 +4,30 @@ import "encoding/json"
 
 // Confirmation is the result paddock-revoke posts before its reboot (plan M4c decision 10, extended additively by
 // plan M4c.1 decision 2): the sums over the reported volumes, each volume, and the crypttab entries it could not
-// erase with certainty. A confirmation of M4c has no volumes.
+// erase with certainty. A confirmation of M4c has no volumes. SkippedNotEscrowed are the volumes a Lock left alone
+// because the token did not confirm their header escrow (PDK-009); they do not make the erasure incomplete.
 type Confirmation struct {
-	Erased      bool                 `json:"erased"`
-	SlotsBefore int                  `json:"slots_before"`
-	SlotsAfter  int                  `json:"slots_after"`
-	Volumes     []VolumeConfirmation `json:"volumes"`
-	Unresolved  []string             `json:"unresolved"`
+	Erased             bool                 `json:"erased"`
+	SlotsBefore        int                  `json:"slots_before"`
+	SlotsAfter         int                  `json:"slots_after"`
+	Volumes            []VolumeConfirmation `json:"volumes"`
+	Unresolved         []string             `json:"unresolved"`
+	SkippedNotEscrowed []SkippedVolume      `json:"skipped_not_escrowed"`
 }
 
 // VolumeConfirmation is the erasure of one LUKS volume of the device.
 type VolumeConfirmation struct {
 	Device      string `json:"device"`
+	UUID        string `json:"uuid"`
 	SlotsBefore int    `json:"slots_before"`
 	SlotsAfter  int    `json:"slots_after"`
 	Erased      bool   `json:"erased"`
+}
+
+// SkippedVolume is a volume a Lock did not erase.
+type SkippedVolume struct {
+	Device string `json:"device"`
+	UUID   string `json:"uuid"`
 }
 
 // ParseConfirmation reads a device's confirmation; a malformed one yields the zero value, which is not erased.

@@ -2042,8 +2042,10 @@ paths:
       tags: [devices]
       description: |
         Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns a stored LUKS header
-        backup of the device, decrypted (the newest generation unless generation is given), as the file
-        <hostname>-luks-header-<generation>.img for cryptsetup luksHeaderRestore; confirm_hostname must equal the
+        backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest
+        generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img
+        (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup
+        luksHeaderRestore; confirm_hostname must equal the
         device's hostname. 409 invalid_state when no such generation is stored, 404 not_found once a Destroy of the
         device was issued.
       x-paddock-audit: disk.header_downloaded
@@ -3619,7 +3621,8 @@ components:
       description: |
         Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
         with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
-        header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, both escrowed).
+        a header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, escrowed with the
+        current header of every LUKS volume, PDK-009).
       enum: [not_encrypted, unmanaged, tpm_missing, tpm_pin_missing, escrow_pending, compliant]
     DiskEscrow:
       type: object
@@ -3628,10 +3631,27 @@ components:
         generation: { type: integer }
         status: { type: string, enum: [pending, stored, failed] }
         size: { type: integer, format: int64, description: "Headers: bytes of the sealed object." }
+        volume:
+          type: string
+          format: uuid
+          description: "Headers: the LUKS UUID of the volume (PDK-009). Absent on a root volume header escrowed before PDK-009 until the device reports its root volume's UUID."
         created_at: { type: string, format: date-time }
+    DiskVolume:
+      type: object
+      required: [device, root, keyslots, tokens, escrowed]
+      description: A LUKS volume of the device as its last check-in reports it (PDK-009 decision 4).
+      properties:
+        uuid: { type: string, description: LUKS UUID; absent when the device could not read it. }
+        device: { type: string, description: "The device or detached header file, e.g. /dev/sdb1." }
+        root: { type: boolean }
+        luks_version: { type: integer }
+        tokens: { type: array, items: { type: string }, description: "Kind of every keyslot, sorted." }
+        keyslots: { type: integer }
+        escrowed: { type: boolean, description: A header of the current keyslots is stored. }
+        header_generation: { type: integer, description: The newest stored header generation of the volume. }
     DiskEncryption:
       type: object
-      required: [state, tokens, keyslots, recovery_keys, headers]
+      required: [state, tokens, keyslots, recovery_keys, headers, volumes, unresolved]
       properties:
         state:
           allOf: [{ $ref: "#/components/schemas/DiskState" }]
@@ -3649,7 +3669,16 @@ components:
           items: { $ref: "#/components/schemas/DiskEscrow" }
         headers:
           type: array
+          description: Header generations of every volume, newest first; volume tells them apart.
           items: { $ref: "#/components/schemas/DiskEscrow" }
+        volumes:
+          type: array
+          description: Every LUKS volume of the device, the root volume first (empty until the device reports them).
+          items: { $ref: "#/components/schemas/DiskVolume" }
+        unresolved:
+          type: array
+          description: /etc/crypttab entries the device could not classify; they are not escrowed.
+          items: { type: string }
         last_keyslot_change:
           type: object
           required: [at, before, after]
@@ -3670,6 +3699,7 @@ components:
       properties:
         confirm_hostname: { type: string, maxLength: 253 }
         generation: { type: integer, minimum: 1, description: Header generation; the newest stored one if absent. }
+        volume: { type: string, format: uuid, description: "LUKS UUID of the volume (PDK-009); the root volume if absent." }
     LocalAdminRevealRequest:
       type: object
       required: [confirm_hostname]

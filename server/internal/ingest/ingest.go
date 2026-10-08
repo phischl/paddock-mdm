@@ -60,19 +60,20 @@ type Events struct {
 // 10) has no ciphertext but the object key the gateway chose and the facts of the sealed object the device uploads
 // there.
 type Escrow struct {
-	DeviceID       uuid.UUID `json:"device_id"`
-	OrganizationID uuid.UUID `json:"organization_id"`
-	EscrowID       uuid.UUID `json:"escrow_id"`
-	Kind           string    `json:"kind"`
-	Generation     int64     `json:"generation"`
-	KeyVersion     int       `json:"key_version"`
-	Ciphertext     []byte    `json:"ciphertext"`
-	ObjectKey      string    `json:"object_key,omitempty"`
-	WrappedDEK     []byte    `json:"wrapped_dek,omitempty"`
-	Nonce          []byte    `json:"nonce,omitempty"`
-	SHA256         string    `json:"sha256,omitempty"`
-	Size           int64     `json:"size,omitempty"`
-	ReceivedAt     time.Time `json:"received_at"`
+	DeviceID       uuid.UUID  `json:"device_id"`
+	OrganizationID uuid.UUID  `json:"organization_id"`
+	EscrowID       uuid.UUID  `json:"escrow_id"`
+	Kind           string     `json:"kind"`
+	Generation     int64      `json:"generation"`
+	Volume         *uuid.UUID `json:"volume,omitempty"` // the LUKS UUID of a header's volume (PDK-009)
+	KeyVersion     int        `json:"key_version"`
+	Ciphertext     []byte     `json:"ciphertext"`
+	ObjectKey      string     `json:"object_key,omitempty"`
+	WrappedDEK     []byte     `json:"wrapped_dek,omitempty"`
+	Nonce          []byte     `json:"nonce,omitempty"`
+	SHA256         string     `json:"sha256,omitempty"`
+	Size           int64      `json:"size,omitempty"`
+	ReceivedAt     time.Time  `json:"received_at"`
 }
 
 // CommandResult is the result of a device command (routing key ingest.command_result.<org>, message_id = CommandID +

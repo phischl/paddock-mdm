@@ -27,3 +27,33 @@ the root volume.
 
 ## 4. Stop conditions
 Any change that would let `paddockd` erase keyslots; M0 §11 S2/S6/S7/S8.
+
+## Amendment 2026-10-08 (architect, PDK-009)
+
+A Lock is restorable by definition (concept: Lock vs. Destroy), so Paddock escrows the header of every LUKS volume it
+erases, not only the root volume. Binding:
+
+1. The agent `luks` reconciler escrows the header of each `/etc/crypttab` LUKS1/LUKS2 volume (same target resolution
+   as `paddock-revoke`, shared code in `agent/internal/luks/crypttab.go`, no duplicate parser) with kind
+   `luks_header` and a new field `volume` = LUKS UUID (root volume: its UUID as well). Existing rows get the root UUID
+   with the device's first check-in that reports it; until then they are matched as the root volume's. Object keys
+   become `org/<org>/devices/<dev>/luks-header/<volume_uuid>/<generation>.bin`; existing root objects stay readable
+   under the old key (the row records it; no object copy). Header generations count across all volumes of a device.
+2. No Paddock recovery key is added to non-root volumes; their own keyslots come back with `luksHeaderRestore`. Root
+   keeps today's recovery key.
+3. Keyslot-change detection and re-escrow per volume (`device.tamper_keyslot_changed` gains param `volume`).
+4. `health.disk` reports per volume (`volumes`, `unresolved`); device state `compliant` requires every volume
+   escrowed. Unresolved crypttab entries are reported but do not block compliance.
+5. Portal *Disk encryption* card lists the volumes; header download per volume (step-up, typed hostname, audit
+   `disk.header_downloaded` with param `volume`). Destroy deletes the escrowed headers of **all** volumes.
+6. A Lock erases only volumes whose header escrow is confirmed. `paddockd` must not influence the revoke path, so the
+   **revocation-issuer** writes the device's confirmed volume UUIDs into the signed Lock and `self_lock` tokens
+   (`volumes`; `self_lock` tokens are re-issued when the confirmed set changes), and `paddock-revoke` erases root plus
+   exactly those — both are restorable locks. Destroy erases all volumes (as before). Volumes not listed are reported
+   as `skipped_not_escrowed` in the confirmation. `paddock-revoke` builds before PDK-009 refuse tokens with `volumes`,
+   so the issuer adds them only when the device's check-in health reports `revoke_capabilities: ["volumes"]` (from
+   `paddock-revoke capabilities`); other devices get tokens without volumes.
+7. Two-person rule applies to the `paddock-revoke` part (item 6, and the shared `agent/internal/luks/crypttab.go`,
+   which is added to CODEOWNERS); commit marked `needs second review`.
+8. This amendment; `docs/operations/revocation.md` and `disk-recovery.md` are updated. Architecture §12.4 (object key)
+   is amended by the architect.

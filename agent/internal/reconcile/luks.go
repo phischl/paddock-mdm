@@ -43,7 +43,10 @@ type LUKSEscrow interface {
 // first-boot disk setup is done it enrolls a recovery key, escrows it and the LUKS header, removes the install
 // passphrase and then watches the keyslots. Each pass does at most one change. It removes only the keyslots it
 // recorded — the install passphrase's, found before the first change, and the one its recovery key was enrolled in —
-// never another keyslot of the same kind (plan M4b.1 decision 3). It is used by one goroutine (the agent's run loop).
+// never another keyslot of the same kind (plan M4b.1 decision 3). Once the root volume is escrowed, it escrows the
+// header of every other LUKS volume of /etc/crypttab — the volumes paddock-revoke erases — and escrows it again after
+// a keyslot change (PDK-009 decisions 1–3); it never changes their keyslots and adds no recovery key to them. It is
+// used by one goroutine (the agent's run loop).
 type LUKS struct {
 	Tools  luks.Tools
 	Layout paths.Layout
@@ -55,18 +58,24 @@ type LUKS struct {
 	Now         func() time.Time
 	TPM2Present func() bool
 
-	pending *luksEscrow
-	health  *protocol.DiskHealth
+	pending  *luksEscrow
+	health   *protocol.DiskHealth
+	rootUUID string // the LUKS UUID of the root volume in the current pass ("" when cryptsetup reported none)
 }
 
-// luksEscrow is an escrow waiting for the server: a recovery key (kept in memory until stored) or a header (with
-// the digest of the metadata it was taken from).
+// CrypttabWithin bounds the classification of /etc/crypttab in a pass (as paddock-revoke's SelectWithin).
+const CrypttabWithin = time.Minute
+
+// luksEscrow is an escrow waiting for the server: a recovery key (kept in memory until stored) or a header of the
+// root volume or of volume (with the digest of the metadata it was taken from).
 type luksEscrow struct {
 	kind       string
 	escrowID   string
 	generation int64
 	key        []byte
 	digest     string
+	root       bool
+	volume     string
 	deadline   time.Time
 	nextPoll   time.Time
 }
@@ -114,6 +123,9 @@ func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 		m.health = m.report(m.state(md, passphrase), kinds)
 		return
 	}
+	if m.rootUUID, err = luks.UUID(ctx, m.Tools, vol.Device); err != nil {
+		slog.WarnContext(ctx, "the LUKS UUID of the root volume is unknown", "device", vol.Device, "error", err)
+	}
 	m.watch(kinds)
 	if m.pending == nil {
 		if err := m.step(ctx, vol.Device, md, passphrase, keys); err != nil {
@@ -126,6 +138,75 @@ func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 		kinds, passphrase = md.Kinds(), exists(m.Layout.InstallPassphrase())
 	}
 	m.health = m.report(m.state(md, passphrase), kinds)
+	m.volumes(ctx, vol.Device, md, keys)
+}
+
+// volumes inventories the root volume and every other LUKS volume of /etc/crypttab for health.disk, reports changed
+// keyslots of the other volumes and, once the root volume's current header is stored and no escrow is pending,
+// escrows the header of the first volume whose current header is not stored (PDK-009 decisions 1–4). The disk is
+// compliant only when every volume is escrowed.
+func (m *LUKS) volumes(ctx context.Context, rootDevice string, root luks.Metadata, keys *bundle.Keys) {
+	h := m.health
+	rootEscrowed := m.pending == nil && m.State.HeaderStored > 0 && digest(root) == m.State.HeaderDigest
+	h.Volumes = []protocol.DiskVolume{{UUID: m.rootUUID, Device: rootDevice, Root: true, LUKSVersion: 2, Tokens: h.Tokens,
+		Keyslots: h.Keyslots, Escrowed: rootEscrowed, HeaderGeneration: m.State.HeaderStored}}
+	ready := rootEscrowed && m.State.RecoveryStored > 0
+	ct := luks.ReadCrypttab(ctx, m.Tools, m.Layout.Root, rootDevice, CrypttabWithin)
+	h.Unresolved = ct.Unresolved
+	for _, v := range ct.Volumes {
+		dv := protocol.DiskVolume{UUID: v.UUID, Device: v.Header}
+		inv, err := luks.Inspect(ctx, m.Tools, v.Header)
+		if err != nil || v.UUID == "" {
+			slog.WarnContext(ctx, "LUKS volume not inventoried", "device", v.Header, "uuid", v.UUID, "error", err)
+			h.Volumes = append(h.Volumes, dv)
+			continue
+		}
+		st := m.volumeState(v.UUID)
+		m.watchVolume(v.UUID, st, inv.Kinds)
+		dv.LUKSVersion, dv.Tokens, dv.Keyslots, dv.HeaderGeneration = inv.Version, inv.Kinds, len(inv.Kinds), st.HeaderStored
+		dv.Escrowed = st.HeaderStored > 0 && st.HeaderDigest == inv.Digest && !m.pendingFor(v.UUID)
+		if !dv.Escrowed && ready && m.pending == nil {
+			if err := m.escrowHeader(ctx, v.Header, v.UUID, false, inv.Digest, keys); err != nil {
+				slog.ErrorContext(ctx, "LUKS header escrow failed; retrying at the next pass", "device", v.Header, "volume", v.UUID, "error", err)
+			}
+		}
+		h.Volumes = append(h.Volumes, dv)
+	}
+	if h.State == protocol.DiskCompliant && slices.ContainsFunc(h.Volumes, func(v protocol.DiskVolume) bool { return !v.Escrowed }) {
+		h.State = protocol.DiskEscrowPending
+	}
+}
+
+// volumeState is the recorded state of a volume other than the root volume.
+func (m *LUKS) volumeState(uuid string) *state.LUKSVolume {
+	if m.State.Volumes == nil {
+		m.State.Volumes = map[string]*state.LUKSVolume{}
+	}
+	st, ok := m.State.Volumes[uuid]
+	if !ok {
+		st = &state.LUKSVolume{}
+		m.State.Volumes[uuid] = st
+	}
+	return st
+}
+
+// watchVolume reports keyslots of a volume other than the root volume that differ from the recorded ones (PDK-009
+// decision 3); the changed metadata makes the volume's header escrowed again. The first inventory only records.
+func (m *LUKS) watchVolume(uuid string, st *state.LUKSVolume, kinds []string) {
+	if st.Keyslots != nil && slices.Equal(kinds, st.Keyslots) {
+		return
+	}
+	if st.Keyslots != nil {
+		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Volume: uuid, Before: st.Keyslots, After: kinds})
+		slog.Warn("LUKS keyslots changed outside Paddock", "volume", uuid, "before", st.Keyslots, "after", kinds)
+	}
+	st.Keyslots = kinds
+	m.save()
+}
+
+// pendingFor reports whether a header escrow of volume waits for the server.
+func (m *LUKS) pendingFor(volume string) bool {
+	return m.pending != nil && !m.pending.root && m.pending.volume == volume
 }
 
 // watch reports keyslots that differ from the recorded ones (plan M4b decision 12) and records the new set; the
@@ -135,8 +216,8 @@ func (m *LUKS) watch(kinds []string) {
 		return
 	}
 	if m.State.Keyslots != nil {
-		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Before: m.State.Keyslots, After: kinds})
-		slog.Warn("LUKS keyslots changed outside Paddock", "before", m.State.Keyslots, "after", kinds)
+		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Volume: m.rootUUID, Before: m.State.Keyslots, After: kinds})
+		slog.Warn("LUKS keyslots changed outside Paddock", "volume", m.rootUUID, "before", m.State.Keyslots, "after", kinds)
 	}
 	m.State.Keyslots = kinds
 	m.save()
@@ -170,7 +251,7 @@ func (m *LUKS) step(ctx context.Context, device string, md luks.Metadata, passph
 	case m.State.RecoveryStored == 0:
 		return nil // a recovery keyslot this agent did not create: nothing to escrow
 	case digest(md) != m.State.HeaderDigest:
-		return m.escrowHeader(ctx, device, md, keys)
+		return m.escrowHeader(ctx, device, m.rootUUID, true, digest(md), keys)
 	case passphrase && md.Has(luks.KindTPM2PIN):
 		return m.removePassphrase(ctx, device, keyFile, md)
 	}
@@ -262,9 +343,10 @@ func (m *LUKS) recordRecoverySlot(ctx context.Context, device string, before luk
 	return m.Save()
 }
 
-// escrowHeader backs the header up to tmpfs, seals it to escrow-wrap and uploads it; the backup file is removed at
-// once.
-func (m *LUKS) escrowHeader(ctx context.Context, device string, md luks.Metadata, keys *bundle.Keys) error {
+// escrowHeader backs the header of device (the LUKS volume with UUID volume, the root volume if root) up to tmpfs,
+// seals it to escrow-wrap and uploads it with sum, the digest of the metadata it was taken from; the backup file is
+// removed at once. Header generations count across all volumes.
+func (m *LUKS) escrowHeader(ctx context.Context, device, volume string, root bool, sum string, keys *bundle.Keys) error {
 	pub, version, err := escrowKey(keys)
 	if err != nil {
 		return err
@@ -298,12 +380,12 @@ func (m *LUKS) escrowHeader(ctx context.Context, device string, md luks.Metadata
 		return err
 	}
 	if err := m.Escrow.UploadHeader(ctx, escrow.Request{EscrowID: id, Kind: escrow.KindLUKSHeader, Generation: generation,
-		KeyVersion: version, WrappedDEK: sealed.WrappedDEK, Nonce: sealed.Nonce, SHA256: sealed.SHA256,
+		Volume: volume, KeyVersion: version, WrappedDEK: sealed.WrappedDEK, Nonce: sealed.Nonce, SHA256: sealed.SHA256,
 		Size: int64(len(sealed.Object))}, sealed.Object); err != nil {
 		return fmt.Errorf("escrow the header: %w", err)
 	}
-	slog.InfoContext(ctx, "LUKS header uploaded for escrow", "generation", generation, "size", len(sealed.Object))
-	m.start(luksEscrow{kind: escrow.KindLUKSHeader, escrowID: id, generation: generation, digest: digest(md)})
+	slog.InfoContext(ctx, "LUKS header uploaded for escrow", "volume", volume, "generation", generation, "size", len(sealed.Object))
+	m.start(luksEscrow{kind: escrow.KindLUKSHeader, escrowID: id, generation: generation, digest: sum, root: root, volume: volume})
 	return nil
 }
 
@@ -327,7 +409,7 @@ func (m *LUKS) removePassphrase(ctx context.Context, device, keyFile string, bef
 	}
 	slog.InfoContext(ctx, "install passphrase removed; the disk unlocks with TPM2+PIN or the recovery key", "keyslot", slot)
 	if kinds := md.Kinds(); !slices.Equal(kinds, compliantKeyslots) {
-		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Before: compliantKeyslots, After: kinds})
+		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Volume: m.rootUUID, Before: compliantKeyslots, After: kinds})
 		slog.WarnContext(ctx, "LUKS keyslots not created by Paddock are kept", "expected", compliantKeyslots, "keyslots", kinds)
 	}
 	return nil
@@ -362,12 +444,16 @@ func (m *LUKS) poll(ctx context.Context) bool {
 	status, err := m.Escrow.Status(ctx, p.escrowID)
 	switch {
 	case err == nil && status == escrow.StatusStored:
-		if p.kind == escrow.KindLUKSRecoveryKey {
+		switch {
+		case p.kind == escrow.KindLUKSRecoveryKey:
 			m.State.RecoveryStored = p.generation
-		} else {
+		case p.root:
 			m.State.HeaderStored, m.State.HeaderDigest = p.generation, p.digest
+		default:
+			st := m.volumeState(p.volume)
+			st.HeaderStored, st.HeaderDigest = p.generation, p.digest
 		}
-		slog.InfoContext(ctx, "LUKS escrow stored", "kind", p.kind, "generation", p.generation)
+		slog.InfoContext(ctx, "LUKS escrow stored", "kind", p.kind, "volume", p.volume, "generation", p.generation)
 	case err == nil && status == escrow.StatusFailed, !now.Before(p.deadline):
 		slog.WarnContext(ctx, "LUKS escrow not stored; starting over", "kind", p.kind, "generation", p.generation, "status", status)
 	default:

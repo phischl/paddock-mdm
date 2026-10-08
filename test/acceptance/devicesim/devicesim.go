@@ -44,6 +44,8 @@ type Device struct {
 	// SchemaVersions are the bundle schemas the device reports and accepts; nil means [bundle.SchemaVersion], the
 	// schema of today's agent.
 	SchemaVersions []int
+	// Health is the check-in health; nil reports {"reconcile":"ok"}.
+	Health json.RawMessage
 }
 
 func (d *Device) schemaVersions() []int {
@@ -193,9 +195,13 @@ func (d *Device) WaitEnrollment(ctx context.Context, until func(protocol.EnrollS
 
 // Checkin sends a check-in and adopts the returned sequence number.
 func (d *Device) Checkin(ctx context.Context) (protocol.CheckinResponse, Response, error) {
+	health := d.Health
+	if health == nil {
+		health = json.RawMessage(`{"reconcile":"ok"}`)
+	}
 	res, err := d.Do(ctx, Request{Method: http.MethodPost, Path: "/v1/checkin", Body: protocol.CheckinRequest{
 		AppliedBundleVersion: d.Applied, AgentVersion: "0.0.0-devicesim", SchemaVersions: d.schemaVersions(),
-		Health: json.RawMessage(`{"reconcile":"ok"}`), Arch: d.Arch,
+		Health: health, Arch: d.Arch,
 	}})
 	if err != nil || res.Status != http.StatusOK {
 		return protocol.CheckinResponse{}, res, err

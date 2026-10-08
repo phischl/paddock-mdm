@@ -209,7 +209,7 @@ onMounted(async () => {
               {{ t('devices.revocation.incomplete') }}
             </p>
             <ul
-              v-if="volumeResults(r).volumes.length > 0 || volumeResults(r).unresolved.length > 0"
+              v-if="volumeResults(r).volumes.length > 0 || volumeResults(r).unresolved.length > 0 || volumeResults(r).skipped.length > 0"
               class="volumes"
               :aria-label="t('devices.revocation.volumes')"
               data-testid="revocation-volumes"
@@ -225,6 +225,13 @@ onMounted(async () => {
                 :key="'u' + i + ':' + source"
               >
                 {{ t('devices.revocation.volume.unresolved', { source }) }}
+              </li>
+              <li
+                v-for="(v, i) in volumeResults(r).skipped"
+                :key="'s' + i + ':' + v.device"
+                data-testid="revocation-skipped"
+              >
+                {{ t('devices.revocation.volume.skipped', { device: v.device }) }}
               </li>
             </ul>
           </td>

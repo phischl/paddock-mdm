@@ -40,7 +40,11 @@ func (g *gateway) escrowUpload(w http.ResponseWriter, r *http.Request) {
 			g.fail(w, r, errInternal) // a gateway without the escrow bucket is misconfigured
 			return
 		}
-		msg.ObjectKey = escrow.HeaderObjectKey(msg.OrganizationID.String(), msg.DeviceID.String(), msg.Generation)
+		volume := ""
+		if msg.Volume != nil {
+			volume = msg.Volume.String()
+		}
+		msg.ObjectKey = escrow.HeaderObjectKey(msg.OrganizationID.String(), msg.DeviceID.String(), volume, msg.Generation)
 		if accepted.UploadURL, err = g.d.Escrow.PresignPut(r.Context(), msg.ObjectKey, HeaderUploadTTL); err != nil {
 			g.fail(w, r, err)
 			return
@@ -74,7 +78,14 @@ func validateEscrow(req escrow.Request) (ingest.Escrow, error) {
 		return ingest.Escrow{}, errInvalidRequest.with("generation and key_version must be positive")
 	}
 	m := ingest.Escrow{EscrowID: id, Kind: req.Kind, Generation: req.Generation, KeyVersion: req.KeyVersion}
-	header := req.WrappedDEK != "" || req.Nonce != "" || req.SHA256 != "" || req.Size != 0
+	header := req.WrappedDEK != "" || req.Nonce != "" || req.SHA256 != "" || req.Size != 0 || req.Volume != ""
+	if req.Volume != "" {
+		volume, err := uuid.Parse(req.Volume)
+		if err != nil || volume.String() != req.Volume {
+			return ingest.Escrow{}, errInvalidRequest.with("volume must be a lowercase UUID")
+		}
+		m.Volume = &volume
+	}
 	if req.Kind != escrow.KindLUKSHeader {
 		if m.Ciphertext, err = decoded(req.Ciphertext, 1, escrow.MaxCiphertext); err != nil || header {
 			return ingest.Escrow{}, errInvalidRequest.with("ciphertext must be standard base64 of 1 to 4096 bytes, without header fields")

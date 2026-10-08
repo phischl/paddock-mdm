@@ -57,23 +57,33 @@ func (e *env) recoveryKey(org, device uuid.UUID, generation int, key string) {
 	}
 }
 
-// header seals and stores a header generation with status.
+// header seals and stores a header generation with status (of the root volume, before PDK-009: no volume).
 func (e *env) header(org, device uuid.UUID, generation int, status string, header []byte) {
+	e.t.Helper()
+	e.volumeHeader(org, device, "", generation, status, header)
+}
+
+// volumeHeader seals and stores a header generation of volume ("" none) with status.
+func (e *env) volumeHeader(org, device uuid.UUID, volume string, generation int, status string, header []byte) {
 	e.t.Helper()
 	id := uuid.New()
 	sealed, err := escrow.SealHeader(&e.disk.key.PublicKey, header, id.String())
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	key := escrow.HeaderObjectKey(org.String(), device.String(), int64(generation))
+	key := escrow.HeaderObjectKey(org.String(), device.String(), volume, int64(generation))
+	var vol *string
+	if volume != "" {
+		vol = &volume
+	}
 	e.disk.mu.Lock()
 	e.disk.objects[key] = sealed.Object
 	e.disk.mu.Unlock()
 	wrapped, _ := base64.StdEncoding.DecodeString(sealed.WrappedDEK)
 	nonce, _ := base64.StdEncoding.DecodeString(sealed.Nonce)
 	if _, err := e.super.Exec(context.Background(), `INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status,
-		key_version, object_key, wrapped_dek, nonce, sha256, size) VALUES ($1, $2, $3, 'luks_header', $4, $5, 1, $6, $7, $8, $9, $10)`,
-		id, org, device, generation, status, key, wrapped, nonce, sealed.SHA256, len(sealed.Object)); err != nil {
+		key_version, object_key, wrapped_dek, nonce, sha256, size, volume) VALUES ($1, $2, $3, 'luks_header', $4, $5, 1, $6, $7, $8, $9, $10, $11)`,
+		id, org, device, generation, status, key, wrapped, nonce, sealed.SHA256, len(sealed.Object), vol); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -162,6 +172,69 @@ func TestDeviceDisk(t *testing.T) {
 	}
 	if r := e.do(call{method: "POST", path: path + "/header", cookie: e.steppedUp(auditor, time.Now()), body: body}); r.status != http.StatusForbidden {
 		t.Fatalf("auditor: %d", r.status)
+	}
+}
+
+// TestDeviceDiskVolumes (PDK-009 decisions 1 and 5): the disk card lists every volume the device reports and the
+// header generations of each; a download is per volume, the root volume's by default — including its headers
+// escrowed before PDK-009 without a volume —, and audited with the volume.
+func TestDeviceDiskVolumes(t *testing.T) {
+	e := newEnv(t)
+	alice := e.steppedUp(e.session(e.acme, principal.RoleOrgAdmin), time.Now())
+	device := e.insertDevice(e.acme, "lt-vols", "active")
+	path := "/api/v1/devices/" + device.String() + "/disk"
+	const root, data = "0d8f4c62-0000-4000-8000-0000000000aa", "0d8f4c62-0000-4000-8000-0000000000bb"
+	health := `{"disk":{"state":"compliant","luks_version":2,"tokens":["recovery","tpm2+pin"],"keyslots":2,"volumes":[` +
+		`{"uuid":"` + root + `","device":"/dev/sda3","root":true,"luks_version":2,"tokens":["recovery","tpm2+pin"],"keyslots":2,"escrowed":true,"header_generation":2},` +
+		`{"uuid":"` + data + `","device":"/dev/sdb1","luks_version":2,"tokens":["password"],"keyslots":1,"escrowed":true,"header_generation":3}],` +
+		`"unresolved":["LABEL=backup"]}}`
+	if _, err := e.super.Exec(context.Background(), `INSERT INTO device_status (device_id, organization_id, last_contact_at, health)
+		VALUES ($1, $2, now(), $3)`, device, e.acme, health); err != nil {
+		t.Fatal(err)
+	}
+	e.header(e.acme, device, 1, "stored", []byte("legacy root header"))
+	e.volumeHeader(e.acme, device, data, 3, "stored", []byte("data header"))
+
+	var disk adminapi.DiskEncryption
+	e.do(call{method: "GET", path: path, cookie: alice}).decode(t, &disk)
+	if len(disk.Volumes) != 2 || !disk.Volumes[0].Root || disk.Volumes[1].Uuid == nil || *disk.Volumes[1].Uuid != data ||
+		disk.Volumes[1].Device != "/dev/sdb1" || !disk.Volumes[1].Escrowed || strings.Join(disk.Unresolved, ",") != "LABEL=backup" ||
+		len(disk.Headers) != 2 || disk.Headers[0].Volume == nil || disk.Headers[0].Volume.String() != data || disk.Headers[1].Volume != nil {
+		raw, _ := json.Marshal(disk)
+		t.Fatalf("disk %s", raw)
+	}
+
+	// The root volume by default: its only header is the one without a volume.
+	body := map[string]any{"confirm_hostname": "lt-vols"}
+	res := e.do(call{method: "POST", path: path + "/header", cookie: alice, body: body})
+	if res.status != http.StatusOK || string(res.body) != "legacy root header" ||
+		res.header.Get("Content-Disposition") != `attachment; filename=lt-vols-luks-header-1.img` {
+		t.Fatalf("root header: %d %s %v", res.status, res.body, res.header)
+	}
+	e.volumeHeader(e.acme, device, root, 2, "stored", []byte("root header 2"))
+	res = e.do(call{method: "POST", path: path + "/header", cookie: alice, body: map[string]any{"confirm_hostname": "lt-vols", "volume": root}})
+	if res.status != http.StatusOK || string(res.body) != "root header 2" {
+		t.Fatalf("root header by volume: %d %s", res.status, res.body)
+	}
+	res = e.do(call{method: "POST", path: path + "/header", cookie: alice, body: map[string]any{"confirm_hostname": "lt-vols", "volume": data}})
+	if res.status != http.StatusOK || string(res.body) != "data header" ||
+		res.header.Get("Content-Disposition") != `attachment; filename=lt-vols-luks-header-`+data+`-3.img` {
+		t.Fatalf("data header: %d %s %v", res.status, res.body, res.header)
+	}
+	e.expectEvent(res, "disk.header_downloaded:success:")
+	var param string
+	if err := e.super.QueryRow(context.Background(), "SELECT params->>'volume' FROM action WHERE correlation_id = $1",
+		res.header.Get("X-Request-Id")).Scan(&param); err != nil || param != data {
+		t.Fatalf("audit volume %q: %v", param, err)
+	}
+	// A generation of another volume, and a volume without headers, are not this volume's.
+	for _, b := range []map[string]any{
+		{"confirm_hostname": "lt-vols", "volume": data, "generation": 1},
+		{"confirm_hostname": "lt-vols", "volume": "0d8f4c62-0000-4000-8000-0000000000cc"},
+	} {
+		if r := e.do(call{method: "POST", path: path + "/header", cookie: alice, body: b}); r.status != http.StatusConflict {
+			t.Fatalf("%v: %d %s", b, r.status, r.body)
+		}
 	}
 }
 

@@ -97,13 +97,21 @@ export interface VolumeResult {
   erased: boolean
 }
 
+/** A volume a Lock left alone because its header escrow was not confirmed (PDK-009); uuid is absent when unknown. */
+export interface SkippedVolume {
+  device: string
+  uuid?: string
+}
+
 /**
- * The per-volume results of a request's confirmation and the crypttab entries the device could not erase with
- * certainty; incomplete when an entry is unresolved or a volume was not erased (plan M4c.1, review round 1).
+ * The per-volume results of a request's confirmation, the crypttab entries the device could not erase with
+ * certainty and the volumes a Lock skipped; incomplete when an entry is unresolved or a volume was not erased (plan
+ * M4c.1, review round 1). Skipped volumes do not make a Lock incomplete: they stay readable.
  */
 export interface VolumeResults {
   volumes: VolumeResult[]
   unresolved: string[]
+  skipped: SkippedVolume[]
   incomplete: boolean
 }
 
@@ -111,9 +119,17 @@ export interface VolumeResults {
 export function volumeResults(r: RevocationRequest): VolumeResults {
   const raw = Array.isArray(r.result?.volumes) ? r.result.volumes as unknown[] : []
   const rawUnresolved = Array.isArray(r.result?.unresolved) ? r.result.unresolved as unknown[] : []
+  const rawSkipped = Array.isArray(r.result?.skipped_not_escrowed) ? r.result.skipped_not_escrowed as unknown[] : []
   const volumes = raw.filter(isVolumeResult)
   const unresolved = rawUnresolved.filter((s): s is string => typeof s === 'string')
-  return { volumes, unresolved, incomplete: unresolved.length > 0 || volumes.some((v) => !v.erased) }
+  const skipped = rawSkipped.filter(isSkippedVolume)
+  return { volumes, unresolved, skipped, incomplete: unresolved.length > 0 || volumes.some((v) => !v.erased) }
+}
+
+function isSkippedVolume(v: unknown): v is SkippedVolume {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return typeof o.device === 'string' && (o.uuid === undefined || typeof o.uuid === 'string')
 }
 
 function isVolumeResult(v: unknown): v is VolumeResult {
