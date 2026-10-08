@@ -19,7 +19,7 @@ test('organization admin switches the portal to German', async ({ page }) => {
     await page.goto('/devices')
     await expect(page.getByRole('heading', { level: 1, name: 'Geräte' })).toBeVisible()
     await expect(page.getByRole('columnheader', { name: 'Letzter Kontakt' })).toBeVisible()
-    await expect(page.getByText('Einträge pro Seite').first()).toBeVisible()
+    await expect(page.getByRole('combobox', { name: 'Einträge pro Seite' })).toBeVisible()
     const nav = page.getByRole('navigation', { name: 'Hauptnavigation' })
     await expect(nav.getByRole('link', { name: 'Gerätegruppen' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Audit-Protokoll' })).toBeVisible()
