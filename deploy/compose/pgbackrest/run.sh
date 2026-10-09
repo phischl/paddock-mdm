@@ -3,7 +3,7 @@
 #
 #   serve     push archived WAL to the repository every 2 s and take a full backup when the last one is older than
 #             24 h (the service's command)
-#   backup    take a full backup now
+#   backup    take a full backup now (further arguments go to `pgbackrest backup`, e.g. --start-fast)
 #   flush     push every WAL file still in the spool
 #   info      pgbackrest info
 #   restore   restore the latest backup into the empty data directory and stage the WAL up to the newest archived
@@ -85,7 +85,7 @@ ensure_stanza() {
 }
 
 full_backup() {
-  pgb backup --type=full && date +%s >"$STATE/last-full"
+  pgb backup --type=full "$@" && date +%s >"$STATE/last-full"
 }
 
 # pusher keeps pushing the spool in the background: a backup waits for WAL segments that only the spool delivers.
@@ -116,7 +116,7 @@ case "${1:-serve}" in
     ensure_stanza
     pusher &
     trap 'kill $! 2>/dev/null || true' EXIT
-    full_backup
+    full_backup "${@:2}"
     ;;
   flush)
     push_spool

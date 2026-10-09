@@ -46,11 +46,15 @@ wait_spool_empty() {
 }
 
 bao() { dc exec -T -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN="$BAO_TOKEN"} openbao bao "$@"; }
+bao_restart() { dc restart openbao >/dev/null; }
+# shellcheck source=openbao-restore.sh
+. "$here/openbao-restore.sh"
 
 # --- 1. Backup -------------------------------------------------------------------------------------------------------
 log "1. full backups and an OpenBao snapshot"
-dc run --rm --no-deps pgbackrest backup
-dc run --rm --no-deps pgbackrest-authentik backup
+# --start-fast: a checkpoint now instead of the next regular one, up to checkpoint_timeout (5 min) away.
+dc run --rm --no-deps pgbackrest backup --start-fast
+dc run --rm --no-deps pgbackrest-authentik backup --start-fast
 dc --profile paddock run --rm --no-deps paddock-worker backup openbao
 devices_before="$(psql_in postgres postgres paddock 'select count(*) from device')"
 # Everything written so far reaches the archive: the restore must bring back the latest point, not the full backup.
@@ -98,22 +102,13 @@ aws() {
 snapshot="$(aws s3api list-objects-v2 --bucket "$BUCKET" --prefix openbao/ --query 'max_by(Contents, &LastModified).Key' --output text)"
 aws s3 cp --only-show-errors "s3://$BUCKET/$snapshot" /drill/snapshot.enc
 dc up -d --no-deps openbao
-for _ in $(seq 1 60); do bao status -format=json 2>/dev/null | grep -q '"initialized"' && break; sleep 1; done
-# A fresh OpenBao takes the snapshot only after its own initialization; the snapshot then brings back the original
-# barrier, which the stored development shares unseal.
-bao operator init -key-shares=1 -key-threshold=1 -format=json >"$work/init.json"
-tmp_key="$(grep -A1 '"unseal_keys_b64"' "$work/init.json" | tail -1 | tr -d ' ",')"
-BAO_TOKEN="$(grep '"root_token"' "$work/init.json" | cut -d'"' -f4)"
-bao operator unseal "$tmp_key" >/dev/null
-for _ in $(seq 1 30); do bao status -format=json 2>/dev/null | grep -q '"sealed": false' && break; sleep 1; done
+openbao_wait
 # The decrypted snapshot never touches the host's disk: the worker image decrypts it to stdout.
 dc --profile paddock run --rm --no-deps -T -v "$work:/drill:ro" paddock-worker backup decrypt /drill/snapshot.enc - |
   dc exec -T openbao sh -c 'cat >/tmp/snapshot'
-bao operator raft snapshot restore -force /tmp/snapshot
-unset BAO_TOKEN
+# The restored node has the original barrier; the stored development shares unseal it.
+openbao_restore_snapshot "$work" "$SECRETS_DIR/openbao/init.txt"
 dc exec -T openbao rm -f /tmp/snapshot
-# The restored node is sealed with the original barrier; the stored development shares unseal it.
-"$here/openbao-bootstrap.sh" unseal
 
 # --- 5. Paddock ------------------------------------------------------------------------------------------------------
 log "5. starting Authentik and the roles; restore commands (plan M6c decisions 20–22)"
