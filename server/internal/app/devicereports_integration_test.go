@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
+	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 )
 
@@ -229,5 +232,43 @@ func TestRecordEventsBatch(t *testing.T) {
 	var seen int
 	if err := h.super.QueryRow(ctx, "SELECT count(*) FROM device_user_seen WHERE device_id = $1 AND username = 'dave@acme.test'", device).Scan(&seen); err != nil || seen != 1 {
 		t.Fatalf("device_user_seen %d (%v)", seen, err)
+	}
+}
+
+// TestRecordOnceBatchFallback (N2 review): when the batch transaction fails because of one event (a NUL character,
+// which jsonb rejects), every other event is still audited exactly once; the bad one fails alone, also on redelivery,
+// and leaves no claimed key behind.
+func TestRecordOnceBatchFallback(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	entry := func(seq int64, reason string) app.OnceEntry {
+		return app.OnceEntry{
+			Spec: app.ActionSpec{Code: audit.CodeDeviceLoginApplyFailed, Actor: &audit.Actor{Type: audit.ActorDevice, ID: device.String()},
+				Target: &audit.Target{Type: "device", ID: device.String()}, Params: map[string]any{"event_seq": seq, "reason": reason}},
+			Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+				n, err := q.InsertDeviceEventSeen(ctx, pgstore.InsertDeviceEventSeenParams{DeviceID: device, EventSeq: seq, OrganizationID: org})
+				return n == 1, err
+			},
+		}
+	}
+	entries := []app.OnceEntry{entry(1, "first"), entry(2, "bad\x00reason"), entry(3, "third")}
+	for round, want := range [][]bool{{true, false, true}, {false, false, false}} {
+		recorded, err := h.runner.RecordOnceBatch(systemCtx(org), entries)
+		if err == nil || !strings.Contains(err.Error(), "entry 1:") || strings.Contains(err.Error(), "entry 0:") || strings.Contains(err.Error(), "entry 2:") {
+			t.Fatalf("round %d: error %v, want the failure of entry 1 alone", round, err)
+		}
+		if fmt.Sprint(recorded) != fmt.Sprint(want) {
+			t.Fatalf("round %d: recorded %v, want %v", round, recorded, want)
+		}
+	}
+	ctx := context.Background()
+	var seqs string
+	if err := h.super.QueryRow(ctx, `SELECT string_agg(params->>'event_seq', ' ' ORDER BY params->>'event_seq') FROM action
+		WHERE organization_id = $1 AND code = 'device.login_apply_failed'`, org).Scan(&seqs); err != nil || seqs != "1 3" {
+		t.Fatalf("audited event_seq %q (%v), want 1 3", seqs, err)
+	}
+	var seen int
+	if err := h.super.QueryRow(ctx, "SELECT count(*) FROM device_event_seen WHERE device_id = $1", device).Scan(&seen); err != nil || seen != 2 {
+		t.Fatalf("%d claimed keys (%v), want 2", seen, err)
 	}
 }

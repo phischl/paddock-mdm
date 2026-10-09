@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of one, which handled one publisher confirm at a time and held a gateway at about 800 check-ins/s
   (`docs/operations/capacity.md`). Each gateway replica now opens 16 AMQP connections.
 - The worker reaches N2 (5 000 device events/s with 3 replicas): it handles 8 `ingest.event` messages at a time and
-  records the events of one message in one transaction instead of one transaction per event.
+  records the events of one message in one transaction instead of one transaction per event. When that transaction
+  fails, the events are recorded one by one, so one bad event fails alone.
 
 ## [0.1.0] - 2026-10-08
 

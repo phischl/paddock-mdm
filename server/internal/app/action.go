@@ -373,7 +373,9 @@ func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
 	return recorded, nil
 }
 
-// OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce).
+// OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
+// without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
+// login) and reports false.
 type OnceEntry struct {
 	Spec  ActionSpec
 	Claim func(ctx context.Context, q *pgstore.Queries) (bool, error)
@@ -381,7 +383,9 @@ type OnceEntry struct {
 
 // RecordOnceBatch is RecordOnce for several events in one transaction, so a batch of device events costs one commit
 // instead of one per event (N2, docs/operations/capacity.md): every entry records exactly one event when its key was
-// new. It reports which entries were recorded; an error rolls back the whole batch and nothing counts as recorded.
+// new. When the batch transaction fails, every entry is recorded on its own with RecordOnce, so one bad event fails
+// alone and the others are recorded exactly once. It reports which entries were recorded and the errors of the
+// entries that failed.
 func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry) ([]bool, error) {
 	p, ok := principal.From(ctx)
 	if !ok || p.Kind != principal.KindSystem {
@@ -389,7 +393,9 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 	}
 	recs := make([]*recorder, len(entries))
 	for i, e := range entries {
-		recs[i] = r.newRecorder(ctx, p, ScopeOrg, e.Spec)
+		if e.Spec.Code != "" {
+			recs[i] = r.newRecorder(ctx, p, ScopeOrg, e.Spec)
+		}
 	}
 	var recorded []bool
 	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -399,7 +405,7 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 			if err != nil {
 				return err
 			}
-			if !fresh {
+			if !fresh || recs[i] == nil {
 				continue
 			}
 			if err := r.insertFinished(ctx, q, recs[i], nil); err != nil {
@@ -409,10 +415,29 @@ func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry)
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return recorded, nil
 	}
-	return recorded, nil
+	recorded = make([]bool, len(entries))
+	var errs []error
+	for i, e := range entries {
+		if e.Spec.Code == "" {
+			if err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+				_, err := e.Claim(ctx, q)
+				return err
+			}); err != nil {
+				errs = append(errs, fmt.Errorf("entry %d: %w", i, err))
+			}
+			continue
+		}
+		fresh, err := r.RecordOnce(ctx, e.Spec, e.Claim)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("entry %d: %w", i, err))
+			continue
+		}
+		recorded[i] = fresh
+	}
+	return recorded, errors.Join(errs...)
 }
 
 // RecordOnceRefusal is RecordOnce for an event refused with refusal (recorded with its outcome and error code):

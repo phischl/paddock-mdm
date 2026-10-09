@@ -142,18 +142,17 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 	return d.runner.RecordOnce(ctx, entry.Spec, entry.Claim)
 }
 
-// RecordEvents is RecordEvent for the events of one ingest message: the audited events are recorded in one
-// transaction (ActionRunner.RecordOnceBatch), session logins each on their own.
+// RecordEvents is RecordEvent for the events of one ingest message, session logins included, in one transaction
+// (ActionRunner.RecordOnceBatch). An error means that some event could not be recorded; the others are, and a
+// redelivery skips them by (device_id, event_seq).
 func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, events []protocol.Event) error {
 	entries := make([]OnceEntry, 0, len(events))
 	for _, ev := range events {
+		entry, ok := eventEntry(deviceID, ev)
 		if ev.Type == protocol.EventSessionLogin {
-			if err := d.recordSessionLogin(ctx, deviceID, ev); err != nil {
-				return err
-			}
-			continue
+			entry, ok = sessionLoginEntry(deviceID, ev)
 		}
-		if entry, ok := eventEntry(deviceID, ev); ok {
+		if ok {
 			entries = append(entries, entry)
 		}
 	}
@@ -210,23 +209,36 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 // recordSessionLogin notes that a user logged in on a device (device_user_seen, plan M3a decision 10); logins are not
 // audited (privacy, volume), and a redelivered event only repeats the same upsert. A malformed event is ignored.
 func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UUID, ev protocol.Event) error {
+	entry, ok := sessionLoginEntry(deviceID, ev)
+	if !ok {
+		return nil
+	}
+	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		_, err := entry.Claim(ctx, q)
+		return err
+	})
+}
+
+// sessionLoginEntry is the unaudited batch entry of a session login (an upsert of device_user_seen); false for a
+// malformed event.
+func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 	var login protocol.SessionLogin
 	if json.Unmarshal(ev.Data, &login) != nil {
-		return nil
+		return OnceEntry{}, false
 	}
 	username := strings.ToLower(strings.TrimSpace(login.Username))
 	if username == "" || len(username) > maxParamString {
-		return nil
+		return OnceEntry{}, false
 	}
 	at := login.At
 	if at.IsZero() || at.After(ev.OccurredAt.Add(time.Minute)) {
 		at = ev.OccurredAt
 	}
-	return d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		return q.UpsertDeviceUserSeen(ctx, pgstore.UpsertDeviceUserSeenParams{
+	return OnceEntry{Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		return false, q.UpsertDeviceUserSeen(ctx, pgstore.UpsertDeviceUserSeenParams{
 			OrganizationID: mustOrg(ctx), DeviceID: deviceID, Username: username, LastSeenAt: at.UTC(),
 		})
-	})
+	}}, true
 }
 
 // loginStateArea is the area of device_status.login_state an event updates: "login" for login.*, "sudo" for
