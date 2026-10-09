@@ -7,27 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
-
-- Go toolchain 1.27.2 (build image `golang:1.27.2-trixie`, CI, every module): fixes GO-2026-6617 (HTTP/2 server crash
-  through an HPACK encoder race) and GO-2026-6613 (HTTP/1 connection desynchronization after a 2xx CONNECT response)
-  in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
-  GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
-
-### Fixed
-
-- `fleet-backup` no longer takes its first daily dump before Fleet created its schema: on a fresh installation the
-  first dump was an empty database that counted as the day's Fleet backup for 24 hours.
-- The gateway reaches N1 (1 000 check-ins/s per replica, p99 < 200 ms): it publishes over 16 broker connections
-  instead of one, which handled one publisher confirm at a time and held a gateway at about 800 check-ins/s
-  (`docs/operations/capacity.md`). Each gateway replica now opens 16 AMQP connections.
-- The worker reaches N2 (5 000 device events/s with 3 replicas): it handles 8 `ingest.event` messages at a time and
-  records the events of one message in one transaction instead of one transaction per event. When that transaction
-  fails, the events are recorded one by one, so one bad event fails alone.
-- Device-supplied strings in audit parameters lose their C0 control characters (except tab, newline and carriage
-  return): a NUL character, which PostgreSQL rejects, made the event fail on every delivery until it was
-  dead-lettered. A session login of a username with control characters is ignored.
-
 ## [0.1.0] - 2026-10-08
 
 First public release (prepared, not tagged yet: the product owner sets the date when tagging `v0.1.0`). Paddock
@@ -249,6 +228,17 @@ acceptance.
 - `make dev-seed` right after `make up` waits up to 300 s until Authentik reports every Paddock blueprint as applied successfully before it checks the login flow, and names the pending blueprints and their status on timeout (M0.3 step 3).
 - The development blueprint `paddock-dev.yaml` no longer ends in status `error` when Authentik re-applies it after the first start (M0.3 step 3).
 - `make up` after `make down V=1` no longer leaves `paddock-api` and `paddock-audit-writer` unhealthy: re-initializing OpenBao now also replaces the stored AppRole secret-ids (M1 step 1).
+- `fleet-backup` no longer takes its first daily dump before Fleet created its schema: on a fresh installation the
+  first dump was an empty database that counted as the day's Fleet backup for 24 hours.
+- The gateway reaches N1 (1 000 check-ins/s per replica, p99 < 200 ms): it publishes over 16 broker connections
+  instead of one, which handled one publisher confirm at a time and held a gateway at about 800 check-ins/s
+  (`docs/operations/capacity.md`). Each gateway replica now opens 16 AMQP connections.
+- The worker reaches N2 (5 000 device events/s with 3 replicas): it handles 8 `ingest.event` messages at a time and
+  records the events of one message in one transaction instead of one transaction per event. When that transaction
+  fails, the events are recorded one by one, so one bad event fails alone.
+- Device-supplied strings in audit parameters lose their C0 control characters (except tab, newline and carriage
+  return): a NUL character, which PostgreSQL rejects, made the event fail on every delivery until it was
+  dead-lettered. A session login of a username with control characters is ignored.
 
 ### Known limitations
 
@@ -272,6 +262,10 @@ acceptance.
 - The portal uses a backend-for-frontend session: tokens stay on the server, the browser only holds an encrypted, `HttpOnly`, `SameSite=Strict` session cookie (F8, M0 step 7).
 - The portal is served with a strict Content Security Policy without `'unsafe-inline'`, with `frame-ancestors 'none'` and no third-party origins (C7, M0 step 8).
 - Portal CSP now uses a per-response style nonce: `index.html` is served with `Cache-Control: no-store` and a fresh nonce in its `style-src` directive, still without `'unsafe-inline'` (C7, M0.1 step 4).
+- Go toolchain 1.27.2 (build image `golang:1.27.2-trixie`, CI, every module): fixes GO-2026-6617 (HTTP/2 server crash
+  through an HPACK encoder race) and GO-2026-6613 (HTTP/1 connection desynchronization after a 2xx CONNECT response)
+  in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
+  GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
 [Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0
