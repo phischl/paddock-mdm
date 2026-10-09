@@ -2,6 +2,9 @@ package mq_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,5 +118,44 @@ func TestProvisionTopology(t *testing.T) {
 	}
 	if d := get("dlq." + mq.StateQueue(mq.StatePartition(org))); d.MessageId != "st-1" {
 		t.Fatalf("state dead-letter queue got %s", d.MessageId)
+	}
+}
+
+// TestPublisherPool: concurrent batches through the pool are each confirmed and routed, and an unroutable message is
+// reported to the batch that published it only.
+func TestPublisherPool(t *testing.T) {
+	broker := mqtest.Start(t)
+	ctx := context.Background()
+	pool := mq.NewPublisherPool(broker.Config, 4)
+	defer pool.Close()
+	if err := pool.Ping(); err != nil {
+		t.Fatal(err)
+	}
+	org := uuid.New()
+	var wg sync.WaitGroup
+	errs := make(chan error, 64)
+	for i := range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			key := mq.IngestRoutingKey(mq.IngestHeartbeat, org)
+			if i%8 == 0 {
+				key = "ingest.unknown." + org.String()
+			}
+			res, err := pool.PublishBatch(ctx, mq.ExchangeIngest, []mq.Message{{RoutingKey: key, MessageID: fmt.Sprint("m-", i), Body: []byte(`{}`)}})
+			switch {
+			case err != nil:
+				errs <- err
+			case i%8 == 0 && !errors.Is(res[0], mq.ErrReturned):
+				errs <- fmt.Errorf("message %d: want returned, got %v", i, res[0])
+			case i%8 != 0 && res[0] != nil:
+				errs <- fmt.Errorf("message %d: %w", i, res[0])
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }

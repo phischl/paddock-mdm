@@ -17,6 +17,10 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/device"
 )
 
+// gatewayPublishers is the number of broker connections a gateway publishes over: every check-in waits for its
+// publisher confirm, and one connection held the measured N1 rate at about 800 check-ins/s.
+const gatewayPublishers = 16
+
 // serveGateway runs the device API. The gateway has no database credentials (plan M2a decision 1).
 func serveGateway(ctx context.Context, l *config.Loader, common config.Common) error {
 	httpAddr := l.String("PADDOCK_HTTP_ADDR", ":8081")
@@ -36,7 +40,7 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 		return err
 	}
 	defer vk.Close()
-	pub := mq.NewPublisher(mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password})
+	pub := mq.NewPublisherPool(mq.Config{URL: amqpCfg.URL, User: amqpCfg.User, Password: amqpCfg.Password}, gatewayPublishers)
 	defer pub.Close()
 	handler := device.NewHandler(device.Deps{
 		Cache:     devicecache.New(vk),

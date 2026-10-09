@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `fleet-backup` no longer takes its first daily dump before Fleet created its schema: on a fresh installation the
   first dump was an empty database that counted as the day's Fleet backup for 24 hours.
+- The gateway reaches N1 (1 000 check-ins/s per replica, p99 < 200 ms): it publishes over 16 broker connections
+  instead of one, which handled one publisher confirm at a time and held a gateway at about 800 check-ins/s
+  (`docs/operations/capacity.md`). Each gateway replica now opens 16 AMQP connections.
 
 ## [0.1.0] - 2026-10-08
 
