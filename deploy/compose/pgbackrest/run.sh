@@ -132,14 +132,26 @@ case "${1:-serve}" in
     ensure_stanza
     pusher &
     trap 'kill $! 2>/dev/null || true' EXIT
-    # The service may be taking its scheduled backup: wait for the stanza's lock (exit code 50) for up to 15 minutes.
+    # The service may be taking its scheduled backup: wait for the stanza's lock for up to 15 minutes. flock(1) sees
+    # pgBackRest's lock, so the wait is one log line instead of a failed backup (ERROR [050]) every round; a backup
+    # that loses the race to the lock still exits 50 and is retried.
+    lock="$PGBACKREST_LOCK_PATH/$STANZA-backup-1.lock"
+    waiting=false
     for _ in $(seq 1 90); do
+      if [[ -e "$lock" ]] && ! flock -n "$lock" true; then
+        if ! $waiting; then
+          echo "$(date -u '+%F %T') INFO: waiting for the running backup of $STANZA to finish"
+          waiting=true
+        fi
+        sleep 10
+        continue
+      fi
       rc=0
       full_backup "${@:2}" || rc=$?
       if ((rc != 50)); then exit "$rc"; fi
-      echo "pgbackrest: another backup of $STANZA is running; waiting" >&2
       sleep 10
     done
+    echo "pgbackrest: the running backup of $STANZA did not finish within 15 minutes" >&2
     exit 50
     ;;
   flush)
