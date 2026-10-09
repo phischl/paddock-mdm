@@ -42,7 +42,7 @@ disabled until an installation has passed its hardware acceptance (`docs/operati
 
 ## Quick start (local development)
 
-Prerequisites: Docker Engine with Compose v2, GNU make, Go 1.21 or newer (fetches the declared Go 1.27.1 toolchain
+Prerequisites: Docker Engine with Compose v2, GNU make, Go 1.21 or newer (fetches the declared Go 1.27.2 toolchain
 automatically). Node is not needed on the host. Free ports: `8443` and the loopback ports listed in
 `docs/operations/local-dev.md`.
 

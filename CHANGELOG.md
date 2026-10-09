@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Go toolchain 1.27.2 (build image `golang:1.27.2-trixie`, CI, every module): fixes GO-2026-6617 (HTTP/2 server crash
+  through an HPACK encoder race) and GO-2026-6613 (HTTP/1 connection desynchronization after a 2xx CONNECT response)
+  in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
+  GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
+
 ### Fixed
 
 - `fleet-backup` no longer takes its first daily dump before Fleet created its schema: on a fresh installation the

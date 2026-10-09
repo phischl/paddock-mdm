@@ -2,7 +2,7 @@ module github.com/phischl/paddock-mdm/agent
 
 go 1.27.0
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	aead.dev/minisign v0.3.0
