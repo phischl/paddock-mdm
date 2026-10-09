@@ -239,6 +239,11 @@ acceptance.
 - Device-supplied strings in audit parameters lose their C0 control characters (except tab, newline and carriage
   return): a NUL character, which PostgreSQL rejects, made the event fail on every delivery until it was
   dead-lettered. A session login of a username with control characters is ignored.
+- The restore drill (`make restore-drill`) and the runbook restart OpenBao after the snapshot restore: until it
+  restarts, the restored node keeps the temporary seal configuration and refuses the original shares ("invalid key
+  size 33"). The drill's full backups use `--start-fast` (`paddock-pgbackrest backup` passes further arguments to
+  `pgbackrest backup`) instead of waiting up to 5 minutes for a checkpoint; `make test` restores a snapshot into a
+  throwaway OpenBao.
 
 ### Known limitations
 

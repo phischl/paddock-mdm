@@ -70,7 +70,7 @@ time of the newest object of each kind in the bucket; the alert `PaddockBackupSt
 Commands (with the control plane's Compose files, `pc` in `docs/operations/install.md`):
 
 ```sh
-pc run --rm --no-deps pgbackrest backup              # full backup of paddock now (pgbackrest-authentik: Authentik)
+pc run --rm --no-deps pgbackrest backup --start-fast # full backup of paddock now (pgbackrest-authentik: Authentik)
 pc run --rm --no-deps pgbackrest info                # pgbackrest info of the stanza
 pc run --rm --no-deps paddock-worker backup openbao  # OpenBao snapshot now
 pc run --rm --no-deps fleet-backup once              # Fleet dump now; fleet-backup-upload uploads it within a minute
@@ -106,10 +106,12 @@ store is not restored; the audit host keeps running. Commands use the control pl
      pc exec -T openbao sh -c 'cat >/tmp/snapshot'
    bao operator raft snapshot restore -force /tmp/snapshot     # with the temporary root token
    pc exec openbao rm /tmp/snapshot
+   pc restart openbao
    ```
 
-   The restored node is sealed with the original barrier: three custodians unseal it with their shares
-   (`docs/operations/openbao.md` section 2). Policies, AppRoles and keys are those of the snapshot; secret IDs issued
+   The restored node is sealed with the original barrier, but until it restarts it keeps the temporary seal
+   configuration (one share) and refuses the original shares ("invalid key size 33"). After the restart three
+   custodians unseal it with their shares (`docs/operations/openbao.md` section 2). Policies, AppRoles and keys are those of the snapshot; secret IDs issued
    after it must be issued again.
 5. **Paddock.** Start Authentik and the roles except the compiler, then run the restore commands in exactly this order
    (plan M6c decisions 20–22): a restored database can hold older bundle sequence numbers than the devices, which would

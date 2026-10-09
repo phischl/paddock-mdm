@@ -128,6 +128,7 @@ test: ## Unit and integration tests (requires Docker)
 	go test -count=1 -tags paddock_revoke_testtarget ./agent/internal/revoke/
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
+	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
 
 .PHONY: fuzz
