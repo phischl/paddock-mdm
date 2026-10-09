@@ -32,9 +32,14 @@ func (r *Reports) HandleHeartbeats(ctx context.Context, _ *amqp.Channel, deliver
 	})
 }
 
+// EventConcurrency is the number of ingest.event messages a worker handles at a time: each event is one transaction,
+// so a single loop bounded N2 (5 000 events/s with 3 workers) at about 1 000 events/s. The order does not matter:
+// events are deduplicated by (device_id, event_seq) and a login state never replaces a newer one.
+const EventConcurrency = 8
+
 // HandleEvents is the mq.ConsumeFunc of queue ingest.event.
 func (r *Reports) HandleEvents(ctx context.Context, _ *amqp.Channel, deliveries <-chan amqp.Delivery) error {
-	return consume(ctx, deliveries, r.pause, func(ctx context.Context, d amqp.Delivery) outcome {
+	return consumeConcurrently(ctx, deliveries, EventConcurrency, r.pause, func(ctx context.Context, d amqp.Delivery) outcome {
 		return r.events(ctx, d.MessageId, d.Body)
 	})
 }
@@ -87,12 +92,10 @@ func (r *Reports) events(ctx context.Context, messageID string, body []byte) out
 		return poison
 	}
 	ctx = systemContext(ctx, batch.OrganizationID, messageID)
-	for _, ev := range batch.Events {
-		if _, err := r.reports.RecordEvent(ctx, batch.DeviceID, ev); err != nil {
-			slog.WarnContext(ctx, "recording device event failed; retrying", "device_id", batch.DeviceID,
-				"event_seq", ev.EventSeq, "error", err)
-			return retry
-		}
+	if err := r.reports.RecordEvents(ctx, batch.DeviceID, batch.Events); err != nil {
+		slog.WarnContext(ctx, "recording device events failed; retrying", "device_id", batch.DeviceID,
+			"events", len(batch.Events), "error", err)
+		return retry
 	}
 	return ack
 }

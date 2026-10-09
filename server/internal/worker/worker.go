@@ -65,6 +65,29 @@ func consume(ctx context.Context, deliveries <-chan amqp.Delivery, pause time.Du
 	}
 }
 
+// consumeConcurrently runs n consume loops over the same deliveries until all of them have returned and returns the
+// first error; for queues whose messages may be settled in any order.
+func consumeConcurrently(ctx context.Context, deliveries <-chan amqp.Delivery, n int, pause time.Duration,
+	handle func(ctx context.Context, d amqp.Delivery) outcome) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make(chan error, n)
+	for range n {
+		go func() {
+			err := consume(ctx, deliveries, pause, handle)
+			cancel() // one failed loop (closed channel, failed ack) ends the others, so the consumer reconnects
+			errs <- err
+		}()
+	}
+	var first error
+	for range n {
+		if err := <-errs; first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 func settle(ctx context.Context, d amqp.Delivery, o outcome, pause time.Duration) error {
 	switch o {
 	case ack:

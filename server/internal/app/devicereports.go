@@ -135,9 +135,41 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 	if ev.Type == protocol.EventSessionLogin {
 		return true, d.recordSessionLogin(ctx, deviceID, ev)
 	}
-	code, ok := eventCodes[ev.Type]
+	entry, ok := eventEntry(deviceID, ev)
 	if !ok {
 		return false, nil // the gateway admits only known types; anything else is ignored
+	}
+	return d.runner.RecordOnce(ctx, entry.Spec, entry.Claim)
+}
+
+// RecordEvents is RecordEvent for the events of one ingest message: the audited events are recorded in one
+// transaction (ActionRunner.RecordOnceBatch), session logins each on their own.
+func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, events []protocol.Event) error {
+	entries := make([]OnceEntry, 0, len(events))
+	for _, ev := range events {
+		if ev.Type == protocol.EventSessionLogin {
+			if err := d.recordSessionLogin(ctx, deviceID, ev); err != nil {
+				return err
+			}
+			continue
+		}
+		if entry, ok := eventEntry(deviceID, ev); ok {
+			entries = append(entries, entry)
+		}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	_, err := d.runner.RecordOnceBatch(ctx, entries)
+	return err
+}
+
+// eventEntry is the audited action of a device event and the claim of its (device, event_seq); false for a type that
+// is not audited.
+func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
+	code, ok := eventCodes[ev.Type]
+	if !ok {
+		return OnceEntry{}, false
 	}
 	spec := ActionSpec{
 		Code:   code,
@@ -145,7 +177,7 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 		Target: &audit.Target{Type: "device", ID: deviceID.String()},
 		Params: eventParams(ev),
 	}
-	return d.runner.RecordOnce(ctx, spec, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+	return OnceEntry{Spec: spec, Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
 		org, err := orgOf(ctx)
 		if err != nil {
 			return false, err
@@ -172,7 +204,7 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 			})
 		}
 		return true, err
-	})
+	}}, true
 }
 
 // recordSessionLogin notes that a user logged in on a device (device_user_seen, plan M3a decision 10); logins are not
