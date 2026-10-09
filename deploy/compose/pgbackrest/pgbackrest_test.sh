@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test of the pgBackRest behaviour run.sh relies on (`make test`, needs Docker and the image paddock-pgbackrest:dev,
 # built by `make image-pgbackrest`): two containers that share the lock path on a volume cannot back up the same stanza
-# at once (the second exits 50), and `verify --output=text --verbose` reports a backup set with a missing file as
+# at once (the second exits 50, and flock(1) sees the lock), and `verify --output=text --verbose` reports a backup set with a missing file as
 # "status: error" while its exit code stays 0. Throwaway PostgreSQL and a posix repository in volumes.
 set -euo pipefail
 
@@ -53,6 +53,9 @@ pusher_pid=$!
 pgb backup --type=full --start-fast >/dev/null 2>&1 &
 first=$!
 sleep 1
+held=0
+docker run --rm --entrypoint flock -v "$id-state:/state" "$image" -n /state/lock/test-backup-1.lock true || held=$?
+check "flock(1) sees the lock of the running backup (run.sh waits on it)" "$([[ $held != 0 ]] && echo 0 || echo 1)"
 second=0
 pgb backup --type=full --start-fast >/dev/null 2>&1 || second=$?
 first_rc=0
