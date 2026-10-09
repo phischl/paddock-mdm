@@ -92,6 +92,12 @@ A tag `v<version>` runs the release workflow (`.github/workflows/release.yml`, p
    workflow's GitHub OIDC identity, Sigstore's public good instance; no key to keep), attaches its SBOM as a signed
    SPDX attestation, and signs `SHA256SUMS` (`SHA256SUMS.sigstore.json`).
 
+`<version>` is `x.y.z` or a pre-release `x.y.z-alpha.N`, `x.y.z-beta.N` or `x.y.z-rc.N` (`make release-check`
+refuses anything else). Images carry exactly `<version>` as their tag, never `latest`. The Debian packages of a
+pre-release carry the Debian version `x.y.z~alpha.N` (`~beta.N`, `~rc.N`), which sorts before `x.y.z`, so their
+files are named `<name>_0.1.0~alpha.1_amd64-unsigned.deb`; agents and supervisors order the versions by SemVer
+precedence (`0.1.0-alpha.1 < 0.1.0-alpha.2 < 0.1.0-beta.1 < 0.1.0-rc.1 < 0.1.0`).
+
 `PUSH=1` pushes the `:<version>` tags before `release-sign` runs, so a run that fails between the two leaves
 unsigned images under the release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and
 consumers verify the signature (`cosign verify`, below) instead of trusting the tag, so an unsigned image fails

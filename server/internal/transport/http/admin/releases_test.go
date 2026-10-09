@@ -36,8 +36,8 @@ func TestAgentReleasesAPI(t *testing.T) {
 		t.Fatalf("forged signature: %d %s", r.status, r.body)
 	}
 	// A valid signature whose trusted comment does not bind the binary to this version and architecture (plan M4b.1
-	// decision 12), or has no such comment at all.
-	for _, comment := range []string{releasesig.Comment("1.0.0", "amd64"), releasesig.Comment(v, "arm64"), ""} {
+	// decision 12), or has no such comment at all; the release 2.0.0 is not its pre-release v (PDK-022).
+	for _, comment := range []string{releasesig.Comment("1.0.0", "amd64"), releasesig.Comment("2.0.0", "amd64"), releasesig.Comment(v, "arm64"), ""} {
 		other := minisign.Sign(e.release, bin)
 		if comment != "" {
 			other = minisign.SignWithComments(e.release, bin, comment, "")

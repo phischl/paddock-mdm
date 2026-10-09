@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
@@ -86,6 +87,40 @@ func TestUpdateNotStaged(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPreReleaseOffers (PDK-022): the agent compares versions only for equality and leaves their order to the
+// supervisor, so every pre-release of the sequence is staged, also right after its predecessor failed; the running
+// version itself is never staged.
+func TestPreReleaseOffers(t *testing.T) {
+	sequence := []string{"0.1.0-alpha.1", "0.1.0-alpha.2", "0.1.0-beta.1", "0.1.0-rc.1", "0.1.0"}
+	for i, v := range sequence {
+		t.Run(v, func(t *testing.T) {
+			g := testgw.New(t)
+			a := newAgent(t, g)
+			if i > 0 {
+				a.st.FailedUpdateVersion = sequence[i-1]
+			}
+			a.d.Supervisor = func() (int, error) { return 1, nil }
+			a.d.Signal = func(int) error { return nil }
+			offer(g, v, []byte("agent "+v))
+			a.Cycle(context.Background())
+			if staged, err := os.ReadFile(filepath.Join(a.d.Layout.Staging(), v, "paddockd")); err != nil || string(staged) != "agent "+v {
+				t.Fatalf("staged %q, %v", staged, err)
+			}
+		})
+	}
+	t.Run("running version", func(t *testing.T) {
+		g := testgw.New(t)
+		a := newAgent(t, g)
+		a.d.Supervisor = func() (int, error) { return 1, nil }
+		a.d.Signal = func(int) error { return nil }
+		offer(g, buildinfo.Version, []byte("x"))
+		a.Cycle(context.Background())
+		if update.Pending(a.d.Layout) {
+			t.Fatal("the running version was staged")
+		}
+	})
 }
 
 func TestUpdateResultReportedOnce(t *testing.T) {
