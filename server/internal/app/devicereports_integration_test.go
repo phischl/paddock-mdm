@@ -198,3 +198,36 @@ func TestRevokeCapabilitiesKept(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordEventsBatch (N2): the events of one ingest message are recorded in one transaction, each audited exactly
+// once; a repeated sequence number in the batch and a redelivered batch record nothing more, and a session login is
+// noted without an audit event.
+func TestRecordEventsBatch(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	batch := []protocol.Event{
+		{EventSeq: 1, Type: protocol.EventLoginApplied, OccurredAt: at, Data: json.RawMessage(`{"changed":["config"]}`)},
+		{EventSeq: 2, Type: protocol.EventTamperSudoersDFile, OccurredAt: at, Data: json.RawMessage(`{"file":"evil"}`)},
+		{EventSeq: 2, Type: protocol.EventTamperSudoersDFile, OccurredAt: at, Data: json.RawMessage(`{"file":"evil"}`)},
+		{EventSeq: 3, Type: protocol.EventSessionLogin, OccurredAt: at, Data: json.RawMessage(`{"username":"Dave@acme.test"}`)},
+		{EventSeq: 4, Type: "unknown.type", OccurredAt: at},
+	}
+	for range 2 {
+		if err := h.reports.RecordEvents(systemCtx(org), device, batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	var codes string
+	if err := h.super.QueryRow(ctx, "SELECT string_agg(code, ' ' ORDER BY code) FROM action WHERE organization_id = $1", org).Scan(&codes); err != nil {
+		t.Fatal(err)
+	}
+	if codes != "device.login_applied device.tamper_sudoers_d_file" {
+		t.Fatalf("audit codes %q", codes)
+	}
+	var seen int
+	if err := h.super.QueryRow(ctx, "SELECT count(*) FROM device_user_seen WHERE device_id = $1 AND username = 'dave@acme.test'", device).Scan(&seen); err != nil || seen != 1 {
+		t.Fatalf("device_user_seen %d (%v)", seen, err)
+	}
+}
