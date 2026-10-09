@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The worker reaches N2 (5 000 device events/s with 3 replicas): it handles 8 `ingest.event` messages at a time and
   records the events of one message in one transaction instead of one transaction per event. When that transaction
   fails, the events are recorded one by one, so one bad event fails alone.
+- Device-supplied strings in audit parameters lose their C0 control characters (except tab, newline and carriage
+  return): a NUL character, which PostgreSQL rejects, made the event fail on every delivery until it was
+  dead-lettered. A session login of a username with control characters is ignored.
 
 ## [0.1.0] - 2026-10-08
 

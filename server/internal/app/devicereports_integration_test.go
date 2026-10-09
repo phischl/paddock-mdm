@@ -272,3 +272,27 @@ func TestRecordOnceBatchFallback(t *testing.T) {
 		t.Fatalf("%d claimed keys (%v), want 2", seen, err)
 	}
 }
+
+// TestRecordEventsStripsControls (N2 review): a NUL character in a device-supplied string no longer fails the event;
+// it is audited without the control characters, and a session login of a username with control characters is ignored.
+func TestRecordEventsStripsControls(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	org, device := h.device(t)
+	at := time.Now().UTC()
+	events := []protocol.Event{
+		{EventSeq: 1, Type: protocol.EventLoginApplyFailed, OccurredAt: at, Data: json.RawMessage(`{"stage":"apt","message":"dpkg\u0000 lock\u001b"}`)},
+		{EventSeq: 2, Type: protocol.EventSessionLogin, OccurredAt: at, Data: json.RawMessage(`{"username":"eve\u0000@acme.test"}`)},
+	}
+	if err := h.reports.RecordEvents(systemCtx(org), device, events); err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	if err := h.super.QueryRow(context.Background(), "SELECT count(*) FROM device_user_seen WHERE device_id = $1", device).Scan(&seen); err != nil || seen != 0 {
+		t.Fatalf("device_user_seen %d (%v), want 0", seen, err)
+	}
+	var msg string
+	if err := h.super.QueryRow(context.Background(), "SELECT params->>'message' FROM action WHERE organization_id = $1 AND code = 'device.login_apply_failed'",
+		org).Scan(&msg); err != nil || msg != "dpkg lock" {
+		t.Fatalf("message %q (%v)", msg, err)
+	}
+}
