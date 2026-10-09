@@ -163,6 +163,12 @@ acceptance.
 
 ### Changed
 
+- The portal navigates through a drawer instead of app bar links, which no longer fit the bar (at 1 920 px *Dead
+  man's switch*, *API tokens*, *Change sets*, *Audit log* and sign-out were cut off): the pages are grouped into
+  Overview, Devices, Configuration, Security, Inventory, Organization and Platform, shown by role as before. From
+  1 280 px the drawer stays open and the menu button of the app bar hides and shows it (remembered per browser); below
+  it opens from that button.
+  The app bar keeps the logo, the organization name, the attention count and a user menu with language and sign-out.
 - **BREAKING:** `paddock-api` needs `PADDOCK_REVOKE_RELEASE_PUBLIC_KEY_FILE`, the public key of the revocation release key that signs `paddock-revoke` packages (`docs/operations/agent-releases.md`); agent releases may carry the package `paddock-revoke` (migration `00021`), and the Paddock autoinstall installs it with the release (M4c step 3).
 - The disk recovery endpoints answer 404 `not_found` once a Destroy of the device was issued: its escrow is gone (M4c step 2).
 - **BREAKING:** OpenBao needs the Transit key `revocation-signing` (Ed25519, non-exportable), read access to `transit/keys/revocation-signing` for the policies `paddock-api` and `paddock-compiler`, and the new policy and AppRole `paddock-revocation-issuer`; without them creating an enrollment token fails with `upstream_unavailable` and the compiler stops. Run the commands of `docs/operations/openbao.md` §1 for the new key and policies (M4c step 1).

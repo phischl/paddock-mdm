@@ -2,11 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useTheme } from 'vuetify'
+import { useDisplay, useTheme } from 'vuetify'
 import { useSessionStore } from './stores/session'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { pendingConfirm, settleConfirm } from './composables/useConfirm'
 import { attentionCount } from './lib/updates'
+import { visibleNavigation } from './lib/navigation'
+import { navigationBreakpoint } from './plugins/vuetify'
 import { portalLocales, type PortalLocale } from './i18n'
 
 const { t, locale } = useI18n()
@@ -14,9 +16,43 @@ const route = useRoute()
 const session = useSessionStore()
 const showChrome = computed(() => !route.meta.public && session.me !== null)
 const roleLabel = computed(() => (session.me ? t('roles.' + session.me.role) : ''))
+const initial = computed(() => (session.me?.display_name ?? '').charAt(0).toUpperCase())
+const groups = computed(() => visibleNavigation(session))
 // The symbol variant follows the theme (plan M4c step 0b); the files are copied from docs/assets/logo/ at build time.
 const theme = useTheme()
 const logo = computed(() => (theme.current.value.dark ? '/paddock-symbol-dark.svg' : '/paddock-symbol-light.svg'))
+
+// The drawer is permanent on wide screens, where the app bar button hides and shows it; below the breakpoint it is
+// temporary and closes on every entry chosen, the current page included, so the page is not left covered.
+const display = useDisplay()
+const desktop = computed(() => display.width.value >= navigationBreakpoint)
+
+// Hiding the drawer on wide screens is a per-viewer convenience: storage may be unavailable (private window, blocked
+// site data), then the drawer starts shown.
+const hiddenKey = 'paddock.navigation.hidden'
+function storedHidden(): boolean {
+  try {
+    return localStorage.getItem(hiddenKey) === 'true'
+  } catch {
+    return false
+  }
+}
+const drawerOpen = ref(desktop.value && !storedHidden())
+watch(desktop, (wide) => {
+  drawerOpen.value = wide && !storedHidden()
+})
+function toggleDrawer(): void {
+  drawerOpen.value = !drawerOpen.value
+  if (!desktop.value) return
+  try {
+    localStorage.setItem(hiddenKey, String(!drawerOpen.value))
+  } catch {
+    // Not persisted; the choice holds until the page is reloaded.
+  }
+}
+function closeOnSmallScreen(): void {
+  if (!desktop.value) drawerOpen.value = false
+}
 
 // The number of open conditions on the attention list, refreshed on every navigation (plan M5b decision 11).
 const attention = ref(0)
@@ -59,6 +95,13 @@ onBeforeUnmount(() => observer.disconnect())
       flat
     >
       <template #prepend>
+        <v-app-bar-nav-icon
+          :aria-label="drawerOpen ? t('app.hideNavigation') : t('app.showNavigation')"
+          :aria-expanded="drawerOpen ? 'true' : 'false'"
+          aria-controls="main-navigation"
+          data-testid="nav-toggle"
+          @click="toggleDrawer"
+        />
         <img
           :src="logo"
           alt=""
@@ -69,213 +112,155 @@ onBeforeUnmount(() => observer.disconnect())
         >
       </template>
       <v-app-bar-title class="brand">
-        {{ t('app.name') }}
+        <span class="app-name">{{ t('app.name') }}</span>
+        <span
+          v-if="session.me?.organization"
+          class="org-name"
+          data-testid="org-name"
+        >{{ session.me.organization.name }}</span>
       </v-app-bar-title>
-      <nav
-        class="main-nav"
-        :aria-label="t('app.mainNavigation')"
-      >
+      <template #append>
         <v-btn
-          v-if="session.canReadGroups"
+          v-if="session.canReadGroups && attention > 0"
           to="/attention"
           variant="text"
-          data-testid="nav-attention"
+          :aria-label="t('nav.attentionCount', { count: attention })"
+          data-testid="app-bar-attention"
         >
-          {{ t('nav.attention') }}
-          <!-- Vuetify makes a badge a polite live region; this count changes on every navigation and is not news. -->
           <v-badge
-            v-if="attention > 0"
             :content="attention"
             color="error"
             inline
-            :aria-label="t('nav.attentionCount', { count: attention })"
-            role="img"
+            aria-hidden="true"
             aria-live="off"
-            data-testid="attention-count"
           />
         </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/devices"
-          variant="text"
-        >
-          {{ t('nav.devices') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/device-groups"
-          variant="text"
-        >
-          {{ t('nav.deviceGroups') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/software"
-          variant="text"
-        >
-          {{ t('nav.software') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/vulnerabilities"
-          variant="text"
-        >
-          {{ t('nav.vulnerabilities') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canWrite"
-          to="/enrollment-tokens"
-          variant="text"
-        >
-          {{ t('nav.enrollmentTokens') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/managed-files"
-          variant="text"
-        >
-          {{ t('nav.managedFiles') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/managed-units"
-          variant="text"
-        >
-          {{ t('nav.managedUnits') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/package-holds"
-          variant="text"
-        >
-          {{ t('nav.packageHolds') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/users"
-          variant="text"
-        >
-          {{ t('nav.users') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/user-groups"
-          variant="text"
-        >
-          {{ t('nav.userGroups') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/permission-profiles"
-          variant="text"
-        >
-          {{ t('nav.permissionProfiles') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/settings/login"
-          variant="text"
-        >
-          {{ t('nav.loginSettings') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/settings/updates"
-          variant="text"
-        >
-          {{ t('nav.updateSettings') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canDelete"
-          to="/revocations"
-          variant="text"
-        >
-          {{ t('nav.revocations') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/settings/dms"
-          variant="text"
-        >
-          {{ t('nav.dms') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/api-tokens"
-          variant="text"
-        >
-          {{ t('nav.apiTokens') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadGroups"
-          to="/change-sets"
-          variant="text"
-        >
-          {{ t('nav.changeSets') }}
-        </v-btn>
-        <v-btn
-          v-if="session.canReadAudit"
-          to="/audit"
-          variant="text"
-        >
-          {{ t('nav.audit') }}
-        </v-btn>
-        <v-btn
-          v-if="session.isPlatform"
-          to="/platform/organizations"
-          variant="text"
-        >
-          {{ t('nav.organizations') }}
-        </v-btn>
-        <v-btn
-          v-if="session.isPlatform"
-          to="/platform/agent-releases"
-          variant="text"
-        >
-          {{ t('nav.agentReleases') }}
-        </v-btn>
-      </nav>
-      <div class="user">
-        <span data-testid="user-name">{{ t('app.signedInAs', { name: session.me?.display_name ?? '' }) }}</span>
-        <span
-          class="role"
-          data-testid="user-role"
-        >{{ roleLabel }}</span>
         <v-menu>
           <template #activator="{ props: menu }">
             <v-btn
               v-bind="menu"
-              variant="outlined"
-              :aria-label="t('app.languageMenu', { language: t('app.languages.' + locale) })"
-              data-testid="language-menu"
+              variant="text"
+              class="user-button"
+              :aria-label="t('app.userMenu', { name: session.me?.display_name ?? '' })"
+              data-testid="user-menu"
             >
-              {{ t('app.languages.' + locale) }}
+              <v-avatar
+                color="surface"
+                size="28"
+                aria-hidden="true"
+              >
+                {{ initial }}
+              </v-avatar>
+              <span class="user-button-name">{{ session.me?.display_name }}</span>
             </v-btn>
           </template>
           <v-list
-            :aria-label="t('app.language')"
+            :aria-label="t('app.userMenu', { name: session.me?.display_name ?? '' })"
             density="compact"
           >
+            <!-- A border instead of a divider: a separator is not allowed among the items of a list. -->
+            <v-list-item class="border-b">
+              <v-list-item-title
+                class="text-wrap"
+                data-testid="user-name"
+              >
+                {{ t('app.signedInAs', { name: session.me?.display_name ?? '' }) }}
+              </v-list-item-title>
+              <v-list-item-subtitle data-testid="user-role">
+                {{ roleLabel }}
+              </v-list-item-subtitle>
+            </v-list-item>
+            <v-menu submenu>
+              <template #activator="{ props: languageMenu }">
+                <v-list-item
+                  v-bind="languageMenu"
+                  :aria-label="t('app.languageMenu', { language: t('app.languages.' + locale) })"
+                  data-testid="language-menu"
+                >
+                  <v-list-item-title>{{ t('app.language') }}</v-list-item-title>
+                  <v-list-item-subtitle>{{ t('app.languages.' + locale) }}</v-list-item-subtitle>
+                </v-list-item>
+              </template>
+              <v-list
+                :aria-label="t('app.language')"
+                density="compact"
+              >
+                <v-list-item
+                  v-for="l in portalLocales"
+                  :key="l"
+                  :active="l === locale"
+                  :lang="l"
+                  :data-testid="'language-' + l"
+                  @click="chooseLanguage(l)"
+                >
+                  <v-list-item-title>{{ t('app.languages.' + l) }}</v-list-item-title>
+                </v-list-item>
+              </v-list>
+            </v-menu>
             <v-list-item
-              v-for="l in portalLocales"
-              :key="l"
-              :active="l === locale"
-              :lang="l"
-              :data-testid="'language-' + l"
-              @click="chooseLanguage(l)"
+              data-testid="logout"
+              @click="session.logout()"
             >
-              <v-list-item-title>{{ t('app.languages.' + l) }}</v-list-item-title>
+              <v-list-item-title>{{ t('app.logout') }}</v-list-item-title>
             </v-list-item>
           </v-list>
         </v-menu>
-        <v-btn
-          color="surface"
-          @click="session.logout()"
-        >
-          {{ t('app.logout') }}
-        </v-btn>
-      </div>
+      </template>
     </v-app-bar>
+    <!-- Bound only while a dialog is open: an inert attribute here would override the one Vuetify sets on a closed
+         drawer. -->
+    <v-navigation-drawer
+      v-if="showChrome"
+      id="main-navigation"
+      v-model="drawerOpen"
+      v-bind="modalOpen ? { inert: true } : {}"
+      :permanent="desktop"
+      :temporary="!desktop"
+      :aria-label="t('app.mainNavigation')"
+      data-testid="nav-drawer"
+    >
+      <!-- Not a v-list: it takes the links out of the tab order (arrow keys only) and its list role would require list
+           items around them. Plain links keep every page one Tab stop away, in order. -->
+      <div class="nav-groups">
+        <div
+          v-for="group in groups"
+          :key="group.key"
+          role="group"
+          :aria-labelledby="'nav-group-' + group.key"
+          :data-testid="'nav-group-' + group.key"
+        >
+          <v-list-subheader :id="'nav-group-' + group.key">
+            {{ t(group.label) }}
+          </v-list-subheader>
+          <v-list-item
+            v-for="item in group.items"
+            :key="item.to"
+            :to="item.to"
+            nav
+            density="compact"
+            :data-testid="item.testid"
+            @click="closeOnSmallScreen"
+          >
+            <v-list-item-title>{{ t(item.label) }}</v-list-item-title>
+            <template
+              v-if="item.to === '/attention' && attention > 0"
+              #append
+            >
+              <!-- Vuetify makes a badge a polite live region; this count changes on every navigation and is not news. -->
+              <v-badge
+                :content="attention"
+                color="error"
+                inline
+                :aria-label="t('nav.attentionCount', { count: attention })"
+                role="img"
+                aria-live="off"
+                data-testid="attention-count"
+              />
+            </template>
+          </v-list-item>
+        </div>
+      </div>
+    </v-navigation-drawer>
     <v-main
       id="main"
       :inert="modalOpen"

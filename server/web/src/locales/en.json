@@ -13,7 +13,10 @@
       "en": "English",
       "de": "Deutsch"
     },
-    "languageFailed": "The language could not be saved."
+    "languageFailed": "The language could not be saved.",
+    "userMenu": "User menu of {name}",
+    "showNavigation": "Show the navigation",
+    "hideNavigation": "Hide the navigation"
   },
   "nav": {
     "deviceGroups": "Device groups",
@@ -37,7 +40,17 @@
     "packageHolds": "Package holds",
     "updateSettings": "Updates",
     "apiTokens": "API tokens",
-    "changeSets": "Change sets"
+    "changeSets": "Change sets",
+    "start": "Start",
+    "groups": {
+      "overview": "Overview",
+      "devices": "Devices",
+      "configuration": "Configuration",
+      "security": "Security",
+      "inventory": "Inventory",
+      "organization": "Organization",
+      "platform": "Platform"
+    }
   },
   "roles": {
     "org_admin": "Organization administrator",

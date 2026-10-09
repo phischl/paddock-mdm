@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, mainNav, watchCSP } from './checks'
 
 // The release uploader (test/acceptance/cmd/agentrelease), built by `make e2e`.
 const agentrelease = process.env.PADDOCK_E2E_AGENTRELEASE ?? '../../bin/agentrelease'
@@ -26,7 +26,7 @@ test('platform admin halts an agent rollout', async ({ page }) => {
   releaseWithRollout(version)
   await login(page, 'platform-admin@paddock.test', 'dev_platform_admin_password')
 
-  await page.getByRole('link', { name: 'Agent releases' }).click()
+  await mainNav(page).getByRole('link', { name: 'Agent releases' }).click()
   await expect(page.getByRole('heading', { name: 'Agent releases' })).toBeVisible()
   await page.getByTestId('list-search').getByRole('searchbox').fill(version)
   await expect(page).toHaveURL(/q=/)
