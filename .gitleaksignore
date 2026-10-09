@@ -1,18 +1,17 @@
-# Reviewed gitleaks false positives (2026-10-05, regenerated after the history rewrite 2026-10-06): UUIDs in
-# recorded Authentik fixtures, test public keys, a GPG key fingerprint, a hex-alphabet check and gzip data in
-# generated code. One fingerprint per line.
-1595cc2c47829bdc2aefbe68d1244d5e30970227:server/internal/transport/http/admin/adminapi/adminapi.gen.go:generic-api-key:10071
-6628e913798b242f0fd17599a89aba7d1fc595ba:test/poc/m1/vm-prepare.sh:generic-api-key:17
-a05b706d7332ba1abf6a29f994da0c0ea9a38f90:server/internal/transport/http/admin/devices_test.go:generic-api-key:21
-b7ebc50955cbf3d9679ffe0c14a83dce27132b78:test/acceptance/cmd/devseed/main.go:generic-api-key:121
-c0041c2303806f451fe03b9dbc71887d459c4d96:server/internal/adapters/authentik/testdata/get_core_applications_paddock-device-fixture-org.json:generic-api-key:10
-c0041c2303806f451fe03b9dbc71887d459c4d96:server/internal/adapters/authentik/testdata/patch_core_applications_paddock-device-fixture-org.json:generic-api-key:10
-c0041c2303806f451fe03b9dbc71887d459c4d96:server/internal/adapters/authentik/testdata/post_core_applications.json:generic-api-key:10
-c0041c2303806f451fe03b9dbc71887d459c4d96:server/internal/adapters/authentik/testdata/post_providers_oauth2.json:generic-api-key:35
-c0041c2303806f451fe03b9dbc71887d459c4d96:server/internal/adapters/authentik/testdata/post_providers_oauth2.json:generic-api-key:4
-c0041c2303806f451fe03b9dbc71887d459c4d96:server/internal/adapters/authentik/testdata/put_providers_oauth2_id.json:generic-api-key:35
-c0041c2303806f451fe03b9dbc71887d459c4d96:server/internal/adapters/authentik/testdata/put_providers_oauth2_id.json:generic-api-key:4
-cd79352d0880491ef0df8b5f1f7e68465f7411ba:pkg/protocol/protocol_test.go:generic-api-key:54
-f845233af3483783a990afdfc77f48d9e8db3011:server/internal/adapters/authentik/testdata/get_core_brands.json:generic-api-key:22
-f845233af3483783a990afdfc77f48d9e8db3011:server/internal/adapters/authentik/testdata/patch_core_brands_id.json:generic-api-key:11
-30b07b67f89e712b0d527511ef1d0a088176414e:test/system/autoinstall.go:generic-api-key:33
+# Reviewed gitleaks false positives (2026-10-05; fingerprints regenerated after the history rewrites of 2026-10-06 and
+# 2026-10-09): UUIDs in recorded Authentik fixtures, test public keys, a GPG key fingerprint and a hex-alphabet check.
+# One fingerprint per line.
+3341911911fb1dafb41cda433830446c8d41c0d4:test/system/autoinstall.go:generic-api-key:33
+641f2944e5102cfaabca6554fed96929c77920e6:pkg/protocol/protocol_test.go:generic-api-key:54
+6f4dc6efc9f93a3e818e84178163d194f533ea20:server/internal/adapters/authentik/testdata/get_core_brands.json:generic-api-key:22
+6f4dc6efc9f93a3e818e84178163d194f533ea20:server/internal/adapters/authentik/testdata/patch_core_brands_id.json:generic-api-key:11
+871656efccaf1976bd8fc35adddad58b973494f5:test/poc/m1/vm-prepare.sh:generic-api-key:17
+af861a64911b02a24537a877abfc3aef70921d3a:test/acceptance/cmd/devseed/main.go:generic-api-key:121
+d68bebc21dc74ce8de228fb9f185221b7d39dbc8:server/internal/adapters/authentik/testdata/get_core_applications_paddock-device-fixture-org.json:generic-api-key:10
+d68bebc21dc74ce8de228fb9f185221b7d39dbc8:server/internal/adapters/authentik/testdata/patch_core_applications_paddock-device-fixture-org.json:generic-api-key:10
+d68bebc21dc74ce8de228fb9f185221b7d39dbc8:server/internal/adapters/authentik/testdata/post_core_applications.json:generic-api-key:10
+d68bebc21dc74ce8de228fb9f185221b7d39dbc8:server/internal/adapters/authentik/testdata/post_providers_oauth2.json:generic-api-key:35
+d68bebc21dc74ce8de228fb9f185221b7d39dbc8:server/internal/adapters/authentik/testdata/post_providers_oauth2.json:generic-api-key:4
+d68bebc21dc74ce8de228fb9f185221b7d39dbc8:server/internal/adapters/authentik/testdata/put_providers_oauth2_id.json:generic-api-key:35
+d68bebc21dc74ce8de228fb9f185221b7d39dbc8:server/internal/adapters/authentik/testdata/put_providers_oauth2_id.json:generic-api-key:4
+f9b9e16a19a14a54f8f6a61c95115c3d0f9be28e:server/internal/transport/http/admin/devices_test.go:generic-api-key:21
