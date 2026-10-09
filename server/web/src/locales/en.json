@@ -14,10 +14,9 @@
       "de": "Deutsch"
     },
     "languageFailed": "The language could not be saved.",
-    "openNavigation": "Open the navigation",
-    "collapseNavigation": "Collapse the navigation",
-    "expandNavigation": "Expand the navigation",
-    "userMenu": "User menu of {name}"
+    "userMenu": "User menu of {name}",
+    "showNavigation": "Show the navigation",
+    "hideNavigation": "Hide the navigation"
   },
   "nav": {
     "deviceGroups": "Device groups",

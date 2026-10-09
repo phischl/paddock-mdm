@@ -22,37 +22,36 @@ const groups = computed(() => visibleNavigation(session))
 const theme = useTheme()
 const logo = computed(() => (theme.current.value.dark ? '/paddock-symbol-dark.svg' : '/paddock-symbol-light.svg'))
 
-// The drawer is permanent on wide screens and collapses to a rail there; below the breakpoint it is temporary and
-// closes on every entry chosen, the current page included, so the page is not left covered.
+// The drawer is permanent on wide screens, where the app bar button hides and shows it; below the breakpoint it is
+// temporary and closes on every entry chosen, the current page included, so the page is not left covered.
 const display = useDisplay()
 const desktop = computed(() => display.width.value >= navigationBreakpoint)
-const drawerOpen = ref(desktop.value)
-watch(desktop, (wide) => {
-  drawerOpen.value = wide
-})
-function closeOnSmallScreen(): void {
-  if (!desktop.value) drawerOpen.value = false
-}
 
-// The rail state is a per-viewer convenience: storage may be unavailable (private window, blocked site data), then
-// the drawer starts expanded.
-const railKey = 'paddock.navigation.rail'
-function storedRail(): boolean {
+// Hiding the drawer on wide screens is a per-viewer convenience: storage may be unavailable (private window, blocked
+// site data), then the drawer starts shown. The key keeps its first name, so a stored choice stays readable.
+const hiddenKey = 'paddock.navigation.rail'
+function storedHidden(): boolean {
   try {
-    return localStorage.getItem(railKey) === 'true'
+    return localStorage.getItem(hiddenKey) === 'true'
   } catch {
     return false
   }
 }
-const rail = ref(storedRail())
-const railActive = computed(() => desktop.value && rail.value)
-function toggleRail(): void {
-  rail.value = !rail.value
+const drawerOpen = ref(desktop.value && !storedHidden())
+watch(desktop, (wide) => {
+  drawerOpen.value = wide && !storedHidden()
+})
+function toggleDrawer(): void {
+  drawerOpen.value = !drawerOpen.value
+  if (!desktop.value) return
   try {
-    localStorage.setItem(railKey, String(rail.value))
+    localStorage.setItem(hiddenKey, String(!drawerOpen.value))
   } catch {
     // Not persisted; the choice holds until the page is reloaded.
   }
+}
+function closeOnSmallScreen(): void {
+  if (!desktop.value) drawerOpen.value = false
 }
 
 // The number of open conditions on the attention list, refreshed on every navigation (plan M5b decision 11).
@@ -97,12 +96,11 @@ onBeforeUnmount(() => observer.disconnect())
     >
       <template #prepend>
         <v-app-bar-nav-icon
-          v-if="!desktop"
-          :aria-label="t('app.openNavigation')"
+          :aria-label="drawerOpen ? t('app.hideNavigation') : t('app.showNavigation')"
           :aria-expanded="drawerOpen ? 'true' : 'false'"
           aria-controls="main-navigation"
           data-testid="nav-toggle"
-          @click="drawerOpen = !drawerOpen"
+          @click="toggleDrawer"
         />
         <img
           :src="logo"
@@ -218,8 +216,6 @@ onBeforeUnmount(() => observer.disconnect())
       v-bind="modalOpen ? { inert: true } : {}"
       :permanent="desktop"
       :temporary="!desktop"
-      :rail="railActive"
-      :class="{ 'nav-rail': railActive }"
       :aria-label="t('app.mainNavigation')"
       data-testid="nav-drawer"
     >
@@ -242,19 +238,9 @@ onBeforeUnmount(() => observer.disconnect())
             :to="item.to"
             nav
             density="compact"
-            :title="railActive ? t(item.label) : undefined"
             :data-testid="item.testid"
             @click="closeOnSmallScreen"
           >
-            <template
-              v-if="railActive"
-              #prepend
-            >
-              <span
-                class="nav-initial"
-                aria-hidden="true"
-              >{{ t(item.label).charAt(0) }}</span>
-            </template>
             <v-list-item-title>{{ t(item.label) }}</v-list-item-title>
             <template
               v-if="item.to === '/attention' && attention > 0"
@@ -274,22 +260,6 @@ onBeforeUnmount(() => observer.disconnect())
           </v-list-item>
         </div>
       </div>
-      <template
-        v-if="desktop"
-        #append
-      >
-        <v-divider />
-        <v-btn
-          block
-          variant="text"
-          :icon="rail ? '$next' : '$prev'"
-          :aria-label="rail ? t('app.expandNavigation') : t('app.collapseNavigation')"
-          :aria-expanded="rail ? 'false' : 'true'"
-          aria-controls="main-navigation"
-          data-testid="nav-rail-toggle"
-          @click="toggleRail"
-        />
-      </template>
     </v-navigation-drawer>
     <v-main
       id="main"

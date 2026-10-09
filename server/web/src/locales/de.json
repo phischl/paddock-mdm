@@ -14,10 +14,9 @@
       "de": "Deutsch"
     },
     "languageFailed": "Die Sprache konnte nicht gespeichert werden.",
-    "openNavigation": "Navigation öffnen",
-    "collapseNavigation": "Navigation einklappen",
-    "expandNavigation": "Navigation ausklappen",
-    "userMenu": "Benutzermenü von {name}"
+    "userMenu": "Benutzermenü von {name}",
+    "showNavigation": "Navigation einblenden",
+    "hideNavigation": "Navigation ausblenden"
   },
   "nav": {
     "deviceGroups": "Gerätegruppen",
