@@ -32,7 +32,10 @@ test('organization admin creates, sees once and revokes an API token', async ({ 
   await page.getByTestId('close-api-token').click()
   await expect(page).not.toHaveURL(/stepup/)
 
-  const row = page.getByTestId('api-token-list').getByRole('row').filter({ hasText: name })
+  // The organization keeps the tokens of earlier runs, which can push this one past the first page.
+  await page.getByTestId('list-search').getByRole('searchbox').fill(name)
+  await expect(page).toHaveURL(/[?&]q=/)
+  const row =page.getByTestId('api-token-list').getByRole('row').filter({ hasText: name })
   await expect(row.getByTestId('api-token-status-active')).toBeVisible()
   await expect(row).toContainText(secret.slice(0, 12))
   await page.reload()
