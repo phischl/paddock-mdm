@@ -54,6 +54,10 @@ jobs:
           restore-keys: trivy-db-
       - run: make scan-fs
       - run: make scan-images
+      - name: Make the trivy cache readable for the cache step
+        # trivy runs as root in its container; actions/cache saves as the runner user (tar exit 2 otherwise)
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" ~/.cache/trivy || true
 
   web:
     runs-on: ubuntu-24.04

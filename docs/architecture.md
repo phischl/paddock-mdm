@@ -26,15 +26,15 @@ needs a documented reason to deviate, **MAY** is a genuine degree of freedom.
 10. [Permission profiles and sudo](#10-permission-profiles-and-sudo)
 11. [The agent](#11-the-agent)
 12. [Device controls](#12-device-controls)
-13. [Key management](#13-key-management)
+13. [Key management](#13-key-management-a3)
 14. [Audit pipeline](#14-audit-pipeline)
-15. [Fleet and osquery integration](#15-fleet-and-osquery-integration)
+15. [Fleet and osquery integration](#15-fleet-and-osquery-integration-a10)
 16. [Data model](#16-data-model)
 17. [APIs](#17-apis)
 18. [Portal and internationalization](#18-portal-and-internationalization)
-19. [Observability](#19-observability)
-20. [Backup and restore](#20-backup-and-restore)
-21. [Version compatibility](#21-version-compatibility)
+19. [Observability](#19-observability-a12)
+20. [Backup and restore](#20-backup-and-restore-a11)
+21. [Version compatibility](#21-version-compatibility-a7)
 22. [Test strategy](#22-test-strategy)
 23. [Repository layout](#23-repository-layout)
 24. [Milestones](#24-milestones)
@@ -1878,7 +1878,7 @@ to the operator's private repository (concept: operator configuration never in t
 | **M5 Inventory & updates** | Fleet adapter, vulnerability view, holds, schedules, immediate install, staleness | Scalability, F4, F6, F12 |
 | **M6 Hardening & release** | Load tests, restore drill, German locale, documentation, compliance pack | All gates |
 
-Implementation plans for the coding agent are written per milestone, following `.claude/agents/architect.md` § 6.
+Implementation plans are written per milestone in `docs/plans/`, in the format of the existing plans.
 
 ---
 
