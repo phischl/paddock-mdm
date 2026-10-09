@@ -65,16 +65,25 @@ func consume(ctx context.Context, deliveries <-chan amqp.Delivery, pause time.Du
 	}
 }
 
+// HandleTimeout bounds the handling of one message by consumeConcurrently, whose handlers do not end with the loops.
+const HandleTimeout = 2 * time.Minute
+
 // consumeConcurrently runs n consume loops over the same deliveries until all of them have returned and returns the
-// first error; for queues whose messages may be settled in any order.
+// first error; for queues whose messages may be settled in any order. A failing loop ends the receiving of the others,
+// not a message they are handling: a handler runs until it is done or HandleTimeout has passed.
 func consumeConcurrently(ctx context.Context, deliveries <-chan amqp.Delivery, n int, pause time.Duration,
 	handle func(ctx context.Context, d amqp.Delivery) outcome) error {
+	detached := func(ctx context.Context, d amqp.Delivery) outcome {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), HandleTimeout)
+		defer cancel()
+		return handle(ctx, d)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errs := make(chan error, n)
 	for range n {
 		go func() {
-			err := consume(ctx, deliveries, pause, handle)
+			err := consume(ctx, deliveries, pause, detached)
 			cancel() // one failed loop (closed channel, failed ack) ends the others, so the consumer reconnects
 			errs <- err
 		}()
