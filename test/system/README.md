@@ -28,7 +28,7 @@ enrollment tokens, permission profiles, Authentik users), so the VMs never share
 the whole organization shares is coordinated through the VMs' `vmGroup` (`parallel.go`):
 
 - `Together` runs a step once for all VMs when each of them reached it: the stack outage of S3 (`make down`,
-  `make up`), the releases of S4 (a rollout reaches every device) and the stopped worker of LA1. A VM whose gate
+  `make up`, with `BACKUP=1` when the running stack uses the backup overlay and `BACKUP` is not set), the releases of S4 (a rollout reaches every device) and the stopped worker of LA1. A VM whose gate
   ended early (a failure) is no longer waited for.
 - `Exclusive` and `Lock` let one VM at a time through a section: the organization's login notice (N1) and reading the
   device code the greeter shows (`gdmLogin`, the newest pending code of the organization).
