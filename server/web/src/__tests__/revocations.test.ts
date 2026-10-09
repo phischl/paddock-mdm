@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RevocationRequest } from '../api/client'
-import { parseWarnDays, revocationActions, revocationStatuses, reviewVerbs, timeline } from '../lib/revocations'
+import { parseWarnDays, revocationActions, revocationStatuses, reviewVerbs, timeline, volumeResults } from '../lib/revocations'
 import en from '../locales/en.json'
 
 const alice = '0190f000-0000-7000-8000-00000000000a'
@@ -29,6 +29,18 @@ describe('revocations', () => {
     })).map((s) => s.step)).toEqual(['requested', 'approved', 'issued', 'delivered', 'confirmed'])
     expect(timeline(request({ status: 'rejected', finished_at: '2026-10-07T11:00:00Z' })).map((s) => s.step))
       .toEqual(['requested', 'finished'])
+  })
+
+  it('reads the per-volume results of a confirmation and ignores malformed entries', () => {
+    const volume = { device: '/dev/sda3', slots_before: 2, slots_after: 0, erased: true }
+    expect(volumeResults(request({ result: { erased: true, volumes: [{ device: '/dev/sdb1' }, volume, 'x'], unresolved: ['UUID=gone', 3] } })))
+      .toEqual({ volumes: [volume], unresolved: ['UUID=gone'], skipped: [], shared: [], incomplete: true })
+    expect(volumeResults(request({ result: { erased: true, slots_before: 2, slots_after: 0 } }))).toEqual({ volumes: [], unresolved: [], skipped: [], shared: [], incomplete: false })
+    expect(volumeResults(request({ result: { volumes: 'all' } }))).toEqual({ volumes: [], unresolved: [], skipped: [], shared: [], incomplete: false })
+    expect(volumeResults(request({}))).toEqual({ volumes: [], unresolved: [], skipped: [], shared: [], incomplete: false })
+    // PDK-009: the volumes a Lock skipped, malformed ones ignored; they do not make the Lock incomplete.
+    expect(volumeResults(request({ result: { erased: true, skipped_not_escrowed: [{ device: '/dev/sdb1', uuid: 'u' }, { device: '/dev/sdc' }, { uuid: 1 }, 'x'], shared_uuid: ['/dev/sdc', 3] } })))
+      .toEqual({ volumes: [], unresolved: [], skipped: [{ device: '/dev/sdb1', uuid: 'u' }, { device: '/dev/sdc' }], shared: ['/dev/sdc'], incomplete: false })
   })
 
   it('parses the warning lead times', () => {

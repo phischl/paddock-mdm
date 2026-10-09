@@ -2,6 +2,8 @@ import { expect, test as base, type APIRequestContext } from '@playwright/test'
 
 const csrf = { 'X-Paddock-CSRF': '1' }
 const tokens = '/api/v1/enrollment-tokens'
+// API tokens are revoked, never deleted; a test may have revoked one itself (409 invalid_state).
+const apiTokens = '/api/v1/api-tokens'
 
 /**
  * Test data hygiene (plan M2.2 decision 7): what a test creates is removed through the admin API when the test ends,
@@ -10,7 +12,7 @@ const tokens = '/api/v1/enrollment-tokens'
 export interface Cleanup {
   /**
    * Removes every item of collection (e.g. /api/v1/device-groups) that the search q finds: deletes device groups,
-   * managed files and units, revokes enrollment tokens (they cannot be deleted). q must be unique to the test.
+   * managed files and units, revokes enrollment and API tokens (they cannot be deleted). q must be unique to the test.
    * Removals run in reverse order of registration.
    */
   remove(collection: string, q: string): void
@@ -31,6 +33,11 @@ async function removeFound(request: APIRequestContext, collection: string, q: st
   const { items, total } = (await res.json()) as { items: { id: string }[]; total: number }
   expect(total, `cleanup: ${collection} finds more than one page for ${q}`).toBe(items.length)
   for (const { id } of items) {
+    if (collection === apiTokens) {
+      const revoked = await request.post(`${collection}/${id}/revoke`, { headers: csrf })
+      expect([200, 409], `cleanup: revoke ${collection}/${id}`).toContain(revoked.status())
+      continue
+    }
     const removed = collection === tokens
       ? await request.post(`${collection}/${id}/revoke`, { headers: csrf })
       : await request.delete(`${collection}/${id}`, { headers: csrf })

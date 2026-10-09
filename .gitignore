@@ -5,6 +5,7 @@ deploy/compose/.env
 # Build output
 /paddock-server
 /bin/
+/dist/
 server/web/dist/*
 !server/web/dist/.gitkeep
 # Logos copied from docs/assets/logo/ at build time

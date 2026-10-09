@@ -1,6 +1,8 @@
 // Package revoke is paddock-revoke, the device side of Lock, Destroy and the dead man's switch (architecture §12.3,
 // plan M4c decisions 11–13). It verifies a revocation token against the pinned trust anchor and, only then, terminates
-// the user sessions, erases every keyslot of the root volume, confirms the erasure to the server and reboots.
+// the user sessions, erases every keyslot of every LUKS volume (plan M4c.1) — for a Lock only of the volumes whose
+// header escrow the signed token confirms, besides the root volume (PDK-009) —, confirms the erasure to the server
+// and reboots.
 //
 // Two-person rule (design contract 10): every change to this package and to agent/cmd/paddock-revoke needs the review
 // of a second person and a passed test on real hardware (docs/operations/revocation-acceptance.md).
@@ -13,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -69,8 +72,9 @@ type System interface {
 	luks.Tools
 	// Loginctl runs loginctl.
 	Loginctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
-	// RootDevice returns the LUKS device to erase; a refusal for the test target override of a release build.
-	RootDevice(ctx context.Context) (string, error)
+	// Targets returns the LUKS volumes to erase, the root volume last; a refusal for the test target override of a
+	// release build.
+	Targets(ctx context.Context) (Targets, error)
 	// Reboot reboots the device at once (systemctl reboot --force --force).
 	Reboot(ctx context.Context) error
 	// ReadFile and WriteFile access the files of paddock-revoke (Root of OS in tests).
@@ -91,13 +95,45 @@ type Revoker struct {
 	Now      func() time.Time
 	// ConfirmWithin replaces ConfirmTimeout (tests); zero keeps it.
 	ConfirmWithin time.Duration
+	// SecondaryWithin replaces the constant SecondaryWithin (tests); zero keeps it.
+	SecondaryWithin time.Duration
 }
 
-// Erasure is the confirmation of a token; it is posted as the command result.
+// SecondaryWithin bounds the erasure of all volumes before the root volume together; with SelectWithin the volumes
+// other than the root volume take at most 3 minutes, so a hung secondary disk cannot keep the root volume from being
+// erased (plan M4c.1, review round 1).
+const SecondaryWithin = 2 * time.Minute
+
+// Erasure is the confirmation of a token; it is posted as the command result (plan M4c.1 decision 2). Erased is
+// true only if every erased volume has no keyslot left and no crypttab entry is unresolved; SlotsBefore and
+// SlotsAfter are the sums over the volumes (SlotsAfter -1 when a volume's count is unknown), kept for the
+// confirmations of M4c. SkippedNotEscrowed are the volumes a Lock left alone because the token does not confirm
+// their header escrow (PDK-009); they do not make the erasure incomplete. SharedUUID lists the devices whose LUKS UUID
+// another volume or the root volume has (review round 2): a Destroy erases them, a Lock skips them; they do not make
+// the erasure incomplete either.
 type Erasure struct {
-	Erased      bool `json:"erased"`
-	SlotsBefore int  `json:"slots_before"`
-	SlotsAfter  int  `json:"slots_after"`
+	Erased             bool            `json:"erased"`
+	SlotsBefore        int             `json:"slots_before"`
+	SlotsAfter         int             `json:"slots_after"`
+	Volumes            []VolumeErasure `json:"volumes"`
+	Unresolved         []string        `json:"unresolved,omitempty"`
+	SkippedNotEscrowed []SkippedVolume `json:"skipped_not_escrowed,omitempty"`
+	SharedUUID         []string        `json:"shared_uuid,omitempty"`
+}
+
+// VolumeErasure is the erasure of one LUKS volume.
+type VolumeErasure struct {
+	Device      string `json:"device"`
+	UUID        string `json:"uuid,omitempty"`
+	SlotsBefore int    `json:"slots_before"`
+	SlotsAfter  int    `json:"slots_after"` // -1: unknown, never reported as erased
+	Erased      bool   `json:"erased"`
+}
+
+// SkippedVolume is a volume a Lock did not erase; UUID is "" when cryptsetup reported none.
+type SkippedVolume struct {
+	Device string `json:"device"`
+	UUID   string `json:"uuid,omitempty"`
 }
 
 // Handle verifies a token paddockd handed over. A Lock or Destroy runs the binding sequence at once; a self-lock
@@ -139,10 +175,11 @@ func (r *Revoker) SelfLock(ctx context.Context, envelope []byte, elapsed time.Du
 
 // execute checks whether the token may run now and runs the binding sequence.
 func (r *Revoker) execute(ctx context.Context, tok *revocation.Token) (Erasure, error) {
-	device, err := r.check(ctx, tok)
+	targets, err := r.check(ctx, tok)
 	if err != nil {
 		return Erasure{}, err
 	}
+	targets, skipped := restorable(tok, targets)
 	// Recorded before anything happens: a crash or a power loss in the sequence never leads to a second run of the
 	// token, and the 24 h limit counts from here.
 	if err := r.record(tok.CommandID); err != nil {
@@ -152,8 +189,9 @@ func (r *Revoker) execute(ctx context.Context, tok *revocation.Token) (Erasure, 
 	// Binding sequence (architecture §12.3, plan M4c decision 12); between (2) and (4) nothing else runs.
 	// (1) Terminate the sessions of every non-system user. A failure does not stop the erasure.
 	r.terminateSessions(ctx)
-	// (2) Erase every keyslot of the root volume and verify that none is left.
-	result := r.erase(ctx, device)
+	// (2) Erase every keyslot of every target, the root volume last, and verify that none is left.
+	result := r.erase(ctx, targets)
+	result.SkippedNotEscrowed, result.SharedUUID = skipped, targets.Shared
 	// (3) Post the confirmation ourselves, signed with the device key, and wait up to 20 s for the 202.
 	r.confirm(ctx, tok.CommandID, result)
 	// (4) Reboot regardless of the confirmation's outcome.
@@ -192,30 +230,55 @@ func (r *Revoker) verify(envelope []byte, lifetime bool) (*revocation.Token, err
 	return tok, nil
 }
 
-// check runs the checks before the sequence: whether the token ran before, the 24 h limit and the root device. It
-// returns the device to erase, or a refusal.
-func (r *Revoker) check(ctx context.Context, tok *revocation.Token) (string, error) {
+// check runs the checks before the sequence: whether the token ran before, the 24 h limit and the targets. It
+// returns the volumes to erase, or a refusal.
+func (r *Revoker) check(ctx context.Context, tok *revocation.Token) (Targets, error) {
 	st, err := r.load()
 	if err != nil {
-		return "", refuse(ReasonInternal)
+		return Targets{}, refuse(ReasonInternal)
 	}
 	if _, done := st.Executed[tok.CommandID]; done {
-		return "", refuse(ReasonExecuted)
+		return Targets{}, refuse(ReasonExecuted)
 	}
 	if last := st.LastRevocationAt; last != nil && r.Now().Sub(*last) < RateLimit {
-		return "", refuse(ReasonRateLimited)
+		return Targets{}, refuse(ReasonRateLimited)
 	}
-	device, err := r.Sys.RootDevice(ctx)
+	targets, err := r.Sys.Targets(ctx)
 	var refusal *Refusal
 	switch {
 	case errors.As(err, &refusal):
-		return "", err
+		return Targets{}, err
 	case errors.Is(err, luks.ErrNotEncrypted):
-		return "", refuse(ReasonNotEncrypted)
-	case err != nil:
-		return "", refuse(ReasonInternal)
+		return Targets{}, refuse(ReasonNotEncrypted)
+	case err != nil || len(targets.Devices) == 0:
+		return Targets{}, refuse(ReasonInternal)
 	}
-	return device, nil
+	return targets, nil
+}
+
+// restorable returns the targets of a token: for a Destroy every target; for a Lock and a self-lock the root volume
+// and, of the other volumes, exactly those whose LUKS UUID the token lists and that share it with no other volume —
+// none while the root volume's UUID is unknown —, so that every erased volume can be restored from its escrowed
+// header (PDK-009). The other volumes are returned as
+// skipped. The list comes only from the token the revocation-issuer signed; nothing paddockd hands over decides what
+// is erased.
+func restorable(tok *revocation.Token, tg Targets) (Targets, []SkippedVolume) {
+	if tok.Action == revocation.ActionDestroy || len(tg.Devices) == 0 {
+		return tg, nil
+	}
+	last := len(tg.Devices) - 1
+	out := Targets{UUIDs: tg.UUIDs, Shared: tg.Shared, Unresolved: tg.Unresolved, RootUnknown: tg.RootUnknown}
+	var skipped []SkippedVolume
+	for _, d := range tg.Devices[:last] {
+		// Without the root volume's UUID a clone of it is not marked shared: no other volume is erased (round 3).
+		if id := tg.UUIDs[d]; id != "" && !tg.RootUnknown && !slices.Contains(tg.Shared, d) && slices.Contains(tok.Volumes, id) {
+			out.Devices = append(out.Devices, d)
+		} else {
+			skipped = append(skipped, SkippedVolume{Device: d, UUID: id})
+		}
+	}
+	out.Devices = append(out.Devices, tg.Devices[last])
+	return out, skipped
 }
 
 func verifyReason(err error) string {
@@ -246,21 +309,107 @@ func (r *Revoker) terminateSessions(ctx context.Context) {
 	}
 }
 
-// erase runs `cryptsetup luksErase` on device and counts the keyslots before and after (luksDump).
-func (r *Revoker) erase(ctx context.Context, device string) Erasure {
-	var e Erasure
-	if m, err := luks.Dump(ctx, r.Sys, device); err == nil {
-		e.SlotsBefore = len(m.Keyslots)
-	}
-	_, _, exit, err := r.Sys.Command(ctx, nil, "cryptsetup", "luksErase", "--batch-mode", "--", device)
-	m, dumpErr := luks.Dump(ctx, r.Sys, device)
-	if dumpErr != nil {
-		e.SlotsAfter = -1 // unknown: never reported as erased
+// erase erases every target in order and sums the results; a volume that fails does not stop the others. The
+// volumes before the root volume share SecondaryWithin; the root volume is attempted afterwards in any case.
+func (r *Revoker) erase(ctx context.Context, tg Targets) Erasure {
+	e := Erasure{Erased: len(tg.Devices) > 0 && len(tg.Unresolved) == 0, Unresolved: tg.Unresolved}
+	if len(tg.Devices) == 0 {
 		return e
 	}
-	e.SlotsAfter = len(m.Keyslots)
-	e.Erased = err == nil && exit == 0 && e.SlotsAfter == 0
+	last := len(tg.Devices) - 1
+	within := SecondaryWithin
+	if r.SecondaryWithin > 0 {
+		within = r.SecondaryWithin
+	}
+	e.Volumes = append(r.eraseWithin(ctx, tg.Devices[:last], within), r.eraseVolume(ctx, tg.Devices[last]))
+	for i := range e.Volumes {
+		e.Volumes[i].UUID = tg.UUIDs[e.Volumes[i].Device]
+	}
+	for _, v := range e.Volumes {
+		e.SlotsBefore += v.SlotsBefore
+		if v.SlotsAfter < 0 || e.SlotsAfter < 0 {
+			e.SlotsAfter = -1
+		} else {
+			e.SlotsAfter += v.SlotsAfter
+		}
+		e.Erased = e.Erased && v.Erased
+	}
 	return e
+}
+
+// eraseWithin erases devices in order until within has passed. The erasure runs in a goroutine, so that a command
+// stuck in the kernel (uninterruptible, beyond its WaitDelay) cannot hold up the root volume; a volume not finished
+// in time is reported with an unknown keyslot count.
+func (r *Revoker) eraseWithin(ctx context.Context, devices []string, within time.Duration) []VolumeErasure {
+	out := make([]VolumeErasure, len(devices))
+	for i, d := range devices {
+		out[i] = VolumeErasure{Device: d, SlotsAfter: -1}
+	}
+	if len(devices) == 0 {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
+	results := make(chan VolumeErasure, len(devices))
+	go func() {
+		for _, d := range devices {
+			if ctx.Err() != nil {
+				return
+			}
+			results <- r.eraseVolume(ctx, d)
+		}
+	}()
+	for i := range devices {
+		select {
+		case out[i] = <-results:
+		case <-ctx.Done():
+			return out
+		}
+	}
+	return out
+}
+
+// eraseVolume runs `cryptsetup luksErase` on device and counts the keyslots before and after.
+func (r *Revoker) eraseVolume(ctx context.Context, device string) VolumeErasure {
+	v := VolumeErasure{Device: device}
+	if n, err := r.keyslots(ctx, device); err == nil {
+		v.SlotsBefore = n
+	}
+	_, _, exit, err := r.Sys.Command(ctx, nil, "cryptsetup", "luksErase", "--batch-mode", "--", device)
+	n, countErr := r.keyslots(ctx, device)
+	if countErr != nil {
+		v.SlotsAfter = -1
+		return v
+	}
+	v.SlotsAfter = n
+	v.Erased = err == nil && exit == 0 && v.SlotsAfter == 0
+	return v
+}
+
+// keyslots counts the keyslots of device: from the JSON metadata of LUKS2 or, as LUKS1 has none, from the text dump
+// of a LUKS1 header ("Version: 1", "Key Slot N: ENABLED").
+func (r *Revoker) keyslots(ctx context.Context, device string) (int, error) {
+	if m, err := luks.Dump(ctx, r.Sys, device); err == nil {
+		return len(m.Keyslots), nil
+	}
+	out, _, exit, err := r.Sys.Command(ctx, nil, "cryptsetup", "luksDump", "--", device)
+	if err != nil || exit != 0 {
+		return 0, fmt.Errorf("revoke: no keyslot count for %s", device)
+	}
+	luks1, n := false, 0
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		switch {
+		case len(f) == 2 && f[0] == "Version:" && f[1] == "1":
+			luks1 = true
+		case len(f) == 4 && f[0] == "Key" && f[1] == "Slot" && f[3] == "ENABLED":
+			n++
+		}
+	}
+	if !luks1 {
+		return 0, fmt.Errorf("revoke: no keyslot count for %s", device)
+	}
+	return n, nil
 }
 
 // confirm posts the result until the server accepts it or ConfirmTimeout has passed.

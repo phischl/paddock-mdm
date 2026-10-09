@@ -359,19 +359,12 @@ func NewRevocationReports(runner *ActionRunner, org *db.OrgPool) *RevocationRepo
 	return &RevocationReports{runner: runner, org: org}
 }
 
-// confirmation is the result object paddock-revoke posts before its reboot.
-type confirmation struct {
-	Erased      bool `json:"erased"`
-	SlotsBefore int  `json:"slots_before"`
-	SlotsAfter  int  `json:"slots_after"`
-}
-
 // Finish records the result of a revocation token: confirmed when the device reports success, failed otherwise
 // (audited once: device.revocation_confirmed, actor the device). It reports false when the result belongs to no
 // open revocation (a device command, or a duplicate).
 func (r *RevocationReports) Finish(ctx context.Context, res ingest.CommandResult) (bool, error) {
-	var c confirmation
-	_ = json.Unmarshal(res.Result, &c) // a malformed result is recorded as it is, with zero values in the audit event
+	// A malformed result is recorded as it is, with zero values in the audit event.
+	c := revocation.ParseConfirmation(res.Result)
 	status := revocation.StatusConfirmed
 	if res.Status != protocol.CommandSucceeded {
 		status = revocation.StatusFailed
@@ -384,8 +377,10 @@ func (r *RevocationReports) Finish(ctx context.Context, res ingest.CommandResult
 		Code:   audit.CodeDeviceRevocationConfirmed,
 		Actor:  &audit.Actor{Type: audit.ActorDevice, ID: res.DeviceID.String()},
 		Target: &audit.Target{Type: "device", ID: res.DeviceID.String()},
-		Params: map[string]any{"request_id": res.CommandID.String(), "status": res.Status, "erased": c.Erased,
-			"slots_before": c.SlotsBefore, "slots_after": c.SlotsAfter},
+		Params: map[string]any{"request_id": res.CommandID.String(), "status": res.Status, "erased": c.AllErased(),
+			"slots_before": c.SlotsBefore, "slots_after": c.SlotsAfter, "volumes": len(c.Volumes),
+			"unresolved": len(c.Unresolved), "skipped_not_escrowed": len(c.SkippedNotEscrowed),
+			"shared_uuid": len(c.SharedUUID)},
 	}
 	open := false
 	if err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {

@@ -78,6 +78,53 @@ the bucket and every other prefix still need credentials or a presigned URL. The
 (`aws s3api put-bucket-policy --bucket paddock-agent-artifacts --policy file://policy.json`; the development
 bootstrap `deploy/compose/scripts/rustfs-bundles-bootstrap.sh` sets it).
 
+## Server release
+
+A tag `v<version>` runs the release workflow (`.github/workflows/release.yml`, plan M6b decision 4). It calls
+
+1. `make release-artifacts RELEASE_VERSION=<version> PUSH=1 RELEASE_PUBLIC_KEY_FILE=<production release public key>`:
+   builds `ghcr.io/phischl/paddock-server:<version>` and `ghcr.io/phischl/paddock-compiler:<version>` (OCI
+   labels for source, version, revision and license), pushes them and records their digests in `images.txt`,
+   builds the Debian packages and the agent binaries for amd64 and arm64 with the production public key compiled
+   into `paddock-supervisor`, writes an SPDX SBOM per image with `syft` and `SHA256SUMS` over all files, all into
+   `dist/release/<version>/`. It refuses the development keys, `TAGS` and `REVOKE_TAGS`.
+2. `make release-sign RELEASE_VERSION=<version>`: signs each pushed image by digest with `cosign` keyless (the
+   workflow's GitHub OIDC identity, Sigstore's public good instance; no key to keep), attaches its SBOM as a signed
+   SPDX attestation, and signs `SHA256SUMS` (`SHA256SUMS.sigstore.json`).
+
+`PUSH=1` pushes the `:<version>` tags before `release-sign` runs, so a run that fails between the two leaves
+unsigned images under the release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and
+consumers verify the signature (`cosign verify`, below) instead of trusting the tag, so an unsigned image fails
+verification. Re-run the release, or delete the tags, before announcing it.
+
+The workflow attaches the files to a **draft** GitHub release. Debian packages and agent binaries carry the suffix
+`-unsigned`: CI never holds the release keys, so they are not releasable as they are. Locally, the same targets run
+with images that are only built (`PUSH` unset) and `make release-sign DRY_RUN=1`, which checks the inputs and
+prints the cosign commands. Verify a published image with
+
+```sh
+cosign verify ghcr.io/phischl/paddock-server:<version> \
+  --certificate-identity-regexp '^https://github.com/phischl/paddock-mdm/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-attestation --type spdxjson … (same identity options)
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json … (same identity options)
+```
+
+### Offline signing of the agent artifacts
+
+On the offline signing machine, for each draft release:
+
+1. Download the `-unsigned` files, `SHA256SUMS` and `SHA256SUMS.sigstore.json`; check the bundle with
+   `cosign verify-blob` (above) and the files with `sha256sum -c SHA256SUMS`.
+2. Remove the suffix (`paddockd_<version>_linux_amd64-unsigned` → `paddockd`,
+   `paddock-agent_<version>_amd64-unsigned.deb` → `paddock-agent_<version>_amd64.deb`, …) and sign every binary and
+   package as described under *Keys*: `paddockd` and the `paddock-agent` and `paddock-supervisor` packages with the
+   agent release key, the `paddock-revoke` package with the revocation release key (two holders).
+3. Build fleetd for the release with `make fleetd-deb` (needs outbound HTTPS to Fleet's update server) and sign it
+   with the agent release key.
+4. Upload and publish through the platform API as under *Releasing*, then attach the `.minisig` files to the GitHub
+   release and publish it. Tagging and publishing a release are the product owner's decision.
+
 ## Rolling out
 
 `POST …/<version>/rollout` (or *Start rollout* on the release page of the portal) starts a staged rollout. Defaults:
@@ -113,3 +160,11 @@ that device.
 Troubleshooting on a device: `journalctl -u paddock-supervisor`, `readlink /opt/paddock/agent/current`,
 `/var/lib/paddock/state/update-result.json` (until the event is delivered), `/var/lib/paddock/state/probation.json`
 (during a probation).
+
+## GitHub release workflow
+
+`.github/workflows/release.yml` runs on tags `v*.*.*`. Before the first tag, set the repository variable
+`PADDOCK_RELEASE_PUBLIC_KEY` to the **complete two-line** production minisign public key (`untrusted comment:` line plus
+key line, as in the `.pub` file). The workflow refuses to run without it and `make release-key-check` refuses a
+development key. It pushes the server images, signs them keylessly, and creates a **draft** release with the unsigned
+agent artifacts; sign those offline as described above before publishing the release.

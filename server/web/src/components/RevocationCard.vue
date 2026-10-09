@@ -6,7 +6,7 @@ import type { RevocationRequest } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
-import { listRevocations, requestRevocation, timeline, type RevokeAction } from '../lib/revocations'
+import { listRevocations, requestRevocation, timeline, volumeResults, type RevokeAction, type VolumeResult } from '../lib/revocations'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 
@@ -28,6 +28,13 @@ const requested = ref<RevocationRequest | null>(null)
 const requests = ref<RevocationRequest[]>([])
 
 const stepUpAction = (action: RevokeAction) => 'revocation-' + action
+
+/** One volume of a confirmation (plan M4c.1 decision 2); a count of -1 means the device could not count the keyslots. */
+function volumeText(v: VolumeResult): string {
+  if (v.erased) return t('devices.revocation.volume.erased', { device: v.device, before: v.slots_before })
+  if (v.slots_after < 0) return t('devices.revocation.volume.unknown', { device: v.device })
+  return t('devices.revocation.volume.notErased', { device: v.device, after: v.slots_after })
+}
 
 async function load(): Promise<void> {
   try {
@@ -194,6 +201,45 @@ onMounted(async () => {
                 {{ t('devices.revocation.timelineSteps.' + s.step, { at: formatDateTime(s.at, locale) }) }}
               </li>
             </ol>
+            <p
+              v-if="volumeResults(r).incomplete"
+              class="incomplete"
+              data-testid="revocation-incomplete"
+            >
+              {{ t('devices.revocation.incomplete') }}
+            </p>
+            <ul
+              v-if="volumeResults(r).volumes.length > 0 || volumeResults(r).unresolved.length > 0 || volumeResults(r).skipped.length > 0 || volumeResults(r).shared.length > 0"
+              class="volumes"
+              :aria-label="t('devices.revocation.volumes')"
+              data-testid="revocation-volumes"
+            >
+              <li
+                v-for="(v, i) in volumeResults(r).volumes"
+                :key="'v' + i + ':' + v.device"
+              >
+                {{ volumeText(v) }}
+              </li>
+              <li
+                v-for="(source, i) in volumeResults(r).unresolved"
+                :key="'u' + i + ':' + source"
+              >
+                {{ t('devices.revocation.volume.unresolved', { source }) }}
+              </li>
+              <li
+                v-for="(v, i) in volumeResults(r).skipped"
+                :key="'s' + i + ':' + v.device"
+                data-testid="revocation-skipped"
+              >
+                {{ t('devices.revocation.volume.skipped', { device: v.device }) }}
+              </li>
+              <li
+                v-for="(device, i) in volumeResults(r).shared"
+                :key="'h' + i + ':' + device"
+              >
+                {{ t('devices.revocation.volume.shared', { device }) }}
+              </li>
+            </ul>
           </td>
         </tr>
       </tbody>

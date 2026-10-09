@@ -1053,8 +1053,8 @@ digits; the agent therefore pins Himmelblau's `idmap_range = 200000-999999999` o
 change** (it would change directory users' UIDs and orphan their home directories). The compiler validates the Classic
 flavor only (Debian's `sudo-rs` lags behind Ubuntu's); the SudoRS flavor is Classic minus one line, proven by test. **Residual risk:** on `sudo-rs` devices the organization's
 lecture text (concept layer 2, "Notice") is not shown at `sudo` — users see the default lecture. The notice must then
-come from another channel (login banner / acceptable-use acknowledgment, planned with the device-notice work in a
-later milestone); operators record this in their ISMS until then.
+come from another channel. **Resolved (M4a):** the device notice is shown on the login screen and at session start
+(notice reconciler), so the organization's text reaches `sudo-rs` users before they can use privileges.
 
 Apply procedure on the device:
 
@@ -1828,7 +1828,8 @@ reject new bundles as downgrades. The restore runbook therefore runs `paddock-se
 | Acceptance | `test/acceptance/` Go test suite that orchestrates Compose stack + VMs; one test file per gate of the concept | Definition of done for each milestone |
 
 CI: GitHub Actions (or Forgejo Actions), `golangci-lint`, `govulncheck`, `gosec`, SBOM (`syft`), container
-image signing with `cosign` using a key held in the CI secret store.
+image signing with `cosign` keyless via GitHub OIDC (no long-lived signing key; M6b decision 4); agent binaries and
+packages stay signed offline with the minisign release key.
 
 ---
 

@@ -69,6 +69,10 @@ const (
 	StatusPending = "pending"
 	StatusStored  = "stored"
 	StatusFailed  = "failed"
+	// StatusRefused is a header the server will not store: the device escrows the headers of the most volumes a
+	// revocation token carries already (PDK-009, review round 2). The device does not try that volume again for a
+	// while; agents before PDK-009 treat it as not yet stored and start over after their wait.
+	StatusRefused = "refused"
 )
 
 // Request is the body of POST /v1/escrow. Secrets (admin_password, luks_recovery_key) carry Ciphertext; a header
@@ -78,6 +82,9 @@ type Request struct {
 	EscrowID   string `json:"escrow_id"` // UUID chosen by the device
 	Kind       string `json:"kind"`
 	Generation int64  `json:"generation"`
+	// Volume is the LUKS UUID of the volume a header belongs to (PDK-009 decision 1); empty for secrets and for the
+	// root volume's headers of agents before PDK-009.
+	Volume     string `json:"volume,omitempty"`
 	KeyVersion int    `json:"key_version"`           // version of escrow-wrap the ciphertext or the DEK is wrapped with
 	Ciphertext string `json:"ciphertext,omitempty"`  // standard base64 RSA-OAEP-SHA256 ciphertext
 	WrappedDEK string `json:"wrapped_dek,omitempty"` // standard base64 RSA-OAEP-SHA256 ciphertext of the header key
@@ -123,13 +130,17 @@ func Encrypt(pub *rsa.PublicKey, secret []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(ct), nil
 }
 
-// HeaderObjectKey is the object of a header generation in the escrow bucket (architecture §12.4); the server
-// chooses it, the device only uploads to its presigned URL.
-func HeaderObjectKey(org, device string, generation int64) string {
-	return HeaderObjectPrefix(org, device) + fmt.Sprintf("%d.bin", generation)
+// HeaderObjectKey is the object of a header generation of the LUKS volume with UUID volume in the escrow bucket
+// (architecture §12.4, PDK-009 decision 1); the server chooses it, the device only uploads to its presigned URL. An
+// upload without a volume (an agent before PDK-009: the root volume) keeps the key without the volume.
+func HeaderObjectKey(org, device, volume string, generation int64) string {
+	if volume == "" {
+		return HeaderObjectPrefix(org, device) + fmt.Sprintf("%d.bin", generation)
+	}
+	return HeaderObjectPrefix(org, device) + fmt.Sprintf("%s/%d.bin", volume, generation)
 }
 
-// HeaderObjectPrefix is the prefix of every header generation of a device in the escrow bucket.
+// HeaderObjectPrefix is the prefix of every header generation of every volume of a device in the escrow bucket.
 func HeaderObjectPrefix(org, device string) string {
 	return fmt.Sprintf("org/%s/devices/%s/luks-header/", org, device)
 }

@@ -6,13 +6,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/pkg/dsse"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/revocation"
@@ -29,21 +32,32 @@ var (
 	otherKey   = ed25519.NewKeyFromSeed([]byte("paddock-revoke-test-other---key!"))
 )
 
-// fakeSys is a device with two keyslots on /dev/vda3, the marker and the trust anchor; it logs every action.
-type fakeSys struct {
-	mu        sync.Mutex
-	files     map[string][]byte
+// fakeVolume is a LUKS volume of fakeSys.
+type fakeVolume struct {
 	slots     int
-	log       []string
-	rootErr   error
+	luks1     bool // only the text dump of a LUKS1 header, no JSON metadata
 	eraseFail bool
+	// hang blocks luksErase until it is closed, whatever the context says (a disk stuck in the kernel).
+	hang chan struct{}
+}
+
+// fakeSys is a device with two keyslots on its root volume /dev/vda3, the marker and the trust anchor; it logs every
+// action. targets are the volumes Targets returns, root last.
+type fakeSys struct {
+	mu      sync.Mutex
+	files   map[string][]byte
+	volumes map[string]*fakeVolume
+	targets Targets
+	log     []string
+	rootErr error
 }
 
 func newSys(t *testing.T) *fakeSys {
 	t.Helper()
 	trust, _ := json.Marshal(revocation.TrustFile{RevocationKeys: []revocation.Key{{KeyID: "revocation-signing:v1",
 		PublicKey: base64.StdEncoding.EncodeToString(trustedKey.Public().(ed25519.PublicKey))}}})
-	return &fakeSys{files: map[string][]byte{EnabledFile: {}, TrustFile: trust}, slots: 2}
+	return &fakeSys{files: map[string][]byte{EnabledFile: {}, TrustFile: trust},
+		volumes: map[string]*fakeVolume{"/dev/vda3": {slots: 2}}, targets: Targets{Devices: []string{"/dev/vda3"}}}
 }
 
 func (s *fakeSys) add(entry string) {
@@ -54,19 +68,39 @@ func (s *fakeSys) add(entry string) {
 
 func (s *fakeSys) Command(_ context.Context, _ []string, name string, args ...string) (string, string, int, error) {
 	s.add(name + " " + strings.Join(args, " "))
+	v := s.volumes[args[len(args)-1]]
 	switch {
-	case name == "cryptsetup" && args[0] == "luksDump":
+	case name != "cryptsetup" || v == nil:
+	case args[0] == "luksDump" && args[1] == "--dump-json-metadata":
+		if v.luks1 {
+			return "", "Unsupported for LUKS1", 1, nil
+		}
 		slots := map[string]any{}
-		for i := range s.slots {
+		for i := range v.slots {
 			slots[string(rune('0'+i))] = map[string]any{"type": "luks2"}
 		}
 		out, _ := json.Marshal(map[string]any{"keyslots": slots, "tokens": map[string]any{}})
 		return string(out), "", 0, nil
-	case name == "cryptsetup" && args[0] == "luksErase":
-		if s.eraseFail {
+	case args[0] == "luksDump" && v.luks1:
+		var out strings.Builder
+		out.WriteString("LUKS header information for " + args[len(args)-1] + "\n\nVersion:       \t1\nCipher name:   \taes\n\n")
+		for i := range 8 {
+			state := "DISABLED"
+			if i < v.slots {
+				state = "ENABLED"
+			}
+			fmt.Fprintf(&out, "Key Slot %d: %s\n", i, state)
+		}
+		return out.String(), "", 0, nil
+	case args[0] == "luksErase":
+		if v.hang != nil {
+			<-v.hang
+			return "", "killed", -1, errors.New("signal: killed")
+		}
+		if v.eraseFail {
 			return "", "erase failed", 1, nil
 		}
-		s.slots = 0
+		v.slots = 0
 		return "", "", 0, nil
 	}
 	return "", "unexpected", 1, nil
@@ -80,11 +114,11 @@ func (s *fakeSys) Loginctl(_ context.Context, args ...string) (string, int, erro
 	return "", 0, nil
 }
 
-func (s *fakeSys) RootDevice(context.Context) (string, error) {
+func (s *fakeSys) Targets(context.Context) (Targets, error) {
 	if s.rootErr != nil {
-		return "", s.rootErr
+		return Targets{}, s.rootErr
 	}
-	return "/dev/vda3", nil
+	return s.targets, nil
 }
 
 func (s *fakeSys) Reboot(context.Context) error { s.add("reboot"); return nil }
@@ -143,6 +177,9 @@ func token(t *testing.T, key ed25519.PrivateKey, change func(*revocation.Token))
 	return env
 }
 
+// destroy makes a token a Destroy, which erases every volume (plan M4c.1).
+func destroy(tok *revocation.Token) { tok.Action = revocation.ActionDestroy }
+
 func revoker(sys *fakeSys, c *fakeConfirmer) *Revoker {
 	return &Revoker{Sys: sys, Confirm: c, DeviceID: device, Now: func() time.Time { return now }, ConfirmWithin: 2 * time.Second}
 }
@@ -153,7 +190,8 @@ func TestSequence(t *testing.T) {
 	sys := newSys(t)
 	c := &fakeConfirmer{sys: sys}
 	e, stored, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
-	if err != nil || stored || e != (Erasure{Erased: true, SlotsBefore: 2, SlotsAfter: 0}) {
+	if err != nil || stored || !reflect.DeepEqual(e, Erasure{Erased: true, SlotsBefore: 2, SlotsAfter: 0,
+		Volumes: []VolumeErasure{{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true}}}) {
 		t.Fatalf("execute: %+v %v", e, err)
 	}
 	want := []string{
@@ -169,8 +207,125 @@ func TestSequence(t *testing.T) {
 		t.Fatalf("sequence\n%s\nwant\n%s", strings.Join(sys.log, "\n"), strings.Join(want, "\n"))
 	}
 	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
-		string(c.results[0].Result) != `{"erased":true,"slots_before":2,"slots_after":0}` {
+		string(c.results[0].Result) != `{"erased":true,"slots_before":2,"slots_after":0,`+
+			`"volumes":[{"device":"/dev/vda3","slots_before":2,"slots_after":0,"erased":true}]}` {
+		t.Fatalf("confirmation %s", c.results[0].Result)
+	}
+}
+
+// TestEveryVolume (plan M4c.1 decisions 1–3): a Destroy erases and verifies every target, the root volume last; the
+// confirmation lists every volume, and erased is true as every volume has no keyslot left. A LUKS1 volume is counted
+// from its text dump.
+func TestEveryVolume(t *testing.T) {
+	sys := newSys(t)
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
+	sys.volumes["/dev/vdc"] = &fakeVolume{slots: 1, luks1: true}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc", "/dev/vda3"}}
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, destroy))
+	want := Erasure{Erased: true, SlotsBefore: 6, SlotsAfter: 0, Volumes: []VolumeErasure{
+		{Device: "/dev/vdb1", SlotsBefore: 3, SlotsAfter: 0, Erased: true},
+		{Device: "/dev/vdc", SlotsBefore: 1, SlotsAfter: 0, Erased: true},
+		{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true},
+	}}
+	t.Logf("per-volume results: %+v", e)
+	if err != nil || !reflect.DeepEqual(e, want) {
+		t.Fatalf("execute: %+v %v\nwant %+v", e, err, want)
+	}
+	erases := []string{}
+	for _, entry := range sys.log {
+		if strings.HasPrefix(entry, "cryptsetup luksErase") {
+			erases = append(erases, entry)
+		}
+	}
+	if !slices.Equal(erases, []string{"cryptsetup luksErase --batch-mode -- /dev/vdb1",
+		"cryptsetup luksErase --batch-mode -- /dev/vdc", "cryptsetup luksErase --batch-mode -- /dev/vda3"}) {
+		t.Fatalf("erasures %v", erases)
+	}
+	if tail := sys.log[len(sys.log)-2:]; !slices.Equal(tail, []string{"confirm 0190f000-0000-7000-8000-0000000000c1", "reboot"}) {
+		t.Fatalf("sequence ends with %v", tail)
+	}
+	var posted Erasure
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
+		json.Unmarshal(c.results[0].Result, &posted) != nil || !reflect.DeepEqual(posted, want) {
 		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestUnresolvedIsIncomplete (plan M4c.1 decision 3, review round 1): an unresolved crypttab entry does not stop the
+// erasure of the others, but the revocation is not erased and is confirmed as failed.
+func TestUnresolvedIsIncomplete(t *testing.T) {
+	sys := newSys(t)
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vda3"}, Unresolved: []string{CrypttabFile}}
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, destroy))
+	t.Logf("per-volume results: %+v", e)
+	if err != nil || e.Erased || e.SlotsAfter != 0 || len(e.Volumes) != 2 || !e.Volumes[0].Erased || !e.Volumes[1].Erased ||
+		!slices.Equal(e.Unresolved, []string{CrypttabFile}) {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandFailed ||
+		!strings.Contains(string(c.results[0].Result), `"erased":false`) ||
+		!strings.Contains(string(c.results[0].Result), `"unresolved":["/etc/crypttab"]`) {
+		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestHungSecondaryVolume (review round 1): a secondary volume whose erasure hangs beyond every timeout gets the shared
+// deadline; the root volume is erased all the same, and the hung volume is reported with an unknown count.
+func TestHungSecondaryVolume(t *testing.T) {
+	sys := newSys(t)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3, hang: hang}
+	sys.volumes["/dev/vdc1"] = &fakeVolume{slots: 1}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc1", "/dev/vda3"}}
+	c := &fakeConfirmer{sys: sys}
+	r := revoker(sys, c)
+	r.SecondaryWithin = 100 * time.Millisecond
+	start := time.Now()
+	e, _, err := r.Handle(context.Background(), token(t, trustedKey, destroy))
+	t.Logf("per-volume results after %s: %+v", time.Since(start), e)
+	want := []VolumeErasure{
+		{Device: "/dev/vdb1", SlotsAfter: -1},
+		{Device: "/dev/vdc1", SlotsAfter: -1},
+		{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true},
+	}
+	if err != nil || e.Erased || e.SlotsAfter != -1 || !reflect.DeepEqual(e.Volumes, want) || time.Since(start) > 5*time.Second {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+	if sys.volumes["/dev/vda3"].slots != 0 || len(c.results) != 1 || c.results[0].Status != protocol.CommandFailed {
+		t.Fatalf("root keyslots %d, confirmation %+v", sys.volumes["/dev/vda3"].slots, c.results)
+	}
+}
+
+// TestOneVolumeLeftKeyslots (plan M4c.1 decision 2): a volume whose erasure failed does not stop the others, and the
+// confirmation reports the revocation as failed with that volume's keyslots.
+func TestOneVolumeLeftKeyslots(t *testing.T) {
+	sys := newSys(t)
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3, eraseFail: true}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vda3"}}
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, destroy))
+	t.Logf("per-volume results: %+v", e)
+	if err != nil || e.Erased || e.SlotsBefore != 5 || e.SlotsAfter != 3 || len(e.Volumes) != 2 ||
+		e.Volumes[0] != (VolumeErasure{Device: "/dev/vdb1", SlotsBefore: 3, SlotsAfter: 3}) ||
+		e.Volumes[1] != (VolumeErasure{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true}) {
+		t.Fatalf("execute: %+v %v", e, err)
+	}
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandFailed || sys.log[len(sys.log)-1] != "reboot" {
+		t.Fatalf("confirmation %+v, log %v", c.results, sys.log)
+	}
+}
+
+// TestUnknownKeyslotCount: a volume whose keyslots cannot be counted after the erasure is never reported as erased.
+func TestUnknownKeyslotCount(t *testing.T) {
+	sys := newSys(t)
+	sys.targets = Targets{Devices: []string{"/dev/vdz", "/dev/vda3"}}
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, destroy))
+	if err != nil || e.Erased || e.SlotsAfter != -1 || e.Volumes[0].SlotsAfter != -1 || e.Volumes[0].Erased || !e.Volumes[1].Erased {
+		t.Fatalf("execute: %+v %v", e, err)
 	}
 }
 
@@ -178,7 +333,7 @@ func TestSequence(t *testing.T) {
 // keyslot is reported as failed.
 func TestRebootWithoutConfirmation(t *testing.T) {
 	sys := newSys(t)
-	sys.eraseFail = true
+	sys.volumes["/dev/vda3"].eraseFail = true
 	c := &fakeConfirmer{sys: sys, fail: true}
 	start := time.Now()
 	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, nil))
@@ -225,6 +380,8 @@ func TestRefusals(t *testing.T) {
 		}, elapsed: 30*dayLength - time.Second, reason: ReasonPeriod},
 		"dead man's switch with a Lock":  {elapsed: 30 * dayLength, reason: ReasonNotSelfLock},
 		"test target in a release build": {prepare: func(s *fakeSys) { s.rootErr = refuse(ReasonTestTarget) }, reason: ReasonTestTarget},
+		"root not on LUKS":               {prepare: func(s *fakeSys) { s.rootErr = luks.ErrNotEncrypted }, reason: ReasonNotEncrypted},
+		"no target":                      {prepare: func(s *fakeSys) { s.targets = Targets{Unresolved: []string{"UUID=x"}} }, reason: ReasonInternal},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -271,6 +428,201 @@ func TestSelfLockStoredThenRun(t *testing.T) {
 	e, err := r.SelfLock(context.Background(), env, 30*dayLength)
 	if err != nil || !e.Erased || sys.log[len(sys.log)-1] != "reboot" {
 		t.Fatalf("self-lock after its period: %+v %v %v", e, err, sys.log)
+	}
+}
+
+// LUKS UUIDs of the secondary volumes of the Lock tests.
+const (
+	uuidData = "1b6a3c1e-0000-4000-8000-00000000000b"
+	uuidHome = "1b6a3c1e-0000-4000-8000-00000000000c"
+)
+
+// lockTargets is a device with the root volume and three other volumes: data and home with a UUID, one without.
+func lockTargets(sys *fakeSys) {
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
+	sys.volumes["/dev/vdc1"] = &fakeVolume{slots: 1}
+	sys.volumes["/dev/vdd"] = &fakeVolume{slots: 1}
+	sys.targets = Targets{Devices: []string{"/dev/vdb1", "/dev/vdc1", "/dev/vdd", "/dev/vda3"},
+		UUIDs: map[string]string{"/dev/vdb1": uuidData, "/dev/vdc1": uuidHome}}
+}
+
+// erasures returns the devices luksErase ran on, in order.
+func erasures(sys *fakeSys) []string {
+	var out []string
+	for _, entry := range sys.log {
+		if d, ok := strings.CutPrefix(entry, "cryptsetup luksErase --batch-mode -- "); ok {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// TestLockErasesConfirmedVolumes (PDK-009 decision 6): a Lock erases the root volume and, of the other volumes,
+// exactly those whose UUID the signed token lists; the others — including a volume without a UUID and a UUID the
+// token lists that the device does not have — are reported as skipped_not_escrowed and do not make the Lock fail.
+func TestLockErasesConfirmedVolumes(t *testing.T) {
+	sys := newSys(t)
+	lockTargets(sys)
+	c := &fakeConfirmer{sys: sys}
+	env := token(t, trustedKey, func(k *revocation.Token) {
+		k.Volumes = []string{uuidData, "1b6a3c1e-0000-4000-8000-0000000000ff"}
+	})
+	e, _, err := revoker(sys, c).Handle(context.Background(), env)
+	t.Logf("lock results: %+v", e)
+	want := Erasure{Erased: true, SlotsBefore: 5, SlotsAfter: 0,
+		Volumes: []VolumeErasure{
+			{Device: "/dev/vdb1", UUID: uuidData, SlotsBefore: 3, SlotsAfter: 0, Erased: true},
+			{Device: "/dev/vda3", SlotsBefore: 2, SlotsAfter: 0, Erased: true},
+		},
+		SkippedNotEscrowed: []SkippedVolume{{Device: "/dev/vdc1", UUID: uuidHome}, {Device: "/dev/vdd"}},
+	}
+	if err != nil || !reflect.DeepEqual(e, want) {
+		t.Fatalf("lock: %+v %v\nwant %+v", e, err, want)
+	}
+	if got := erasures(sys); !slices.Equal(got, []string{"/dev/vdb1", "/dev/vda3"}) {
+		t.Fatalf("erased %v", got)
+	}
+	if sys.volumes["/dev/vdc1"].slots != 1 || sys.volumes["/dev/vdd"].slots != 1 {
+		t.Fatal("a volume without a confirmed header escrow lost its keyslots")
+	}
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
+		!strings.Contains(string(c.results[0].Result), `"skipped_not_escrowed":[{"device":"/dev/vdc1","uuid":"`+uuidHome+`"},{"device":"/dev/vdd"}]`) {
+		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestLockWithoutVolumes (PDK-009): a Lock token without volumes — the root volume's escrow only, or an issuer
+// before PDK-009 — erases the root volume only.
+func TestLockWithoutVolumes(t *testing.T) {
+	sys := newSys(t)
+	lockTargets(sys)
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, nil))
+	if err != nil || !e.Erased || len(e.SkippedNotEscrowed) != 3 || !slices.Equal(erasures(sys), []string{"/dev/vda3"}) {
+		t.Fatalf("lock: %+v %v, erased %v", e, err, erasures(sys))
+	}
+}
+
+// TestDestroyErasesEveryVolume (PDK-009 decision 6): a Destroy erases every volume, whatever is escrowed.
+func TestDestroyErasesEveryVolume(t *testing.T) {
+	sys := newSys(t)
+	lockTargets(sys)
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), token(t, trustedKey, destroy))
+	if err != nil || !e.Erased || len(e.SkippedNotEscrowed) != 0 ||
+		!slices.Equal(erasures(sys), []string{"/dev/vdb1", "/dev/vdc1", "/dev/vdd", "/dev/vda3"}) {
+		t.Fatalf("destroy: %+v %v, erased %v", e, err, erasures(sys))
+	}
+}
+
+// TestSelfLockErasesConfirmedVolumes (PDK-009 decision 6): the dead man's switch is a restorable lock, too.
+func TestSelfLockErasesConfirmedVolumes(t *testing.T) {
+	sys := newSys(t)
+	lockTargets(sys)
+	r := revoker(sys, &fakeConfirmer{sys: sys})
+	env := token(t, trustedKey, func(k *revocation.Token) {
+		k.Action, k.PeriodDays, k.Volumes = revocation.ActionSelfLock, 30, []string{uuidData, uuidHome}
+	})
+	e, err := r.SelfLock(context.Background(), env, 30*dayLength)
+	if err != nil || !e.Erased || !reflect.DeepEqual(e.SkippedNotEscrowed, []SkippedVolume{{Device: "/dev/vdd"}}) ||
+		!slices.Equal(erasures(sys), []string{"/dev/vdb1", "/dev/vdc1", "/dev/vda3"}) {
+		t.Fatalf("self-lock: %+v %v, erased %v", e, err, erasures(sys))
+	}
+}
+
+// rootClone is a device whose /dev/vdb is a clone of the root volume: same LUKS UUID, marked shared, and a data
+// volume.
+func rootClone(sys *fakeSys) {
+	const rootID = "1b6a3c1e-0000-4000-8000-0000000000aa"
+	sys.volumes["/dev/vdb"] = &fakeVolume{slots: 2}
+	sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 3}
+	sys.targets = Targets{Devices: []string{"/dev/vdb", "/dev/vdb1", "/dev/vda3"},
+		UUIDs: map[string]string{"/dev/vdb": rootID, "/dev/vdb1": uuidData}, Shared: []string{"/dev/vdb"}}
+}
+
+// TestDestroyErasesRootClone (PDK-009 review round 2): a Destroy erases a volume that shares the root volume's UUID,
+// reports it as shared_uuid, and the erasure is complete.
+func TestDestroyErasesRootClone(t *testing.T) {
+	sys := newSys(t)
+	rootClone(sys)
+	c := &fakeConfirmer{sys: sys}
+	e, _, err := revoker(sys, c).Handle(context.Background(), token(t, trustedKey, destroy))
+	if err != nil || !e.Erased || !slices.Equal(erasures(sys), []string{"/dev/vdb", "/dev/vdb1", "/dev/vda3"}) ||
+		!slices.Equal(e.SharedUUID, []string{"/dev/vdb"}) || sys.volumes["/dev/vdb"].slots != 0 {
+		t.Fatalf("destroy: %+v %v, erased %v", e, err, erasures(sys))
+	}
+	if len(c.results) != 1 || c.results[0].Status != protocol.CommandSucceeded ||
+		!strings.Contains(string(c.results[0].Result), `"shared_uuid":["/dev/vdb"]`) {
+		t.Fatalf("confirmation %+v", c.results)
+	}
+}
+
+// TestLockSkipsRootClone (PDK-009 review round 2): a Lock never erases a volume with a shared UUID, even when the
+// token lists that UUID (its header cannot be escrowed); it is skipped, and the Lock is complete.
+func TestLockSkipsRootClone(t *testing.T) {
+	sys := newSys(t)
+	rootClone(sys)
+	env := token(t, trustedKey, func(k *revocation.Token) {
+		k.Volumes = []string{uuidData, "1b6a3c1e-0000-4000-8000-0000000000aa"}
+	})
+	e, _, err := revoker(sys, &fakeConfirmer{sys: sys}).Handle(context.Background(), env)
+	if err != nil || !e.Erased || !slices.Equal(erasures(sys), []string{"/dev/vdb1", "/dev/vda3"}) ||
+		!reflect.DeepEqual(e.SkippedNotEscrowed, []SkippedVolume{{Device: "/dev/vdb", UUID: "1b6a3c1e-0000-4000-8000-0000000000aa"}}) ||
+		!slices.Equal(e.SharedUUID, []string{"/dev/vdb"}) || sys.volumes["/dev/vdb"].slots != 2 {
+		t.Fatalf("lock: %+v %v, erased %v", e, err, erasures(sys))
+	}
+}
+
+// TestRootUUIDUnknown (PDK-009 review round 3): when the root volume's luksUUID fails or hangs, a Destroy still
+// erases every classified volume, also a clone of the root volume, and a Lock or self-lock erases the root volume
+// only, skipping every other volume — even those the token lists.
+func TestRootUUIDUnknown(t *testing.T) {
+	const rootID = "1b6a3c1e-0000-4000-8000-0000000000aa"
+	root := fakeRoot(t, "clone /dev/vdb none luks\ndata /dev/vdb1 none luks\n", "/dev/vda3", "/dev/vdb", "/dev/vdb1")
+	failing := &crypttabTools{luks: []string{"/dev/vdb", "/dev/vdb1"}, uuids: map[string]string{"/dev/vdb": rootID, "/dev/vdb1": uuidData}}
+	hung := &crypttabTools{luks: []string{"/dev/vdb", "/dev/vdb1"},
+		uuids: map[string]string{"/dev/vdb": rootID, "/dev/vdb1": uuidData, "/dev/vda3": rootID}, hang: "/dev/vda3", release: make(chan struct{})}
+	t.Cleanup(func() { close(hung.release) })
+	for name, tools := range map[string]*crypttabTools{"fails": failing, "hangs": hung} {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			targets := crypttabTargets(context.Background(), tools, root, "/dev/vda3")
+			if !targets.RootUnknown || !slices.Equal(targets.Devices, []string{"/dev/vdb", "/dev/vdb1", "/dev/vda3"}) ||
+				time.Since(start) > luks.RootUUIDGrace+2*time.Second {
+				t.Fatalf("targets %+v after %s", targets, time.Since(start))
+			}
+			for _, action := range []string{revocation.ActionDestroy, revocation.ActionLock, revocation.ActionSelfLock} {
+				sys := newSys(t)
+				sys.volumes["/dev/vdb"] = &fakeVolume{slots: 2}
+				sys.volumes["/dev/vdb1"] = &fakeVolume{slots: 1}
+				sys.targets = targets
+				r := revoker(sys, &fakeConfirmer{sys: sys})
+				env := token(t, trustedKey, func(k *revocation.Token) {
+					k.Action = action
+					if action != revocation.ActionDestroy {
+						k.Volumes = []string{uuidData, rootID}
+					}
+					if action == revocation.ActionSelfLock {
+						k.PeriodDays = 30
+					}
+				})
+				var e Erasure
+				var err error
+				if action == revocation.ActionSelfLock {
+					e, err = r.SelfLock(context.Background(), env, 30*dayLength)
+				} else {
+					e, _, err = r.Handle(context.Background(), env)
+				}
+				want := []string{"/dev/vda3"}
+				if action == revocation.ActionDestroy {
+					want = []string{"/dev/vdb", "/dev/vdb1", "/dev/vda3"}
+				}
+				if err != nil || !e.Erased || !slices.Equal(erasures(sys), want) {
+					t.Fatalf("%s: %+v %v, erased %v", action, e, err, erasures(sys))
+				}
+				if action != revocation.ActionDestroy && len(e.SkippedNotEscrowed) != 2 {
+					t.Fatalf("%s skipped %+v", action, e.SkippedNotEscrowed)
+				}
+			}
+		})
 	}
 }
 

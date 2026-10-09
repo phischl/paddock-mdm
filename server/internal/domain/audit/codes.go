@@ -93,6 +93,7 @@ const (
 
 	CodeAutoinstallGenerated       Code = "autoinstall.generated"
 	CodeDeviceTamperKeyslotChanged Code = "device.tamper_keyslot_changed"
+	CodeDeviceHeaderEscrowRefused  Code = "device.header_escrow_refused"
 	CodeDiskRecoveryKeyRevealed    Code = "disk.recovery_key_revealed"
 	CodeDiskHeaderDownloaded       Code = "disk.header_downloaded"
 
@@ -126,6 +127,19 @@ const (
 
 	CodePlatformOSVStale    Code = "platform.osv_stale"
 	CodePlatformOSVImported Code = "platform.osv_imported"
+
+	// API tokens (plan M6c decisions 4, 5 and 9).
+	CodeAPITokenCreated   Code = "api_token.created"
+	CodeAPITokenRevoked   Code = "api_token.revoked"
+	CodeAPITokenUseDenied Code = "api_token.use_denied" //nolint:gosec // an audit code, not a credential
+
+	// Declarative configuration (plan M6c decision 16).
+	CodeConfigApplied Code = "config.applied"
+
+	// Restore commands of paddock-server admin (plan M6c decision 21).
+	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
+	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
+	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -148,7 +162,7 @@ var deviceEventParams = []string{
 	"from_version", "outcome", "count", "from_seq", "to_seq", "stage", "message", "username", "sessions_locked",
 	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
 	"generation", "service", "at", "field", "before", "after", "unit",
-	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error",
+	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
 }
 
 var registry = map[Code]Definition{
@@ -626,10 +640,17 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperKeyslotChanged: {
 		Code: CodeDeviceTamperKeyslotChanged, Emitted: true,
-		Description: "A device found the keyslots of its encrypted root volume changed outside Paddock; it escrows the header again (actor: the device).",
+		Description: "A device found the keyslots of one of its encrypted volumes changed outside Paddock; it escrows that volume's header again (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "before and after list the kind of every keyslot (tpm2+pin, tpm2, recovery, password, or another token type).",
+		Note:        "volume is the LUKS UUID of the volume (absent for devices before PDK-009, which watch the root volume only); before and after list the kind of every keyslot (tpm2+pin, tpm2, recovery, password, or another token type).",
+	},
+	CodeDeviceHeaderEscrowRefused: {
+		Code: CodeDeviceHeaderEscrowRefused, Emitted: true,
+		Description: "The worker refused a LUKS header escrow of a device for a 33rd distinct volume: a revocation token carries at most 32 volumes (actor: the device).",
+		Params:      []string{"volume", "generation", "volumes"},
+		Outcomes:    []Outcome{OutcomeFailure},
+		Note:        "error_code too_many_volumes; volume is the refused volume's LUKS UUID, volumes the number of volumes the device already escrows. The device reports the escrow as failed and retries later.",
 	},
 	CodeDiskRecoveryKeyRevealed: {
 		Code: CodeDiskRecoveryKeyRevealed, Emitted: true,
@@ -640,7 +661,8 @@ var registry = map[Code]Definition{
 	CodeDiskHeaderDownloaded: {
 		Code: CodeDiskHeaderDownloaded, Emitted: true,
 		Description: "An organization administrator downloaded an escrowed LUKS header of a device after a step-up.",
-		Params:      []string{"hostname", "generation"},
+		Params:      []string{"hostname", "volume", "generation"},
+		Note:        "volume is the LUKS UUID of the header's volume; absent for a root volume header escrowed before PDK-009 whose UUID the device has not reported yet.",
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceRevocationTrustPinnedTOFU: {
@@ -677,8 +699,9 @@ var registry = map[Code]Definition{
 	CodeRevocationIssued: {
 		Code: CodeRevocationIssued, Emitted: true,
 		Description: "The revocation-issuer verified the step-up proofs and the limits of a Lock or a self-lock and signed the device-bound revocation token (actor: system).",
-		Params:      []string{"action", "hostname", "request_id", "requested_by", "expires_at"},
+		Params:      []string{"action", "hostname", "request_id", "requested_by", "expires_at", "volumes"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "volumes counts the volumes besides the root volume the token lets the device erase: those with a confirmed header escrow, so that the lock stays restorable (always 0 for a device whose paddock-revoke predates PDK-009).",
 	},
 	CodeDeviceEscrowDestroyed: {
 		Code: CodeDeviceEscrowDestroyed, Emitted: true,
@@ -703,10 +726,10 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceRevocationConfirmed: {
 		Code: CodeDeviceRevocationConfirmed, Emitted: true,
-		Description: "A device confirmed a revocation before its forced reboot: every keyslot of its encrypted root volume is erased (actor: the device).",
-		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "status"},
+		Description: "A device confirmed a revocation before its forced reboot: every keyslot of every LUKS volume of the device is erased (actor: the device).",
+		Params:      []string{"action", "request_id", "erased", "slots_before", "slots_after", "volumes", "unresolved", "skipped_not_escrowed", "shared_uuid", "status"},
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "status failed means the device reported that the erasure did not complete.",
+		Note:        "status failed means the device reported that the erasure did not complete. erased is true only if every volume has no keyslot left and no crypttab entry is unresolved; slots_before and slots_after are sums over the reported volumes, volumes counts the reported volumes (failed ones included) and unresolved the crypttab entries the device could not erase with certainty (both 0 for devices before M4c.1); skipped_not_escrowed counts the volumes a Lock left alone because their header escrow was not confirmed (PDK-009), shared_uuid the volumes whose LUKS UUID another volume or the root volume has (a Destroy erases them, a Lock skips them).",
 	},
 	CodeDeviceRevocationRefused: {
 		Code: CodeDeviceRevocationRefused, Emitted: true,
@@ -808,6 +831,54 @@ var registry = map[Code]Definition{
 		Params:      []string{"last_success_at", "last_error"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per stale period; the next successful download or import ends it. last_success_at is missing if no download ever succeeded.",
+	},
+	CodeAPITokenCreated: {
+		Code: CodeAPITokenCreated, Emitted: true,
+		Description: "An organization administrator or operator created an API token. The token secret is never recorded.",
+		Params:      []string{"name", "role", "expires_at", "prefix"},
+		Outcomes:    adminOutcomes,
+		Note:        "Requires a fresh step-up: denied with step_up_required without one (an API token never has one, so a token cannot create tokens); denied with forbidden for a role above the creator's.",
+	},
+	CodeAPITokenRevoked: {
+		Code: CodeAPITokenRevoked, Emitted: true,
+		Description: "An API token was revoked; it is refused from its next request on.",
+		Params:      []string{"name", "role", "created_by"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with forbidden for an operator revoking another administrator's token and for a request made with an API token.",
+	},
+	CodeAPITokenUseDenied: {
+		Code: CodeAPITokenUseDenied, Emitted: true,
+		Description: "A request authenticated with a revoked or expired API token was refused (actor: anonymous, with the token's name).",
+		Params:      []string{"name", "reason"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "reason is revoked or expired. Unknown or malformed secrets are not recorded.",
+	},
+	CodeOrganizationRecompileRequested: {
+		Code: CodeOrganizationRecompileRequested, Emitted: true,
+		Description: "An operator ran paddock-server admin recompile --all: every active device of the organization gets a new bundle version, also when its content is unchanged (actor: system).",
+		Params:      []string{"organizations_total"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "One event per organization; part of the restore order of docs/operations/paddockctl.md.",
+	},
+	CodePlatformBundleSeqBumped: {
+		Code: CodePlatformBundleSeqBumped, Emitted: true,
+		Description: "An operator ran paddock-server admin bump-bundle-seq after a database restore: the bundle sequence of every device was raised (actor: system, platform pseudo-organization).",
+		Params:      []string{"by", "devices"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+	},
+	CodePlatformCacheRebuilt: {
+		Code: CodePlatformCacheRebuilt, Emitted: true,
+		Description: "An operator ran paddock-server admin rebuild-cache: the enrollment tokens, device keys and sequence numbers of the gateway's cache were rewritten from PostgreSQL (actor: system, platform pseudo-organization).",
+		Params:      []string{"organizations"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Bundle pointers and time tickets are rewritten by the running compiler within 60 s.",
+	},
+	CodeConfigApplied: {
+		Code: CodeConfigApplied, Emitted: true,
+		Description: "A declarative configuration (PUT /api/v1/config, paddockctl apply) was applied in one transaction; the change set lists every change.",
+		Params:      []string{"change_set_id", "created", "updated", "deleted", "sections"},
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the change set; an apply without changes records zeros and no change set. Dry runs are not recorded. A failure carries the problem code of the refusing resource, and nothing is applied.",
 	},
 	CodePlatformOSVImported: {
 		Code: CodePlatformOSVImported, Emitted: true,

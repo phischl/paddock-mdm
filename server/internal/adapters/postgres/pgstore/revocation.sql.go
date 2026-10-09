@@ -35,7 +35,7 @@ func (q *Queries) ActiveRevocationFreeze(ctx context.Context, arg ActiveRevocati
 const approveRevocationRequest = `-- name: ApproveRevocationRequest :one
 UPDATE revocation_request SET status = 'approved', approved_at = $1::timestamptz
 WHERE id = $2 AND status = 'requested'
-RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result
+RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result, volumes
 `
 
 type ApproveRevocationRequestParams struct {
@@ -66,6 +66,7 @@ func (q *Queries) ApproveRevocationRequest(ctx context.Context, arg ApproveRevoc
 		&i.FinishedAt,
 		&i.Rejection,
 		&i.Result,
+		&i.Volumes,
 	)
 	return i, err
 }
@@ -89,7 +90,7 @@ const closeRevocationRequest = `-- name: CloseRevocationRequest :one
 UPDATE revocation_request SET status = $1, finished_at = $2::timestamptz,
   rejection = $3
 WHERE id = $4 AND status IN ('requested','approved')
-RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result
+RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result, volumes
 `
 
 type CloseRevocationRequestParams struct {
@@ -127,6 +128,7 @@ func (q *Queries) CloseRevocationRequest(ctx context.Context, arg CloseRevocatio
 		&i.FinishedAt,
 		&i.Rejection,
 		&i.Result,
+		&i.Volumes,
 	)
 	return i, err
 }
@@ -235,6 +237,20 @@ func (q *Queries) DeviceEscrowDestroyed(ctx context.Context, deviceID uuid.UUID)
 	return exists, err
 }
 
+const deviceRevokeCapable = `-- name: DeviceRevokeCapable :one
+SELECT coalesce((SELECT (health -> 'revoke_capabilities') ? 'volumes' FROM device_status WHERE device_id = $1),
+                false)::boolean
+`
+
+// Whether the device's paddock-revoke reported that it understands the volumes of a token (revoke_capabilities in
+// the check-in health); builds before PDK-009 refuse such tokens.
+func (q *Queries) DeviceRevokeCapable(ctx context.Context, deviceID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, deviceRevokeCapable, deviceID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const expireRevocations = `-- name: ExpireRevocations :many
 UPDATE revocation_request SET status = 'expired', finished_at = $1::timestamptz
 WHERE status IN ('issued','delivered') AND expires_at <= $1::timestamptz
@@ -270,7 +286,7 @@ const finishRevocation = `-- name: FinishRevocation :one
 UPDATE revocation_request SET status = $1, result = $2, confirmed_at = $3::timestamptz,
   finished_at = $3::timestamptz, delivered_at = coalesce(delivered_at, $3::timestamptz)
 WHERE id = $4 AND device_id = $5 AND status IN ('issued','delivered')
-RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result
+RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result, volumes
 `
 
 type FinishRevocationParams struct {
@@ -310,12 +326,13 @@ func (q *Queries) FinishRevocation(ctx context.Context, arg FinishRevocationPara
 		&i.FinishedAt,
 		&i.Rejection,
 		&i.Result,
+		&i.Volumes,
 	)
 	return i, err
 }
 
 const getRevocationRequest = `-- name: GetRevocationRequest :one
-SELECT id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result FROM revocation_request WHERE id = $1
+SELECT id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result, volumes FROM revocation_request WHERE id = $1
 `
 
 func (q *Queries) GetRevocationRequest(ctx context.Context, id uuid.UUID) (RevocationRequest, error) {
@@ -340,12 +357,13 @@ func (q *Queries) GetRevocationRequest(ctx context.Context, id uuid.UUID) (Revoc
 		&i.FinishedAt,
 		&i.Rejection,
 		&i.Result,
+		&i.Volumes,
 	)
 	return i, err
 }
 
 const getRevocationRequestForUpdate = `-- name: GetRevocationRequestForUpdate :one
-SELECT id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result FROM revocation_request WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result, volumes FROM revocation_request WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetRevocationRequestForUpdate(ctx context.Context, id uuid.UUID) (RevocationRequest, error) {
@@ -370,12 +388,13 @@ func (q *Queries) GetRevocationRequestForUpdate(ctx context.Context, id uuid.UUI
 		&i.FinishedAt,
 		&i.Rejection,
 		&i.Result,
+		&i.Volumes,
 	)
 	return i, err
 }
 
 const getRevocationRequestRow = `-- name: GetRevocationRequestRow :one
-SELECT revocation_request.id, revocation_request.organization_id, revocation_request.device_id, revocation_request.action, revocation_request.status, revocation_request.requested_by, revocation_request.requested_at, revocation_request.reason, revocation_request.approved_at, revocation_request.issued_at, revocation_request.expires_at, revocation_request.envelope, revocation_request.period_days, revocation_request.delivered_at, revocation_request.confirmed_at, revocation_request.finished_at, revocation_request.rejection, revocation_request.result, device.hostname, coalesce(ac.username, '')::text AS requested_by_username
+SELECT revocation_request.id, revocation_request.organization_id, revocation_request.device_id, revocation_request.action, revocation_request.status, revocation_request.requested_by, revocation_request.requested_at, revocation_request.reason, revocation_request.approved_at, revocation_request.issued_at, revocation_request.expires_at, revocation_request.envelope, revocation_request.period_days, revocation_request.delivered_at, revocation_request.confirmed_at, revocation_request.finished_at, revocation_request.rejection, revocation_request.result, revocation_request.volumes, device.hostname, coalesce(ac.username, '')::text AS requested_by_username
 FROM revocation_request JOIN device ON device.id = revocation_request.device_id
 LEFT JOIN admin_account ac ON ac.id = revocation_request.requested_by
 WHERE revocation_request.id = $1
@@ -409,6 +428,7 @@ func (q *Queries) GetRevocationRequestRow(ctx context.Context, id uuid.UUID) (Ge
 		&i.RevocationRequest.FinishedAt,
 		&i.RevocationRequest.Rejection,
 		&i.RevocationRequest.Result,
+		&i.RevocationRequest.Volumes,
 		&i.Hostname,
 		&i.RequestedByUsername,
 	)
@@ -477,7 +497,7 @@ INSERT INTO revocation_request (id, organization_id, device_id, action, status, 
                                 approved_at, period_days)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10)
-RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result
+RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result, volumes
 `
 
 type InsertRevocationRequestParams struct {
@@ -528,16 +548,17 @@ func (q *Queries) InsertRevocationRequest(ctx context.Context, arg InsertRevocat
 		&i.FinishedAt,
 		&i.Rejection,
 		&i.Result,
+		&i.Volumes,
 	)
 	return i, err
 }
 
 const insertSelfLock = `-- name: InsertSelfLock :one
 INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_at, approved_at, issued_at,
-                                expires_at, envelope, period_days)
+                                expires_at, envelope, period_days, volumes)
 VALUES ($1, $2, $3, 'self_lock', 'issued', $4, $4, $4, $5,
-        $6, $7)
-RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result
+        $6, $7, $8::uuid[])
+RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result, volumes
 `
 
 type InsertSelfLockParams struct {
@@ -548,6 +569,7 @@ type InsertSelfLockParams struct {
 	ExpiresAt      *time.Time
 	Envelope       []byte
 	PeriodDays     *int32
+	Volumes        []uuid.UUID
 }
 
 // A self-lock token of the dead man's switch: no approvals, no limits (plan M4c decision 15).
@@ -560,6 +582,7 @@ func (q *Queries) InsertSelfLock(ctx context.Context, arg InsertSelfLockParams) 
 		arg.ExpiresAt,
 		arg.Envelope,
 		arg.PeriodDays,
+		arg.Volumes,
 	)
 	var i RevocationRequest
 	err := row.Scan(
@@ -581,21 +604,23 @@ func (q *Queries) InsertSelfLock(ctx context.Context, arg InsertSelfLockParams) 
 		&i.FinishedAt,
 		&i.Rejection,
 		&i.Result,
+		&i.Volumes,
 	)
 	return i, err
 }
 
 const issueRevocationRequest = `-- name: IssueRevocationRequest :one
 UPDATE revocation_request SET status = 'issued', issued_at = $1::timestamptz,
-  expires_at = $2::timestamptz, envelope = $3
-WHERE id = $4 AND status = 'approved'
-RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result
+  expires_at = $2::timestamptz, envelope = $3, volumes = $4::uuid[]
+WHERE id = $5 AND status = 'approved'
+RETURNING id, organization_id, device_id, action, status, requested_by, requested_at, reason, approved_at, issued_at, expires_at, envelope, period_days, delivered_at, confirmed_at, finished_at, rejection, result, volumes
 `
 
 type IssueRevocationRequestParams struct {
 	IssuedAt  time.Time
 	ExpiresAt time.Time
 	Envelope  []byte
+	Volumes   []uuid.UUID
 	ID        uuid.UUID
 }
 
@@ -604,6 +629,7 @@ func (q *Queries) IssueRevocationRequest(ctx context.Context, arg IssueRevocatio
 		arg.IssuedAt,
 		arg.ExpiresAt,
 		arg.Envelope,
+		arg.Volumes,
 		arg.ID,
 	)
 	var i RevocationRequest
@@ -626,6 +652,7 @@ func (q *Queries) IssueRevocationRequest(ctx context.Context, arg IssueRevocatio
 		&i.FinishedAt,
 		&i.Rejection,
 		&i.Result,
+		&i.Volumes,
 	)
 	return i, err
 }
@@ -648,6 +675,41 @@ func (q *Queries) ListApprovedRevocationRequests(ctx context.Context) ([]uuid.UU
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConfirmedHeaderVolumes = `-- name: ListConfirmedHeaderVolumes :many
+SELECT newest.volume::uuid AS volume FROM (
+  SELECT DISTINCT ON (e.volume) e.volume, e.status FROM escrow_secret e
+  WHERE e.device_id = $1 AND e.kind = 'luks_header' AND e.status <> 'failed' AND e.volume IS NOT NULL
+  ORDER BY e.volume, e.generation DESC
+) newest
+WHERE newest.status = 'stored'
+ORDER BY 1
+LIMIT 32
+`
+
+// The volumes of a device whose newest header generation that did not fail is stored (PDK-009 decision 6, review
+// round 1: a pending re-escrow leaves the volume out until it is stored), the first 32 by UUID: a Lock erases exactly
+// these besides the root volume. Headers without a volume (before PDK-009) are the root volume's, which a Lock erases
+// anyway. CancelSelfLocks (dms.sql) computes the same set; keep both alike.
+func (q *Queries) ListConfirmedHeaderVolumes(ctx context.Context, deviceID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listConfirmedHeaderVolumes, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var volume uuid.UUID
+		if err := rows.Scan(&volume); err != nil {
+			return nil, err
+		}
+		items = append(items, volume)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -781,7 +843,7 @@ func (q *Queries) ListRevocationApprovals(ctx context.Context, requestIds []uuid
 
 const listRevocationRequests = `-- name: ListRevocationRequests :many
 
-SELECT revocation_request.id, revocation_request.organization_id, revocation_request.device_id, revocation_request.action, revocation_request.status, revocation_request.requested_by, revocation_request.requested_at, revocation_request.reason, revocation_request.approved_at, revocation_request.issued_at, revocation_request.expires_at, revocation_request.envelope, revocation_request.period_days, revocation_request.delivered_at, revocation_request.confirmed_at, revocation_request.finished_at, revocation_request.rejection, revocation_request.result, device.hostname, coalesce(ac.username, '')::text AS requested_by_username
+SELECT revocation_request.id, revocation_request.organization_id, revocation_request.device_id, revocation_request.action, revocation_request.status, revocation_request.requested_by, revocation_request.requested_at, revocation_request.reason, revocation_request.approved_at, revocation_request.issued_at, revocation_request.expires_at, revocation_request.envelope, revocation_request.period_days, revocation_request.delivered_at, revocation_request.confirmed_at, revocation_request.finished_at, revocation_request.rejection, revocation_request.result, revocation_request.volumes, device.hostname, coalesce(ac.username, '')::text AS requested_by_username
 FROM revocation_request JOIN device ON device.id = revocation_request.device_id
 LEFT JOIN admin_account ac ON ac.id = revocation_request.requested_by
 WHERE ($1::text IS NULL
@@ -856,6 +918,7 @@ func (q *Queries) ListRevocationRequests(ctx context.Context, arg ListRevocation
 			&i.RevocationRequest.FinishedAt,
 			&i.RevocationRequest.Rejection,
 			&i.RevocationRequest.Result,
+			&i.RevocationRequest.Volumes,
 			&i.Hostname,
 			&i.RequestedByUsername,
 		); err != nil {

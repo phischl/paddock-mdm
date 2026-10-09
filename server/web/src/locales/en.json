@@ -6,7 +6,17 @@
     "signedInAs": "Signed in as {name}",
     "logout": "Sign out",
     "mainNavigation": "Main navigation",
-    "error": "Something went wrong. Please try again."
+    "error": "Something went wrong. Please try again.",
+    "language": "Language",
+    "languageMenu": "Choose the language (current: {language})",
+    "languages": {
+      "en": "English",
+      "de": "Deutsch"
+    },
+    "languageFailed": "The language could not be saved.",
+    "userMenu": "User menu of {name}",
+    "showNavigation": "Show the navigation",
+    "hideNavigation": "Hide the navigation"
   },
   "nav": {
     "deviceGroups": "Device groups",
@@ -28,7 +38,19 @@
     "attention": "Attention",
     "attentionCount": "{count, plural, one {# open condition} other {# open conditions}}",
     "packageHolds": "Package holds",
-    "updateSettings": "Updates"
+    "updateSettings": "Updates",
+    "apiTokens": "API tokens",
+    "changeSets": "Change sets",
+    "start": "Start",
+    "groups": {
+      "overview": "Overview",
+      "devices": "Devices",
+      "configuration": "Configuration",
+      "security": "Security",
+      "inventory": "Inventory",
+      "organization": "Organization",
+      "platform": "Platform"
+    }
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -131,7 +153,8 @@
       "platform_admin": "Platform administrator",
       "system": "System",
       "anonymous": "Anonymous",
-      "device": "Device"
+      "device": "Device",
+      "api_token": "API token"
     },
     "outcomes": {
       "success": "Success",
@@ -144,7 +167,8 @@
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
-      "domains_changed": "{actor} set the domains of {slug}"
+      "domains_changed": "{actor} set the domains of {slug}",
+      "recompile_requested": "{actor} requested a new bundle for every device (restore)"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -154,6 +178,14 @@
     "enrollment_token": {
       "created": "{actor} created the enrollment token {name}",
       "revoked": "{actor} revoked the enrollment token {name}"
+    },
+    "config": {
+      "applied": "{actor} applied a configuration ({created} created, {updated} updated, {deleted} deleted)"
+    },
+    "api_token": {
+      "created": "{actor} created the API token {name} ({role})",
+      "revoked": "{actor} revoked the API token {name}",
+      "use_denied": "A request with the {reason} API token {name} was refused"
     },
     "device": {
       "enrolled": "The device {hostname} enrolled",
@@ -187,6 +219,7 @@
       "tamper_protected_file_changed": "The device {target} found the protected file {file} changed",
       "tamper_local_admin_changed": "The device {target} found its local administrator account changed ({field})",
       "tamper_keyslot_changed": "The device {target} found the keyslots of its disk changed",
+      "header_escrow_refused": "A LUKS header of {target} was not escrowed: the device already escrows 32 volumes",
       "tamper_service_stopped": "The device {target} found the service {unit} stopped and started it again",
       "tamper_agent_not_running": "fleetd reports that the Paddock agent does not run on {target}",
       "revocation_trust_pinned_tofu": "The device {target} pinned the revocation keys of its first bundle that carried them (trust on first use)",
@@ -223,6 +256,8 @@
     },
     "platform": {
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
+      "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
+      "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
       "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)"
     },
     "agent_rollout": {
@@ -523,6 +558,14 @@
       "reportedAt": "Reported",
       "recoveryKeyRow": "Recovery key",
       "headers": "Header backups",
+      "volumes": "Encrypted volumes",
+      "volumeFacts": "{device}{root, select, true { (root)} other {}}: {count, plural, one {# keyslot} other {# keyslots}}, LUKS {version, number}, {escrowed, select, true {header escrowed} other {header not escrowed yet}}",
+      "rootVolume": "the root volume",
+      "volumeUnknown": "{device}: not inventoried, its LUKS UUID is unknown",
+      "volumeShared": "{device}: shares its LUKS UUID with another volume (a cloned header); not escrowed, a Lock leaves it readable, a Destroy erases it",
+      "volumeRefused": "{device}: header not escrowed, the device already escrows 32 volumes",
+      "unresolved": "{source}: listed in /etc/crypttab but not classified; not escrowed",
+      "headerVolumeFacts": "{device}, generation {generation, number}: {status}, {at}",
       "none": "none yet",
       "escrowFacts": "Generation {generation, number}, escrowed {at}",
       "headerFacts": "Generation {generation, number}: {status}, {at}",
@@ -539,8 +582,9 @@
       },
       "header": {
         "label": "Download header backup",
+        "volumeLabel": "Download header of {device}",
         "title": "Download the LUKS header backup",
-        "confirm": "The newest header backup of {hostname} is downloaded and the download is recorded in the audit log."
+        "confirm": "The newest header backup of {device} on {hostname} is downloaded and the download is recorded in the audit log."
       },
       "revealed": {
         "title": "Recovery key of {hostname}",
@@ -554,18 +598,18 @@
     },
     "revocation": {
       "title": "Lock and Destroy",
-      "hint": "Lock erases every keyslot of the disk and reboots the device; it can be restored with the escrowed header and recovery key. Destroy also deletes the escrow, so the data cannot be recovered; a second administrator must approve it.",
+      "hint": "Lock erases every keyslot of the device's root volume and of every other encrypted volume whose header Paddock escrowed, and reboots the device; each can be restored from its escrowed header (the root volume with the recovery key, the others with their own passphrases). Encrypted volumes without an escrowed header are not erased by a Lock. Destroy erases every encrypted volume and deletes the escrow, so the data cannot be recovered; a second administrator must approve it.",
       "reason": "Reason",
       "reasonHint": "Shown to the administrators and kept with the request.",
       "lock": {
         "label": "Lock device",
         "title": "Lock the device",
-        "confirm": "The device {hostname} erases every keyslot of its disk and reboots with its next check-in. Nobody can unlock it until an administrator restores it with the escrowed header and recovery key."
+        "confirm": "The device {hostname} erases every keyslot of its root volume and of its other encrypted volumes with an escrowed header, and reboots with its next check-in. Nobody can unlock them until an administrator restores them with the escrowed headers."
       },
       "destroy": {
         "label": "Destroy device",
         "title": "Destroy the device",
-        "confirm": "The escrowed header and recovery key of {hostname} are deleted and the device erases every keyslot of its disk. Its data cannot be recovered. A second administrator must approve this request before anything happens."
+        "confirm": "The escrowed headers and recovery key of {hostname} are deleted and the device erases every keyslot of every encrypted volume. Its data cannot be recovered. A second administrator must approve this request before anything happens."
       },
       "requested": {
         "lock": "The lock was requested. The device locks itself with its next check-in.",
@@ -581,6 +625,16 @@
         "delivered": "Delivered to the device {at}",
         "confirmed": "Keyslots erased, confirmed by the device {at}",
         "finished": "Ended {at}"
+      },
+      "volumes": "Encrypted volumes",
+      "incomplete": "Incomplete: not every encrypted volume of the device is known to be erased.",
+      "volume": {
+        "erased": "{device}: {before, plural, one {# keyslot} other {# keyslots}} erased",
+        "notErased": "{device}: not erased, {after, plural, one {# keyslot} other {# keyslots}} left",
+        "unknown": "{device}: not erased, the remaining keyslots are unknown",
+        "unresolved": "{source}: listed in /etc/crypttab but not erased with certainty",
+        "skipped": "{device}: not erased, its header was not escrowed (the volume stays readable)",
+        "shared": "{device}: shares its LUKS UUID with another volume"
       }
     },
     "presumedLost": "Presumed lost since {at}"
@@ -614,6 +668,70 @@
     "copy": "Copy",
     "copied": "Copied to the clipboard.",
     "done": "Done"
+  },
+  "apiTokens": {
+    "title": "API tokens",
+    "summary": "API tokens let automation such as paddockctl act in this organization with one role. Everything a token does is in the audit log under its name.",
+    "create": "Create API token",
+    "createTitle": "New API token",
+    "nameHint": "Letters, digits, spaces, dots, underscores and hyphens; at most 64 characters.",
+    "nameInvalid": "The name must start with a letter or digit and have at most 64 characters of letters, digits, spaces, '.', '_' and '-'.",
+    "role": "Role",
+    "roles": {
+      "org_admin": "Organization administrator",
+      "org_operator": "Operator",
+      "org_auditor": "Auditor"
+    },
+    "roleAboveCeiling": "The role exceeds your own role.",
+    "expires": "Expires",
+    "expiryTooSoon": "The token must be valid for at least 1 hour.",
+    "expiryTooLate": "The token can be valid for at most 365 days.",
+    "prefix": "Prefix",
+    "status": "Status",
+    "statuses": {
+      "active": "Active",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "createdBy": "Created by",
+    "lastUsed": "Last used",
+    "neverUsed": "Never",
+    "secret": "API token",
+    "shownOnce": "This is the only time the token is shown. Copy it now and store it like a password; Paddock keeps only a hash of it.",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke API token",
+    "revokeConfirm": "Revoke the API token {name}? Requests made with it are refused from now on.",
+    "revokeLabel": "Revoke {name}"
+  },
+  "changeSets": {
+    "title": "Change sets",
+    "summary": "Every configuration applied with paddockctl or PUT /api/v1/config that changed something, with its plan.",
+    "appliedAt": "Applied",
+    "actor": "By",
+    "source": "Source",
+    "sources": {
+      "session": "Portal session",
+      "api_token": "API token"
+    },
+    "created": "Created",
+    "updated": "Updated",
+    "deleted": "Deleted",
+    "details": "Details",
+    "detailsLabel": "Details of the change set of {at}",
+    "detailsTitle": "Change set",
+    "detailsSummary": "Applied by {actor} on {at}.",
+    "section": "Section",
+    "key": "Item",
+    "action": "Change",
+    "actions": {
+      "create": "Created",
+      "update": "Updated",
+      "delete": "Deleted"
+    },
+    "field": "Field",
+    "before": "Before",
+    "after": "After",
+    "close": "Close"
   },
   "managed": {
     "scope": "Applies to",

@@ -8,6 +8,9 @@ info:
 
     - All errors are RFC 9457 problem details (`application/problem+json`) with `code` and `instance` (request ID).
     - Mutating requests require the header `X-Paddock-CSRF: 1` (otherwise 403 `csrf_missing`).
+    - Requests authenticate with the portal session cookie or with an API token (`Authorization: Bearer pdk_…`,
+      plan M6c decision 9). A token acts in its organization with the role it carries; API token requests send
+      `X-Paddock-CSRF: 1` on mutating requests, too.
     - The organization is never part of a path: it comes from the session only. Resources of other organizations
       answer 404 `not_found`, exactly like missing resources.
     - Operations that are privileged actions carry `x-paddock-audit: <code>`; each attempt produces exactly one
@@ -23,11 +26,14 @@ servers:
   - url: https://admin.paddock.localhost:8443
 security:
   - session: []
+  - bearer: []
 tags:
   - name: auth
   - name: me
   - name: device-groups
   - name: enrollment-tokens
+  - name: api-tokens
+  - name: config
   - name: devices
   - name: managed-config
   - name: users
@@ -432,6 +438,216 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/EnrollmentToken" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/api-tokens:
+    get:
+      operationId: listApiTokens
+      tags: [api-tokens]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      x-paddock-list:
+        sort: [name, created_at, expires_at, last_used_at]
+        default_sort: name
+        search: [name]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ApiTokenSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ApiTokenStatus" }
+      responses:
+        "200":
+          description: One page of API tokens.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiTokenPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createApiToken
+      tags: [api-tokens]
+      description: |
+        Roles: org_admin, org_operator; requires a step-up within the last 5 minutes (403 step_up_required), so an
+        API token cannot create tokens. The role may not be above the creator's: org_admin creates any organization
+        role, org_operator creates org_operator and org_auditor (403 forbidden). expires_at lies between 1 hour and
+        365 days ahead. The response carries the secret exactly once; only its SHA-256 is stored.
+      x-paddock-audit: api_token.created
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiTokenCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiTokenCreated" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/api-tokens/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getApiToken
+      tags: [api-tokens]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The API token (without secret).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiToken" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/api-tokens/{id}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: revokeApiToken
+      tags: [api-tokens]
+      description: |
+        Roles: org_admin (any token of the organization), org_operator (only tokens it created; otherwise 403
+        forbidden). A request made with an API token cannot revoke (403 forbidden). The token is refused from its
+        next request on. Revoking a revoked token is 409 invalid_state.
+      x-paddock-audit: api_token.revoked
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiToken" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/config:
+    get:
+      operationId: getConfig
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The organization's declarative configuration as a paddock.v1
+        document (api/schema/paddock.v1.json) with every section present, in the key order of the schema.
+      responses:
+        "200":
+          description: The configuration document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigDocument" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: applyConfig
+      tags: [config]
+      description: |
+        Roles: org_admin, org_operator. Applies a paddock.v1 document (at most 1 MiB) in one transaction: a present
+        section is authoritative (items not listed are deleted), absent sections are untouched. The rules of the
+        per-resource endpoints apply unchanged and abort the whole apply with their problem code, the document path
+        in the detail: deleting device groups and changing settings need org_admin (403 forbidden), assigning a full
+        profile or changing a profile to full needs a step-up (403 step_up_required; an API token never has one).
+        A schema violation is 422 invalid_document listing up to 20 "path: message" pairs. With dry_run=true the
+        plan is computed and checked the same way but nothing is applied and nothing is audited. An apply with
+        changes records a change set; one without changes records the event with zeros and no change set.
+        expected_plan (plan M6c amendment 2026-10-08) is the plan_sha256 of a dry run the client confirmed: when the
+        plan computed now differs, the apply is refused with 412 plan_changed (audited as failure) and nothing is
+        applied.
+      x-paddock-audit: config.applied
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - name: dry_run
+          in: query
+          description: Compute and check the plan without applying it.
+          schema: { type: boolean, default: false }
+        - name: expected_plan
+          in: query
+          description: plan_sha256 of the confirmed dry run; a different plan is refused with 412 plan_changed.
+          schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfigDocument" }
+      responses:
+        "200":
+          description: The plan, applied unless dry_run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigApplyResult" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "412": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/change-sets:
+    get:
+      operationId: listChangeSets
+      tags: [config]
+      description: "Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something."
+      x-paddock-list:
+        sort: [applied_at]
+        default_sort: -applied_at
+        search: [actor_display]
+        filters: [source]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/ChangeSetSort"
+        - $ref: "#/components/parameters/Search"
+        - name: source
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ChangeSetSource" }
+      responses:
+        "200":
+          description: One page of change sets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChangeSetPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/change-sets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getChangeSet
+      tags: [config]
+      description: "Roles: org_admin, org_operator, org_auditor."
+      responses:
+        "200":
+          description: The change set with its plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChangeSet" }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
@@ -1711,8 +1927,8 @@ paths:
         Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
         needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
         PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
-        Requests a Lock: every keyslot of the device's encrypted root volume is erased and the device reboots; it
-        stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
+        Requests a Lock: every keyslot of every LUKS volume of the device is erased and the device reboots; its
+        root volume stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
         the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
         administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
         open Lock, 409 invalid_state unless the device is active or quarantined.
@@ -2042,8 +2258,10 @@ paths:
       tags: [devices]
       description: |
         Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns a stored LUKS header
-        backup of the device, decrypted (the newest generation unless generation is given), as the file
-        <hostname>-luks-header-<generation>.img for cryptsetup luksHeaderRestore; confirm_hostname must equal the
+        backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest
+        generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img
+        (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup
+        luksHeaderRestore; confirm_hostname must equal the
         device's hostname. 409 invalid_state when no such generation is stored, 404 not_found once a Destroy of the
         device was issued.
       x-paddock-audit: disk.header_downloaded
@@ -2868,6 +3086,10 @@ components:
       type: apiKey
       in: cookie
       name: paddock_session
+    bearer:
+      type: http
+      scheme: bearer
+      description: An API token secret (pdk_ and 43 characters), plan M6c decision 9.
   parameters:
     Csrf:
       name: X-Paddock-CSRF
@@ -2996,6 +3218,22 @@ components:
         type: string
         enum: [name, -name, created_at, -created_at, expires_at, -expires_at]
         default: -created_at
+    ChangeSetSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [applied_at, -applied_at]
+        default: -applied_at
+    ApiTokenSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [name, -name, created_at, -created_at, expires_at, -expires_at, last_used_at, -last_used_at]
+        default: name
     ManagedFileSort:
       name: sort
       in: query
@@ -3153,7 +3391,7 @@ components:
           allOf:
             - $ref: "#/components/schemas/MeOrganization"
           nullable: true
-        locale: { type: string, enum: [en] }
+        locale: { type: string, enum: [en, de] }
         revocation_enabled:
           type: boolean
           description: |
@@ -3161,6 +3399,16 @@ components:
             dead man's switch answer 403 revocation_disabled.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
+        api_token:
+          $ref: "#/components/schemas/MeApiToken"
+    MeApiToken:
+      type: object
+      description: The API token the request authenticated with; absent for sessions.
+      required: [id, name, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        expires_at: { type: string, format: date-time }
     MeStepUp:
       type: object
       description: >-
@@ -3180,7 +3428,7 @@ components:
       required: [locale]
       additionalProperties: false
       properties:
-        locale: { type: string, enum: [en] }
+        locale: { type: string, enum: [en, de] }
     DeviceGroup:
       type: object
       required: [id, name, description, created_at, updated_at]
@@ -3359,7 +3607,7 @@ components:
       enum: [success, failure, denied, unknown]
     AuditActorType:
       type: string
-      enum: [admin, platform_admin, system, anonymous, device]
+      enum: [admin, platform_admin, system, anonymous, device, api_token]
     AuditActor:
       type: object
       required: [type, step_up]
@@ -3484,6 +3732,149 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/EnrollmentToken" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ConfigDocument:
+      type: object
+      description: >-
+        A paddock.v1 document; its schema is api/schema/paddock.v1.json (JSON Schema draft 2020-12, also printed by
+        paddockctl schema), which the server validates every document against.
+      additionalProperties: true
+    ConfigPlan:
+      type: object
+      required: [changes, created, updated, deleted]
+      properties:
+        changes:
+          type: array
+          description: In application order; deletions first.
+          items: { $ref: "#/components/schemas/ConfigChange" }
+        created: { type: integer }
+        updated: { type: integer }
+        deleted: { type: integer }
+    ConfigChange:
+      type: object
+      required: [section, key, action, fields]
+      properties:
+        section: { type: string, description: "A section of the document, settings as settings.login and settings.updates." }
+        key: { type: string, description: "The natural key of the item; empty for settings." }
+        action: { type: string, enum: [create, update, delete] }
+        fields:
+          type: array
+          description: Changed fields; every field for creations and deletions. File content is shown as its SHA-256.
+          items: { $ref: "#/components/schemas/ConfigFieldChange" }
+    ConfigFieldChange:
+      type: object
+      required: [name, before, after]
+      properties:
+        name: { type: string }
+        before: { nullable: true, description: Value before; null for creations. }
+        after: { nullable: true, description: Value after; null for deletions. }
+    ConfigApplyResult:
+      type: object
+      required: [dry_run, change_set_id, plan, plan_sha256]
+      properties:
+        dry_run: { type: boolean }
+        plan_sha256:
+          type: string
+          description: Hex SHA-256 of the plan's canonical JSON; send it as expected_plan to apply exactly this plan.
+        change_set_id: { type: string, format: uuid, nullable: true, description: Null for dry runs and empty plans. }
+        plan: { $ref: "#/components/schemas/ConfigPlan" }
+    ChangeSetSource:
+      type: string
+      enum: [session, api_token]
+    ChangeSetActor:
+      type: object
+      required: [type, display]
+      properties:
+        type: { type: string }
+        id: { type: string }
+        display: { type: string }
+    ChangeSetSummary:
+      type: object
+      required: [created, updated, deleted, sections]
+      properties:
+        created: { type: integer }
+        updated: { type: integer }
+        deleted: { type: integer }
+        sections:
+          type: array
+          items: { type: string }
+    ChangeSet:
+      type: object
+      required: [id, applied_at, actor, source, summary, plan]
+      properties:
+        id: { type: string, format: uuid }
+        applied_at: { type: string, format: date-time }
+        actor: { $ref: "#/components/schemas/ChangeSetActor" }
+        source: { $ref: "#/components/schemas/ChangeSetSource" }
+        summary: { $ref: "#/components/schemas/ChangeSetSummary" }
+        plan: { $ref: "#/components/schemas/ConfigPlan" }
+    ChangeSetPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ChangeSet" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    ApiTokenRole:
+      type: string
+      enum: [org_admin, org_operator, org_auditor]
+    ApiTokenStatus:
+      type: string
+      enum: [active, expired, revoked]
+    ApiToken:
+      type: object
+      required: [id, name, prefix, role, status, created_by, created_at, expires_at, last_used_at, revoked_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        prefix: { type: string, description: The first 12 characters of the secret (pdk_ and 8). }
+        role: { $ref: "#/components/schemas/ApiTokenRole" }
+        status: { $ref: "#/components/schemas/ApiTokenStatus" }
+        created_by: { $ref: "#/components/schemas/ApiTokenCreator" }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last request made with the token, updated at most once per minute.
+        revoked_at: { type: string, format: date-time, nullable: true }
+    ApiTokenCreator:
+      type: object
+      required: [id, display]
+      properties:
+        id: { type: string, format: uuid }
+        display: { type: string }
+    ApiTokenCreate:
+      type: object
+      required: [name, role, expires_at]
+      additionalProperties: false
+      properties:
+        name: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' }
+        role: { $ref: "#/components/schemas/ApiTokenRole" }
+        expires_at: { type: string, format: date-time, description: Between 1 hour and 365 days ahead. }
+    ApiTokenCreated:
+      type: object
+      required: [token, secret]
+      properties:
+        token: { $ref: "#/components/schemas/ApiToken" }
+        secret: { type: string, description: "Shown once; keep it like a password." }
+    ApiTokenPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ApiToken" }
         page: { type: integer }
         page_size: { type: integer }
         total: { type: integer, description: "Matching items, counted up to 10000." }
@@ -3619,7 +4010,8 @@ components:
       description: |
         Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
         with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
-        header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, both escrowed).
+        a header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, escrowed with the
+        current header of every LUKS volume, PDK-009).
       enum: [not_encrypted, unmanaged, tpm_missing, tpm_pin_missing, escrow_pending, compliant]
     DiskEscrow:
       type: object
@@ -3628,10 +4020,29 @@ components:
         generation: { type: integer }
         status: { type: string, enum: [pending, stored, failed] }
         size: { type: integer, format: int64, description: "Headers: bytes of the sealed object." }
+        volume:
+          type: string
+          format: uuid
+          description: "Headers: the LUKS UUID of the volume (PDK-009). Absent on a root volume header escrowed before PDK-009 until the device reports its root volume's UUID."
         created_at: { type: string, format: date-time }
+    DiskVolume:
+      type: object
+      required: [device, root, keyslots, tokens, escrowed]
+      description: A LUKS volume of the device as its last check-in reports it (PDK-009 decision 4).
+      properties:
+        uuid: { type: string, description: LUKS UUID; absent when the device could not read it. }
+        device: { type: string, description: "The device or detached header file, e.g. /dev/sdb1." }
+        root: { type: boolean }
+        luks_version: { type: integer }
+        tokens: { type: array, items: { type: string }, description: "Kind of every keyslot, sorted." }
+        keyslots: { type: integer }
+        escrowed: { type: boolean, description: A header of the current keyslots is stored. }
+        header_generation: { type: integer, description: The newest stored header generation of the volume. }
+        shared_uuid: { type: boolean, description: "Another volume or the root volume has the same LUKS UUID (a cloned header): not escrowed; a Destroy erases it, a Lock does not." }
+        refused: { type: boolean, description: "The server refused the header: the device escrows the most volumes a revocation token carries (32)." }
     DiskEncryption:
       type: object
-      required: [state, tokens, keyslots, recovery_keys, headers]
+      required: [state, tokens, keyslots, recovery_keys, headers, volumes, unresolved]
       properties:
         state:
           allOf: [{ $ref: "#/components/schemas/DiskState" }]
@@ -3649,7 +4060,16 @@ components:
           items: { $ref: "#/components/schemas/DiskEscrow" }
         headers:
           type: array
+          description: Header generations of every volume, newest first; volume tells them apart.
           items: { $ref: "#/components/schemas/DiskEscrow" }
+        volumes:
+          type: array
+          description: Every LUKS volume of the device, the root volume first (empty until the device reports them).
+          items: { $ref: "#/components/schemas/DiskVolume" }
+        unresolved:
+          type: array
+          description: /etc/crypttab entries the device could not classify; they are not escrowed.
+          items: { type: string }
         last_keyslot_change:
           type: object
           required: [at, before, after]
@@ -3670,6 +4090,7 @@ components:
       properties:
         confirm_hostname: { type: string, maxLength: 253 }
         generation: { type: integer, minimum: 1, description: Header generation; the newest stored one if absent. }
+        volume: { type: string, format: uuid, description: "LUKS UUID of the volume (PDK-009); the root volume if absent." }
     LocalAdminRevealRequest:
       type: object
       required: [confirm_hostname]
@@ -3930,7 +4351,7 @@ components:
         result:
           type: object
           additionalProperties: true
-          description: 'The device''s confirmation, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}.'
+          description: 'The device''s confirmation: erased (true only if every LUKS volume has no keyslot left and unresolved is empty), slots_before and slots_after (sums over the reported volumes), volumes (one {device, slots_before, slots_after, erased} per reported volume, failed ones included, the root volume last) and unresolved (the crypttab entries the device could not erase with certainty; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}.'
         approvals:
           type: array
           items: { $ref: "#/components/schemas/RevocationApproval" }

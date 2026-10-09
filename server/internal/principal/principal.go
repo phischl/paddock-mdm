@@ -40,6 +40,10 @@ type Principal struct {
 	// StepUpJTI the jti of its ID token, under which the api keeps the token for the escrow-reader (plan M4b.1).
 	StepUpAt  time.Time
 	StepUpJTI string
+	// APITokenID and APITokenName are set when the request authenticated with an API token (plan M6c decision 7).
+	// The token acts in its organization with Role; ID is the creating administrator's account ID.
+	APITokenID   uuid.UUID
+	APITokenName string
 }
 
 type ctxKey struct{}

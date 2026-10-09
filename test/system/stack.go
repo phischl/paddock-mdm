@@ -26,6 +26,9 @@ type Stack struct {
 	t     *testing.T
 	root  string // repository root
 	alice *portal.Session
+	// composeFiles are the Compose files the stack ran with when the test started: after a `make down` nothing is
+	// running any more to tell whether `make up` needs the backup overlay (PDK-018).
+	composeFiles []string
 }
 
 func newStack(t *testing.T) *Stack {
@@ -34,7 +37,9 @@ func newStack(t *testing.T) *Stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Stack{t: t, root: root}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	s := &Stack{t: t, root: root, composeFiles: runningComposeFiles(ctx)}
 	s.Login()
 	return s
 }
@@ -164,16 +169,44 @@ func Until(t *testing.T, what string, timeout, interval time.Duration, tick func
 	}
 }
 
-// Make runs a make target in the repository root.
+// Make runs a make target in the repository root. A restart of the stack (down, up) keeps the backup overlay of a
+// stack that runs with it (PDK-018).
 func (s *Stack) Make(args ...string) {
 	s.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
+	if slices.Contains(args, "down") || slices.Contains(args, "up") {
+		args = withBackup(args, os.Getenv, s.composeFiles)
+	}
 	cmd := exec.CommandContext(ctx, "make", args...)
 	cmd.Dir = s.root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		s.t.Fatalf("make %s: %v\n%s", strings.Join(args, " "), err, tail(out))
 	}
+}
+
+// withBackup adds BACKUP=1 to make arguments when the running stack uses the backup overlay (compose.backup.yaml in
+// configFiles) and neither the arguments, the environment nor MAKEFLAGS (make system-test BACKUP=…) set BACKUP:
+// `make down` and `make up` without it would drop the overlay, and with it PostgreSQL's archive_command.
+func withBackup(args []string, getenv func(string) string, configFiles []string) []string {
+	if slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "BACKUP=") }) || getenv("BACKUP") != "" ||
+		slices.ContainsFunc(strings.Fields(getenv("MAKEFLAGS")), func(f string) bool { return strings.HasPrefix(f, "BACKUP=") }) {
+		return args
+	}
+	if !slices.ContainsFunc(configFiles, func(f string) bool { return filepath.Base(f) == "compose.backup.yaml" }) {
+		return args
+	}
+	return append(slices.Clone(args), "BACKUP=1")
+}
+
+// runningComposeFiles are the Compose files of the project paddock's containers (empty when there are none).
+func runningComposeFiles(ctx context.Context) []string {
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label=com.docker.compose.project=paddock",
+		"--format", `{{.Label "com.docker.compose.project.config_files"}}`).Output()
+	if err != nil {
+		return nil
+	}
+	return strings.FieldsFunc(string(out), func(r rune) bool { return r == ',' || r == '\n' })
 }
 
 func tail(b []byte) string {

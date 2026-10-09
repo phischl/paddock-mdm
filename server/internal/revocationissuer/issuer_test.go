@@ -519,3 +519,200 @@ func TestSelfLocks(t *testing.T) {
 		t.Fatalf("revocation disabled: %v %v", off.selfLocks(d), err)
 	}
 }
+
+// Volumes of the PDK-009 tests, in ascending order.
+const (
+	volRoot = "0d8f4c62-0000-4000-8000-0000000000aa"
+	volData = "0d8f4c62-0000-4000-8000-0000000000bb"
+	volHome = "0d8f4c62-0000-4000-8000-0000000000cc"
+)
+
+// escrowHeader records a header generation of volume ("" none) with status.
+func (w *world) escrowHeader(dev uuid.UUID, volume string, generation int, status string) {
+	w.t.Helper()
+	var vol *string
+	if volume != "" {
+		vol = &volume
+	}
+	w.exec(`INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version, object_key, wrapped_dek,
+		nonce, sha256, size, volume) VALUES ($1, $2, $3, 'luks_header', $4, $5, 1, 'k', '\x01', '\x000000000000000000000000', $6, 1, $7)`,
+		uuid.New(), w.org, dev, generation, status, strings.Repeat("a", 64), vol)
+}
+
+// capable records the check-in health of a device whose paddock-revoke understands the volumes of a token.
+func (w *world) capable(dev uuid.UUID) {
+	w.exec(`INSERT INTO device_status (device_id, organization_id, last_contact_at, health)
+		VALUES ($1, $2, now(), '{"revoke_capabilities":["volumes"]}')`, dev, w.org)
+}
+
+// TestLockCarriesConfirmedVolumes (PDK-009 decision 6): a Lock lists the volumes with a stored header — not a pending
+// or failed one, and not a header without a volume (the root volume's before PDK-009) —, sorted; a device whose
+// paddock-revoke does not understand volumes gets a token without them.
+func TestLockCarriesConfirmedVolumes(t *testing.T) {
+	w := newWorld(t, true)
+	dev, old := w.device(), w.device()
+	w.capable(dev)
+	for _, d := range []uuid.UUID{dev, old} {
+		w.escrowHeader(d, "", 1, "stored")
+		w.escrowHeader(d, volRoot, 2, "stored")
+		w.escrowHeader(d, volHome, 3, "stored")
+		w.escrowHeader(d, volData, 4, "stored")
+		w.escrowHeader(d, volData, 5, "stored")
+		w.escrowHeader(d, "0d8f4c62-0000-4000-8000-0000000000dd", 6, "pending")
+		w.escrowHeader(d, "0d8f4c62-0000-4000-8000-0000000000ee", 7, "failed")
+	}
+	id := w.lock(dev, w.alice)
+	w.issue(id)
+	tok, err := revocation.Verify(w.commands.put[id].Envelope, w.trust, dev.String(), time.Now())
+	if err != nil || !slices.Equal(tok.Volumes, []string{volRoot, volData, volHome}) {
+		t.Fatalf("token %+v %v", tok, err)
+	}
+	var stored []uuid.UUID
+	var n string
+	if err := w.super.QueryRow(context.Background(), `SELECT r.volumes, a.params ->> 'volumes' FROM revocation_request r
+		JOIN action a ON a.params ->> 'request_id' = r.id::text WHERE r.id = $1`, id).Scan(&stored, &n); err != nil || len(stored) != 3 || n != "3" {
+		t.Fatalf("recorded volumes %v, audit %q: %v", stored, n, err)
+	}
+	plain := w.lock(old, w.bob)
+	w.issue(plain)
+	if tok, err := revocation.Verify(w.commands.put[plain].Envelope, w.trust, old.String(), time.Now()); err != nil || tok.Volumes != nil {
+		t.Fatalf("token for a paddock-revoke before PDK-009 %+v %v", tok, err)
+	}
+}
+
+// TestDestroyDeletesEveryVolume (PDK-009 decision 5): a Destroy deletes the headers of every volume and carries no
+// volumes; paddock-revoke erases every volume.
+func TestDestroyDeletesEveryVolume(t *testing.T) {
+	w := newWorld(t, true)
+	dev := w.device()
+	w.capable(dev)
+	w.escrowHeader(dev, "", 1, "stored")
+	w.escrowHeader(dev, volRoot, 2, "stored")
+	w.escrowHeader(dev, volData, 3, "stored")
+	id := w.request("destroy", dev, w.alice, w.approval("requester", w.alice), w.approval("approver", w.bob))
+	w.issue(id)
+	var left int
+	if err := w.super.QueryRow(context.Background(), "SELECT count(*) FROM escrow_secret WHERE device_id = $1", dev).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("%d headers left: %v", left, err)
+	}
+	if !slices.Equal(w.shredder.prefixes, []string{"org/" + w.org.String() + "/devices/" + dev.String() + "/luks-header/"}) {
+		t.Fatalf("deleted prefixes %v", w.shredder.prefixes)
+	}
+	if tok, err := revocation.Verify(w.commands.put[id].Envelope, w.trust, dev.String(), time.Now()); err != nil || tok.Volumes != nil {
+		t.Fatalf("destroy token %+v %v", tok, err)
+	}
+}
+
+// TestSelfLockFollowsVolumes (PDK-009 decision 6): a self-lock token carries the confirmed volumes and is re-issued
+// when that set changes; the replaced token leaves cmd:<device_id>.
+func TestSelfLockFollowsVolumes(t *testing.T) {
+	w := newWorld(t, true)
+	dev := w.device()
+	w.capable(dev)
+	w.escrowHeader(dev, volRoot, 1, "stored")
+	w.exec("INSERT INTO organization_dms_settings (organization_id, enabled, period_days) VALUES ($1, true, 14)", w.org)
+	ctx := context.Background()
+	token := func() (uuid.UUID, *revocation.Token) {
+		t.Helper()
+		if err := w.issuer.Round(ctx); err != nil {
+			t.Fatal(err)
+		}
+		locks := w.selfLocks(dev)
+		if len(locks) != 1 {
+			t.Fatalf("self-locks %v", locks)
+		}
+		for id := range locks {
+			tok, err := revocation.Verify(w.commands.put[id].Envelope, w.trust, dev.String(), time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			return id, tok
+		}
+		return uuid.UUID{}, nil
+	}
+	first, tok := token()
+	if !slices.Equal(tok.Volumes, []string{volRoot}) {
+		t.Fatalf("first token %+v", tok)
+	}
+	if again, _ := token(); again != first {
+		t.Fatal("an unchanged set replaced the token")
+	}
+	w.escrowHeader(dev, volData, 2, "pending")
+	if again, _ := token(); again != first {
+		t.Fatal("a pending header replaced the token")
+	}
+	w.exec("UPDATE escrow_secret SET status = 'stored' WHERE device_id = $1 AND generation = 2", dev)
+	second, tok := token()
+	if second == first || !slices.Equal(tok.Volumes, []string{volRoot, volData}) {
+		t.Fatalf("after a new volume: %s %+v", second, tok)
+	}
+	if _, kept := w.commands.put[first]; kept {
+		t.Fatal("the replaced token stays in cmd:<device_id>")
+	}
+}
+
+// TestLockVolumesCapped (PDK-009 review round 1, decision 1): with more than 32 volumes — rows the worker would refuse,
+// written here directly — a Lock carries the first 32 by UUID and is issued, and the self-lock token carries the same
+// 32 and is not replaced round after round.
+func TestLockVolumesCapped(t *testing.T) {
+	w := newWorld(t, true)
+	dev := w.device()
+	w.capable(dev)
+	var want []string
+	for i := 0; i < 33; i++ {
+		v := fmt.Sprintf("0d8f4c62-0000-4000-8000-%012d", i)
+		w.escrowHeader(dev, v, i+1, "stored")
+		if i < revocation.MaxVolumes {
+			want = append(want, v)
+		}
+	}
+	id := w.lock(dev, w.alice)
+	w.issue(id)
+	if s, _ := w.status(id); s != "issued" {
+		t.Fatalf("status %s", s)
+	}
+	tok, err := revocation.Verify(w.commands.put[id].Envelope, w.trust, dev.String(), time.Now())
+	if err != nil || !slices.Equal(tok.Volumes, want) {
+		t.Fatalf("lock token: %d volumes, %v", len(tok.Volumes), err)
+	}
+	w.exec("INSERT INTO organization_dms_settings (organization_id, enabled, period_days) VALUES ($1, true, 14)", w.org)
+	ctx := context.Background()
+	var first uuid.UUID
+	for round := 0; round < 3; round++ {
+		if err := w.issuer.Round(ctx); err != nil {
+			t.Fatal(err)
+		}
+		locks := w.selfLocks(dev)
+		if len(locks) != 1 {
+			t.Fatalf("round %d: self-locks %v", round, locks)
+		}
+		for id := range locks {
+			if round > 0 && id != first {
+				t.Fatalf("round %d replaced the self-lock token", round)
+			}
+			first = id
+		}
+	}
+	tok, err = revocation.Verify(w.commands.put[first].Envelope, w.trust, dev.String(), time.Now())
+	if err != nil || !slices.Equal(tok.Volumes, want) {
+		t.Fatalf("self-lock token: %d volumes, %v", len(tok.Volumes), err)
+	}
+}
+
+// TestLockVolumesNewestStored (PDK-009 review round 1, decision 3): a volume whose newest header generation is
+// pending is left out until it is stored; a failed newest generation does not count.
+func TestLockVolumesNewestStored(t *testing.T) {
+	w := newWorld(t, true)
+	dev := w.device()
+	w.capable(dev)
+	w.escrowHeader(dev, volData, 1, "stored")
+	w.escrowHeader(dev, volData, 2, "pending")
+	w.escrowHeader(dev, volHome, 3, "stored")
+	w.escrowHeader(dev, volHome, 4, "failed")
+	id := w.lock(dev, w.alice)
+	w.issue(id)
+	tok, err := revocation.Verify(w.commands.put[id].Envelope, w.trust, dev.String(), time.Now())
+	if err != nil || !slices.Equal(tok.Volumes, []string{volHome}) {
+		t.Fatalf("token %+v %v", tok, err)
+	}
+}

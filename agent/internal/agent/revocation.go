@@ -17,6 +17,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/config"
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
+	"github.com/phischl/paddock-mdm/agent/internal/health"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -118,6 +119,50 @@ func revokeReason(err error) string {
 		return "not_installed"
 	}
 	return "internal_error"
+}
+
+// capabilitiesTimeout bounds `paddock-revoke capabilities`.
+const capabilitiesTimeout = 10 * time.Second
+
+// refreshRevokeCapabilities reports what the installed paddock-revoke understands in the health report, so that the
+// revocation-issuer adds the volumes of a Lock only for a build that accepts them (PDK-009). paddockd only passes the
+// answer on: a false report can only make the issuer leave the volumes out (the build then erases the root volume
+// and, before PDK-009, every volume) or make an old build refuse the token; it never selects what is erased. A
+// failed call reports nothing, and the server keeps the last reported value (review round 1): a timeout or a package
+// upgrade in progress must not make the issuer replace a self-lock token.
+func (a *Agent) refreshRevokeCapabilities(ctx context.Context) {
+	caps, err := a.d.RevokeCapabilities(ctx)
+	var reported *[]string
+	if err != nil {
+		slog.DebugContext(ctx, "paddock-revoke reports no capabilities", "error", err)
+	} else {
+		if caps == nil {
+			caps = []string{}
+		}
+		reported = &caps
+	}
+	a.d.Health.Update(func(r *health.Report) { r.RevokeCapabilities = reported })
+}
+
+// revokeCapabilities runs `paddock-revoke capabilities`; a build before PDK-009 fails (unknown command).
+func revokeCapabilities(ctx context.Context, binary string) ([]string, error) {
+	if _, err := os.Stat(binary); err != nil {
+		return nil, errNotInstalled
+	}
+	ctx, cancel := context.WithTimeout(ctx, capabilitiesTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "capabilities") //nolint:gosec // the fixed path of paddock-revoke
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(e string) bool { return strings.HasPrefix(e, "NOTIFY_SOCKET=") })
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("paddock-revoke capabilities: %w", err)
+	}
+	var c revocation.Capabilities
+	if err := json.Unmarshal(out, &c); err != nil {
+		return nil, fmt.Errorf("paddock-revoke capabilities: %w", err)
+	}
+	return c.Capabilities, nil
 }
 
 // runRevoke runs `paddock-revoke execute [args]` with the envelope on stdin. Exit 2 is a refusal with

@@ -71,16 +71,36 @@ WHERE action IN ('lock','destroy') AND issued_at > @since::timestamptz;
 -- name: InsertSelfLock :one
 -- A self-lock token of the dead man's switch: no approvals, no limits (plan M4c decision 15).
 INSERT INTO revocation_request (id, organization_id, device_id, action, status, requested_at, approved_at, issued_at,
-                                expires_at, envelope, period_days)
+                                expires_at, envelope, period_days, volumes)
 VALUES (@id, @organization_id, @device_id, 'self_lock', 'issued', @issued_at, @issued_at, @issued_at, @expires_at,
-        @envelope, @period_days)
+        @envelope, @period_days, @volumes::uuid[])
 RETURNING *;
 
 -- name: IssueRevocationRequest :one
 UPDATE revocation_request SET status = 'issued', issued_at = @issued_at::timestamptz,
-  expires_at = @expires_at::timestamptz, envelope = @envelope
+  expires_at = @expires_at::timestamptz, envelope = @envelope, volumes = @volumes::uuid[]
 WHERE id = @id AND status = 'approved'
 RETURNING *;
+
+-- name: ListConfirmedHeaderVolumes :many
+-- The volumes of a device whose newest header generation that did not fail is stored (PDK-009 decision 6, review
+-- round 1: a pending re-escrow leaves the volume out until it is stored), the first 32 by UUID: a Lock erases exactly
+-- these besides the root volume. Headers without a volume (before PDK-009) are the root volume's, which a Lock erases
+-- anyway. CancelSelfLocks (dms.sql) computes the same set; keep both alike.
+SELECT newest.volume::uuid AS volume FROM (
+  SELECT DISTINCT ON (e.volume) e.volume, e.status FROM escrow_secret e
+  WHERE e.device_id = @device_id AND e.kind = 'luks_header' AND e.status <> 'failed' AND e.volume IS NOT NULL
+  ORDER BY e.volume, e.generation DESC
+) newest
+WHERE newest.status = 'stored'
+ORDER BY 1
+LIMIT 32;
+
+-- name: DeviceRevokeCapable :one
+-- Whether the device's paddock-revoke reported that it understands the volumes of a token (revoke_capabilities in
+-- the check-in health); builds before PDK-009 refuse such tokens.
+SELECT coalesce((SELECT (health -> 'revoke_capabilities') ? 'volumes' FROM device_status WHERE device_id = @device_id),
+                false)::boolean;
 
 -- name: ListApprovedRevocationRequests :many
 -- Approved requests the issuer has not handled yet (a lost message, a failed attempt).

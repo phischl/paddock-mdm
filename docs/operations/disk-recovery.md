@@ -21,28 +21,37 @@ Then the agent (`luks` reconciler) enrolls a recovery key, escrows it, escrows t
 passphrase keyslot, deletes `/var/lib/paddock/install-passphrase` and escrows the header again. A device with a
 skipped PIN keeps its passphrase keyslot (otherwise only the recovery key would unlock it).
 
+Once the root volume is escrowed, the agent escrows the header of every other LUKS1 or LUKS2 volume of
+`/etc/crypttab` as well — the volumes `paddock-revoke` erases on a Lock — one per pass, each with its LUKS UUID. It
+adds no recovery key to them and never changes their keyslots: their own passphrases or key files open them after a
+header restore. Header generations count across all volumes of a device.
+
 ## States
 
 The device page (*Disk encryption*) and the device list filter show the state of the last check-in:
 
 | State | Meaning |
 | --- | --- |
-| `compliant` | Only TPM2+PIN and the recovery key unlock the disk; both the recovery key and the current header are escrowed. |
-| `escrow_pending` | Being set up (recovery key or header not escrowed yet, install passphrase still present), or the keyslots differ from TPM2+PIN and recovery key — for example after a keyslot was added locally. |
+| `compliant` | Only TPM2+PIN and the recovery key unlock the root volume; the recovery key and the current header of every LUKS volume are escrowed. |
+| `escrow_pending` | Being set up (recovery key or a header not escrowed yet, install passphrase still present), the keyslots of the root volume differ from TPM2+PIN and recovery key — for example after a keyslot was added locally —, or another volume's current header is not escrowed (also a volume whose LUKS UUID cannot be read). |
 | `tpm_pin_missing` | The boot PIN was skipped; the disk keeps the install passphrase. |
 | `tpm_missing` | The device has no TPM 2.0. |
 | `unmanaged` | Encrypted, but not installed with the Paddock autoinstall (no in-place conversion). |
 | `not_encrypted` | The root file system is not encrypted. |
 
-The agent records the keyslots it expects. Any other change — a keyslot added or removed outside Paddock — is
-reported as `device.tamper_keyslot_changed` (keyslot kinds before and after), shown on the device page, and the
-header is escrowed again. The agent never wipes a keyslot it did not create.
+The *Disk encryption* card lists every LUKS volume with its device, keyslots and whether its current header is
+escrowed, and the `/etc/crypttab` entries the agent could not classify (for example `LABEL=` sources); those are not
+escrowed and do not keep the device from being `compliant`.
+
+The agent records the keyslots of every volume. Any other change — a keyslot added or removed outside Paddock — is
+reported as `device.tamper_keyslot_changed` (the volume's LUKS UUID, keyslot kinds before and after), shown on the
+device page, and that volume's header is escrowed again. The agent never wipes a keyslot it did not create.
 
 ## Recovering a device
 
 Both actions need an organization administrator, a step-up (MFA within the last 5 minutes) and the device's
 hostname typed as confirmation. Each is recorded once in the audit log (`disk.recovery_key_revealed`,
-`disk.header_downloaded`, with the generation, never the secret).
+`disk.header_downloaded`, with the generation and, for a header, the volume, never the secret).
 
 ### Forgotten boot PIN: the recovery key
 
@@ -66,13 +75,15 @@ device asks for the recovery key. Re-enroll TPM2+PIN as in step 3.
 
 ### Damaged header: restore from the escrow
 
-1. Portal → *Download header backup* (`POST /api/v1/devices/{id}/disk/header`, optional `generation` in the body;
-   default the newest stored one). The file is `<hostname>-luks-header-<generation>.img`.
-2. Boot the device from a live system, identify the LUKS partition (`lsblk -f`), and restore:
+1. Portal → *Download header of <device>* (`POST /api/v1/devices/{id}/disk/header`, optional `volume` — the LUKS
+   UUID, default the root volume — and `generation` in the body; default the newest stored one). The file is
+   `<hostname>-luks-header-<volume>-<generation>.img`; a root volume header escrowed before PDK-009 is
+   `<hostname>-luks-header-<generation>.img` and counts as the root volume's.
+2. Boot the device from a live system, identify the LUKS partition (`lsblk -f`, `cryptsetup luksUUID`), and restore:
 
    ```sh
-   cryptsetup luksHeaderRestore /dev/<partition> --header-backup-file <hostname>-luks-header-<generation>.img
-   cryptsetup open --test-passphrase /dev/<partition>   # type the recovery key
+   cryptsetup luksHeaderRestore /dev/<partition> --header-backup-file <hostname>-luks-header-<volume>-<generation>.img
+   cryptsetup open --test-passphrase /dev/<partition>   # root: the recovery key; other volumes: their passphrase
    ```
 
    A header generation only contains the keyslots that existed when it was taken: the recovery key of a generation
@@ -84,9 +95,15 @@ device asks for the recovery key. Re-enroll TPM2+PIN as in step 3.
   (`escrow_secret`, kind `luks_recovery_key`).
 - Headers are compressed and encrypted on the device with AES-256-GCM under a random key, which is wrapped to
   `escrow-wrap`. The device uploads the sealed object with a presigned PUT (valid 10 minutes) to the bucket
-  `paddock-escrow` under `org/<organization>/devices/<device>/luks-header/<generation>.bin`; the key is chosen by
-  the server. The worker marks a generation `stored` once the object has the announced size and SHA-256 (it fails
-  after 15 minutes without the object).
+  `paddock-escrow` under `org/<organization>/devices/<device>/luks-header/<volume UUID>/<generation>.bin`; the key
+  is chosen by the server. Root volume headers escrowed before PDK-009 stay under
+  `org/<organization>/devices/<device>/luks-header/<generation>.bin` (no copy); the database gives them the root
+  volume's UUID with the device's first check-in that reports it (migration `00035`). The worker marks a generation
+  `stored` once the object has the announced size and SHA-256 (it fails after 15 minutes without the object). A
+  device escrows the headers of at most 32 volumes; a header of a 33rd is refused (`device.header_escrow_refused`,
+  escrow status `refused`), shown as *header not escrowed* on the card, and not uploaded again for 24 hours unless
+  the volumes of `/etc/crypttab` change. A volume with the LUKS UUID of another volume or of the root volume (a cloned
+  header) is shown as sharing its UUID: it is not escrowed, and the device is not `compliant`.
 - The bucket keeps every version and has no Object Lock, so a Destroy can delete it. Credentials: the gateway's
   bundles credential may only `s3:PutObject` below `org/*/devices/*/luks-header/*`; the worker and the api have
   read-only credentials (`PADDOCK_ESCROW_S3_*`). Only the `paddock-escrow-reader` role can unwrap the header key,

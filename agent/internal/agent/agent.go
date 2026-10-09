@@ -65,6 +65,9 @@ type Deps struct {
 	// SelfLock runs the stored self-lock token with paddock-revoke after elapsed (the dead man's switch); nil runs the
 	// installed paddock-revoke.
 	SelfLock func(ctx context.Context, envelope []byte, elapsed time.Duration) (refused string, err error)
+	// RevokeCapabilities returns what the installed paddock-revoke understands (`paddock-revoke capabilities`); nil
+	// runs the installed paddock-revoke.
+	RevokeCapabilities func(ctx context.Context) ([]string, error)
 	// Uptime returns the time since boot including suspend and the boot ID; nil reads /proc.
 	Uptime func() (time.Duration, string, error)
 	// Notify shows a desktop notification on the user sessions; nil shows none.
@@ -174,6 +177,11 @@ func New(d Deps) (*Agent, error) {
 	if a.d.SelfLock == nil {
 		a.d.SelfLock = func(ctx context.Context, envelope []byte, elapsed time.Duration) (string, error) {
 			return runRevoke(ctx, a.d.Layout.RevokeBinary(), envelope, "--elapsed-seconds", strconv.FormatInt(int64(elapsed/time.Second), 10))
+		}
+	}
+	if a.d.RevokeCapabilities == nil {
+		a.d.RevokeCapabilities = func(ctx context.Context) ([]string, error) {
+			return revokeCapabilities(ctx, a.d.Layout.RevokeBinary())
 		}
 	}
 	if a.d.Uptime == nil {
@@ -342,6 +350,7 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	a.refreshSudoFlavor(ctx)
 	a.refreshRebootRequired()
+	a.refreshRevokeCapabilities(ctx)
 	health, err := json.Marshal(a.d.Health.Report())
 	if err != nil {
 		health = nil

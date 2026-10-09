@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, mainNav, watchCSP } from './checks'
 import { test } from './cleanup'
 
 const devicesim = process.env.PADDOCK_E2E_DEVICESIM ?? '../../bin/devicesim'
@@ -29,7 +29,7 @@ test('organization admin manages users, groups, profiles and device logins', asy
   cleanup.remove('/api/v1/enrollment-tokens', `E2E login token ${stamp}`)
 
   // Local user: the one-time recovery link is shown once with a copy button.
-  await page.getByRole('link', { name: 'Users', exact: true }).click()
+  await mainNav(page).getByRole('link', { name: 'Users', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible()
   await expectAccessible(page)
   await page.getByTestId('create-user').click()
@@ -51,7 +51,7 @@ test('organization admin manages users, groups, profiles and device logins', asy
   await expect(page.getByRole('row').filter({ hasText: username })).toContainText('Local')
 
   // Group with the user as member.
-  await page.getByRole('link', { name: 'Groups', exact: true }).click()
+  await mainNav(page).getByRole('link', { name: 'Groups', exact: true }).click()
   await page.getByTestId('create-user-group').click()
   const groupDialog = page.getByRole('dialog', { name: 'New group' })
   await groupDialog.getByLabel('Name').fill(groupName)
@@ -66,7 +66,7 @@ test('organization admin manages users, groups, profiles and device logins', asy
   await expectAccessible(page)
 
   // A restricted profile with a root-equivalent command: inline warning, no dialog.
-  await page.getByRole('link', { name: 'Permission profiles' }).click()
+  await mainNav(page).getByRole('link', { name: 'Permission profiles' }).click()
   await page.getByTestId('create-profile').click()
   const profileDialog = page.getByRole('dialog', { name: 'New permission profile' })
   await profileDialog.getByLabel('Name').fill(profileName)

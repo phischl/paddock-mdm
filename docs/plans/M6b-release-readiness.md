@@ -43,7 +43,7 @@ release artifacts built by a release workflow, and a compliance pack operators c
    - `iso27001-mapping.md`: A.5.33, A.8.15, A.8.16, A.8.17 (and A.8.1, A.8.2, A.8.5, A.8.9, A.8.24 where Paddock
      contributes) → Paddock feature, evidence (audit codes, WORM, hash chain, `audit verify`), operator duties;
    - `audit-codes.md` (generated, exists), `privacy.md` (exists, reviewed for completeness).
-6. README for the public release: what Paddock is, screenshots (from e2e runs, light and dark), quick start, links to
+6. README for the public release: what Paddock is, screenshots (from e2e runs, light theme — Amendment 2026-10-08 (architect): the portal has no dark theme, so light only), quick start, links to
    install guide, compliance pack, CHANGELOG; CHANGELOG gets a `## [0.1.0] - <date>` section prepared but **not tagged**
    (tagging is the product owner's decision).
 

@@ -60,6 +60,13 @@ services:
       # Fleet's UI for platform operators on the development host only (docs/operations/fleet.md).
       - "127.0.0.1:8412:8080"
 
+  # One Prometheus scrapes both domains of the single development host; the API is published for gate P-4 (plan M6a).
+  prometheus:
+    volumes:
+      - ./prometheus/scrape/audit.yml:/etc/prometheus/scrape/audit.yml:ro
+    ports:
+      - "127.0.0.1:9091:9090"
+
   paddock-migrate:
     environment:
       PADDOCK_ENV: development

@@ -89,6 +89,60 @@ export function timeline(r: RevocationRequest): TimelineStep[] {
   return steps
 }
 
+/** The erasure of one LUKS volume in a device's confirmation (plan M4c.1 decision 2). */
+export interface VolumeResult {
+  device: string
+  slots_before: number
+  slots_after: number
+  erased: boolean
+}
+
+/** A volume a Lock left alone because its header escrow was not confirmed (PDK-009); uuid is absent when unknown. */
+export interface SkippedVolume {
+  device: string
+  uuid?: string
+}
+
+/**
+ * The per-volume results of a request's confirmation, the crypttab entries the device could not erase with
+ * certainty and the volumes a Lock skipped; incomplete when an entry is unresolved or a volume was not erased (plan
+ * M4c.1, review round 1). Skipped volumes do not make a Lock incomplete: they stay readable.
+ */
+export interface VolumeResults {
+  volumes: VolumeResult[]
+  unresolved: string[]
+  skipped: SkippedVolume[]
+  /** Devices whose LUKS UUID another volume has (PDK-009 review round 2); they do not make an erasure incomplete. */
+  shared: string[]
+  incomplete: boolean
+}
+
+/** Reads the per-volume results from a request's confirmation; both lists are empty for confirmations before M4c.1. */
+export function volumeResults(r: RevocationRequest): VolumeResults {
+  const raw = Array.isArray(r.result?.volumes) ? r.result.volumes as unknown[] : []
+  const rawUnresolved = Array.isArray(r.result?.unresolved) ? r.result.unresolved as unknown[] : []
+  const rawSkipped = Array.isArray(r.result?.skipped_not_escrowed) ? r.result.skipped_not_escrowed as unknown[] : []
+  const volumes = raw.filter(isVolumeResult)
+  const unresolved = rawUnresolved.filter((s): s is string => typeof s === 'string')
+  const skipped = rawSkipped.filter(isSkippedVolume)
+  const rawShared = Array.isArray(r.result?.shared_uuid) ? r.result.shared_uuid as unknown[] : []
+  const shared = rawShared.filter((s): s is string => typeof s === 'string')
+  return { volumes, unresolved, skipped, shared, incomplete: unresolved.length > 0 || volumes.some((v) => !v.erased) }
+}
+
+function isSkippedVolume(v: unknown): v is SkippedVolume {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return typeof o.device === 'string' && (o.uuid === undefined || typeof o.uuid === 'string')
+}
+
+function isVolumeResult(v: unknown): v is VolumeResult {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return typeof o.device === 'string' && typeof o.slots_before === 'number' && typeof o.slots_after === 'number'
+    && typeof o.erased === 'boolean'
+}
+
 /** The dead man's switch settings; the problem code on failure. */
 export async function getDMS(): Promise<DMSSettings | string> {
   const { data, error } = await api.GET('/api/v1/settings/dms')

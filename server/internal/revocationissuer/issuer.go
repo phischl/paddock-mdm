@@ -356,12 +356,22 @@ func (i *Issuer) issueDestroy(ctx context.Context, s subject) error {
 	return i.publish(ctx, issued)
 }
 
-// sign signs the device-bound token (command_id = request ID, valid 30 days) and records the request as issued.
+// sign signs the device-bound token (command_id = request ID, valid 30 days) and records the request as issued. A
+// Lock carries the volumes with a confirmed header escrow (PDK-009 decision 6); a Destroy erases every volume.
 func (i *Issuer) sign(ctx context.Context, q *pgstore.Queries, rec app.Recorder, s subject) (pgstore.RevocationRequest, error) {
 	now := i.now().UTC().Truncate(time.Second)
 	tok := revocation.Token{
 		CommandID: s.req.ID.String(), DeviceID: s.dev.ID.String(), OrganizationID: s.req.OrganizationID.String(),
 		Action: s.req.Action, IssuedAt: now, ExpiresAt: now.Add(revocation.Lifetime), RequestID: s.req.ID.String(),
+	}
+	volumes := []uuid.UUID{}
+	if s.req.Action == domain.ActionLock {
+		var err error
+		if volumes, err = lockVolumes(ctx, q, s.dev.ID); err != nil {
+			return pgstore.RevocationRequest{}, err
+		}
+		tok.Volumes = volumeStrings(volumes)
+		rec.SetParam("volumes", len(volumes))
 	}
 	env, err := revocationsign.Sign(ctx, i.signer, tok)
 	if err != nil {
@@ -369,12 +379,46 @@ func (i *Issuer) sign(ctx context.Context, q *pgstore.Queries, rec app.Recorder,
 	}
 	rec.SetParam("expires_at", tok.ExpiresAt.Format(time.RFC3339))
 	issued, err := q.IssueRevocationRequest(ctx, pgstore.IssueRevocationRequestParams{
-		ID: s.req.ID, IssuedAt: now, ExpiresAt: tok.ExpiresAt, Envelope: env,
+		ID: s.req.ID, IssuedAt: now, ExpiresAt: tok.ExpiresAt, Envelope: env, Volumes: volumes,
 	})
 	if db.IsNoRows(err) {
 		return issued, problem.InvalidState.WithDetail("the request is no longer approved")
 	}
 	return issued, err
+}
+
+// lockVolumes are the volumes besides the root volume a Lock or self-lock token of device lets paddock-revoke erase:
+// those whose newest header generation is stored (PDK-009 decision 6, review round 1), at most
+// revocation.MaxVolumes, sorted. A device whose paddock-revoke does not report the volumes
+// capability gets none: such a build refuses a token with volumes. The list comes from the escrow the worker verified,
+// never from what paddockd hands to paddock-revoke.
+func lockVolumes(ctx context.Context, q *pgstore.Queries, device uuid.UUID) ([]uuid.UUID, error) {
+	capable, err := q.DeviceRevokeCapable(ctx, device)
+	if err != nil || !capable {
+		return []uuid.UUID{}, err
+	}
+	// The query takes at most revocation.MaxVolumes, the first by UUID (review round 1): a device can never block its
+	// Lock with more volumes; fewer volumes only shrink it.
+	volumes, err := q.ListConfirmedHeaderVolumes(ctx, device)
+	if err != nil {
+		return nil, err
+	}
+	if volumes == nil {
+		volumes = []uuid.UUID{}
+	}
+	return volumes, nil
+}
+
+// volumeStrings are the volumes as a token lists them: lowercase UUIDs, in the order given.
+func volumeStrings(volumes []uuid.UUID) []string {
+	out := make([]string, 0, len(volumes))
+	for _, v := range volumes {
+		out = append(out, v.String())
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // publish puts an issued token into cmd:<device_id>; a failure is repaired by the round.

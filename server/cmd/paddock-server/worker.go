@@ -52,6 +52,18 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	if err := l.Err(); err != nil {
 		return err
 	}
+	// Certificate expiry of the public hostnames, read from Caddy on the internal network (plan M6a decision 9).
+	var tlsHosts []string
+	for _, h := range strings.Split(l.String("PADDOCK_TLS_PROBE_HOSTS", ""), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			tlsHosts = append(tlsHosts, h)
+		}
+	}
+	tlsAddr := l.String("PADDOCK_TLS_PROBE_ADDR", "caddy:443")
+	backups, err := loadBackup(l, baoCfg.Addr)
+	if err != nil {
+		return err
+	}
 	pool, err := db.NewOrgPool(ctx, dsn, db.Options{ApplicationName: "paddock-worker", MaxConns: 8})
 	if err != nil {
 		return err
@@ -90,7 +102,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	deviceCommands := app.NewDeviceCommands(pool)
 	reports := worker.NewReports(app.NewDeviceReports(runner, pool), deviceCommands, cache)
 	commands := worker.NewCommands(deviceCommands, app.NewRevocationReports(runner, pool), pool, platformPool, cache, signer)
-	escrowStore := worker.NewEscrow(app.NewEscrow(pool, escrowObjects), cache, pool, platformPool)
+	escrowStore := worker.NewEscrow(app.NewEscrow(runner, pool, escrowObjects), cache, pool, platformPool)
 	cacheSync := worker.NewCacheSync(pool, cache)
 	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
 	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
@@ -104,7 +116,11 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
 	slog.InfoContext(ctx, "worker starting")
 
-	return runAll(ctx,
+	jobs := []func(context.Context) error{worker.NewOpsProbe(signer, worker.DialCertExpiry(tlsAddr), tlsHosts).Run}
+	if backups != nil {
+		jobs = append(jobs, worker.NewBackups(backups.store, backups.snap, backups.key, platformPool).Run)
+	}
+	return runAll(ctx, append(jobs,
 		func(ctx context.Context) error {
 			return ops.Serve(ctx, common.OpsAddr, func(ctx context.Context) error {
 				var notConnected error
@@ -134,5 +150,5 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		inventory.RunSettings,
 		inventory.RunSync,
 		osvSync.Run,
-	)
+	)...)
 }

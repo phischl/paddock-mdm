@@ -191,7 +191,9 @@ func TestRevocationRefusalGates(t *testing.T) {
 
 		t.Run("one revocation per 24 h", func(t *testing.T) {
 			code, out := executeRevoke(t, vm, revokeBinary, signer.sign(t, signer.key, nil))
-			if code != 0 || out != `{"erased":true,"slots_before":2,"slots_after":0}` || target.slots(t) != 0 {
+			want := `{"erased":true,"slots_before":2,"slots_after":0,"volumes":[{"device":"` + target.device +
+				`","slots_before":2,"slots_after":0,"erased":true}]}`
+			if code != 0 || out != want || target.slots(t) != 0 {
 				t.Fatalf("valid token: exit %d %s", code, out)
 			}
 			if d.Must("test -s /run/paddock/revoke-would-reboot && echo marker") != "marker" {
@@ -392,7 +394,8 @@ func TestRevocationLockGate(t *testing.T) {
 		if n := keyslotCount(t, vm, rootDev); n != rootSlots {
 			t.Fatalf("root volume: %d keyslots, %d before", n, rootSlots)
 		}
-		want := fmt.Sprintf(`{"erased":true,"slots_after":0,"slots_before":%d}`, before)
+		want := fmt.Sprintf(`{"erased":true,"slots_after":0,"slots_before":%d,`+
+			`"volumes":[{"device":%q,"erased":true,"slots_after":0,"slots_before":%d}]}`, before, target.device, before)
 		var result map[string]any
 		_ = json.Unmarshal(confirmed.Result, &result)
 		if got, _ := json.Marshal(result); string(got) != want {

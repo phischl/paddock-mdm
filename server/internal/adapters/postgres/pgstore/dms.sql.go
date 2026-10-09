@@ -16,7 +16,17 @@ const cancelSelfLocks = `-- name: CancelSelfLocks :many
 UPDATE revocation_request r SET status = 'cancelled', finished_at = $1::timestamptz
 WHERE r.action = 'self_lock' AND r.status IN ('issued','delivered')
   AND (NOT $2::boolean OR r.period_days <> $3::int OR r.expires_at <= $4::timestamptz
-       OR NOT EXISTS (SELECT 1 FROM device d WHERE d.id = r.device_id AND d.state = 'active'))
+       OR NOT EXISTS (SELECT 1 FROM device d WHERE d.id = r.device_id AND d.state = 'active')
+       OR r.volumes <> CASE
+         WHEN coalesce((SELECT (s.health -> 'revoke_capabilities') ? 'volumes' FROM device_status s
+                        WHERE s.device_id = r.device_id), false)
+         THEN ARRAY(SELECT newest.volume FROM (
+                      SELECT DISTINCT ON (e.volume) e.volume, e.status FROM escrow_secret e
+                      WHERE e.device_id = r.device_id AND e.kind = 'luks_header' AND e.status <> 'failed'
+                        AND e.volume IS NOT NULL
+                      ORDER BY e.volume, e.generation DESC) newest
+                    WHERE newest.status = 'stored' ORDER BY 1 LIMIT 32)
+         ELSE '{}'::uuid[] END)
 RETURNING r.id, r.device_id
 `
 
@@ -33,7 +43,10 @@ type CancelSelfLocksRow struct {
 }
 
 // Open self-lock tokens that no longer fit the settings: all of them when the switch is off, otherwise those of
-// another period, of a device that is no longer active, or expiring before renew_before (they are replaced).
+// another period, of a device that is no longer active, expiring before renew_before, or whose volumes differ from the
+// device's volumes with a confirmed header escrow (PDK-009; they are replaced). The set is that of
+// ListConfirmedHeaderVolumes (revocation.sql): newest generation stored, the first 32 by UUID. A device whose
+// paddock-revoke does not understand volumes keeps a token without them.
 func (q *Queries) CancelSelfLocks(ctx context.Context, arg CancelSelfLocksParams) ([]CancelSelfLocksRow, error) {
 	rows, err := q.db.Query(ctx, cancelSelfLocks,
 		arg.Now,

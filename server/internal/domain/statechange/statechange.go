@@ -23,6 +23,9 @@ type Event struct {
 	Scope          string    `json:"scope"`
 	ID             uuid.UUID `json:"id"` // organization, device group, device or user ID
 	Priority       bool      `json:"priority,omitempty"`
+	// Force publishes a new bundle version even when the rendered content equals the device's latest bundle (restore
+	// after a database restore, plan M6c decision 19).
+	Force bool `json:"force,omitempty"`
 }
 
 // Subject prefixes: state.<organization_id> and state.priority.<organization_id>.

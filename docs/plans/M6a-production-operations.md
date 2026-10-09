@@ -44,6 +44,8 @@ public TLS, no development weakening, backups with stated RPO/RTO and a tested r
    unseal with the dev shares, run `paddockctl admin bump-bundle-seq --by 1000000` and `paddockctl admin rebuild-cache`,
    `paddockctl admin recompile --all`, then run the acceptance subset `TestDeviceProtocol|TestLoginGate|TestAuditChain|
    TestOrganizationIsolation`. Measured RTO is written to the runbook. The audit store is not part of the restore.
+   Amendment 2026-10-08 (architect): `paddockctl admin …` → `paddock-server admin …` (plan M6c decisions 20–23; item 9
+   of the amendment below).
 
 ### 2.3 Monitoring (A12)
 8. Compose profile `observability` (prod and dev): Prometheus (image `prom/prometheus`, pinned — approved) scraping
@@ -79,3 +81,65 @@ Alertmanager/Grafana bundling; multi-region.
 ## 6. Stop conditions
 pgBackRest cannot archive to the S3 endpoint (RustFS) — then report; any need to weaken a production default; M0 §11
 S2/S6/S7/S8.
+
+## Amendment 2026-10-08 (architect)
+Decided on the implementer's questions during PDK-005; binding for steps 1–4.
+
+1. **Links between the hosts (decision 1).** The audit host reaches RabbitMQ and OpenBao on the control plane, the
+   control plane reaches the audit PostgreSQL (read-only role). These endpoints are published only on
+   `${PADDOCK_INTERCONNECT_ADDR}`, the host's address on a private interconnect the operator provides (VPN or private
+   network), never on `0.0.0.0`. Every link between the hosts MUST use TLS: `amqps` on 5671 only (no 5672 on the
+   interconnect), PostgreSQL `sslmode=verify-full` for the audit reader, OpenBao over TLS. Each host generates its own
+   internal CA at install (`make prod-secrets HOST=…`); the CA certificates (public) are exchanged, so each side
+   trusts both (`internal-ca/bundle.crt`) and no CA key leaves its host. `prod-check` FAILs on a plaintext cross-host
+   link and on any published port other than 80/443 that is not bound to `${PADDOCK_INTERCONNECT_ADDR}`.
+2. **Audit bucket check (decision 2).** Runs on the audit host with `make prod-check HOST=audit ONLINE=1`, using the
+   writer credential, which gains the read-only permission `s3:GetBucketObjectLockConfiguration`. Offline the item is
+   "not checked" and reported as FAIL on the audit host; the control plane has no such item.
+3. **Development release key (decision 2).** FAIL when the matching minisign secret key (`<name>.key`) lies next to
+   the configured public key, and when the configured key equals a key `make dev-release-key` produced
+   (`.secrets/release/*.pub`) if that file is known on the host. Production public keys live in
+   `.secrets/release-production/`.
+4. **Secret files (decision 2).** World-readable means any user of the host can read the file: it has the read bit
+   for others and every directory above it lets others pass (a 0644 file in the 0700 secrets directory is private).
+   An empty secret file counts as missing.
+5. The production settings template is `deploy/compose/prod.env.example`; `make prod-check` runs from source in the
+   pinned Go image, so production hosts need no Go toolchain.
+6. **Backups (decisions 4–6), as implemented in step 2.** pgBackRest speaks TLS only and cannot run inside the
+   PostgreSQL image, so: `archive_command` copies each WAL file into a spool volume (the path contains "pgbackrest",
+   which pgBackRest's own check requires) and one `pgbackrest` container per database (`pgbackrest`,
+   `pgbackrest-authentik`; pgBackRest needs the data directory at the path the server reports) pushes it every 2 s and
+   takes the daily full. `restore` stages the archived WAL next to the data directory for PostgreSQL's
+   `restore_command`. The repository, the OpenBao snapshots and the Fleet dumps are encrypted with
+   `backup_encryption_key` before they leave the host. The development stack reaches the audit host's RustFS through
+   the Caddy TLS proxy `backup-s3-tls` (`compose.backup.dev.yaml`, `make up BACKUP=1`). The Fleet dump is uploaded by a
+   second container in the pinned AWS CLI image, because the MySQL image's curl cannot sign S3 uploads. The worker's
+   backup credential may write below `openbao/` and list the bucket. OpenBao key operations are manual `bao` CLI
+   operations outside Paddock, so "after key operations" is a runbook step (`paddock-server backup openbao`,
+   `docs/operations/openbao.md` section 5) besides the 6-hourly snapshot.
+7. **Missing metrics (decision 9), as implemented in step 4.** Caddy exports no certificate metrics, so the worker
+   probes the public hostnames over TLS through Caddy on the internal network (`PADDOCK_TLS_PROBE_HOSTS`, production
+   only) and exports `paddock_tls_certificate_expiry_timestamp_seconds{host}` and `paddock_tls_probe_success{host}`.
+   The worker exports `paddock_openbao_sealed` and `paddock_openbao_reachable` from OpenBao's unauthenticated
+   `sys/health`, and `paddock_backup_last_success_timestamp_seconds{kind}` from the newest object of each kind in the
+   backup bucket (0 before the first, so that a kind that never ran alerts too).
+8. **Prometheus per host (decision 8).** The control plane's Prometheus scrapes the roles and RabbitMQ (plugin
+   `rabbitmq_prometheus`, bundled with the image); the audit host runs its own (`prometheus-audit`) for the audit
+   writer, because no further port crosses the interconnect. The control plane watches the audit queue
+   (`PaddockAuditWriterLag`: `audit.writer` not drained for 10 minutes; `PaddockAuditWriterNotConsuming`). Each role is
+   one static target, so that a stopped role stays a target with `up == 0`. `make lint-prometheus` (part of
+   `make lint`) runs `promtool check config`, `check rules` and the rule tests.
+9. **Restore commands (decision 7).** Amendment 2026-10-08 (architect): `paddockctl admin …` → `paddock-server admin …`
+   (plan M6c decisions 20–23). Order, each as `docker compose … run --rm --no-deps paddock-worker admin …`: stop
+   `paddock-compiler` → `bump-bundle-seq --by 1000000` → start the compiler → `rebuild-cache` → `recompile --all`
+   (plan M6c §5). The OpenBao snapshot is decrypted to stdout (`paddock-server backup decrypt <in> -`) straight into
+   the fresh OpenBao container, which after `raft snapshot restore -force` is sealed with the original barrier and is
+   unsealed with the original shares (verified on a throwaway OpenBao). `make restore-drill` requires the development
+   stack with backups (`make up BACKUP=1`).
+10. **Review round 1 (2026-10-09).** The production control plane's file order is `compose.yaml`, `compose.prod.yaml`,
+    `compose.backup.yaml`, so that the backup overlay's worker secrets add to compose.prod.yaml's `secrets: !override`.
+    prod-check gains the item "secrets the services reference are mounted" (any `/run/secrets/` path in a variable or
+    as a DSN's `sslrootcert`), allows 80/443 for Caddy only, resolves symbolic links before the world-readable walk and
+    treats errors as findings; a static test renders the real Compose configurations. The restore drill's guard reads
+    `PADDOCK_ENV` from `.env` only and refuses with production secrets or a production overlay in the running stack.
+    Alert companions fire when the backup ages, OpenBao's health or the certificate expiries are never exported.

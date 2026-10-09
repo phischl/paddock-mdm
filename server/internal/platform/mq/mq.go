@@ -245,6 +245,54 @@ func (p *Publisher) PublishBatch(ctx context.Context, exchange string, msgs []Me
 	return results, nil
 }
 
+// PublisherPool spreads concurrent publishes over several publishers, each with its own connection and channel. A
+// publisher waits for the confirms of one batch at a time, so a single one bounds the gateway to one broker round trip
+// per check-in (N1, docs/operations/capacity.md); the order of messages is kept within a batch only.
+type PublisherPool struct {
+	all  []*Publisher
+	free chan *Publisher
+}
+
+// NewPublisherPool creates size publishers (at least one); their connections are opened on first use.
+func NewPublisherPool(cfg Config, size int) *PublisherPool {
+	size = max(size, 1)
+	p := &PublisherPool{free: make(chan *Publisher, size)}
+	for range size {
+		pub := NewPublisher(cfg)
+		p.all = append(p.all, pub)
+		p.free <- pub
+	}
+	return p
+}
+
+// PublishBatch publishes msgs with a free publisher (Publisher.PublishBatch), waiting for one while all are busy.
+func (p *PublisherPool) PublishBatch(ctx context.Context, exchange string, msgs []Message) ([]error, error) {
+	var pub *Publisher
+	select {
+	case pub = <-p.free:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { p.free <- pub }()
+	return pub.PublishBatch(ctx, exchange, msgs)
+}
+
+// Ping opens every publisher's connection if necessary.
+func (p *PublisherPool) Ping() error {
+	var errs []error
+	for _, pub := range p.all {
+		errs = append(errs, pub.Ping())
+	}
+	return errors.Join(errs...)
+}
+
+// Close closes every connection.
+func (p *PublisherPool) Close() {
+	for _, pub := range p.all {
+		pub.Close()
+	}
+}
+
 // ProvisionOptions are the tunables of the topology.
 type ProvisionOptions struct {
 	AuditQueueMaxBytes  int64

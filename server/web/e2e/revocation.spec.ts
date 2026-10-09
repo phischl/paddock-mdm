@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { expect, type Page } from '@playwright/test'
 import { login, stepUp } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, mainNav, watchCSP } from './checks'
 import { test } from './cleanup'
 
 // The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
@@ -78,7 +78,7 @@ test('organization admin requests and cancels revocations of a device', async ({
   await expect(card.getByTestId('revocation-timeline').getByRole('row').filter({ hasText: 'Destroy' })).toContainText('Requested')
 
   // The revocations page: the requester may cancel, not approve.
-  await page.getByRole('link', { name: 'Revocations' }).click()
+  await mainNav(page).getByRole('link', { name: 'Revocations' }).click()
   await expect(page.getByRole('heading', { name: 'Revocations' })).toBeVisible()
   await page.getByTestId('list-search').getByRole('searchbox').fill(hostname)
   await expect(page).toHaveURL(/[?&]q=/)
@@ -100,7 +100,7 @@ test('organization admin requests and cancels revocations of a device', async ({
 test("organization admin sees the dead man's switch warning", async ({ page }) => {
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
-  await page.getByRole('link', { name: "Dead man's switch" }).click()
+  await mainNav(page).getByRole('link', { name: "Dead man's switch" }).click()
   await expect(page.getByTestId('dms-warning')).toHaveText(
     'If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself.')
   await page.getByTestId('dms-period').locator('input').fill('10')
