@@ -4,7 +4,8 @@
 // Prometheus of the observability profile (PROMETHEUS_URL, rabbitmq_detailed_queue_messages) every 5 s and keeps
 // sampling for DRAIN after the load ends, so a backlog that never clears fails the run. The lag is the backlog
 // divided by the consumption rate (published messages minus the backlog's growth); while nothing is consumed it is
-// the time since the backlog was last empty. Prometheus scrapes every 15 s, so the figure has that resolution.
+// the time since the backlog was last empty. Prometheus scrapes every SCRAPE_INTERVAL_S (15 s), so the figure has that
+// resolution and the consumption is derived over at least one scrape interval.
 import http from 'k6/http'
 import { check, sleep } from 'k6'
 import { Trend } from 'k6/metrics'
@@ -17,6 +18,7 @@ const vus = Number(__ENV.VUS || 200)
 const duration = __ENV.DURATION || '5m'
 const drain = __ENV.DRAIN || '2m'
 const prometheus = (__ENV.PROMETHEUS_URL || 'http://prometheus:9090').replace(/\/$/, '')
+const scrapeSeconds = Number(__ENV.SCRAPE_INTERVAL_S || 15)
 const messagesPerSecond = Math.ceil(eventsPerSecond / batch)
 
 const lagSeconds = new Trend('ingest_consumer_lag_seconds')
@@ -66,21 +68,26 @@ function backlogOf(queue) {
   return Number(result[0].value[1])
 }
 
-let previous = null
+const samples = []
 let emptySince = Date.now()
 
 export function sampleLag() {
   const now = Date.now()
   const depth = backlogOf('ingest.event')
-  const publishing = now - exec.scenario.startTime < seconds(duration) * 1000
   backlog.add(depth)
   auditBacklog.add(backlogOf('audit.writer'))
   if (depth === 0) emptySince = now
-  if (previous) {
-    const dt = (now - previous.at) / 1000
-    const consumed = (publishing ? messagesPerSecond : 0) - (depth - previous.depth) / dt
+  // Two samples of the same scrape show no change although the queue moved, which would count as nothing consumed:
+  // compare with the newest sample at least one scrape interval old.
+  const ref = samples.filter((s) => now - s.at >= scrapeSeconds * 1000).pop()
+  if (ref) {
+    const dt = (now - ref.at) / 1000
+    const start = exec.scenario.startTime
+    const end = start + seconds(duration) * 1000
+    const publishedS = Math.max(0, Math.min(now, end) - Math.max(ref.at, start)) / 1000
+    const consumed = (messagesPerSecond * publishedS - (depth - ref.depth)) / dt
     lagSeconds.add(depth === 0 ? 0 : consumed > 0 ? depth / consumed : (now - emptySince) / 1000)
   }
-  previous = { at: now, depth }
+  samples.push({ at: now, depth })
   sleep(5)
 }
