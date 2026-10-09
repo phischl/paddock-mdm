@@ -58,8 +58,16 @@ and an operator on the host can always switch it off.
     `trusted_proxies`, `trusted_proxies_strict` and `client_ip_headers` server options and the `{client_ip}`
     placeholder; Caddyfile env placeholders `{$VAR}` are substituted before parsing and may expand to nothing or to
     several lines.
-- **ADRs touched:** new ADR 0021 (text in §9, placed by the main session); architecture §4.1 hostname table
-  amendment (open point 7).
+- **ADRs touched:** new ADR 0021 (text in §9, placed by the main session; M7b takes 0022); architecture §4.1
+  hostname table amendment (open point 7).
+- **Compatibility with M7b (operator bundle):** M7b ships `Caddyfile.prod` and `compose.prod.yaml` verbatim and
+  generates `.env.example` from `prod.env.example`. This plan therefore (a) keeps every operator-facing variable in
+  `prod.env.example` with a comment and a safe default (decision 28: `PADDOCK_ADMIN_ALLOWED_CIDRS`,
+  `PADDOCK_INTERNAL_CIDRS`, `PADDOCK_EDGE_TRUSTED_PROXIES`, `PADDOCK_EDGE_CLIENT_IP_HEADER`,
+  `PADDOCK_IP_ALLOWLIST_BYPASS`, `PADDOCK_TRUSTED_PROXY_CIDRS`; `PADDOCK_EDGE_SERVERS_LISTENER` is internal and
+  fixed by `compose.prod.yaml`, not an operator variable), and (b) adds two files the Caddyfiles and `compose.yaml`
+  reference — `deploy/compose/caddy/guards.caddy` and `deploy/compose/caddy/entrypoint.sh` — which M7b's bundle
+  MUST include next to `Caddyfile.prod` (M7b plan input, noted in `CHANGELOG.md` and in the file table of §5).
 
 ### 2.1 Requirements
 | ID | Requirement | Acceptance (who observes) |
@@ -491,7 +499,12 @@ and an operator on the host can always switch it off.
     defaults, the trusted-proxy test path and the untrusted listener 8444 (decisions 8 and 9).
     `deploy/compose/prod.env.example`: `PADDOCK_ADMIN_ALLOWED_CIDRS` (existing), `PADDOCK_INTERNAL_CIDRS`,
     `PADDOCK_EDGE_TRUSTED_PROXIES`, `PADDOCK_EDGE_CLIENT_IP_HEADER`, `PADDOCK_IP_ALLOWLIST_BYPASS`,
-    `PADDOCK_TRUSTED_PROXY_CIDRS` (commented, with the defaults). `CHANGELOG.md` *Unreleased → Added*.
+    `PADDOCK_TRUSTED_PROXY_CIDRS` — each as a commented line with a one-sentence explanation and the safe default
+    shown (`PADDOCK_EDGE_CLIENT_IP_HEADER=none`, `PADDOCK_EDGE_TRUSTED_PROXIES=` empty, `PADDOCK_INTERNAL_CIDRS=private_ranges`,
+    `PADDOCK_IP_ALLOWLIST_BYPASS=false`, `PADDOCK_TRUSTED_PROXY_CIDRS` = the private-range list of decision 4),
+    because M7b generates the operator's `.env.example` from this file. `CHANGELOG.md` *Unreleased → Added*,
+    including the sentence that an operator bundle of `Caddyfile.prod` needs `caddy/guards.caddy` and
+    `caddy/entrypoint.sh` next to it.
 
 ## 4. Non-goals
 Per-user or per-organization IP rules; organization-scoped lists (the perimeter is platform-wide: ADR 0007 makes
