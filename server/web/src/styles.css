@@ -12,11 +12,22 @@ h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.75rem; }
 .skip-link { position: absolute; left: -9999px; top: 0; }
 .skip-link:focus { left: 1rem; top: 1rem; background: #fff; padding: 0.5rem 1rem; z-index: 3000; }
 
-.brand { font-weight: 700; flex: 0 0 auto; }
-.main-nav { display: flex; gap: 0.25rem; flex: 1; }
-.main-nav .v-btn--active { background: rgba(255, 255, 255, 0.18); }
-.user { display: flex; align-items: center; gap: 0.75rem; padding-right: 1rem; }
-.user .role { font-size: 0.875rem; }
+/* App bar and navigation drawer (the drawer replaced the app bar links, which did not fit). */
+.brand .app-name { font-weight: 700; }
+.brand .org-name { margin-left: 0.75rem; font-size: 1rem; font-weight: 400; }
+.user-button { text-transform: none; letter-spacing: normal; }
+.user-button .v-avatar { font-weight: 700; }
+.user-button-name { margin-left: 0.5rem; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-groups { padding: 0 8px 8px; }
+.nav-groups .v-list-item { margin-bottom: 2px; }
+.nav-initial { display: inline-flex; width: 24px; justify-content: center; font-weight: 700; }
+.nav-rail .v-list-subheader, .nav-rail .v-list-item-title {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+@media (max-width: 599.98px) {
+  .brand .app-name, .user-button-name { display: none; }
+  .brand .org-name { margin-left: 0; }
+}
 
 .page { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
 .page.narrow { max-width: 36rem; }

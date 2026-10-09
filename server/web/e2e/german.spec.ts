@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, mainNav, openUserMenu, watchCSP } from './checks'
 import { test } from './cleanup'
 
 // German smoke test (plan M6b decision 2): the language switch of the user menu persists on the account, and the
@@ -9,18 +9,21 @@ test('organization admin switches the portal to German', async ({ page }) => {
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
   try {
+    await openUserMenu(page)
     await page.getByTestId('language-menu').click()
     await page.getByTestId('language-de').click()
     await expect(page.locator('html')).toHaveAttribute('lang', 'de')
+    await openUserMenu(page)
     await expect(page.getByTestId('user-role')).toHaveText('Organisationsadministrator')
-    await expect(page.getByRole('button', { name: 'Abmelden' })).toBeVisible()
+    await expect(page.getByTestId('logout')).toHaveText('Abmelden')
+    await page.keyboard.press('Escape')
 
     // The choice is stored on the account, not in the browser: a reload keeps it.
     await page.goto('/devices')
     await expect(page.getByRole('heading', { level: 1, name: 'Geräte' })).toBeVisible()
     await expect(page.getByRole('columnheader', { name: 'Letzter Kontakt' })).toBeVisible()
     await expect(page.getByRole('combobox', { name: 'Einträge pro Seite' })).toBeVisible()
-    const nav = page.getByRole('navigation', { name: 'Hauptnavigation' })
+    const nav = mainNav(page, 'Hauptnavigation')
     await expect(nav.getByRole('link', { name: 'Gerätegruppen' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Audit-Protokoll' })).toBeVisible()
     await expectAccessible(page)
@@ -39,6 +42,7 @@ test('organization admin switches the portal to German', async ({ page }) => {
     expect(new Set(codes)).toEqual(new Set(['admin.login']))
     await expectAccessible(page)
 
+    await openUserMenu(page)
     await page.getByTestId('language-menu').click()
     await page.getByTestId('language-en').click()
     await expect(page.locator('html')).toHaveAttribute('lang', 'en')

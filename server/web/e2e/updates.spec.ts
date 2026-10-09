@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, mainNav, watchCSP } from './checks'
 import { test } from './cleanup'
 
 // The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
@@ -28,7 +28,7 @@ test('organization admin manages updates, holds and install now', async ({ page,
   cleanup.remove('/api/v1/package-holds', pinned)
 
   // Settings: a schedule outside the subset is refused in the form; the current values save.
-  await page.getByRole('link', { name: 'Updates', exact: true }).click()
+  await mainNav(page).getByRole('link', { name: 'Updates', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Updates', exact: true })).toBeVisible()
   const schedule = page.getByTestId('regular-schedule').locator('input')
   const current = await schedule.inputValue()
@@ -56,7 +56,7 @@ test('organization admin manages updates, holds and install now', async ({ page,
   expect((await page.request.put(`/api/v1/devices/${device.device_id}/groups`, { headers: csrf, data: { device_group_ids: [groupID] } })).status()).toBe(200)
 
   // Package holds: one for the group, one pinned organization-wide, changed, then released after a confirmation.
-  await page.getByRole('link', { name: 'Package holds' }).click()
+  await mainNav(page).getByRole('link', { name: 'Package holds' }).click()
   await expect(page.getByRole('heading', { name: 'Package holds' })).toBeVisible()
   await page.getByTestId('create-hold').click()
   let dialog = page.getByRole('dialog', { name: 'Hold a package' })

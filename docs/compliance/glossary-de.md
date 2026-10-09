@@ -22,6 +22,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Bundle | Bundle | Signed configuration of a device. |
 | Change set | Änderungssatz | declarative configuration (paddockctl) |
 | Check-in | Check-in | |
+| Configuration (navigation group) | Konfiguration | |
 | Dead man's switch | Totmannschalter | Its period is the *Frist*. |
 | Destroy (revocation) | Vernichtung; Gerät vernichten | Irreversible: erases every keyslot and the escrow. |
 | Device | Gerät | |
@@ -34,11 +35,16 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Finding (vulnerability) | Fund | a CVE matched on a device |
 | Hold (package) | Zurückhalten; zurückgehaltenes Paket | Not *Sperre*, which is reserved for locks. |
 | Install now | Sofort installieren; Sofortinstallation | |
+| Inventory (navigation group) | Inventar | |
 | Issue (revocation) | Ausstellen | The revocation issuer is the *Widerrufsaussteller*. |
 | Local administrator | Lokaler Administrator | |
 | Managed file / unit | Verwaltete Datei / Unit | |
+| Navigation | Navigation | Navigation drawer; *einklappen* / *ausklappen* for the rail. |
+| Organization | Organisation | |
 | Organization administrator | Organisationsadministrator | |
+| Overview (navigation group) | Übersicht | |
 | Permission profile | Berechtigungsprofil | Classes: Keine, Eingeschränkt, Voll. |
+| Platform (navigation group) | Plattform | |
 | Platform administrator | Plattformadministrator | |
 | Presumed lost | Vermutlich verloren | |
 | Quarantine | Quarantäne | |
@@ -51,14 +57,17 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Rollout, wave | Rollout, Welle | |
 | Root-equivalent | root-gleichwertig | |
 | Rotate (password) | Rotieren; Rotation | |
+| Security (navigation group) | Sicherheit | |
 | Self-lock (dead man's switch) | Selbstsperre | |
 | Severity | Schweregrad | Kritisch, Hoch, Mittel, Niedrig, Unbekannt. |
 | Sign in / sign out | Anmelden / Abmelden | |
 | Silent device (staleness) | Gerät ohne Kontakt | |
+| Start (page) | Start | |
 | Step-up | Identitätsbestätigung | |
 | Suspend / resume logins | Anmeldungen aussetzen / wieder zulassen | |
 | Synced (user), upstream directory | Synchronisiert, Quellverzeichnis | |
 | Tamper (event) | Manipulation | |
 | User lock | Sperre; Benutzer sperren / entsperren | *Benutzersperre* where it must be told apart from a device lock. |
+| User menu | Benutzermenü | |
 | Volume (LUKS) | Volume | kept in English, as in cryptsetup |
 | Vulnerability | Schwachstelle | |

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, expectAdminStartPage, watchCSP } from './checks'
+import { expectAccessible, expectAdminStartPage, mainNav, watchCSP } from './checks'
 import { test } from './cleanup'
 
 // The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
@@ -72,7 +72,7 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
 
   // The organization's Software page counts the device.
   await page.goto('/device-groups')
-  await page.getByRole('link', { name: 'Software', exact: true }).click()
+  await mainNav(page).getByRole('link', { name: 'Software', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Software', exact: true })).toBeVisible()
   await page.getByTestId('list-search').getByRole('searchbox').fill(pkg)
   const row = page.getByTestId('software-list').getByRole('row').filter({ hasText: pkg })
