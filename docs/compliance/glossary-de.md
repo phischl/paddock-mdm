@@ -39,7 +39,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Issue (revocation) | Ausstellen | The revocation issuer is the *Widerrufsaussteller*. |
 | Local administrator | Lokaler Administrator | |
 | Managed file / unit | Verwaltete Datei / Unit | |
-| Navigation | Navigation | Navigation drawer; *einklappen* / *ausklappen* for the rail. |
+| Navigation | Navigation | Navigation drawer; *einblenden* / *ausblenden* to show or hide it. |
 | Organization | Organisation | |
 | Organization administrator | Organisationsadministrator | |
 | Overview (navigation group) | Übersicht | |

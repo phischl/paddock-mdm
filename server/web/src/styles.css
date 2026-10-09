@@ -20,10 +20,6 @@ h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.75rem; }
 .user-button-name { margin-left: 0.5rem; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-groups { padding: 0 8px 8px; }
 .nav-groups .v-list-item { margin-bottom: 2px; }
-.nav-initial { display: inline-flex; width: 24px; justify-content: center; font-weight: 700; }
-.nav-rail .v-list-subheader, .nav-rail .v-list-item-title {
-  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
-}
 @media (max-width: 599.98px) {
   .brand .app-name, .user-button-name { display: none; }
   .brand .org-name { margin-left: 0; }

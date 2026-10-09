@@ -127,24 +127,32 @@ describe('navigation drawer', () => {
     expect(links.filter((a) => a.attributes('tabindex') !== undefined && a.attributes('tabindex') !== '0')).toEqual([])
   })
 
-  it('collapses to a rail on wide screens and remembers it', async () => {
+  it('hides and shows the permanent drawer on wide screens and remembers it', async () => {
     const first = await mountApp()
-    expect(first.w.find('[data-testid="nav-toggle"]').exists()).toBe(false)
-    const toggle = first.w.find('[data-testid="nav-rail-toggle"]')
-    expect(toggle.attributes('aria-label')).toBe('Collapse the navigation')
+    expect(drawer(first.w).classes()).not.toContain('v-navigation-drawer--temporary')
+    expect(drawer(first.w).classes()).toContain('v-navigation-drawer--active')
+    const toggle = first.w.find('[data-testid="nav-toggle"]')
+    expect(toggle.attributes('aria-label')).toBe('Hide the navigation')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
     await toggle.trigger('click')
-    expect(drawer(first.w).classes()).toContain('v-navigation-drawer--rail')
+    expect(drawer(first.w).classes()).not.toContain('v-navigation-drawer--active')
+    expect(toggle.attributes('aria-label')).toBe('Show the navigation')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
     expect(localStorage.getItem('paddock.navigation.rail')).toBe('true')
     first.w.unmount()
 
     const second = await mountApp()
-    expect(drawer(second.w).classes()).toContain('v-navigation-drawer--rail')
-    expect(second.w.find('[data-testid="nav-rail-toggle"]').attributes('aria-label')).toBe('Expand the navigation')
-    // The entries keep their accessible names in the rail.
-    expect(linkLabels(second.w)).toContain('Devices')
+    expect(drawer(second.w).classes()).not.toContain('v-navigation-drawer--active')
+    await second.w.find('[data-testid="nav-toggle"]').trigger('click')
+    expect(drawer(second.w).classes()).toContain('v-navigation-drawer--active')
+    expect(localStorage.getItem('paddock.navigation.rail')).toBe('false')
+    // An entry chosen on a wide screen leaves the drawer shown.
+    await drawer(second.w).find('a[href="/software"]').trigger('click')
+    await flushPromises()
+    expect(drawer(second.w).classes()).toContain('v-navigation-drawer--active')
   })
 
-  it('starts expanded when the storage is unavailable', async () => {
+  it('starts shown when the storage is unavailable', async () => {
     const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new DOMException('denied', 'SecurityError')
     })
@@ -153,9 +161,9 @@ describe('navigation drawer', () => {
     })
     try {
       const { w } = await mountApp()
-      expect(drawer(w).classes()).not.toContain('v-navigation-drawer--rail')
-      await w.find('[data-testid="nav-rail-toggle"]').trigger('click')
-      expect(drawer(w).classes()).toContain('v-navigation-drawer--rail')
+      expect(drawer(w).classes()).toContain('v-navigation-drawer--active')
+      await w.find('[data-testid="nav-toggle"]').trigger('click')
+      expect(drawer(w).classes()).not.toContain('v-navigation-drawer--active')
     } finally {
       get.mockRestore()
       set.mockRestore()
@@ -166,14 +174,14 @@ describe('navigation drawer', () => {
     resize(1279)
     const { w, router } = await mountApp()
     const hamburger = w.find('[data-testid="nav-toggle"]')
-    expect(hamburger.attributes('aria-label')).toBe('Open the navigation')
+    expect(hamburger.attributes('aria-label')).toBe('Show the navigation')
     expect(hamburger.attributes('aria-expanded')).toBe('false')
     expect(drawer(w).classes()).toContain('v-navigation-drawer--temporary')
     expect(drawer(w).attributes('inert')).toBeDefined()
-    expect(w.find('[data-testid="nav-rail-toggle"]').exists()).toBe(false)
 
     await hamburger.trigger('click')
     expect(hamburger.attributes('aria-expanded')).toBe('true')
+    expect(hamburger.attributes('aria-label')).toBe('Hide the navigation')
     expect(drawer(w).classes()).toContain('v-navigation-drawer--active')
 
     await drawer(w).find('a[href="/software"]').trigger('click')
@@ -186,9 +194,11 @@ describe('navigation drawer', () => {
     await flushPromises()
     expect(drawer(w).classes()).not.toContain('v-navigation-drawer--active')
 
+    // Opening and closing on a small screen is not remembered.
+    expect(localStorage.getItem('paddock.navigation.rail')).toBeNull()
+
     resize(1280)
     await flushPromises()
-    expect(w.find('[data-testid="nav-toggle"]').exists()).toBe(false)
     expect(drawer(w).classes()).not.toContain('v-navigation-drawer--temporary')
     expect(drawer(w).classes()).toContain('v-navigation-drawer--active')
   })
