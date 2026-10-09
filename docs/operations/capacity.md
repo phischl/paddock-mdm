@@ -64,9 +64,10 @@ rate over enough devices: 10 000 devices check in every 10 s at 1 000/s.
 
    Devices send `config.drift_corrected` events in batches of `BATCH` (one queue message per batch). The scenario
    reads the backlog of `ingest.event` (and, for information, `audit.writer`) from Prometheus every 5 s and records
-   the lag as backlog divided by the consumption rate. Every device event becomes an audit event: an ingest run
-   writes millions of objects into the WORM audit bucket, which cannot be deleted before their retention ends. Run
-   it only on a stack whose audit bucket may keep them.
+   the lag as backlog divided by the consumption rate, derived over at least one scrape interval (15 s,
+   `SCRAPE_INTERVAL_S`): two samples of the same scrape show no change although the queue moved. Every device event
+   becomes an audit event: an ingest run writes millions of objects into the WORM audit bucket, which cannot be
+   deleted before their retention ends. Run it only on a stack whose audit bucket may keep them.
 
 k6 writes its summary to `bin/load/<scenario>-summary.json`; copy the figures into the table above together with
 the hardware (CPU model and cores, RAM, disk) and the Paddock commit.
