@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
 /** Fails on serious or critical axe violations. */
@@ -35,4 +35,17 @@ export async function expectAdminStartPage(page: Page): Promise<void> {
   const open = ((await res.json()) as { total: number }).total
   await expect(page).toHaveURL(open > 0 ? /\/attention$/ : /\/device-groups$/)
   if (open > 0) await page.goto('/device-groups')
+}
+
+/**
+ * The navigation drawer with the portal's pages; it is permanent from 1280 px, the default viewport of the specs.
+ * name is the localized label of the navigation landmark.
+ */
+export function mainNav(page: Page, name = 'Main navigation'): Locator {
+  return page.getByRole('navigation', { name })
+}
+
+/** Opens the user menu of the app bar: account, role, language and sign-out. */
+export async function openUserMenu(page: Page): Promise<void> {
+  await page.getByTestId('user-menu').click()
 }

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, watchCSP } from './checks'
+import { expectAccessible, mainNav, watchCSP } from './checks'
 import { test } from './cleanup'
 
 // The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
@@ -28,7 +28,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   cleanup.remove('/api/v1/managed-files', path)
 
   // Enrollment token: the configuration with the secret is shown once.
-  await page.getByRole('link', { name: 'Enrollment tokens' }).click()
+  await mainNav(page).getByRole('link', { name: 'Enrollment tokens' }).click()
   await expect(page.getByRole('heading', { name: 'Enrollment tokens' })).toBeVisible()
   await expectAccessible(page)
   await page.getByTestId('create-token').click()
@@ -57,7 +57,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   // The device enrolls with the manual-approval token and waits for approval.
   const enrolled = enrollDevice(config, hostname)
   expect(enrolled.status).toBe('pending')
-  await page.getByRole('link', { name: 'Devices' }).click()
+  await mainNav(page).getByRole('link', { name: 'Devices' }).click()
   await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible()
   await page.getByTestId('list-search').getByRole('searchbox').fill(hostname)
   const row = page.getByRole('row').filter({ hasText: hostname })
@@ -82,7 +82,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await page.getByTestId('save-device-groups').click()
   await expect(page.getByRole('main').getByRole('status')).toHaveText('Device groups saved.')
 
-  await page.getByRole('link', { name: 'Managed files' }).click()
+  await mainNav(page).getByRole('link', { name: 'Managed files' }).click()
   await expect(page.getByRole('heading', { name: 'Managed files' })).toBeVisible()
   await page.getByTestId('create-managed-file').click()
   const fileDialog = page.getByRole('dialog', { name: 'New managed file' })

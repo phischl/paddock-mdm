@@ -7,6 +7,9 @@ import { i18n } from '../i18n'
 
 const noncePlaceholder = '__CSP_NONCE__'
 
+/** Viewport width from which the navigation drawer is permanent (and can be hidden); below it is temporary. */
+export const navigationBreakpoint = 1280
+
 /**
  * The per-response CSP style nonce the server writes into <meta name="csp-nonce">; undefined if the tag is
  * missing or still holds the placeholder (not served through the api role, e.g. unit tests).
