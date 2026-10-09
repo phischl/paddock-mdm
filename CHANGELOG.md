@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- CI: the trivy job saves its vulnerability database cache again (the cache step failed on root-owned files).
+- `docs/architecture.md`: five table-of-contents links point to their sections again.
+
 ## [0.1.0] - 2026-10-08
 
 First public release (prepared, not tagged yet: the product owner sets the date when tagging `v0.1.0`). Paddock
