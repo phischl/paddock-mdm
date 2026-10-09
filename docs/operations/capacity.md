@@ -18,13 +18,32 @@ with the same scenarios before a large rollout.
 
 ## Results
 
-**Not measured yet.** The scenarios below are ready; the figures are filled in from the first run on the reference
-machine (hardware, Paddock commit, k6 summary).
+Measured on 2026-10-09 on the reference machine below, with the whole development stack (`make up BACKUP=1`, with
+the observability profile), the k6 load generator and 10 000 load devices on the same host. A production control
+plane spreads these roles over more hardware; treat the figures as a lower bound of one gateway and three workers.
+
+**Reference machine:** a laptop with an Intel Core Ultra 7 155H (16 cores, 22 threads, up to 4.8 GHz), 62 GiB RAM and
+an NVMe SSD (SanDisk PC SN8000S, 1 TB), Ubuntu with Docker. **Paddock commit:** `5687d78` (branch
+`M6-integration`, with the fixes below).
 
 | Scenario | Reference machine | Rate | p99 | Error rate | Lag (max) | Result |
 | --- | --- | --- | --- | --- | --- | --- |
-| `checkin` | – | – | – | – | – | pending |
-| `ingest` | – | – | – | – | – | pending |
+| `checkin` | Core Ultra 7 155H, 62 GiB | 1 000 check-ins/s held for 5 min (300 001 requests), 1 gateway | 10.3 ms (median 2.2 ms, max 112 ms) | 0.00 % | – | met |
+| `ingest` | Core Ultra 7 155H, 62 GiB | 5 000 events/s for 60 s (6 000 batches of 50), 3 workers | 9.0 ms (request) | 0.00 % | 0.03 s (backlog ≤ 2 messages) | met |
+
+`checkin`: `RATE=1000 VUS=400 WARMUP=1m DURATION=5m`. `ingest`: `EVENTS_PER_S=5000 BATCH=50 VUS=200 DURATION=60s
+DRAIN=2m` with `--scale paddock-worker=3`; the run is limited to 60 s by architect decision (each run writes its
+events into the WORM audit bucket for good). The audit pipeline behind it (`audit.writer`) peaked at about 61 000
+queued messages and drained within a minute after the run.
+
+The first runs missed both targets and found two hot spots, fixed before the figures above:
+
+- **Gateway:** every check-in waits for its publisher confirm, and the gateway published over one broker channel
+  that handled one batch at a time: about 800 check-ins/s at a p99 of 786 ms. It now publishes over a pool of 16
+  connections.
+- **Worker:** `ingest.event` was consumed one message at a time with one transaction per event: about 1 000
+  events/s with three workers, a backlog of 2 500 messages and a lag of about 75 s. A worker now handles 8 messages at a
+  time and records the events of one message in one transaction.
 
 ## Method
 
