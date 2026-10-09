@@ -220,14 +220,14 @@ func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UU
 }
 
 // sessionLoginEntry is the unaudited batch entry of a session login (an upsert of device_user_seen); false for a
-// malformed event.
+// malformed event, including a username with control characters.
 func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 	var login protocol.SessionLogin
 	if json.Unmarshal(ev.Data, &login) != nil {
 		return OnceEntry{}, false
 	}
 	username := strings.ToLower(strings.TrimSpace(login.Username))
-	if username == "" || len(username) > maxParamString {
+	if username == "" || len(username) > maxParamString || stripControls(username) != username {
 		return OnceEntry{}, false
 	}
 	at := login.At
@@ -358,7 +358,23 @@ func boundedStrings(list []any) []string {
 	return out
 }
 
+// boundedString is a device-supplied string without C0 control characters other than tab, newline and carriage
+// return: PostgreSQL rejects NUL in jsonb and text, and one such event failed its whole batch (N2 review).
 func boundedString(v any) (string, bool) {
 	s, ok := v.(string)
-	return s, ok && len(s) <= maxParamString
+	if !ok {
+		return "", false
+	}
+	s = stripControls(s)
+	return s, len(s) <= maxParamString
+}
+
+// stripControls drops the C0 control characters of s except tab, newline and carriage return.
+func stripControls(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			return -1
+		}
+		return r
+	}, s)
 }

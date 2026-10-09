@@ -36,6 +36,8 @@ func TestEventParams(t *testing.T) {
 			map[string]any{"before": []string{"recovery", "tpm2+pin"}, "after": []string{"password", "recovery", "tpm2+pin"}}},
 		{"oversized strings", `{"reason":"` + long + `","version":"` + long + `"}`, map[string]any{}},
 		{"not an object", `[1]`, map[string]any{}},
+		{"control characters", `{"message":"a\u0000b\u001bc\td\ne\rf","resource_ids":["\u0000x"],"errors":[{"id":"i\u0007","message":"m\u0000"}]}`,
+			map[string]any{"message": "abc\td\ne\rf", "resource_ids": []string{"x"}, "errors": []map[string]string{{"id": "i", "message": "m"}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
