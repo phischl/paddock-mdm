@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/canonicaljson"
@@ -46,7 +47,27 @@ type Token struct {
 	RequestID      string    `json:"request_id"`
 	// PeriodDays is the dead man's switch period of a self_lock token (0 otherwise).
 	PeriodDays int `json:"period_days,omitempty"`
+	// Volumes are the LUKS UUIDs of the volumes whose header escrow the server confirmed, sorted (PDK-009): a lock or
+	// self_lock erases the root volume and, of the other volumes, exactly these, so that every erased volume can be
+	// restored. A destroy erases every volume and carries none.
+	Volumes []string `json:"volumes,omitempty"`
 }
+
+// CapabilityVolumes is the capability of a paddock-revoke build that understands Volumes (`paddock-revoke
+// capabilities`, reported by paddockd in the check-in health as revoke_capabilities). Builds before it refuse a
+// token with volumes as malformed, so the revocation-issuer adds volumes only for devices that report it (PDK-009).
+const CapabilityVolumes = "volumes"
+
+// Capabilities is the output of `paddock-revoke capabilities`.
+type Capabilities struct {
+	Capabilities []string `json:"capabilities"`
+}
+
+// MaxVolumes bounds the volumes of a token.
+const MaxVolumes = 32
+
+// volumePattern is a LUKS UUID as the device and the server write it: lowercase.
+var volumePattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Encode returns the canonical JSON payload (RFC 8785).
 func Encode(t Token) ([]byte, error) {
@@ -162,6 +183,15 @@ func (t Token) validate() error {
 		return fmt.Errorf("%w: period_days on a %s token", ErrMalformed, t.Action)
 	case t.Action != ActionLock && t.Action != ActionDestroy && t.Action != ActionSelfLock:
 		return fmt.Errorf("%w: action %q", ErrMalformed, t.Action)
+	case t.Action == ActionDestroy && len(t.Volumes) != 0:
+		return fmt.Errorf("%w: volumes on a destroy token", ErrMalformed)
+	case len(t.Volumes) > MaxVolumes:
+		return fmt.Errorf("%w: more than %d volumes", ErrMalformed, MaxVolumes)
+	}
+	for i, v := range t.Volumes {
+		if !volumePattern.MatchString(v) || (i > 0 && t.Volumes[i-1] >= v) {
+			return fmt.Errorf("%w: volumes must be distinct lowercase UUIDs in ascending order", ErrMalformed)
+		}
 	}
 	return nil
 }

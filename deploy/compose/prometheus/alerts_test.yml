@@ -1,0 +1,249 @@
+# promtool test rules for alerts.yml (`make lint-prometheus`).
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: a stopped role fires after 2 minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "1 1 0 0 0 0"
+      - series: 'up{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PaddockRoleDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaddockRoleDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: paddock-audit, role: paddock-audit-writer, instance: "paddock-audit-writer:9090" }
+            exp_annotations:
+              summary: "paddock-audit-writer is down"
+              description: "Prometheus cannot scrape paddock-audit-writer (paddock-audit-writer:9090) for 2 minutes."
+
+  - name: dead-lettered audit events are critical, other queues a warning
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_detailed_queue_messages{queue="dlq.audit.writer", vhost="paddock"}'
+        values: "0 2"
+      - series: 'rabbitmq_detailed_queue_messages{queue="dlq.ingest.heartbeat", vhost="paddock"}'
+        values: "0 1"
+      - series: 'rabbitmq_detailed_queue_messages{queue="audit.writer", vhost="paddock"}'
+        values: "5 5"
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: PaddockAuditDLQ
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: PaddockAuditDLQ
+        exp_alerts:
+          - exp_labels: { severity: critical, queue: dlq.audit.writer }
+            exp_annotations:
+              summary: "Audit events in the dead-letter queue"
+              description: "2 audit events were dead-lettered; they are not in the audit log until replayed."
+      - eval_time: 1m
+        alertname: PaddockDLQ
+        exp_alerts:
+          - exp_labels: { severity: warning, queue: dlq.ingest.heartbeat }
+            exp_annotations:
+              summary: "Messages in dlq.ingest.heartbeat"
+              description: "1 messages were dead-lettered to dlq.ingest.heartbeat."
+
+  - name: an audit backlog that does not drain for 10 minutes is lag
+    interval: 1m
+    input_series:
+      - series: 'rabbitmq_detailed_queue_messages_ready{queue="audit.writer", vhost="paddock"}'
+        values: "3 0 4 4 4 4 4 4 4 4 4 4 4 4 4"
+      - series: 'rabbitmq_detailed_queue_consumers{queue="audit.writer", vhost="paddock"}'
+        values: "1 1 0 0 0 0 0 0 0 0 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PaddockAuditWriterLag
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: PaddockAuditWriterLag
+        exp_alerts:
+          - exp_labels: { severity: critical, queue: audit.writer, vhost: paddock }
+            exp_annotations:
+              summary: "The audit writer lags more than 10 minutes"
+              description: "audit.writer has held at least 4 ready messages for 10 minutes."
+      - eval_time: 7m
+        alertname: PaddockAuditWriterNotConsuming
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "No audit writer consumes audit.writer"
+              description: "audit.writer has had no consumer for 5 minutes; audit events wait in RabbitMQ."
+
+  - name: OpenBao sealed, OSV stale, backups and certificates
+    interval: 1m
+    input_series:
+      - series: 'paddock_openbao_sealed{role="paddock-worker"}'
+        values: "0 1 1 1"
+      - series: 'paddock_osv_stale{role="paddock-worker"}'
+        values: "1"
+      # At 27 h: postgres 25 h old (fine), fleet never backed up (0).
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="postgres", role="paddock-worker"}'
+        values: "7200x1620"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", role="paddock-worker"}'
+        values: "0x1620"
+      - series: 'paddock_tls_certificate_expiry_timestamp_seconds{host="admin.example.org", role="paddock-worker"}'
+        values: "864000"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PaddockOpenBaoSealed
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "OpenBao is sealed"
+              description: "Bundles, commands and the audit seal stop until three custodians unseal OpenBao (docs/operations/openbao.md)."
+      - eval_time: 0m
+        alertname: PaddockOSVStale
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Ubuntu's vulnerability data is stale"
+              description: "The OSV data has not been updated for 3 days (docs/operations/vulnerability-data.md)."
+      - eval_time: 27h
+        alertname: PaddockBackupStale
+        exp_alerts:
+          - exp_labels: { severity: critical, kind: fleet }
+            exp_annotations:
+              summary: "No fleet backup for more than 26 hours"
+              description: "The newest fleet backup in the backup bucket is older than 26 hours (docs/operations/restore.md)."
+      - eval_time: 0m
+        alertname: PaddockCertificateExpiry
+        exp_alerts:
+          - exp_labels: { severity: warning, host: admin.example.org }
+            exp_annotations:
+              summary: "The certificate of admin.example.org expires within 14 days"
+              description: "Caddy has not renewed it; check its ACME logs and that port 80 is reachable."
+
+  - name: series that are never set
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_kinds{role="paddock-worker"}'
+        values: "4x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", role="paddock-worker"}'
+        values: "0x70"
+      - series: 'up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x70"
+      - series: 'paddock_tls_probe_hosts{role="paddock-worker"}'
+        values: "5x70"
+      - series: 'paddock_tls_certificate_expiry_timestamp_seconds{host="admin.example.org", role="paddock-worker"}'
+        values: "9999999999x70"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PaddockBackupAgeMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockBackupAgeMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The age of some backups is unknown"
+              description: "The worker exports the age of fewer backup kinds than configured; check its log and its backup bucket credential."
+      - eval_time: 65m
+        alertname: PaddockOpenBaoHealthMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "OpenBao's seal status is unknown"
+              description: "The worker runs but exports no OpenBao health."
+      - eval_time: 65m
+        alertname: PaddockCertificateExpiryMissing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "The expiry of some public certificates is unknown"
+              description: "The worker probes more hostnames than it exports a certificate expiry for."
+
+  - name: complete series and a host without a worker stay silent
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_kinds{role="paddock-worker"}'
+        values: "4x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="postgres", role="paddock-worker"}'
+        values: "1x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="authentik", role="paddock-worker"}'
+        values: "1x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="openbao", role="paddock-worker"}'
+        values: "1x70"
+      - series: 'paddock_backup_last_success_timestamp_seconds{kind="fleet", role="paddock-worker"}'
+        values: "1x70"
+      - series: 'paddock_tls_probe_hosts{role="paddock-worker"}'
+        values: "0x70"
+      - series: 'up{job="paddock-audit", role="paddock-audit-writer", instance="paddock-audit-writer:9090"}'
+        values: "1x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockBackupAgeMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockOpenBaoHealthMissing
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: PaddockCertificateExpiryMissing
+        exp_alerts: []
+
+  # PDK-015: the paddock archive stops at 10m (lag > 15 min from 26m on), authentik keeps archiving.
+  - name: a stalled WAL archive fires after 15 minutes of lag for 10 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+        values: "0+60x10 600x50"
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="authentik", role="paddock-worker"}'
+        values: "0+60x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PaddockWALArchiveLag
+        exp_alerts: []
+      - eval_time: 34m
+        alertname: PaddockWALArchiveLag
+        exp_alerts: []
+      - eval_time: 37m
+        alertname: PaddockWALArchiveLag
+        exp_alerts:
+          - exp_labels: { severity: critical, stanza: paddock }
+            exp_annotations:
+              summary: "The WAL archive of paddock lags by more than 15 minutes"
+              description: "No WAL segment of the paddock database has reached the backup bucket for 15 minutes; check the pgbackrest container and its spool volume (docs/operations/restore.md)."
+
+  - name: a WAL archive age that is never set
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_wal_stanzas{role="paddock-worker"}'
+        values: "2x60"
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+        values: "0+60x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PaddockWALArchiveLagMissing
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: PaddockWALArchiveLagMissing
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "The WAL archive lag of some databases is unknown"
+              description: "The worker exports the WAL archive age of fewer stanzas than configured; check its log and its backup bucket credential."
+
+  - name: complete WAL archive ages stay silent
+    interval: 1m
+    input_series:
+      - series: 'paddock_backup_wal_stanzas{role="paddock-worker"}'
+        values: "2x60"
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="paddock", role="paddock-worker"}'
+        values: "0+60x60"
+      - series: 'paddock_backup_wal_last_archived_timestamp_seconds{stanza="authentik", role="paddock-worker"}'
+        values: "0+60x60"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: PaddockWALArchiveLagMissing
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: PaddockWALArchiveLag
+        exp_alerts: []

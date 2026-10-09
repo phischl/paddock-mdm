@@ -654,6 +654,28 @@ services:
       openbao:
         condition: service_healthy
 
+  # Metrics and alert rules (plan M6a decision 8, docs/operations/monitoring.md): `--profile observability`. Not
+  # published; Alertmanager and Grafana are not bundled.
+  prometheus:
+    image: ${PROMETHEUS_IMAGE}
+    profiles: [observability]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./prometheus/scrape/controlplane.yml:/etc/prometheus/scrape/controlplane.yml:ro
+      - prometheus-data:/prometheus
+    networks: [cp]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
 networks:
   cp: {}
   audit-index: {}
@@ -677,6 +699,7 @@ volumes:
   fleet-mysql-data: {}
   fleet-redis-data: {}
   fleet-vulndb: {}
+  prometheus-data: {}
 
 secrets:
   postgres_superuser_password: { file: ./.secrets/postgres_superuser_password }

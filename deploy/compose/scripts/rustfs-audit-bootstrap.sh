@@ -65,7 +65,7 @@ policy=$(cat <<JSON
     },
     {
       "Effect": "Allow",
-      "Action": ["s3:ListBucket"],
+      "Action": ["s3:ListBucket", "s3:GetBucketObjectLockConfiguration"],
       "Resource": ["arn:aws:s3:::$BUCKET"]
     }
   ]

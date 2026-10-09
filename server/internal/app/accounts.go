@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -217,6 +218,15 @@ type Me struct {
 	Role         principal.Role
 	Organization *pgstore.Organization
 	Locale       string
+	// APIToken is the token of a request made with an API token (nil for sessions, plan M6c decision 10).
+	APIToken *MeAPIToken
+}
+
+// MeAPIToken is the API token a request authenticated with.
+type MeAPIToken struct {
+	ID        uuid.UUID
+	Name      string
+	ExpiresAt time.Time
 }
 
 // GetMe returns the signed-in administrator.
@@ -226,6 +236,9 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 		return Me{}, problem.Unauthenticated
 	}
 	me := Me{ID: p.ID, Role: p.Role}
+	if p.APITokenID != uuid.Nil {
+		return a.tokenMe(ctx, p)
+	}
 	if p.Kind == principal.KindPlatformAdmin {
 		err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 			acc, err := q.GetPlatformAdmin(ctx, p.ID)
@@ -252,8 +265,28 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 	return me, unauthenticatedIfGone(err)
 }
 
-// SupportedLocales are the catalogs of the portal (M0: English only).
-var SupportedLocales = []string{"en"}
+// tokenMe answers GET /api/v1/me for a request made with an API token from the token, not from the account of the
+// administrator who created it.
+func (a *Accounts) tokenMe(ctx context.Context, p principal.Principal) (Me, error) {
+	me := Me{ID: p.APITokenID, Username: p.APITokenName, DisplayName: p.APITokenName, Role: p.Role, Locale: "en"}
+	err := a.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		tok, err := q.GetApiToken(ctx, p.APITokenID)
+		if err != nil {
+			return notFound(err)
+		}
+		org, err := q.GetOrganization(ctx, p.OrganizationID)
+		if err != nil {
+			return notFound(err)
+		}
+		me.Organization = &org
+		me.APIToken = &MeAPIToken{ID: tok.ID, Name: tok.Name, ExpiresAt: tok.ExpiresAt}
+		return nil
+	})
+	return me, unauthenticatedIfGone(err)
+}
+
+// SupportedLocales are the catalogs of the portal (plan M6b decision 2: English and German).
+var SupportedLocales = []string{"en", "de"}
 
 // UpdateLocale stores the administrator's locale.
 func (a *Accounts) UpdateLocale(ctx context.Context, locale string) (Me, error) {
@@ -264,6 +297,9 @@ func (a *Accounts) UpdateLocale(ctx context.Context, locale string) (Me, error) 
 	supported := false
 	for _, l := range SupportedLocales {
 		supported = supported || l == locale
+	}
+	if p.APITokenID != uuid.Nil {
+		return Me{}, problem.Forbidden.WithDetail("an API token has no account settings")
 	}
 	if !supported {
 		return Me{}, problem.InvalidRequest.WithDetail("unsupported locale")

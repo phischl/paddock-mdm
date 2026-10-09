@@ -330,6 +330,8 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 	d := admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
 		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, nil, "https://device.test"),
+		APITokens:     app.NewAPITokens(runner, orgPool),
+		Declarative:   app.NewDeclarative(runner, orgPool),
 		Devices:       app.NewDevices(runner, orgPool),
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, idp),
@@ -693,11 +695,14 @@ func TestRoleBoundaries(t *testing.T) {
 	if m.Organization == nil || m.Organization.Id != e.acme || m.Role != adminapi.MeRoleOrgAdmin {
 		t.Fatalf("org /me: %s", me.body)
 	}
-	locale := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "en"}})
-	if locale.status != http.StatusOK {
-		t.Fatalf("set locale: %d", locale.status)
+	for _, l := range []string{"de", "en"} {
+		locale := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": l}})
+		locale.decode(t, &m)
+		if locale.status != http.StatusOK || string(m.Locale) != l {
+			t.Fatalf("set locale %s: %d %s", l, locale.status, locale.body)
+		}
 	}
-	bad := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "de"}, skipReqCheck: true})
+	bad := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "fr"}, skipReqCheck: true})
 	if bad.status != http.StatusBadRequest {
 		t.Fatalf("unsupported locale: %d", bad.status)
 	}
@@ -768,7 +773,8 @@ func TestOrganizationProvisioning(t *testing.T) {
 	}
 	e.expectEvent(invalid, "organization.created:failure:invalid_request")
 
-	list := e.do(call{method: "GET", path: "/api/platform/v1/organizations", cookie: root})
+	// Searched by slug: the shared test database holds the organizations of every package, more than one page.
+	list := e.do(call{method: "GET", path: "/api/platform/v1/organizations?q=" + slug, cookie: root})
 	if list.status != http.StatusOK || !strings.Contains(string(list.body), slug) {
 		t.Fatalf("list: %d", list.status)
 	}

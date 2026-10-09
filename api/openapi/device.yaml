@@ -156,7 +156,8 @@ paths:
         A LUKS header (luks_header) is sealed on the device — gzip, AES-256-GCM with a random key and the escrow ID
         as additional data, the key RSA-OAEP-wrapped to escrow-wrap — and announced with wrapped_dek, nonce, sha256
         and size of the sealed object instead of a ciphertext. The answer carries upload_url, a presigned PUT of the
-        object key the server chose (org/<org>/devices/<device>/luks-header/<generation>.bin, valid 10 minutes);
+        object key the server chose (org/<org>/devices/<device>/luks-header/<volume>/<generation>.bin, without
+        <volume>/ for a header without a volume, valid 10 minutes); header generations count across all volumes;
         the device uploads the object there, and the worker marks it stored once size and SHA-256 match.
       parameters:
         - $ref: "#/components/parameters/Device"
@@ -212,7 +213,10 @@ paths:
                 type: object
                 required: [status]
                 properties:
-                  status: { type: string, enum: [pending, stored, failed] }
+                  status:
+                    type: string
+                    enum: [pending, stored, failed, refused]
+                    description: "refused: a luks_header of a 33rd distinct volume of the device (PDK-009); not retried for 24 h."
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -435,6 +439,7 @@ components:
         nonce: { type: string, description: "luks_header only (required): standard base64 of the 12-byte AES-GCM nonce." }
         sha256: { type: string, description: "luks_header only (required): hex SHA-256 of the sealed object." }
         size: { type: integer, format: int64, description: "luks_header only (required): bytes of the sealed object, at most 32 MiB." }
+        volume: { type: string, format: uuid, description: "luks_header only (optional): lowercase LUKS UUID of the volume (PDK-009); without it the header is the root volume's." }
     CommandResult:
       type: object
       required: [status]

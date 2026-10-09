@@ -1,0 +1,30 @@
+# Scrape targets of the control plane (prometheus.yml). Every role serves /metrics on its ops port 9090 on the
+# internal network; one static target per role, so that a stopped role stays a target with up == 0
+# (alert PaddockRoleDown). With several replicas of a role, the service name reaches one of them per scrape.
+scrape_configs:
+  - job_name: paddock
+    static_configs:
+      - targets: ["paddock-api:9090"]
+        labels: { role: paddock-api }
+      - targets: ["paddock-gateway:9090"]
+        labels: { role: paddock-gateway }
+      - targets: ["paddock-worker:9090"]
+        labels: { role: paddock-worker }
+      - targets: ["paddock-compiler:9090"]
+        labels: { role: paddock-compiler }
+      - targets: ["paddock-outbox-relay:9090"]
+        labels: { role: paddock-outbox-relay }
+      - targets: ["paddock-escrow-reader:9090"]
+        labels: { role: paddock-escrow-reader }
+      - targets: ["paddock-revocation-issuer:9090"]
+        labels: { role: paddock-revocation-issuer }
+
+  # Queue depths and consumers of the vhost paddock (rabbitmq_prometheus plugin).
+  - job_name: rabbitmq
+    metrics_path: /metrics/detailed
+    params:
+      vhost: [paddock]
+      family: [queue_coarse_metrics, queue_consumer_count]
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+        labels: { role: rabbitmq }

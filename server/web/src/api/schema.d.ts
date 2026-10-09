@@ -248,6 +248,140 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/api-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["listApiTokens"];
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator; requires a step-up within the last 5 minutes (403 step_up_required), so an
+         *     API token cannot create tokens. The role may not be above the creator's: org_admin creates any organization
+         *     role, org_operator creates org_operator and org_auditor (403 forbidden). expires_at lies between 1 hour and
+         *     365 days ahead. The response carries the secret exactly once; only its SHA-256 is stored.
+         */
+        post: operations["createApiToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getApiToken"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-tokens/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin (any token of the organization), org_operator (only tokens it created; otherwise 403
+         *     forbidden). A request made with an API token cannot revoke (403 forbidden). The token is refused from its
+         *     next request on. Revoking a revoked token is 409 invalid_state.
+         */
+        post: operations["revokeApiToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The organization's declarative configuration as a paddock.v1
+         *     document (api/schema/paddock.v1.json) with every section present, in the key order of the schema.
+         */
+        get: operations["getConfig"];
+        /**
+         * @description Roles: org_admin, org_operator. Applies a paddock.v1 document (at most 1 MiB) in one transaction: a present
+         *     section is authoritative (items not listed are deleted), absent sections are untouched. The rules of the
+         *     per-resource endpoints apply unchanged and abort the whole apply with their problem code, the document path
+         *     in the detail: deleting device groups and changing settings need org_admin (403 forbidden), assigning a full
+         *     profile or changing a profile to full needs a step-up (403 step_up_required; an API token never has one).
+         *     A schema violation is 422 invalid_document listing up to 20 "path: message" pairs. With dry_run=true the
+         *     plan is computed and checked the same way but nothing is applied and nothing is audited. An apply with
+         *     changes records a change set; one without changes records the event with zeros and no change set.
+         *     expected_plan (plan M6c amendment 2026-10-08) is the plan_sha256 of a dry run the client confirmed: when the
+         *     plan computed now differs, the apply is refused with 412 plan_changed (audited as failure) and nothing is
+         *     applied.
+         */
+        put: operations["applyConfig"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. Every apply of PUT /api/v1/config that changed something. */
+        get: operations["listChangeSets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-sets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. */
+        get: operations["getChangeSet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/autoinstall": {
         parameters: {
             query?: never;
@@ -1014,8 +1148,8 @@ export interface paths {
          * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required); each request and approval
          *     needs its own step-up. confirm_hostname must equal the device's hostname. 403 revocation_disabled while
          *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
-         *     Requests a Lock: every keyslot of the device's encrypted root volume is erased and the device reboots; it
-         *     stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
+         *     Requests a Lock: every keyslot of every LUKS volume of the device is erased and the device reboots; its
+         *     root volume stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
          *     the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
          *     administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
          *     open Lock, 409 invalid_state unless the device is active or quarantined.
@@ -1276,8 +1410,10 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Returns a stored LUKS header
-         *     backup of the device, decrypted (the newest generation unless generation is given), as the file
-         *     <hostname>-luks-header-<generation>.img for cryptsetup luksHeaderRestore; confirm_hostname must equal the
+         *     backup of a LUKS volume of the device (the root volume unless volume is given), decrypted (the newest
+         *     generation unless generation is given), as the file <hostname>-luks-header-<volume>-<generation>.img
+         *     (<hostname>-luks-header-<generation>.img for a root header without a volume) for cryptsetup
+         *     luksHeaderRestore; confirm_hostname must equal the
          *     device's hostname. 409 invalid_state when no such generation is stored, 404 not_found once a Destroy of the
          *     device was issued.
          */
@@ -1782,13 +1918,22 @@ export interface components {
             role: "org_admin" | "org_operator" | "org_auditor" | "platform_admin";
             organization: components["schemas"]["MeOrganization"] | null;
             /** @enum {string} */
-            locale: "en";
+            locale: "en" | "de";
             /**
              * @description PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
              *     dead man's switch answer 403 revocation_disabled.
              */
             revocation_enabled: boolean;
             step_up?: components["schemas"]["MeStepUp"];
+            api_token?: components["schemas"]["MeApiToken"];
+        };
+        /** @description The API token the request authenticated with; absent for sessions. */
+        MeApiToken: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            expires_at: string;
         };
         /** @description Development only (PADDOCK_ENV=development; absent in production): the session's last step-up and the step-up timing the server applies, for the acceptance gates. */
         MeStepUp: {
@@ -1804,7 +1949,7 @@ export interface components {
         };
         MeUpdate: {
             /** @enum {string} */
-            locale: "en";
+            locale: "en" | "de";
         };
         DeviceGroup: {
             /** Format: uuid */
@@ -1971,7 +2116,7 @@ export interface components {
         /** @enum {string} */
         AuditOutcome: "success" | "failure" | "denied" | "unknown";
         /** @enum {string} */
-        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous" | "device";
+        AuditActorType: "admin" | "platform_admin" | "system" | "anonymous" | "device" | "api_token";
         AuditActor: {
             type: string;
             id?: string;
@@ -2097,6 +2242,134 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /** @description A paddock.v1 document; its schema is api/schema/paddock.v1.json (JSON Schema draft 2020-12, also printed by paddockctl schema), which the server validates every document against. */
+        ConfigDocument: {
+            [key: string]: unknown;
+        };
+        ConfigPlan: {
+            /** @description In application order; deletions first. */
+            changes: components["schemas"]["ConfigChange"][];
+            created: number;
+            updated: number;
+            deleted: number;
+        };
+        ConfigChange: {
+            /** @description A section of the document, settings as settings.login and settings.updates. */
+            section: string;
+            /** @description The natural key of the item; empty for settings. */
+            key: string;
+            /** @enum {string} */
+            action: "create" | "update" | "delete";
+            /** @description Changed fields; every field for creations and deletions. File content is shown as its SHA-256. */
+            fields: components["schemas"]["ConfigFieldChange"][];
+        };
+        ConfigFieldChange: {
+            name: string;
+            /** @description Value before; null for creations. */
+            before: unknown;
+            /** @description Value after; null for deletions. */
+            after: unknown;
+        };
+        ConfigApplyResult: {
+            dry_run: boolean;
+            /** @description Hex SHA-256 of the plan's canonical JSON; send it as expected_plan to apply exactly this plan. */
+            plan_sha256: string;
+            /**
+             * Format: uuid
+             * @description Null for dry runs and empty plans.
+             */
+            change_set_id: string | null;
+            plan: components["schemas"]["ConfigPlan"];
+        };
+        /** @enum {string} */
+        ChangeSetSource: "session" | "api_token";
+        ChangeSetActor: {
+            type: string;
+            id?: string;
+            display: string;
+        };
+        ChangeSetSummary: {
+            created: number;
+            updated: number;
+            deleted: number;
+            sections: string[];
+        };
+        ChangeSet: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            applied_at: string;
+            actor: components["schemas"]["ChangeSetActor"];
+            source: components["schemas"]["ChangeSetSource"];
+            summary: components["schemas"]["ChangeSetSummary"];
+            plan: components["schemas"]["ConfigPlan"];
+        };
+        ChangeSetPage: {
+            items: components["schemas"]["ChangeSet"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        /** @enum {string} */
+        ApiTokenRole: "org_admin" | "org_operator" | "org_auditor";
+        /** @enum {string} */
+        ApiTokenStatus: "active" | "expired" | "revoked";
+        ApiToken: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description The first 12 characters of the secret (pdk_ and 8). */
+            prefix: string;
+            role: components["schemas"]["ApiTokenRole"];
+            status: components["schemas"]["ApiTokenStatus"];
+            created_by: components["schemas"]["ApiTokenCreator"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /**
+             * Format: date-time
+             * @description Last request made with the token, updated at most once per minute.
+             */
+            last_used_at: string | null;
+            /** Format: date-time */
+            revoked_at: string | null;
+        };
+        ApiTokenCreator: {
+            /** Format: uuid */
+            id: string;
+            display: string;
+        };
+        ApiTokenCreate: {
+            name: string;
+            role: components["schemas"]["ApiTokenRole"];
+            /**
+             * Format: date-time
+             * @description Between 1 hour and 365 days ahead.
+             */
+            expires_at: string;
+        };
+        ApiTokenCreated: {
+            token: components["schemas"]["ApiToken"];
+            /** @description Shown once; keep it like a password. */
+            secret: string;
+        };
+        ApiTokenPage: {
+            items: components["schemas"]["ApiToken"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
         /** @enum {string} */
         DeviceState: "pending" | "active" | "rejected" | "quarantined" | "retired";
         Device: {
@@ -2210,7 +2483,8 @@ export interface components {
         /**
          * @description Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
          *     with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
-         *     header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, both escrowed).
+         *     a header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, escrowed with the
+         *     current header of every LUKS volume, PDK-009).
          * @enum {string}
          */
         DiskState: "not_encrypted" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "escrow_pending" | "compliant";
@@ -2223,8 +2497,33 @@ export interface components {
              * @description Headers: bytes of the sealed object.
              */
             size?: number;
+            /**
+             * Format: uuid
+             * @description Headers: the LUKS UUID of the volume (PDK-009). Absent on a root volume header escrowed before PDK-009 until the device reports its root volume's UUID.
+             */
+            volume?: string;
             /** Format: date-time */
             created_at: string;
+        };
+        /** @description A LUKS volume of the device as its last check-in reports it (PDK-009 decision 4). */
+        DiskVolume: {
+            /** @description LUKS UUID; absent when the device could not read it. */
+            uuid?: string;
+            /** @description The device or detached header file, e.g. /dev/sdb1. */
+            device: string;
+            root: boolean;
+            luks_version?: number;
+            /** @description Kind of every keyslot, sorted. */
+            tokens: string[];
+            keyslots: number;
+            /** @description A header of the current keyslots is stored. */
+            escrowed: boolean;
+            /** @description The newest stored header generation of the volume. */
+            header_generation?: number;
+            /** @description Another volume or the root volume has the same LUKS UUID (a cloned header): not escrowed; a Destroy erases it, a Lock does not. */
+            shared_uuid?: boolean;
+            /** @description The server refused the header: the device escrows the most volumes a revocation token carries (32). */
+            refused?: boolean;
         };
         DiskEncryption: {
             /** @description Null until the device reports its disk. */
@@ -2239,7 +2538,12 @@ export interface components {
              */
             reported_at?: string;
             recovery_keys: components["schemas"]["DiskEscrow"][];
+            /** @description Header generations of every volume, newest first; volume tells them apart. */
             headers: components["schemas"]["DiskEscrow"][];
+            /** @description Every LUKS volume of the device, the root volume first (empty until the device reports them). */
+            volumes: components["schemas"]["DiskVolume"][];
+            /** @description /etc/crypttab entries the device could not classify; they are not escrowed. */
+            unresolved: string[];
             last_keyslot_change?: {
                 /** Format: date-time */
                 at: string;
@@ -2255,6 +2559,11 @@ export interface components {
             confirm_hostname: string;
             /** @description Header generation; the newest stored one if absent. */
             generation?: number;
+            /**
+             * Format: uuid
+             * @description LUKS UUID of the volume (PDK-009); the root volume if absent.
+             */
+            volume?: string;
         };
         LocalAdminRevealRequest: {
             confirm_hostname: string;
@@ -2494,7 +2803,7 @@ export interface components {
             finished_at?: string;
             /** @description Why the revocation-issuer rejected or failed it, e.g. limit_admin_hour. */
             rejection?: string;
-            /** @description The device's confirmation, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
+            /** @description The device's confirmation: erased (true only if every LUKS volume has no keyslot left and unresolved is empty), slots_before and slots_after (sums over the reported volumes), volumes (one {device, slots_before, slots_after, erased} per reported volume, failed ones included, the root volume last) and unresolved (the crypttab entries the device could not erase with certainty; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
             result?: {
                 [key: string]: unknown;
             };
@@ -3149,6 +3458,10 @@ export interface components {
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        ChangeSetSort: "applied_at" | "-applied_at";
+        /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
+        ApiTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at" | "last_used_at" | "-last_used_at";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         ManagedFileSort: "path" | "-path" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         ManagedUnitSort: "unit" | "-unit" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
@@ -3682,6 +3995,243 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnrollmentToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listApiTokens: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Tokens never used sort last. The id is the tie-breaker. */
+                sort?: components["parameters"]["ApiTokenSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                status?: components["schemas"]["ApiTokenStatus"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of API tokens. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiTokenPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createApiToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApiTokenCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiTokenCreated"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getApiToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The API token (without secret). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    revokeApiToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiToken"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The configuration document. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigDocument"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    applyConfig: {
+        parameters: {
+            query?: {
+                /** @description Compute and check the plan without applying it. */
+                dry_run?: boolean;
+                /** @description plan_sha256 of the confirmed dry run; a different plan is refused with 412 plan_changed. */
+                expected_plan?: string;
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigDocument"];
+            };
+        };
+        responses: {
+            /** @description The plan, applied unless dry_run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigApplyResult"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    listChangeSets: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["ChangeSetSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Repeatable. */
+                source?: components["schemas"]["ChangeSetSource"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of change sets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSetPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getChangeSet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The change set with its plan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSet"];
                 };
             };
             400: components["responses"]["Problem"];

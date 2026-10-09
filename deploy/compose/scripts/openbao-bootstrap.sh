@@ -170,7 +170,15 @@ path "transit/keys/audit-chain" {
 }
 EOF
 
-for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer; do
+# Raft snapshots for the backup (plan M6a decision 5); nothing else.
+bao policy write paddock-backup - >/dev/null <<'EOF'
+path "sys/storage/raft/snapshot" {
+  capabilities = ["read"]
+}
+EOF
+
+for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer \
+  paddock-backup; do
   bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h \
     secret_id_ttl=0 token_no_default_policy=false >/dev/null
   dir="$SECRETS_DIR/approle/$role"

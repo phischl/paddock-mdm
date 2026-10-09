@@ -1,0 +1,6 @@
+# Scrape target of the audit domain (prometheus.yml): the audit writer's ops port.
+scrape_configs:
+  - job_name: paddock-audit
+    static_configs:
+      - targets: ["paddock-audit-writer:9090"]
+        labels: { role: paddock-audit-writer }

@@ -11,6 +11,31 @@ import (
 	"github.com/google/uuid"
 )
 
+const countDeviceGroupMembers = `-- name: CountDeviceGroupMembers :one
+SELECT count(*) FROM device_group_member WHERE device_group_id = $1
+`
+
+func (q *Queries) CountDeviceGroupMembers(ctx context.Context, id uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDeviceGroupMembers, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countDeviceGroupScopedRows = `-- name: CountDeviceGroupScopedRows :one
+SELECT ((SELECT count(*) FROM managed_file f WHERE f.device_group_id = $1::uuid)
+      + (SELECT count(*) FROM managed_unit u WHERE u.device_group_id = $1::uuid)
+      + (SELECT count(*) FROM package_hold h WHERE h.device_group_id = $1::uuid)
+      + (SELECT count(*) FROM profile_assignment a WHERE a.device_group_id = $1::uuid))::bigint AS scoped
+`
+
+func (q *Queries) CountDeviceGroupScopedRows(ctx context.Context, id uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDeviceGroupScopedRows, id)
+	var scoped int64
+	err := row.Scan(&scoped)
+	return scoped, err
+}
+
 const countDeviceGroups = `-- name: CountDeviceGroups :one
 SELECT count(*) FROM (
   SELECT 1 FROM device_group
@@ -95,6 +120,38 @@ func (q *Queries) InsertDeviceGroup(ctx context.Context, arg InsertDeviceGroupPa
 	return i, err
 }
 
+const listAllDeviceGroups = `-- name: ListAllDeviceGroups :many
+SELECT id, organization_id, name, description, created_at, updated_at FROM device_group ORDER BY name, id
+`
+
+// Declarative configuration (plan M6c decision 16): every device group of the organization.
+func (q *Queries) ListAllDeviceGroups(ctx context.Context) ([]DeviceGroup, error) {
+	rows, err := q.db.Query(ctx, listAllDeviceGroups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeviceGroup{}
+	for rows.Next() {
+		var i DeviceGroup
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.Name,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeviceGroups = `-- name: ListDeviceGroups :many
 
 SELECT id, organization_id, name, description, created_at, updated_at FROM device_group
@@ -151,6 +208,19 @@ func (q *Queries) ListDeviceGroups(ctx context.Context, arg ListDeviceGroupsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockDeviceGroup = `-- name: LockDeviceGroup :one
+SELECT id FROM device_group WHERE id = $1 FOR UPDATE
+`
+
+// Declarative configuration (review 3 of PDK-008): the deletion of a device group locks it, so that no scoped row or
+// member can be added until the transaction ends, and then counts what still references it.
+func (q *Queries) LockDeviceGroup(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lockDeviceGroup, id)
+	var id_2 uuid.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const updateDeviceGroup = `-- name: UpdateDeviceGroup :one

@@ -46,6 +46,7 @@ func (f *fakeArtifactStore) Put(_ context.Context, key, _, _ string, body []byte
 type releaseHarness struct {
 	releases *app.AgentReleases
 	reports  *app.DeviceReports
+	runner   *app.ActionRunner
 	store    *fakeArtifactStore
 	priv     minisign.PrivateKey
 	super    *pgx.Conn
@@ -79,7 +80,7 @@ func newReleaseHarness(t *testing.T, development bool) releaseHarness {
 	verify := app.NewReleaseVerifier(pub)
 	return releaseHarness{
 		releases: app.NewAgentReleases(runner, platform, store, verify, verify, development),
-		reports:  app.NewDeviceReports(runner, worker), store: store, priv: priv, super: super,
+		reports:  app.NewDeviceReports(runner, worker), runner: runner, store: store, priv: priv, super: super,
 	}
 }
 

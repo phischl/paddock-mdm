@@ -1,13 +1,16 @@
 import { expect, type Page } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, expectAdminStartPage, watchCSP } from './checks'
+import { expectAccessible, expectAdminStartPage, mainNav, openUserMenu, watchCSP } from './checks'
 import { test } from './cleanup'
 
 test('organization admin manages a device group and sees the audit trail', async ({ page, cleanup }) => {
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
   await expectAdminStartPage(page)
+  await openUserMenu(page)
   await expect(page.getByTestId('user-role')).toHaveText('Organization administrator')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('user-role')).toBeHidden()
   await expectAccessible(page)
 
   const name = `E2E ${Date.now()}`
@@ -50,7 +53,7 @@ test('organization admin manages a device group and sees the audit trail', async
 
   // The audit pipeline is asynchronous (outbox → RabbitMQ → audit writer): poll the audit page, narrowed to this
   // test's group by the search.
-  await page.getByRole('link', { name: 'Audit log' }).click()
+  await mainNav(page).getByRole('link', { name: 'Audit log' }).click()
   await expect(page).toHaveURL(/\/audit$/)
   await page.goto('/audit?q=' + encodeURIComponent(name))
   const expected = [
@@ -154,7 +157,7 @@ test('auditor sees the audit log but cannot create device groups', async ({ page
   await expect(page).toHaveURL(/\/audit$/)
   await expect(page.getByTestId('audit-table')).toBeVisible()
   await expectAccessible(page)
-  await page.getByRole('link', { name: 'Device groups' }).click()
+  await mainNav(page).getByRole('link', { name: 'Device groups' }).click()
   await expect(page.getByRole('heading', { name: 'Device groups' })).toBeVisible()
   await expect(page.getByTestId('create-device-group')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Edit / })).toHaveCount(0)

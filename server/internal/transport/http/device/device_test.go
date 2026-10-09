@@ -829,6 +829,8 @@ func TestEscrowHeader(t *testing.T) {
 		"size":        func(b map[string]any) { b["size"] = 32<<20 + 1 },
 		"no size":     func(b map[string]any) { delete(b, "size") },
 		"wrapped_dek": func(b map[string]any) { b["wrapped_dek"] = "%%%" },
+		"volume":      func(b map[string]any) { b["volume"] = "/dev/sdb1" },
+		"volume case": func(b map[string]any) { b["volume"] = "0D8F4C62-0000-4000-8000-0000000000BB" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := map[string]any{}
@@ -840,4 +842,35 @@ func TestEscrowHeader(t *testing.T) {
 			e.expectProblem(r, http.StatusBadRequest, "invalid_request")
 		})
 	}
+}
+
+// TestEscrowHeaderVolume (PDK-009 decision 1): a header with a volume gets the object key below the volume's UUID and
+// is published with it; a secret with a volume is refused.
+func TestEscrowHeaderVolume(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	const volume = "0d8f4c62-0000-4000-8000-0000000000bb"
+	body := map[string]any{"escrow_id": uuid.Must(uuid.NewV7()).String(), "kind": "luks_header", "generation": 4, "key_version": 1,
+		"volume":      volume,
+		"wrapped_dek": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 512)),
+		"nonce":       base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{2}, 12)),
+		"sha256":      strings.Repeat("ab", 32), "size": 100}
+	r := e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: body})
+	key := "org/" + e.org.String() + "/devices/" + id.String() + "/luks-header/" + volume + "/4.bin"
+	var accepted struct {
+		UploadURL string `json:"upload_url"`
+	}
+	if err := json.Unmarshal(r.body, &accepted); err != nil || r.status != http.StatusAccepted ||
+		accepted.UploadURL != "https://bundles.test/paddock-escrow/"+key+"?X-Amz-Expires=600" {
+		t.Fatalf("header: %d %s", r.status, r.body)
+	}
+	var in ingest.Escrow
+	if err := json.Unmarshal(e.pub.last(t).Body, &in); err != nil || in.ObjectKey != key || in.Volume == nil || in.Volume.String() != volume {
+		t.Fatalf("published %+v", in)
+	}
+	secret := map[string]any{"escrow_id": uuid.Must(uuid.NewV7()).String(), "kind": "luks_recovery_key", "generation": 1, "key_version": 1,
+		"ciphertext": base64.StdEncoding.EncodeToString([]byte("x")), "volume": volume}
+	e.expectProblem(e.send(c, request{method: "POST", path: "/v1/escrow", device: id.String(), body: secret, skipReqCheck: true}),
+		http.StatusBadRequest, "invalid_request")
 }

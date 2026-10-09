@@ -234,6 +234,34 @@ func TestCompileAffectsExactlyTheChangedDevices(t *testing.T) {
 	}
 }
 
+// TestForcedStateChangePublishesUnchangedContent: a forced state change publishes a new bundle version even when the
+// content equals the latest bundle (plan M6c decision 19, restore after a database restore), and only for the devices
+// it targets; a plain one does not.
+func TestForcedStateChangePublishesUnchangedContent(t *testing.T) {
+	w := newWorld(t)
+	d1, d2 := w.device("active", w.g1), w.device("active", w.g2)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if w.version(d1) != 1 || w.version(d2) != 1 {
+		t.Fatalf("versions after two plain compiles: %d %d", w.version(d1), w.version(d2))
+	}
+	// A restore bumped bundle_seq beyond what devices applied.
+	w.exec("UPDATE device SET bundle_seq = bundle_seq + 1000 WHERE id = $1", d1)
+	err := w.comp.Compile(context.Background(), []statechange.Event{
+		{OrganizationID: w.org, Scope: statechange.ScopeDeviceGroup, ID: w.g1, Force: true},
+		{OrganizationID: w.org, Scope: statechange.ScopeDevice, ID: d2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.version(d1) != 1002 || w.version(d2) != 1 {
+		t.Fatalf("versions after the forced compile: %d %d, want 1002 1", w.version(d1), w.version(d2))
+	}
+	if b := w.fetch(d1); b.BundleVersion != 1002 || resourceIDs(b) != "time" {
+		t.Fatalf("forced bundle %s v%d", resourceIDs(b), b.BundleVersion)
+	}
+}
+
 func TestUploadFailureLeavesNoGap(t *testing.T) {
 	w := newWorld(t)
 	d := w.device("active")

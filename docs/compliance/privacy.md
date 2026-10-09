@@ -25,8 +25,10 @@ Fleet's features that could collect such data are switched off and kept off by `
 | What | When | Stored |
 | --- | --- | --- |
 | Enrollment: hostname, hardware UUID (`/sys/class/dmi/id/product_uuid`), machine ID, `/etc/os-release`, agent version, public identity key | once | device record |
-| Check-in: applied bundle version, agent version, bundle schema versions, architecture, health (agent status and last error, sudo implementation, disk encryption state with the kinds of the LUKS keyslots) | every check-in (5 minutes) | device status |
+| Check-in: applied bundle version, agent version, bundle schema versions, architecture, health (agent status and last error, sudo implementation, disk encryption state with the kinds of the LUKS keyslots and, per encrypted volume, its device path, LUKS UUID and keyslot count, the capabilities of `paddock-revoke`), whether a reboot is required | every check-in (5 minutes) | device status |
 | Events of the agent's own work: bundle applied or rejected (resource IDs and error messages), configuration drift corrected, agent updated or rolled back, login and sudo configuration applied or failed, locks and suspensions applied | when they happen | audit log |
+| Update runs (`updates.run`): kind (security or regular), start and end, result, number of upgraded packages, held-back package names, reboot required | after each run | audit log, device update status |
+| Revocation results: per volume the device path and the keyslot counts before and after, unresolved crypttab entries, refusals with their reason | after a Lock, Destroy or refused token | audit log, revocation request |
 | Tamper events: changed sudoers files or privileged group members (file names, user names, hashes), changed protected files (file name), changed LUKS keyslots (kinds), changed local administrator account (which field), a stopped `orbit.service` (unit name) | when they happen | audit log |
 | `session.login`: the directory user's name and the time, at most once per user and 24 hours | at a directory user's login | device_user_seen (no session, terminal or remote host) |
 | `local_admin.login`: the PAM service and the time of a login of the managed local administrator | at such a login | audit log (no terminal or remote host) |
@@ -93,3 +95,10 @@ collected from devices. Findings Ubuntu has not rated show severity "unknown".
 Organization members see the stored inventory of their organization's devices in the portal (*Software* and
 *Vulnerabilities*); reading it is not audited. Fleet's own UI and API are not published; only platform operators reach
 them, through a local port forward (`docs/operations/fleet.md`).
+
+## Administrators
+
+Paddock stores of its administrators the account (user name, display name, organization, role, portal language),
+and in every audit event of their actions the actor's name, the client IP address and whether the action had a
+step-up. API tokens (`paddockctl`) are stored only as hashes, with their name, creator and expiry. Audit events are kept for
+the retention of the WORM store (at least 400 days) and cannot be deleted earlier.

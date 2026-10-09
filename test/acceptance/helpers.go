@@ -37,6 +37,12 @@ const (
 // (plan M3b decision 2).
 func parallelCases(t *testing.T) chan struct{} {
 	t.Helper()
+	return make(chan struct{}, parallelism(t))
+}
+
+// parallelism is the number of parallel cases of a gate (PADDOCK_ACCEPTANCE_PARALLEL, default 8).
+func parallelism(t *testing.T) int {
+	t.Helper()
 	n := 8
 	if v := os.Getenv("PADDOCK_ACCEPTANCE_PARALLEL"); v != "" {
 		var err error
@@ -44,7 +50,7 @@ func parallelCases(t *testing.T) chan struct{} {
 			t.Fatalf("PADDOCK_ACCEPTANCE_PARALLEL=%q: want a positive integer", v)
 		}
 	}
-	return make(chan struct{}, n)
+	return n
 }
 
 func testContext(t *testing.T, d time.Duration) context.Context {
@@ -328,7 +334,9 @@ func expectError(t *testing.T, op string, err error) {
 // stepUp runs a step-up of p as user and fails the test unless the outcome matches ok.
 func stepUp(t *testing.T, p *env.Portal, user string, ok bool) {
 	t.Helper()
-	final, err := p.StepUp(testContext(t, 3*time.Minute), user, "/settings")
+	// A user's TOTP generator hands out one code per 30 s step (Authentik refuses a reused code), so the parallel cases
+	// of a gate that step up as the same user queue for it: up to one step per parallel case before the flow starts.
+	final, err := p.StepUp(testContext(t, 3*time.Minute+time.Duration(parallelism(t))*30*time.Second), user, "/settings")
 	if err != nil {
 		t.Fatalf("step-up as %s: %v", user, err)
 	}

@@ -1,0 +1,158 @@
+# Alert rules of the Compose profile observability (plan M6a decision 8, architecture §19, docs/operations/monitoring.md).
+# Each host's Prometheus loads all rules; a rule whose series a host does not scrape stays silent there. Thresholds are
+# the plan's; tests: prometheus/alerts_test.yml (`make lint-prometheus`).
+groups:
+  - name: paddock-roles
+    rules:
+      - alert: PaddockRoleDown
+        expr: up{role!=""} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.role }} is down"
+          description: "Prometheus cannot scrape {{ $labels.role }} ({{ $labels.instance }}) for 2 minutes."
+
+  - name: paddock-rabbitmq
+    rules:
+      - alert: PaddockAuditDLQ
+        expr: max by (queue) (rabbitmq_detailed_queue_messages{queue="dlq.audit.writer"}) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit events in the dead-letter queue"
+          description: "{{ $value }} audit events were dead-lettered; they are not in the audit log until replayed."
+      - alert: PaddockDLQ
+        expr: max by (queue) (rabbitmq_detailed_queue_messages{queue=~"dlq\\..+", queue!="dlq.audit.writer"}) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Messages in {{ $labels.queue }}"
+          description: "{{ $value }} messages were dead-lettered to {{ $labels.queue }}."
+      # The writer drains audit.writer within seconds; a backlog that never emptied for 10 minutes is a lag of more than
+      # 10 minutes. Observed on the control plane, so it also covers a writer on the audit host.
+      - alert: PaddockAuditWriterLag
+        expr: min_over_time(rabbitmq_detailed_queue_messages_ready{queue="audit.writer"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "The audit writer lags more than 10 minutes"
+          description: "audit.writer has held at least {{ $value }} ready messages for 10 minutes."
+      - alert: PaddockAuditWriterNotConsuming
+        expr: max(rabbitmq_detailed_queue_consumers{queue="audit.writer"}) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No audit writer consumes audit.writer"
+          description: "audit.writer has had no consumer for 5 minutes; audit events wait in RabbitMQ."
+
+  - name: paddock-control-plane
+    rules:
+      - alert: PaddockCompileLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(paddock_compiler_latency_seconds_bucket[10m]))) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bundle compilation p95 above 30 s"
+          description: "The 95th percentile from state change to published bundle is {{ $value | humanizeDuration }}."
+      - alert: PaddockGateway5xx
+        expr: |
+          sum(rate(paddock_gateway_requests_total{code=~"5.."}[5m]))
+            / sum(rate(paddock_gateway_requests_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Device API answers more than 5 % with 5xx"
+          description: "{{ $value | humanizePercentage }} of the device API's responses are server errors."
+      - alert: PaddockOpenBaoSealed
+        expr: max(paddock_openbao_sealed) == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenBao is sealed"
+          description: "Bundles, commands and the audit seal stop until three custodians unseal OpenBao (docs/operations/openbao.md)."
+      - alert: PaddockOpenBaoUnreachable
+        expr: min(paddock_openbao_reachable) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenBao is unreachable"
+          description: "The worker cannot reach OpenBao's health endpoint."
+      - alert: PaddockOSVStale
+        expr: max(paddock_osv_stale) == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ubuntu's vulnerability data is stale"
+          description: "The OSV data has not been updated for 3 days (docs/operations/vulnerability-data.md)."
+      - alert: PaddockBackupStale
+        expr: time() - max by (kind) (paddock_backup_last_success_timestamp_seconds) > 26 * 3600
+        labels:
+          severity: critical
+        annotations:
+          summary: "No {{ $labels.kind }} backup for more than 26 hours"
+          description: "The newest {{ $labels.kind }} backup in the backup bucket is older than 26 hours (docs/operations/restore.md)."
+      # The RPO of the continuous WAL archive is minutes (archive_timeout 60 s, pushed every 2 s); the daily backup
+      # alert above would notice a stalled archive only after a day.
+      - alert: PaddockWALArchiveLag
+        expr: time() - max by (stanza) (paddock_backup_wal_last_archived_timestamp_seconds) > 15 * 60
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The WAL archive of {{ $labels.stanza }} lags by more than 15 minutes"
+          description: "No WAL segment of the {{ $labels.stanza }} database has reached the backup bucket for 15 minutes; check the pgbackrest container and its spool volume (docs/operations/restore.md)."
+      - alert: PaddockCertificateExpiry
+        expr: min by (host) (paddock_tls_certificate_expiry_timestamp_seconds) - time() < 14 * 86400
+        labels:
+          severity: warning
+        annotations:
+          summary: "The certificate of {{ $labels.host }} expires within 14 days"
+          description: "Caddy has not renewed it; check its ACME logs and that port 80 is reachable."
+      # "Never set" companions: a series that never appears (listing the bucket, the health request or the probe fails
+      # from the start) would keep the alerts above silent.
+      - alert: PaddockBackupAgeMissing
+        expr: max(paddock_backup_kinds) > (count(paddock_backup_last_success_timestamp_seconds) or vector(0))
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "The age of some backups is unknown"
+          description: "The worker exports the age of fewer backup kinds than configured; check its log and its backup bucket credential."
+      - alert: PaddockWALArchiveLagMissing
+        expr: max(paddock_backup_wal_stanzas) > (count(paddock_backup_wal_last_archived_timestamp_seconds) or vector(0))
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The WAL archive lag of some databases is unknown"
+          description: "The worker exports the WAL archive age of fewer stanzas than configured; check its log and its backup bucket credential."
+      - alert: PaddockOpenBaoHealthMissing
+        expr: absent(paddock_openbao_reachable) and on() max(up{role="paddock-worker"}) == 1
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenBao's seal status is unknown"
+          description: "The worker runs but exports no OpenBao health."
+      - alert: PaddockCertificateExpiryMissing
+        expr: max(paddock_tls_probe_hosts) > (count(paddock_tls_certificate_expiry_timestamp_seconds) or vector(0))
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The expiry of some public certificates is unknown"
+          description: "The worker probes more hostnames than it exports a certificate expiry for."
+      - alert: PaddockCertificateProbeFailing
+        expr: max by (host) (paddock_tls_probe_success) == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The certificate of {{ $labels.host }} cannot be read"
+          description: "The worker's TLS handshake with Caddy for {{ $labels.host }} fails."

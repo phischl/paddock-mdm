@@ -4,11 +4,14 @@ package s3test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -36,7 +39,7 @@ func Start(t testing.TB, bucket string) *RustFS {
 	t.Helper()
 	ctx := context.Background()
 	r := start(t, bucket)
-	if _, err := r.Root.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: &bucket, ObjectLockEnabledForBucket: aws.Bool(true)}); err != nil {
+	if err := createBucket(ctx, r.Root, &s3.CreateBucketInput{Bucket: &bucket, ObjectLockEnabledForBucket: aws.Bool(true)}, bucketReadyTimeout); err != nil {
 		t.Fatalf("s3test: create bucket: %v", err)
 	}
 	_, err := r.Root.PutObjectLockConfiguration(ctx, &s3.PutObjectLockConfigurationInput{
@@ -58,7 +61,7 @@ func Start(t testing.TB, bucket string) *RustFS {
 func StartPlain(t testing.TB, bucket string) *RustFS {
 	t.Helper()
 	r := start(t, bucket)
-	if _, err := r.Root.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: &bucket}); err != nil {
+	if err := createBucket(context.Background(), r.Root, &s3.CreateBucketInput{Bucket: &bucket}, bucketReadyTimeout); err != nil {
 		t.Fatalf("s3test: create bucket: %v", err)
 	}
 	return r
@@ -76,6 +79,32 @@ func StartVersioned(t testing.TB, bucket string) *RustFS {
 		t.Fatalf("s3test: versioning: %v", err)
 	}
 	return r
+}
+
+// bucketReadyTimeout bounds how long createBucket retries. RustFS answers /health before it accepts S3 requests and,
+// on a loaded machine, answers 503 for longer than the SDK's three attempts (PDK-011).
+const bucketReadyTimeout = time.Minute
+
+// createBucket creates the bucket, retrying while RustFS answers 503 Service Unavailable, at most for timeout. A bucket
+// that an attempt answered with 503 may still have created counts as created.
+func createBucket(ctx context.Context, client *s3.Client, in *s3.CreateBucketInput, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	backoff := 100 * time.Millisecond
+	retried := false
+	for {
+		_, err := client.CreateBucket(ctx, in)
+		var owned *types.BucketAlreadyOwnedByYou
+		if err == nil || (retried && errors.As(err, &owned)) {
+			return nil
+		}
+		var resp *awshttp.ResponseError
+		if !errors.As(err, &resp) || resp.HTTPStatusCode() != http.StatusServiceUnavailable || time.Now().Add(backoff).After(deadline) {
+			return err
+		}
+		retried = true
+		time.Sleep(backoff)
+		backoff = min(2*backoff, 2*time.Second)
+	}
 }
 
 func start(t testing.TB, bucket string) *RustFS {

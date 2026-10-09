@@ -64,6 +64,9 @@ type Recorder interface {
 	// PriorityStateChanged is StateChanged on the compiler's priority lane (user lock and unlock, login suspension,
 	// architecture §9.5).
 	PriorityStateChanged(scope string, id uuid.UUID)
+	// ForcedStateChanged is StateChanged for a recompile that publishes a new bundle version even for devices whose
+	// content did not change (paddock-server admin recompile --all, plan M6c decision 19).
+	ForcedStateChanged(scope string, id uuid.UUID)
 	// CommandIssued queues the command.issued message of a device command inserted by the action; like a state
 	// change it is written to the outbox only when the action succeeds (plan M4a decision 2).
 	CommandIssued(id uuid.UUID)
@@ -151,6 +154,10 @@ func (r *recorder) PriorityStateChanged(scope string, id uuid.UUID) {
 	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id, Priority: true})
 }
 
+func (r *recorder) ForcedStateChanged(scope string, id uuid.UUID) {
+	r.changes = append(r.changes, statechange.Event{OrganizationID: r.org, Scope: scope, ID: id, Force: true})
+}
+
 func (r *recorder) CommandIssued(id uuid.UUID) { r.commands = append(r.commands, id) }
 
 func (r *recorder) RevocationApproved(id uuid.UUID) { r.approved = append(r.approved, id) }
@@ -223,7 +230,12 @@ func (r *ActionRunner) checkStepUp(p principal.Principal) error {
 	return nil
 }
 
+// actorOf derives the audit actor. A request made with an API token is attributed to the token; its created_by leads
+// to the administrator who created it (plan M6c decision 8).
 func actorOf(p principal.Principal) audit.Actor {
+	if p.APITokenID != uuid.Nil {
+		return audit.Actor{Type: audit.ActorAPIToken, ID: p.APITokenID.String(), Display: p.APITokenName, IP: p.IP}
+	}
 	a := audit.Actor{Display: p.Display, IP: p.IP}
 	switch p.Kind {
 	case principal.KindAdmin:
@@ -354,6 +366,97 @@ func (r *ActionRunner) RecordOnce(ctx context.Context, spec ActionSpec,
 		}
 		recorded = true
 		return r.insertFinished(ctx, q, rec, nil)
+	})
+	if err != nil {
+		return false, err
+	}
+	return recorded, nil
+}
+
+// OnceEntry is one event of RecordOnceBatch: its action and the claim of its natural key (RecordOnce). An entry
+// without an audit code records no event: its Claim only applies an unaudited change of the same batch (a session
+// login) and reports false.
+type OnceEntry struct {
+	Spec  ActionSpec
+	Claim func(ctx context.Context, q *pgstore.Queries) (bool, error)
+}
+
+// RecordOnceBatch is RecordOnce for several events in one transaction, so a batch of device events costs one commit
+// instead of one per event (N2, docs/operations/capacity.md): every entry records exactly one event when its key was
+// new. When the batch transaction fails, every entry is recorded on its own with RecordOnce, so one bad event fails
+// alone and the others are recorded exactly once. It reports which entries were recorded and the errors of the
+// entries that failed.
+func (r *ActionRunner) RecordOnceBatch(ctx context.Context, entries []OnceEntry) ([]bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return nil, problem.Unauthenticated
+	}
+	recs := make([]*recorder, len(entries))
+	for i, e := range entries {
+		if e.Spec.Code != "" {
+			recs[i] = r.newRecorder(ctx, p, ScopeOrg, e.Spec)
+		}
+	}
+	var recorded []bool
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		recorded = make([]bool, len(entries))
+		for i, e := range entries {
+			fresh, err := e.Claim(ctx, q)
+			if err != nil {
+				return err
+			}
+			if !fresh || recs[i] == nil {
+				continue
+			}
+			if err := r.insertFinished(ctx, q, recs[i], nil); err != nil {
+				return err
+			}
+			recorded[i] = true
+		}
+		return nil
+	})
+	if err == nil {
+		return recorded, nil
+	}
+	recorded = make([]bool, len(entries))
+	var errs []error
+	for i, e := range entries {
+		if e.Spec.Code == "" {
+			if err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+				_, err := e.Claim(ctx, q)
+				return err
+			}); err != nil {
+				errs = append(errs, fmt.Errorf("entry %d: %w", i, err))
+			}
+			continue
+		}
+		fresh, err := r.RecordOnce(ctx, e.Spec, e.Claim)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("entry %d: %w", i, err))
+			continue
+		}
+		recorded[i] = fresh
+	}
+	return recorded, errors.Join(errs...)
+}
+
+// RecordOnceRefusal is RecordOnce for an event refused with refusal (recorded with its outcome and error code):
+// claim inserts the natural key in the same transaction, and a key that existed records nothing.
+func (r *ActionRunner) RecordOnceRefusal(ctx context.Context, spec ActionSpec, refusal error,
+	claim func(ctx context.Context, q *pgstore.Queries) (bool, error)) (bool, error) {
+	p, ok := principal.From(ctx)
+	if !ok || p.Kind != principal.KindSystem {
+		return false, problem.Unauthenticated
+	}
+	rec := r.newRecorder(ctx, p, ScopeOrg, spec)
+	recorded := false
+	err := r.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		fresh, err := claim(ctx, q)
+		if err != nil || !fresh {
+			return err
+		}
+		recorded = true
+		return r.insertFinished(ctx, q, rec, refusal)
 	})
 	if err != nil {
 		return false, err

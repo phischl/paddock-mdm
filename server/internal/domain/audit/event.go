@@ -31,6 +31,7 @@ const (
 	ActorSystem        = "system"
 	ActorAnonymous     = "anonymous"
 	ActorDevice        = "device"
+	ActorAPIToken      = "api_token"
 )
 
 // Sources.
@@ -39,11 +40,12 @@ const (
 	SourcePlatform = "platform"
 	SourceSystem   = "system"
 	SourceDevice   = "device"
+	SourceAPI      = "api"
 )
 
 // Actor is who performed the action.
 type Actor struct {
-	Type    string `json:"type"` // "admin" | "platform_admin" | "system" | "anonymous" | "device"
+	Type    string `json:"type"` // "admin" | "platform_admin" | "system" | "anonymous" | "device" | "api_token"
 	ID      string `json:"id,omitempty"`
 	Display string `json:"display,omitempty"`
 	IP      string `json:"ip,omitempty"`
@@ -83,6 +85,8 @@ func SourceForActor(actorType string) string {
 		return SourcePlatform
 	case ActorDevice:
 		return SourceDevice
+	case ActorAPIToken:
+		return SourceAPI
 	default:
 		return SourceSystem
 	}

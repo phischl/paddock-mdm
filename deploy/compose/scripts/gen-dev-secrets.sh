@@ -127,12 +127,20 @@ secret fleet_admin_password "$(rand)1!"
 secret fleet_enroll_secret
 [[ -e "$SECRETS_DIR/fleet_api_token" ]] || { : >"$SECRETS_DIR/fleet_api_token"; chmod 644 "$SECRETS_DIR/fleet_api_token"; }
 
+# Backups (plan M6a decisions 4–6; compose.backup.yaml, `make up BACKUP=1`): bucket paddock-backup on audit-rustfs,
+# one credential each for pgBackRest, the worker's OpenBao snapshots and the Fleet dump, and the encryption key.
+secret backup_encryption_key "$(head -c 32 /dev/urandom | base64 -w0)"
+for role in pgbackrest worker fleet; do
+  secret "backup_${role}_access_key"
+  secret "backup_${role}_secret_key"
+done
+
 # Placeholder for the Caddy root certificate; the caddy-ca-export service overwrites it.
 [[ -e "$SECRETS_DIR/caddy-root.crt" ]] || { : >"$SECRETS_DIR/caddy-root.crt"; chmod 666 "$SECRETS_DIR/caddy-root.crt"; }
 
 # AppRole credential directories are filled by openbao-bootstrap.sh; they must exist for the bind mounts.
 for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader \
-  paddock-revocation-issuer; do
+  paddock-revocation-issuer paddock-backup; do
   mkdir -p "$SECRETS_DIR/approle/$role"
   for f in role_id secret_id; do
     [[ -e "$SECRETS_DIR/approle/$role/$f" ]] || { : >"$SECRETS_DIR/approle/$role/$f"; chmod 644 "$SECRETS_DIR/approle/$role/$f"; }

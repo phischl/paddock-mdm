@@ -54,6 +54,12 @@ func waitEscrow(t *testing.T, d *devicesim.Device, id string, timeout time.Durat
 // presigned URL; it returns the escrow ID, the upload URL and the HTTP status of the upload.
 func escrowHeader(t *testing.T, d *devicesim.Device, b *bundle.Bundle, generation int64, header, object []byte) (string, string, int) {
 	t.Helper()
+	return escrowVolumeHeader(t, d, b, "", generation, header, object)
+}
+
+// escrowVolumeHeader is escrowHeader for the LUKS volume with UUID volume ("": none, as before PDK-009).
+func escrowVolumeHeader(t *testing.T, d *devicesim.Device, b *bundle.Bundle, volume string, generation int64, header, object []byte) (string, string, int) {
+	t.Helper()
 	pub, version := escrowWrap(t, b)
 	id := uuid.Must(uuid.NewV7()).String()
 	sealed, err := escrow.SealHeader(pub, header, id)
@@ -65,7 +71,7 @@ func escrowHeader(t *testing.T, d *devicesim.Device, b *bundle.Bundle, generatio
 	}
 	ctx := testContext(t, 2*time.Minute)
 	res, err := d.Escrow(ctx, escrow.Request{EscrowID: id, Kind: escrow.KindLUKSHeader, Generation: generation, KeyVersion: version,
-		WrappedDEK: sealed.WrappedDEK, Nonce: sealed.Nonce, SHA256: sealed.SHA256, Size: int64(len(sealed.Object))})
+		Volume: volume, WrappedDEK: sealed.WrappedDEK, Nonce: sealed.Nonce, SHA256: sealed.SHA256, Size: int64(len(sealed.Object))})
 	var accepted escrow.Accepted
 	if err != nil || res.Status != http.StatusAccepted || json.Unmarshal(res.Body, &accepted) != nil || accepted.UploadURL == "" {
 		t.Fatalf("header escrow: %v HTTP %d %s", err, res.Status, res.Body)
@@ -215,6 +221,81 @@ func TestDiskRecovery(t *testing.T) {
 
 	res = call(t, bob, http.MethodPost, path+"/header", body)
 	expectStatus(t, res, http.StatusForbidden, "forbidden")
+}
+
+// TestDiskEscrowVolumes is the acceptance check of the escrow schema of PDK-009 (decisions 1, 4 and 5): a header with
+// a volume is stored below the volume's UUID; the root volume's header escrowed without a volume gets the root UUID
+// with the first check-in that reports it; the disk card lists both volumes, and each header downloads on its own and
+// is audited with its volume.
+func TestDiskEscrowVolumes(t *testing.T) {
+	alice := login(t, env.Alice)
+	d := v2Device(t, alice, "", 1, 2)
+	b := latestBundle(t, d, time.Minute, func(b *bundle.Bundle) bool { return b.Keys != nil && b.Keys.EscrowWrap != nil })
+	root, data := uuid.NewString(), uuid.NewString()
+	rootHeader, dataHeader := testHeader(t), testHeader(t)
+	id, _, status := escrowHeader(t, d, b, 1, rootHeader, nil)
+	if status != http.StatusOK || waitEscrow(t, d, id, time.Minute) != escrow.StatusStored {
+		t.Fatalf("root header: HTTP %d", status)
+	}
+	id, url, status := escrowVolumeHeader(t, d, b, data, 2, dataHeader, nil)
+	if status != http.StatusOK || !strings.Contains(url, "/devices/"+d.DeviceID+"/luks-header/"+data+"/2.bin?") {
+		t.Fatalf("upload to %s: HTTP %d", url, status)
+	}
+	if status := waitEscrow(t, d, id, time.Minute); status != escrow.StatusStored {
+		t.Fatalf("data header: %s", status)
+	}
+	d.Health = json.RawMessage(`{"disk":{"state":"compliant","luks_version":2,"tokens":["recovery","tpm2+pin"],"keyslots":2,"volumes":[` +
+		`{"uuid":"` + root + `","device":"/dev/sda3","root":true,"luks_version":2,"tokens":["recovery","tpm2+pin"],"keyslots":2,"escrowed":true,"header_generation":1},` +
+		`{"uuid":"` + data + `","device":"/dev/sdb1","luks_version":2,"tokens":["password"],"keyslots":1,"escrowed":true,"header_generation":2}]}}`)
+
+	path := "/api/v1/devices/" + d.DeviceID + "/disk"
+	var disk struct {
+		Volumes []struct {
+			UUID   string `json:"uuid"`
+			Device string `json:"device"`
+			Root   bool   `json:"root"`
+		} `json:"volumes"`
+		Headers []struct {
+			Generation int    `json:"generation"`
+			Volume     string `json:"volume"`
+		} `json:"headers"`
+	}
+	// The worker writes device_status at most once a minute per device (plan M2a decision 12) and latestBundle just
+	// checked in, so the device keeps checking in like an agent until a heartbeat with the volumes is materialized;
+	// every 5 s stays below the gateway's 30 requests a minute per device.
+	for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(5 * time.Second) {
+		if _, res, err := d.Checkin(testContext(t, time.Minute)); err != nil || res.Status != http.StatusOK {
+			t.Fatalf("check-in: %v HTTP %d", err, res.Status)
+		}
+		if err := call(t, alice, http.MethodGet, path, nil).JSON(&disk); err != nil {
+			t.Fatal(err)
+		}
+		if len(disk.Headers) == 2 && disk.Headers[1].Volume == root {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the root header did not get the root volume: %+v", disk)
+		}
+	}
+	if len(disk.Volumes) != 2 || !disk.Volumes[0].Root || disk.Volumes[1].UUID != data || disk.Headers[0].Volume != data {
+		t.Fatalf("disk %+v", disk)
+	}
+
+	hostname := getDevice(t, alice, d.DeviceID).Hostname
+	stepUp(t, alice, env.Alice, true)
+	res := call(t, alice, http.MethodPost, path+"/header", map[string]any{"confirm_hostname": hostname, "volume": data})
+	expectStatus(t, res, http.StatusOK, "")
+	if !bytes.Equal(res.Body, dataHeader) || res.Header.Get("Content-Disposition") != "attachment; filename="+hostname+"-luks-header-"+data+"-2.img" {
+		t.Fatalf("data header: %d bytes, Content-Disposition %q", len(res.Body), res.Header.Get("Content-Disposition"))
+	}
+	if ev := expectOneEvent(t, alice, res.RequestID, "disk.header_downloaded", "success"); ev.Params["volume"] != data {
+		t.Fatalf("audit params %v", ev.Params)
+	}
+	res = call(t, alice, http.MethodPost, path+"/header", map[string]any{"confirm_hostname": hostname})
+	expectStatus(t, res, http.StatusOK, "")
+	if !bytes.Equal(res.Body, rootHeader) {
+		t.Fatalf("root header by default: %d bytes", len(res.Body))
+	}
 }
 
 // diskAuditCases are the A3 cases of the disk recovery (plan M4b decision 14); each case that needs a step-up signs
