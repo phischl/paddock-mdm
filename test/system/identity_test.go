@@ -213,6 +213,11 @@ func (w *identityWorld) neverIdle(t *testing.T) {
 	time.Sleep(15 * time.Second) // the greeter needs a moment after its session appears
 }
 
+// nextCheckinBound is the time within which a change reaches a device at its next regular check-in: the longest
+// interval the gateway hands out (300 s × 1.2, device.Deps.CheckinDelay) plus a minute to compile the bundle and
+// reconcile it (architecture F2: "≤ 6 min with jitter").
+const nextCheckinBound = 360*time.Second + time.Minute
+
 // adminPassword is the password of the local admin paddock (test/vms/virtualbox/.secrets/credentials.env).
 func adminPassword(t *testing.T, vm *VM) string {
 	t.Helper()
@@ -510,12 +515,16 @@ echo "rc=$?"
 	}
 
 	// Unlock in Paddock: the device drops the deny entry, and the user signs in with the device code and a new PIN.
+	// The unlock is guaranteed at the next check-in only (architecture F2), not at the one the link toggle triggers:
+	// that one may come before the unlocked bundle or not at all for a short blip (PDK-019).
 	w.s.Call(http.MethodPost, "/api/v1/users/"+w.dave.id+"/unlock", nil, http.StatusOK)
+	unlockedAt := time.Now()
 	w.toggleLink(t)
-	Until(t, "deny list without "+w.dave.name, 3*time.Minute, 5*time.Second, nil, func() bool {
+	Until(t, "deny list without "+w.dave.name, nextCheckinBound, 5*time.Second, nil, func() bool {
 		out, _ := w.SSH(context.Background(), nil, "cat /etc/paddock/login-deny 2>/dev/null || true")
 		return !strings.Contains(out, w.dave.name)
 	})
+	t.Logf("unlock applied on the device %s after the unlock", time.Since(unlockedAt).Round(time.Second))
 	w.dave.pin = randomDigits(t, 8)
 	if exit := w.pamLogin(t, w.dave, true, 4*time.Minute); exit != 0 {
 		t.Errorf("login of %s after the unlock: exit %d", w.dave.name, exit)
