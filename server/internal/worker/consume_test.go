@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -69,5 +70,39 @@ func TestConsumeConcurrentlyStops(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("consumeConcurrently did not return after cancel")
+	}
+}
+
+// TestConsumeConcurrentlyDetachesHandlers: a loop that fails (closed delivery channel) ends the receiving of the
+// others, not the message one of them is handling.
+func TestConsumeConcurrentlyDetachesHandlers(t *testing.T) {
+	a := &acks{acked: map[uint64]bool{}}
+	deliveries := make(chan amqp.Delivery, 1)
+	deliveries <- amqp.Delivery{Acknowledger: a, DeliveryTag: 1}
+	started := make(chan struct{})
+	var handlerErr atomic.Value
+	go func() {
+		<-started
+		close(deliveries) // the other loop finds the channel closed and cancels the loops
+	}()
+	err := consumeConcurrently(context.Background(), deliveries, 2, time.Millisecond, func(ctx context.Context, _ amqp.Delivery) outcome {
+		close(started)
+		time.Sleep(100 * time.Millisecond)
+		if err := ctx.Err(); err != nil {
+			handlerErr.Store(err)
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			handlerErr.Store(errors.New("handler context without a deadline"))
+		}
+		return ack
+	})
+	if err == nil {
+		t.Fatal("closed delivery channel: want an error")
+	}
+	if v := handlerErr.Load(); v != nil {
+		t.Fatalf("handler context: %v", v)
+	}
+	if !a.acked[1] {
+		t.Fatal("the message being handled was not acknowledged")
 	}
 }
