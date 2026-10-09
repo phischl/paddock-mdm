@@ -8,6 +8,7 @@ import { vuetify } from '../plugins/vuetify'
 import { useSessionStore } from '../stores/session'
 import { navigationGroups, visibleNavigation, type NavigationAccess } from '../lib/navigation'
 import type { Me } from '../api/client'
+import { settleConfirm, useConfirm } from '../composables/useConfirm'
 
 vi.mock('../lib/updates', async (original) => ({
   ...(await original<typeof import('../lib/updates')>()),
@@ -28,6 +29,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  settleConfirm(false)
   wrapper?.unmount()
   wrapper = null
 })
@@ -138,14 +140,14 @@ describe('navigation drawer', () => {
     expect(drawer(first.w).classes()).not.toContain('v-navigation-drawer--active')
     expect(toggle.attributes('aria-label')).toBe('Show the navigation')
     expect(toggle.attributes('aria-expanded')).toBe('false')
-    expect(localStorage.getItem('paddock.navigation.rail')).toBe('true')
+    expect(localStorage.getItem('paddock.navigation.hidden')).toBe('true')
     first.w.unmount()
 
     const second = await mountApp()
     expect(drawer(second.w).classes()).not.toContain('v-navigation-drawer--active')
     await second.w.find('[data-testid="nav-toggle"]').trigger('click')
     expect(drawer(second.w).classes()).toContain('v-navigation-drawer--active')
-    expect(localStorage.getItem('paddock.navigation.rail')).toBe('false')
+    expect(localStorage.getItem('paddock.navigation.hidden')).toBe('false')
     // An entry chosen on a wide screen leaves the drawer shown.
     await drawer(second.w).find('a[href="/software"]').trigger('click')
     await flushPromises()
@@ -168,6 +170,21 @@ describe('navigation drawer', () => {
       get.mockRestore()
       set.mockRestore()
     }
+  })
+
+  it('makes the drawer inert while a dialog is open', async () => {
+    const { w } = await mountApp()
+    // jsdom has no inert property, so Vue writes the bound value as an attribute.
+    const inert = () => drawer(w).attributes('inert')
+    expect(inert()).toBe('false')
+
+    const answer = useConfirm()({ title: 'Delete device group', message: 'Delete Laptops?', confirmLabel: 'Delete' })
+    await vi.waitFor(() => expect(inert()).toBe('true'))
+    expect(w.find('header').attributes('inert')).toBe('true')
+
+    settleConfirm(false)
+    await answer
+    await vi.waitFor(() => expect(inert()).toBe('false'))
   })
 
   it('is a temporary drawer behind a hamburger button below 1280 px', async () => {
@@ -195,7 +212,7 @@ describe('navigation drawer', () => {
     expect(drawer(w).classes()).not.toContain('v-navigation-drawer--active')
 
     // Opening and closing on a small screen is not remembered.
-    expect(localStorage.getItem('paddock.navigation.rail')).toBeNull()
+    expect(localStorage.getItem('paddock.navigation.hidden')).toBeNull()
 
     resize(1280)
     await flushPromises()

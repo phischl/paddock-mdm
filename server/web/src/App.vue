@@ -28,8 +28,8 @@ const display = useDisplay()
 const desktop = computed(() => display.width.value >= navigationBreakpoint)
 
 // Hiding the drawer on wide screens is a per-viewer convenience: storage may be unavailable (private window, blocked
-// site data), then the drawer starts shown. The key keeps its first name, so a stored choice stays readable.
-const hiddenKey = 'paddock.navigation.rail'
+// site data), then the drawer starts shown.
+const hiddenKey = 'paddock.navigation.hidden'
 function storedHidden(): boolean {
   try {
     return localStorage.getItem(hiddenKey) === 'true'
