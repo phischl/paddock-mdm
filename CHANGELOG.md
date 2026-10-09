@@ -244,6 +244,11 @@ acceptance.
   size 33"). The drill's full backups use `--start-fast` (`paddock-pgbackrest backup` passes further arguments to
   `pgbackrest backup`) instead of waiting up to 5 minutes for a checkpoint; `make test` restores a snapshot into a
   throwaway OpenBao.
+- A full backup taken by hand (the restore drill, `pc run … pgbackrest backup`) no longer runs beside the scheduled
+  one of the same database: pgBackRest's lock was in each container's own `/tmp`, and the expire of one backup deleted
+  the files of the other's set, which pgBackRest had reported complete. The lock is in the stanza's state volume, a
+  backup by hand waits for a running one, and every full backup is read back with `pgbackrest verify` and fails
+  when a file is missing or damaged.
 
 ### Known limitations
 
