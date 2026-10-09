@@ -150,7 +150,7 @@ the loss until the control plane is ready and until the subset is green.
 
 | Drill | Control plane ready | Subset green (RTO) |
 | --- | --- | --- |
-| first drill (gate P-3) | pending | pending |
+| first drill (gate P-3): reference machine (`docs/operations/capacity.md`), 2026-10-09, M6-integration `058e769` | 75 s | 150 s |
 
 The stated RTO of 4 hours covers a rebuilt host, the custodians' arrival and the download of the backups; the drill
 measures the technical part.
