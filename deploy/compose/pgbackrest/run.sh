@@ -2,8 +2,9 @@
 # pgBackRest for the control plane's PostgreSQL databases (plan M6a decision 4, docs/operations/restore.md).
 #
 #   serve     push archived WAL to the repository every 2 s and take a full backup when the last one is older than
-#             24 h (the service's command)
-#   backup    take a full backup now (further arguments go to `pgbackrest backup`, e.g. --start-fast)
+#             24 h, and verify it (the service's command)
+#   backup    take a full backup now (further arguments go to `pgbackrest backup`, e.g. --start-fast), after the
+#             service's running backup if there is one, and verify it
 #   flush     push every WAL file still in the spool
 #   info      pgbackrest info
 #   restore   restore the latest backup into the empty data directory and stage the WAL up to the newest archived
@@ -56,7 +57,10 @@ export PGBACKREST_PG1_SOCKET_PATH=/var/run/postgresql
 export PGBACKREST_PG1_USER="${PADDOCK_BACKUP_PG_USER:-postgres}"
 export PGBACKREST_LOG_LEVEL_CONSOLE=info
 export PGBACKREST_LOG_LEVEL_FILE=off
-export PGBACKREST_LOCK_PATH=/tmp/pgbackrest
+# The lock lives in the stanza's state volume, which the service and every one-off container (`backup`, the restore
+# drill) share: with a lock in each container's own /tmp a one-off backup ran beside the service's, and the expire of
+# one deleted the files of the other's backup set (restore drill, 2026-10-09).
+export PGBACKREST_LOCK_PATH="$STATE/lock"
 export PGBACKREST_SPOOL_PATH=/tmp/pgbackrest
 export PGBACKREST_COMPRESS_TYPE=zst
 # The backup waits for its last WAL segment, which reaches the repository through the spool.
@@ -84,8 +88,20 @@ ensure_stanza() {
   pgb stanza-create && : >"$STATE/stanza"
 }
 
+# full_backup takes a full backup and reads it back with `pgbackrest verify`, so a set with a missing or damaged
+# file fails now and not at restore time; verify reports problems in its output only, its exit code stays 0.
 full_backup() {
-  pgb backup --type=full "$@" && date +%s >"$STATE/last-full"
+  local label report
+  pgb backup --type=full "$@" || return
+  label="$(pgb info --output=json | grep -o '"label":"[^"]*"' | tail -1 | cut -d'"' -f4)"
+  report="$(pgb verify --set="$label" --output=text --verbose)" || return
+  if ! grep -q '^status: ok$' <<<"$report"; then
+    echo "pgbackrest: backup $label of $STANZA failed verification:" >&2
+    echo "$report" >&2
+    return 1
+  fi
+  echo "pgbackrest: backup $label of $STANZA verified"
+  date +%s >"$STATE/last-full"
 }
 
 # pusher keeps pushing the spool in the background: a backup waits for WAL segments that only the spool delivers.
@@ -116,7 +132,15 @@ case "${1:-serve}" in
     ensure_stanza
     pusher &
     trap 'kill $! 2>/dev/null || true' EXIT
-    full_backup "${@:2}"
+    # The service may be taking its scheduled backup: wait for the stanza's lock (exit code 50) for up to 15 minutes.
+    for _ in $(seq 1 90); do
+      rc=0
+      full_backup "${@:2}" || rc=$?
+      if ((rc != 50)); then exit "$rc"; fi
+      echo "pgbackrest: another backup of $STANZA is running; waiting" >&2
+      sleep 10
+    done
+    exit 50
     ;;
   flush)
     push_spool

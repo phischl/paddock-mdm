@@ -57,7 +57,10 @@ The overlay `deploy/compose/compose.backup.yaml` (part of the production configu
 - **PostgreSQL** (`postgres`, `authentik-postgres`) runs with `archive_mode=on` and `archive_timeout=60`. Its image has
   no pgBackRest, so `archive_command` copies every WAL file into a spool volume; `pgbackrest` and
   `pgbackrest-authentik` push it to the repository every 2 seconds and take a full backup when the last one is older
-  than 24 hours. They read the data directory and the socket of their database through shared volumes.
+  than 24 hours. They read the data directory and the socket of their database through shared volumes. Every full
+  backup is read back with `pgbackrest verify` and counts only when it is intact. The stanza's lock lives in its state
+  volume, so a backup taken by hand (`pc run … pgbackrest backup`) waits for a running scheduled one instead of
+  running beside it.
 - **OpenBao**: `paddock-worker` takes a snapshot when the newest one in the bucket is older than 6 hours (AppRole
   `paddock-backup`, read on `sys/storage/raft/snapshot` only), encrypts it and uploads it. After key operations take
   one by hand (`docs/operations/openbao.md` section 5).
