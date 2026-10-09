@@ -26,6 +26,9 @@ type Stack struct {
 	t     *testing.T
 	root  string // repository root
 	alice *portal.Session
+	// composeFiles are the Compose files the stack ran with when the test started: after a `make down` nothing is
+	// running any more to tell whether `make up` needs the backup overlay (PDK-018).
+	composeFiles []string
 }
 
 func newStack(t *testing.T) *Stack {
@@ -34,7 +37,9 @@ func newStack(t *testing.T) *Stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Stack{t: t, root: root}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	s := &Stack{t: t, root: root, composeFiles: runningComposeFiles(ctx)}
 	s.Login()
 	return s
 }
@@ -171,7 +176,7 @@ func (s *Stack) Make(args ...string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	if slices.Contains(args, "down") || slices.Contains(args, "up") {
-		args = withBackup(args, os.Getenv, runningComposeFiles(ctx))
+		args = withBackup(args, os.Getenv, s.composeFiles)
 	}
 	cmd := exec.CommandContext(ctx, "make", args...)
 	cmd.Dir = s.root
@@ -194,7 +199,7 @@ func withBackup(args []string, getenv func(string) string, configFiles []string)
 	return append(slices.Clone(args), "BACKUP=1")
 }
 
-// runningComposeFiles are the Compose files of the running project paddock (empty when it is not running).
+// runningComposeFiles are the Compose files of the project paddock's containers (empty when there are none).
 func runningComposeFiles(ctx context.Context) []string {
 	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label=com.docker.compose.project=paddock",
 		"--format", `{{.Label "com.docker.compose.project.config_files"}}`).Output()
