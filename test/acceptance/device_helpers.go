@@ -151,6 +151,12 @@ func newSim(t *testing.T, cfg protocol.EnrollmentConfig) *devicesim.Device {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newSimWith(t, cfg, client)
+}
+
+// newSimWith is newSim with the given HTTP client (e.g. env.HeaderClient).
+func newSimWith(t *testing.T, cfg protocol.EnrollmentConfig, client *http.Client) *devicesim.Device {
+	t.Helper()
 	d, err := devicesim.New(cfg, client)
 	if err != nil {
 		t.Fatal(err)

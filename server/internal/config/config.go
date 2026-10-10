@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -145,6 +146,9 @@ type Common struct {
 	Env      string // production | development
 	LogLevel string
 	OpsAddr  string
+	// TrustedProxies are the peers whose X-Paddock-Client-IP header names the client (plan M7a decision 4); empty
+	// trusts no peer.
+	TrustedProxies []netip.Prefix
 }
 
 // Development reports whether development-only behaviour may be enabled.
@@ -160,7 +164,32 @@ func LoadCommon(l *Loader) Common {
 	if c.Env != "production" && c.Env != "development" {
 		l.Invalid("PADDOCK_ENV", "must be production or development")
 	}
+	c.TrustedProxies = trustedProxies(l)
 	return c
+}
+
+// trustedProxies parses PADDOCK_TRUSTED_PROXY_CIDRS (space-separated CIDRs). A /0 is refused: it would let every
+// peer choose its own client address.
+func trustedProxies(l *Loader) []netip.Prefix {
+	const name = "PADDOCK_TRUSTED_PROXY_CIDRS"
+	v, ok := l.get(name)
+	if !ok {
+		return nil
+	}
+	var out []netip.Prefix
+	for _, f := range strings.Fields(v) {
+		p, err := netip.ParsePrefix(f)
+		if err != nil {
+			l.Invalid(name, fmt.Sprintf("not a CIDR: %q", f))
+			continue
+		}
+		if p.Bits() == 0 {
+			l.Invalid(name, fmt.Sprintf("%s trusts every address", f))
+			continue
+		}
+		out = append(out, p.Masked())
+	}
+	return out
 }
 
 // DevStepUp shortens the step-up timing for the acceptance gates (PADDOCK_STEPUP_WINDOW: how long a step-up

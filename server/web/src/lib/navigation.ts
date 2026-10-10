@@ -91,6 +91,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     items: [
       { to: '/platform/organizations', label: 'nav.organizations', visible: (a) => a.isPlatform },
       { to: '/platform/agent-releases', label: 'nav.agentReleases', visible: (a) => a.isPlatform },
+      { to: '/platform/ip-allowlist', label: 'nav.ipAllowlist', visible: (a) => a.isPlatform },
     ],
   },
 ]

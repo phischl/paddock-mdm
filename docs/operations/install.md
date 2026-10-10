@@ -26,6 +26,10 @@ credential for audit events and the read-only audit database role; it holds noth
 - The control plane is reachable from the internet on 80 (ACME HTTP-01, redirect) and 443. Nothing else is published;
   `make prod-check` refuses any other published port that is not bound to the interconnect address.
 - An S3 bucket for backups **outside the control-plane host** (section 9).
+- **Proxies or a CDN in front of Caddy** (optional): declare them with `PADDOCK_EDGE_TRUSTED_PROXIES` and
+  `PADDOCK_EDGE_CLIENT_IP_HEADER` (`X-Forwarded-For` or `CF-Connecting-IP`), so that the allow lists, rate limits
+  and audit log see the real client; without them Caddy treats its peer as the client and ignores every such header.
+  Firewall the origin to the proxy's ranges. Details and the Cloudflare example: `docs/operations/ip-allowlist.md`.
 - Outbound HTTPS from the control plane (allow it in the host's firewall): the ACME CA (Caddy), Ubuntu's OSV feed
   `https://osv-vulnerabilities.storage.googleapis.com` (`paddock-worker`, daily; without it the alert
   `PaddockOSVStale` fires after 3 days, and `docs/operations/vulnerability-data.md` describes the offline import),
@@ -38,8 +42,8 @@ ACME CA as soon as it starts.
 
 | Name | Serves | Exposure |
 | --- | --- | --- |
-| `admin.<domain>` | portal and admin API | SHOULD be restricted (`PADDOCK_ADMIN_ALLOWED_CIDRS` or a VPN) |
-| `auth.<domain>` | Authentik (portal login, device logins) | internet |
+| `admin.<domain>` | portal and admin API | restricted by `PADDOCK_ADMIN_ALLOWED_CIDRS` and the application allow list (`docs/operations/ip-allowlist.md`) |
+| `auth.<domain>` | Authentik (portal login, device logins) | internet for logins and device approvals; administrative paths restricted by `PADDOCK_ADMIN_ALLOWED_CIDRS` |
 | `device.<domain>` | device API (gateway) | internet |
 | `bundles.<domain>` | presigned bundle downloads, agent packages, header uploads | internet |
 | `fleet.<domain>` | osquery and fleetd endpoints only | internet |
@@ -132,6 +136,10 @@ configuration; `PADDOCK_ENV` other than `production`; development-only variables
 missing, empty or readable by every user of the host (symbolic links resolved); a path below `/run/secrets/` that a
 service names (in a variable or as the `sslrootcert` of a DSN) without mounting that secret; 80/443 published by any
 service but Caddy, or another published port that is not bound to `PADDOCK_INTERCONNECT_ADDR`; a link between the hosts without TLS; `tls internal` in the Caddyfile or no ACME e-mail;
+`caddy/guards.caddy` and `caddy/entrypoint.sh` not mounted next to the Caddyfile, or a Caddyfile that sets
+`trusted_proxies` itself; an edge client address configuration that is not consistent (a `/0` trusted proxy, a header
+without proxies or proxies without a header, an unknown header name, item `edge client address`); a `/0` in a role's
+`PADDOCK_TRUSTED_PROXY_CIDRS`; `PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
 the development release key (its secret key next to the public key, or the key of `make dev-release-key`); and, on the
 audit host with `ONLINE=1`, an audit bucket without Object Lock COMPLIANCE of at least 400 days.
 
@@ -146,6 +154,11 @@ audit host with `ONLINE=1`, an audit bucket without Object Lock COMPLIANCE of at
    (`docs/operations/identity-sources.md`) and make its first administrator a member of `paddock.<slug>.admins`.
 3. As the organization administrator, create an enrollment token and install the first device with the autoinstall
    (`docs/operations/autoinstall.md`) or the packages under `https://bundles.<domain>/packages/`.
+4. Set the IP allow list (optional, recommended): as the platform administrator open *Platform* → *IP allow list*,
+   add your own address with *Use my address* first (the server refuses a first entry that would lock you out), then
+   the office and VPN ranges. From then on the portal and the admin API are reachable from those ranges only, with
+   sessions and API tokens alike. The edge list `PADDOCK_ADMIN_ALLOWED_CIDRS` in `.env` is the second, static layer;
+   the runbook for a lockout is in `docs/operations/ip-allowlist.md`.
 
 ## 9. Backups
 

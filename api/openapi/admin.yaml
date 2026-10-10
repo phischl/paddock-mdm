@@ -146,6 +146,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Me" }
         "401": { $ref: "#/components/responses/Problem" }
+        "403":
+          description: The client address is outside the IP allow list (ip_not_allowed, plan M7a decision 17).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: The api has not loaded the IP allow list yet and refuses every request (ip_allowlist_unavailable, fail closed).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
     patch:
       operationId: updateMe
       tags: [me]
@@ -2814,6 +2824,135 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /api/platform/v1/ip-allowlist:
+    get:
+      operationId: listIpAllowlist
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin. The IP allow list of the administrative surfaces (plan M7a decision 16): while it has
+        entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions
+        and API tokens alike. Sessions only: platform tokens do not exist.
+      x-paddock-list:
+        sort: [cidr, label, created_at]
+        default_sort: cidr
+        search: [label, cidr]
+        filters: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/IpAllowlistSort"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: One page of entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpAllowlistEntryPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createIpAllowlistEntry
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin; requires a step-up within the step-up window (403 step_up_required). Adds a range.
+        409 lockout_confirmation_required when the list would no longer cover the caller's own address (repeat with
+        confirm=lockout); 409 already_exists for a duplicate CIDR. Every attempt is audited.
+      x-paddock-audit: platform.ip_allowlist_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/Confirm"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IpAllowlistEntryCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpAllowlistEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/ip-allowlist/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getIpAllowlistEntry
+      tags: [platform]
+      security:
+        - session: []
+      description: "Roles: platform_admin. One entry."
+      responses:
+        "200":
+          description: The entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpAllowlistEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateIpAllowlistEntry
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin; requires a step-up (403 step_up_required). Changes the range and/or the label (at least
+        one). 409 lockout_confirmation_required when the caller's own address would no longer be covered (repeat with
+        confirm=lockout); 409 already_exists for a duplicate CIDR.
+      x-paddock-audit: platform.ip_allowlist_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/Confirm"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IpAllowlistEntryUpdate" }
+      responses:
+        "200":
+          description: The changed entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpAllowlistEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteIpAllowlistEntry
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin; requires a step-up (403 step_up_required). Removes the entry. 409
+        lockout_confirmation_required when the caller's own address would no longer be covered (repeat with
+        confirm=lockout); 409 disable_confirmation_required when it is the last entry, which switches the allow list
+        off for everyone (repeat with confirm=disable).
+      x-paddock-audit: platform.ip_allowlist_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/Confirm"
+      responses:
+        "204":
+          description: Removed.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases:
     get:
       operationId: listAgentReleases
@@ -3131,6 +3270,23 @@ components:
         type: string
         enum: [occurred_at, -occurred_at, code, -code, outcome, -outcome]
         default: -occurred_at
+    IpAllowlistSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [cidr, -cidr, label, -label, created_at, -created_at]
+        default: cidr
+    Confirm:
+      name: confirm
+      in: query
+      description: |
+        Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+        disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+      schema:
+        type: string
+        enum: [lockout, disable]
     AgentReleaseSort:
       name: sort
       in: query
@@ -3381,7 +3537,7 @@ components:
         name: { type: string }
     Me:
       type: object
-      required: [id, username, display_name, role, organization, locale, revocation_enabled]
+      required: [id, username, display_name, role, organization, locale, revocation_enabled, client_ip]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -3397,6 +3553,12 @@ components:
           description: |
             PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
             dead man's switch answer 403 revocation_disabled.
+        client_ip:
+          type: string
+          description: |
+            The client address the server resolved for this request (plan M7a decision 15): the peer, or the address
+            Caddy forwarded in X-Paddock-Client-IP when the peer is a trusted proxy. The IP allow list is checked
+            against it.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
         api_token:
@@ -3486,6 +3648,45 @@ components:
         published_at: { type: string, format: date-time }
         artifact_count: { type: integer }
         rollout_status: { $ref: "#/components/schemas/AgentRolloutStatus" }
+    IpAllowlistEntry:
+      type: object
+      required: [id, cidr, label, created_by, created_at, updated_at, covers_caller]
+      properties:
+        id: { type: string, format: uuid }
+        cidr: { type: string, description: "Canonical CIDR: a.b.c.d/n or <ipv6>/n." }
+        label: { type: string }
+        created_by: { type: string, description: "Display name of the platform administrator, or paddock-server admin." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        covers_caller: { type: boolean, description: "The range contains the caller's own client address (client_ip of GET /api/v1/me)." }
+    IpAllowlistEntryCreate:
+      type: object
+      required: [cidr, label]
+      properties:
+        cidr:
+          type: string
+          description: |
+            IPv4 or IPv6 range with a prefix of at least 1 and the host bits zero; a single address is /32 or /128.
+            IPv4-mapped IPv6 is refused. The detail of a 400 names the canonical form.
+        label: { type: string, minLength: 1, maxLength: 64 }
+    IpAllowlistEntryUpdate:
+      type: object
+      description: At least one field.
+      properties:
+        cidr: { type: string }
+        label: { type: string, minLength: 1, maxLength: 64 }
+    IpAllowlistEntryPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/IpAllowlistEntry" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     AgentReleasePage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]

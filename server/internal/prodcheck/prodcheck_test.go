@@ -56,7 +56,11 @@ func newFixture(t *testing.T) *fixture {
 			"caddy": {
 				Environment: map[string]*string{"PADDOCK_ACME_EMAIL": ptr("ops@example.org")},
 				Ports:       []prodcheck.Port{{Target: 443, Published: "443"}, {Target: 80, Published: "80"}},
-				Volumes:     []prodcheck.Volume{{Type: "bind", Source: caddyfile, Target: "/etc/caddy/Caddyfile"}},
+				Volumes: []prodcheck.Volume{
+					{Type: "bind", Source: caddyfile, Target: "/etc/caddy/Caddyfile"},
+					{Type: "bind", Source: filepath.Join(dir, "guards.caddy"), Target: "/etc/caddy/guards.caddy"},
+					{Type: "bind", Source: filepath.Join(dir, "entrypoint.sh"), Target: "/paddock/entrypoint.sh"},
+				},
 			},
 			"postgres": {},
 			"rabbitmq": {Ports: []prodcheck.Port{{HostIP: interconnect, Target: 5671, Published: "5671"}}},
@@ -69,6 +73,8 @@ func newFixture(t *testing.T) *fixture {
 					"PADDOCK_RELEASE_PUBLIC_KEY_FILE":  ptr("/run/secrets/release_public_key"),
 					"PADDOCK_REVOCATION_ENABLED":       ptr("false"),
 					"PADDOCK_TEST_EXTERNAL_DELAY":      ptr(""),
+					"PADDOCK_TRUSTED_PROXY_CIDRS":      ptr("10.0.0.0/8 172.16.0.0/12 fc00::/7 ::1/128"),
+					"PADDOCK_IP_ALLOWLIST_BYPASS":      ptr("false"),
 				},
 				Secrets: []prodcheck.ServiceSecret{
 					{Source: "db_paddock_api_url"}, {Source: "db_paddock_audit_reader_url"}, {Source: "release_public_key"},
@@ -118,8 +124,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 10 {
-		t.Fatalf("expected 10 items:\n%s", out)
+	if strings.Count(out, "PASS") != 13 {
+		t.Fatalf("expected 13 items:\n%s", out)
 	}
 }
 
@@ -283,6 +289,83 @@ func TestCaddy(t *testing.T) {
 	_, out := run(t, f.cfg, prodcheck.Options{})
 	failLine(t, out, "Caddyfile uses tls internal")
 	failLine(t, out, "PADDOCK_ACME_EMAIL is not set")
+}
+
+// TestCaddyEdgeFiles: the guards and the entrypoint are mounted from next to the Caddyfile, and the Caddyfile does
+// not configure the client address itself (plan M7a decision 24).
+func TestCaddyEdgeFiles(t *testing.T) {
+	f := newFixture(t)
+	caddy := f.service("caddy")
+	content := "{\n\tservers {\n\t\ttrusted_proxies static 10.0.0.0/8\n\t\tclient_ip_headers X-Forwarded-For\n\t}\n}\n"
+	if err := os.WriteFile(caddy.Volumes[0].Source, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	caddy.Volumes = []prodcheck.Volume{caddy.Volumes[0], {Type: "bind", Source: "/elsewhere/guards.caddy", Target: "/etc/caddy/guards.caddy"}}
+	f.cfg.Services["caddy"] = caddy
+	_, out := run(t, f.cfg, prodcheck.Options{})
+	failLine(t, out, "Caddyfile declares trusted_proxies itself")
+	failLine(t, out, "Caddyfile declares client_ip_headers itself")
+	failLine(t, out, "/etc/caddy/guards.caddy is mounted from /elsewhere/guards.caddy")
+	failLine(t, out, "/paddock/entrypoint.sh is not mounted")
+}
+
+// TestEdgeClientAddress: every invalid edge combination of plan M7a decision 24 fails the item, the valid ones pass.
+func TestEdgeClientAddress(t *testing.T) {
+	cases := []struct {
+		header, proxies, listener, want string
+	}{
+		{"X-Forwarded-For", "0.0.0.0/0", "", "0.0.0.0/0 trusts every address"},
+		{"X-Forwarded-For", "10.0.0.0/8 ::/0", "", "::/0 trusts every address"},
+		{"CF-Connecting-IP", "", "", "PADDOCK_EDGE_TRUSTED_PROXIES is empty"},
+		{"none", "10.0.0.0/8", "", "PADDOCK_EDGE_CLIENT_IP_HEADER is none"},
+		{"", "10.0.0.0/8", "", "PADDOCK_EDGE_CLIENT_IP_HEADER is none"},
+		{"CF-Connecting-IP X-Forwarded-For", "10.0.0.0/8", "", "is not exactly one of"},
+		{"X-Real-IP", "10.0.0.0/8", "", "is not exactly one of"},
+		{"X-Forwarded-For", "10.0.0.0/33", "", "10.0.0.0/33 is not a CIDR"},
+		{"none", "", ":8443", "PADDOCK_EDGE_SERVERS_LISTENER"},
+		{"CF-Connecting-IP", "203.0.113.0/24", "", ""},
+		{"X-Forwarded-For", "private_ranges 10.0.0.5 2001:db8::/32", "", ""},
+		{"none", "", "", ""},
+	}
+	for _, tc := range cases {
+		f := newFixture(t)
+		f.setEnv("caddy", "PADDOCK_EDGE_CLIENT_IP_HEADER", tc.header)
+		f.setEnv("caddy", "PADDOCK_EDGE_TRUSTED_PROXIES", tc.proxies)
+		f.setEnv("caddy", "PADDOCK_EDGE_SERVERS_LISTENER", tc.listener)
+		ok, out := run(t, f.cfg, prodcheck.Options{})
+		if tc.want == "" {
+			if !ok {
+				t.Errorf("header %q proxies %q: expected PASS:\n%s", tc.header, tc.proxies, out)
+			}
+			continue
+		}
+		failLine(t, out, tc.want)
+		if !strings.Contains(out, "FAIL  edge client address") {
+			t.Errorf("header %q proxies %q: the item edge client address did not fail:\n%s", tc.header, tc.proxies, out)
+		}
+	}
+}
+
+// TestRoleTrustedProxies: an unparsable entry or a /0 in PADDOCK_TRUSTED_PROXY_CIDRS fails the item.
+func TestRoleTrustedProxies(t *testing.T) {
+	for value, want := range map[string]string{
+		"10.0.0.0/8 0.0.0.0/0": "paddock-api: PADDOCK_TRUSTED_PROXY_CIDRS: 0.0.0.0/0 trusts every address",
+		"::/0":                 "::/0 trusts every address",
+		"10.0.0.1":             "10.0.0.1 is not a CIDR",
+	} {
+		f := newFixture(t)
+		f.setEnv("paddock-api", "PADDOCK_TRUSTED_PROXY_CIDRS", value)
+		_, out := run(t, f.cfg, prodcheck.Options{})
+		failLine(t, out, want)
+	}
+}
+
+// TestAllowlistBypass: the api's environment bypass of the IP allow list fails prod-check (plan M7a decision 22).
+func TestAllowlistBypass(t *testing.T) {
+	f := newFixture(t)
+	f.setEnv("paddock-api", "PADDOCK_IP_ALLOWLIST_BYPASS", "true")
+	_, out := run(t, f.cfg, prodcheck.Options{})
+	failLine(t, out, "PADDOCK_IP_ALLOWLIST_BYPASS is true")
 }
 
 func TestReleaseKeys(t *testing.T) {

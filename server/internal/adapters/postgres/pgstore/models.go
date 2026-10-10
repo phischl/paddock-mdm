@@ -6,6 +6,7 @@ package pgstore
 
 import (
 	"encoding/json"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
@@ -330,6 +331,15 @@ type InventoryPolicyResult struct {
 	Passing        bool
 	UpdatedAt      time.Time
 	AlertedAt      *time.Time
+}
+
+type IpAllowlistEntry struct {
+	ID        uuid.UUID
+	Cidr      netip.Prefix
+	Label     string
+	CreatedBy string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type ManagedFile struct {

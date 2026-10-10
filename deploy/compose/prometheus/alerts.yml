@@ -90,6 +90,14 @@ groups:
         annotations:
           summary: "Ubuntu's vulnerability data is stale"
           description: "The OSV data has not been updated for 3 days (docs/operations/vulnerability-data.md)."
+      - alert: PaddockIPAllowlistBypassed
+        expr: max(paddock_ip_allowlist_bypass) == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IP allow list bypassed on the api"
+          description: "paddock-api runs with PADDOCK_IP_ALLOWLIST_BYPASS=true (break-glass): the application IP allow list is not enforced. Remove the variable once access is restored (docs/operations/ip-allowlist.md)."
       - alert: PaddockBackupStale
         expr: time() - max by (kind) (paddock_backup_last_success_timestamp_seconds) > 26 * 3600
         labels:

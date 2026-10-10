@@ -3,22 +3,27 @@
 	# one per hostname. The routes match caddy/Caddyfile of the development stack, without `tls internal`.
 	email {$PADDOCK_ACME_EMAIL}
 	admin 127.0.0.1:2019
+	# Trusted proxies and the client address header, rendered by /paddock/entrypoint.sh from
+	# PADDOCK_EDGE_TRUSTED_PROXIES and PADDOCK_EDGE_CLIENT_IP_HEADER (plan M7a decision 2).
+	{$CADDY_SERVERS_BLOCK}
 }
 
-# The portal and admin API SHOULD be limited to an IP allow list or VPN (architecture §4.1):
-# PADDOCK_ADMIN_ALLOWED_CIDRS, space-separated (default: every address).
+# The portal, the admin API and Authentik's administrative paths are limited to PADDOCK_ADMIN_ALLOWED_CIDRS
+# (architecture §4.1, plan M7a decision 6, docs/operations/ip-allowlist.md).
+import /etc/caddy/guards.caddy
+
 admin.{$PADDOCK_DOMAIN} {
-	@denied not remote_ip {$PADDOCK_ADMIN_ALLOWED_CIDRS}
-	respond @denied 403
-	reverse_proxy paddock-api:8080
+	import admin_site
 }
 
 auth.{$PADDOCK_DOMAIN} {
-	reverse_proxy authentik-server:9000
+	import authentik_site
 }
 
 device.{$PADDOCK_DOMAIN} {
-	reverse_proxy paddock-gateway:8081
+	reverse_proxy paddock-gateway:8081 {
+		header_up X-Paddock-Client-IP {client_ip}
+	}
 }
 
 # Bundles are served only through presigned GET URLs (architecture §7.3); everything else is refused at the edge.

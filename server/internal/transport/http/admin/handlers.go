@@ -45,6 +45,7 @@ type handlers struct {
 	inventory   *app.Inventory
 	updates     *app.Updates
 	attention   *app.Attention
+	ipAllowlist *app.IPAllowlist
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).
@@ -62,8 +63,9 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 		return nil, err
 	}
 	out := h.toMe(me)
+	p, _ := principal.From(ctx)
+	out.ClientIp = p.IP
 	if h.stepUpTiming != nil {
-		p, _ := principal.From(ctx)
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
 			MaxAuthAgeSeconds: int(h.stepUpTiming.maxAuthAge.Seconds()),

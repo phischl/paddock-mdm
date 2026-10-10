@@ -102,6 +102,12 @@ func ApproveDevice(ctx context.Context, caRoot string, da DeviceAuthorization, u
 	if err != nil {
 		return nil, err
 	}
+	return ApproveDeviceWith(ctx, browser, da, username, password, totp)
+}
+
+// ApproveDeviceWith is ApproveDevice in the given browser session, e.g. one that sends a client address header
+// (plan M7a gate A2).
+func ApproveDeviceWith(ctx context.Context, browser *http.Client, da DeviceAuthorization, username, password string, totp *TOTP) ([]string, error) {
 	var stages []string
 	next := da.VerificationURIComplete
 	for hop := 0; hop < 30; hop++ {

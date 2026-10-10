@@ -18,7 +18,7 @@ vi.mock('../lib/updates', async (original) => ({
 const admin: Me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice Admin',
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme' },
-  locale: 'en', revocation_enabled: false,
+  locale: 'en', revocation_enabled: false, client_ip: '198.51.100.7',
 }
 
 let wrapper: VueWrapper | null = null
@@ -108,7 +108,7 @@ describe('navigation drawer', () => {
 
     const platform = await mountApp({ ...admin, role: 'platform_admin', organization: null }, '/platform/organizations')
     expect(groupLabels(platform.w)).toEqual(['Overview', 'Platform'])
-    expect(linkLabels(platform.w)).toEqual(['Start', 'Organizations', 'Agent releases'])
+    expect(linkLabels(platform.w)).toEqual(['Start', 'Organizations', 'Agent releases', 'IP allow list'])
     expect(platform.w.find('[data-testid="app-bar-attention"]').exists()).toBe(false)
     expect(platform.w.find('[data-testid="org-name"]').exists()).toBe(false)
   })

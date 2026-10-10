@@ -98,6 +98,9 @@ export type ChangeSet = components['schemas']['ChangeSet']
 export type ChangeSetSource = components['schemas']['ChangeSetSource']
 export type ChangeSetSort = components['parameters']['ChangeSetSort']
 export type ConfigPlan = components['schemas']['ConfigPlan']
+export type IpAllowlistEntry = components['schemas']['IpAllowlistEntry']
+export type IpAllowlistSort = components['parameters']['IpAllowlistSort']
+export type IpAllowlistConfirm = components['parameters']['Confirm']
 
 /** Sends the CSRF header on mutating requests and sends the browser to the login on 401. */
 const middleware: Middleware = {

@@ -27,18 +27,36 @@ x-paddock-env: &paddock-env
   PADDOCK_ENV: ${PADDOCK_ENV:-production}
   PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
   PADDOCK_OPS_ADDR: ":9090"
+  # Peers that may name the client through X-Paddock-Client-IP (plan M7a decision 4): Caddy's address on the Compose
+  # network is not fixed, and the roles' ports are never published in production.
+  PADDOCK_TRUSTED_PROXY_CIDRS: ${PADDOCK_TRUSTED_PROXY_CIDRS:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 fc00::/7 ::1/128}
 
 services:
   caddy:
     image: ${CADDY_IMAGE}
     restart: unless-stopped
+    # Validates the edge client address configuration and renders the servers block (plan M7a decision 2).
+    entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
     ports:
       - "${PADDOCK_HTTPS_PORT:-8443}:${PADDOCK_HTTPS_PORT:-8443}"
+      # Untrusted listener of the acceptance gates (plan M7a decision 9); the production overlay replaces the ports.
+      - "${PADDOCK_HTTPS_UNTRUSTED_PORT:-8444}:${PADDOCK_HTTPS_UNTRUSTED_PORT:-8444}"
     environment:
       PADDOCK_DOMAIN: ${PADDOCK_DOMAIN:-paddock.localhost}
       PADDOCK_HTTPS_PORT: ${PADDOCK_HTTPS_PORT:-8443}
+      PADDOCK_HTTPS_UNTRUSTED_PORT: ${PADDOCK_HTTPS_UNTRUSTED_PORT:-8444}
+      # Edge allow lists and client address (plan M7a decision 8). The development defaults admit the host and the
+      # documentation networks 198.51.100.0/24, 192.0.2.0/24 and 2001:db8::/32 the gates simulate clients from;
+      # 203.0.113.0/24 is refused at the edge.
+      PADDOCK_ADMIN_ALLOWED_CIDRS: ${PADDOCK_ADMIN_ALLOWED_CIDRS:-private_ranges 198.51.100.0/24 192.0.2.0/24 2001:db8::/32}
+      PADDOCK_INTERNAL_CIDRS: ${PADDOCK_INTERNAL_CIDRS:-private_ranges}
+      PADDOCK_EDGE_TRUSTED_PROXIES: ${PADDOCK_EDGE_TRUSTED_PROXIES:-private_ranges}
+      PADDOCK_EDGE_CLIENT_IP_HEADER: ${PADDOCK_EDGE_CLIENT_IP_HEADER:-CF-Connecting-IP X-Forwarded-For}
+      PADDOCK_EDGE_SERVERS_LISTENER: ":${PADDOCK_HTTPS_PORT:-8443}"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/guards.caddy:/etc/caddy/guards.caddy:ro
+      - ./caddy/entrypoint.sh:/paddock/entrypoint.sh:ro
       - caddy-data:/data
       - caddy-config:/config
     networks:
@@ -386,6 +404,9 @@ services:
       # Publishes new and revoked enrollment tokens to the gateway's cache at once.
       PADDOCK_VALKEY_ADDR: valkey:6379
       PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      # Break-glass of a locked-out platform (plan M7a decision 22): true ignores the application IP allow list;
+      # prod-check fails while it is set.
+      PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
       - valkey_password

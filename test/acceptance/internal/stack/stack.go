@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"aead.dev/minisign"
@@ -75,6 +76,12 @@ func AuditBucket() string { return Env("PADDOCK_TEST_AUDIT_S3_BUCKET", "paddock-
 // AdminURL is the portal URL (PADDOCK_TEST_ADMIN_URL overrides).
 func AdminURL() string { return Env("PADDOCK_TEST_ADMIN_URL", "https://admin.paddock.localhost:8443") }
 
+// AdminUntrustedURL is the portal on the development stack's untrusted listener, where Caddy ignores every client
+// address header (plan M7a decision 9; PADDOCK_TEST_ADMIN_UNTRUSTED_URL overrides).
+func AdminUntrustedURL() string {
+	return Env("PADDOCK_TEST_ADMIN_UNTRUSTED_URL", "https://admin.paddock.localhost:8444")
+}
+
 // BundlesURL is the public bundles host (PADDOCK_TEST_BUNDLES_URL overrides).
 func BundlesURL() string {
 	return Env("PADDOCK_TEST_BUNDLES_URL", "https://bundles.paddock.localhost:8443")
@@ -102,21 +109,49 @@ func ComposeInput(ctx context.Context, stdin io.Reader, args ...string) (string,
 // ComposeProduction runs `docker compose` over the production files only (without compose.dev.yaml), e.g. to check
 // the configuration a production deployment gets.
 func ComposeProduction(ctx context.Context, env []string, args ...string) (string, error) {
-	return composeFiles(ctx, env, nil, []string{"compose.yaml", "compose.audit.yaml"}, args)
+	return composeFiles(ctx, env, nil, ".env", []string{"compose.yaml", "compose.audit.yaml"}, args)
 }
 
 func compose(ctx context.Context, env []string, stdin io.Reader, args []string) (string, error) {
-	return composeFiles(ctx, env, stdin, []string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml"}, args)
+	return composeFiles(ctx, env, stdin, ".env", []string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml"}, args)
 }
 
-func composeFiles(ctx context.Context, env []string, stdin io.Reader, files, args []string) (string, error) {
+// ProdFiles returns the Compose files of a production host from the Makefile (PROD_FILES_<host>), the list
+// `make prod-check HOST=<host>` checks.
+func ProdFiles(host string) ([]string, error) {
+	root, err := RepoRoot()
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		return nil, err
+	}
+	m := regexp.MustCompile(`(?m)^PROD_FILES_` + host + `\s*:=\s*(.+)$`).FindSubmatch(b)
+	if m == nil {
+		return nil, fmt.Errorf("no PROD_FILES_%s in the Makefile", host)
+	}
+	return strings.Fields(string(m[1])), nil
+}
+
+// ComposeProductionHost runs `docker compose` over the production files of host with the settings template
+// prod.env.example (not the development .env), e.g. `config --format json` for prod-check (plan M7a gate A4).
+func ComposeProductionHost(ctx context.Context, env []string, host string, args ...string) (string, error) {
+	files, err := ProdFiles(host)
+	if err != nil {
+		return "", err
+	}
+	return composeFiles(ctx, env, nil, "prod.env.example", files, args)
+}
+
+func composeFiles(ctx context.Context, env []string, stdin io.Reader, envFile string, files, args []string) (string, error) {
 	root, err := RepoRoot()
 	if err != nil {
 		return "", err
 	}
 	dir := filepath.Join(root, "deploy", "compose")
 	base := []string{"compose", "--project-directory", dir, "-p", "paddock",
-		"--env-file", filepath.Join(dir, "versions.env"), "--env-file", filepath.Join(dir, ".env")}
+		"--env-file", filepath.Join(dir, "versions.env"), "--env-file", filepath.Join(dir, envFile)}
 	for _, f := range files {
 		base = append(base, "-f", filepath.Join(dir, f))
 	}
