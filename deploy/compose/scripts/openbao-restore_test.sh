@@ -26,7 +26,7 @@ start() { # start <name> <volume> [network alias]
     "$image" bao server -config=/openbao/config/config.hcl -config=/openbao/config/dev.hcl >/dev/null
 }
 target=""
-bao() { docker exec -i -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN="$BAO_TOKEN"} "$target" bao "$@"; }
+bao() { docker exec -i -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN} "$target" bao "$@"; }
 bao_restart() { docker restart "$target" >/dev/null; }
 
 # Source: 5 shares, threshold 3, one secret, a snapshot.
@@ -34,7 +34,7 @@ start "$id-src" "$id-src"
 target="$id-src"
 openbao_wait
 bao operator init -key-shares=5 -key-threshold=3 >"$work/init.txt"
-for i in 1 2 3; do bao operator unseal "$(sed -n "s/^Unseal Key $i: //p" "$work/init.txt")" >/dev/null; done
+for i in 1 2 3; do openbao_unseal "$(sed -n "s/^Unseal Key $i: //p" "$work/init.txt")"; done
 openbao_unsealed
 root="$(sed -n 's/^Initial Root Token: //p' "$work/init.txt")"
 for _ in $(seq 1 30); do BAO_TOKEN="$root" bao secrets enable -path=restore-test kv >/dev/null 2>&1 && break; sleep 1; done

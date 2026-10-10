@@ -113,6 +113,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pre-release before its release, and the newest release among equally recent ones is the highest version.
 - The bucket bootstraps no longer fail when a generated RustFS root credential begins with `-` (a random
   base64url value does so now and then): `rc alias set` takes the credentials after `--`.
+- The OpenBao scripts no longer put a secret on a command line: the root token reaches the container by name only,
+  the session keys and the unseal shares go through stdin (`openbao-configure.sh`, `openbao-bootstrap.sh`, the restore
+  drill); a test of `make test` refuses `-e NAME=$value` and secret arguments in the bootstrap and bundle scripts.
+- `fleet-bootstrap.sh` replaces the API-only user `paddock` only when Fleet rejects the stored token with 401; when
+  Fleet is unreachable, answers otherwise or does not answer within 10 seconds, or when the stored token file exists
+  but cannot be read, it stops without touching the user, so a passing outage no longer rotates the token.
+- `paddock-server admin agent-release` audits every refusal like the admin API: an invalid version or a release
+  without an agent binary records a failed `agent_release.created` event, a refused file a failed
+  `agent_release.artifact_uploaded` event.
 
 ## [0.1.0-alpha.1] - 2026-10-09
 

@@ -145,6 +145,8 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
+	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
+	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh

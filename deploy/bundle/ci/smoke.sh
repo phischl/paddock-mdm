@@ -139,14 +139,21 @@ root_token="$(sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' "$W/init.json")"
 mapfile -t shares < <(awk '/"unseal_keys_b64"/ { f = 1; next } f && /\]/ { f = 0 } f { gsub(/[ ",]/, ""); print }' \
   "$W/init.json" | head -3)
 ((${#shares[@]} == 3)) || fail "no unseal shares in the OpenBao init output"
-for share in "${shares[@]}"; do cp_paddock bao operator unseal "$share" </dev/null >/dev/null; done
+# Shares on stdin, never on a command line.
+for share in "${shares[@]}"; do printf '%s' "$share" | cp_paddock bao write sys/unseal key=- >/dev/null; done
 cp_paddock bao status </dev/null | grep -Eq '^Sealed +false' || fail "OpenBao is still sealed"
-(cd "$W/cp" && BAO_TOKEN="$root_token" PADDOCK_COMPOSE_EXTRA="$ci_overlay" ./paddock bootstrap openbao)
+export BAO_TOKEN="$root_token"
+cp_paddock bootstrap openbao
+unset BAO_TOKEN
 mkdir -p "$W/audit/.secrets/approle"
 rm -rf "$W/audit/.secrets/approle/paddock-audit-writer"
 cp -a "$W/cp/.secrets/approle/paddock-audit-writer" "$W/audit/.secrets/approle/"
 cp_paddock bootstrap buckets
 cp_paddock bootstrap fleet
+# A second run keeps the stored token: Fleet answers 200 for it.
+cp_paddock bootstrap fleet | tee "$W/fleet-bootstrap-2.txt"
+grep -q 'API token of the API-only user paddock is valid' "$W/fleet-bootstrap-2.txt" ||
+  fail "a second ./paddock bootstrap fleet did not keep the token"
 
 step "6 production checks"
 cp_paddock check

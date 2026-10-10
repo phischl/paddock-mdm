@@ -64,7 +64,9 @@ its own; that directory is the installation (keep it, an upgrade takes `.env` an
 v=<version>      # for example 1.2.0
 curl -fLO https://github.com/phischl/paddock-mdm/releases/download/v$v/paddock-deploy-$v.tar.gz
 curl -fLO https://github.com/phischl/paddock-mdm/releases/download/v$v/paddock-deploy-$v.tar.gz.sigstore.json
-docker run --rm -v "$PWD:/w" -w /w ghcr.io/sigstore/cosign/cosign:v3.1.3 verify-blob paddock-deploy-$v.tar.gz \
+# COSIGN_IMAGE of versions.env in the repository at the release tag (tag and digest)
+cosign_image=ghcr.io/sigstore/cosign/cosign:v3.1.3@sha256:9e5c2f2edc34351160407ca3416c61855bdf9403c3c5936e0f0be7fc261611b8
+docker run --rm -v "$PWD:/w" -w /w "$cosign_image" verify-blob paddock-deploy-$v.tar.gz \
   --bundle paddock-deploy-$v.tar.gz.sigstore.json \
   --certificate-identity-regexp '^https://github.com/phischl/paddock-mdm/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
@@ -73,8 +75,9 @@ tar -xzf paddock-deploy-$v.tar.gz && cd paddock-deploy-$v
 ./paddock version
 ```
 
-The bundle's `README.md` shows the same commands with the cosign image pinned in the repository and how to verify an
-image (`cosign verify` of the reference in `versions.env`). Run every command below inside the bundle directory, as
+Take the cosign image with its digest from `deploy/compose/versions.env` (`COSIGN_IMAGE`) of the release tag on
+GitHub; the line above is the one of this documentation's version. The bundle's `README.md` shows the same commands
+with that image filled in and how to verify an image (`cosign verify` of the reference in `versions.env`). Run every command below inside the bundle directory, as
 the operator who runs Compose. Never edit the shipped files; local settings belong in `.env`.
 
 To pull the Paddock images from a mirror of your own, set `PADDOCK_IMAGE`, `PADDOCK_COMPILER_IMAGE` and
@@ -138,10 +141,15 @@ encryption (not recommended) `./paddock bao operator init -key-shares=5 -key-thr
 on the control plane:
 
 ```sh
-./paddock bao operator unseal          # three custodians, one share each
-BAO_TOKEN=<root token> ./paddock bootstrap openbao
-BAO_TOKEN=<root token> ./paddock bao token revoke -self
+./paddock bao operator unseal          # three custodians, one share each; prompts for the share
+read -rs BAO_TOKEN && export BAO_TOKEN # the decrypted root token, typed without echo
+./paddock bootstrap openbao
+./paddock bao token revoke -self
+unset BAO_TOKEN
 ```
+
+The root token stays out of the shell history and off every command line: `./paddock` passes it to the container
+by name only.
 
 `./paddock bootstrap openbao` creates the transit keys, the session secret, the policies and the AppRoles and writes
 every AppRole's `role_id` and `secret_id` to `.secrets/approle/<role>/`. Copy `.secrets/approle/paddock-audit-writer/`
