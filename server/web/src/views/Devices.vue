@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import type { Device } from '../api/client'
 import { allGroups, contactFilter, groupFilter, listDevices, stateFilter } from '../lib/devices'
+import { paneQuery } from '../lib/deviceHealth'
 import { diskStateFilter } from '../lib/disk'
 import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 
 const { t, locale } = useI18n()
+const route = useRoute()
 const groups = ref<{ id: string; name: string }[]>([])
 onMounted(async () => {
   groups.value = await allGroups()
@@ -39,7 +42,7 @@ const columns: ListColumn[] = [
       data-testid="device-list"
     >
       <template #[`item.hostname`]="{ item }: { item: Device }">
-        <RouterLink :to="{ name: 'device', params: { id: item.id } }">
+        <RouterLink :to="{ name: 'device', params: { id: item.id }, query: paneQuery(route.query) }">
           {{ item.hostname }}
         </RouterLink>
       </template>

@@ -36,13 +36,16 @@ test('organization admin rotates and reveals the local administrator password', 
   await expect(card.getByTestId('local-admin-active')).toHaveText('1')
   await expectAccessible(page)
 
-  // Rotate now: confirmed in a dialog, listed as a pending command.
-  await card.getByTestId('local-admin-rotate').click()
+  // Rotate now: in the header band (plan M7c decision 29), confirmed in a dialog, listed as a pending command.
+  const header = page.getByTestId('device-header')
+  await header.getByTestId('local-admin-rotate').click()
   const rotate = page.getByRole('dialog', { name: 'Rotate the local administrator password' })
   await rotate.getByRole('button', { name: 'Rotate now' }).click()
-  await expect(card.getByRole('status')).toHaveText('The device rotates the password with its next check-in.')
+  await expect(header.getByRole('status')).toHaveText('The device rotates the password with its next check-in.')
+  await page.getByTestId('tab-commands').click()
   await expect(page.getByTestId('command-list').getByRole('row').filter({ hasText: 'Rotate the local administrator password' }))
     .toContainText('Pending')
+  await page.getByTestId('tab-overview').click()
 
   // Reveal: step-up, typed hostname, password with copy button.
   await stepUp(page, () => card.getByTestId('local-admin-reveal').click(), 'alice@acme.test', 'dev_alice_password', 'dev_alice_totp_key')

@@ -10,11 +10,17 @@ export const router = createRouter({
     { path: '/device-groups', name: 'device-groups', component: () => import('./views/DeviceGroups.vue') },
     { path: '/device-groups/:id', name: 'device-group', component: () => import('./views/DeviceGroupDetail.vue') },
     { path: '/devices', name: 'devices', component: () => import('./views/Devices.vue') },
-    { path: '/devices/:id', name: 'device', component: () => import('./views/DeviceDetail.vue') },
-    { path: '/devices/:id/software', name: 'device-software', component: () => import('./views/DeviceSoftware.vue') },
     {
-      path: '/devices/:id/vulnerabilities', name: 'device-vulnerabilities',
-      component: () => import('./views/DeviceVulnerabilities.vue'),
+      // The device frame (pane, header band, tabs) loads the device once; the tabs are its children (plan M7c decision 29).
+      path: '/devices/:id', component: () => import('./views/DeviceDetail.vue'),
+      children: [
+        { path: '', name: 'device', component: () => import('./views/DeviceOverview.vue') },
+        { path: 'software', name: 'device-software', component: () => import('./views/DeviceSoftware.vue') },
+        { path: 'vulnerabilities', name: 'device-vulnerabilities', component: () => import('./views/DeviceVulnerabilities.vue') },
+        { path: 'access', name: 'device-access', component: () => import('./views/DeviceAccess.vue') },
+        { path: 'configuration', name: 'device-configuration', component: () => import('./views/DeviceConfiguration.vue') },
+        { path: 'commands', name: 'device-commands', component: () => import('./views/DeviceCommands.vue') },
+      ],
     },
     { path: '/software', name: 'software', component: () => import('./views/Software.vue') },
     { path: '/vulnerabilities', name: 'vulnerabilities', component: () => import('./views/Vulnerabilities.vue') },

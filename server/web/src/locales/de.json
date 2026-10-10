@@ -695,7 +695,49 @@
         "label": "Außer Betrieb nehmen …"
       }
     },
-    "contactFilter": "Kontakt"
+    "contactFilter": "Kontakt",
+    "pane": "Geräte filtern",
+    "breadcrumb": "Pfadnavigation",
+    "header": {
+      "install": "Updates installieren…",
+      "rotate": "Admin-Passwort rotieren…",
+      "os": "Ubuntu",
+      "agent": "Agent",
+      "lastContact": "letzter Kontakt",
+      "unknown": "unbekannt"
+    },
+    "tabs": {
+      "overview": "Übersicht",
+      "access": "Anmeldung & sudo",
+      "configuration": "Konfiguration",
+      "commands": "Befehle"
+    },
+    "health": {
+      "title": "Zustand und Konformität",
+      "contact": "Kontakt",
+      "encryption": "Festplattenverschlüsselung",
+      "agent": "Agent-Version",
+      "security": "Sicherheitsupdates",
+      "reboot": "Neustart",
+      "login": "Anmeldekonfiguration",
+      "sudo": "sudo-Konfiguration",
+      "notReported": "Nicht gemeldet",
+      "securityOk": "Letzter Lauf erfolgreich",
+      "securityFailed": "Letzter Lauf fehlgeschlagen",
+      "configApplied": "Angewendet",
+      "configFailed": "Fehlgeschlagen",
+      "agentCurrent": "Aktuell",
+      "agentOutdated": "Veraltet",
+      "rebootRequired": "Neustart erforderlich",
+      "rebootNone": "Nicht erforderlich"
+    },
+    "copyId": "Geräte-ID kopieren",
+    "copied": "Kopiert.",
+    "noReportYet": "Keine Meldung seit der Registrierung – der Agent hat sich nicht verbunden",
+    "findings": {
+      "title": "Software und Schwachstellen",
+      "all": "{count, plural, one {Der Fund} other {Alle # Funde}}"
+    }
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -1013,6 +1055,10 @@
       "failed": "Fehlgeschlagen",
       "expired": "Abgelaufen",
       "cancelled": "Abgebrochen"
+    },
+    "empty": {
+      "title": "Noch keine Befehle",
+      "description": "Befehle erscheinen, wenn das Passwort rotiert, Pakete installiert oder das Gerät gesperrt wird."
     }
   },
   "revocations": {
@@ -1084,7 +1130,6 @@
   "inventory": {
     "deviceTabs": "Gerätebereiche",
     "tabs": {
-      "details": "Details",
       "software": "Software",
       "vulnerabilities": "Schwachstellen"
     },
@@ -1120,6 +1165,10 @@
       "vulnerabilities": {
         "title": "Noch keine Funde",
         "description": "Funde erscheinen nach dem ersten Inventar-Abgleich eines Geräts."
+      },
+      "deviceVulnerabilities": {
+        "title": "Keine Funde für dieses Gerät",
+        "description": "Für das Gerät wurden keine CVEs gefunden."
       }
     }
   },

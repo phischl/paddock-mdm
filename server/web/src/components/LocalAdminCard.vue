@@ -1,21 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { LocalAdmin, LocalAdminRevealed } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { formatDateTime } from '../lib/format'
-import { getLocalAdmin, revealLocalAdmin, rotateLocalAdmin, rotationOverdue } from '../lib/localAdmin'
+import { getLocalAdmin, revealLocalAdmin, rotationOverdue } from '../lib/localAdmin'
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 
 /**
- * The managed local administrator of a device (plan M4a decision 20): state and generations, Rotate now, and
+ * The managed local administrator of a device (plan M4a decision 20): state and generations, and
  * Reveal — a step-up, then the typed hostname, then the passwords in a dialog that hides them after 60 s. The
- * passwords live only in this component while the dialog is open: never in the store or the URL.
+ * passwords live only in this component while the dialog is open: never in the store or the URL. Rotate now is in
+ * the header band (plan M7c decision 29); refresh changes when it issued the command.
  */
-const props = defineProps<{ deviceId: string; hostname: string; active: boolean }>()
+const props = defineProps<{ deviceId: string; hostname: string; refresh: number }>()
 const emit = defineEmits<{ changed: [] }>()
 
 /** Seconds until revealed passwords are hidden. */
@@ -29,7 +30,6 @@ const session = useSessionStore()
 
 const state = ref<LocalAdmin | null>(null)
 const problem = ref('')
-const notice = ref('')
 const revealed = ref<LocalAdminRevealed | null>(null)
 const remaining = ref(hideAfter)
 const copied = ref<number | null>(null)
@@ -93,25 +93,12 @@ async function copy(generation: number, password: string): Promise<void> {
   copied.value = generation
 }
 
-async function rotate(): Promise<void> {
-  problem.value = ''
-  notice.value = ''
-  const confirmed = await confirm({
-    title: t('devices.localAdmin.rotate.title'), message: t('devices.localAdmin.rotate.confirm', { hostname: props.hostname }),
-    confirmLabel: t('devices.localAdmin.rotate.label'),
-  })
-  if (!confirmed) return
-  problem.value = (await rotateLocalAdmin(props.deviceId)) ?? ''
-  if (!problem.value) notice.value = t('devices.localAdmin.rotate.requested')
-  emit('changed')
-  await load()
-}
-
 onMounted(async () => {
   await load()
   await resume()
 })
 onBeforeUnmount(hide)
+watch(() => props.refresh, load)
 </script>
 
 <template>
@@ -126,12 +113,6 @@ onBeforeUnmount(hide)
       role="alert"
     >
       {{ problemText(problem) }}
-    </p>
-    <p
-      v-if="notice"
-      role="status"
-    >
-      {{ notice }}
     </p>
     <template v-if="state">
       <v-alert
@@ -193,14 +174,6 @@ onBeforeUnmount(hide)
         </tbody>
       </v-table>
       <div class="form-actions">
-        <v-btn
-          v-if="session.canWrite && active"
-          variant="outlined"
-          data-testid="local-admin-rotate"
-          @click="rotate"
-        >
-          {{ t('devices.localAdmin.rotate.label') }}
-        </v-btn>
         <v-btn
           v-if="session.canDelete && state.active_generation !== null"
           color="error"

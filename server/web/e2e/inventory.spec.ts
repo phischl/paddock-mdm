@@ -53,7 +53,8 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   const software = page.getByTestId('device-software-list')
   await expect(software.getByRole('row').filter({ hasText: pkg })).toContainText('1.0-1')
   await expect(software.getByRole('row').filter({ hasText: 'apport' })).toContainText('deb_packages')
-  await page.getByTestId('list-search').getByRole('searchbox').fill(pkg)
+  // The device pane beside the tab has its own list; the tab's search is the one inside the software list.
+  await software.getByTestId('list-search').getByRole('searchbox').fill(pkg)
   await expect(page).toHaveURL(/[?&]q=/)
   await expect(software.getByRole('row').filter({ hasText: 'apport' })).toHaveCount(0)
   await expectAccessible(page)
@@ -83,9 +84,9 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   await expect(page).toHaveURL(/sort=device_count/)
   await expectAccessible(page)
 
-  // The organization's Vulnerabilities page with the severity filter of the tile.
-  await page.goto('/device-groups')
-  await tile.getByRole('link', { name: /findings of unknown severity/ }).click()
+  // The organization's Vulnerabilities page with the severity filter of the overview's legend.
+  await page.goto('/')
+  await page.getByTestId('overview-vulnerabilities').getByRole('link', { name: /Unknown/ }).click()
   await expect(page).toHaveURL(/\/vulnerabilities\?.*severity=unknown/)
   await expect(page.getByRole('heading', { name: 'Vulnerabilities', exact: true })).toBeVisible()
   await expect(page.getByTestId('list-filter-severity')).toContainText('Unknown')

@@ -178,10 +178,20 @@ function onFieldFocus(e: FocusEvent): void {
 watch(paletteOpen, (open) => {
   if (!open) ignoreFieldFocusUntil = Date.now() + 500
 })
-function goDangerZone(): void {
-  const heading = document.querySelector<HTMLElement>('#danger-zone h2')
-  heading?.scrollIntoView({ block: 'start' })
-  heading?.focus()
+/** Opens the device's Overview tab when another tab is open and focuses the danger zone heading once it renders. */
+async function goDangerZone(): Promise<void> {
+  const device = currentDevice.value
+  if (!device) return
+  if (route.name !== 'device') await router.push({ name: 'device', params: { id: device.id }, query: route.query })
+  for (let i = 0; i < 40; i++) {
+    const heading = document.querySelector<HTMLElement>('#danger-zone h2')
+    if (heading) {
+      heading.scrollIntoView({ block: 'start' })
+      heading.focus()
+      return
+    }
+    await new Promise((r) => setTimeout(r, 50))
+  }
 }
 const paletteContext = computed<PaletteContext>(() => ({
   pages: navItems.value.map((i) => ({ to: i.to, label: t(i.label), shortcut: i.shortcut })),
@@ -199,7 +209,7 @@ const paletteContext = computed<PaletteContext>(() => ({
   toggleNav,
   openHelp: () => (helpOpen.value = true),
   setDensity: chooseDensity,
-  goDangerZone,
+  goDangerZone: () => void goDangerZone(),
   fetchDevices: fetchPaletteDevices,
   fetchGroups: fetchPaletteGroups,
 }))

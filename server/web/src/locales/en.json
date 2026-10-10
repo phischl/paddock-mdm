@@ -695,7 +695,49 @@
         "label": "Retire…"
       }
     },
-    "contactFilter": "Contact"
+    "contactFilter": "Contact",
+    "pane": "Filter devices",
+    "breadcrumb": "Breadcrumb",
+    "header": {
+      "install": "Install updates…",
+      "rotate": "Rotate admin password…",
+      "os": "Ubuntu",
+      "agent": "agent",
+      "lastContact": "last contact",
+      "unknown": "unknown"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "access": "Login & sudo",
+      "configuration": "Configuration",
+      "commands": "Commands"
+    },
+    "health": {
+      "title": "Health and compliance",
+      "contact": "Contact",
+      "encryption": "Disk encryption",
+      "agent": "Agent version",
+      "security": "Security updates",
+      "reboot": "Reboot",
+      "login": "Login configuration",
+      "sudo": "Sudo configuration",
+      "notReported": "Not reported",
+      "securityOk": "Last run succeeded",
+      "securityFailed": "Last run failed",
+      "configApplied": "Applied",
+      "configFailed": "Failed",
+      "agentCurrent": "Current",
+      "agentOutdated": "Outdated",
+      "rebootRequired": "Reboot required",
+      "rebootNone": "Not required"
+    },
+    "copyId": "Copy device ID",
+    "copied": "Copied.",
+    "noReportYet": "No report since enrolment — the agent has not connected",
+    "findings": {
+      "title": "Software and vulnerabilities",
+      "all": "{count, plural, one {The finding} other {All # findings}}"
+    }
   },
   "tokens": {
     "title": "Enrollment tokens",
@@ -1013,6 +1055,10 @@
       "failed": "Failed",
       "expired": "Expired",
       "cancelled": "Cancelled"
+    },
+    "empty": {
+      "title": "No commands yet",
+      "description": "Commands appear when an administrator rotates the password, installs packages or locks the device."
     }
   },
   "revocations": {
@@ -1084,7 +1130,6 @@
   "inventory": {
     "deviceTabs": "Device sections",
     "tabs": {
-      "details": "Details",
       "software": "Software",
       "vulnerabilities": "Vulnerabilities"
     },
@@ -1120,6 +1165,10 @@
       "vulnerabilities": {
         "title": "No findings yet",
         "description": "Findings appear after the first inventory sync of a device."
+      },
+      "deviceVulnerabilities": {
+        "title": "No findings for this device",
+        "description": "The device has no CVE matches."
       }
     }
   },
