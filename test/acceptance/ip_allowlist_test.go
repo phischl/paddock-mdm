@@ -89,6 +89,8 @@ func TestIPAllowlist(t *testing.T) {
 		t.Fatalf("a refused change changed the list: %+v", entries)
 	}
 
+	// The development step-up window (30 s) is shorter than the audit polls between the writes.
+	freshStepUp(t, root, env.PlatformAdmin)
 	res = call(t, root, http.MethodPost, ipAllowlistPath, map[string]string{"cidr": own, "label": "gate host"})
 	expectStatus(t, res, http.StatusCreated, "")
 	var mine ipAllowlistEntry
@@ -99,6 +101,7 @@ func TestIPAllowlist(t *testing.T) {
 	if ev.Params["action"] != "added" || ev.Params["consequence"] != "none" || ev.Params["entries"] != float64(1) || ev.Params["cidr"] != own {
 		t.Fatalf("added params: %v", ev.Params)
 	}
+	freshStepUp(t, root, env.PlatformAdmin)
 	res = call(t, root, http.MethodPost, ipAllowlistPath, map[string]string{"cidr": "198.51.100.0/24", "label": "office"})
 	expectStatus(t, res, http.StatusCreated, "")
 	var office ipAllowlistEntry
@@ -111,9 +114,11 @@ func TestIPAllowlist(t *testing.T) {
 	if err := res.JSON(&v6); err != nil {
 		t.Fatal(err)
 	}
+	freshStepUp(t, root, env.PlatformAdmin)
 	res = call(t, root, http.MethodPost, ipAllowlistPath, map[string]string{"cidr": "198.51.100.0/24", "label": "again"})
 	expectStatus(t, res, http.StatusConflict, "already_exists")
 	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
+	freshStepUp(t, root, env.PlatformAdmin)
 	res = call(t, root, http.MethodPatch, ipAllowlistPath+"/"+office.ID, map[string]string{"label": "branch office"})
 	expectStatus(t, res, http.StatusOK, "")
 	ev = expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "success", auditPollTimeout)
