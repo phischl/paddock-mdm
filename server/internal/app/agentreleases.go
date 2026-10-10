@@ -174,10 +174,7 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 		Version: version, Arch: arch, Sha256: hex.EncodeToString(sum[:]), Size: int64(len(binary)), Minisig: minisigB64,
 		ObjectKey: agentrelease.ObjectKey(version, arch),
 	}
-	spec := SpecAgentReleaseUpload
-	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": art.Sha256, "size": art.Size, "kind": "binary"}
-	t := releaseTarget(version)
-	spec.Target = &t
+	spec := uploadSpec(version, arch, binary, "binary", "", "")
 	var out pgstore.AgentArtifact
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
@@ -216,14 +213,10 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 		Version: version, Name: name, Arch: arch, Sha256: hex.EncodeToString(sum[:]), Size: int64(len(deb)),
 		Minisig: minisigB64, ObjectKey: agentrelease.PackageObjectKey(version, name, packageVersion, arch),
 	}
-	spec := SpecAgentReleaseUpload
-	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": pkg.Sha256, "size": pkg.Size, "kind": "deb", "name": name}
+	spec := uploadSpec(version, arch, deb, "deb", name, packageVersion)
 	if packageVersion != "" {
 		pkg.PackageVersion = &packageVersion
-		spec.Params["package_version"] = packageVersion
 	}
-	t := releaseTarget(version)
-	spec.Target = &t
 	var out pgstore.AgentPackage
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
@@ -249,6 +242,24 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 		return out, problem.UpstreamUnavailable.WithDetail("the artifact store is unavailable")
 	}
 	return out, err
+}
+
+// uploadSpec is the audited action of uploading one release file: kind binary, or deb with the package name and, for
+// fleet-osquery, its package version.
+func uploadSpec(version, arch string, body []byte, kind, name, packageVersion string) ActionSpec {
+	sum := sha256.Sum256(body)
+	spec := SpecAgentReleaseUpload
+	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": hex.EncodeToString(sum[:]), "size": int64(len(body)),
+		"kind": kind}
+	if name != "" {
+		spec.Params["name"] = name
+	}
+	if packageVersion != "" {
+		spec.Params["package_version"] = packageVersion
+	}
+	t := releaseTarget(version)
+	spec.Target = &t
+	return spec
 }
 
 // packageVerifier is the verifier of a package; paddock-revoke's is the revocation release key's.
@@ -356,7 +367,8 @@ type HostPackage struct {
 // PublishFromHost creates the release version (or continues its draft), uploads every artifact and package and
 // publishes it, through the same use cases as the admin API and with the system actor of the host commands
 // (`paddock-server admin agent-release`, plan M7b decision 31). Every file is verified before anything is created or
-// stored, so a wrong signature leaves the release untouched; a published release is refused.
+// stored, so a wrong signature leaves the release untouched; the refusal is audited as the failed upload of that file,
+// as the API records it. A published release is refused.
 func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, artifacts []HostArtifact, packages []HostPackage) (ReleaseDetail, error) {
 	ctx = systemPlatform(ctx)
 	if err := agentrelease.ValidateVersion(version); err != nil {
@@ -371,7 +383,8 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 			err = checkBinaryComment(comment, version, art.Arch)
 		}
 		if err != nil {
-			return ReleaseDetail{}, fmt.Errorf("paddockd %s: %w", art.Arch, err)
+			return ReleaseDetail{}, a.refuseUpload(ctx, uploadSpec(version, art.Arch, art.Binary, "binary", "", ""),
+				fmt.Errorf("paddockd %s: %w", art.Arch, err))
 		}
 	}
 	for _, pkg := range packages {
@@ -382,7 +395,8 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 			_, err = checkFile(a.packageVerifier(pkg.Name), pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
 		}
 		if err != nil {
-			return ReleaseDetail{}, fmt.Errorf("package %s %s: %w", pkg.Name, pkg.Arch, err)
+			return ReleaseDetail{}, a.refuseUpload(ctx, uploadSpec(version, pkg.Arch, pkg.Deb, "deb", pkg.Name, pkg.PackageVersion),
+				fmt.Errorf("package %s %s: %w", pkg.Name, pkg.Arch, err))
 		}
 	}
 
@@ -413,6 +427,16 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 		return ReleaseDetail{}, err
 	}
 	return a.get(ctx, version)
+}
+
+// refuseUpload records one failed upload event for a file the host command refused before uploading, and returns the
+// refusal.
+func (a *AgentReleases) refuseUpload(ctx context.Context, spec ActionSpec, refusal error) error {
+	if err := a.runner.RunTxRefusal(ctx, ScopePlatform, spec, refusal,
+		func(context.Context, *pgstore.Queries, Recorder) error { return nil }); err != nil && !errors.Is(err, refusal) {
+		return errors.Join(refusal, err)
+	}
+	return refusal
 }
 
 // RolloutOptions override the rollout defaults; nil keeps the default.

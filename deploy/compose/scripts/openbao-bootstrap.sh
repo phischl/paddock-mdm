@@ -16,7 +16,7 @@ INIT_FILE="$BAO_DIR/init.txt"
 mode="${1:-bootstrap}"
 
 bao() {
-  compose exec -T -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN="$BAO_TOKEN"} openbao bao "$@"
+  compose exec -T -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN} openbao bao "$@"
 }
 
 status() { bao status -format=json 2>/dev/null || true; }
@@ -38,7 +38,8 @@ unseal() {
   [[ -s "$INIT_FILE" ]] || { echo "no stored unseal shares in $INIT_FILE" >&2; exit 1; }
   for i in 1 2 3; do
     key="$(sed -n "s/^Unseal Key $i: //p" "$INIT_FILE")"
-    bao operator unseal "$key" >/dev/null
+    # On stdin: an unseal share never appears on a command line.
+    printf '%s' "$key" | bao write sys/unseal key=- >/dev/null
   done
   status | grep -q '"sealed": false' || { echo "unseal failed" >&2; exit 1; }
   echo "OpenBao unsealed"

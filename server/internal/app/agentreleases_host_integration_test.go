@@ -92,5 +92,13 @@ func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 		if len(h.store.puts) != before {
 			t.Errorf("%s: a file was stored", name)
 		}
+		if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1`, v); n != 1 {
+			t.Errorf("%s: %d audit events of %s, want exactly the failed upload", name, n, v)
+		}
+		if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1
+			AND code = 'agent_release.artifact_uploaded' AND outcome = 'failure'
+			AND actor->>'type' = 'system' AND actor->>'display' = 'paddock-server admin'`, v); n != 1 {
+			t.Errorf("%s: no failed agent_release.artifact_uploaded event of the host actor", name)
+		}
 	}
 }

@@ -13,6 +13,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/lib.sh"
 
 [[ -n "${BAO_TOKEN:-}" ]] || { echo "set BAO_TOKEN to the root token of OpenBao" >&2; exit 2; }
+# Secrets never appear on a command line (ps, /proc): the token reaches the container by name from the environment,
+# values by stdin.
+export BAO_TOKEN
 
 production=
 [[ "$(env_value PADDOCK_ENV)" == development ]] || production=1
@@ -21,9 +24,9 @@ production=
 bao() {
   if [[ -n "$production" ]]; then
     compose exec -T -e BAO_ADDR=https://127.0.0.1:8200 -e BAO_CACERT=/run/secrets/internal_ca_bundle \
-      -e BAO_TOKEN="$BAO_TOKEN" openbao bao "$@"
+      -e BAO_TOKEN openbao bao "$@"
   else
-    compose exec -T -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN="$BAO_TOKEN" openbao bao "$@"
+    compose exec -T -e BAO_ADDR=http://127.0.0.1:8200 -e BAO_TOKEN openbao bao "$@"
   fi
 }
 
@@ -55,9 +58,8 @@ if ! bao read transit/keys/escrow-wrap >/dev/null 2>&1; then
 fi
 
 if ! bao kv get secret/paddock/session >/dev/null 2>&1; then
-  bao kv put secret/paddock/session \
-    current="$(head -c 32 /dev/urandom | base64 -w0)" \
-    previous="$(head -c 32 /dev/urandom | base64 -w0)" >/dev/null
+  printf '{"current":"%s","previous":"%s"}' "$(head -c 32 /dev/urandom | base64 -w0)" \
+    "$(head -c 32 /dev/urandom | base64 -w0)" | bao kv put secret/paddock/session - >/dev/null
   echo "created secret/paddock/session"
 fi
 

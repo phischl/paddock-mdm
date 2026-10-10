@@ -45,7 +45,8 @@ Hand each encrypted share to its custodian (`Unseal Key N` is encrypted for `cus
 unseal (section 2), and the root token holder configures OpenBao on the control-plane host, in the bundle directory:
 
 ```sh
-BAO_TOKEN=<decrypted root token> ./paddock bootstrap openbao
+read -rs BAO_TOKEN && export BAO_TOKEN   # the decrypted root token, typed without echo
+./paddock bootstrap openbao
 ```
 
 It enables `transit`, `secret` (kv-v2) and `approle`, creates the transit keys `audit-chain`, `bundle-signing`,
@@ -59,7 +60,7 @@ and never the api, `paddock-revocation-issuer` the revocation-issuer and no othe
 Copy `.secrets/approle/paddock-audit-writer/` to the audit host (`docs/operations/install.md` section 4).
 
 Then take the first snapshot (section 5) and finally revoke the root token
-(`BAO_TOKEN=<root token> ./paddock bao token revoke -self`). A new root token can be generated later only with three
+(`./paddock bao token revoke -self` with `BAO_TOKEN` still exported, then `unset BAO_TOKEN`). A new root token can be generated later only with three
 custodians (`bao operator generate-root`).
 
 ## 2. Unseal after a restart

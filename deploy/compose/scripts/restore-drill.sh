@@ -45,7 +45,7 @@ wait_spool_empty() {
   exit 1
 }
 
-bao() { dc exec -T -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN="$BAO_TOKEN"} openbao bao "$@"; }
+bao() { dc exec -T -e BAO_ADDR=http://127.0.0.1:8200 ${BAO_TOKEN:+-e BAO_TOKEN} openbao bao "$@"; }
 bao_restart() { dc restart openbao >/dev/null; }
 # shellcheck source=openbao-restore.sh
 . "$here/openbao-restore.sh"
