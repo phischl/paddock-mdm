@@ -28,7 +28,13 @@ function attributes(text: string, allowed: Set<string>, where: string): Record<s
 
 /** Parses one Lucide SVG into its nodes; throws with the icon name and the reason when the file is not acceptable. */
 export function parseIconSvg(name: string, svg: string): IconNode[] {
-  const body = svg.replace(/<\?xml[^>]*\?>/, '').replace(/<!--[\s\S]*?-->/g, '').trim()
+  let body = svg.replace(/<\?xml[^>]*\?>/, '')
+  // Repeat until stable so that nested or overlapping markers such as `<!<!---->--` cannot leave a comment opener behind.
+  for (let prev = ''; prev !== body; ) {
+    prev = body
+    body = body.replace(/<!--[\s\S]*?-->/g, '')
+  }
+  body = body.trim()
   const root = /^<svg\b([^>]*)>([\s\S]*)<\/svg>$/.exec(body)
   if (!root) throw new Error(`${name}: not a single <svg> element`)
   const rootAttrs = attributes(root[1], rootAttributes, name)
