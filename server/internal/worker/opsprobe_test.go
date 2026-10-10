@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net/http/httptest"
 	"testing"
@@ -41,22 +42,47 @@ func TestOpsProbeCertificates(t *testing.T) {
 	srv.StartTLS()
 	defer srv.Close()
 	want := srv.Certificate().NotAfter
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
 
-	NewOpsProbe(nil, DialCertExpiry(srv.Listener.Addr().String()), []string{"admin.example.org"}).ProbeCertificates(context.Background())
-	if got := testutil.ToFloat64(metricTLSExpiry.WithLabelValues("admin.example.org")); got != float64(want.Unix()) {
+	// httptest's certificate is issued for example.com.
+	NewOpsProbe(nil, DialCertExpiry(srv.Listener.Addr().String(), roots), []string{"example.com"}).ProbeCertificates(context.Background())
+	if got := testutil.ToFloat64(metricTLSExpiry.WithLabelValues("example.com")); got != float64(want.Unix()) {
 		t.Fatalf("expiry %v, want %v", got, want.Unix())
 	}
-	if testutil.ToFloat64(metricTLSProbeSuccess.WithLabelValues("admin.example.org")) != 1 {
+	if testutil.ToFloat64(metricTLSProbeSuccess.WithLabelValues("example.com")) != 1 {
 		t.Fatal("probe success must be 1")
 	}
 
 	failing := func(context.Context, string) (time.Time, error) { return time.Time{}, errors.New("refused") }
-	NewOpsProbe(nil, failing, []string{"admin.example.org"}).ProbeCertificates(context.Background())
-	if testutil.ToFloat64(metricTLSProbeSuccess.WithLabelValues("admin.example.org")) != 0 {
+	NewOpsProbe(nil, failing, []string{"example.com"}).ProbeCertificates(context.Background())
+	if testutil.ToFloat64(metricTLSProbeSuccess.WithLabelValues("example.com")) != 0 {
 		t.Fatal("a failed probe must read 0")
 	}
-	if got := testutil.ToFloat64(metricTLSExpiry.WithLabelValues("admin.example.org")); got != float64(want.Unix()) {
+	if got := testutil.ToFloat64(metricTLSExpiry.WithLabelValues("example.com")); got != float64(want.Unix()) {
 		t.Fatal("a failed probe keeps the last expiry")
+	}
+}
+
+// TestDialCertExpiryVerifiesTheCertificate: the probe verifies the chain and the name like a client, so an untrusted
+// certificate or one for another hostname fails instead of reporting its expiry.
+func TestDialCertExpiryVerifiesTheCertificate(t *testing.T) {
+	srv := httptest.NewUnstartedServer(nil)
+	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+
+	if _, err := DialCertExpiry(addr, x509.NewCertPool())(context.Background(), "example.com"); err == nil {
+		t.Fatal("a certificate from an untrusted issuer was accepted")
+	}
+	if _, err := DialCertExpiry(addr, roots)(context.Background(), "admin.example.org"); err == nil {
+		t.Fatal("a certificate for another hostname was accepted")
+	}
+	if _, err := DialCertExpiry(addr, roots)(context.Background(), "example.com"); err != nil {
+		t.Fatalf("trusted certificate for the hostname: %v", err)
 	}
 }
 

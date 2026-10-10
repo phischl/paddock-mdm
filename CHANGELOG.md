@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The worker's certificate probe (`PADDOCK_TLS_PROBE_HOSTS`) verifies each public certificate against the system
+  trust store and the hostname, like a client. An expired, untrusted or wrong-name certificate now reads
+  `paddock_tls_probe_success` 0 and raises `PaddockCertificateProbeFailing`, instead of reporting its expiry.
+- Device gateway cache errors no longer contain the cache key, so logs carry neither a device key ID nor the hash of
+  an enrollment token.
+- The audit sealer refuses a signing key version outside 1…2³¹−1 before it writes the manifest, instead of
+  truncating it into the manifest index.
+
 ## [0.1.0-alpha.1] - 2026-10-09
 
 **Alpha.** This is a pre-release for evaluation, not for production fleets. Revocation (Lock, Destroy, dead man's
