@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Portal theme preference on the account (M7c step 1, ADR 0023): `GET /api/v1/me` returns `theme` (`system`, `light` or `dark`; `system` follows the operating system's preference) and `PATCH /api/v1/me` accepts a patch of `locale` and/or `theme` (at least one field; an unsupported value or an empty patch answers 400). Database migration `00037` runs automatically.
+
 ### Fixed
 
 - CI: the trivy job saves its vulnerability database cache again (the cache step failed on root-owned files).

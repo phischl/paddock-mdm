@@ -5,7 +5,7 @@ import { useSessionStore } from '../stores/session'
 
 const me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice', role: 'org_admin',
-  organization: null, locale: 'de', revocation_enabled: false,
+  organization: null, locale: 'de', theme: 'system', revocation_enabled: false,
 }
 const GET = vi.fn()
 const PATCH = vi.fn()

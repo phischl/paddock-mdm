@@ -8,8 +8,10 @@ RETURNING *;
 -- name: GetPlatformAdmin :one
 SELECT * FROM platform_admin WHERE id = @id;
 
--- name: UpdatePlatformAdminLocale :one
-UPDATE platform_admin SET locale = @locale WHERE id = @id RETURNING *;
+-- name: UpdatePlatformAdminSettings :one
+UPDATE platform_admin
+SET locale = coalesce(sqlc.narg(locale), locale), theme = coalesce(sqlc.narg(theme), theme)
+WHERE id = @id RETURNING *;
 
 -- name: UpsertAdminAccount :one
 INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role, last_login_at)
@@ -24,8 +26,10 @@ SELECT * FROM admin_account WHERE id = @id;
 -- name: GetAdminAccountBySubject :one
 SELECT * FROM admin_account WHERE authentik_sub = @authentik_sub;
 
--- name: UpdateAdminAccountLocale :one
-UPDATE admin_account SET locale = @locale WHERE id = @id RETURNING *;
+-- name: UpdateAdminAccountSettings :one
+UPDATE admin_account
+SET locale = coalesce(sqlc.narg(locale), locale), theme = coalesce(sqlc.narg(theme), theme)
+WHERE id = @id RETURNING *;
 
 -- name: GetPlatformAdminBySubject :one
 SELECT * FROM platform_admin WHERE authentik_sub = @authentik_sub;

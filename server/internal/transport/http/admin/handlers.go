@@ -77,7 +77,14 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 }
 
 func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObject) (adminapi.UpdateMeResponseObject, error) {
-	me, err := h.accounts.UpdateLocale(ctx, string(req.Body.Locale))
+	var settings app.AccountSettings
+	if req.Body.Locale != nil {
+		settings.Locale = (*string)(req.Body.Locale)
+	}
+	if req.Body.Theme != nil {
+		settings.Theme = (*string)(req.Body.Theme)
+	}
+	me, err := h.accounts.UpdateSettings(ctx, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +94,7 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 func (h *handlers) toMe(me app.Me) adminapi.Me {
 	out := adminapi.Me{
 		Id: me.ID, Username: me.Username, DisplayName: me.DisplayName, Role: adminapi.MeRole(me.Role),
-		Locale: adminapi.MeLocale(me.Locale), RevocationEnabled: h.revocations.Enabled(),
+		Locale: adminapi.MeLocale(me.Locale), Theme: adminapi.MeTheme(me.Theme), RevocationEnabled: h.revocations.Enabled(),
 	}
 	if me.Organization != nil {
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name}

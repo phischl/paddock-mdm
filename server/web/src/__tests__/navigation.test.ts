@@ -18,7 +18,7 @@ vi.mock('../lib/updates', async (original) => ({
 const admin: Me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice Admin',
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme' },
-  locale: 'en', revocation_enabled: false,
+  locale: 'en', theme: 'system', revocation_enabled: false,
 }
 
 let wrapper: VueWrapper | null = null

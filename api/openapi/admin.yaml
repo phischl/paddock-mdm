@@ -3381,7 +3381,7 @@ components:
         name: { type: string }
     Me:
       type: object
-      required: [id, username, display_name, role, organization, locale, revocation_enabled]
+      required: [id, username, display_name, role, organization, locale, theme, revocation_enabled]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -3392,6 +3392,10 @@ components:
             - $ref: "#/components/schemas/MeOrganization"
           nullable: true
         locale: { type: string, enum: [en, de] }
+        theme:
+          type: string
+          enum: [system, light, dark]
+          description: Portal theme preference; system follows prefers-color-scheme. An API token answers system.
         revocation_enabled:
           type: boolean
           description: |
@@ -3425,10 +3429,12 @@ components:
         max_auth_age_seconds: { type: integer, description: The oldest login a step-up callback accepts (max_age). }
     MeUpdate:
       type: object
-      required: [locale]
+      description: A patch of the account settings; at least one field.
+      minProperties: 1
       additionalProperties: false
       properties:
         locale: { type: string, enum: [en, de] }
+        theme: { type: string, enum: [system, light, dark] }
     DeviceGroup:
       type: object
       required: [id, name, description, created_at, updated_at]

@@ -1920,6 +1920,11 @@ export interface components {
             /** @enum {string} */
             locale: "en" | "de";
             /**
+             * @description Portal theme preference; system follows prefers-color-scheme. An API token answers system.
+             * @enum {string}
+             */
+            theme: "system" | "light" | "dark";
+            /**
              * @description PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
              *     dead man's switch answer 403 revocation_disabled.
              */
@@ -1947,9 +1952,12 @@ export interface components {
             /** @description The oldest login a step-up callback accepts (max_age). */
             max_auth_age_seconds: number;
         };
+        /** @description A patch of the account settings; at least one field. */
         MeUpdate: {
             /** @enum {string} */
-            locale: "en" | "de";
+            locale?: "en" | "de";
+            /** @enum {string} */
+            theme?: "system" | "light" | "dark";
         };
         DeviceGroup: {
             /** Format: uuid */
