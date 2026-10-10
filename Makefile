@@ -444,12 +444,27 @@ release-artifacts: release-key-check ## Build the release RELEASE_VERSION into d
 	rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
 	$(MAKE) --no-print-directory release-images
 	$(MAKE) --no-print-directory deb VERSION=$(RELEASE_VERSION) RELEASE_PUBLIC_KEY_FILE=$(RELEASE_PUBLIC_KEY_FILE) TAGS= REVOKE_TAGS=
-	@for f in bin/deb/*.deb; do b=$$(basename "$$f" .deb); cp "$$f" "$(RELEASE_DIR)/$$b-unsigned.deb" || exit 1; done
+	$(MAKE) --no-print-directory release-debs
 	@for arch in amd64 arm64; do cp bin/agent/$$arch/paddockd $(RELEASE_DIR)/paddockd_$(RELEASE_VERSION)_linux_$$arch-unsigned || exit 1; done
 	$(MAKE) --no-print-directory release-sbom
+	$(MAKE) --no-print-directory release-names-check
 	cd $(RELEASE_DIR) && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name images.txt ! -name '*.sigstore.json' \
 		-printf '%f\n' | LC_ALL=C sort | xargs sha256sum >SHA256SUMS
 	@ls -1 $(RELEASE_DIR)
+
+# GitHub renames release assets with characters such as ~, so a pre-release's packages (Debian version x.y.z~alpha.N
+# inside) are published as <name>_<release version>_<arch>-unsigned.deb, and SHA256SUMS names the files as published.
+RELEASE_DEB_DIR ?= bin/deb
+
+.PHONY: release-debs
+release-debs: release-check
+	@for f in $(RELEASE_DEB_DIR)/*.deb; do b=$$(basename "$$f" .deb); \
+		cp "$$f" "$(RELEASE_DIR)/$${b%%_*}_$(RELEASE_VERSION)_$${b##*_}-unsigned.deb" || exit 1; done
+
+.PHONY: release-names-check
+release-names-check:
+	@bad=$$(find $(RELEASE_DIR) -maxdepth 1 -type f -printf '%f\n' | grep -v '^[A-Za-z0-9._+-]*$$' || true); \
+		test -z "$$bad" || { echo "release file names GitHub would rename: $$bad"; exit 2; }
 
 .PHONY: release-images
 release-images: release-check

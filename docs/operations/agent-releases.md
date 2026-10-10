@@ -94,9 +94,11 @@ A tag `v<version>` runs the release workflow (`.github/workflows/release.yml`, p
 
 `<version>` is `x.y.z` or a pre-release `x.y.z-alpha.N`, `x.y.z-beta.N` or `x.y.z-rc.N` (`make release-check`
 refuses anything else). Images carry exactly `<version>` as their tag, never `latest`. The Debian packages of a
-pre-release carry the Debian version `x.y.z~alpha.N` (`~beta.N`, `~rc.N`), which sorts before `x.y.z`, so their
-files are named `<name>_0.1.0~alpha.1_amd64-unsigned.deb`; agents and supervisors order the versions by SemVer
-precedence (`0.1.0-alpha.1 < 0.1.0-alpha.2 < 0.1.0-beta.1 < 0.1.0-rc.1 < 0.1.0`).
+pre-release carry the Debian version `x.y.z~alpha.N` (`~beta.N`, `~rc.N`) inside, which sorts before `x.y.z`, but
+their release files are named with the release version, `<name>_0.1.0-alpha.1_amd64-unsigned.deb`: GitHub renames
+asset names with characters such as `~`, and `SHA256SUMS` names the files exactly as published
+(`make release-artifacts` refuses file names outside `[A-Za-z0-9._+-]`). Agents and supervisors order the versions
+by SemVer precedence (`0.1.0-alpha.1 < 0.1.0-alpha.2 < 0.1.0-beta.1 < 0.1.0-rc.1 < 0.1.0`).
 
 `PUSH=1` pushes the `:<version>` tags before `release-sign` runs, so a run that fails between the two leaves
 unsigned images under the release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and
@@ -121,10 +123,13 @@ cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json … (same identi
 On the offline signing machine, for each draft release:
 
 1. Download the `-unsigned` files, `SHA256SUMS` and `SHA256SUMS.sigstore.json`; check the bundle with
-   `cosign verify-blob` (above) and the files with `sha256sum -c SHA256SUMS`.
+   `cosign verify-blob` (above) and the files with `sha256sum -c SHA256SUMS` (the asset names are the names in
+   `SHA256SUMS`, also for a pre-release).
 2. Remove the suffix (`paddockd_<version>_linux_amd64-unsigned` → `paddockd`,
-   `paddock-agent_<version>_amd64-unsigned.deb` → `paddock-agent_<version>_amd64.deb`, …) and sign every binary and
-   package as described under *Keys*: `paddockd` and the `paddock-agent` and `paddock-supervisor` packages with the
+   `paddock-agent_<version>_amd64-unsigned.deb` → `paddock-agent_<version>_amd64.deb`, …; `<version>` is the release
+   version, e.g. `0.1.0-alpha.1`, while `dpkg-deb -f` shows the Debian version `0.1.0~alpha.1`; the upload takes
+   name, version and architecture from the URL, not from the file name) and sign every binary and package as
+   described under *Keys*: `paddockd` and the `paddock-agent` and `paddock-supervisor` packages with the
    agent release key, the `paddock-revoke` package with the revocation release key (two holders).
 3. Build fleetd for the release with `make fleetd-deb` (needs outbound HTTPS to Fleet's update server) and sign it
    with the agent release key.

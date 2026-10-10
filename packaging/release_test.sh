@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests of the release version rules in the Makefile (`make test`): which versions release-check accepts, that every
 # release image is tagged with exactly the release version (never latest), and how a version maps to the Debian
-# version of the packages (a pre-release sorts before its release).
+# version of the packages (a pre-release sorts before its release), and that the release assets are named with the
+# release version and only characters GitHub keeps.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,6 +56,24 @@ if command -v dpkg >/dev/null; then
 else
   echo "skip Debian ordering: dpkg is not installed"
 fi
+
+# Release assets: GitHub renames names with characters outside [A-Za-z0-9._+-] (such as ~), which would no longer
+# match SHA256SUMS, so the packages are published under the release version.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/deb" "$work/out"
+for pkg in paddock-agent paddock-supervisor paddock-revoke; do : >"$work/deb/${pkg}_0.1.0~alpha.1_amd64.deb"; done
+make -s -C "$root" --no-print-directory release-debs RELEASE_VERSION=0.1.0-alpha.1 RELEASE_DEB_DIR="$work/deb" \
+  RELEASE_DIR="$work/out"
+check "release package names" "$(ls "$work/out" | LC_ALL=C sort | tr '\n' ' ')" \
+  "paddock-agent_0.1.0-alpha.1_amd64-unsigned.deb paddock-revoke_0.1.0-alpha.1_amd64-unsigned.deb paddock-supervisor_0.1.0-alpha.1_amd64-unsigned.deb "
+if ls "$work/out" | grep -qv '^[A-Za-z0-9._+-]*$'; then got=1; else got=0; fi
+check "release file names keep to [A-Za-z0-9._+-]" "$got" 0
+if make -s -C "$root" --no-print-directory release-names-check RELEASE_DIR="$work/out" >/dev/null 2>&1; then got=0; else got=1; fi
+check "release-names-check accepts the release files" "$got" 0
+: >"$work/out/paddock-agent_0.1.0~alpha.1_amd64-unsigned.deb"
+if make -s -C "$root" --no-print-directory release-names-check RELEASE_DIR="$work/out" >/dev/null 2>&1; then got=0; else got=1; fi
+check "release-names-check rejects a ~ in a file name" "$got" 1
 
 if ((failures > 0)); then
   echo "$failures failure(s)"
