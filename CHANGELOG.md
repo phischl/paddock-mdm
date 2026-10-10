@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `caddy/guards.caddy` and `caddy/entrypoint.sh` next to it. `prod-check` gains the items `edge client address`,
   `role trusted proxies` and `ip allow list bypass is off` and checks the two mounts. The development stack trusts
   private ranges, reads both headers and adds the untrusted listener 8444 for the gates.
+- Application IP allow list (M7a step 2, ADR 0021): platform administrators manage the allow list of the portal and
+  the admin API under `/api/platform/v1/ip-allowlist` (every write needs a fresh step-up); while it has entries,
+  every api replica refuses sessions and API tokens from other addresses with 403 `ip_not_allowed` before any session
+  or token is read, and follows changes within 2 s through a Valkey change counter. A change that would exclude the
+  caller's own address or remove the last entry is refused with 409 until confirmed (`confirm=lockout` or
+  `confirm=disable`). New audit codes `platform.ip_allowlist_changed`, `platform.ip_allowlist_denied` (aggregated per
+  address and 10-minute window, at most 41 events per window and replica) and `platform.ip_allowlist_disabled`;
+  metrics `paddock_ip_allowlist_*`. Migration 00036 adds the platform table `ip_allowlist_entry`.
 
 ### Fixed
 

@@ -25,6 +25,8 @@ func TestRLSLint(t *testing.T) {
 		"agent_release": true, "agent_artifact": true, "agent_rollout": true, "agent_package": true,
 		// Ubuntu's vulnerability data (plan M5c decision 1), platform data without organization data.
 		"osv_ubuntu": true, "osv_ubuntu_binary": true, "osv_sync_state": true,
+		// IP allow list of the administrative surfaces (plan M7a decision 10), role paddock_platform only.
+		"ip_allowlist_entry": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,

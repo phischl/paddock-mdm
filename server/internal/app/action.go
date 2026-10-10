@@ -47,6 +47,9 @@ type ActionSpec struct {
 	// RequiresStepUp refuses the action (denied, step_up_required) unless the administrator completed a step-up
 	// within StepUpValidity (plan M4a decision 7).
 	RequiresStepUp bool
+	// CorrelationID replaces the request ID of ctx; events aggregated outside a request (the IP allow list denials
+	// of one window, plan M7a decision 20) share one.
+	CorrelationID string
 }
 
 // StepUpValidity is how long a step-up authentication satisfies RequiresStepUp (plan M4a decision 6).
@@ -193,6 +196,9 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 		correlated: r.correlationID(ctx),
 		startedAt:  audit.Timestamp(r.now()),
 	}
+	if spec.CorrelationID != "" {
+		rec.correlated = spec.CorrelationID
+	}
 	if spec.Target != nil {
 		t := *spec.Target
 		rec.target = &t
@@ -284,7 +290,8 @@ func OutcomeOf(err error) (audit.Outcome, string) {
 	p := problem.From(err)
 	if errors.Is(err, problem.Forbidden) || errors.Is(err, problem.NoOrganization) || errors.Is(err, problem.CSRFMissing) ||
 		errors.Is(err, problem.StepUpRequired) || errors.Is(err, problem.RevocationDisabled) ||
-		errors.Is(err, problem.RevocationFrozen) || errors.Is(err, problem.RevocationRejected) {
+		errors.Is(err, problem.RevocationFrozen) || errors.Is(err, problem.RevocationRejected) ||
+		errors.Is(err, problem.IPNotAllowed) {
 		return audit.OutcomeDenied, p.Code
 	}
 	return audit.OutcomeFailure, p.Code

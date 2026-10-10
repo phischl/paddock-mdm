@@ -140,6 +140,11 @@ const (
 	CodeOrganizationRecompileRequested Code = "organization.recompile_requested"
 	CodePlatformBundleSeqBumped        Code = "platform.bundle_seq_bumped"
 	CodePlatformCacheRebuilt           Code = "platform.cache_rebuilt"
+
+	// IP allow list of the administrative surfaces (plan M7a decision 14).
+	CodePlatformIPAllowlistChanged  Code = "platform.ip_allowlist_changed"
+	CodePlatformIPAllowlistDenied   Code = "platform.ip_allowlist_denied"
+	CodePlatformIPAllowlistDisabled Code = "platform.ip_allowlist_disabled"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -872,6 +877,27 @@ var registry = map[Code]Definition{
 		Params:      []string{"organizations"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
 		Note:        "Bundle pointers and time tickets are rewritten by the running compiler within 60 s.",
+	},
+	CodePlatformIPAllowlistChanged: {
+		Code: CodePlatformIPAllowlistChanged, Emitted: true,
+		Description: "A platform administrator added, updated or removed an entry of the IP allow list of the administrative surfaces, or an operator added one with paddock-server admin allowlist add (actor: system).",
+		Params:      []string{"action", "cidr", "label", "previous_cidr", "previous_label", "entries", "consequence"},
+		Outcomes:    adminOutcomes,
+		Note:        "Target is the entry (type ip_allowlist_entry, display the CIDR); action is added, updated or removed; entries is the count after the change; consequence is none, lockout (the caller's own address is no longer covered) or disable (the last entry was removed). Denied with step_up_required without a fresh step-up, forbidden for a non-platform principal; failure with lockout_confirmation_required or disable_confirmation_required when the consequence was not confirmed, already_exists for a duplicate CIDR. Platform pseudo-organization.",
+	},
+	CodePlatformIPAllowlistDenied: {
+		Code: CodePlatformIPAllowlistDenied, Emitted: true,
+		Description: "A request to the admin surface was refused because the client address is outside the IP allow list (actor: anonymous with the address); aggregated per address and window.",
+		Params:      []string{"ip", "count", "window_seconds", "first_at", "last_at", "aggregated", "distinct_ips"},
+		Outcomes:    []Outcome{OutcomeDenied},
+		Note:        "Per api replica and window (10 minutes): the first denial of an address is recorded at once (count 1, aggregated false) for at most 20 addresses; at the window's end one summary per address with further denials (count, first_at, last_at, aggregated true) and one for every address beyond the 20 (ip empty, distinct_ips). The immediate and summary events of one address and window share the correlation ID ipal-<window start>-<ip>. Edge denials are not audited; the exact count is the metric paddock_ip_allowlist_denied_total. Platform pseudo-organization.",
+	},
+	CodePlatformIPAllowlistDisabled: {
+		Code: CodePlatformIPAllowlistDisabled, Emitted: true,
+		Description: "The IP allow list of the administrative surfaces was switched off on the host (actor: system): paddock-server admin allowlist disable removed every entry, or the api started with PADDOCK_IP_ALLOWLIST_BYPASS.",
+		Params:      []string{"method", "entries_removed", "removed"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "method is cli (removed lists the CIDRs) or env (recorded once per api start with entries_removed 0; the entries stay and apply again once the variable is removed). Platform pseudo-organization.",
 	},
 	CodeConfigApplied: {
 		Code: CodeConfigApplied, Emitted: true,

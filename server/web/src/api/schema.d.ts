@@ -1701,6 +1701,62 @@ export interface paths {
         patch: operations["updateOrganization"];
         trace?: never;
     };
+    "/api/platform/v1/ip-allowlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The IP allow list of the administrative surfaces (plan M7a decision 16): while it has
+         *     entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions
+         *     and API tokens alike. Sessions only: platform tokens do not exist.
+         */
+        get: operations["listIpAllowlist"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin; requires a step-up within the step-up window (403 step_up_required). Adds a range.
+         *     409 lockout_confirmation_required when the list would no longer cover the caller's own address (repeat with
+         *     confirm=lockout); 409 already_exists for a duplicate CIDR. Every attempt is audited.
+         */
+        post: operations["createIpAllowlistEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/ip-allowlist/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: platform_admin. One entry. */
+        get: operations["getIpAllowlistEntry"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: platform_admin; requires a step-up (403 step_up_required). Removes the entry. 409
+         *     lockout_confirmation_required when the caller's own address would no longer be covered (repeat with
+         *     confirm=lockout); 409 disable_confirmation_required when it is the last entry, which switches the allow list
+         *     off for everyone (repeat with confirm=disable).
+         */
+        delete: operations["deleteIpAllowlistEntry"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: platform_admin; requires a step-up (403 step_up_required). Changes the range and/or the label (at least
+         *     one). 409 lockout_confirmation_required when the caller's own address would no longer be covered (repeat with
+         *     confirm=lockout); 409 already_exists for a duplicate CIDR.
+         */
+        patch: operations["updateIpAllowlistEntry"];
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases": {
         parameters: {
             query?: never;
@@ -2003,6 +2059,45 @@ export interface components {
             published_at?: string;
             artifact_count: number;
             rollout_status?: components["schemas"]["AgentRolloutStatus"];
+        };
+        IpAllowlistEntry: {
+            /** Format: uuid */
+            id: string;
+            /** @description Canonical CIDR: a.b.c.d/n or <ipv6>/n. */
+            cidr: string;
+            label: string;
+            /** @description Display name of the platform administrator, or paddock-server admin. */
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** @description The range contains the caller's own client address (client_ip of GET /api/v1/me). */
+            covers_caller: boolean;
+        };
+        IpAllowlistEntryCreate: {
+            /**
+             * @description IPv4 or IPv6 range with a prefix of at least 1 and the host bits zero; a single address is /32 or /128.
+             *     IPv4-mapped IPv6 is refused. The detail of a 400 names the canonical form.
+             */
+            cidr: string;
+            label: string;
+        };
+        /** @description At least one field. */
+        IpAllowlistEntryUpdate: {
+            cidr?: string;
+            label?: string;
+        };
+        IpAllowlistEntryPage: {
+            items: components["schemas"]["IpAllowlistEntry"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
         };
         AgentReleasePage: {
             items: components["schemas"]["AgentRelease"][];
@@ -3441,6 +3536,13 @@ export interface components {
         DeviceGroupSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
         AuditEventSort: "occurred_at" | "-occurred_at" | "code" | "-code" | "outcome" | "-outcome";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        IpAllowlistSort: "cidr" | "-cidr" | "label" | "-label" | "created_at" | "-created_at";
+        /**
+         * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+         *     disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+         */
+        Confirm: "lockout" | "disable";
         /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
         AgentReleaseSort: "version" | "-version" | "created_at" | "-created_at" | "status" | "-status";
         /** @description Semantic version of an agent release. */
@@ -3638,6 +3740,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["Problem"];
+            /** @description The client address is outside the IP allow list (ip_not_allowed, plan M7a decision 17). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     updateMe: {
@@ -6904,6 +7015,172 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Organization"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    listIpAllowlist: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["IpAllowlistSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IpAllowlistEntryPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createIpAllowlistEntry: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+                 *     disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+                 */
+                confirm?: components["parameters"]["Confirm"];
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IpAllowlistEntryCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IpAllowlistEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getIpAllowlistEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IpAllowlistEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteIpAllowlistEntry: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+                 *     disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+                 */
+                confirm?: components["parameters"]["Confirm"];
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    updateIpAllowlistEntry: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+                 *     disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+                 */
+                confirm?: components["parameters"]["Confirm"];
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IpAllowlistEntryUpdate"];
+            };
+        };
+        responses: {
+            /** @description The changed entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IpAllowlistEntry"];
                 };
             };
             400: components["responses"]["Problem"];

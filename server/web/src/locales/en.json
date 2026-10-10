@@ -258,7 +258,10 @@
       "osv_stale": "Ubuntu's vulnerability data has not been updated for 3 days",
       "bundle_seq_bumped": "{actor} raised the bundle sequence of {devices} devices by {by} (restore)",
       "cache_rebuilt": "{actor} rebuilt the device cache of {organizations} organizations (restore)",
-      "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)"
+      "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)",
+      "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",
+      "ip_allowlist_denied": "{aggregated, select, true {{count, number} requests from {ip} were refused by the IP allow list} other {A request from {ip} was refused by the IP allow list}}",
+      "ip_allowlist_disabled": "{method, select, env {The IP allow list is bypassed on the api (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} switched the IP allow list off: {entries_removed, number} entries removed}}"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",

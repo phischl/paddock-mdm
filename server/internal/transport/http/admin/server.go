@@ -43,10 +43,14 @@ type Deps struct {
 	Inventory     *app.Inventory
 	Updates       *app.Updates
 	Attention     *app.Attention
-	Runner        *app.ActionRunner
-	Keys          *Keyring
-	OIDC          *OIDC
-	StepUp        *OIDC // provider paddock-portal-stepup (plan M4a decision 6)
+	// IPAllowlist and IPGuard are the IP allow list of the administrative surfaces (plan M7a decisions 12 and 17);
+	// a nil IPGuard installs no enforcement (serveAPI always installs one).
+	IPAllowlist *app.IPAllowlist
+	IPGuard     *IPGuard
+	Runner      *app.ActionRunner
+	Keys        *Keyring
+	OIDC        *OIDC
+	StepUp      *OIDC // provider paddock-portal-stepup (plan M4a decision 6)
 	// StepUpTokens keeps the raw ID token of every step-up for the escrow-reader (plan M4b.1 decision 7).
 	StepUpTokens StepUpTokenStore
 	PublicURL    string
@@ -132,6 +136,9 @@ var privileged = map[string]struct {
 	"DELETE /api/v1/package-holds/{id}":                                    {app.ScopeOrg, app.SpecPackageHoldDelete},
 	"POST /api/v1/devices/{id}/install-now":                                {app.ScopeOrg, app.SpecInstallNow},
 	"POST /api/v1/device-groups/{id}/install-now":                          {app.ScopeOrg, app.SpecInstallNow},
+	"POST /api/platform/v1/ip-allowlist":                                   {app.ScopePlatform, app.SpecIPAllowlistChange},
+	"PATCH /api/platform/v1/ip-allowlist/{id}":                             {app.ScopePlatform, app.SpecIPAllowlistChange},
+	"DELETE /api/platform/v1/ip-allowlist/{id}":                            {app.ScopePlatform, app.SpecIPAllowlistChange},
 }
 
 // NewHandler builds the complete handler including the shared middleware.
@@ -156,7 +163,7 @@ func NewHandler(d Deps) http.Handler {
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, apiTokens: d.APITokens, declarative: d.Declarative,
-		now: d.Now,
+		ipAllowlist: d.IPAllowlist, now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}
@@ -186,7 +193,13 @@ func NewHandler(d Deps) http.Handler {
 	root.Handle("/api/", noStore(authenticated))
 	root.Handle("/", d.Static)
 
-	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(securityHeaders(root)))))
+	var guarded http.Handler = root
+	if d.IPGuard != nil {
+		// Before the static handler, /api/auth/* and the session middleware: a denied request never touches a
+		// session, a token or a use case (plan M7a decision 17).
+		guarded = d.IPGuard.Middleware(root)
+	}
+	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(securityHeaders(guarded)))))
 }
 
 type server struct {

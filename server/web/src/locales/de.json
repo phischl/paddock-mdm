@@ -258,7 +258,10 @@
       "osv_stale": "Die Schwachstellendaten von Ubuntu wurden seit 3 Tagen nicht aktualisiert",
       "bundle_seq_bumped": "{actor} hat die Bundle-Sequenz von {devices} Geräten um {by} erhöht (Wiederherstellung)",
       "cache_rebuilt": "{actor} hat den Geräte-Cache von {organizations} Organisationen neu aufgebaut (Wiederherstellung)",
-      "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)"
+      "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)",
+      "ip_allowlist_changed": "{action, select, added {{actor} hat {cidr} ({label}) zur IP-Freigabeliste hinzugefügt} updated {{actor} hat den Eintrag {previous_cidr} der IP-Freigabeliste zu {cidr} ({label}) geändert} other {{actor} hat {cidr} ({label}) aus der IP-Freigabeliste entfernt}}",
+      "ip_allowlist_denied": "{aggregated, select, true {{count, number} Anfragen von {ip} wurden durch die IP-Freigabeliste abgewiesen} other {Eine Anfrage von {ip} wurde durch die IP-Freigabeliste abgewiesen}}",
+      "ip_allowlist_disabled": "{method, select, env {Die IP-Freigabeliste wird auf der API umgangen (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} hat die IP-Freigabeliste abgeschaltet: {entries_removed, number} Einträge entfernt}}"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",

@@ -246,6 +246,65 @@ var auditCases = map[string][]auditCase{
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.created", "failure", auditPollTimeout)
 		}},
 	},
+	// The IP allow list is platform-wide state (gate A1 exercises the successful changes and cleans up); here only
+	// the cases that leave it as it is (plan M7a decision 16).
+	"POST /api/platform/v1/ip-allowlist": {
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			root := login(t, env.PlatformAdmin)
+			res := call(t, root, http.MethodPost, ipAllowlistPath, map[string]string{"cidr": "198.51.100.0/24", "label": "x"})
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "denied", auditPollTimeout)
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			freshStepUp(t, w.root, env.PlatformAdmin)
+			res := call(t, w.root, http.MethodPost, ipAllowlistPath, map[string]string{"cidr": "10.0.0.1/8", "label": "x"})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPost, ipAllowlistPath, map[string]string{"cidr": "198.51.100.0/24", "label": "x"})
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "platform.ip_allowlist_changed", "denied")
+		}},
+	},
+	"PATCH /api/platform/v1/ip-allowlist/{id}": {
+		{"not found", func(t *testing.T, w *auditWorld) {
+			freshStepUp(t, w.root, env.PlatformAdmin)
+			res := call(t, w.root, http.MethodPatch, ipAllowlistPath+"/"+uuid.NewString(), map[string]string{"label": "x"})
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			freshStepUp(t, w.root, env.PlatformAdmin)
+			res := call(t, w.root, http.MethodPatch, ipAllowlistPath+"/not-a-uuid", map[string]string{"label": "x"})
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPatch, ipAllowlistPath+"/"+uuid.NewString(), map[string]string{"label": "x"})
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "platform.ip_allowlist_changed", "denied")
+		}},
+	},
+	"DELETE /api/platform/v1/ip-allowlist/{id}": {
+		{"not found", func(t *testing.T, w *auditWorld) {
+			freshStepUp(t, w.root, env.PlatformAdmin)
+			res := call(t, w.root, http.MethodDelete, ipAllowlistPath+"/"+uuid.NewString(), nil)
+			expectStatus(t, res, http.StatusNotFound, "not_found")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "failure", auditPollTimeout)
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			root := login(t, env.PlatformAdmin)
+			res := call(t, root, http.MethodDelete, ipAllowlistPath+"/"+uuid.NewString(), nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.ip_allowlist_changed", "denied", auditPollTimeout)
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodDelete, ipAllowlistPath+"/"+uuid.NewString(), nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "platform.ip_allowlist_changed", "denied")
+		}},
+	},
 }
 
 type group struct{ id, name string }
