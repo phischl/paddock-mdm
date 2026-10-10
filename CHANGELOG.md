@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   must not recreate a container — with the CI overlay `deploy/bundle/ci/compose.ci.yaml` for internal TLS.
   `deploy/bundle/ci/prune-edge.sh` deletes edge image versions older than 30 days whose tags are all
   `edge-<date>-<sha>` and keeps releases, `edge`, `latest` and untagged versions (tested in `make test`).
+- Upgrade and rollback runbook `docs/operations/upgrade.md` (M7b step 7): new bundle next to the running one,
+  `./paddock migrate-from`, check, backup, `./paddock up`; rollback by the release's `Schema:` line. The installation
+  guide is rewritten for the bundle (download and signature check, `./paddock secrets|bootstrap|check|up`, first
+  agent release, installing from source with a local bundle); ADR 0022 records the distribution decision. M7b adds no
+  database migration.
 
 ### Changed
 

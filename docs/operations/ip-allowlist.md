@@ -43,7 +43,7 @@ address. Caddy resolves it once:
 A header is read **only** from peers in the list; anybody else's `X-Forwarded-For`, `CF-Connecting-IP` or
 `X-Paddock-Client-IP` is ignored and the peer's own address counts. A header without proxies, proxies without a
 header, any `/0` range, an unknown header name or an unparsable range stop Caddy from starting (`caddy/entrypoint.sh`
-prints the reason) and fail `make prod-check` (item `edge client address`).
+prints the reason) and fail `./paddock check` (item `edge client address`).
 
 Three configurations:
 
@@ -101,23 +101,23 @@ off (no entries), nothing changes for them.
 Symptoms: the portal answers *403 Forbidden* (or `ip_not_allowed`) from every address the administrators use, for
 example after a provider change or a mistaken entry. Access is restored on the control-plane host:
 
-1. See what is listed: `pc run --rm --no-deps paddock-worker admin allowlist show` (one line per entry: CIDR, label,
+1. See what is listed: `./paddock compose run --rm --no-deps paddock-worker admin allowlist show` (one line per entry: CIDR, label,
    who, when; or `ip allowlist: off (no entries)`).
-2. Either add the current egress address — `pc run --rm --no-deps paddock-worker admin allowlist add --cidr
+2. Either add the current egress address — `./paddock compose run --rm --no-deps paddock-worker admin allowlist add --cidr
    203.0.113.7/32 --label "break-glass $(date -I)"` (audited as `platform.ip_allowlist_changed`, actor `system`,
-   created by `paddock-server admin`) — or switch the list off: `pc run --rm --no-deps paddock-worker admin
+   created by `paddock-server admin`) — or switch the list off: `./paddock compose run --rm --no-deps paddock-worker admin
    allowlist disable` (removes every entry, audited as `platform.ip_allowlist_disabled` with the removed ranges;
    `already off` when there is none). The api replicas follow within 2 s; when Valkey is unreachable the command
    says so and they follow within 60 s.
 3. If the database itself is unreachable for the command, set `PADDOCK_IP_ALLOWLIST_BYPASS=true` in `.env` and
-   `pc up -d paddock-api`: the api ignores the application list, logs it every 10 minutes, records one
+   `./paddock compose up -d paddock-api`: the api ignores the application list, logs it every 10 minutes, records one
    `platform.ip_allowlist_disabled` (method `env`) and exports `paddock_ip_allowlist_bypass = 1`; the alert
-   `PaddockIPAllowlistBypassed` fires after 15 minutes and `make prod-check` fails (item `ip allow list bypass is
+   `PaddockIPAllowlistBypassed` fires after 15 minutes and `./paddock check` fails (item `ip allow list bypass is
    off`) until the variable is removed again.
 4. If the **edge** list is the problem: set `PADDOCK_ADMIN_ALLOWED_CIDRS=0.0.0.0/0 ::/0` in `.env` and
-   `pc up -d caddy`, fix the ranges, set them again and recreate Caddy once more.
+   `./paddock compose up -d caddy`, fix the ranges, set them again and recreate Caddy once more.
 
-(`pc` is the Compose alias of `docs/operations/install.md` section 3.)
+(Run the commands in the control plane's bundle directory, `docs/operations/install.md`.)
 
 ## Audit codes, metrics and alert
 

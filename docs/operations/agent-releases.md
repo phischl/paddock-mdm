@@ -44,7 +44,13 @@ minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<versio
 1. Build `paddockd` for each architecture with the version injected
    (`-ldflags "-X github.com/phischl/paddock-mdm/agent/internal/buildinfo.Version=<version>"`, `CGO_ENABLED=0`).
 2. Sign it (above).
-3. Create the release and upload each artifact through the platform API as a platform administrator:
+3. **Production:** put the signed files on the control-plane host (layout in `docs/operations/install.md` section 10)
+   and run `./paddock agent-release <version> <dir>` in the bundle directory. It runs
+   `paddock-server admin agent-release` in the `paddock-api` service, which verifies every signature first, then
+   creates the release, uploads every binary and package and publishes it through the same use cases and audit events
+   as the API below, with the system actor `paddock-server admin`, and prints the release as JSON (steps 3–5 in one
+   command; a published release is refused). For automation, the platform API does the same step by step:
+   create the release and upload each artifact as a platform administrator:
    `POST /api/platform/v1/agent-releases {"version"}`, then
    `PUT /api/platform/v1/agent-releases/<version>/artifacts/<arch>` with the binary as body and
    `X-Paddock-Minisig: <base64 of the .minisig file>`. The server stores it in `paddock-agent-artifacts` under
@@ -80,35 +86,54 @@ bootstrap `deploy/compose/scripts/rustfs-bundles-bootstrap.sh` sets it).
 
 ## Server release
 
-A tag `v<version>` runs the release workflow (`.github/workflows/release.yml`, plan M6b decision 4). It calls
+A tag `v<version>` runs the release workflow (`.github/workflows/release.yml`, plan M6b decision 4, plan M7b
+decision 23). Its build job calls, in this order:
 
-1. `make release-artifacts RELEASE_VERSION=<version> PUSH=1 RELEASE_PUBLIC_KEY_FILE=<production release public key>`:
-   builds `ghcr.io/phischl/paddock-server:<version>` and `ghcr.io/phischl/paddock-compiler:<version>` (OCI
-   labels for source, version, revision and license), pushes them and records their digests in `images.txt`,
-   builds the Debian packages and the agent binaries for amd64 and arm64 with the production public key compiled
-   into `paddock-supervisor`, writes an SPDX SBOM per image with `syft` and `SHA256SUMS` over all files, all into
-   `dist/release/<version>/`. It refuses the development keys, `TAGS` and `REVOKE_TAGS`.
-2. `make release-sign RELEASE_VERSION=<version>`: signs each pushed image by digest with `cosign` keyless (the
-   workflow's GitHub OIDC identity, Sigstore's public good instance; no key to keep), attaches its SBOM as a signed
-   SPDX attestation, and signs `SHA256SUMS` (`SHA256SUMS.sigstore.json`).
+1. `make release-images RELEASE_VERSION=<version> PUSH=1`: builds `ghcr.io/phischl/paddock-server`,
+   `paddock-compiler` and `paddock-pgbackrest` with `docker buildx` for `linux/amd64` and `linux/arm64` as one
+   multi-platform index each, with the OCI labels of the release (source, URL, documentation, title, description,
+   version, revision, created, license, vendor, `io.paddock.channel`), pushes them and records the index and platform
+   digests in `images.txt`.
+2. `make release-packages RELEASE_VERSION=<version> RELEASE_PUBLIC_KEY_FILE=<production release public key>`: the
+   Debian packages and the agent binaries for amd64 and arm64 with the production public key compiled into
+   `paddock-supervisor`. It refuses the development keys, `TAGS` and `REVOKE_TAGS`.
+3. `make release-sbom`: one SPDX SBOM per image and platform with `syft`, read from the registry.
+4. `make release-bundle`: the operator bundle `paddock-deploy-<version>.tar.gz`, which references the three images
+   by tag and index digest (`docs/operations/install.md`).
+5. `make release-sums`: `SHA256SUMS` over every release file.
+6. `make release-sign`: signs each image index recursively (index and platform manifests) with `cosign` keyless (the
+   workflow's GitHub OIDC identity, Sigstore's public good instance; no key to keep), attaches each SBOM as a signed
+   SPDX attestation to its platform manifest, and signs `SHA256SUMS` and the bundle (`*.sigstore.json`).
+
+A smoke job then installs the bundle on one runner as two hosts (`deploy/bundle/ci/smoke.sh`: anonymous pull,
+`./paddock check` on both, start, probes, a backup, an agent release with throwaway keys, idempotence); only after
+it passes does the publish job create the draft release.
 
 `<version>` is `x.y.z` or a pre-release `x.y.z-alpha.N`, `x.y.z-beta.N` or `x.y.z-rc.N` (`make release-check`
-refuses anything else). Images carry exactly `<version>` as their tag, never `latest`. The Debian packages of a
-pre-release carry the Debian version `x.y.z~alpha.N` (`~beta.N`, `~rc.N`) inside, which sorts before `x.y.z`, but
-their release files are named with the release version, `<name>_0.1.0-alpha.1_amd64-unsigned.deb`: GitHub renames
-asset names with characters such as `~`, and `SHA256SUMS` names the files exactly as published
-(`make release-artifacts` refuses file names outside `[A-Za-z0-9._+-]`). Agents and supervisors order the versions
-by SemVer precedence (`0.1.0-alpha.1 < 0.1.0-alpha.2 < 0.1.0-beta.1 < 0.1.0-rc.1 < 0.1.0`).
+refuses anything else). Image tags: a pre-release gets only `<version>`; a plain `x.y.z` gets `<version>`,
+`<major>.<minor>` and, when it is the highest plain `x.y.z` among the repository's `v*` tags, `latest` (a patch of an
+older minor never moves `latest`). The Debian packages of a pre-release carry the Debian version `x.y.z~alpha.N`
+(`~beta.N`, `~rc.N`) inside, which sorts before `x.y.z`, but their release files are named with the release version,
+`<name>_0.1.0-alpha.1_amd64-unsigned.deb`: GitHub renames asset names with characters such as `~`, and `SHA256SUMS`
+names the files exactly as published (`make release-sums` refuses file names outside `[A-Za-z0-9._+-]`). Agents and
+supervisors order the versions by SemVer precedence (`0.1.0-alpha.1 < 0.1.0-alpha.2 < 0.1.0-beta.1 < 0.1.0-rc.1 <
+0.1.0`).
 
-`PUSH=1` pushes the `:<version>` tags before `release-sign` runs, so a run that fails between the two leaves
-unsigned images under the release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and
-consumers verify the signature (`cosign verify`, below) instead of trusting the tag, so an unsigned image fails
-verification. Re-run the release, or delete the tags, before announcing it.
+**Schema line.** The `CHANGELOG.md` section of every release states `Schema: unchanged` or `Schema: migrations
+NNNNN–NNNNN` (the migrations of both databases since the previous release). The release manager checks it before
+tagging; `docs/operations/upgrade.md` decides the rollback by it.
+
+The images are pushed before `release-sign` runs, so a run that fails between the two leaves unsigned images under the
+release tag. This is accepted (architect decision 2026-10-08): cosign signs digests, and consumers verify the
+signature (`cosign verify`, below) instead of trusting the tag, so an unsigned image fails verification. Re-run the
+release, or delete the tags, before announcing it. The three packages on `ghcr.io` must be public (a one-time
+setting per package in its GitHub settings); the smoke job pulls anonymously and fails on a private package.
 
 The workflow attaches the files to a **draft** GitHub release. Debian packages and agent binaries carry the suffix
-`-unsigned`: CI never holds the release keys, so they are not releasable as they are. Locally, the same targets run
-with images that are only built (`PUSH` unset) and `make release-sign DRY_RUN=1`, which checks the inputs and
-prints the cosign commands. Verify a published image with
+`-unsigned`: CI never holds the release keys, so they are not releasable as they are. Locally,
+`make release-artifacts` runs the same targets without pushing (`release-images` and `release-sbom` print their
+commands, the bundle references the local images), and `make release-sign DRY_RUN=1` prints the cosign commands.
+Verify a published image with
 
 ```sh
 cosign verify ghcr.io/phischl/paddock-server:<version> \
@@ -117,6 +142,16 @@ cosign verify ghcr.io/phischl/paddock-server:<version> \
 cosign verify-attestation --type spdxjson … (same identity options)
 cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json … (same identity options)
 ```
+
+### Edge channel
+
+Every green commit on `main` publishes the three images with the tags `edge` and `edge-<yyyymmdd>-<sha7>` (never
+`latest` or a version tag; edge job of `.github/workflows/ci.yml`), signed and attested the same way, and a bundle
+`paddock-deploy-edge-<yyyymmdd>-<sha7>.tar.gz` as the workflow artifact `paddock-deploy-edge` (30 days). Edge builds
+are unsupported and never for production. Verify them with the identity
+`^https://github.com/phischl/paddock-mdm/\.github/workflows/ci\.yml@refs/heads/main$`. A weekly workflow
+(`ghcr-prune.yml`, `deploy/bundle/ci/prune-edge.sh`) deletes image versions older than 30 days whose tags are all
+`edge-<date>-<sha>`; releases, `edge`, `latest` and untagged versions stay.
 
 ### Offline signing of the agent artifacts
 

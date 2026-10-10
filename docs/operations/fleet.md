@@ -105,26 +105,16 @@ made in the UI to the settings below are reset by `paddock-worker` within one ro
 
 ## Bootstrap
 
-In development, `make up` runs `deploy/compose/scripts/fleet-bootstrap.sh` (also `make fleet-bootstrap`), which
-refuses to run with `PADDOCK_ENV=production`. It is idempotent:
+`deploy/compose/scripts/fleet-bootstrap.sh` sets Fleet up; development runs it in `make up` (also
+`make fleet-bootstrap`), production with `./paddock bootstrap fleet` on the control plane
+(`docs/operations/install.md` section 7). It is idempotent:
 
-1. Fleet's initial setup with the admin user `admin@paddock-mdm.invalid` (password from `.secrets/fleet_admin_password`).
+1. Fleet's initial setup with the admin user `admin@paddock-mdm.invalid` (password from `.secrets/fleet_admin_password`;
+   Fleet's UI is never published, so the address needs no real mailbox).
 2. The API-only user `paddock` with the global role `admin`; its API token is written to `.secrets/fleet_api_token`.
    A valid token is kept; otherwise every earlier API-only user named `paddock` is deleted (which revokes its token)
    and a new one is created. Restart `paddock-worker` after a new token.
 3. The global enroll secret from `.secrets/fleet_enroll_secret`.
-
-Production does the same with `fleetctl` against Fleet's internal address (`fleetctl` speaks plain HTTP only to
-`localhost`, so run it in Fleet's network namespace):
-
-```sh
-docker run --rm -it --network container:paddock-fleet-1 -e HOME=/tmp --entrypoint sh "$FLEETCTL_IMAGE"
-fleetctl config set --address http://localhost:8080
-fleetctl setup --email admin@<your domain> --name "Paddock administrator" --org-name Paddock
-fleetctl user create --api-only --name paddock --global-role admin   # store the token as PADDOCK_FLEET_TOKEN_FILE
-printf 'apiVersion: v1\nkind: enroll_secret\nspec:\n  secrets:\n    - secret: "%s"\n' "<enroll secret>" >/tmp/s.yml
-fleetctl apply -f /tmp/s.yml
-```
 
 ## Settings Paddock enforces
 

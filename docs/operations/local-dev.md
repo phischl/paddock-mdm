@@ -26,6 +26,12 @@ make dev-seed        # organizations acme and globex, test users in their groups
 (WORM bucket and writer credential) and `make bundles-bootstrap` (bundles bucket, compiler and gateway credentials)
 itself; all are idempotent and can also be run on their own.
 
+The Paddock images are built from source by the `build:` sections of `compose.dev.yaml` and
+`compose.backup.dev.yaml`; the production Compose files reference images only, so that the operator bundle
+(`deploy/bundle/`, ADR 0022) is a plain copy of them. `make bundle-test` checks that the bundle renders the same
+production configuration as `deploy/compose/`. The Compose file sets of every host live in
+`deploy/compose/scripts/lib.sh`.
+
 ## Files and services
 
 | Path | Purpose |

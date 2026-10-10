@@ -15,8 +15,8 @@ The Compose profile `observability` runs Prometheus (pinned `PROMETHEUS_IMAGE`) 
 | Development | `prometheus`, published on `127.0.0.1:9091` | both |
 
 ```sh
-pc --profile paddock --profile observability up -d     # control plane (pc: docs/operations/install.md)
-pa --profile paddock --profile observability up -d     # audit host
+./paddock up      # control plane and audit host: starts the profiles paddock and observability
+                  # (docs/operations/install.md)
 ```
 
 Prometheus is not published in production. Reach it through an SSH tunnel, for example
