@@ -3435,7 +3435,7 @@ export interface components {
         DeviceGroupSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
         AuditEventSort: "occurred_at" | "-occurred_at" | "code" | "-code" | "outcome" | "-outcome";
-        /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+        /** @description Sort field; "-" prefix sorts descending. version sorts by SemVer precedence (0.2.0 before 0.10.0, a pre-release before its release). The version is the tie-breaker. */
         AgentReleaseSort: "version" | "-version" | "created_at" | "-created_at" | "status" | "-status";
         /** @description Semantic version of an agent release. */
         Version: string;
@@ -6913,7 +6913,7 @@ export interface operations {
                 /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
                 page?: components["parameters"]["Page"];
                 page_size?: components["parameters"]["PageSize"];
-                /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+                /** @description Sort field; "-" prefix sorts descending. version sorts by SemVer precedence (0.2.0 before 0.10.0, a pre-release before its release). The version is the tie-breaker. */
                 sort?: components["parameters"]["AgentReleaseSort"];
                 /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
                 q?: components["parameters"]["Search"];

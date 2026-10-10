@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Agent versions compare by SemVer order, not as text or for equality (PDK-025): the attention list flags a device
+  as `agent_outdated` only when its agent is older than the current release, and the server offers a device an agent
+  update only when the release is newer than its agent, so a device that is ahead of the last completed rollout is
+  neither flagged nor offered an older release. An update a device refuses as a downgrade no longer counts toward a
+  rollout's failure rate. `GET /api/platform/v1/agent-releases?sort=version` sorts 0.2.0 before 0.10.0 and a
+  pre-release before its release, and the newest release among equally recent ones is the highest version.
+
 ## [0.1.0-alpha.1] - 2026-10-09
 
 **Alpha.** This is a pre-release for evaluation, not for production fleets. Revocation (Lock, Destroy, dead man's

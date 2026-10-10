@@ -3134,7 +3134,7 @@ components:
     AgentReleaseSort:
       name: sort
       in: query
-      description: Sort field; "-" prefix sorts descending. The version is the tie-breaker.
+      description: Sort field; "-" prefix sorts descending. version sorts by SemVer precedence (0.2.0 before 0.10.0, a pre-release before its release). The version is the tie-breaker.
       schema:
         type: string
         enum: [version, -version, created_at, -created_at, status, -status]

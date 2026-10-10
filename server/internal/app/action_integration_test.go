@@ -116,7 +116,7 @@ func (h harness) recorded(t *testing.T, correlation string) ([]actionRow, []audi
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err = h.super.Query(ctx, "SELECT payload FROM outbox WHERE payload->>'correlation_id' = $1", correlation)
+	rows, err = h.super.Query(ctx, "SELECT payload FROM outbox WHERE payload->>'correlation_id' = $1 ORDER BY id", correlation)
 	if err != nil {
 		t.Fatal(err)
 	}

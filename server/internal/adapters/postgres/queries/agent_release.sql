@@ -23,8 +23,8 @@ FROM agent_release
 WHERE (sqlc.narg(q_pattern)::text IS NULL OR version ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
   AND (sqlc.narg(statuses)::text[] IS NULL OR status = ANY(sqlc.narg(statuses)::text[]))
 ORDER BY
-  CASE WHEN @sort::text = 'version' THEN version END ASC,
-  CASE WHEN @sort::text = '-version' THEN version END DESC,
+  CASE WHEN @sort::text = 'version' THEN version_key END ASC, -- SemVer precedence (PDK-025)
+  CASE WHEN @sort::text = '-version' THEN version_key END DESC,
   CASE WHEN @sort::text = 'created_at' THEN created_at END ASC,
   CASE WHEN @sort::text = '-created_at' THEN created_at END DESC,
   CASE WHEN @sort::text = 'status' THEN status END ASC,

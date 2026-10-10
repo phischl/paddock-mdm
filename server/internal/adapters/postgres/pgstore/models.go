@@ -65,6 +65,7 @@ type AgentRelease struct {
 	CreatedBy   string
 	CreatedAt   time.Time
 	PublishedAt *time.Time
+	VersionKey  string
 }
 
 type AgentRollout struct {
