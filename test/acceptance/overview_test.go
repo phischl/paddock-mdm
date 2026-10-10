@@ -19,7 +19,10 @@ type overview struct {
 		SecurityOverdue int `json:"security_overdue"`
 	} `json:"updates"`
 	Devices struct {
-		Total, Active, Pending, Quarantined, Online, Silent, SilentCritical, PresumedLost, NeverContacted int
+		Total, Active, Pending, Quarantined, Online, Silent int
+		SilentCritical                                      int `json:"silent_critical"`
+		PresumedLost                                        int `json:"presumed_lost"`
+		NeverContacted                                      int `json:"never_contacted"`
 	} `json:"devices"`
 	Vulnerabilities struct {
 		ByHighestSeverity struct{ Critical, High, Medium, Low, Unknown, None int } `json:"by_highest_severity"`
