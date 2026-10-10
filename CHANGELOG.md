@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image recursively, attests each SBOM on its platform manifest and signs `SHA256SUMS` and the bundle tarball;
   `release-packages`, `release-bundle` and `release-sums` complete the release, and `release-artifacts` runs them all
   locally.
+- Agent releases from the host (M7b step 5): `paddock-server admin agent-release --version <v> --dir <dir>` (in the
+  bundle: `./paddock agent-release <v> <dir>`) verifies every signed `paddockd` and Debian package of the offline
+  signing step first, then creates, uploads and publishes the release through the same use cases and audit events as
+  the admin API, with the system actor of the host commands, and prints the release as JSON. A published release or a
+  wrong signature is refused without storing anything.
 
 ### Changed
 
