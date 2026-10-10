@@ -92,6 +92,7 @@ function onConfirm(): void {
           </v-btn>
           <v-btn
             :color="destructive ? 'error' : 'primary'"
+            variant="flat"
             :disabled="!canConfirm"
             data-testid="confirm-accept"
             @click="onConfirm"

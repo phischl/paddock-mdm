@@ -24,9 +24,10 @@ var (
 func staticHandler(t *testing.T) http.Handler {
 	t.Helper()
 	static, err := admin.NewStaticHandler(fstest.MapFS{
-		"index.html":       {Data: []byte(testIndex)},
-		"assets/app-1.js":  {Data: []byte("console.log(1)")},
-		"assets/app-1.css": {Data: []byte("body{}")},
+		"index.html":          {Data: []byte(testIndex)},
+		"assets/app-1.js":     {Data: []byte("console.log(1)")},
+		"assets/app-1.css":    {Data: []byte("body{}")},
+		"assets/font-1.woff2": {Data: []byte("wOF2")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,5 +114,14 @@ func TestStaticHandlerWithoutPortalBuild(t *testing.T) {
 	rec := get(admin.NewHandler(admin.Deps{Static: static, Keys: &admin.Keyring{}, OIDC: admin.NewOIDC(admin.OIDCConfig{})}), "/")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status %d, want 404", rec.Code)
+	}
+}
+
+// TestStaticWoff2ContentType: the vendored fonts are served as font/woff2 (plan M7c decision 8); Go's built-in MIME
+// table has no entry and the distroless image no /etc/mime.types.
+func TestStaticWoff2ContentType(t *testing.T) {
+	rec := get(staticHandler(t), "/assets/font-1.woff2")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "font/woff2" {
+		t.Fatalf("woff2: %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 }

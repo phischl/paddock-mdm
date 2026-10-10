@@ -239,5 +239,5 @@ async function onRevoke(token: ApiToken): Promise<void> {
 </template>
 
 <style scoped>
-.token-inactive { color: var(--muted); }
+.token-inactive { color: var(--pd-text-muted); }
 </style>

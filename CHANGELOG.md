@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Portal design system (M7c step 2, ADR 0023): the portal ships with a light and a dark theme built on one token set (`--pd-*`, `server/web/src/plugins/theme.ts`), self-hosted IBM Plex Sans and JetBrains Mono (OFL-1.1, upstream woff2 files unmodified, licence texts next to them) and vendored Lucide icons (ISC); no font or icon leaves the portal origin. The api role serves `.woff2` as `font/woff2`. `make lint` fails when a vendored font or icon is missing, changed, unlisted in `server/web/src/assets/vendored.json`, under another licence or not recorded in `docs/compliance/third-party.md`, and when the generated icon module is out of date (`npm run gen:icons`).
 - Portal theme preference on the account (M7c step 1, ADR 0023): `GET /api/v1/me` returns `theme` (`system`, `light` or `dark`; `system` follows the operating system's preference) and `PATCH /api/v1/me` accepts a patch of `locale` and/or `theme` (at least one field; an unsupported value or an empty patch answers 400). Database migration `00037` runs automatically.
 
 ### Fixed

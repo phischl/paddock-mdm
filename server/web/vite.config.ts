@@ -27,5 +27,7 @@ export default defineConfig({
     setupFiles: ['src/__tests__/setup.ts'],
     // Vuetify ships CSS imports in its modules; Vite must process them.
     server: { deps: { inline: ['vuetify'] } },
+    // The portal's own style sheets are processed so tests can read them with ?raw (theme and colour gates).
+    css: { include: [/\/src\/.*\.css(?:\?.*)?$/] },
   },
 })

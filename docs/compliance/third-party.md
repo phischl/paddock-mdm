@@ -64,6 +64,45 @@ can be checked per release.
 | fleetd (`fleet-osquery`: orbit and osquery) | built with `fleetctl package` from Fleet's update server and distributed with the agent release (`make fleetd-deb`) | orbit MIT (Fleet); osquery Apache-2.0 or GPL-2.0 (dual-licensed) |
 | Himmelblau | installed by the agent from the upstream repository `packages.himmelblau-idm.org`; Paddock does not redistribute it | GPL-3.0; runs as its own services and PAM/NSS modules, Paddock only writes its configuration file |
 
+## Vendored fonts and icons (checked by `check-vendored.ts`)
+
+The portal ships its fonts and icons as files under `server/web/src/assets/` (ADR 0023): no font or icon package, no CDN,
+no request leaves the portal origin. Every file was downloaded once from the official GitHub release named below and is
+committed unmodified with the upstream licence text next to it; `server/web/src/assets/vendored.json` pins the release
+and the SHA-256 of every file, and `server/web/scripts/check-vendored.ts` (part of `make lint`) fails on any file that
+is missing, changed, unlisted, under another licence or not recorded here.
+
+### IBM Plex Sans — OFL-1.1
+
+Source: https://github.com/IBM/plex, release `@ibm/plex-sans@1.1.0` (asset `ibm-plex-sans.zip`), directory `fonts/ibm-plex-sans`, licence file `LICENSE.txt`.
+
+| File | Weight / subset | SHA-256 |
+| --- | --- | --- |
+| `IBMPlexSans-Medium-Latin1.woff2` | 500 / Latin1 | `b5610af04d0d4b5a14a621d96d974b993e945a065db1a8861918f69ef9321934` |
+| `IBMPlexSans-Medium-Latin2.woff2` | 500 / Latin2 | `46fbe4f398e7ff3cc7773a1156b1efef0f81e4d034f682369c221de587f443ca` |
+| `IBMPlexSans-Regular-Latin1.woff2` | 400 / Latin1 | `b5ad7bd39f996144915f0ad9849a90183b27d8c28ad97ed98af5b1bebc51f6b1` |
+| `IBMPlexSans-Regular-Latin2.woff2` | 400 / Latin2 | `fcfa82e0d46ed01a8df38610b451860ca7e7518770c52fdd2a1d136247c40f28` |
+| `IBMPlexSans-SemiBold-Latin1.woff2` | 600 / Latin1 | `fff0ab3a88b0b4aa0b693e4f0201359a15183b08e3fa5696d1918d8f0ade8ad5` |
+| `IBMPlexSans-SemiBold-Latin2.woff2` | 600 / Latin2 | `2bc85a8e53540c4c211f7af36e806bb045ba7da8946bb221d87144c12c83d577` |
+| `LICENSE.txt` | licence text | `7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da` |
+
+### JetBrains Mono — OFL-1.1
+
+Source: https://github.com/JetBrains/JetBrainsMono, release `v2.304` (asset `JetBrainsMono-2.304.zip`), directory `fonts/jetbrains-mono`, licence file `OFL.txt`.
+
+| File | Weight / subset | SHA-256 |
+| --- | --- | --- |
+| `JetBrainsMono-Medium.woff2` | 500 / full | `086c48dfbea9ddaff1320f7e09399b8e2924e88ce67453721255db3bdbb5a353` |
+| `JetBrainsMono-Regular.woff2` | 400 / full | `a9cb1cd82332b23a47e3a1239d25d13c86d16c4220695e34b243effa999f45f2` |
+| `OFL.txt` | licence text | `30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad` |
+
+### Lucide — ISC
+
+Source: https://github.com/lucide-icons/lucide, release `1.55.0` (asset `lucide-icons-1.55.0.zip`), directory `icons/lucide`, licence file `LICENSE`.
+Icons the plan names by their former Lucide name: `building-2` → `building-complex`, `filter` → `funnel`, `circle-help` → `circle-question-mark`.
+
+47 icons: `arrow-left`, `bell`, `bug`, `building-complex`, `check`, `chevron-down`, `chevron-left`, `chevron-right`, `circle-check`, `circle-question-mark`, `circle-x`, `cog`, `copy`, `diff`, `ellipsis`, `external-link`, `file-text`, `folder`, `funnel`, `globe-lock`, `hard-drive`, `inbox`, `info`, `key`, `keyboard`, `laptop`, `layout-dashboard`, `lock`, `log-in`, `menu`, `monitor`, `moon`, `package-search`, `package`, `panel-left`, `refresh-cw`, `rocket`, `scroll-text`, `search`, `shield-check`, `sun`, `ticket`, `timer`, `triangle-alert`, `user`, `users`, `x`. Checksums per file: `vendored.json`; licence file SHA-256 `b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57`.
+
 ## Tools used only to build and test (not distributed)
 
 | Tool | Use | License |
