@@ -9,7 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `paddock-supervisor` no longer rolls back a healthy agent update whose first check-in follows the switch within one kernel clock tick: the file system dated such a check-in before the switch. The supervisor now removes `/run/paddock/last-checkin` while no agent runs, and a probation passes if the new agent recreated it. If the supervisor cannot remove the mark, it rolls the update back.
+- `paddock-supervisor` no longer rolls back a healthy agent update whose first check-in follows the switch within one
+  kernel clock tick: the file system dated such a check-in before the switch. The supervisor now removes
+  `/run/paddock/last-checkin` while no agent runs, and a probation passes if the new agent recreated it. If the
+  supervisor cannot remove the mark, it rolls the update back.
+
+### Security
+
+- Dependency update (PDK-032): `github.com/google/cel-go` 0.28.0 → 0.31.0, fixing GHSA-gcjh-h69q-9w9g (private JSON
+  fields exposed through `NativeTypes` and `ParseStructTag`). The library is only pulled in by the build-time code
+  generator `sqlc`; Paddock's own code does not evaluate CEL and the shipped binaries do not contain it, so running
+  installations were not exposed.
 
 ## [0.1.0-alpha.1] - 2026-10-09
 
