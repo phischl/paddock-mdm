@@ -247,6 +247,36 @@ func TestUpdateSuccess(t *testing.T) {
 	}
 }
 
+// TestUpdateCheckinStampedBeforeTheSwitch (PDK-031): the kernel stamps files with its coarse clock, so a check-in
+// right after the switch can carry an mtime before the switch time; it still proves the new agent healthy.
+func TestUpdateCheckinStampedBeforeTheSwitch(t *testing.T) {
+	f := newFake(t)
+	f.start()
+	staged := time.Now()
+	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, f.good()))
+	f.waitFor("the new agent checked in", f.checkedIn)
+	stamp := staged.Add(-time.Millisecond)
+	if err := os.Chtimes(f.cfg.LastCheckin, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.endProbation("B"); r.Outcome != outcomeUpdated || r.Version != "1.1.0" || f.active() != "B" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+}
+
+// TestRollbackWhenOnlyTheOldAgentCheckedIn: a check-in mark of the agent before the switch never passes the
+// probation of the new one, even if the test leaves it in place.
+func TestRollbackWhenOnlyTheOldAgentCheckedIn(t *testing.T) {
+	f := newFake(t)
+	f.start()
+	f.waitFor("the running agent checked in", f.checkedIn)
+	f.stage("1.1.0", script("1.1.0", 0, "trap '' HUP; exec sleep 300"), nil)
+	r := f.endProbation("B")
+	if r.Outcome != outcomeRolledBack || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+}
+
 func TestUpdateRefused(t *testing.T) {
 	_, other, _ := minisign.GenerateKey(rand.Reader)
 	tests := []struct {
@@ -422,6 +452,28 @@ func TestResumeProbation(t *testing.T) {
 	f.start()
 	if r := f.waitResult(20 * time.Second); r.Outcome != outcomeRolledBack || f.active() != "A" {
 		t.Fatalf("a probation interrupted by a restart must still roll back: %+v", r)
+	}
+}
+
+// TestResumeProbationIgnoresAnEarlierCheckin: a check-in mark from before the supervisor restarted does not pass the
+// resumed probation of an agent that never checks in.
+func TestResumeProbationIgnoresAnEarlierCheckin(t *testing.T) {
+	f := newFake(t)
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
+	if err := flip(f.cfg.Slots, "B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.cfg.LastCheckin, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	// The supervisor removes the mark only after it has resumed the probation and set its deadline.
+	f.waitFor("the supervisor removed the earlier check-in", func() bool { return !f.checkedIn() })
+	if r := f.endProbation("B"); r.Outcome != outcomeRolledBack || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
 	}
 }
 

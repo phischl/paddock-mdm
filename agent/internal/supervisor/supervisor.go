@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -301,17 +302,28 @@ func (s *Supervisor) onSelfTest(r selfTest) {
 	slog.Info("switched to the new agent version; probation started", "version", r.version, "slot", r.slot, "probation", s.cfg.Probation)
 	p.deadline = p.SwitchedAt.Add(s.cfg.Probation)
 	s.probation = p
+	s.stop()
+	s.forgetCheckin()
 	s.restartChild()
 }
 
-// checkProbation ends a probation at its deadline: healthy is a running child that checked in after the switch.
+// forgetCheckin removes the check-in mark while no agent runs, so that only an agent started after the switch can set
+// it again. Comparing the mark's mtime with the switch time cannot decide this: the kernel stamps files with its
+// coarse clock, up to one tick behind time.Now, so a check-in right after the switch can carry an older mtime.
+func (s *Supervisor) forgetCheckin() {
+	if err := os.Remove(s.cfg.LastCheckin); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		slog.Error("removing the check-in mark failed", "error", err)
+	}
+}
+
+// checkProbation ends a probation at its deadline: healthy is a running child that checked in after the switch, i.e.
+// set the check-in mark that forgetCheckin removed before the child started.
 func (s *Supervisor) checkProbation() {
 	p := s.probation
 	if p == nil || s.cfg.Now().Before(p.deadline) {
 		return
 	}
-	fi, err := os.Stat(s.cfg.LastCheckin)
-	if s.child == nil || err != nil || !fi.ModTime().After(p.SwitchedAt) {
+	if _, err := os.Stat(s.cfg.LastCheckin); s.child == nil || err != nil {
 		s.rollback("not healthy at the end of the probation")
 		return
 	}
@@ -374,6 +386,7 @@ func (s *Supervisor) resumeProbation() {
 	p.SwitchedAt = s.cfg.Now()
 	p.deadline = p.SwitchedAt.Add(s.cfg.Probation)
 	s.probation = &p
+	s.forgetCheckin()
 	slog.Info("resuming probation", "version", p.Version)
 }
 
