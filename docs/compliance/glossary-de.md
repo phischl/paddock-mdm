@@ -15,6 +15,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | API token | API-Token | neuter: *das* API-Token |
 | Approve (device, Destroy) | Freigeben | Freigabe |
 | Attention (page) | Handlungsbedarf | One row is a *Befund* (open condition). |
+| Attention pill (app bar) | „{n} brauchen Aufmerksamkeit“ | Plural through ICU (*1 braucht Aufmerksamkeit*). |
 | Audit log | Audit-Protokoll | |
 | Auditor | Auditor | |
 | Boot PIN | Boot-PIN | |
@@ -22,13 +23,17 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Bundle | Bundle | Signed configuration of a device. |
 | Change set | Änderungssatz | declarative configuration (paddockctl) |
 | Check-in | Check-in | |
+| Command palette | Befehlspalette | |
 | Configuration (navigation group) | Konfiguration | |
+| Danger zone | Gefahrenbereich | Lock, Destroy and Retire on the device page. |
 | Dead man's switch | Totmannschalter | Its period is the *Frist*. |
+| Density | Dichte (Kompakt / Komfortabel) | |
 | Destroy (revocation) | Vernichtung; Gerät vernichten | Irreversible: erases every keyslot and the escrow. |
 | Device | Gerät | |
 | Device group | Gerätegruppe | |
 | Device lock (Lock revocation) | Sperre; Gerät sperren | *Gerätesperre* where it must be told apart from a user lock. |
 | Disk encryption | Festplattenverschlüsselung | |
+| Encrypted / Not encrypted / Partial | Verschlüsselt / Nicht verschlüsselt / Teilweise | Disk encryption chips. |
 | Enroll, enrollment | Registrieren, Registrierung | |
 | Enrollment token | Registrierungstoken | |
 | Escrow; escrowed | Treuhand-Ablage; in der Treuhand-Ablage hinterlegt (kurz: hinterlegt) | Recovery keys, LUKS headers, local administrator passwords. |
@@ -37,17 +42,23 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Install now | Sofort installieren; Sofortinstallation | |
 | Inventory (navigation group) | Inventar | |
 | Issue (revocation) | Ausstellen | The revocation issuer is the *Widerrufsaussteller*. |
+| Keyboard shortcut | Tastenkürzel | |
 | Local administrator | Lokaler Administrator | |
 | Managed file / unit | Verwaltete Datei / Unit | |
 | Navigation | Navigation | Navigation drawer; *einblenden* / *ausblenden* to show or hide it. |
+| Never contacted | Nie verbunden | |
+| Not reported | Nicht gemeldet | |
+| Online | Online | |
 | Organization | Organisation | |
 | Organization administrator | Organisationsadministrator | |
 | Overview (navigation group) | Übersicht | |
+| Overview (page) | Übersicht | The start page of administrators and operators. |
 | Permission profile | Berechtigungsprofil | Classes: Keine, Eingeschränkt, Voll. |
 | Platform (navigation group) | Plattform | |
 | Platform administrator | Plattformadministrator | |
 | Presumed lost | Vermutlich verloren | |
 | Quarantine | Quarantäne | |
+| Reboot required | Neustart erforderlich | |
 | Recovery key | Wiederherstellungsschlüssel | |
 | Reject | Ablehnen | |
 | Restore (backup) | Wiederherstellung | restore drill: *Wiederherstellungsprobe* |
@@ -58,15 +69,18 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Root-equivalent | root-gleichwertig | |
 | Rotate (password) | Rotieren; Rotation | |
 | Security (navigation group) | Sicherheit | |
+| Security updates overdue | Sicherheitsupdates überfällig | |
 | Self-lock (dead man's switch) | Selbstsperre | |
 | Severity | Schweregrad | Kritisch, Hoch, Mittel, Niedrig, Unbekannt. |
 | Sign in / sign out | Anmelden / Abmelden | |
+| Silent (contact chip) | Ohne Kontakt | |
 | Silent device (staleness) | Gerät ohne Kontakt | |
 | Start (page) | Start | |
 | Step-up | Identitätsbestätigung | |
 | Suspend / resume logins | Anmeldungen aussetzen / wieder zulassen | |
 | Synced (user), upstream directory | Synchronisiert, Quellverzeichnis | |
 | Tamper (event) | Manipulation | |
+| Theme | Erscheinungsbild (System / Hell / Dunkel) | |
 | User lock | Sperre; Benutzer sperren / entsperren | *Benutzersperre* where it must be told apart from a device lock. |
 | User menu | Benutzermenü | |
 | Volume (LUKS) | Volume | kept in English, as in cryptsetup |
