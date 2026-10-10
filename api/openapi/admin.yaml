@@ -30,6 +30,7 @@ security:
 tags:
   - name: auth
   - name: me
+  - name: overview
   - name: device-groups
   - name: enrollment-tokens
   - name: api-tokens
@@ -278,12 +279,16 @@ paths:
         sort: [occurred_at, code, outcome]
         default_sort: -occurred_at
         search: [code, actor.display, target.display]
-        filters: [from, to, code, outcome, actor_type]
+        filters: [from, to, code, outcome, actor_type, target_id]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
         - $ref: "#/components/parameters/AuditEventSort"
         - $ref: "#/components/parameters/Search"
+        - name: target_id
+          in: query
+          description: Exact target id (for example a device id).
+          schema: { type: string, format: uuid }
         - name: from
           in: query
           description: RFC 3339; default to - 7 days.
@@ -695,7 +700,7 @@ paths:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
         search: [hostname, hardware_uuid]
-        filters: [state, device_group_id, disk_state]
+        filters: [state, device_group_id, disk_state, contact]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -714,6 +719,14 @@ paths:
           schema:
             type: array
             items: { $ref: "#/components/schemas/DiskState" }
+        - name: contact
+          in: query
+          description: Repeatable. Contact state of the device (plan M7c §12 open point 1).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/DeviceContact" }
       responses:
         "200":
           description: One page of devices.
@@ -1689,6 +1702,54 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/overview:
+    get:
+      operationId: getOverview
+      tags: [overview]
+      description: "Roles: org_admin, org_operator, org_auditor. The numbers of the overview page, computed in one transaction; never cached."
+      responses:
+        "200":
+          description: The overview of the organization's fleet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Overview" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/attention/devices:
+    get:
+      operationId: listAttentionDevices
+      tags: [devices]
+      description: >-
+        Roles: org_admin, org_operator, org_auditor. The attention list grouped by device: one item per device with an
+        open condition, its conditions most severe first. A kind filter selects devices with at least one matching
+        condition; all conditions of the device are listed.
+      x-paddock-list:
+        sort: [severity, hostname, since]
+        default_sort: -severity
+        search: [hostname]
+        filters: [kind]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AttentionDeviceSort"
+        - $ref: "#/components/parameters/Search"
+        - name: kind
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AttentionKind" }
+      responses:
+        "200":
+          description: One page of devices with their open conditions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttentionDevicePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/attention:
     get:
       operationId: listAttention
@@ -3291,6 +3352,14 @@ components:
         type: string
         enum: [since, -since, kind, -kind, hostname, -hostname]
         default: -since
+    AttentionDeviceSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers.
+      schema:
+        type: string
+        enum: [severity, -severity, hostname, -hostname, since, -since]
+        default: -severity
     DeviceGroupFilter:
       name: device_group_id
       in: query
@@ -3630,10 +3699,26 @@ components:
         type: { type: string }
         id: { type: string }
         display: { type: string }
+    AuditDeviceRef:
+      type: object
+      required: [id, hostname]
+      properties:
+        id: { type: string, format: uuid }
+        hostname:
+          type: string
+          nullable: true
+          description: Current hostname, resolved at read time; null when the organization has no such device.
     AuditEvent:
       type: object
-      required: [event_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id]
+      required: [event_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, device]
       properties:
+        device:
+          allOf:
+            - $ref: "#/components/schemas/AuditDeviceRef"
+          nullable: true
+          description: >-
+            The device the event concerns (target of type device, else params.device_id); read-time enrichment, the
+            stored event is unchanged.
         event_id: { type: string, format: uuid }
         occurred_at: { type: string, format: date-time }
         recorded_at: { type: string, format: date-time }
@@ -3886,17 +3971,24 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    DeviceContact:
+      type: string
+      enum: [never, ok, stale_warning, stale_critical, presumed_lost]
+      description: >-
+        Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet;
+        ok otherwise. Devices that are not active report ok or never.
     DeviceState:
       type: string
       enum: [pending, active, rejected, quarantined, retired]
     Device:
       type: object
       required: [id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at,
-                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version]
+                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version, contact]
       properties:
         id: { type: string, format: uuid }
         hostname: { type: string }
         state: { $ref: "#/components/schemas/DeviceState" }
+        contact: { $ref: "#/components/schemas/DeviceContact" }
         hardware_uuid: { type: string, nullable: true }
         machine_id: { type: string, nullable: true }
         os_release:
@@ -4307,6 +4399,137 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    AttentionCondition:
+      type: object
+      required: [kind, since, detail]
+      properties:
+        kind: { $ref: "#/components/schemas/AttentionKind" }
+        since: { type: string, format: date-time }
+        detail: { type: string }
+    AttentionDevice:
+      type: object
+      required: [device_id, hostname, state, os_release, last_contact_at, severity, since, conditions]
+      properties:
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        state: { $ref: "#/components/schemas/DeviceState" }
+        os_release:
+          type: object
+          additionalProperties: { type: string }
+        last_contact_at: { type: string, format: date-time, nullable: true }
+        severity: { type: string, enum: [info, warn, critical], description: Of the most severe condition. }
+        since: { type: string, format: date-time, description: Newest condition. }
+        conditions:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/AttentionCondition" }
+    AttentionDevicePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AttentionDevice" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    Overview:
+      type: object
+      required: [generated_at, devices, encryption, vulnerabilities, updates, attention]
+      properties:
+        generated_at: { type: string, format: date-time }
+        devices: { $ref: "#/components/schemas/OverviewDevices" }
+        encryption: { $ref: "#/components/schemas/OverviewEncryption" }
+        vulnerabilities: { $ref: "#/components/schemas/OverviewVulnerabilities" }
+        updates: { $ref: "#/components/schemas/OverviewUpdates" }
+        attention: { $ref: "#/components/schemas/OverviewAttention" }
+    OverviewDevices:
+      type: object
+      required: [total, active, pending, quarantined, retired, rejected, online, silent, silent_critical, presumed_lost, never_contacted]
+      properties:
+        total: { type: integer, description: "pending + active + quarantined" }
+        active: { type: integer }
+        pending: { type: integer }
+        quarantined: { type: integer }
+        retired: { type: integer }
+        rejected: { type: integer }
+        online: { type: integer, description: "Active devices in contact (none of the buckets below)." }
+        silent: { type: integer, description: "Active devices with an open stale_warning alert." }
+        silent_critical: { type: integer, description: "Active devices with an open stale_critical alert." }
+        presumed_lost: { type: integer }
+        never_contacted: { type: integer }
+    OverviewEncryption:
+      type: object
+      required: [encrypted, not_encrypted, partial, not_reported]
+      properties:
+        encrypted: { type: integer, description: "Active devices whose disk state is compliant." }
+        not_encrypted: { type: integer }
+        partial: { type: integer, description: "unmanaged, tpm_missing, tpm_pin_missing or escrow_pending." }
+        not_reported: { type: integer }
+    OverviewVulnerabilities:
+      type: object
+      required: [by_highest_severity, top]
+      properties:
+        by_highest_severity: { $ref: "#/components/schemas/OverviewSeverityBuckets" }
+        top:
+          type: array
+          maxItems: 5
+          description: "The CVEs with the highest severity, then the most devices."
+          items: { $ref: "#/components/schemas/OverviewTopCVE" }
+    OverviewSeverityBuckets:
+      type: object
+      description: "Active or quarantined devices by the severity of their worst finding; none = no findings."
+      required: [critical, high, medium, low, unknown, none]
+      properties:
+        critical: { type: integer }
+        high: { type: integer }
+        medium: { type: integer }
+        low: { type: integer }
+        unknown: { type: integer }
+        none: { type: integer }
+    OverviewTopCVE:
+      type: object
+      required: [cve, severity, devices, packages]
+      properties:
+        cve: { type: string }
+        severity: { $ref: "#/components/schemas/Severity" }
+        devices: { type: integer }
+        packages:
+          type: array
+          maxItems: 3
+          items: { type: string }
+    OverviewUpdates:
+      type: object
+      required: [security_overdue, reboot_required, agent, os_releases]
+      properties:
+        security_overdue: { type: integer, description: "Active devices without a successful security run in the last 48 hours." }
+        reboot_required: { type: integer }
+        agent: { $ref: "#/components/schemas/OverviewAgent" }
+        os_releases:
+          type: array
+          items: { $ref: "#/components/schemas/OverviewOSRelease" }
+    OverviewAgent:
+      type: object
+      required: [current_version, on_current, outdated, unknown]
+      properties:
+        current_version: { type: string, nullable: true }
+        on_current: { type: integer }
+        outdated: { type: integer }
+        unknown: { type: integer }
+    OverviewOSRelease:
+      type: object
+      required: [release, devices]
+      properties:
+        release: { type: string }
+        devices: { type: integer }
+    OverviewAttention:
+      type: object
+      required: [conditions, devices]
+      properties:
+        conditions: { type: integer }
+        devices: { type: integer }
     RevocationAction:
       type: string
       enum: [lock, destroy, self_lock]

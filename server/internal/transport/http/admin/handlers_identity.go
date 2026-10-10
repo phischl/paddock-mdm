@@ -373,7 +373,7 @@ func (h *handlers) CreatePermissionProfile(ctx context.Context, req adminapi.Cre
 	b := req.Body
 	in := privilege.Profile{
 		Name: b.Name, Class: privilege.Class(b.Class), Commands: deref(b.Commands, nil), RequirePassword: deref(b.RequirePassword, true),
-		TimestampTimeoutMin: deref(b.TimestampTimeoutMin, 5), Lecture: privilege.Lecture(deref(b.Lecture, adminapi.Once)),
+		TimestampTimeoutMin: deref(b.TimestampTimeoutMin, 5), Lecture: privilege.Lecture(deref(b.Lecture, adminapi.LectureOnce)),
 	}
 	p, err := h.privileges.CreateProfile(ctx, in)
 	if err != nil {

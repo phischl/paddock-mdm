@@ -45,6 +45,7 @@ type handlers struct {
 	inventory   *app.Inventory
 	updates     *app.Updates
 	attention   *app.Attention
+	overview    *app.Overview
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).
@@ -185,7 +186,7 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 	}
 	res, err := h.audit.List(ctx, app.AuditQuery{
 		From: req.Params.From, To: req.Params.To, Codes: listing.Strings(req.Params.Code), Outcomes: outcomes,
-		ActorTypes: actorTypes, Page: params.ListPage(),
+		ActorTypes: actorTypes, TargetID: req.Params.TargetId, Page: params.ListPage(),
 	})
 	if err != nil {
 		return nil, err
@@ -194,6 +195,9 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 	for i, e := range res.Items {
 		if items[i], err = toAuditEvent(e); err != nil {
 			return nil, err
+		}
+		if d, ok := res.Devices[e.EventID]; ok {
+			items[i].Device = &adminapi.AuditDeviceRef{Id: d.ID, Hostname: d.Hostname}
 		}
 	}
 	return adminapi.ListAuditEvents200JSONResponse(listing.NewPage(items, params, res.Count)), nil

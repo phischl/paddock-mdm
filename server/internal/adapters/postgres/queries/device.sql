@@ -14,13 +14,16 @@ SELECT * FROM device WHERE id = @id FOR UPDATE;
 
 -- name: ListDevices :many
 SELECT sqlc.embed(device), device_status.last_contact_at, device_status.applied_bundle_version,
-       device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state -- '' = none
+       device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
+       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id)::text AS contact
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 WHERE (sqlc.narg(q_pattern)::text IS NULL
        OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
        OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
   AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
   AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
+  AND (sqlc.narg(contacts)::text[] IS NULL
+       OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY(sqlc.narg(contacts)::text[]))
   AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m
         WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
@@ -44,11 +47,22 @@ SELECT count(*) FROM (
          OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
     AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
+    AND (sqlc.narg(contacts)::text[] IS NULL
+         OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY(sqlc.narg(contacts)::text[]))
     AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_group_member m
           WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
   LIMIT @count_limit
 ) matching;
+
+-- name: DeviceContact :one
+SELECT paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id)::text AS contact
+FROM device LEFT JOIN device_status ON device_status.device_id = device.id
+WHERE device.id = @id;
+
+-- name: ListDeviceHostnames :many
+-- The devices of the caller's organization among ids (RLS bounds it): the audit list resolves hostnames with it.
+SELECT id, hostname FROM device WHERE id = ANY(@ids::uuid[]);
 
 -- name: SetDeviceState :one
 UPDATE device SET state = @state, state_changed_at = now()

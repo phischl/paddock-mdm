@@ -45,6 +45,7 @@ type DeviceQuery struct {
 	States     []string
 	GroupID    *uuid.UUID
 	DiskStates []string // disk encryption states of the last check-in (plan M4b decision 14)
+	Contacts   []string // contact states (plan M7c §12 open point 1)
 }
 
 // List returns one page of devices with their status.
@@ -78,14 +79,15 @@ func (d *Devices) ListGroupMembers(ctx context.Context, groupID uuid.UUID, query
 func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out *Listed[pgstore.ListDevicesRow]) error {
 	group := nullID(query.GroupID)
 	n, err := q.CountDevices(ctx, pgstore.CountDevicesParams{
-		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, CountLimit: countLimit,
+		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
+		CountLimit: countLimit,
 	})
 	if err != nil {
 		return fmt.Errorf("count devices: %w", err)
 	}
 	out.Count = int(n)
 	out.Items, err = q.ListDevices(ctx, pgstore.ListDevicesParams{
-		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates,
+		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
 		Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
 	})
 	if err != nil {
@@ -96,7 +98,9 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 
 // DeviceDetail is a device with status, latest bundle, group memberships, identity keys and login assignment.
 type DeviceDetail struct {
-	Device       pgstore.Device
+	Device pgstore.Device
+	// Contact is the device's contact state (plan M7c §6.2), derived like the attention conditions.
+	Contact      string
 	Status       *pgstore.DeviceStatus
 	LatestBundle *pgstore.Bundle
 	Groups       []pgstore.ListDeviceGroupsOfDeviceRow
@@ -135,6 +139,9 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 	case err == nil:
 		out.Status = &status
 	case !db.IsNoRows(err):
+		return out, err
+	}
+	if out.Contact, err = q.DeviceContact(ctx, id); err != nil {
 		return out, err
 	}
 	latest, err := q.GetLatestBundle(ctx, id)

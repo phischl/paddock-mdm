@@ -131,6 +131,9 @@ func TestOrganizationIsolation(t *testing.T) {
 			if !ok {
 				t.Fatalf("collection GET %s has no entry in listIsolationQueries", path)
 			}
+			for _, dynamic := range listIsolationDynamicQueries[path] {
+				queries = append(queries, dynamic(w))
+			}
 			resolved, parent := path, listParents[path]
 			if parent != nil {
 				resolved = pathParam.ReplaceAllString(path, parent(w))
