@@ -79,6 +79,7 @@ services:
       PADDOCK_OPENBAO_ADDR: https://openbao:8200
       BAO_CACERT: /run/secrets/internal_ca_bundle
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
     secrets: !override
       - valkey_password
       - release_public_key

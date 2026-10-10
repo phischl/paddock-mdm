@@ -29,6 +29,8 @@ commands:
   admin bump-bundle-seq --by N
   admin recompile --all
   admin rebuild-cache
+  admin allowlist show|disable
+  admin allowlist add --cidr <cidr> --label <label>
   backup openbao
   backup decrypt <in> <out|->
   prod-check [--host controlplane|audit] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json

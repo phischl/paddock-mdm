@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `confirm=disable`). New audit codes `platform.ip_allowlist_changed`, `platform.ip_allowlist_denied` (aggregated per
   address and 10-minute window, at most 41 events per window and replica) and `platform.ip_allowlist_disabled`;
   metrics `paddock_ip_allowlist_*`. Migration 00036 adds the platform table `ip_allowlist_entry`.
+- Break-glass of the IP allow list (M7a step 3): `paddock-server admin allowlist show|disable|add` on the host
+  (audited as `platform.ip_allowlist_disabled` and `platform.ip_allowlist_changed` with actor system) and the api
+  variable `PADDOCK_IP_ALLOWLIST_BYPASS` (default `false`; `prod-check` fails and the alert
+  `PaddockIPAllowlistBypassed` fires while it is set). Runbook: `docs/operations/ip-allowlist.md`.
 
 ### Fixed
 

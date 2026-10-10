@@ -26,6 +26,10 @@ func NewAdmin(runner *ActionRunner, org *db.OrgPool) *Admin {
 	return &Admin{runner: runner, org: org}
 }
 
+// Runner is the action runner the restore commands record with, shared by the break-glass commands of the IP
+// allow list (plan M7a decision 21).
+func (a *Admin) Runner() *ActionRunner { return a.runner }
+
 // adminActor is the actor of every restore command.
 var adminActor = audit.Actor{Type: audit.ActorSystem, Display: "paddock-server admin"}
 

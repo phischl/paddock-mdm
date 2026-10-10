@@ -52,6 +52,23 @@ tests:
               summary: "Messages in dlq.ingest.heartbeat"
               description: "1 messages were dead-lettered to dlq.ingest.heartbeat."
 
+  - name: a bypassed ip allow list warns after 15 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_ip_allowlist_bypass{job="paddock", role="paddock-api", instance="paddock-api:9090"}'
+        values: "0 1x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PaddockIPAllowlistBypassed
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: PaddockIPAllowlistBypassed
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "IP allow list bypassed on the api"
+              description: "paddock-api runs with PADDOCK_IP_ALLOWLIST_BYPASS=true (break-glass): the application IP allow list is not enforced. Remove the variable once access is restored (docs/operations/ip-allowlist.md)."
+
   - name: an audit backlog that does not drain for 10 minutes is lag
     interval: 1m
     input_series:

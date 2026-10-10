@@ -404,6 +404,9 @@ services:
       # Publishes new and revoked enrollment tokens to the gateway's cache at once.
       PADDOCK_VALKEY_ADDR: valkey:6379
       PADDOCK_VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+      # Break-glass of a locked-out platform (plan M7a decision 22): true ignores the application IP allow list;
+      # prod-check fails while it is set.
+      PADDOCK_IP_ALLOWLIST_BYPASS: ${PADDOCK_IP_ALLOWLIST_BYPASS:-false}
       SSL_CERT_FILE: /run/secrets/caddy_root_crt
     secrets:
       - valkey_password
