@@ -124,6 +124,10 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 		t.Fatalf("globex device enrollment %+v", s)
 	}
 	w.globexDevice = dev.DeviceID
+	// One check-in without any update run makes it a device with overdue security updates (security_updates filter).
+	if _, _, err := dev.Checkin(testContext(t, time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	res := call(t, w.carol, http.MethodPut, "/api/v1/devices/"+dev.DeviceID+"/groups", map[string]any{"device_group_ids": []string{w.globexDeviceGroup}})
 	expectStatus(t, res, http.StatusOK, "")
 	res = call(t, w.carol, http.MethodPost, "/api/v1/managed-files", map[string]any{
@@ -564,8 +568,10 @@ var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Value
 		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexDevice}} },
 	},
 	"/api/v1/audit-events": {
+		// Successes only: acme's own failed attempts on the globex device (the item checks above) are acme events that
+		// carry the ID alice sent.
 		func(w *isolationWorld) url.Values {
-			return url.Values{"target_id": {w.globexDevice}, "page_size": {"100"}}
+			return url.Values{"target_id": {w.globexDevice}, "outcome": {"success"}, "page_size": {"100"}}
 		},
 	},
 }
