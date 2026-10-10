@@ -335,9 +335,9 @@ Public hostnames (each its own TLS certificate and rate limit profile):
 | Hostname | Target | Exposure |
 | --- | --- | --- |
 | `device.<domain>` | `gateway` | Internet (devices are mobile, C1) |
-| `auth.<domain>` | Authentik | Internet (Himmelblau logins) |
+| `auth.<domain>` | Authentik | Internet for the login and device-code flow paths only; the admin interface and the rest of `/api/v3` follow the admin allow list (M7a, ADR 0021) |
 | `fleet.<domain>` | Fleet enroll/osquery endpoints only (`/api/osquery/*`, `/api/fleet/orbit/*`) | Internet |
-| `admin.<domain>` | `api` + portal static files | SHOULD be restricted by IP allow list or VPN; MAY be public |
+| `admin.<domain>` | `api` + portal static files | Edge allow list `PADDOCK_ADMIN_ALLOWED_CIDRS` plus the application allow list managed by platform admins (M7a, ADR 0021); client address derived once by Caddy from configurable trusted proxies |
 | `bundles.<domain>` | Object storage, presigned GET only | Internet |
 
 Fleet's own UI and admin API are **not** published; Paddock reaches them on the internal network.
