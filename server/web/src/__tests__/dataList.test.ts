@@ -49,15 +49,25 @@ function navigated(router: Router): Promise<void> {
 afterEach(() => {
   wrapper?.unmount()
   wrapper = null
+  resize(1280)
 })
+
+const listEvent = (action: 'down' | 'up' | 'open') => window.dispatchEvent(new CustomEvent('paddock:list', { detail: action }))
+
+function resize(width: number): void {
+  Object.defineProperty(window, 'innerWidth', { value: width, configurable: true, writable: true })
+  window.dispatchEvent(new Event('resize'))
+}
 
 async function mountList(
   url: string,
   fetch: (p: ListParams) => Promise<Page<Row>>,
   onRowClick?: (item: Row) => void,
+  extra: Record<string, unknown> = {},
+  slots: Record<string, (p: { item: Row }) => unknown> = {},
 ): Promise<{ router: Router; w: VueWrapper }> {
   const Page = () =>
-    h(DataList<Row>, { columns, filters, fetch, searchable: true, defaultSort: 'name', itemValue: 'id', onRowClick })
+    h(DataList<Row>, { columns, filters, fetch, searchable: true, defaultSort: 'name', itemValue: 'id', onRowClick, ...extra }, slots)
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/list', name: 'list', component: Page }] })
   await router.push(url)
   await router.isReady()
@@ -178,5 +188,124 @@ describe('DataList', () => {
     resolve(pageOf({ page: 1, page_size: 25, sort: 'name' }, 3))
     await flushPromises()
     expect(w.find('.table').attributes('aria-busy')).toBe('false')
+  })
+
+  it('prefixes its query keys so two lists share a page', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 95)))
+    const { router, w } = await mountList('/list?pane.page=2&pane.q=lap&page=4&other=x', fetch, undefined, { queryPrefix: 'pane' })
+    expect(fetch.mock.calls[0][0]).toMatchObject({ page: 2, q: 'lap' })
+    const done = navigated(router)
+    await w.findAll('th').find((th) => th.text().includes('Name'))!.trigger('click')
+    await done
+    expect(router.currentRoute.value.query).toEqual({ 'pane.q': 'lap', 'pane.sort': '-name', page: '4', other: 'x' })
+  })
+
+  it('renders cards with the primary, status and meta cells below 600 px and the filters in a sheet', async () => {
+    resize(390)
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 3)))
+    const { w } = await mountList('/list?status=active', fetch, undefined, {
+      columns: [
+        { key: 'name', title: 'common.name', role: 'primary', mono: true },
+        { key: 'status', title: 'organizations.status', role: 'status' },
+        { key: 'id', title: 'devices.id', role: 'meta' },
+      ],
+    }, { 'item.status': ({ item }) => h('span', { class: 'chip' }, item.status) })
+    expect(w.find('table').exists()).toBe(false)
+    const cards = w.findAll('.pd-card')
+    expect(cards.length).toBe(3)
+    expect(cards[1].find('.pd-card-primary').text()).toBe('Group 1')
+    expect(cards[1].find('.pd-card-primary').classes()).toContain('pd-cell-mono')
+    expect(cards[1].find('.pd-card-status .chip').text()).toBe('active')
+    expect(cards[1].find('.pd-card-meta').text()).toBe('Device ID: 1')
+    expect(cards[1].attributes('tabindex')).toBe('-1')
+    expect(w.find('[data-testid="list-search"]').exists()).toBe(true)
+    expect(w.find('[data-testid="list-filter-status"]').exists()).toBe(false)
+    expect(w.find('[data-testid="list-filters-open"]').text()).toBe('Filters (1)')
+    await w.find('[data-testid="list-filters-open"]').trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="list-filter-sheet"]')).not.toBeNull())
+    expect(document.querySelector('[data-testid="list-filter-sheet"] [data-testid="list-filter-status"]')).not.toBeNull()
+  })
+
+  it('forces the cards layout on request and keeps the cell slots', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 2)))
+    const { w } = await mountList('/list', fetch, undefined, { layout: 'cards', currentValue: '1' }, {
+      'item.name': ({ item }) => h('a', { href: '/x/' + item.id }, item.name),
+    })
+    expect(w.findAll('.pd-card').length).toBe(2)
+    expect(w.find('.pd-card a').attributes('href')).toBe('/x/0')
+    expect(w.findAll('.pd-card')[1].attributes('aria-current')).toBe('true')
+    expect(w.findAll('.pd-card')[0].attributes('aria-current')).toBeUndefined()
+  })
+
+  it('moves a row cursor with j/k, opens with Enter, and leaves the keys to an input that has the focus', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 3)))
+    const clicked = vi.fn()
+    const { w } = await mountList('/list', fetch, clicked)
+    const rows = () => w.findAll('tbody tr[data-row-index]')
+    expect(rows().length).toBe(3)
+    expect(rows()[0].attributes('tabindex')).toBe('-1')
+    listEvent('down')
+    await flushPromises()
+    expect(rows()[0].classes()).toContain('pd-row-cursor')
+    expect(document.activeElement).toBe(rows()[0].element)
+    listEvent('down')
+    listEvent('down')
+    listEvent('down')
+    await flushPromises()
+    expect(rows()[2].classes()).toContain('pd-row-cursor')
+    listEvent('up')
+    await flushPromises()
+    expect(rows()[1].classes()).toContain('pd-row-cursor')
+    listEvent('open')
+    expect(clicked).toHaveBeenCalledWith({ id: '1', name: 'Group 1', status: 'active' })
+    // A click sets the cursor too.
+    await rows()[0].trigger('click')
+    expect(rows()[0].classes()).toContain('pd-row-cursor')
+  })
+
+  it('follows the first link of the cursor row when the page does not listen', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 2)))
+    const followed = vi.fn()
+    const { w } = await mountList('/list', fetch, undefined, {}, {
+      'item.name': ({ item }) => h('a', { href: '#' + item.id, onClick: (e: Event) => { e.preventDefault(); followed(item.id) } }, item.name),
+    })
+    listEvent('down')
+    listEvent('down')
+    listEvent('open')
+    await flushPromises()
+    expect(followed).toHaveBeenCalledWith('1')
+    expect(w.findAll('tbody tr[data-row-index]')[1].classes()).toContain('pd-row-cursor')
+  })
+
+  it('offers to clear the filters when nothing matches, and an empty state otherwise', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 0)))
+    const { router, w } = await mountList('/list?q=lap&status=active', fetch, undefined, {
+      emptyTitle: 'deviceGroups.empty.title', emptyDescription: 'deviceGroups.empty.description',
+    })
+    expect(w.find('.pd-list-empty').text()).toContain('No results match the search or filters.')
+    const done = navigated(router)
+    await w.find('[data-testid="list-clear-filters"]').trigger('click')
+    await done
+    expect(router.currentRoute.value.query).toEqual({})
+    await flushPromises()
+    expect(w.find('[data-testid="empty-state"]').exists()).toBe(true)
+    expect(w.find('[data-testid="list-clear-filters"]').exists()).toBe(false)
+  })
+
+  it('toggles an expanded row with a labelled button', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 2)))
+    const { w } = await mountList('/list', fetch, undefined, { expandable: true }, {
+      expanded: ({ item }) => h('dl', { class: 'details' }, item.id),
+    })
+    const toggles = () => w.findAll('[data-testid="list-expand"]')
+    expect(toggles().length).toBe(2)
+    expect(toggles()[1].attributes('aria-label')).toBe('Show details of row 2')
+    expect(toggles()[1].attributes('aria-expanded')).toBe('false')
+    expect(w.find('.details').exists()).toBe(false)
+    await toggles()[1].trigger('click')
+    expect(toggles()[1].attributes('aria-expanded')).toBe('true')
+    expect(w.find('.pd-expanded-row .details').text()).toBe('1')
+    await toggles()[1].trigger('click')
+    expect(w.find('.details').exists()).toBe(false)
   })
 })

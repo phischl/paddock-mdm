@@ -104,7 +104,12 @@
     "rangeCapped": "{from, number}–{to, number} of {total, number}+ results",
     "cappedHint": "More than {total, number} results match. Narrow the search or filters to see all of them.",
     "noResults": "No results match the search or filters.",
-    "loading": "Loading results"
+    "loading": "Loading results",
+    "filters": "Filters",
+    "filtersCount": "Filters ({count})",
+    "clearFilters": "Clear filters",
+    "toggleDetails": "Show details of row {n}",
+    "applyFilters": "Apply"
   },
   "confirm": {
     "typeToConfirm": "Type {text} to confirm"
@@ -663,7 +668,33 @@
         "shared": "{device}: shares its LUKS UUID with another volume"
       }
     },
-    "presumedLost": "Presumed lost since {at}"
+    "presumedLost": "Presumed lost since {at}",
+    "contact": {
+      "ok": "Online",
+      "stale_warning": "Silent",
+      "stale_critical": "Silent (critical)",
+      "presumed_lost": "Presumed lost",
+      "never": "Never contacted"
+    },
+    "danger": {
+      "title": "Danger zone — revocation",
+      "caption": "Separately signed path. Every action opens a confirm dialog and is recorded in the audit log.",
+      "lock": {
+        "title": "Lock",
+        "explanation": "Lock erases every keyslot of the device's root volume and of every other encrypted volume whose header Paddock escrowed, and reboots the device; each can be restored from its escrowed header (the root volume with the recovery key, the others with their own passphrases). Encrypted volumes without an escrowed header are not erased by a Lock.",
+        "label": "Lock device…"
+      },
+      "destroy": {
+        "title": "Destroy",
+        "explanation": "Destroy erases every encrypted volume and deletes the escrow, so the data cannot be recovered. Requires typing the hostname; a second organization administrator must approve it.",
+        "label": "Request destroy…"
+      },
+      "retire": {
+        "title": "Retire",
+        "explanation": "Retiring revokes the device's identity permanently and it stops receiving configuration. This cannot be undone.",
+        "label": "Retire…"
+      }
+    }
   },
   "tokens": {
     "title": "Enrollment tokens",
@@ -1235,5 +1266,16 @@
     "never": "Destructive actions never have a shortcut; they always open the confirm dialog.",
     "paletteKey": "{mod} K",
     "keyEsc": "Esc"
+  },
+  "status": {
+    "encrypted": "Encrypted",
+    "notReported": "Not reported",
+    "locked": "Locked",
+    "active": "Active",
+    "loginsSuspended": "Logins suspended"
+  },
+  "time": {
+    "never": "never",
+    "now": "now"
   }
 }

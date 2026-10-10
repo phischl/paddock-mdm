@@ -65,7 +65,7 @@ describe('local administrator card', () => {
     // The pending reveal asks for the typed hostname before anything is revealed.
     expect(pendingConfirm.value?.options.requireTypedText).toBe('lt-1')
     expect(reveal).not.toHaveBeenCalled()
-    settleConfirm(true)
+    settleConfirm({ reason: '' })
     await flushPromises()
     expect(reveal).toHaveBeenCalledWith('d1', 'lt-1')
     expect(document.body.textContent).toContain('hidden in 60 seconds')

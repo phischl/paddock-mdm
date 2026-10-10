@@ -94,11 +94,45 @@ export function toRouteQuery(p: ListParams, defaults: ListParams): LocationQuery
   return out
 }
 
-/** A list column; title is a message key. */
+/**
+ * A list column; title is a message key. role places the cell in the cards layout (plan M7c decision 21): the
+ * primary identifier and the status chips on the first line, meta cells as "label: value" on the second, the
+ * actions at the end. hideBelow hides the column in the table layout on narrow viewports.
+ */
 export interface ListColumn {
   key: string
   title: string
   sortable?: boolean
+  role?: 'primary' | 'status' | 'meta' | 'actions'
+  mono?: boolean
+  align?: 'start' | 'end'
+  hideBelow?: 'sm' | 'md'
+}
+
+/** The query keys a list owns, prefixed when the list shares the page with another (plan M7c decision 21). */
+export function prefixKey(prefix: string | undefined, key: string): string {
+  return prefix ? `${prefix}.${key}` : key
+}
+
+/** The list's own part of a route query, with the prefix removed. */
+export function unprefixQuery(q: LocationQuery, prefix: string | undefined): LocationQuery {
+  if (!prefix) return q
+  const out: LocationQuery = {}
+  for (const [key, value] of Object.entries(q)) {
+    if (key.startsWith(prefix + '.')) out[key.slice(prefix.length + 1)] = value
+  }
+  return out
+}
+
+/** Merges a list's query (own keys replaced, prefixed) into the page's query, keeping every foreign key. */
+export function mergeQuery(page: LocationQuery, own: LocationQueryRaw, ownKeys: string[], prefix: string | undefined): LocationQueryRaw {
+  const mine = new Set(ownKeys.map((k) => prefixKey(prefix, k)))
+  const out: LocationQueryRaw = {}
+  for (const [key, value] of Object.entries(page)) {
+    if (!mine.has(key)) out[key] = value
+  }
+  for (const [key, value] of Object.entries(own)) out[prefixKey(prefix, key)] = value
+  return out
 }
 
 /** An option of an enum filter; title is a message key, without one the value is shown as is. */

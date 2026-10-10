@@ -2,10 +2,13 @@
 import { computed, nextTick, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ComponentPublicInstance } from 'vue'
+import type { ConfirmReason } from '../composables/useConfirm'
+import { reducedMotion } from '../lib/pageContext'
 
 /**
- * Modal confirmation (ADR 0018): title, consequence in one sentence, focus on Cancel, Esc cancels, destructive
- * button in the error colour; high-risk actions require typing a text.
+ * Modal confirmation (ADR 0018, plan M7c decision 23): title, consequence in one sentence, an optional reason
+ * field, focus on Cancel, Esc cancels, destructive button in the danger colour; high-risk actions require typing a
+ * text. Enter in the fields never submits.
  */
 const props = defineProps<{
   modelValue: boolean
@@ -14,18 +17,24 @@ const props = defineProps<{
   confirmLabel: string
   destructive?: boolean
   requireTypedText?: string
+  reason?: ConfirmReason
 }>()
 
 const emit = defineEmits<{
-  confirm: []
+  confirm: [answer: { reason: string }]
   cancel: []
 }>()
 
 const { t } = useI18n()
 const id = useId()
 const typed = ref('')
+const reasonText = ref('')
 const cancelButton = ref<ComponentPublicInstance | null>(null)
-const canConfirm = computed(() => !props.requireTypedText || typed.value === props.requireTypedText)
+const canConfirm = computed(
+  () =>
+    (!props.requireTypedText || typed.value === props.requireTypedText) &&
+    (!props.reason?.required || reasonText.value.trim() !== ''),
+)
 
 function focusCancel(): void {
   ;(cancelButton.value?.$el as HTMLElement | undefined)?.focus()
@@ -37,20 +46,22 @@ watch(
   () => props.modelValue,
   (open) => {
     typed.value = ''
+    reasonText.value = ''
     if (open) void nextTick(focusCancel)
   },
   { immediate: true },
 )
 
 function onConfirm(): void {
-  if (canConfirm.value) emit('confirm')
+  if (canConfirm.value) emit('confirm', { reason: reasonText.value.trim() })
 }
 </script>
 
 <template>
   <v-dialog
     :model-value="modelValue"
-    max-width="32rem"
+    max-width="480"
+    :transition="reducedMotion() ? false : 'dialog-transition'"
     :aria-labelledby="id + '-title'"
     :aria-describedby="id + '-message'"
     @update:model-value="(open: boolean) => !open && emit('cancel')"
@@ -71,6 +82,20 @@ function onConfirm(): void {
         <p :id="id + '-message'">
           {{ message }}
         </p>
+        <v-textarea
+          v-if="reason"
+          v-model="reasonText"
+          :label="reason.label"
+          :hint="reason.hint"
+          :persistent-hint="!!reason.hint"
+          :counter="reason.maxLength"
+          :maxlength="reason.maxLength"
+          rows="2"
+          auto-grow
+          autocomplete="off"
+          data-testid="confirm-reason"
+          @keydown.enter.stop
+        />
         <v-text-field
           v-if="requireTypedText"
           v-model="typed"
@@ -79,7 +104,7 @@ function onConfirm(): void {
           autocomplete="off"
           spellcheck="false"
           data-testid="confirm-typed"
-          @keydown.enter.prevent="onConfirm"
+          @keydown.enter.prevent
         />
         <div class="form-actions">
           <v-btn

@@ -556,7 +556,7 @@ onBeforeUnmount(() => observer.disconnect())
         v-if="pendingConfirm"
         :model-value="true"
         v-bind="pendingConfirm.options"
-        @confirm="settleConfirm(true)"
+        @confirm="(answer) => settleConfirm(answer)"
         @cancel="settleConfirm(false)"
       />
     </v-defaults-provider>

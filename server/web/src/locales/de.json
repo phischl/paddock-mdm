@@ -104,7 +104,12 @@
     "rangeCapped": "{from, number}–{to, number} von über {total, number} Ergebnissen",
     "cappedHint": "Mehr als {total, number} Ergebnisse passen. Schränken Sie Suche oder Filter ein, um alle zu sehen.",
     "noResults": "Keine Ergebnisse passen zu Suche oder Filtern.",
-    "loading": "Ergebnisse werden geladen"
+    "loading": "Ergebnisse werden geladen",
+    "filters": "Filter",
+    "filtersCount": "Filter ({count})",
+    "clearFilters": "Filter zurücksetzen",
+    "toggleDetails": "Details der Zeile {n} anzeigen",
+    "applyFilters": "Anwenden"
   },
   "confirm": {
     "typeToConfirm": "Geben Sie zur Bestätigung {text} ein"
@@ -663,7 +668,33 @@
         "shared": "{device}: teilt seine LUKS-UUID mit einem anderen Volume"
       }
     },
-    "presumedLost": "Vermutlich verloren seit {at}"
+    "presumedLost": "Vermutlich verloren seit {at}",
+    "contact": {
+      "ok": "Online",
+      "stale_warning": "Ohne Kontakt",
+      "stale_critical": "Ohne Kontakt (kritisch)",
+      "presumed_lost": "Vermutlich verloren",
+      "never": "Nie verbunden"
+    },
+    "danger": {
+      "title": "Gefahrenbereich — Widerruf",
+      "caption": "Separat signierter Pfad. Jede Aktion öffnet einen Bestätigungsdialog und wird im Audit-Protokoll festgehalten.",
+      "lock": {
+        "title": "Sperren",
+        "explanation": "Sperren löscht jeden Keyslot des Root-Volumes und jedes weiteren verschlüsselten Volumes, dessen Header Paddock hinterlegt hat, und startet das Gerät neu; jedes lässt sich aus dem hinterlegten Header wiederherstellen (das Root-Volume mit dem Wiederherstellungsschlüssel, die anderen mit ihren eigenen Passphrasen). Verschlüsselte Volumes ohne hinterlegten Header löscht ein Sperren nicht.",
+        "label": "Gerät sperren …"
+      },
+      "destroy": {
+        "title": "Zerstören",
+        "explanation": "Zerstören löscht jedes verschlüsselte Volume und die Hinterlegung, die Daten sind nicht wiederherstellbar. Erfordert die Eingabe des Hostnamens; ein zweiter Organisationsadministrator muss zustimmen.",
+        "label": "Zerstören anfordern …"
+      },
+      "retire": {
+        "title": "Außer Betrieb nehmen",
+        "explanation": "Außerbetriebnahme widerruft die Identität des Geräts dauerhaft, es erhält keine Konfiguration mehr. Das lässt sich nicht rückgängig machen.",
+        "label": "Außer Betrieb nehmen …"
+      }
+    }
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -1235,5 +1266,16 @@
     "never": "Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog.",
     "paletteKey": "{mod} K",
     "keyEsc": "Esc"
+  },
+  "status": {
+    "encrypted": "Verschlüsselt",
+    "notReported": "Nicht gemeldet",
+    "locked": "Gesperrt",
+    "active": "Aktiv",
+    "loginsSuspended": "Anmeldungen ausgesetzt"
+  },
+  "time": {
+    "never": "nie",
+    "now": "jetzt"
   }
 }

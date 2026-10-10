@@ -76,7 +76,61 @@ describe('ConfirmDialog', () => {
   })
 })
 
+describe('ConfirmDialog reason field (plan M7c decision 23)', () => {
+  const reason = { label: 'Reason', hint: 'Kept with the request.', required: true, maxLength: 500 as const }
+
+  it('keeps the confirm button disabled until the typed text matches and a required reason is non-empty', async () => {
+    const w = mountDialog({ requireTypedText: 'acme-lt-0142', reason, destructive: true })
+    await flushPromises()
+    const accept = () => el('confirm-accept') as HTMLButtonElement
+    const typed = el('confirm-typed')?.querySelector('input') as HTMLInputElement
+    const text = el('confirm-reason')?.querySelector('textarea') as HTMLTextAreaElement
+    expect(el('confirm-reason')?.textContent).toContain('Reason')
+    expect(accept().disabled).toBe(true)
+    typed.value = 'acme-lt-0142'
+    typed.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(accept().disabled).toBe(true)
+    text.value = '   '
+    text.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(accept().disabled).toBe(true)
+    text.value = ' stolen laptop '
+    text.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(accept().disabled).toBe(false)
+    // Enter in either field does not submit.
+    typed.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    text.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(w.emitted('confirm')).toBeUndefined()
+    accept().click()
+    expect(w.emitted('confirm')).toEqual([[{ reason: 'stolen laptop' }]])
+  })
+
+  it('lets an optional reason stay empty', async () => {
+    const w = mountDialog({ reason: { ...reason, required: false } })
+    await flushPromises()
+    expect((el('confirm-accept') as HTMLButtonElement).disabled).toBe(false)
+    el('confirm-accept')?.click()
+    expect(w.emitted('confirm')).toEqual([[{ reason: '' }]])
+  })
+})
+
 describe('useConfirm', () => {
+  it('resolves the reason when the options ask for one, a boolean otherwise', async () => {
+    const confirm = useConfirm()
+    const withReason = confirm({ title: 'Lock', message: 'Lock?', confirmLabel: 'Lock', reason: { label: 'Reason', required: true, maxLength: 500 } })
+    expect(pendingConfirm.value?.options.reason?.label).toBe('Reason')
+    settleConfirm({ reason: 'stolen' })
+    expect(await withReason).toEqual({ reason: 'stolen' })
+    const plain = confirm({ title: 'Delete', message: 'Delete?', confirmLabel: 'Delete' })
+    settleConfirm({ reason: '' })
+    expect(await plain).toBe(true)
+    const cancelled = confirm({ title: 'Delete', message: 'Delete?', confirmLabel: 'Delete' })
+    settleConfirm(false)
+    expect(await cancelled).toBe(false)
+  })
+
   const Host = defineComponent({
     setup() {
       return () =>
@@ -84,7 +138,7 @@ describe('useConfirm', () => {
           ? h(ConfirmDialog, {
               modelValue: true,
               ...pendingConfirm.value.options,
-              onConfirm: () => settleConfirm(true),
+              onConfirm: () => settleConfirm({ reason: '' }),
               onCancel: () => settleConfirm(false),
             })
           : null
@@ -112,7 +166,7 @@ describe('useConfirm', () => {
     const second = confirm({ title: 'B', message: 'M', confirmLabel: 'OK' })
     expect(await first).toBe(false)
     expect(pendingConfirm.value?.options.title).toBe('B')
-    settleConfirm(true)
+    settleConfirm({ reason: '' })
     expect(await second).toBe(true)
   })
 })
