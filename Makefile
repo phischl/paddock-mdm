@@ -107,11 +107,14 @@ lint-vuln:
 			for m in $(GO_MODULES); do echo "govulncheck $$m"; go tool govulncheck -test -C /src/$$m ./...; done'
 
 # The build stage of the server image compiles the Go workspace, so a commit that breaks the image fails lint (plan
-# M2.1 decision 5); the compiler image (with visudo) is built as well (plan M3a decision 17).
+# M2.1 decision 5); the compiler image (with visudo) is built as well (plan M3a decision 17). The build stage is also
+# cross-compiled for arm64 (on the build platform, no QEMU), so a commit that breaks the published arm64 images fails
+# lint too (plan M7b decision 20).
 .PHONY: lint-image
 lint-image:
-	@for target in build compiler; do \
-		docker build --target $$target -f $(COMPOSE_DIR)/Dockerfile \
+	@for target in build compiler build/linux/arm64; do \
+		docker build --target $${target%%/*} $$(case $$target in */*) echo --platform $${target#*/};; esac) \
+			-f $(COMPOSE_DIR)/Dockerfile \
 			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
 			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
 			--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) . || exit 1; \

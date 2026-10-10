@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation, removal through the confirmation modal, and the typed confirmation of a change that would lock the
   administrator out or switch the list off.
 
+### Changed
+
+- Production Compose files carry no `build:` sections any more (M7b step 1, ADR 0022): `compose.yaml`,
+  `compose.audit.yaml` and `compose.backup.yaml` reference the images `PADDOCK_IMAGE`, `PADDOCK_COMPILER_IMAGE` and
+  `PADDOCK_PGBACKREST_IMAGE` only; the development overlays `compose.dev.yaml` and `compose.backup.dev.yaml` build
+  them from source, so `make up` is unchanged. The server image cross-compiles (portal and Go build on the build
+  platform) for `linux/amd64` and `linux/arm64`; `make lint-image` also builds the arm64 Go stage.
+
 ### Fixed
 
 - CI: the trivy job saves its vulnerability database cache again (the cache step failed on root-owned files).
