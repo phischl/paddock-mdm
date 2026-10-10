@@ -64,38 +64,48 @@ else
 fi
 
 # listen <reply>: a local TCP server that answers every connection with <reply> (or never answers when it is empty);
-# prints its port.
+# sets $port. It runs in this shell, not in $(…), so cleanup knows its pid, and it exits on its own after 30 s so an
+# aborted run leaks nothing.
 listen() {
   python3 -c '
 import socket, sys, time
-s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(4)
+deadline = time.monotonic() + 30
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(4); s.settimeout(1)
 print(s.getsockname()[1], flush=True)
-while True:
-    c, _ = s.accept()
+while time.monotonic() < deadline:
+    try:
+        c, _ = s.accept()
+    except socket.timeout:
+        continue
     if sys.argv[1]:
         c.recv(4096); c.sendall(sys.argv[1].encode()); c.close()
     else:
-        time.sleep(60)
-' "$1" >"$tmp/port" &
+        time.sleep(max(0, deadline - time.monotonic()))
+' "$1" >"$tmp/port" 2>/dev/null </dev/null &
   listeners+=("$!")
   for _ in $(seq 1 50); do [[ -s "$tmp/port" ]] && break; sleep 0.1; done
-  cat "$tmp/port"
+  port="$(cat "$tmp/port")"
   : >"$tmp/port"
 }
 
 if command -v python3 >/dev/null && command -v timeout >/dev/null; then
   export TOKEN=secret-token
-  port="$(listen $'HTTP/1.0 401 Unauthorized\r\n\r\n')"
+  listen $'HTTP/1.0 401 Unauthorized\r\n\r\n'
   check "probe reads the status (401)" test "$(fleet_me_status "$port" 5)" = 401
-  port="$(listen $'HTTP/1.0 200 OK\r\n\r\n')"
+  listen $'HTTP/1.0 200 OK\r\n\r\n'
   check "probe reads the status (200)" test "$(fleet_me_status "$port" 5)" = 200
-  port="$(listen "")"
+  listen ""
   start=$SECONDS
   got="$(fleet_me_status "$port" 1)"
   check "probe of a Fleet that never answers: no status (-> fail)" test -z "$got"
   check "probe of a Fleet that never answers gives up after its timeout" test $((SECONDS - start)) -le 3
   check "probe of a closed port: no status (-> fail)" test -z "$(fleet_me_status 1 2)"
   unset TOKEN
+  check "three listeners are tracked for cleanup" test "${#listeners[@]}" -eq 3
+  for pid in "${listeners[@]}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
+  alive=0
+  for pid in "${listeners[@]}"; do kill -0 "$pid" 2>/dev/null && alive=$((alive + 1)); done
+  check "no listener survives cleanup" test "$alive" -eq 0
 else
   echo "skip probe tests (python3 or timeout missing)"
 fi
