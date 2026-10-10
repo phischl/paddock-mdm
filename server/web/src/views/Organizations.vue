@@ -2,14 +2,16 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import type { Organization } from '../api/client'
 import { createOrganization, listOrganizations, organizationFilters } from '../lib/organizations'
 import { hasErrors, validateOrganization } from '../lib/validation'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
+import { organizationStatus } from '../lib/status'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const problemText = useProblemText()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
 
@@ -66,13 +68,28 @@ async function submit(): Promise<void> {
       searchable
       default-sort="slug"
       item-value="id"
+      empty-icon="building-complex"
+      empty-title="organizations.empty.title"
+      empty-description="organizations.empty.description"
       data-testid="organization-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="true"
+          color="primary"
+          @click="openCreate"
+        >
+          {{ t('organizations.create') }}
+        </v-btn>
+      </template>
       <template #[`item.status`]="{ item }: { item: Organization }">
-        {{ t('organizations.statuses.' + item.status) }}
+        <StatusChip
+          :status="organizationStatus(item.status).status"
+          :label="t(organizationStatus(item.status).label)"
+        />
       </template>
       <template #[`item.created_at`]="{ item }: { item: Organization }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
     </DataList>
 

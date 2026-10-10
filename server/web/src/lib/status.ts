@@ -1,6 +1,6 @@
 import type {
   AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceContact, DeviceState,
-  DiskState, RevocationStatus,
+  DiskState, OrganizationStatus, RevocationStatus,
 } from '../api/client'
 
 /**
@@ -179,6 +179,20 @@ export function releaseStatus(s: AgentReleaseStatus): StatusView {
       return { status: 'neutral', label }
     case 'published':
       return { status: 'ok', label }
+  }
+}
+
+export function organizationStatus(s: OrganizationStatus): StatusView {
+  const label = 'organizations.statuses.' + s
+  switch (s) {
+    case 'active':
+      return { status: 'ok', label }
+    case 'provisioning':
+      return { status: 'info', label }
+    case 'provisioning_failed':
+      return { status: 'critical', label }
+    case 'suspended':
+      return { status: 'warn', label }
   }
 }
 

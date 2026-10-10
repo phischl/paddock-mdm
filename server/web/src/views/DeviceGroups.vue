@@ -2,16 +2,16 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import TimeCell from '../components/TimeCell.vue'
 import DeviceGroupForm from '../components/DeviceGroupForm.vue'
 import type { DeviceGroup } from '../api/client'
 import { useDeviceGroupPage } from '../lib/deviceGroupPage'
 import { listDeviceGroups } from '../lib/deviceGroups'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const problemText = useProblemText()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
@@ -56,18 +56,30 @@ const columns = computed<ListColumn[]>(() => [
       searchable
       default-sort="name"
       item-value="id"
+      empty-icon="folder"
+      empty-title="deviceGroups.empty.title"
+      empty-description="deviceGroups.empty.description"
       data-testid="device-group-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="session.canWrite"
+          color="primary"
+          @click="openCreate"
+        >
+          {{ t('deviceGroups.create') }}
+        </v-btn>
+      </template>
       <template #[`item.name`]="{ item }: { item: DeviceGroup }">
         <RouterLink :to="{ name: 'device-group', params: { id: item.id } }">
           {{ item.name }}
         </RouterLink>
       </template>
       <template #[`item.created_at`]="{ item }: { item: DeviceGroup }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
       <template #[`item.updated_at`]="{ item }: { item: DeviceGroup }">
-        {{ formatDateTime(item.updated_at, locale) }}
+        <TimeCell :iso="item.updated_at" />
       </template>
       <template #[`item.actions`]="{ item }: { item: DeviceGroup }">
         <div class="row-actions">

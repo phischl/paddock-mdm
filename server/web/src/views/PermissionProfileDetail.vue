@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import TimeCell from '../components/TimeCell.vue'
 import ProfileForm from '../components/ProfileForm.vue'
 import type { PermissionProfile, ProfileAssignment, SubjectType, User, UserGroup } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
@@ -327,7 +328,7 @@ async function unassign(a: ProfileAssignment): Promise<void> {
           {{ scopeName(item.device_group_id) }}
         </template>
         <template #[`item.created_at`]="{ item }: { item: ProfileAssignment }">
-          {{ formatDateTime(item.created_at, locale) }}
+          <TimeCell :iso="item.created_at" />
         </template>
         <template #[`item.actions`]="{ item }: { item: ProfileAssignment }">
           <v-btn

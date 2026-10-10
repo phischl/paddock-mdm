@@ -125,7 +125,11 @@
     "editLabel": "Edit {name}",
     "deleteLabel": "Delete {name}",
     "back": "Back to device groups",
-    "members": "Devices in this group"
+    "members": "Devices in this group",
+    "empty": {
+      "title": "No device groups yet",
+      "description": "Groups scope configuration, package holds and login rules to a set of devices."
+    }
   },
   "validation": {
     "nameRequired": "Enter a name.",
@@ -377,6 +381,10 @@
       "active": "Active",
       "provisioning_failed": "Provisioning failed",
       "suspended": "Suspended"
+    },
+    "empty": {
+      "title": "No organizations yet",
+      "description": "Create the first organization to onboard its administrators."
     }
   },
   "agentReleases": {
@@ -434,6 +442,10 @@
         "title": "Resume the rollout?",
         "confirm": "Agent {version} will be offered again to the devices of the current wave."
       }
+    },
+    "empty": {
+      "title": "No agent releases yet",
+      "description": "Upload a signed release to start a staged rollout."
     }
   },
   "loginDenied": {
@@ -752,6 +764,11 @@
     "findings": {
       "title": "Software and vulnerabilities",
       "all": "{count, plural, one {The finding} other {All # findings}}"
+    },
+    "empty": {
+      "title": "No devices yet",
+      "description": "Devices appear here after they enroll with an enrollment token.",
+      "action": "Create enrollment token"
     }
   },
   "tokens": {
@@ -782,7 +799,11 @@
     "config": "Enrollment configuration",
     "copy": "Copy",
     "copied": "Copied to the clipboard.",
-    "done": "Done"
+    "done": "Done",
+    "empty": {
+      "title": "No enrollment tokens yet",
+      "description": "A token lets a device enroll; its configuration is shown once when it is created."
+    }
   },
   "apiTokens": {
     "title": "API tokens",
@@ -816,7 +837,11 @@
     "revoke": "Revoke",
     "revokeTitle": "Revoke API token",
     "revokeConfirm": "Revoke the API token {name}? Requests made with it are refused from now on.",
-    "revokeLabel": "Revoke {name}"
+    "revokeLabel": "Revoke {name}",
+    "empty": {
+      "title": "No API tokens yet",
+      "description": "API tokens let CI and paddockctl use the admin API with a role and an expiry."
+    }
   },
   "changeSets": {
     "title": "Change sets",
@@ -846,7 +871,11 @@
     "field": "Field",
     "before": "Before",
     "after": "After",
-    "close": "Close"
+    "close": "Close",
+    "empty": {
+      "title": "No change sets yet",
+      "description": "Change sets are recorded when paddockctl or the API applies a configuration."
+    }
   },
   "managed": {
     "scope": "Applies to",
@@ -865,7 +894,11 @@
       "mode": "Mode",
       "owner": "Owner",
       "group": "Group",
-      "content": "Content"
+      "content": "Content",
+      "empty": {
+        "title": "No managed files yet",
+        "description": "Managed files are written to every device of their scope and kept unchanged."
+      }
     },
     "units": {
       "title": "Managed units",
@@ -878,7 +911,11 @@
       "enabled": "Enabled at boot",
       "active": "Running",
       "wanted": "Desired state",
-      "wantedState": "{enabled, select, true {enabled} other {disabled}}, {active, select, true {running} other {stopped}}"
+      "wantedState": "{enabled, select, true {enabled} other {disabled}}, {active, select, true {running} other {stopped}}",
+      "empty": {
+        "title": "No managed units yet",
+        "description": "Managed units keep systemd services enabled or disabled on their scope."
+      }
     }
   },
   "users": {
@@ -914,7 +951,11 @@
     "unlockTitle": "Unlock user",
     "unlockConfirm": "Unlock {username}? The user signs in with the device code again and sets up a new PIN.",
     "deleteTitle": "Delete user",
-    "deleteConfirm": "Delete {username} with all group memberships and permissions? This cannot be undone."
+    "deleteConfirm": "Delete {username} with all group memberships and permissions? This cannot be undone.",
+    "empty": {
+      "title": "No users yet",
+      "description": "Users are synchronized from the directory or created here."
+    }
   },
   "userGroups": {
     "title": "Groups",
@@ -945,7 +986,11 @@
     "remove": "Remove",
     "removeTitle": "Remove member",
     "removeConfirm": "Remove {username} from {group}? The user loses the group's logins and permissions.",
-    "removeLabel": "Remove {username}"
+    "removeLabel": "Remove {username}",
+    "empty": {
+      "title": "No groups yet",
+      "description": "Groups bundle users for login assignment and permission profiles."
+    }
   },
   "profiles": {
     "title": "Permission profiles",
@@ -1018,7 +1063,11 @@
       "command": "Command {item}",
       "scalar": "{item}: {value}"
     },
-    "allCommands": "All commands"
+    "allCommands": "All commands",
+    "empty": {
+      "title": "No permission profiles yet",
+      "description": "Profiles grant sudo rights to users or groups on their devices."
+    }
   },
   "loginSettings": {
     "title": "Login & privileges",
@@ -1122,6 +1171,10 @@
         "confirm": "Your destroy request for {hostname} is cancelled; nothing happens to the device.",
         "done": "The destroy of {hostname} was cancelled."
       }
+    },
+    "empty": {
+      "title": "No revocations",
+      "description": "Lock and Destroy requests of this organization appear here with their progress."
     }
   },
   "dms": {
@@ -1184,6 +1237,14 @@
       "deviceVulnerabilities": {
         "title": "No findings for this device",
         "description": "The device has no CVE matches."
+      },
+      "software": {
+        "title": "No software inventoried yet",
+        "description": "The inventory fills after the first sync of a device with fleetd."
+      },
+      "deviceSoftware": {
+        "title": "No software reported yet",
+        "description": "The list fills after the first inventory sync of the device."
       }
     }
   },
@@ -1225,7 +1286,11 @@
       "versionInvalid": "Enter a Debian version: letters, digits, ., +, :, ~ and -.",
       "reasonInvalid": "At most 500 characters.",
       "deleteTitle": "Release the package?",
-      "deleteConfirm": "Devices may upgrade {name} again with their next updates."
+      "deleteConfirm": "Devices may upgrade {name} again with their next updates.",
+      "empty": {
+        "title": "No package holds yet",
+        "description": "A hold keeps a package at its version or out of updates on its scope."
+      }
     },
     "installNow": {
       "label": "Install now",

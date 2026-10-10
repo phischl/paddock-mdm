@@ -4,13 +4,13 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import CvssScore from '../components/CvssScore.vue'
 import DataList from '../components/DataList.vue'
+import TimeCell from '../components/TimeCell.vue'
 import SeverityChip from '../components/SeverityChip.vue'
 import type { VulnerabilityFinding } from '../api/client'
-import { formatDateTime } from '../lib/format'
 import { listDeviceVulnerabilities, severityFilter } from '../lib/inventory'
 import type { ListColumn } from '../lib/listQuery'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const route = useRoute()
 const id = computed(() => String(route.params.id))
 const fetch = computed(() => listDeviceVulnerabilities(id.value))
@@ -36,6 +36,9 @@ const columns: ListColumn[] = [
       searchable
       default-sort="-cve"
       item-value="key"
+      empty-icon="bug"
+      empty-title="inventory.empty.deviceVulnerabilities.title"
+      empty-description="inventory.empty.deviceVulnerabilities.description"
       data-testid="device-vulnerability-list"
     >
       <template #[`item.cve`]="{ item }: { item: VulnerabilityFinding }">
@@ -59,7 +62,7 @@ const columns: ListColumn[] = [
         {{ item.fixed_version ?? '–' }}
       </template>
       <template #[`item.first_seen_at`]="{ item }: { item: VulnerabilityFinding }">
-        {{ formatDateTime(item.first_seen_at, locale) }}
+        <TimeCell :iso="item.first_seen_at" />
       </template>
     </DataList>
   </div>

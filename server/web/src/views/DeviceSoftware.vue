@@ -28,6 +28,9 @@ const columns: ListColumn[] = [
       searchable
       default-sort="name"
       item-value="key"
+      empty-icon="package-search"
+      empty-title="inventory.empty.deviceSoftware.title"
+      empty-description="inventory.empty.deviceSoftware.description"
       data-testid="device-software-list"
     />
   </div>

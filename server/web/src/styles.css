@@ -77,21 +77,22 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .form-row > * { flex: 1; }
 .config-text textarea { font-family: var(--pd-font-mono); }
 .conflict { margin-bottom: 1rem; }
-.state-quarantined, .state-rejected, .state-retired { color: var(--pd-status-critical-fg); font-weight: 600; }
-.presumed-lost { color: var(--pd-status-critical-fg); font-weight: 600; }
 .timeline { margin: 0; padding-left: 1.25rem; }
 
 /* Identity and privileges (plan M3a step 5). */
-.badge {
-  display: inline-block; border-radius: var(--pd-radius-xs); padding: 0 0.4rem; font-size: 0.8125rem;
-  border: 1px solid var(--pd-border-strong); color: var(--pd-text-secondary);
-}
-.badge-warning { color: var(--pd-status-warn-fg); font-weight: 600; margin-left: 0.5rem; }
-.badge-danger { color: var(--pd-status-critical-fg); font-weight: 600; margin-left: 0.5rem; }
 .chip-link { margin-right: 0.75rem; }
 .command { display: block; font-family: var(--pd-font-mono); overflow-wrap: anywhere; }
-.settings-form fieldset { border: 0; padding: 0; margin: 0 0 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
-.settings-form legend { font-size: 13px; line-height: 18px; font-weight: 600; margin-bottom: 0.5rem; }
+/* Settings forms (plan M7c decision 25): one panel per fieldset, fields as wide as their content. */
+.settings-form { max-width: 48rem; }
+.settings-form fieldset {
+  background: var(--pd-surface-1); border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md);
+  padding: 12px 14px 14px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 0.5rem; min-width: 0;
+}
+.settings-form legend { font-size: 13px; line-height: 18px; font-weight: 600; padding: 0 4px; margin-left: -4px; }
+.settings-form .v-input { max-width: 24rem; width: 100%; }
+.settings-form .v-input:has(input[type="number"]), .settings-form .v-input:has(input[type="time"]),
+.settings-form .v-input.pd-field-short { max-width: 12rem; }
+.settings-form .v-switch, .settings-form .v-input:has(textarea) { max-width: none; }
 
 /* Local administrator (plan M4a step 6). */
 .revealed-password { display: flex; gap: 0.5rem; align-items: center; }
@@ -206,6 +207,9 @@ a.pd-pill:hover { filter: brightness(0.95); }
 .pd-cell-primary a { font-family: var(--pd-font-mono); font-size: 12px; text-decoration: none; }
 .pd-cell-primary a:hover, .pd-cell-primary a:focus-visible { text-decoration: underline; }
 .v-table .v-data-table__td.pd-cell-primary { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Audit sentences wrap (they are the row's content); identifiers and codes stay on one line. */
+.v-table .v-data-table__td.pd-cell-primary:has(.audit-text) { max-width: none; white-space: normal; }
+.v-table .v-data-table__td.pd-cell-mono { white-space: nowrap; }
 .v-table .v-data-table__td { padding-top: var(--pd-row-pad) !important; padding-bottom: var(--pd-row-pad) !important; height: auto !important; overflow-wrap: anywhere; }
 .v-table .v-data-table__td.pd-cell-expand { width: 2.5rem; }
 .v-table tbody tr.pd-row-cursor > td { box-shadow: inset 0 0 0 2px var(--pd-focus); }

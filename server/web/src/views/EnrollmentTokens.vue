@@ -2,17 +2,19 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import EnrollmentTokenForm from '../components/EnrollmentTokenForm.vue'
 import type { EnrollmentToken, EnrollmentTokenCreated } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { allGroups } from '../lib/devices'
 import { configText, createEnrollmentToken, listEnrollmentTokens, revokeEnrollmentToken, type TokenInput } from '../lib/enrollmentTokens'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
+import { tokenStatus } from '../lib/status'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const problemText = useProblemText()
 const confirm = useConfirm()
 const session = useSessionStore()
@@ -31,7 +33,7 @@ const copied = ref(false)
 
 const columns = computed<ListColumn[]>(() => [
   { key: 'name', title: 'common.name', sortable: true },
-  { key: 'status', title: 'tokens.status' },
+  { key: 'status', title: 'tokens.status', role: 'status' },
   { key: 'uses', title: 'tokens.uses' },
   { key: 'expires_at', title: 'tokens.expiresAt', sortable: true },
   { key: 'created_at', title: 'common.createdAt', sortable: true },
@@ -107,19 +109,34 @@ async function onRevoke(token: EnrollmentToken): Promise<void> {
       searchable
       default-sort="-created_at"
       item-value="id"
+      empty-icon="ticket"
+      empty-title="tokens.empty.title"
+      empty-description="tokens.empty.description"
       data-testid="token-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="session.canDelete"
+          color="primary"
+          @click="openCreate"
+        >
+          {{ t('tokens.create') }}
+        </v-btn>
+      </template>
       <template #[`item.status`]="{ item }: { item: EnrollmentToken }">
-        {{ t('tokens.statuses.' + item.status) }}
+        <StatusChip
+          :status="tokenStatus(item.status).status"
+          :label="t(tokenStatus(item.status).label)"
+        />
       </template>
       <template #[`item.uses`]="{ item }: { item: EnrollmentToken }">
         {{ t('tokens.usesOf', { uses: item.uses, max: item.max_uses }) }}
       </template>
       <template #[`item.expires_at`]="{ item }: { item: EnrollmentToken }">
-        {{ formatDateTime(item.expires_at, locale) }}
+        <TimeCell :iso="item.expires_at" />
       </template>
       <template #[`item.created_at`]="{ item }: { item: EnrollmentToken }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
       <template #[`item.actions`]="{ item }: { item: EnrollmentToken }">
         <v-btn

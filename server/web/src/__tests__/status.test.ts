@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type {
-  AgentRolloutStatus, AttentionKind, AuditOutcome, DeviceCommandStatus, DeviceContact, DeviceState, DiskState, RevocationStatus,
+  AgentRolloutStatus, AttentionKind, AuditOutcome, DeviceCommandStatus, DeviceContact, DeviceState, DiskState, OrganizationStatus,
+  RevocationStatus,
 } from '../api/client'
 import {
-  actorStatus, attentionRank, attentionStatus, commandStatus, deviceStatus, encryptionStatus, outcomeStatus, releaseStatus, revocationStatus,
-  rolloutStatus, tokenStatus, userLockStatus, type Status,
+  actorStatus, attentionRank, attentionStatus, commandStatus, deviceStatus, encryptionStatus, organizationStatus, outcomeStatus, releaseStatus,
+  revocationStatus, rolloutStatus, tokenStatus, userLockStatus, type Status,
 } from '../lib/status'
 import en from '../locales/en.json'
 
@@ -84,6 +85,9 @@ describe('status mappings (plan M7c decision 19)', () => {
     expect(rollouts.map((r) => rolloutStatus(r).status)).toEqual(['info', 'critical', 'ok'])
     expect(releaseStatus('draft').status).toBe('neutral')
     expect(releaseStatus('published').status).toBe('ok')
+    const orgs: OrganizationStatus[] = ['active', 'provisioning', 'provisioning_failed', 'suspended']
+    expect(orgs.map((o) => organizationStatus(o).status)).toEqual(['ok', 'info', 'critical', 'warn'])
+    for (const o of orgs) expect(resolve(organizationStatus(o).label), o).toBeTypeOf('string')
     expect(userLockStatus(true)).toEqual({ status: 'critical', label: 'status.locked' })
     expect(userLockStatus(false)).toEqual({ status: 'ok', label: 'status.active' })
     expect(['admin', 'platform_admin', 'api_token'].map((a) => actorStatus(a).status)).toEqual(['info', 'info', 'info'])

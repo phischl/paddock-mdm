@@ -2,14 +2,16 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import type { User, UserCreated } from '../api/client'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { createUser, listUsers, userFilters } from '../lib/users'
 import { useSessionStore } from '../stores/session'
+import { userLockStatus } from '../lib/status'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const problemText = useProblemText()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
@@ -90,21 +92,39 @@ async function copy(): Promise<void> {
       searchable
       default-sort="username"
       item-value="id"
+      empty-icon="user"
+      empty-title="users.empty.title"
+      empty-description="users.empty.description"
       data-testid="user-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="session.canWrite"
+          color="primary"
+          @click="openCreate"
+        >
+          {{ t('users.create') }}
+        </v-btn>
+      </template>
       <template #[`item.username`]="{ item }: { item: User }">
         <RouterLink :to="{ name: 'user', params: { id: item.id } }">
           {{ item.username }}
         </RouterLink>
       </template>
       <template #[`item.source`]="{ item }: { item: User }">
-        <span :class="'badge badge-' + item.source">{{ t('users.sources.' + item.source) }}</span>
+        <StatusChip
+          status="neutral"
+          :label="t('users.sources.' + item.source)"
+        />
       </template>
       <template #[`item.locked`]="{ item }: { item: User }">
-        <span :class="item.locked ? 'state state-quarantined' : ''">{{ t(item.locked ? 'users.locked' : 'users.notLocked') }}</span>
+        <StatusChip
+          :status="userLockStatus(item.locked).status"
+          :label="t(item.locked ? 'users.locked' : 'users.notLocked')"
+        />
       </template>
       <template #[`item.created_at`]="{ item }: { item: User }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
     </DataList>
 

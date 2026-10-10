@@ -125,7 +125,11 @@
     "editLabel": "{name} bearbeiten",
     "deleteLabel": "{name} löschen",
     "back": "Zurück zu den Gerätegruppen",
-    "members": "Geräte in dieser Gruppe"
+    "members": "Geräte in dieser Gruppe",
+    "empty": {
+      "title": "Noch keine Gerätegruppen",
+      "description": "Gruppen begrenzen Konfiguration, zurückgehaltene Pakete und Anmelderegeln auf eine Menge von Geräten."
+    }
   },
   "validation": {
     "nameRequired": "Geben Sie einen Namen ein.",
@@ -377,6 +381,10 @@
       "active": "Aktiv",
       "provisioning_failed": "Einrichtung fehlgeschlagen",
       "suspended": "Ausgesetzt"
+    },
+    "empty": {
+      "title": "Noch keine Organisationen",
+      "description": "Legen Sie die erste Organisation an, um ihre Administratoren aufzunehmen."
     }
   },
   "agentReleases": {
@@ -434,6 +442,10 @@
         "title": "Rollout fortsetzen?",
         "confirm": "Agent {version} wird den Geräten der aktuellen Welle erneut angeboten."
       }
+    },
+    "empty": {
+      "title": "Noch keine Agent-Releases",
+      "description": "Laden Sie ein signiertes Release hoch, um einen gestaffelten Rollout zu starten."
     }
   },
   "loginDenied": {
@@ -752,6 +764,11 @@
     "findings": {
       "title": "Software und Schwachstellen",
       "all": "{count, plural, one {Der Fund} other {Alle # Funde}}"
+    },
+    "empty": {
+      "title": "Noch keine Geräte",
+      "description": "Geräte erscheinen hier, nachdem sie sich mit einem Registrierungstoken registriert haben.",
+      "action": "Registrierungstoken erstellen"
     }
   },
   "tokens": {
@@ -782,7 +799,11 @@
     "config": "Registrierungskonfiguration",
     "copy": "Kopieren",
     "copied": "In die Zwischenablage kopiert.",
-    "done": "Fertig"
+    "done": "Fertig",
+    "empty": {
+      "title": "Noch keine Registrierungstokens",
+      "description": "Ein Token erlaubt einem Gerät die Registrierung; seine Konfiguration wird beim Erstellen einmal angezeigt."
+    }
   },
   "apiTokens": {
     "title": "API-Tokens",
@@ -816,7 +837,11 @@
     "revoke": "Widerrufen",
     "revokeTitle": "API-Token widerrufen",
     "revokeConfirm": "Das API-Token {name} widerrufen? Anfragen damit werden ab sofort abgelehnt.",
-    "revokeLabel": "{name} widerrufen"
+    "revokeLabel": "{name} widerrufen",
+    "empty": {
+      "title": "Noch keine API-Tokens",
+      "description": "API-Tokens erlauben CI und paddockctl die Nutzung der Admin-API mit einer Rolle und einem Ablaufdatum."
+    }
   },
   "changeSets": {
     "title": "Änderungssätze",
@@ -846,7 +871,11 @@
     "field": "Feld",
     "before": "Vorher",
     "after": "Nachher",
-    "close": "Schließen"
+    "close": "Schließen",
+    "empty": {
+      "title": "Noch keine Änderungssätze",
+      "description": "Änderungssätze werden aufgezeichnet, wenn paddockctl oder die API eine Konfiguration anwendet."
+    }
   },
   "managed": {
     "scope": "Gilt für",
@@ -865,7 +894,11 @@
       "mode": "Modus",
       "owner": "Besitzer",
       "group": "Gruppe",
-      "content": "Inhalt"
+      "content": "Inhalt",
+      "empty": {
+        "title": "Noch keine verwalteten Dateien",
+        "description": "Verwaltete Dateien werden auf jedes Gerät ihres Geltungsbereichs geschrieben und unverändert gehalten."
+      }
     },
     "units": {
       "title": "Verwaltete Units",
@@ -878,7 +911,11 @@
       "enabled": "Beim Systemstart aktiviert",
       "active": "Läuft",
       "wanted": "Sollzustand",
-      "wantedState": "{enabled, select, true {aktiviert} other {deaktiviert}}, {active, select, true {läuft} other {gestoppt}}"
+      "wantedState": "{enabled, select, true {aktiviert} other {deaktiviert}}, {active, select, true {läuft} other {gestoppt}}",
+      "empty": {
+        "title": "Noch keine verwalteten Units",
+        "description": "Verwaltete Units halten systemd-Dienste in ihrem Geltungsbereich aktiviert oder deaktiviert."
+      }
     }
   },
   "users": {
@@ -914,7 +951,11 @@
     "unlockTitle": "Benutzer entsperren",
     "unlockConfirm": "{username} entsperren? Der Benutzer meldet sich erneut mit dem Gerätecode an und richtet eine neue PIN ein.",
     "deleteTitle": "Benutzer löschen",
-    "deleteConfirm": "{username} mit allen Gruppenmitgliedschaften und Berechtigungen löschen? Das kann nicht rückgängig gemacht werden."
+    "deleteConfirm": "{username} mit allen Gruppenmitgliedschaften und Berechtigungen löschen? Das kann nicht rückgängig gemacht werden.",
+    "empty": {
+      "title": "Noch keine Benutzer",
+      "description": "Benutzer werden aus dem Verzeichnis synchronisiert oder hier angelegt."
+    }
   },
   "userGroups": {
     "title": "Gruppen",
@@ -945,7 +986,11 @@
     "remove": "Entfernen",
     "removeTitle": "Mitglied entfernen",
     "removeConfirm": "{username} aus {group} entfernen? Der Benutzer verliert die Anmeldungen und Berechtigungen der Gruppe.",
-    "removeLabel": "{username} entfernen"
+    "removeLabel": "{username} entfernen",
+    "empty": {
+      "title": "Noch keine Gruppen",
+      "description": "Gruppen bündeln Benutzer für Anmeldezuweisung und Berechtigungsprofile."
+    }
   },
   "profiles": {
     "title": "Berechtigungsprofile",
@@ -1018,7 +1063,11 @@
       "command": "Befehl {item}",
       "scalar": "{item}: {value}"
     },
-    "allCommands": "Alle Befehle"
+    "allCommands": "Alle Befehle",
+    "empty": {
+      "title": "Noch keine Berechtigungsprofile",
+      "description": "Profile vergeben sudo-Rechte an Benutzer oder Gruppen auf ihren Geräten."
+    }
   },
   "loginSettings": {
     "title": "Anmeldung & Rechte",
@@ -1122,6 +1171,10 @@
         "confirm": "Ihre Anforderung, {hostname} zu vernichten, wird zurückgezogen; mit dem Gerät geschieht nichts.",
         "done": "Die Vernichtung von {hostname} wurde zurückgezogen."
       }
+    },
+    "empty": {
+      "title": "Keine Widerrufe",
+      "description": "Sperr- und Vernichtungsanfragen dieser Organisation erscheinen hier mit ihrem Fortschritt."
     }
   },
   "dms": {
@@ -1184,6 +1237,14 @@
       "deviceVulnerabilities": {
         "title": "Keine Funde für dieses Gerät",
         "description": "Für das Gerät wurden keine CVEs gefunden."
+      },
+      "software": {
+        "title": "Noch keine Software inventarisiert",
+        "description": "Das Inventar füllt sich nach dem ersten Abgleich eines Geräts mit fleetd."
+      },
+      "deviceSoftware": {
+        "title": "Noch keine Software gemeldet",
+        "description": "Die Liste füllt sich nach dem ersten Inventar-Abgleich des Geräts."
       }
     }
   },
@@ -1225,7 +1286,11 @@
       "versionInvalid": "Geben Sie eine Debian-Version ein: Buchstaben, Ziffern, ., +, :, ~ und -.",
       "reasonInvalid": "Höchstens 500 Zeichen.",
       "deleteTitle": "Paket freigeben?",
-      "deleteConfirm": "Geräte dürfen {name} bei ihren nächsten Updates wieder aktualisieren."
+      "deleteConfirm": "Geräte dürfen {name} bei ihren nächsten Updates wieder aktualisieren.",
+      "empty": {
+        "title": "Noch keine zurückgehaltenen Pakete",
+        "description": "Ein zurückgehaltenes Paket bleibt in seinem Geltungsbereich auf seiner Version oder außerhalb der Updates."
+      }
     },
     "installNow": {
       "label": "Sofort installieren",

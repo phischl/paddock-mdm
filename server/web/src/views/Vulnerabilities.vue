@@ -30,6 +30,9 @@ const columns: ListColumn[] = [
       searchable
       default-sort="-cve"
       item-value="cve"
+      empty-icon="bug"
+      empty-title="inventory.empty.vulnerabilities.title"
+      empty-description="inventory.empty.vulnerabilities.description"
       data-testid="vulnerability-list"
     >
       <template #[`item.cve`]="{ item }: { item: Vulnerability }">
