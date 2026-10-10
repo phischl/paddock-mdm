@@ -34,7 +34,7 @@ var (
 	}, []string{"host"})
 	metricTLSProbeSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "paddock_tls_probe_success",
-		Help: "1 when the last TLS handshake with the public hostname returned a certificate, else 0.",
+		Help: "1 when the last TLS handshake with the public hostname returned a certificate that verifies for the hostname against the trust store, else 0.",
 	}, []string{"host"})
 	// metricTLSProbeHosts lets an alert notice expiries that are never exported (PaddockCertificateExpiryMissing).
 	metricTLSProbeHosts = promauto.NewGauge(prometheus.GaugeOpts{

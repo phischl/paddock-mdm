@@ -54,7 +54,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockBackupStale` | the newest backup of a kind (postgres, authentik, openbao, fleet) is older than 26 hours (`docs/operations/restore.md`) | critical |
 | `PaddockWALArchiveLag` | the newest archived WAL segment of a database (stanza `paddock` or `authentik`) is older than 15 minutes for 10 minutes: the RPO of minutes no longer holds (check the `pgbackrest` containers and their spool volumes) | critical |
 | `PaddockCertificateExpiry` | a public certificate expires within 14 days | warning |
-| `PaddockCertificateProbeFailing` | the certificate of a public hostname cannot be read for an hour | warning |
+| `PaddockCertificateProbeFailing` | the certificate of a public hostname cannot be read or does not verify (expired, untrusted, wrong name) for an hour | warning |
 | `PaddockBackupAgeMissing` | the worker exports the age of fewer backup kinds than `paddock_backup_kinds` for an hour (e.g. listing the bucket fails from the start) | critical |
 | `PaddockWALArchiveLagMissing` | the worker exports the WAL archive age of fewer stanzas than `paddock_backup_wal_stanzas` for 30 minutes | critical |
 | `PaddockOpenBaoHealthMissing` | the worker is up but exports no `paddock_openbao_reachable` for an hour | critical |
