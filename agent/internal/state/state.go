@@ -81,10 +81,11 @@ type LUKS struct {
 	HeaderAttempted int64  `json:"header_attempted,omitempty"`
 	HeaderStored    int64  `json:"header_stored,omitempty"`
 	HeaderDigest    string `json:"header_digest,omitempty"`
-	// PassphraseSlot is the keyslot of the install passphrase, recorded before the first change; RecoverySlot the
+	// InstallSlot is the keyslot of the install passphrase, recorded before the first change; RecoverySlot the
 	// keyslot of the agent's current recovery key. Only these slots are ever removed (plan M4b.1 decision 3).
-	PassphraseSlot *int `json:"passphrase_slot,omitempty"`
-	RecoverySlot   *int `json:"recovery_slot,omitempty"`
+	// Both hold keyslot numbers, never key material; the JSON name passphrase_slot stays so existing state files load.
+	InstallSlot  *int `json:"passphrase_slot,omitempty"`
+	RecoverySlot *int `json:"recovery_slot,omitempty"`
 	// Volumes are the LUKS volumes of /etc/crypttab other than the root volume, by LUKS UUID (PDK-009). Their header
 	// generations share the counter HeaderAttempted with the root volume.
 	Volumes map[string]*LUKSVolume `json:"volumes,omitempty"`

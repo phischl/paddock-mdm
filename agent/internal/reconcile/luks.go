@@ -341,7 +341,7 @@ func (m *LUKS) watch(kinds []string) {
 // recorded first.
 func (m *LUKS) step(ctx context.Context, device string, md luks.Metadata, passphrase bool, keys *bundle.Keys) error {
 	keyFile := m.Layout.InstallPassphrase()
-	if passphrase && m.State.PassphraseSlot == nil {
+	if passphrase && m.State.InstallSlot == nil {
 		if err := m.recordPassphraseSlot(ctx, device, keyFile, md); err != nil {
 			return err
 		}
@@ -380,7 +380,7 @@ func (m *LUKS) recordPassphraseSlot(ctx context.Context, device, keyFile string,
 	if kind := md.Kind(slot); kind != luks.KindPassword {
 		return fmt.Errorf("the install passphrase opens keyslot %d of kind %q, not a passphrase keyslot", slot, kind)
 	}
-	m.State.PassphraseSlot = &slot
+	m.State.InstallSlot = &slot
 	slog.InfoContext(ctx, "install passphrase keyslot recorded", "keyslot", slot)
 	return m.Save()
 }
@@ -514,7 +514,7 @@ func (m *LUKS) escrowHeader(ctx context.Context, device, volume string, root boo
 // key remain, deletes the passphrase file (plan M4b decision 11). Other keyslots stay; if the result is not exactly
 // TPM2+PIN and the recovery key, the extra keyslots are reported as tamper.keyslot_changed (plan M4b.1 decision 3).
 func (m *LUKS) removePassphrase(ctx context.Context, device, keyFile string, before luks.Metadata) error {
-	slot := *m.State.PassphraseSlot
+	slot := *m.State.InstallSlot
 	if err := m.change(ctx, device, func() error { return m.wipe(ctx, device, keyFile, before, slot, luks.KindPassword) }); err != nil {
 		return err
 	}

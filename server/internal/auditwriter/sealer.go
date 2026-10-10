@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"time"
 
@@ -100,6 +101,9 @@ func NewSealer(pool *db.AuditWriterPool, writer *Writer, signer Signer) *Sealer 
 
 // ErrLocked means another replica is sealing.
 var ErrLocked = errors.New("auditwriter: another replica holds the seal lock")
+
+// ErrKeyVersion means the signer returned a key version that the manifest index cannot record.
+var ErrKeyVersion = errors.New("auditwriter: signing key version out of range")
 
 // ErrDayOpen means a requested day can still receive objects and must not be sealed yet.
 var ErrDayOpen = errors.New("auditwriter: a day is sealable only from 00:15 UTC of the following day")
@@ -219,6 +223,10 @@ func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev
 		if err != nil {
 			return err
 		}
+		// Checked before the WORM write: a locked object with an unrecordable key version could never be indexed.
+		if sig.KeyVersion < 1 || sig.KeyVersion > math.MaxInt32 {
+			return fmt.Errorf("%w: %d", ErrKeyVersion, sig.KeyVersion)
+		}
 		file, err := json.Marshal(ManifestFile{Manifest: canonical, Signature: sig.Value, KeyVersion: sig.KeyVersion})
 		if err != nil {
 			return err
@@ -229,7 +237,7 @@ func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev
 		}
 		return q.InsertAuditManifest(ctx, auditstore.InsertAuditManifestParams{
 			OrganizationID: org, Day: day, Sha256: sum[:], PrevSha256: prev, Signature: sig.Value,
-			KeyVersion: int32(sig.KeyVersion), ObjectKey: key, //nolint:gosec // key versions are small
+			KeyVersion: int32(sig.KeyVersion), ObjectKey: key,
 		})
 	})
 	if err != nil {

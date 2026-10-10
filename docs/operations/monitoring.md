@@ -54,7 +54,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockBackupStale` | the newest backup of a kind (postgres, authentik, openbao, fleet) is older than 26 hours (`docs/operations/restore.md`) | critical |
 | `PaddockWALArchiveLag` | the newest archived WAL segment of a database (stanza `paddock` or `authentik`) is older than 15 minutes for 10 minutes: the RPO of minutes no longer holds (check the `pgbackrest` containers and their spool volumes) | critical |
 | `PaddockCertificateExpiry` | a public certificate expires within 14 days | warning |
-| `PaddockCertificateProbeFailing` | the certificate of a public hostname cannot be read for an hour | warning |
+| `PaddockCertificateProbeFailing` | the certificate of a public hostname cannot be read or does not verify (expired, untrusted, wrong name) for an hour | warning |
 | `PaddockBackupAgeMissing` | the worker exports the age of fewer backup kinds than `paddock_backup_kinds` for an hour (e.g. listing the bucket fails from the start) | critical |
 | `PaddockWALArchiveLagMissing` | the worker exports the WAL archive age of fewer stanzas than `paddock_backup_wal_stanzas` for 30 minutes | critical |
 | `PaddockOpenBaoHealthMissing` | the worker is up but exports no `paddock_openbao_reachable` for an hour | critical |
@@ -70,5 +70,5 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `paddock_backup_last_success_timestamp_seconds{kind}`, `paddock_backup_kinds` | worker: last-modified time of the newest object of each kind in the backup bucket, 0 before the first; a kind that cannot be listed keeps its last value, the others are still exported |
 | `paddock_backup_wal_last_archived_timestamp_seconds{stanza}`, `paddock_backup_wal_stanzas` | worker, every 5 minutes: last-modified time of the newest segment below `pgbackrest/archive/<stanza>/`, 0 before the first. It never lists the whole archive: it takes the newest archive ID, lists the WAL directories from the newest one seen before (`StartAfter`; a new timeline sorts after it) and the segments of the newest directory only, at most 10 pages of 1000 entries per listing. The alert assumes a database that writes continuously (PostgreSQL switches the segment every 60 s only after activity); a stanza that cannot be listed keeps its last value |
 | `paddock_openbao_sealed`, `paddock_openbao_reachable` | worker: OpenBao's `sys/health` every 30 s |
-| `paddock_tls_certificate_expiry_timestamp_seconds{host}`, `paddock_tls_probe_success{host}`, `paddock_tls_probe_hosts` | worker: TLS handshake with Caddy for each name of `PADDOCK_TLS_PROBE_HOSTS` every 15 minutes (production; Caddy exports no certificate metrics) |
+| `paddock_tls_certificate_expiry_timestamp_seconds{host}`, `paddock_tls_probe_success{host}`, `paddock_tls_probe_hosts` | worker: TLS handshake with Caddy for each name of `PADDOCK_TLS_PROBE_HOSTS` every 15 minutes, verified against the system trust store like a client (production; Caddy exports no certificate metrics). An expired, untrusted or wrong-name certificate reads `paddock_tls_probe_success` 0 |
 | `paddock_osv_stale`, `paddock_osv_last_success_timestamp_seconds` | worker (M5c) |

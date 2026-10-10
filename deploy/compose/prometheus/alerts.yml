@@ -154,5 +154,5 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "The certificate of {{ $labels.host }} cannot be read"
-          description: "The worker's TLS handshake with Caddy for {{ $labels.host }} fails."
+          summary: "The certificate of {{ $labels.host }} cannot be read or does not verify"
+          description: "The worker's TLS handshake with Caddy for {{ $labels.host }} fails, or the certificate is expired, untrusted or issued for another name."
