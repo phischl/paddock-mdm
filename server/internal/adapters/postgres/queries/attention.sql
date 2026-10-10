@@ -42,6 +42,7 @@ WITH ranked AS (
   WHERE (sqlc.narg(q_pattern)::text IS NULL OR r.hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(kinds)::text[] IS NULL OR EXISTS (
           SELECT 1 FROM attention_condition k WHERE k.device_id = r.device_id AND k.kind = ANY(sqlc.narg(kinds)::text[])))
+    AND (sqlc.narg(device_id)::uuid IS NULL OR r.device_id = sqlc.narg(device_id)::uuid)
   GROUP BY r.device_id, r.hostname
 ), page AS (
   SELECT g.device_id, g.hostname, g.severity, g.since, g.conditions, d.state, d.os_release, s.last_contact_at
@@ -64,6 +65,7 @@ SELECT count(*) FROM (
   SELECT 1 FROM attention_condition c
   WHERE (sqlc.narg(q_pattern)::text IS NULL OR c.hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(kinds)::text[] IS NULL OR c.kind = ANY(sqlc.narg(kinds)::text[]))
+    AND (sqlc.narg(device_id)::uuid IS NULL OR c.device_id = sqlc.narg(device_id)::uuid)
   GROUP BY c.device_id
   LIMIT @count_limit
 ) matching;

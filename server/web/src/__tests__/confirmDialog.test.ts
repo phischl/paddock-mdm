@@ -114,6 +114,33 @@ describe('ConfirmDialog reason field (plan M7c decision 23)', () => {
     el('confirm-accept')?.click()
     expect(w.emitted('confirm')).toEqual([[{ reason: '' }]])
   })
+
+  it('starts every new confirmation with empty fields, also when it replaces an open one', async () => {
+    const w = mountDialog({ title: 'Lock lt-1', requireTypedText: 'lt-1', reason, destructive: true })
+    await flushPromises()
+    const typed = () => el('confirm-typed')?.querySelector('input') as HTMLInputElement
+    const text = () => el('confirm-reason')?.querySelector('textarea') as HTMLTextAreaElement
+    typed().value = 'lt-1'
+    typed().dispatchEvent(new Event('input'))
+    text().value = 'stolen'
+    text().dispatchEvent(new Event('input'))
+    await nextTick()
+    expect((el('confirm-accept') as HTMLButtonElement).disabled).toBe(false)
+    // The next request reuses the open dialog (the host did not close it in between).
+    await w.setProps({ title: 'Lock lt-2', requireTypedText: 'lt-2', reason: { ...reason } })
+    await nextTick()
+    expect(typed().value).toBe('')
+    expect(text().value).toBe('')
+    expect((el('confirm-accept') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('gives every request its own id, so the host renders a fresh dialog per request', async () => {
+    const confirm = useConfirm()
+    void confirm({ title: 'A', message: 'M', confirmLabel: 'OK' })
+    const first = pendingConfirm.value?.id
+    void confirm({ title: 'A', message: 'M', confirmLabel: 'OK' })
+    expect(pendingConfirm.value?.id).not.toBe(first)
+  })
 })
 
 describe('useConfirm', () => {

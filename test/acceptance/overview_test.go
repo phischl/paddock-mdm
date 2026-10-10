@@ -11,11 +11,19 @@ import (
 
 type overview struct {
 	GeneratedAt string `json:"generated_at"`
-	Devices     struct {
+	Encryption  struct {
+		Encrypted    int `json:"encrypted"`
+		NotEncrypted int `json:"not_encrypted"`
+	} `json:"encryption"`
+	Updates struct {
+		SecurityOverdue int `json:"security_overdue"`
+	} `json:"updates"`
+	Devices struct {
 		Total, Active, Pending, Quarantined, Online, Silent, SilentCritical, PresumedLost, NeverContacted int
 	} `json:"devices"`
 	Vulnerabilities struct {
 		ByHighestSeverity struct{ Critical, High, Medium, Low, Unknown, None int } `json:"by_highest_severity"`
+		CriticalHighCVEs  int                                                      `json:"critical_high_cves"`
 		Top               []struct {
 			CVE     string `json:"cve"`
 			Devices int    `json:"devices"`
@@ -75,6 +83,21 @@ func TestOverviewGate(t *testing.T) {
 		"presumed_lost": o.Devices.PresumedLost, "never": o.Devices.NeverContacted} {
 		if want := listCount(t, alice, "/api/v1/devices", url.Values{"state": {"active"}, "contact": {contact}, "page_size": {"10"}}); got != want {
 			t.Fatalf("devices.%s %d, device list %d", contact, got, want)
+		}
+	}
+	// AC1 (plan M7c amendment 2026-10-10): the KPI cells link to these lists; their totals equal the numbers.
+	for name, kpi := range map[string]struct {
+		value int
+		path  string
+		query url.Values
+	}{
+		"encrypted":     {o.Encryption.Encrypted, "/api/v1/devices", url.Values{"state": {"active"}, "disk_state": {"compliant"}, "page_size": {"10"}}},
+		"not encrypted": {o.Encryption.NotEncrypted, "/api/v1/devices", url.Values{"state": {"active"}, "disk_state": {"not_encrypted"}, "page_size": {"10"}}},
+		"critical/high": {o.Vulnerabilities.CriticalHighCVEs, "/api/v1/vulnerabilities", url.Values{"severity": {"critical", "high"}, "page_size": {"10"}}},
+		"overdue":       {o.Updates.SecurityOverdue, "/api/v1/devices", url.Values{"state": {"active"}, "security_updates": {"overdue"}, "page_size": {"10"}}},
+	} {
+		if want := listCount(t, alice, kpi.path, kpi.query); kpi.value != want {
+			t.Fatalf("%s: overview %d, list %d", name, kpi.value, want)
 		}
 	}
 	if sum := o.Devices.Online + o.Devices.Silent + o.Devices.SilentCritical + o.Devices.PresumedLost + o.Devices.NeverContacted; sum != o.Devices.Active {

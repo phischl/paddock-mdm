@@ -769,6 +769,10 @@
       "title": "Noch keine Geräte",
       "description": "Geräte erscheinen hier, nachdem sie sich mit einem Registrierungstoken registriert haben.",
       "action": "Registrierungstoken erstellen"
+    },
+    "securityFilter": "Sicherheitsupdates",
+    "securityUpdates": {
+      "overdue": "Überfällig (kein erfolgreicher Lauf in 48 h)"
     }
   },
   "tokens": {
@@ -1430,9 +1434,9 @@
       "silentNote": "davon {count} kritisch",
       "presumedLostNote": "außer Betrieb nehmen, sperren oder behalten",
       "notEncryptedNote": "{partial} teilweise · {notReported} nicht gemeldet",
-      "devicesAffected": "betroffene Geräte",
       "securityOverdueNote": "kein erfolgreicher Lauf in 48 h",
-      "activeDevices": "aktive Geräte"
+      "activeDevices": "aktive Geräte",
+      "cvesNote": "CVEs in der Organisation"
     },
     "attention": {
       "title": "Handlungsbedarf",

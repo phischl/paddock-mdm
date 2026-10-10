@@ -40,19 +40,26 @@ SELECT count(*) FROM (
   SELECT 1 FROM attention_condition c
   WHERE ($1::text IS NULL OR c.hostname ILIKE $1::text ESCAPE '\')
     AND ($2::text[] IS NULL OR c.kind = ANY($2::text[]))
+    AND ($3::uuid IS NULL OR c.device_id = $3::uuid)
   GROUP BY c.device_id
-  LIMIT $3
+  LIMIT $4
 ) matching
 `
 
 type CountAttentionDevicesParams struct {
 	QPattern   *string
 	Kinds      []string
+	DeviceID   uuid.NullUUID
 	CountLimit int32
 }
 
 func (q *Queries) CountAttentionDevices(ctx context.Context, arg CountAttentionDevicesParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countAttentionDevices, arg.QPattern, arg.Kinds, arg.CountLimit)
+	row := q.db.QueryRow(ctx, countAttentionDevices,
+		arg.QPattern,
+		arg.Kinds,
+		arg.DeviceID,
+		arg.CountLimit,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -133,6 +140,7 @@ WITH ranked AS (
   WHERE ($4::text IS NULL OR r.hostname ILIKE $4::text ESCAPE '\')
     AND ($5::text[] IS NULL OR EXISTS (
           SELECT 1 FROM attention_condition k WHERE k.device_id = r.device_id AND k.kind = ANY($5::text[])))
+    AND ($6::uuid IS NULL OR r.device_id = $6::uuid)
   GROUP BY r.device_id, r.hostname
 ), page AS (
   SELECT g.device_id, g.hostname, g.severity, g.since, g.conditions, d.state, d.os_release, s.last_contact_at
@@ -157,6 +165,7 @@ type ListAttentionDevicesParams struct {
 	MaxRows  int32
 	QPattern *string
 	Kinds    []string
+	DeviceID uuid.NullUUID
 }
 
 type ListAttentionDevicesRow struct {
@@ -180,6 +189,7 @@ func (q *Queries) ListAttentionDevices(ctx context.Context, arg ListAttentionDev
 		arg.MaxRows,
 		arg.QPattern,
 		arg.Kinds,
+		arg.DeviceID,
 	)
 	if err != nil {
 		return nil, err

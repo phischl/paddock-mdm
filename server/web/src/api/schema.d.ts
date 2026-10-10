@@ -2876,6 +2876,8 @@ export interface components {
         };
         OverviewVulnerabilities: {
             by_highest_severity: components["schemas"]["OverviewSeverityBuckets"];
+            /** @description Distinct CVEs of critical or high severity, counted like GET /api/v1/vulnerabilities?severity=critical&severity=high. */
+            critical_high_cves: number;
             /** @description The CVEs with the highest severity, then the most devices. */
             top: components["schemas"]["OverviewTopCVE"][];
         };
@@ -2895,7 +2897,7 @@ export interface components {
             packages: string[];
         };
         OverviewUpdates: {
-            /** @description Active devices without a successful security run in the last 48 hours. */
+            /** @description Active devices counted like GET /api/v1/devices?state=active&security_updates=overdue. */
             security_overdue: number;
             reboot_required: number;
             agent: components["schemas"]["OverviewAgent"];
@@ -4464,6 +4466,8 @@ export interface operations {
                 disk_state?: components["schemas"]["DiskState"][];
                 /** @description Repeatable. Contact state of the device (plan M7c §12 open point 1). */
                 contact?: components["schemas"]["DeviceContact"][];
+                /** @description overdue = devices that have contacted Paddock but report no successful security update run within the last 48 hours (the overview's "Security updates overdue", plan M7c amendment 2026-10-10). */
+                security_updates?: "overdue";
             };
             header?: never;
             path?: never;
@@ -5815,6 +5819,8 @@ export interface operations {
                 sort?: components["parameters"]["AttentionDeviceSort"];
                 /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
                 q?: components["parameters"]["Search"];
+                /** @description Only this device (exact match; the device page reads its conditions with it). */
+                device_id?: string;
                 /** @description Repeatable. */
                 kind?: components["schemas"]["AttentionKind"][];
             };

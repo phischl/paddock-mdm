@@ -564,6 +564,7 @@ onBeforeUnmount(() => observer.disconnect())
       />
       <ConfirmDialog
         v-if="pendingConfirm"
+        :key="pendingConfirm.id"
         :model-value="true"
         v-bind="pendingConfirm.options"
         @confirm="(answer) => settleConfirm(answer)"

@@ -20,6 +20,11 @@ export const contactFilter: ListFilter = {
   options: deviceContacts.map((value) => ({ value, title: 'devices.contact.' + value })),
 }
 
+/** The security update filter (plan M7c amendment 2026-10-10): the overview's "Security updates overdue" links to it. */
+export const securityFilter: ListFilter = {
+  kind: 'enum', key: 'security_updates', label: 'devices.securityFilter', options: [{ value: 'overdue', title: 'devices.securityUpdates.overdue' }],
+}
+
 /** The device group filter; options are the organization's groups. */
 export function groupFilter(groups: { id: string; name: string }[]): ListFilter {
   return { kind: 'enum', key: 'device_group_id', label: 'devices.group', options: groups.map((g) => ({ value: g.id, title: g.name })) }
@@ -34,6 +39,7 @@ export async function listDevices(p: ListParams): Promise<Page<Device>> {
           page: p.page, page_size: p.page_size, sort: p.sort as DeviceSort, q: p.q, state: p.state as DeviceState[],
           device_group_id: ((p.device_group_id as string[] | undefined) ?? [])[0], disk_state: p.disk_state as DiskState[],
           contact: p.contact as DeviceContact[],
+          security_updates: ((p.security_updates as string[] | undefined) ?? [])[0] as 'overdue' | undefined,
         },
       },
     }),

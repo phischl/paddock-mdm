@@ -21,6 +21,7 @@ function overviewOf(over: Partial<Overview> = {}): Overview {
     encryption: { encrypted: 7, not_encrypted: 1, partial: 1, not_reported: 1 },
     vulnerabilities: {
       by_highest_severity: { critical: 2, high: 3, medium: 0, low: 1, unknown: 1, none: 4 },
+      critical_high_cves: 7,
       top: [{ cve: 'CVE-2026-0001', severity: 'critical', devices: 2, packages: ['openssh-server'] }],
     },
     updates: {
@@ -97,16 +98,19 @@ async function mountOverview(role = 'org_admin'): Promise<VueWrapper> {
 }
 
 describe('overview helpers (plan M7c decision 28)', () => {
-  it('links every KPI cell but reboot required to its pre-filtered list and takes the values from the API', () => {
-    const cells = kpiCells(overviewOf())
-    const byKey = Object.fromEntries(cells.map((c) => [c.key, c]))
-    expect(byKey.online.value).toBe(6)
-    expect(byKey.online.to).toEqual({ path: '/devices', query: { state: 'active', contact: 'ok' } })
-    expect(byKey.silent.value).toBe(2)
-    expect(byKey['presumed-lost'].to).toEqual({ path: '/attention', query: { kind: 'presumed_lost' } })
-    expect(byKey['critical-high'].value).toBe(5)
-    expect(byKey['critical-high'].to).toEqual({ path: '/vulnerabilities', query: { severity: ['critical', 'high'] } })
-    expect(byKey['reboot-required'].to).toBeUndefined()
+  it('links every KPI cell but reboot required to the list whose total equals its API value (AC1)', () => {
+    const byKey = Object.fromEntries(kpiCells(overviewOf()).map((c) => [c.key, { value: c.value, to: c.to }]))
+    // The same paths as TestOverviewKPIsEqualListTotals, which asserts the totals against the server.
+    expect(byKey).toEqual({
+      online: { value: 6, to: { path: '/devices', query: { state: 'active', contact: 'ok' } } },
+      silent: { value: 2, to: { path: '/devices', query: { state: 'active', contact: ['stale_warning', 'stale_critical'] } } },
+      'presumed-lost': { value: 1, to: { path: '/devices', query: { state: 'active', contact: 'presumed_lost' } } },
+      encrypted: { value: 7, to: { path: '/devices', query: { state: 'active', disk_state: 'compliant' } } },
+      'not-encrypted': { value: 1, to: { path: '/devices', query: { state: 'active', disk_state: 'not_encrypted' } } },
+      'critical-high': { value: 7, to: { path: '/vulnerabilities', query: { severity: ['critical', 'high'] } } },
+      'security-overdue': { value: 4, to: { path: '/devices', query: { state: 'active', security_updates: 'overdue' } } },
+      'reboot-required': { value: 2, to: undefined },
+    })
   })
 
   it('orders the severity segments and links every level but none', () => {
@@ -162,7 +166,7 @@ describe('overview page (plan M7c decision 28)', () => {
   it('shows the empty states when nothing needs attention and nothing was found', async () => {
     attentionItems = []
     overview = overviewOf({
-      vulnerabilities: { by_highest_severity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0, none: 0 }, top: [] },
+      vulnerabilities: { by_highest_severity: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0, none: 0 }, critical_high_cves: 0, top: [] },
     })
     const w = await mountOverview()
     expect(w.find('[data-testid="overview-attention"]').text()).toContain('Nothing needs attention')

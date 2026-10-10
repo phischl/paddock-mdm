@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countDevices = `-- name: CountDevices :one
@@ -23,20 +24,25 @@ SELECT count(*) FROM (
     AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
     AND ($4::text[] IS NULL
          OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY($4::text[]))
-    AND ($5::uuid IS NULL OR EXISTS (
+    AND ($5::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
+           device_status.login_state -> 'updates_security' IS NULL
+           OR device_status.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
+           OR (device_status.login_state -> 'updates_security' ->> 'occurred_at')::timestamptz < now() - $5::interval)))
+    AND ($6::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_group_member m
-          WHERE m.device_id = device.id AND m.device_group_id = $5::uuid))
-  LIMIT $6
+          WHERE m.device_id = device.id AND m.device_group_id = $6::uuid))
+  LIMIT $7
 ) matching
 `
 
 type CountDevicesParams struct {
-	QPattern      *string
-	States        []string
-	DiskStates    []string
-	Contacts      []string
-	DeviceGroupID uuid.NullUUID
-	CountLimit    int32
+	QPattern              *string
+	States                []string
+	DiskStates            []string
+	Contacts              []string
+	SecurityOverdueWindow pgtype.Interval
+	DeviceGroupID         uuid.NullUUID
+	CountLimit            int32
 }
 
 func (q *Queries) CountDevices(ctx context.Context, arg CountDevicesParams) (int64, error) {
@@ -45,6 +51,7 @@ func (q *Queries) CountDevices(ctx context.Context, arg CountDevicesParams) (int
 		arg.States,
 		arg.DiskStates,
 		arg.Contacts,
+		arg.SecurityOverdueWindow,
 		arg.DeviceGroupID,
 		arg.CountLimit,
 	)
@@ -427,31 +434,37 @@ WHERE ($1::text IS NULL
   AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
   AND ($4::text[] IS NULL
        OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY($4::text[]))
-  AND ($5::uuid IS NULL OR EXISTS (
+  -- security_updates=overdue (plan M7c amendment 2026-10-10): contacted, but no successful security run within the window.
+  AND ($5::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
+         device_status.login_state -> 'updates_security' IS NULL
+         OR device_status.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
+         OR (device_status.login_state -> 'updates_security' ->> 'occurred_at')::timestamptz < now() - $5::interval)))
+  AND ($6::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m
-        WHERE m.device_id = device.id AND m.device_group_id = $5::uuid))
+        WHERE m.device_id = device.id AND m.device_group_id = $6::uuid))
 ORDER BY
-  CASE WHEN $6::text = 'hostname' THEN hostname END ASC,
-  CASE WHEN $6::text = '-hostname' THEN hostname END DESC,
-  CASE WHEN $6::text = 'last_contact_at' THEN last_contact_at END ASC,
-  CASE WHEN $6::text = '-last_contact_at' THEN last_contact_at END DESC,
-  CASE WHEN $6::text = 'enrolled_at' THEN enrolled_at END ASC,
-  CASE WHEN $6::text = '-enrolled_at' THEN enrolled_at END DESC,
-  CASE WHEN $6::text = 'state' THEN state END ASC,
-  CASE WHEN $6::text = '-state' THEN state END DESC,
+  CASE WHEN $7::text = 'hostname' THEN hostname END ASC,
+  CASE WHEN $7::text = '-hostname' THEN hostname END DESC,
+  CASE WHEN $7::text = 'last_contact_at' THEN last_contact_at END ASC,
+  CASE WHEN $7::text = '-last_contact_at' THEN last_contact_at END DESC,
+  CASE WHEN $7::text = 'enrolled_at' THEN enrolled_at END ASC,
+  CASE WHEN $7::text = '-enrolled_at' THEN enrolled_at END DESC,
+  CASE WHEN $7::text = 'state' THEN state END ASC,
+  CASE WHEN $7::text = '-state' THEN state END DESC,
   id
-LIMIT $8 OFFSET $7
+LIMIT $9 OFFSET $8
 `
 
 type ListDevicesParams struct {
-	QPattern      *string
-	States        []string
-	DiskStates    []string
-	Contacts      []string
-	DeviceGroupID uuid.NullUUID
-	Sort          string
-	SkipRows      int32
-	MaxRows       int32
+	QPattern              *string
+	States                []string
+	DiskStates            []string
+	Contacts              []string
+	SecurityOverdueWindow pgtype.Interval
+	DeviceGroupID         uuid.NullUUID
+	Sort                  string
+	SkipRows              int32
+	MaxRows               int32
 }
 
 type ListDevicesRow struct {
@@ -470,6 +483,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 		arg.States,
 		arg.DiskStates,
 		arg.Contacts,
+		arg.SecurityOverdueWindow,
 		arg.DeviceGroupID,
 		arg.Sort,
 		arg.SkipRows,

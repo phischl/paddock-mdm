@@ -184,6 +184,12 @@ export async function listAttentionDevices(p: ListParams): Promise<Page<Attentio
   )
 }
 
+/** The open conditions of one device (its page), selected by id; null when it has none. */
+export async function attentionOf(deviceID: string): Promise<AttentionDevice | null> {
+  const { data } = await api.GET('/api/v1/attention/devices', { params: { query: { device_id: deviceID, page_size: 10 } } })
+  return data?.items[0] ?? null
+}
+
 /** The number of open conditions (navigation badge, landing page); 0 when the list cannot be read. */
 export async function attentionCount(): Promise<number> {
   const { data } = await api.GET('/api/v1/attention', { params: { query: { page_size: 10 } } })

@@ -300,3 +300,71 @@ func TestAuditEventDevice(t *testing.T) {
 		t.Fatalf("malformed target_id: %d", r.status)
 	}
 }
+
+// TestOverviewKPIsEqualListTotals (plan M7c AC1, amendment 2026-10-10): every KPI number the overview links equals the
+// total of the list it links to, for the same data. The paths are the portal's KPI links (lib/overview.ts kpiCells).
+func TestOverviewKPIsEqualListTotals(t *testing.T) {
+	e := newEnv(t)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	e.seedFleet(t)
+	// A retired device that kept its health and a contact alert must count neither in a KPI nor in its list.
+	retired := e.insertDevice(e.acme, "ov-retired-encrypted", "retired")
+	if _, err := e.super.Exec(context.Background(), `INSERT INTO device_status (device_id, organization_id, last_contact_at, health, login_state)
+		VALUES ($1, $2, now(), '{"disk":{"state":"compliant"}}', '{}')`, retired, e.acme); err != nil {
+		t.Fatal(err)
+	}
+	var o adminapi.Overview
+	e.do(call{method: "GET", path: "/api/v1/overview", cookie: alice}).decode(t, &o)
+	total := func(path string) int {
+		t.Helper()
+		var page struct {
+			Total int `json:"total"`
+		}
+		r := e.do(call{method: "GET", path: path, cookie: alice})
+		if r.status != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, r.status, r.body)
+		}
+		r.decode(t, &page)
+		return page.Total
+	}
+	for _, kpi := range []struct {
+		name  string
+		value int
+		path  string
+	}{
+		{"online", o.Devices.Online, "/api/v1/devices?state=active&contact=ok"},
+		{"silent", o.Devices.Silent + o.Devices.SilentCritical, "/api/v1/devices?state=active&contact=stale_warning&contact=stale_critical"},
+		{"presumed lost", o.Devices.PresumedLost, "/api/v1/devices?state=active&contact=presumed_lost"},
+		{"encrypted", o.Encryption.Encrypted, "/api/v1/devices?state=active&disk_state=compliant"},
+		{"not encrypted", o.Encryption.NotEncrypted, "/api/v1/devices?state=active&disk_state=not_encrypted"},
+		{"critical and high CVEs", o.Vulnerabilities.CriticalHighCves, "/api/v1/vulnerabilities?severity=critical&severity=high"},
+		{"security updates overdue", o.Updates.SecurityOverdue, "/api/v1/devices?state=active&security_updates=overdue"},
+	} {
+		if got := total(kpi.path); got != kpi.value {
+			t.Errorf("%s: overview %d, list %s total %d", kpi.name, kpi.value, kpi.path, got)
+		}
+	}
+	if o.Vulnerabilities.CriticalHighCves != 2 || o.Updates.SecurityOverdue != 4 || o.Encryption.Encrypted != 2 {
+		t.Fatalf("fixture numbers: CVEs %d, overdue %d, encrypted %d", o.Vulnerabilities.CriticalHighCves, o.Updates.SecurityOverdue, o.Encryption.Encrypted)
+	}
+	if r := e.do(call{method: "GET", path: "/api/v1/devices?security_updates=late", cookie: alice, skipReqCheck: true}); r.status != http.StatusBadRequest {
+		t.Fatalf("bogus security_updates: %d", r.status)
+	}
+}
+
+// TestAttentionDevicesByID: the device_id filter selects exactly one device's conditions, never a hostname neighbour.
+func TestAttentionDevicesByID(t *testing.T) {
+	e := newEnv(t)
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	f := e.seedFleet(t)
+	var page adminapi.AttentionDevicePage
+	// ov-lost is a hostname prefix of ov-lost-and-silent: a search would return both.
+	e.do(call{method: "GET", path: "/api/v1/attention/devices?device_id=" + f.presumedLost.String(), cookie: alice}).decode(t, &page)
+	if page.Total != 1 || page.Items[0].DeviceId != f.presumedLost {
+		t.Fatalf("device_id filter: %+v", page)
+	}
+	e.do(call{method: "GET", path: "/api/v1/attention/devices?device_id=" + f.online.String(), cookie: alice}).decode(t, &page)
+	if page.Total != 0 {
+		t.Fatalf("device without conditions: %+v", page)
+	}
+}

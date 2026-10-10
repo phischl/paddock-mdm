@@ -29,7 +29,8 @@ func (h *handlers) GetOverview(ctx context.Context, _ adminapi.GetOverviewReques
 				Medium: int(o.Vulnerabilities.ByHighestSeverity.Medium), Low: int(o.Vulnerabilities.ByHighestSeverity.Low),
 				Unknown: int(o.Vulnerabilities.ByHighestSeverity.Unknown), None: int(o.Vulnerabilities.ByHighestSeverity.None),
 			},
-			Top: make([]adminapi.OverviewTopCVE, len(o.Vulnerabilities.Top)),
+			CriticalHighCves: o.Vulnerabilities.CriticalHighCVEs,
+			Top:              make([]adminapi.OverviewTopCVE, len(o.Vulnerabilities.Top)),
 		},
 		Updates: adminapi.OverviewUpdates{
 			SecurityOverdue: o.Updates.SecurityOverdue, RebootRequired: o.Updates.RebootRequired,

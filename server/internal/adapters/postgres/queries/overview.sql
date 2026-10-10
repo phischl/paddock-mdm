@@ -55,11 +55,8 @@ ORDER BY rank, devices DESC, f.cve
 LIMIT 5;
 
 -- name: OverviewUpdates :one
-SELECT count(*) FILTER (WHERE s.last_contact_at IS NOT NULL AND (
-         s.login_state -> 'updates_security' IS NULL
-         OR s.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
-         OR (s.login_state -> 'updates_security' ->> 'occurred_at')::timestamptz < now() - @security_window::interval))::int AS security_overdue,
-       count(*) FILTER (WHERE s.health ->> 'reboot_required' = 'true')::int AS reboot_required,
+-- Security updates overdue are counted with CountDevices (the device list's filter), so the number equals its total.
+SELECT count(*) FILTER (WHERE s.health ->> 'reboot_required' = 'true')::int AS reboot_required,
        count(*) FILTER (WHERE s.agent_version IS NOT NULL AND s.agent_version = r.version)::int AS agent_on_current,
        count(*) FILTER (WHERE s.agent_version IS NOT NULL AND r.version IS NOT NULL AND s.agent_version <> r.version)::int AS agent_outdated,
        count(*) FILTER (WHERE s.agent_version IS NULL)::int AS agent_unknown

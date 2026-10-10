@@ -33,40 +33,42 @@ export interface KpiCell {
   to?: RouteLocationRaw
 }
 
-/** The KPI cells of the overview (plan M7c decision 28); values come from the API, never from a page of results. */
+/**
+ * The KPI cells of the overview (plan M7c decision 28); values come from the API, never from a page of results. Each
+ * link is the list whose total equals the value (AC1, amendment 2026-10-10; TestOverviewKPIsEqualListTotals).
+ */
 export function kpiCells(o: Overview): KpiCell[] {
   const active = o.devices.active
+  const devices = (query: Record<string, string | string[]>): RouteLocationRaw => ({ path: '/devices', query: { state: 'active', ...query } })
   return [
     {
       key: 'online', label: 'overview.kpi.online', value: o.devices.online, note: 'overview.kpi.ofActive', noteValues: { count: active },
-      status: 'ok', to: { path: '/devices', query: { state: 'active', contact: 'ok' } },
+      status: 'ok', to: devices({ contact: 'ok' }),
     },
     {
       key: 'silent', label: 'overview.kpi.silent', value: o.devices.silent + o.devices.silent_critical, note: 'overview.kpi.silentNote',
-      noteValues: { count: o.devices.silent_critical }, status: 'warn',
-      to: { path: '/attention', query: { kind: ['stale_warning', 'stale_critical'] } },
+      noteValues: { count: o.devices.silent_critical }, status: 'warn', to: devices({ contact: ['stale_warning', 'stale_critical'] }),
     },
     {
       key: 'presumed-lost', label: 'overview.kpi.presumedLost', value: o.devices.presumed_lost, note: 'overview.kpi.presumedLostNote',
-      noteValues: {}, status: 'critical', to: { path: '/attention', query: { kind: 'presumed_lost' } },
+      noteValues: {}, status: 'critical', to: devices({ contact: 'presumed_lost' }),
     },
     {
       key: 'encrypted', label: 'overview.kpi.encrypted', value: o.encryption.encrypted, note: 'overview.kpi.ofActive', noteValues: { count: active },
-      status: 'ok', to: { path: '/devices', query: { disk_state: 'compliant' } },
+      status: 'ok', to: devices({ disk_state: 'compliant' }),
     },
     {
       key: 'not-encrypted', label: 'overview.kpi.notEncrypted', value: o.encryption.not_encrypted, note: 'overview.kpi.notEncryptedNote',
       noteValues: { partial: o.encryption.partial, notReported: o.encryption.not_reported }, status: 'critical',
-      to: { path: '/devices', query: { disk_state: 'not_encrypted' } },
+      to: devices({ disk_state: 'not_encrypted' }),
     },
     {
-      key: 'critical-high', label: 'overview.kpi.criticalHigh',
-      value: o.vulnerabilities.by_highest_severity.critical + o.vulnerabilities.by_highest_severity.high, note: 'overview.kpi.devicesAffected',
+      key: 'critical-high', label: 'overview.kpi.criticalHigh', value: o.vulnerabilities.critical_high_cves, note: 'overview.kpi.cvesNote',
       noteValues: {}, status: 'critical', to: { path: '/vulnerabilities', query: { severity: ['critical', 'high'] } },
     },
     {
       key: 'security-overdue', label: 'overview.kpi.securityOverdue', value: o.updates.security_overdue, note: 'overview.kpi.securityOverdueNote',
-      noteValues: {}, status: 'warn', to: { path: '/attention' },
+      noteValues: {}, status: 'warn', to: devices({ security_updates: 'overdue' }),
     },
     {
       key: 'reboot-required', label: 'overview.kpi.rebootRequired', value: o.updates.reboot_required, note: 'overview.kpi.activeDevices',

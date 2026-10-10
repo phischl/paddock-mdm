@@ -700,7 +700,7 @@ paths:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
         search: [hostname, hardware_uuid]
-        filters: [state, device_group_id, disk_state, contact]
+        filters: [state, device_group_id, disk_state, contact, security_updates]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -727,6 +727,12 @@ paths:
           schema:
             type: array
             items: { $ref: "#/components/schemas/DeviceContact" }
+        - name: security_updates
+          in: query
+          description: >-
+            overdue = devices that have contacted Paddock but report no successful security update run within the last
+            48 hours (the overview's "Security updates overdue", plan M7c amendment 2026-10-10).
+          schema: { type: string, enum: [overdue] }
       responses:
         "200":
           description: One page of devices.
@@ -1727,12 +1733,16 @@ paths:
         sort: [severity, hostname, since]
         default_sort: -severity
         search: [hostname]
-        filters: [kind]
+        filters: [kind, device_id]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
         - $ref: "#/components/parameters/AttentionDeviceSort"
         - $ref: "#/components/parameters/Search"
+        - name: device_id
+          in: query
+          description: Only this device (exact match; the device page reads its conditions with it).
+          schema: { type: string, format: uuid }
         - name: kind
           in: query
           description: Repeatable.
@@ -4470,9 +4480,13 @@ components:
         not_reported: { type: integer }
     OverviewVulnerabilities:
       type: object
-      required: [by_highest_severity, top]
+      required: [by_highest_severity, critical_high_cves, top]
       properties:
         by_highest_severity: { $ref: "#/components/schemas/OverviewSeverityBuckets" }
+        critical_high_cves:
+          type: integer
+          description: "Distinct CVEs of critical or high severity, counted like GET /api/v1/vulnerabilities?severity=critical&severity=high."
+
         top:
           type: array
           maxItems: 5
@@ -4504,7 +4518,7 @@ components:
       type: object
       required: [security_overdue, reboot_required, agent, os_releases]
       properties:
-        security_overdue: { type: integer, description: "Active devices without a successful security run in the last 48 hours." }
+        security_overdue: { type: integer, description: "Active devices counted like GET /api/v1/devices?state=active&security_updates=overdue." }
         reboot_required: { type: integer }
         agent: { $ref: "#/components/schemas/OverviewAgent" }
         os_releases:

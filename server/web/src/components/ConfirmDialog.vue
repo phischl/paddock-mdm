@@ -41,10 +41,11 @@ function focusCancel(): void {
 }
 
 // Focus on Cancel as soon as the dialog renders and again after its transition, when Vuetify would move focus to
-// the dialog container.
+// the dialog container. A new confirmation (other target, other question) starts with empty fields, also when it
+// replaces an open one without closing the dialog: a typed name must never confirm a different request.
 watch(
-  () => props.modelValue,
-  (open) => {
+  () => [props.modelValue, props.title, props.message, props.requireTypedText, props.reason] as const,
+  ([open]) => {
     typed.value = ''
     reasonText.value = ''
     if (open) void nextTick(focusCancel)

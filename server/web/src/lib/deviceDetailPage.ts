@@ -11,7 +11,7 @@ import {
 import { getDisk } from './disk'
 import { getEffectiveSudo } from './profiles'
 import { listRevocations } from './revocations'
-import { getDeviceUpdates, listAttention } from './updates'
+import { attentionOf, getDeviceUpdates } from './updates'
 import { allUserGroups } from './userGroups'
 import { allUsers } from './users'
 import { useSessionStore } from '../stores/session'
@@ -65,14 +65,14 @@ export function useDeviceDetailPage(id: () => string) {
     const [disk, u, attention, revs] = await Promise.all([
       getDisk(d.id),
       getDeviceUpdates(d.id),
-      listAttention({ page: 1, page_size: 100, sort: '-since', q: d.hostname }).catch(() => null),
+      attentionOf(d.id).catch(() => null),
       session.canDelete
         ? listRevocations(d.id)({ page: 1, page_size: 10, sort: '-requested_at' }).catch(() => null)
         : Promise.resolve(null),
     ])
     diskState.value = typeof disk === 'string' ? null : disk.state
     updates.value = typeof u === 'string' ? null : u
-    conditions.value = attention?.items.filter((a) => a.device_id === d.id).map((a) => a.kind) ?? []
+    conditions.value = attention?.conditions.map((c) => c.kind) ?? []
     revocations.value = revs?.items ?? []
   }
 

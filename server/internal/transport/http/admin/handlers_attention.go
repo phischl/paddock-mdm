@@ -52,7 +52,7 @@ func (h *handlers) ListAttentionDevices(ctx context.Context, req adminapi.ListAt
 	if err != nil {
 		return nil, err
 	}
-	res, err := h.attention.ListDevices(ctx, app.AttentionDeviceQuery{Page: params.ListPage(), Kinds: kinds})
+	res, err := h.attention.ListDevices(ctx, app.AttentionDeviceQuery{Page: params.ListPage(), Kinds: kinds, DeviceID: req.Params.DeviceId})
 	if err != nil {
 		return nil, err
 	}

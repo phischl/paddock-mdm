@@ -24,6 +24,11 @@ WHERE (sqlc.narg(q_pattern)::text IS NULL
   AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
   AND (sqlc.narg(contacts)::text[] IS NULL
        OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY(sqlc.narg(contacts)::text[]))
+  -- security_updates=overdue (plan M7c amendment 2026-10-10): contacted, but no successful security run within the window.
+  AND (sqlc.narg(security_overdue_window)::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
+         device_status.login_state -> 'updates_security' IS NULL
+         OR device_status.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
+         OR (device_status.login_state -> 'updates_security' ->> 'occurred_at')::timestamptz < now() - sqlc.narg(security_overdue_window)::interval)))
   AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m
         WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
@@ -49,6 +54,10 @@ SELECT count(*) FROM (
     AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
     AND (sqlc.narg(contacts)::text[] IS NULL
          OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY(sqlc.narg(contacts)::text[]))
+    AND (sqlc.narg(security_overdue_window)::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
+           device_status.login_state -> 'updates_security' IS NULL
+           OR device_status.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
+           OR (device_status.login_state -> 'updates_security' ->> 'occurred_at')::timestamptz < now() - sqlc.narg(security_overdue_window)::interval)))
     AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_group_member m
           WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))

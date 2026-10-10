@@ -25,12 +25,15 @@ export interface ConfirmOptions {
 export type ConfirmAnswer = false | { reason: string }
 
 interface PendingConfirm {
+  /** Distinct per request; the host keys the dialog with it so each request starts from a fresh instance. */
+  id: number
   options: ConfirmOptions
   resolve: (answer: ConfirmAnswer) => void
 }
 
 // One confirmation at a time for the whole portal; App.vue hosts the single ConfirmDialog that shows it.
 const pending = shallowRef<PendingConfirm | null>(null)
+let requests = 0
 
 /** The confirmation being shown, for the host in App.vue. */
 export const pendingConfirm = readonly(pending)
@@ -46,7 +49,7 @@ export function settleConfirm(answer: ConfirmAnswer): void {
 function ask(options: ConfirmOptions): Promise<ConfirmAnswer> {
   settleConfirm(false)
   return new Promise<ConfirmAnswer>((resolve) => {
-    pending.value = { options, resolve }
+    pending.value = { id: ++requests, options, resolve }
   })
 }
 

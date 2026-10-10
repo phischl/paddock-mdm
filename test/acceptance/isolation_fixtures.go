@@ -494,6 +494,7 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"globex-iso"}},
 		{"state": {"active"}, "sort": {"-last_contact_at"}, "page_size": {"100"}},
 		{"contact": {"never", "ok"}, "page_size": {"100"}},
+		{"security_updates": {"overdue"}, "page_size": {"100"}},
 	},
 	"/api/v1/change-sets": {
 		{"q": {"carol"}},
@@ -559,6 +560,9 @@ func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 // listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c
 // decision 31: the audit log's target_id); the gate runs them like listIsolationQueries.
 var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
+	"/api/v1/attention/devices": {
+		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexDevice}} },
+	},
 	"/api/v1/audit-events": {
 		func(w *isolationWorld) url.Values {
 			return url.Values{"target_id": {w.globexDevice}, "page_size": {"100"}}

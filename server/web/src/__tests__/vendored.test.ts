@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allowedAssetLicenses, vendoredProblems, type VendoredManifest } from '../lib/vendoredCheck'
+import { allowedAssetLicenses, entryProblems, vendoredProblems, walkVendored, type VendoredManifest } from '../lib/vendoredCheck'
 import manifest from '../assets/vendored.json'
 
 const font = 'a'.repeat(64)
@@ -63,5 +63,33 @@ describe('vendored.json', () => {
       expect(Object.keys(set.files)).toContain(set.license_file)
       for (const sha of Object.values(set.files)) expect(sha).toMatch(/^[0-9a-f]{64}$/)
     }
+  })
+})
+
+describe('entryProblems', () => {
+  // A directory tree as readdirSync(dir, { withFileTypes: true }) lists it: lstat semantics, so a symlink is neither
+  // a file nor a directory, also when it points at a directory.
+  const entry = (name: string, kind: 'file' | 'dir' | 'link') => ({ name, isFile: () => kind === 'file', isDirectory: () => kind === 'dir' })
+  const tree: Record<string, ReturnType<typeof entry>[]> = {
+    '/a/icons': [entry('set', 'dir')],
+    '/a/icons/set': [entry('laptop.svg', 'file'), entry('nested', 'dir'), entry('outside', 'link')],
+    '/a/icons/set/nested': [entry('alias.svg', 'link')],
+  }
+  const list = (dir: string) => {
+    if (!tree[dir]) throw new Error('walked into ' + dir)
+    return tree[dir]
+  }
+
+  it('fails on a symlink anywhere under the vendored directories and never walks into one', () => {
+    const entries = walkVendored('/a', 'icons', list)
+    expect(entries.filter((e) => e.kind === 'file').map((e) => e.path)).toEqual(['icons/set/laptop.svg'])
+    expect(entryProblems(entries).sort()).toEqual([
+      'icons/set/nested/alias.svg: not a regular file (symlink or special file)',
+      'icons/set/outside: not a regular file (symlink or special file)',
+    ])
+  })
+
+  it('passes regular files and directories', () => {
+    expect(entryProblems(walkVendored('/a', 'icons', (dir) => list(dir).filter((e) => e.isFile() || e.isDirectory())))).toEqual([])
   })
 })

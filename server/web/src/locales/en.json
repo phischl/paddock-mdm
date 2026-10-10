@@ -769,6 +769,10 @@
       "title": "No devices yet",
       "description": "Devices appear here after they enroll with an enrollment token.",
       "action": "Create enrollment token"
+    },
+    "securityFilter": "Security updates",
+    "securityUpdates": {
+      "overdue": "Overdue (no successful run in 48 h)"
     }
   },
   "tokens": {
@@ -1430,9 +1434,9 @@
       "silentNote": "{count} of them critical",
       "presumedLostNote": "retire, lock or keep",
       "notEncryptedNote": "{partial} partial · {notReported} not reported",
-      "devicesAffected": "devices affected",
       "securityOverdueNote": "no successful run in 48 h",
-      "activeDevices": "active devices"
+      "activeDevices": "active devices",
+      "cvesNote": "CVEs in the organization"
     },
     "attention": {
       "title": "Attention",

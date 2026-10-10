@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
@@ -46,6 +47,8 @@ type DeviceQuery struct {
 	GroupID    *uuid.UUID
 	DiskStates []string // disk encryption states of the last check-in (plan M4b decision 14)
 	Contacts   []string // contact states (plan M7c §12 open point 1)
+	// SecurityOverdue selects devices without a successful security run within SecurityOverdueWindow.
+	SecurityOverdue bool
 }
 
 // List returns one page of devices with their status.
@@ -78,9 +81,13 @@ func (d *Devices) ListGroupMembers(ctx context.Context, groupID uuid.UUID, query
 
 func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out *Listed[pgstore.ListDevicesRow]) error {
 	group := nullID(query.GroupID)
+	var overdue pgtype.Interval
+	if query.SecurityOverdue {
+		overdue = securityOverdueInterval()
+	}
 	n, err := q.CountDevices(ctx, pgstore.CountDevicesParams{
 		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
-		CountLimit: countLimit,
+		SecurityOverdueWindow: overdue, CountLimit: countLimit,
 	})
 	if err != nil {
 		return fmt.Errorf("count devices: %w", err)
@@ -88,7 +95,7 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 	out.Count = int(n)
 	out.Items, err = q.ListDevices(ctx, pgstore.ListDevicesParams{
 		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
-		Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
+		SecurityOverdueWindow: overdue, Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
 	})
 	if err != nil {
 		return fmt.Errorf("list devices: %w", err)

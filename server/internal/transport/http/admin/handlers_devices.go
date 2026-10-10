@@ -109,8 +109,16 @@ func (h *handlers) ListDevices(ctx context.Context, req adminapi.ListDevicesRequ
 	if err != nil {
 		return nil, err
 	}
+	var security []adminapi.ListDevicesParamsSecurityUpdates
+	if req.Params.SecurityUpdates != nil {
+		security = append(security, *req.Params.SecurityUpdates)
+	}
+	overdue, err := listing.Enum("security_updates", &security)
+	if err != nil {
+		return nil, err
+	}
 	res, err := h.devices.List(ctx, app.DeviceQuery{Page: params.ListPage(), States: states, GroupID: req.Params.DeviceGroupId,
-		DiskStates: diskStates, Contacts: contacts})
+		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0})
 	if err != nil {
 		return nil, err
 	}

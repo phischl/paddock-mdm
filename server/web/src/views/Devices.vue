@@ -6,7 +6,7 @@ import DataList from '../components/DataList.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import type { Device } from '../api/client'
-import { allGroups, contactFilter, groupFilter, listDevices, stateFilter } from '../lib/devices'
+import { allGroups, contactFilter, groupFilter, listDevices, securityFilter, stateFilter } from '../lib/devices'
 import { paneQuery } from '../lib/deviceHealth'
 import { diskStateFilter } from '../lib/disk'
 import type { ListColumn } from '../lib/listQuery'
@@ -22,7 +22,7 @@ onMounted(async () => {
   groups.value = await allGroups()
 })
 
-const filters = computed(() => [stateFilter, contactFilter, groupFilter(groups.value), diskStateFilter])
+const filters = computed(() => [stateFilter, contactFilter, groupFilter(groups.value), diskStateFilter, securityFilter])
 const columns: ListColumn[] = [
   { key: 'hostname', title: 'devices.hostname', sortable: true },
   { key: 'state', title: 'devices.state', sortable: true, role: 'status' },

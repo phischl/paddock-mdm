@@ -18,6 +18,46 @@ export interface VendoredManifest {
   sets: VendoredSet[]
 }
 
+/** An entry under a vendored directory; path is relative to src/assets with forward slashes. */
+export interface VendoredEntry {
+  path: string
+  kind: 'file' | 'directory' | 'other'
+}
+
+/** One directory listing entry as node:fs readdirSync(dir, { withFileTypes: true }) returns it (lstat semantics). */
+interface DirectoryEntry {
+  name: string
+  isFile(): boolean
+  isDirectory(): boolean
+}
+
+/**
+ * Walks top (relative to root) without following symlinks: a recursive readdir would descend into a linked
+ * directory and read files outside the vendored tree. list is node:fs readdirSync with file types (injected so this
+ * module stays free of node imports).
+ */
+export function walkVendored(root: string, top: string, list: (dir: string) => DirectoryEntry[]): VendoredEntry[] {
+  const out: VendoredEntry[] = []
+  const visit = (rel: string): void => {
+    for (const e of list(root + '/' + rel)) {
+      const path = rel + '/' + e.name
+      const kind = e.isDirectory() ? 'directory' : e.isFile() ? 'file' : 'other'
+      out.push({ path, kind })
+      if (kind === 'directory') visit(path)
+    }
+  }
+  visit(top)
+  return out
+}
+
+/**
+ * Entries that are neither a directory nor a regular file. A symlink or a special file would bypass the checksum or
+ * point outside the vendored tree, so it fails the check instead of being skipped.
+ */
+export function entryProblems(entries: VendoredEntry[]): string[] {
+  return entries.filter((e) => e.kind === 'other').map((e) => `${e.path}: not a regular file (symlink or special file)`)
+}
+
 /** Licences accepted for vendored fonts and icons (product-owner rule; ISC for icons). */
 export const allowedAssetLicenses = ['OFL-1.1', 'Apache-2.0', 'MIT', 'ISC'] as const
 

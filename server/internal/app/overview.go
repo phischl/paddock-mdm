@@ -23,6 +23,11 @@ func NewOverview(org *db.OrgPool) *Overview { return &Overview{org: org, now: ti
 // SecurityOverdueWindow: an active device without a successful security run within it counts as overdue.
 const SecurityOverdueWindow = 48 * time.Hour
 
+// securityOverdueInterval is SecurityOverdueWindow as the device list's security_updates=overdue filter takes it.
+func securityOverdueInterval() pgtype.Interval {
+	return pgtype.Interval{Microseconds: SecurityOverdueWindow.Microseconds(), Valid: true}
+}
+
 // OverviewResult is what GET /api/v1/overview answers.
 type OverviewResult struct {
 	GeneratedAt     time.Time
@@ -33,10 +38,12 @@ type OverviewResult struct {
 	Attention       pgstore.OverviewAttentionRow
 }
 
-// OverviewVulnerabilities: devices by their worst finding and the top CVEs.
+// OverviewVulnerabilities: devices by their worst finding, the critical and high CVEs, and the top CVEs.
 type OverviewVulnerabilities struct {
 	ByHighestSeverity pgstore.OverviewVulnerabilityBucketsRow
-	Top               []OverviewCVE
+	// CriticalHighCVEs is counted like the vulnerability list filtered by severity critical and high.
+	CriticalHighCVEs int
+	Top              []OverviewCVE
 }
 
 // OverviewCVE is one of the top findings.
@@ -87,6 +94,13 @@ func (o *Overview) Get(ctx context.Context) (OverviewResult, error) {
 		if out.Vulnerabilities.ByHighestSeverity, err = q.OverviewVulnerabilityBuckets(ctx); err != nil {
 			return fmt.Errorf("overview vulnerability buckets: %w", err)
 		}
+		// The KPI numbers that link to a list are counted with that list's own query (plan M7c amendment 2026-10-10),
+		// so the number and the list's total cannot drift apart.
+		critical, err := q.CountVulnerabilities(ctx, pgstore.CountVulnerabilitiesParams{Severities: []string{"critical", "high"}, CountLimit: countLimit})
+		if err != nil {
+			return fmt.Errorf("overview critical and high CVEs: %w", err)
+		}
+		out.Vulnerabilities.CriticalHighCVEs = int(critical)
 		top, err := q.OverviewTopCVEs(ctx)
 		if err != nil {
 			return fmt.Errorf("overview top CVEs: %w", err)
@@ -98,12 +112,18 @@ func (o *Overview) Get(ctx context.Context) (OverviewResult, error) {
 				out.Vulnerabilities.Top[i].Packages = []string{}
 			}
 		}
-		updates, err := q.OverviewUpdates(ctx, pgtype.Interval{Microseconds: SecurityOverdueWindow.Microseconds(), Valid: true})
+		updates, err := q.OverviewUpdates(ctx)
 		if err != nil {
 			return fmt.Errorf("overview updates: %w", err)
 		}
+		overdue, err := q.CountDevices(ctx, pgstore.CountDevicesParams{
+			States: []string{"active"}, SecurityOverdueWindow: securityOverdueInterval(), CountLimit: countLimit,
+		})
+		if err != nil {
+			return fmt.Errorf("overview security updates overdue: %w", err)
+		}
 		out.Updates = OverviewUpdates{
-			SecurityOverdue: int(updates.SecurityOverdue), RebootRequired: int(updates.RebootRequired),
+			SecurityOverdue: int(overdue), RebootRequired: int(updates.RebootRequired),
 			OnCurrent: int(updates.AgentOnCurrent), Outdated: int(updates.AgentOutdated), Unknown: int(updates.AgentUnknown),
 		}
 		version, err := q.CurrentAgentVersion(ctx)
