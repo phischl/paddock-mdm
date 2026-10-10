@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -313,5 +315,33 @@ func TestSealLockIsExclusive(t *testing.T) {
 	}
 	if _, err := s.sealer.SealThrough(ctx, auditwriter.LastSealableDay(time.Now())); err != auditwriter.ErrLocked {
 		t.Fatalf("SealThrough with the lock held elsewhere = %v, want ErrLocked", err)
+	}
+}
+
+type fixedVersionSigner struct{ version int }
+
+func (f fixedVersionSigner) Sign(context.Context, string, []byte) (bao.Signature, error) {
+	return bao.Signature{Value: "vault:v1:sig", KeyVersion: f.version}, nil
+}
+
+// TestSealRejectsKeyVersionOutOfRange: a key version the index column cannot hold fails the seal before anything is
+// written, instead of being truncated into a manifest whose key version verification could never match.
+func TestSealRejectsKeyVersionOutOfRange(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	for _, version := range []int{0, math.MaxInt32 + 1} {
+		org := uuid.Must(uuid.NewV7())
+		day := time.Now().UTC().AddDate(0, 0, -2).Truncate(24 * time.Hour)
+		s.historicObject(t, org, day.Add(time.Hour), event(org, day.Add(time.Hour), audit.CodeDeviceGroupCreated))
+		sealer := auditwriter.NewSealer(s.pool, s.writer, fixedVersionSigner{version: version})
+		if _, err := sealer.SealOrganizationThrough(ctx, org, day); !errors.Is(err, auditwriter.ErrKeyVersion) {
+			t.Fatalf("key version %d: seal = %v, want ErrKeyVersion", version, err)
+		}
+		if n := s.count(t, "SELECT count(*) FROM audit_manifest WHERE organization_id = $1", org); n != 0 {
+			t.Fatalf("key version %d: %d manifests recorded, want 0", version, n)
+		}
+		if _, found, err := s.store.GetIfExists(ctx, auditwriter.ManifestKey(org, day)); err != nil || found {
+			t.Fatalf("key version %d: manifest object found=%v err=%v, want none", version, found, err)
+		}
 	}
 }

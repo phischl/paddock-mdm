@@ -671,8 +671,8 @@ func TestLUKSKeepsForeignKeyslots(t *testing.T) {
 		return escrow.StatusStored
 	}
 	f.pass()
-	if f.st.PassphraseSlot == nil || *f.st.PassphraseSlot != 0 || f.st.RecoverySlot == nil || *f.st.RecoverySlot != 4 {
-		t.Fatalf("recorded keyslots: passphrase %v, recovery %v", f.st.PassphraseSlot, f.st.RecoverySlot)
+	if f.st.InstallSlot == nil || *f.st.InstallSlot != 0 || f.st.RecoverySlot == nil || *f.st.RecoverySlot != 4 {
+		t.Fatalf("recorded keyslots: passphrase %v, recovery %v", f.st.InstallSlot, f.st.RecoverySlot)
 	}
 	f.poll() // generation 1 refused: its keyslot is replaced
 	f.pass() // generation 2
@@ -716,7 +716,7 @@ func TestLUKSWipesOnlyRecordedKeyslots(t *testing.T) {
 
 	g := newLUKSFixture(t, "password", "tpm2+pin")
 	g.vol.installSlot = -1
-	if g.pass(); len(g.vol.changes) != 0 || g.st.PassphraseSlot != nil || len(g.server.requests) != 0 {
+	if g.pass(); len(g.vol.changes) != 0 || g.st.InstallSlot != nil || len(g.server.requests) != 0 {
 		t.Fatalf("without a keyslot for the install passphrase: changes %v, state %+v", g.vol.changes, g.st)
 	}
 }

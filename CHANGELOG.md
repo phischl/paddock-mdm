@@ -122,9 +122,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `paddock-server admin agent-release` audits every refusal like the admin API: an invalid version or a release
   without an agent binary records a failed `agent_release.created` event, a refused file a failed
   `agent_release.artifact_uploaded` event.
+- `paddock-supervisor` no longer rolls back a healthy agent update whose first check-in follows the switch within one
+  kernel clock tick: the file system dated such a check-in before the switch. The supervisor now removes
+  `/run/paddock/last-checkin` while no agent runs, and a probation passes if the new agent recreated it. If the
+  supervisor cannot remove the mark, it rolls the update back.
+
 
 ### Security
 
+- The worker's certificate probe (`PADDOCK_TLS_PROBE_HOSTS`) verifies each public certificate against the system
+  trust store and the hostname, like a client. An expired, untrusted or wrong-name certificate now reads
+  `paddock_tls_probe_success` 0 and raises `PaddockCertificateProbeFailing`, instead of reporting its expiry.
+- Device gateway cache errors no longer contain the cache key, so logs carry neither a device key ID nor the hash of
+  an enrollment token.
+- The audit sealer refuses a signing key version outside 1…2³¹−1 before it writes the manifest, instead of
+  truncating it into the manifest index.
 - Dependency update (PDK-032): `github.com/google/cel-go` 0.28.0 → 0.31.0, fixing GHSA-gcjh-h69q-9w9g (private JSON
   fields exposed through `NativeTypes` and `ParseStructTag`). The library is only pulled in by the build-time code
   generator `sqlc`; Paddock's own code does not evaluate CEL and the shipped binaries do not contain it, so running

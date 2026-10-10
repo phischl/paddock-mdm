@@ -116,7 +116,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	osvSync := worker.NewOSV(app.NewOSV(runner, pool, platformPool), osvfeed.New(osvURL), pool, platformPool, osvEvery)
 	slog.InfoContext(ctx, "worker starting")
 
-	jobs := []func(context.Context) error{worker.NewOpsProbe(signer, worker.DialCertExpiry(tlsAddr), tlsHosts).Run}
+	jobs := []func(context.Context) error{worker.NewOpsProbe(signer, worker.DialCertExpiry(tlsAddr, nil), tlsHosts).Run}
 	if backups != nil {
 		jobs = append(jobs, worker.NewBackups(backups.store, backups.snap, backups.key, platformPool).Run)
 	}

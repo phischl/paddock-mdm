@@ -3,6 +3,7 @@ package devicecache_test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -133,5 +134,30 @@ func TestGatewayKeys(t *testing.T) {
 	// 45 s into the next minute only a quarter of the previous minute still counts.
 	if ok, _, _ := cache.Allow(ctx, "key:x", 3, now.Add(75*time.Second)); !ok {
 		t.Fatal("window does not slide")
+	}
+}
+
+// TestErrorsDoNotCarryKeys: cache errors are logged by the gateway, so they must not contain the key ID from the
+// Paddock-Key-Id header or the hash of an enrollment token.
+func TestErrorsDoNotCarryKeys(t *testing.T) {
+	cache := devicecache.New(valkeytest.Start(t).Client(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tokenHash := bytes.Repeat([]byte{0xab}, 32)
+	tokenHex := strings.Repeat("ab", 32)
+	keyID := strings.Repeat("cd", 32)
+	now := time.Now()
+
+	_, _, readToken := cache.Token(ctx, tokenHash)
+	writeToken := cache.PutToken(ctx, tokenHash, devicecache.Token{ExpiresAt: now.Add(time.Hour)}, now)
+	_, _, readKey := cache.DeviceKey(ctx, keyID)
+	writeKey := cache.PutDeviceKey(ctx, keyID, devicecache.DeviceKey{})
+	for name, err := range map[string]error{"Token": readToken, "PutToken": writeToken, "DeviceKey": readKey, "PutDeviceKey": writeKey} {
+		if err == nil {
+			t.Fatalf("%s with a cancelled context succeeded", name)
+		}
+		if msg := err.Error(); strings.Contains(msg, tokenHex) || strings.Contains(msg, keyID) {
+			t.Fatalf("%s error carries the key: %s", name, msg)
+		}
 	}
 }

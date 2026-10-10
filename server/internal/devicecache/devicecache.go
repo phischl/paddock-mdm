@@ -173,7 +173,8 @@ func (c *Cache) putHash(ctx context.Context, key string, expireAt time.Time, fie
 	cmds = append(cmds, c.c.B().Exec().Build())
 	for _, r := range c.c.DoMulti(ctx, cmds...) {
 		if err := r.Error(); err != nil {
-			return fmt.Errorf("devicecache: write %s: %w", key, err)
+			// No key: it derives from a request header or an enrollment token's hash, and errors are logged.
+			return fmt.Errorf("devicecache: write hash: %w", err)
 		}
 	}
 	return nil
@@ -182,7 +183,7 @@ func (c *Cache) putHash(ctx context.Context, key string, expireAt time.Time, fie
 func (c *Cache) getHash(ctx context.Context, key string) (map[string]string, bool, error) {
 	m, err := c.c.Do(ctx, c.c.B().Hgetall().Key(key).Build()).AsStrMap()
 	if err != nil {
-		return nil, false, fmt.Errorf("devicecache: read %s: %w", key, err)
+		return nil, false, fmt.Errorf("devicecache: read hash: %w", err) // key left out, see putHash
 	}
 	return m, len(m) > 0, nil
 }

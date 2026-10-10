@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"log/slog"
 	"net"
@@ -33,7 +34,7 @@ var (
 	}, []string{"host"})
 	metricTLSProbeSuccess = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "paddock_tls_probe_success",
-		Help: "1 when the last TLS handshake with the public hostname returned a certificate, else 0.",
+		Help: "1 when the last TLS handshake with the public hostname returned a certificate that verifies for the hostname against the trust store, else 0.",
 	}, []string{"host"})
 	// metricTLSProbeHosts lets an alert notice expiries that are never exported (PaddockCertificateExpiryMissing).
 	metricTLSProbeHosts = promauto.NewGauge(prometheus.GaugeOpts{
@@ -119,13 +120,15 @@ func (p *OpsProbe) ProbeCertificates(ctx context.Context) {
 }
 
 // DialCertExpiry connects to addr (Caddy on the internal network) with host as SNI and returns the leaf's notAfter.
-func DialCertExpiry(addr string) CertExpiry {
+// The chain is verified for host against roots (nil: the system trust store), so a certificate that clients would
+// reject — expired, untrusted or for another name — fails the probe (PaddockCertificateProbeFailing) instead of
+// reporting a reassuring expiry.
+func DialCertExpiry(addr string, roots *x509.CertPool) CertExpiry {
 	return func(ctx context.Context, host string) (time.Time, error) {
 		d := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{
 			ServerName: host,
-			// Only the served certificate's expiry is read; nothing is sent over the connection and nothing trusts it.
-			InsecureSkipVerify: true, //nolint:gosec // the probe reads notAfter only
-			MinVersion:         tls.VersionTLS12,
+			RootCAs:    roots,
+			MinVersion: tls.VersionTLS12,
 		}}
 		conn, err := d.DialContext(ctx, "tcp", addr)
 		if err != nil {
