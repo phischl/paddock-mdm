@@ -38,8 +38,14 @@ export async function listAuditEvents(p: ListParams): Promise<Page<AuditEvent>> 
           code: p.code as string[],
           outcome: p.outcome as AuditOutcome[],
           actor_type: p.actor_type as AuditActorType[],
+          target_id: p.target_id as string | undefined,
         },
       },
     }),
   )
+}
+
+/** The audit events of one device (its Audit tab, plan M7c decision 31): the list filtered by target_id. */
+export function listDeviceAuditEvents(deviceID: string): (p: ListParams) => Promise<Page<AuditEvent>> {
+  return (p) => listAuditEvents({ ...p, target_id: deviceID })
 }

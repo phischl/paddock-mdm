@@ -3,15 +3,17 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { listDeviceSoftware, listDeviceVulnerabilities } from '../lib/inventory'
+import { useSessionStore } from '../stores/session'
 
 /**
  * The tabs of a device (plan M7c decision 29): URL-bound, Alt+1…9 through the shell's shortcut event. Software and
- * Vulnerabilities carry their counts, loaded lazily.
+ * Vulnerabilities carry their counts, loaded lazily; the Audit tab is for readers of the audit log.
  */
 const props = defineProps<{ deviceId: string }>()
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const session = useSessionStore()
 const software = ref<number | null>(null)
 const findings = ref<number | null>(null)
 
@@ -23,6 +25,7 @@ const tabs = computed<Tab[]>(() => [
   { name: 'device-access', label: 'devices.tabs.access', testid: 'tab-access' },
   { name: 'device-configuration', label: 'devices.tabs.configuration', testid: 'tab-configuration' },
   { name: 'device-commands', label: 'devices.tabs.commands', testid: 'tab-commands' },
+  ...(session.canReadAudit ? [{ name: 'device-audit', label: 'devices.tabs.audit', testid: 'tab-audit' }] : []),
 ])
 
 async function loadCounts(): Promise<void> {

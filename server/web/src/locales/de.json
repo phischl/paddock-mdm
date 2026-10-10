@@ -350,6 +350,20 @@
       "rotated": "Das Gerät {target} hat das Passwort {generation, number} des lokalen Administrators gesetzt",
       "rotation_failed": "Das Gerät {target} konnte das Passwort seines lokalen Administrators nicht rotieren ({reason})",
       "login": "Der lokale Administrator hat sich an {target} angemeldet ({service})"
+    },
+    "deviceColumn": "Gerät",
+    "codeColumn": "Code",
+    "empty": {
+      "title": "Keine Ereignisse in diesem Zeitraum",
+      "description": "Erweitern Sie den Zeitraum oder setzen Sie die Filter zurück."
+    },
+    "details": {
+      "event_id": "Ereignis-ID",
+      "correlation_id": "Korrelations-ID",
+      "source": "Quelle",
+      "actor_ip": "IP-Adresse",
+      "step_up": "Identitätsbestätigung",
+      "error_code": "Fehlercode"
     }
   },
   "organizations": {
@@ -710,7 +724,8 @@
       "overview": "Übersicht",
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
-      "commands": "Befehle"
+      "commands": "Befehle",
+      "audit": "Audit"
     },
     "health": {
       "title": "Zustand und Konformität",
@@ -1239,10 +1254,8 @@
   },
   "attention": {
     "title": "Handlungsbedarf",
-    "summary": "Geräte, die einen Administrator brauchen, eine Zeile pro offenem Befund. Öffnen Sie das Gerät, um es außer Betrieb zu nehmen, zu sperren oder freizugeben.",
+    "summary": "Geräte, die einen Administrator brauchen, nach Gerät gruppiert mit ihren offenen Befunden. Öffnen Sie das Gerät, um es außer Betrieb zu nehmen, zu sperren oder freizugeben.",
     "kind": "Befund",
-    "since": "Seit",
-    "detail": "Detail",
     "open": "{hostname} öffnen",
     "kinds": {
       "stale_warning": "Ohne Kontakt (Warnung)",
@@ -1272,7 +1285,9 @@
     "empty": {
       "title": "Kein Handlungsbedarf",
       "description": "Jedes Gerät ist online, verschlüsselt und läuft mit dem aktuellen Agent – oder ist außer Betrieb genommen."
-    }
+    },
+    "device": "Gerät",
+    "conditions": "Befunde"
   },
   "palette": {
     "title": "Befehlspalette",

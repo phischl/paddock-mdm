@@ -7,6 +7,7 @@ import EmptyState from '../components/EmptyState.vue'
 import KpiStrip from '../components/KpiStrip.vue'
 import SeverityBar from '../components/SeverityBar.vue'
 import SeverityChip from '../components/SeverityChip.vue'
+import AttentionChips from '../components/AttentionChips.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import { modifierLabel } from '../composables/useShortcuts'
@@ -14,7 +15,7 @@ import { useProblemText } from '../lib/problems'
 import { auditText } from '../lib/format'
 import { shortcutOf } from '../lib/navigation'
 import { getOverview, kpiCells, overviewAttention, recentAuditEvents } from '../lib/overview'
-import { attentionStatus, outcomeStatus } from '../lib/status'
+import { outcomeStatus } from '../lib/status'
 import { formatAbsolute } from '../lib/time'
 import { useSessionStore } from '../stores/session'
 
@@ -30,7 +31,6 @@ const attention = ref<AttentionDevice[]>([])
 const audit = ref<AuditEvent[]>([])
 const problem = ref('')
 const loading = ref(true)
-const maxChips = 3
 
 onMounted(async () => {
   const [o, a, e] = await Promise.all([
@@ -169,21 +169,7 @@ const agentLine = computed(() => {
                     >{{ t('overview.attention.os', { release: d.os_release.VERSION_ID }) }}</span>
                   </td>
                   <td>
-                    <span class="pd-chips">
-                      <StatusChip
-                        v-for="c in d.conditions.slice(0, maxChips)"
-                        :key="c.kind"
-                        :status="attentionStatus(c.kind).status"
-                        :label="t(attentionStatus(c.kind).label)"
-                        :title="c.detail || undefined"
-                      />
-                      <StatusChip
-                        v-if="d.conditions.length > maxChips"
-                        status="neutral"
-                        :label="t('attention.more', { count: d.conditions.length - maxChips })"
-                        :title="d.conditions.slice(maxChips).map((c) => t('attention.kinds.' + c.kind)).join(', ')"
-                      />
-                    </span>
+                    <AttentionChips :conditions="d.conditions" />
                   </td>
                   <td class="pd-hide-sm">
                     <TimeCell

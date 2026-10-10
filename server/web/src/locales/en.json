@@ -350,6 +350,20 @@
       "rotated": "The device {target} set local administrator password {generation, number}",
       "rotation_failed": "The device {target} could not rotate its local administrator password ({reason})",
       "login": "The local administrator logged in on {target} ({service})"
+    },
+    "deviceColumn": "Device",
+    "codeColumn": "Code",
+    "empty": {
+      "title": "No events in this range",
+      "description": "Widen the date range or clear the filters."
+    },
+    "details": {
+      "event_id": "Event ID",
+      "correlation_id": "Correlation ID",
+      "source": "Source",
+      "actor_ip": "IP address",
+      "step_up": "Step-up",
+      "error_code": "Error code"
     }
   },
   "organizations": {
@@ -710,7 +724,8 @@
       "overview": "Overview",
       "access": "Login & sudo",
       "configuration": "Configuration",
-      "commands": "Commands"
+      "commands": "Commands",
+      "audit": "Audit"
     },
     "health": {
       "title": "Health and compliance",
@@ -1239,10 +1254,8 @@
   },
   "attention": {
     "title": "Attention",
-    "summary": "Devices that need an administrator, one row per open condition. Open the device to retire, lock or release it.",
+    "summary": "Devices that need an administrator, grouped by device with their open conditions. Open the device to retire, lock or release it.",
     "kind": "Condition",
-    "since": "Since",
-    "detail": "Detail",
     "open": "Open {hostname}",
     "kinds": {
       "stale_warning": "Silent (warning)",
@@ -1272,7 +1285,9 @@
     "empty": {
       "title": "Nothing needs attention",
       "description": "Every device is online, encrypted and running the current agent, or has been retired."
-    }
+    },
+    "device": "Device",
+    "conditions": "Conditions"
   },
   "palette": {
     "title": "Command palette",
