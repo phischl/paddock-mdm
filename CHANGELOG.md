@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Dependency update (PDK-032): `github.com/google/cel-go` 0.28.0 → 0.31.0, fixing GHSA-gcjh-h69q-9w9g (private JSON
+  fields exposed through `NativeTypes` and `ParseStructTag`). The library is only pulled in by the build-time code
+  generator `sqlc`; Paddock's own code does not evaluate CEL and the shipped binaries do not contain it, so running
+  installations were not exposed.
+
 ## [0.1.0-alpha.1] - 2026-10-09
 
 **Alpha.** This is a pre-release for evaluation, not for production fleets. Revocation (Lock, Destroy, dead man's
