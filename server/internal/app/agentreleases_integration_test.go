@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
+	"github.com/phischl/paddock-mdm/pkg/semver"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -275,6 +278,47 @@ func TestRolloutRoundHaltsOnFailures(t *testing.T) {
 	}
 }
 
+// TestRolloutIgnoresRefusedDowngrades (PDK-025): a device on a newer agent refuses the release as a downgrade; the
+// failure is audited but never counts toward the rollout's failure rate, so even a threshold of one device keeps the
+// rollout running.
+func TestRolloutIgnoresRefusedDowngrades(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	v := h.published(t)
+	one, wave := 1, 1
+	if _, err := h.releases.StartRollout(platformAdmin(), v, app.RolloutOptions{Waves: []int{100}, FailureThresholdMin: &one, MinWaveMinutes: &wave}); err != nil {
+		t.Fatal(err)
+	}
+	org, dev := h.device(t)
+	data, _ := json.Marshal(map[string]string{"version": v, "from_version": "999.0.0", "outcome": "downgrade_refused"})
+	ev := protocol.Event{EventSeq: 1, Type: protocol.EventAgentUpdateFailed, OccurredAt: time.Now(), Data: data}
+	if _, err := h.reports.RecordEvent(systemCtx(org), dev, ev); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := h.releases.EvaluateRollouts(systemCtx(uuid.Nil), time.Now())
+	if err != nil || offer == nil || offer.Version != v || offer.Status != agentrelease.RolloutRunning {
+		t.Fatalf("offer %+v, %v; want the rollout still running", offer, err)
+	}
+	ctx := context.Background()
+	var reports, audited int
+	if err := h.super.QueryRow(ctx, "SELECT count(*) FROM agent_update_report WHERE device_id = $1", dev).Scan(&reports); err != nil || reports != 0 {
+		t.Fatalf("%d update reports (%v), want 0", reports, err)
+	}
+	if err := h.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE code = 'device.agent_update_failed' AND target->>'id' = $1", dev.String()).Scan(&audited); err != nil || audited != 1 {
+		t.Fatalf("%d audit events (%v), want 1", audited, err)
+	}
+
+	// The same device failing for another reason counts and halts the rollout.
+	data, _ = json.Marshal(map[string]string{"version": v, "from_version": "0.9.0", "outcome": "self_test_failed"})
+	ev = protocol.Event{EventSeq: 2, Type: protocol.EventAgentUpdateFailed, OccurredAt: time.Now(), Data: data}
+	if _, err := h.reports.RecordEvent(systemCtx(org), dev, ev); err != nil {
+		t.Fatal(err)
+	}
+	if offer, err := h.releases.EvaluateRollouts(systemCtx(uuid.Nil), time.Now()); err != nil || offer != nil {
+		t.Fatalf("after a real failure: offer %+v, %v; want halted", offer, err)
+	}
+}
+
 func TestRolloutRoundAdvancesAndCompletes(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	h.haltAll(t)
@@ -475,6 +519,65 @@ func TestRolloutBucketMatchesSQL(t *testing.T) {
 		}
 		if want := agentrelease.Bucket(id); got != want {
 			t.Fatalf("%s: SQL %d, Go %d", id, got, want)
+		}
+	}
+}
+
+// TestVersionKeyMatchesCompare (PDK-025): the byte order of paddock_version_key is the order of semver.Compare, so
+// SQL and Go agree on "newer"; anything that is no semantic version has no key.
+func TestVersionKeyMatchesCompare(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	versions := []string{"0.0.0-dev", "0.1.0-alpha.1", "0.1.0-alpha.2", "0.1.0-alpha.10", "0.1.0-beta.1", "0.1.0-rc.1",
+		"0.1.0", "0.1.0+build.7", "0.2.0", "0.9.0", "0.10.0", "1.0.0-alpha", "1.0.0-alpha.beta", "1.0.0-alpha-1", "1.0.0-alpha0",
+		"1.0.0-a", "1.0.0-A", "1.0.0-0a", "1.0.0-007", "1.0.0-8", "1.0.0-1.0.0", "1.0.0-18446744073709551615",
+		"1.0.0-18446744073709551616", "1.0.0-rc.1", "1.0.0", "1.0.01", "1.2.0", "1.10.0", "18446744073709551615.0.0",
+		"18446744073709551616.0.0", "99999999999999999999.0.0", "100000000000000000000.0.0", "0.2.1700000000-good"}
+	keys := make([]string, len(versions))
+	for i, v := range versions {
+		if err := h.super.QueryRow(context.Background(), "SELECT paddock_version_key($1)", v).Scan(&keys[i]); err != nil {
+			t.Fatalf("%s: %v", v, err)
+		}
+	}
+	for i, a := range versions {
+		for j, b := range versions {
+			if got, want := strings.Compare(keys[i], keys[j]), semver.Compare(a, b); got != want {
+				t.Errorf("%s vs %s: key order %d, Compare %d (keys %q, %q)", a, b, got, want, keys[i], keys[j])
+			}
+		}
+	}
+	for _, invalid := range []string{"", "1.0", "v1.0.0", "1.0.0-", "unknown"} {
+		var key *string
+		if err := h.super.QueryRow(context.Background(), "SELECT paddock_version_key($1)", invalid).Scan(&key); err != nil || key != nil {
+			t.Errorf("%q: key %v, %v; want NULL", invalid, key, err)
+		}
+	}
+}
+
+// TestListReleasesSortsByVersion (PDK-025): sort=version orders by SemVer precedence, not as text (0.2.0 before
+// 0.10.0, pre-releases before their release, alpha.2 before alpha.10).
+func TestListReleasesSortsByVersion(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	major := strconv.FormatInt(time.Now().UnixNano()%9000000+1000000, 10)
+	want := []string{major + ".2.0", major + ".9.0-alpha.2", major + ".9.0-alpha.10", major + ".9.0-rc.1", major + ".9.0", major + ".10.0"}
+	for _, i := range []int{5, 2, 0, 4, 1, 3} {
+		if _, err := h.releases.Create(platformAdmin(), want[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	descending := slices.Clone(want)
+	slices.Reverse(descending)
+	pattern := "%" + major + ".%"
+	for sort, order := range map[string][]string{"version": want, "-version": descending} {
+		listed, err := h.releases.List(platformAdmin(), app.ListPage{Sort: sort, QPattern: &pattern, Limit: 10}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, len(listed.Items))
+		for i, r := range listed.Items {
+			got[i] = r.Version
+		}
+		if !slices.Equal(got, order) {
+			t.Errorf("sort=%s: %v, want %v", sort, got, order)
 		}
 	}
 }

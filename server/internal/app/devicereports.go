@@ -187,7 +187,7 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 		if err != nil || n != 1 {
 			return false, err
 		}
-		if outcome, ok := updateOutcomes[ev.Type]; ok {
+		if outcome, ok := updateOutcome(ev.Type, spec.Params); ok {
 			if version, ok := spec.Params["version"].(string); ok {
 				err = q.InsertAgentUpdateReport(ctx, pgstore.InsertAgentUpdateReportParams{
 					DeviceID: deviceID, OrganizationID: org, Version: version, Outcome: outcome,
@@ -280,6 +280,21 @@ var updateOutcomes = map[string]string{
 	protocol.EventAgentUpdated:      "updated",
 	protocol.EventAgentUpdateFailed: "update_failed",
 	protocol.EventAgentRolledBack:   "rolled_back",
+}
+
+// outcomeDowngradeRefused is the supervisor's outcome for a release that is not newer than the active agent
+// (agent/internal/update.OutcomeDowngradeRefused).
+const outcomeDowngradeRefused = "downgrade_refused"
+
+// updateOutcome returns the agent_update_report outcome of an agent update event, if the rollout evaluation counts
+// it. A refused downgrade never counts toward the failure rate (PDK-025): the device keeps its newer agent, so the
+// release did not fail on it.
+func updateOutcome(eventType string, params map[string]any) (string, bool) {
+	outcome, ok := updateOutcomes[eventType]
+	if !ok || params["outcome"] == outcomeDowngradeRefused {
+		return "", false
+	}
+	return outcome, true
 }
 
 // Bounds of the device-reported values copied into audit params.

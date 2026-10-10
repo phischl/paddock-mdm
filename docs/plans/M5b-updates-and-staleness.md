@@ -81,6 +81,9 @@ critical level, audited, and listed on an "attention" page together with other c
     (`agent_outdated`), login/sudo apply failed (latest event), revocation pending/expired. Read-only aggregation over
     existing state. Portal page *Attention* (default landing page for org admins when it has entries) and a count badge
     in the navigation. Actions link to the existing device actions (retire, lock, release quarantine).
+    Amendment 2026-10-10 (architect, PDK-025): `agent_outdated` means the device's agent version is older than the
+    current release by SemVer precedence (stored key `agent_release.version_key`); a device on a newer agent is not
+    outdated, one that reports no semantic version is.
 
 ### 3.4 Portal
 12. Settings → Updates (schedule fields with validation messages, staleness thresholds); *Package holds* page
