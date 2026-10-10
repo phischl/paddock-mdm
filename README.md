@@ -37,11 +37,26 @@ and German.
 
 | Read | For |
 | --- | --- |
-| [Production installation](docs/operations/install.md) | operators: two hosts, TLS, secrets, backups, monitoring, `make prod-check` |
+| [Production installation](docs/operations/install.md) | operators: two hosts, TLS, secrets, backups, monitoring, `./paddock check` |
 | [Operations runbooks](docs/operations/) | day-to-day operation: agent releases, disk recovery, revocation, restore, capacity |
 | [Compliance pack](docs/compliance/) | auditors: [ISO 27001 mapping](docs/compliance/iso27001-mapping.md), [residual risks](docs/compliance/residual-risks.md), [audit codes](docs/compliance/audit-codes.md), [privacy](docs/compliance/privacy.md), [third-party licenses](docs/compliance/third-party.md) |
 | [CHANGELOG](CHANGELOG.md) | what changed per release |
 | [Architecture](docs/architecture.md), [decisions](docs/adr/), [plans](docs/plans/) | contributors; binding rules for contributors and AI agents: `CLAUDE.md` |
+
+## Quick start (operators)
+
+Every release publishes signed images (`ghcr.io/phischl/paddock-server`, `paddock-compiler`, `paddock-pgbackrest`,
+amd64 and arm64) and the operator bundle `paddock-deploy-<version>.tar.gz` on its GitHub release page. Each of the
+two hosts runs the bundle; no checkout and no build:
+
+```sh
+tar -xzf paddock-deploy-<version>.tar.gz && cd paddock-deploy-<version>   # after verifying its signature
+./paddock verify && cp .env.example .env                                  # set PADDOCK_HOST, domain, addresses
+./paddock secrets && ./paddock check && ./paddock up
+```
+
+The full procedure, including OpenBao, the buckets and the first agent release, is
+[docs/operations/install.md](docs/operations/install.md); upgrades: [docs/operations/upgrade.md](docs/operations/upgrade.md).
 
 ## Quick start (local development)
 

@@ -1,34 +1,38 @@
 #!/usr/bin/env bash
-# Generates the production secrets of one host into deploy/compose/.secrets/ (plan M6a decision 3):
-#   gen-prod-secrets.sh controlplane|audit
+# Generates the production secrets of one host into .secrets/ next to the Compose files (plan M6a decision 3, M7b
+# decision 15):
+#   gen-prod-secrets.sh [controlplane|audit]     (default: PADDOCK_HOST of .env; ./paddock secrets)
 # Idempotent: existing files are never overwritten. Prints file names only, never a secret. Two values cross the hosts
 # and are copied by the operator (docs/operations/install.md): the audit reader's database password (audit host →
 # control plane) and the audit writer's RabbitMQ password (control plane → audit host); the internal CA certificates
 # (public) travel both ways. AppRole credentials, the Fleet API token and the release public keys are written during
-# the installation; `make prod-check` fails until they are there.
+# the installation; `./paddock check` fails until they are there.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-HOST="${1:-}"
-if [[ "$HOST" != controlplane && "$HOST" != audit ]]; then
-  echo "usage: $0 controlplane|audit" >&2
-  exit 2
-fi
 if [[ ! -f "$COMPOSE_DIR/.env" ]]; then
-  cp "$COMPOSE_DIR/prod.env.example" "$COMPOSE_DIR/.env"
-  echo "created deploy/compose/.env from prod.env.example: set the domain, the e-mail and the interconnect addresses, then run again"
+  # The repository keeps the production template as prod.env.example; the operator bundle ships it as .env.example.
+  template="$COMPOSE_DIR/prod.env.example"
+  [[ -f "$template" ]] || template="$COMPOSE_DIR/.env.example"
+  cp "$template" "$COMPOSE_DIR/.env"
+  echo "created .env from $(basename "$template"): set the host, the domain, the e-mail and the interconnect addresses, then run again"
   exit 1
 fi
+HOST="${1:-$(env_value PADDOCK_HOST)}"
+if [[ "$HOST" != controlplane && "$HOST" != audit ]]; then
+  echo "usage: $0 [controlplane|audit] (default: PADDOCK_HOST of .env)" >&2
+  exit 2
+fi
 if [[ "$(env_value PADDOCK_ENV)" != production ]]; then
-  echo "refusing to run: PADDOCK_ENV in deploy/compose/.env is not production" >&2
+  echo "refusing to run: PADDOCK_ENV in .env is not production" >&2
   exit 1
 fi
 INTERCONNECT="$(env_value PADDOCK_INTERCONNECT_ADDR)"
 if [[ -z "$INTERCONNECT" ]]; then
-  echo "set PADDOCK_INTERCONNECT_ADDR (this host's address on the private interconnect) in deploy/compose/.env" >&2
+  echo "set PADDOCK_INTERCONNECT_ADDR (this host's address on the private interconnect) in .env" >&2
   exit 1
 fi
 command -v openssl >/dev/null || { echo "openssl is required" >&2; exit 1; }
@@ -95,7 +99,7 @@ if [[ "$HOST" == controlplane ]]; then
   done
   if [[ -s "$SECRETS_DIR/db_paddock_audit_reader_password" ]]; then
     audit_addr="$(env_value PADDOCK_AUDIT_ADDR)"
-    [[ -n "$audit_addr" ]] || { echo "set PADDOCK_AUDIT_ADDR in deploy/compose/.env" >&2; exit 1; }
+    [[ -n "$audit_addr" ]] || { echo "set PADDOCK_AUDIT_ADDR in .env" >&2; exit 1; }
     secret db_paddock_audit_reader_url \
       "postgres://paddock_audit_reader:$(read_secret db_paddock_audit_reader_password)@${audit_addr}:5432/paddock_audit?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca_bundle"
   else
@@ -159,7 +163,9 @@ if [[ "$HOST" == controlplane ]]; then
     placeholder "backup_${role}_secret_key"
   done
 
-  for role in paddock-api paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer paddock-backup; do
+  # The audit writer's AppRole is created on this host's OpenBao as well, then copied to the audit host.
+  for role in paddock-api paddock-compiler paddock-worker paddock-escrow-reader paddock-revocation-issuer paddock-backup \
+    paddock-audit-writer; do
     placeholder "approle/$role/role_id"
     placeholder "approle/$role/secret_id"
   done
@@ -199,4 +205,4 @@ if [[ "$bundle" != "$(cat "$CA_DIR/bundle.crt" 2>/dev/null)" ]]; then
 fi
 [[ -s "$CA_DIR/peer-ca.crt" ]] || echo "missing .secrets/internal-ca/peer-ca.crt: copy ca.crt of the other host and run again"
 
-echo "production secrets of the $HOST host ready in deploy/compose/.secrets/"
+echo "production secrets of the $HOST host ready in .secrets/"

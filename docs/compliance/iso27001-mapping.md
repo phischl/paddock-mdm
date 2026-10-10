@@ -14,7 +14,7 @@ Data collected from devices: [privacy.md](privacy.md). Licenses: [third-party.md
   (`action.finalized_unknown`). Events are stored in English and only displayed in the reader's language.
 - **WORM store:** every event is written to an object store bucket with Object Lock in COMPLIANCE mode
   (retention ≥ 400 days, `PADDOCK_AUDIT_RETENTION_DAYS`); no operator credential can delete or shorten it
-  (`docs/operations/audit-bucket.md`). `make prod-check HOST=audit ONLINE=1` proves the bucket's lock
+  (`docs/operations/audit-bucket.md`). `./paddock check --online` (audit host) proves the bucket's lock
   configuration.
 - **Hash chain:** per organization and recording day the audit writer seals a manifest with the SHA-256 of every
   object and the hash of the previous manifest, signed with the OpenBao key `audit-chain`.

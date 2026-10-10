@@ -17,8 +17,8 @@ store is **not** part of the routine backup or restore: it is protected by WORM 
 
 All backups go to one S3 bucket (default `paddock-backup`) that MUST be outside the control-plane host: another
 site's object store or an S3 provider. pgBackRest speaks TLS only, so the endpoint is an `https://` URL. Everything is
-encrypted on the control plane before it leaves it, with the key in `.secrets/backup_encryption_key` (written by `make
-prod-secrets`). **Keep a copy of that key offline with the OpenBao custodians**: a lost control-plane host takes the
+encrypted on the control plane before it leaves it, with the key in `.secrets/backup_encryption_key` (written by
+`./paddock secrets`). **Keep a copy of that key offline with the OpenBao custodians**: a lost control-plane host takes the
 only other copy with it, and without the key no backup can be read.
 
 | Prefix | Written by | Content |
@@ -59,7 +59,7 @@ The overlay `deploy/compose/compose.backup.yaml` (part of the production configu
   `pgbackrest-authentik` push it to the repository every 2 seconds and take a full backup when the last one is older
   than 24 hours. They read the data directory and the socket of their database through shared volumes. Every full
   backup is read back with `pgbackrest verify` and counts only when it is intact. The stanza's lock lives in its state
-  volume, so a backup taken by hand (`pc run … pgbackrest backup`) waits for a running scheduled one instead of
+  volume, so a backup taken by hand (`./paddock compose run … pgbackrest backup`) waits for a running scheduled one instead of
   running beside it.
 - **OpenBao**: `paddock-worker` takes a snapshot when the newest one in the bucket is older than 6 hours (AppRole
   `paddock-backup`, read on `sys/storage/raft/snapshot` only), encrypts it and uploads it. After key operations take
@@ -70,34 +70,34 @@ Every worker exports `paddock_backup_last_success_timestamp_seconds{kind="postgr
 time of the newest object of each kind in the bucket; the alert `PaddockBackupStale` fires when one is older than
 26 hours (`docs/operations/monitoring.md`).
 
-Commands (with the control plane's Compose files, `pc` in `docs/operations/install.md`):
+Commands (in the control plane's bundle directory, `docs/operations/install.md`):
 
 ```sh
-pc run --rm --no-deps pgbackrest backup --start-fast # full backup of paddock now (pgbackrest-authentik: Authentik)
-pc run --rm --no-deps pgbackrest info                # pgbackrest info of the stanza
-pc run --rm --no-deps paddock-worker backup openbao  # OpenBao snapshot now
-pc run --rm --no-deps fleet-backup once              # Fleet dump now; fleet-backup-upload uploads it within a minute
+./paddock compose run --rm --no-deps pgbackrest backup --start-fast # full backup of paddock now (pgbackrest-authentik: Authentik)
+./paddock compose run --rm --no-deps pgbackrest info                # pgbackrest info of the stanza
+./paddock compose run --rm --no-deps paddock-worker backup openbao  # OpenBao snapshot now
+./paddock compose run --rm --no-deps fleet-backup once              # Fleet dump now; fleet-backup-upload uploads it within a minute
 ```
 
 ## Restoring the control plane
 
 Use this procedure when the control-plane databases or OpenBao are lost, for example after a host failure. The audit
-store is not restored; the audit host keeps running. Commands use the control plane's Compose files (`pc`).
+store is not restored; the audit host keeps running. Commands run in the control plane's bundle directory.
 
 1. **Prepare.** A rebuilt host with the repository, `.env` and `.secrets/` as in `docs/operations/install.md`
    (secrets from your secret store, `backup_encryption_key` from the custodians' offline copy). Three OpenBao
    custodians are available.
-2. **Stop the writers.** `pc --profile paddock stop` and `pc stop authentik-server authentik-worker pgbackrest
+2. **Stop the writers.** `./paddock compose --profile paddock stop` and `./paddock compose stop authentik-server authentik-worker pgbackrest
    pgbackrest-authentik`.
 3. **PostgreSQL.** With empty volumes `postgres-data` and `authentik-postgres-data` (remove damaged ones with
    `docker volume rm paddock_postgres-data …`):
 
    ```sh
-   pc run --rm --no-deps pgbackrest restore               # latest point of the WAL archive
-   pc run --rm --no-deps pgbackrest-authentik restore
-   pc up -d --no-deps postgres authentik-postgres         # replays the staged WAL, then promotes
-   pc exec postgres psql -U postgres -Atc 'select pg_is_in_recovery()'   # f when done
-   pc up -d --no-deps pgbackrest pgbackrest-authentik
+   ./paddock compose run --rm --no-deps pgbackrest restore               # latest point of the WAL archive
+   ./paddock compose run --rm --no-deps pgbackrest-authentik restore
+   ./paddock compose up -d --no-deps postgres authentik-postgres         # replays the staged WAL, then promotes
+   ./paddock compose exec postgres psql -U postgres -Atc 'select pg_is_in_recovery()'   # f when done
+   ./paddock compose up -d --no-deps pgbackrest pgbackrest-authentik
    ```
 
 4. **OpenBao.** Start a fresh OpenBao (empty `openbao-data`), initialize it with a single temporary share, unseal it
@@ -105,11 +105,11 @@ store is not restored; the audit host keeps running. Commands use the control pl
    credential):
 
    ```sh
-   pc run --rm --no-deps -T -v "$PWD/snapshot.enc:/in:ro" paddock-worker backup decrypt /in - |
-     pc exec -T openbao sh -c 'cat >/tmp/snapshot'
+   ./paddock compose run --rm --no-deps -T -v "$PWD/snapshot.enc:/in:ro" paddock-worker backup decrypt /in - |
+     ./paddock compose exec -T openbao sh -c 'cat >/tmp/snapshot'
    bao operator raft snapshot restore -force /tmp/snapshot     # with the temporary root token
-   pc exec openbao rm /tmp/snapshot
-   pc restart openbao
+   ./paddock compose exec openbao rm /tmp/snapshot
+   ./paddock compose restart openbao
    ```
 
    The restored node is sealed with the original barrier, but until it restarts it keeps the temporary seal
@@ -121,23 +121,23 @@ store is not restored; the audit host keeps running. Commands use the control pl
    refuse new bundles as downgrades; Valkey's caches and the bundles bucket are rebuilt from PostgreSQL.
 
    ```sh
-   pc up -d --no-deps authentik-server authentik-worker
-   pc --profile paddock up -d paddock-api paddock-gateway paddock-worker paddock-outbox-relay paddock-escrow-reader \
+   ./paddock compose up -d --no-deps authentik-server authentik-worker
+   ./paddock compose --profile paddock up -d paddock-api paddock-gateway paddock-worker paddock-outbox-relay paddock-escrow-reader \
      paddock-revocation-issuer
-   pc stop paddock-compiler
-   pc run --rm --no-deps paddock-worker admin bump-bundle-seq --by 1000000
-   pc start paddock-compiler
-   pc run --rm --no-deps paddock-worker admin rebuild-cache
-   pc run --rm --no-deps paddock-worker admin recompile --all
+   ./paddock compose stop paddock-compiler
+   ./paddock compose run --rm --no-deps paddock-worker admin bump-bundle-seq --by 1000000
+   ./paddock compose start paddock-compiler
+   ./paddock compose run --rm --no-deps paddock-worker admin rebuild-cache
+   ./paddock compose run --rm --no-deps paddock-worker admin recompile --all
    ```
 
    On a rebuilt host where the compiler's container was never created, create it first
-   (`pc --profile paddock create paddock-compiler`), so that `start` has a container to start.
+   (`./paddock compose --profile paddock create paddock-compiler`), so that `start` has a container to start.
 
 6. **Fleet**, if its MySQL is lost: restore the newest `fleet/*.sql.gz.enc` into an empty `fleet-mysql`
    (`openssl enc -d -aes-256-cbc -pbkdf2 -pass file:.secrets/backup_encryption_key -in <file> | gunzip | mysql …`)
    or let the devices rebuild it within 24 hours.
-7. **Check.** `make prod-check`, all roles ready (`pc ps`), no firing alerts, a device checks in and receives a new
+7. **Check.** `./paddock check`, all roles ready (`./paddock compose ps`), no firing alerts, a device checks in and receives a new
    bundle version.
 
 ## Restore drill (quarterly)

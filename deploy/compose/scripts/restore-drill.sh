@@ -9,7 +9,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-PROJECT=paddock
+PROJECT="$PADDOCK_PROJECT"
 # Stricter than require_development: .env only, no production secrets, no production overlay in the running stack.
 mapfile -t running_files < <(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
   --format '{{.Label "com.docker.compose.project.config_files"}}' | tr ',' '\n' | sort -u)
@@ -21,7 +21,7 @@ SUBSET='TestDeviceProtocol|TestLoginGate|TestAuditChain|TestOrganizationIsolatio
 # The roles the drill stops; the compiler starts only after bump-bundle-seq (plan M6c decision 22).
 ROLES=(paddock-api paddock-gateway paddock-worker paddock-outbox-relay paddock-escrow-reader paddock-revocation-issuer)
 
-dc() { compose -f "$COMPOSE_DIR/compose.backup.yaml" -f "$COMPOSE_DIR/compose.backup.dev.yaml" "$@"; }
+dc() { BACKUP=1 compose "$@"; }
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 psql_in() { dc exec -T "$1" psql -U "$2" -d "$3" -Atc "$4"; }
 

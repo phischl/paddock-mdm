@@ -4,14 +4,6 @@ name: paddock
 
 x-paddock: &paddock
   image: ${PADDOCK_IMAGE:-paddock-server:dev}
-  build:
-    context: ../..
-    dockerfile: deploy/compose/Dockerfile
-    args:
-      GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
-      NODE_IMAGE: ${NODE_IMAGE}
-      RUNTIME_IMAGE: ${RUNTIME_IMAGE}
-      COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
   profiles: [paddock]
   read_only: true
   tmpfs: [/tmp]
@@ -571,15 +563,6 @@ services:
     <<: *paddock
     # A separate image with visudo (plan M3a decision 17).
     image: ${PADDOCK_COMPILER_IMAGE:-paddock-compiler:dev}
-    build:
-      context: ../..
-      dockerfile: deploy/compose/Dockerfile
-      target: compiler
-      args:
-        GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
-        NODE_IMAGE: ${NODE_IMAGE}
-        RUNTIME_IMAGE: ${RUNTIME_IMAGE}
-        COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
     command: ["serve", "compiler"]
     environment:
       <<: *paddock-env

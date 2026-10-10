@@ -44,11 +44,6 @@ services:
   # One pgBackRest container per database: pgBackRest needs the data directory at the path the server reports.
   pgbackrest: &pgbackrest
     image: ${PADDOCK_PGBACKREST_IMAGE:-paddock-pgbackrest:dev}
-    build:
-      context: ../..
-      dockerfile: deploy/compose/pgbackrest/Dockerfile
-      args:
-        COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
     restart: unless-stopped
     command: ["serve"]
     read_only: true

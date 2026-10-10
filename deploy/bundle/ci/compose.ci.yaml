@@ -1,0 +1,81 @@
+# CI overlay of the bundle smoke test (plan M7b decision 26; deploy/bundle/ci/smoke.sh): a runner has no public DNS
+# and no ACME CA, so the control plane runs with the internal TLS of the development stack over the production
+# overlay, and the backups go to the audit project's RustFS as in compose.backup.dev.yaml. Added through
+# PADDOCK_COMPOSE_EXTRA for the running stack only; `./paddock check` renders the production files without it. Never
+# shipped, never used in production. PADDOCK_CI_DIR is the absolute path of deploy/bundle/ci (set by smoke.sh).
+services:
+  caddy:
+    environment:
+      PADDOCK_HTTPS_PORT: "443"
+    volumes: !override
+      - ${PADDOCK_CI_DIR}/../../compose/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/guards.caddy:/etc/caddy/guards.caddy:ro
+      - ./caddy/entrypoint.sh:/paddock/entrypoint.sh:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ >/dev/null && test -s /data/caddy/pki/authorities/local/root.crt"]
+
+  caddy-ca-export:
+    command: ["sh", "-c", "cat /data/caddy/pki/authorities/local/root.crt > /export/caddy-root.crt"]
+    volumes:
+      - caddy-data:/data:ro
+      - ./.secrets/caddy-root.crt:/export/caddy-root.crt
+
+  paddock-api: &caddy-trust
+    environment:
+      SSL_CERT_FILE: /run/secrets/caddy_root_crt
+    secrets: [caddy_root_crt]
+
+  paddock-escrow-reader: *caddy-trust
+
+  paddock-revocation-issuer: *caddy-trust
+
+  paddock-worker:
+    environment:
+      SSL_CERT_FILE: /run/secrets/caddy_root_crt
+      PADDOCK_BACKUP_S3_ENDPOINT: http://audit-rustfs:9000
+    secrets: [caddy_root_crt]
+    networks: [audit-store]
+
+  # pgBackRest speaks TLS only; backup-s3-tls fronts the audit host's plain-HTTP RustFS with an internal certificate.
+  backup-s3-tls:
+    image: ${CADDY_IMAGE}
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - >-
+        caddy reverse-proxy --from https://backup-s3-tls:9443 --to http://audit-rustfs:9000 --internal-certs &
+        until [ -s /data/caddy/pki/authorities/local/root.crt ]; do sleep 1; done;
+        install -m 644 /data/caddy/pki/authorities/local/root.crt /ca/root.crt; wait
+    volumes:
+      - backup-s3-tls-data:/data
+      - backup-s3-ca:/ca
+    networks: [cp, audit-store]
+
+  pgbackrest: &pgbackrest-ci
+    environment:
+      PADDOCK_BACKUP_S3_ENDPOINT: https://backup-s3-tls:9443
+      PADDOCK_BACKUP_S3_CA_FILE: /backup-s3-ca/root.crt
+    volumes:
+      - backup-s3-ca:/backup-s3-ca:ro
+    depends_on:
+      backup-s3-tls:
+        condition: service_started
+
+  pgbackrest-authentik: *pgbackrest-ci
+
+  fleet-backup-upload:
+    environment:
+      PADDOCK_BACKUP_S3_ENDPOINT: http://audit-rustfs:9000
+    networks: [audit-store]
+
+networks:
+  audit-store:
+    external: true
+    name: paddock-audit_audit-store
+
+volumes:
+  backup-s3-tls-data: {}
+  backup-s3-ca: {}

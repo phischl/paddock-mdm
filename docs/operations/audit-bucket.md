@@ -17,9 +17,12 @@ or shorten its retention before the retention date. The acceptance gate `TestWOR
 
 ## 1. One-shot creation (production)
 
-Run on the audit host, with the object store's root credentials loaded into the environment from your secret store
-(never on the command line). The commands match `deploy/compose/scripts/rustfs-audit-bootstrap.sh`, which does the
-same automatically in development and refuses to run with `PADDOCK_ENV=production`.
+With the bundled RustFS, run `./paddock bootstrap audit-bucket` on the audit host (`docs/operations/install.md`
+section 5): `deploy/compose/scripts/rustfs-audit-bootstrap.sh` creates the bucket with Object Lock, the default
+retention and the writer credential from `.secrets/`, and refuses an existing bucket without Object Lock.
+
+For an S3 provider that is not the bundled RustFS, run the same steps by hand on the audit host, with the object
+store's root credentials loaded into the environment from your secret store (never on the command line):
 
 ```sh
 export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…   # root credentials of the audit object store
@@ -38,7 +41,7 @@ aws --endpoint-url "$ENDPOINT" s3api get-object-lock-configuration --bucket padd
 
 Then create the writer credential with a policy that allows only `s3:PutObject`, `s3:PutObjectRetention`,
 `s3:GetObject`, `s3:GetObjectRetention` on `arn:aws:s3:::paddock-audit/*` and `s3:ListBucket` and
-`s3:GetBucketObjectLockConfiguration` (read-only; `make prod-check HOST=audit ONLINE=1` verifies the bucket with it) on
+`s3:GetBucketObjectLockConfiguration` (read-only; `./paddock check --online` verifies the bucket with it) on
 `arn:aws:s3:::paddock-audit` (RustFS: `rc admin policy create`, `rc admin user add`, `rc admin policy attach`; see the
 development script for the exact policy document). No operator account receives `s3:DeleteObject`,
 `s3:BypassGovernanceRetention` or `s3:PutBucketPolicy` on this bucket.

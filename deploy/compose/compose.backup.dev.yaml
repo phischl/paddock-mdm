@@ -21,6 +21,11 @@ services:
     networks: [cp, audit-store]
 
   pgbackrest: &pgbackrest-dev
+    build:
+      context: ../..
+      dockerfile: deploy/compose/pgbackrest/Dockerfile
+      args:
+        COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
     environment:
       PADDOCK_BACKUP_S3_ENDPOINT: https://backup-s3-tls:9443
       PADDOCK_BACKUP_S3_CA_FILE: /backup-s3-ca/root.crt

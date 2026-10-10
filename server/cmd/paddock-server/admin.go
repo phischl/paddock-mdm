@@ -22,13 +22,16 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/worker"
 )
 
-// adminCommand is a parsed paddock-server admin command line (plan M6c decision 20; allowlist: plan M7a decision 21).
+// adminCommand is a parsed paddock-server admin command line (plan M6c decision 20; allowlist: plan M7a decision 21;
+// agent-release: plan M7b decision 31).
 type adminCommand struct {
-	name  string // bump-bundle-seq | recompile | rebuild-cache | allowlist
-	by    int64  // bump-bundle-seq only
-	sub   string // allowlist only: show | disable | add
-	cidr  string // allowlist add
-	label string // allowlist add
+	name    string // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release
+	by      int64  // bump-bundle-seq only
+	sub     string // allowlist only: show | disable | add
+	cidr    string // allowlist add
+	label   string // allowlist add
+	version string // agent-release
+	dir     string // agent-release
 }
 
 // parseAdmin parses the arguments after "admin"; every error is a usage error.
@@ -81,6 +84,13 @@ func parseAdmin(args []string) (adminCommand, error) {
 		default:
 			return adminCommand{}, errUsage
 		}
+	case "agent-release":
+		version := fs.String("version", "", "")
+		dir := fs.String("dir", "", "")
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || *version == "" || *dir == "" {
+			return adminCommand{}, errUsage
+		}
+		cmd.version, cmd.dir = *version, *dir
 	default:
 		return adminCommand{}, errUsage
 	}
@@ -93,6 +103,9 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 	cmd, err := parseAdmin(args)
 	if err != nil {
 		return err
+	}
+	if cmd.name == "agent-release" {
+		return runAgentRelease(ctx, l, cmd, os.Stdout)
 	}
 	dsn := l.SecretFile("PADDOCK_DB_WORKER_URL_FILE")
 	platformDSN := l.SecretFile("PADDOCK_DB_PLATFORM_URL_FILE")

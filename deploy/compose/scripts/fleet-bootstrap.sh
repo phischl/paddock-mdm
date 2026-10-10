@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Development bootstrap of Fleet (plan M5a decision 1): the initial setup with the admin user (secret
+# Bootstrap of Fleet (plan M5a decision 1, M7b decision 19): the initial setup with the admin user (secret
 # fleet_admin_password), the API-only user paddock with the global role admin, whose API token is written to
 # .secrets/fleet_api_token, and the global enroll secret (secret fleet_enroll_secret). Fleet's settings are applied
 # and checked by paddock-worker at every start and sync round (plan M5a decision 2). Idempotent: a valid token is
@@ -9,8 +9,6 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
-
-require_development
 
 ADMIN_PASSWORD="$(cat "$SECRETS_DIR/fleet_admin_password")"
 ENROLL_SECRET="$(cat "$SECRETS_DIR/fleet_enroll_secret")"
