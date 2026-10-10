@@ -857,6 +857,10 @@
   },
   "ipAllowlist": {
     "title": "IP allow list",
+    "empty": {
+      "title": "No allow list entries",
+      "description": "The allow list is off. Add your own address first, then the ranges your administrators work from."
+    },
     "summary": "While this list has entries, only the listed address ranges can open the portal and the admin API — with a session or an API token. Logins on devices and the approval on a phone are not affected. Every change needs a step-up authentication and is in the audit log.",
     "yourAddress": "Your current address: {ip}",
     "statusOff": "The allow list is off: no entries. Everyone who can sign in can use the portal.",

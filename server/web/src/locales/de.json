@@ -857,6 +857,10 @@
   },
   "ipAllowlist": {
     "title": "IP-Freigabeliste",
+    "empty": {
+      "title": "Keine Einträge in der Freigabeliste",
+      "description": "Die Freigabeliste ist aus. Fügen Sie zuerst Ihre eigene Adresse hinzu, dann die Bereiche, aus denen Ihre Administratoren arbeiten."
+    },
     "summary": "Solange diese Liste Einträge hat, können nur die aufgeführten Adressbereiche das Portal und die Admin-API öffnen — mit Sitzung oder API-Token. Anmeldungen an Geräten und die Freigabe am Telefon sind nicht betroffen. Jede Änderung braucht eine Step-up-Anmeldung und steht im Audit-Log.",
     "yourAddress": "Ihre aktuelle Adresse: {ip}",
     "statusOff": "Die Freigabeliste ist aus: keine Einträge. Wer sich anmelden kann, kann das Portal nutzen.",

@@ -5,9 +5,10 @@ import { useRouter } from 'vue-router'
 import DataList from '../components/DataList.vue'
 import IpAllowlistEntryForm from '../components/IpAllowlistEntryForm.vue'
 import IpAllowlistStatus from '../components/IpAllowlistStatus.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import type { IpAllowlistConfirm, IpAllowlistEntry } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
-import { formatDateTime } from '../lib/format'
 import {
   confirmationOf, createIpAllowlistEntry, deleteIpAllowlistEntry, listIpAllowlist, loadIpAllowlistStatus,
   updateIpAllowlistEntry, type IpAllowlistInput, type IpAllowlistStatus as Status,
@@ -25,7 +26,7 @@ type Operation =
 
 const stepUpAction = 'ip-allowlist'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const problemText = useProblemText()
 const confirm = useConfirm()
 const router = useRouter()
@@ -211,23 +212,31 @@ async function onRemove(entry: IpAllowlistEntry): Promise<void> {
       searchable
       default-sort="cidr"
       item-value="id"
+      empty-icon="globe-lock"
+      empty-title="ipAllowlist.empty.title"
+      empty-description="ipAllowlist.empty.description"
       data-testid="ip-allowlist-list"
     >
+      <template #empty-action>
+        <v-btn
+          color="primary"
+          @click="openCreate"
+        >
+          {{ t('ipAllowlist.add') }}
+        </v-btn>
+      </template>
       <template #[`item.cidr`]="{ item }: { item: IpAllowlistEntry }">
-        <code>{{ item.cidr }}</code>
-        <v-chip
+        <span class="mono">{{ item.cidr }}</span>
+        <StatusChip
           v-if="item.covers_caller"
-          size="x-small"
-          color="success"
-          variant="tonal"
+          status="ok"
+          :label="t('ipAllowlist.coversYou')"
           class="ml-2"
           data-testid="covers-caller"
-        >
-          {{ t('ipAllowlist.coversYou') }}
-        </v-chip>
+        />
       </template>
       <template #[`item.created_at`]="{ item }: { item: IpAllowlistEntry }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
       <template #[`item.actions`]="{ item }: { item: IpAllowlistEntry }">
         <v-btn
