@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -56,6 +57,8 @@ type Deps struct {
 	// ExposeStepUp adds the session's step-up time and the step-up timing to GET /api/v1/me (development only, for
 	// the acceptance gates).
 	ExposeStepUp bool
+	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
+	TrustedProxies []netip.Prefix
 }
 
 // privileged maps route patterns of privileged actions to their audit spec, so that requests rejected before
@@ -183,7 +186,7 @@ func NewHandler(d Deps) http.Handler {
 	root.Handle("/api/", noStore(authenticated))
 	root.Handle("/", d.Static)
 
-	return httpx.RequestIDMiddleware(httpx.Recover(httpx.AccessLog(securityHeaders(root))))
+	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(securityHeaders(root)))))
 }
 
 type server struct {

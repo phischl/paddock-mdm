@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -116,6 +117,30 @@ func TestStalenessUnit(t *testing.T) {
 		l := NewLoaderFrom(vars)
 		if got := StalenessUnit(l, Common{Env: tc.env}); got != tc.want || (l.Err() != nil) != tc.fails {
 			t.Errorf("%s %q: %s, %v", tc.env, tc.value, got, l.Err())
+		}
+	}
+}
+
+// TestTrustedProxies: PADDOCK_TRUSTED_PROXY_CIDRS is a space-separated CIDR list; unset trusts nobody, unparsable
+// entries and any /0 fail the start (plan M7a decision 4).
+func TestTrustedProxies(t *testing.T) {
+	c := LoadCommon(NewLoaderFrom(map[string]string{}))
+	if len(c.TrustedProxies) != 0 {
+		t.Fatalf("unset: %v", c.TrustedProxies)
+	}
+	l := NewLoaderFrom(map[string]string{"PADDOCK_TRUSTED_PROXY_CIDRS": " 10.0.0.0/8  fc00::/7 172.16.0.1/12 "})
+	c = LoadCommon(l)
+	if err := l.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(c.TrustedProxies); got != "[10.0.0.0/8 fc00::/7 172.16.0.0/12]" {
+		t.Fatalf("parsed %s", got)
+	}
+	for _, bad := range []string{"0.0.0.0/0", "::/0", "10.0.0.0/8 ::/0", "10.0.0.1", "nonsense", "10.0.0.0/33"} {
+		l := NewLoaderFrom(map[string]string{"PADDOCK_TRUSTED_PROXY_CIDRS": bad})
+		LoadCommon(l)
+		if err := l.Err(); err == nil || !strings.Contains(err.Error(), "PADDOCK_TRUSTED_PROXY_CIDRS") {
+			t.Errorf("%q: err %v", bad, err)
 		}
 	}
 }

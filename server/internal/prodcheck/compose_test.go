@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -123,4 +124,75 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 			}
 		}
 	})
+}
+
+// roleProxy matches a reverse_proxy to a Paddock role and the rest of its block up to the closing brace.
+var roleProxy = regexp.MustCompile(`reverse_proxy (paddock-api:8080|paddock-gateway:8081)([^}]*}?)`)
+
+// TestCaddyfilesEdge: both Caddyfiles carry the rendered servers block and import the shared guards, and every proxy
+// to a Paddock role replaces X-Paddock-Client-IP with the resolved client address (plan M7a decisions 2, 3, 6).
+func TestCaddyfilesEdge(t *testing.T) {
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join(composeDir(t), "caddy", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, name := range []string{"Caddyfile", "Caddyfile.prod"} {
+		s := read(name)
+		if !strings.Contains(s, "\t{$CADDY_SERVERS_BLOCK}\n}") {
+			t.Errorf("%s: {$CADDY_SERVERS_BLOCK} is not the last line of the global options", name)
+		}
+		if !strings.Contains(s, "\nimport /etc/caddy/guards.caddy\n") {
+			t.Errorf("%s does not import the guards", name)
+		}
+		for _, site := range []string{"admin.{$PADDOCK_DOMAIN} {", "auth.{$PADDOCK_DOMAIN} {"} {
+			i := strings.Index(s, site)
+			if i < 0 {
+				t.Fatalf("%s: no site %s", name, site)
+			}
+			if body := s[i : i+strings.Index(s[i:], "\n}")]; !strings.Contains(body, "\timport admin_site") && !strings.Contains(body, "\timport authentik_site") {
+				t.Errorf("%s: site %s does not import its guard", name, site)
+			}
+		}
+	}
+	proxies := 0
+	for _, name := range []string{"Caddyfile", "Caddyfile.prod", "guards.caddy"} {
+		for _, m := range roleProxy.FindAllStringSubmatch(read(name), -1) {
+			proxies++
+			if !strings.HasPrefix(strings.TrimLeft(m[2], " "), "{") || !strings.Contains(m[2], "header_up X-Paddock-Client-IP {client_ip}") {
+				t.Errorf("%s: reverse_proxy %s does not set X-Paddock-Client-IP", name, m[1])
+			}
+		}
+	}
+	if proxies != 3 {
+		t.Errorf("found %d proxies to Paddock roles, want 3 (admin_site, device. in both Caddyfiles)", proxies)
+	}
+}
+
+// TestProductionEdge renders the production control plane: Caddy publishes 80 and 443 only, runs the entrypoint with
+// the guards next to the Caddyfile, and the edge items pass with the defaults of prod.env.example.
+func TestProductionEdge(t *testing.T) {
+	cfg := renderConfig(t, prodFiles(t, "controlplane"), "prod.env.example")
+	var published []string
+	for _, p := range cfg.Services["caddy"].Ports {
+		published = append(published, p.Published)
+	}
+	slices.Sort(published)
+	if !slices.Equal(published, []string{"443", "80"}) {
+		t.Errorf("caddy publishes %v, want 80 and 443 only", published)
+	}
+	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{}) {
+		switch r.Item {
+		case "edge client address", "role trusted proxies":
+			if !r.OK {
+				t.Errorf("%s:\n%s", r.Item, r.Detail)
+			}
+		case "Caddy: public ACME certificates, edge guards and entrypoint mounted":
+			if !r.OK {
+				t.Errorf("%s:\n%s", r.Item, r.Detail)
+			}
+		}
+	}
 }

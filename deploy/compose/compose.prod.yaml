@@ -20,6 +20,12 @@ services:
     environment:
       PADDOCK_ACME_EMAIL: ${PADDOCK_ACME_EMAIL:?set PADDOCK_ACME_EMAIL in .env}
       PADDOCK_ADMIN_ALLOWED_CIDRS: ${PADDOCK_ADMIN_ALLOWED_CIDRS:-0.0.0.0/0 ::/0}
+      # Edge allow list and client address (plan M7a decisions 1 and 8; docs/operations/ip-allowlist.md).
+      PADDOCK_INTERNAL_CIDRS: ${PADDOCK_INTERNAL_CIDRS:-private_ranges}
+      PADDOCK_EDGE_TRUSTED_PROXIES: ${PADDOCK_EDGE_TRUSTED_PROXIES:-}
+      PADDOCK_EDGE_CLIENT_IP_HEADER: ${PADDOCK_EDGE_CLIENT_IP_HEADER:-none}
+      # The servers block applies to every listener; the development value names the trusted listener only.
+      PADDOCK_EDGE_SERVERS_LISTENER: ""
     volumes:
       - ./caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
     healthcheck:

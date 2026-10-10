@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Client address behind proxies and CDNs (M7a step 1, ADR 0021): Caddy reads the client address from
+  `PADDOCK_EDGE_CLIENT_IP_HEADER` (`none`, `X-Forwarded-For` right to left, or `CF-Connecting-IP`) only when the peer
+  is in `PADDOCK_EDGE_TRUSTED_PROXIES`, validated by the new Caddy entrypoint `caddy/entrypoint.sh` (no `/0`, header
+  and proxies together or neither). Caddy forwards the resolved address as `X-Paddock-Client-IP`, which the roles
+  accept only from `PADDOCK_TRUSTED_PROXY_CIDRS` (default: private ranges) and use for the gateway's per-address
+  limit, audit actors and access logs; `X-Forwarded-For` is no longer read by any role. `GET /api/v1/me` returns
+  `client_ip`. The edge allow list moves into the shared snippet file `caddy/guards.caddy`:
+  `PADDOCK_ADMIN_ALLOWED_CIDRS` now also restricts Authentik's administrative paths on `auth.` (`/if/admin/`,
+  `/if/user/`, `/api/v3/` except the flow executor), while logins and the device-code approval stay public;
+  `PADDOCK_INTERNAL_CIDRS` admits the Paddock roles to Authentik's API. An operator bundle of `Caddyfile.prod` needs
+  `caddy/guards.caddy` and `caddy/entrypoint.sh` next to it. `prod-check` gains the items `edge client address`,
+  `role trusted proxies` and `ip allow list bypass is off` and checks the two mounts. The development stack trusts
+  private ranges, reads both headers and adds the untrusted listener 8444 for the gates.
+
 ### Fixed
 
 - CI: the trivy job saves its vulnerability database cache again (the cache step failed on root-owned files).

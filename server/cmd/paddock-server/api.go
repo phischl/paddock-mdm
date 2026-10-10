@@ -176,6 +176,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		// Development only: LoadDevStepUp refuses the variables in production.
 		StepUpMaxAuthAge: devStepUp.MaxAuthAge,
 		ExposeStepUp:     common.Development(),
+		TrustedProxies:   common.TrustedProxies,
 	})
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	slog.InfoContext(ctx, "api starting", "addr", httpAddr, "public_url", publicURL)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -93,12 +94,18 @@ type env struct {
 
 func newEnv(t *testing.T, perKey, perIP int) *env {
 	t.Helper()
+	return newEnvTrusting(t, perKey, perIP, nil)
+}
+
+// newEnvTrusting is newEnv with trusted proxies (plan M7a decision 5).
+func newEnvTrusting(t *testing.T, perKey, perIP int, trusted []netip.Prefix) *env {
+	t.Helper()
 	e := &env{t: t, cache: devicecache.New(valkeytest.Start(t).Client(t)), pub: &fakePublisher{},
 		now: time.Now().Truncate(time.Second), org: uuid.New()}
 	e.handler = device.NewHandler(device.Deps{
 		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, Escrow: fakePresigner{},
 		PerKeyLimit: perKey, PerIPLimit: perIP,
-		Now: func() time.Time { return e.now }, CheckinDelay: func() int { return 300 },
+		Now: func() time.Time { return e.now }, CheckinDelay: func() int { return 300 }, TrustedProxies: trusted,
 	})
 	_, file, _, _ := runtime.Caller(0)
 	doc, err := openapi3.NewLoader().LoadFromFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "api", "openapi", "device.yaml"))
@@ -794,6 +801,37 @@ func TestBackpressureAndRateLimits(t *testing.T) {
 		t.Fatalf("other key, same address: %d %s", r.status, r.body)
 	}
 	e.expectProblem(checkin(d, did), http.StatusTooManyRequests, "rate_limited")
+}
+
+// TestRateLimitClientAddress: the per-address limit keys on the derived client address — the canonical header of a
+// trusted proxy counts, any header of an untrusted peer does not (plan M7a decision 5).
+func TestRateLimitClientAddress(t *testing.T) {
+	checkin := func(e *env, headers map[string]string) result {
+		c := newClient(t)
+		id := e.enrolled(c, "active")
+		return e.send(c, request{method: "POST", path: "/v1/checkin", device: id.String(), body: checkinBody(0),
+			mutate: func(r *http.Request, _ *[]byte) {
+				for k, v := range headers {
+					r.Header.Set(k, v)
+				}
+			}})
+	}
+	// httptest requests come from 192.0.2.1.
+	trusted := newEnvTrusting(t, 10, 1, []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+	for _, ip := range []string{"198.51.100.1", "198.51.100.2"} {
+		if r := checkin(trusted, map[string]string{"X-Paddock-Client-IP": ip}); r.status != http.StatusOK {
+			t.Fatalf("trusted proxy, client %s: %d %s", ip, r.status, r.body)
+		}
+	}
+	trusted.expectProblem(checkin(trusted, map[string]string{"X-Paddock-Client-IP": "198.51.100.1"}), http.StatusTooManyRequests, "rate_limited")
+
+	untrusted := newEnv(t, 10, 1)
+	if r := checkin(untrusted, map[string]string{"X-Paddock-Client-IP": "198.51.100.1"}); r.status != http.StatusOK {
+		t.Fatalf("first: %d %s", r.status, r.body)
+	}
+	for _, h := range []string{"X-Paddock-Client-IP", "X-Forwarded-For", "CF-Connecting-IP"} {
+		untrusted.expectProblem(checkin(untrusted, map[string]string{h: "198.51.100.9"}), http.StatusTooManyRequests, "rate_limited")
+	}
 }
 
 // TestEscrowHeader: a header escrow is answered with a presigned PUT of the key the gateway chose for the device's

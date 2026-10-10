@@ -1924,6 +1924,12 @@ export interface components {
              *     dead man's switch answer 403 revocation_disabled.
              */
             revocation_enabled: boolean;
+            /**
+             * @description The client address the server resolved for this request (plan M7a decision 15): the peer, or the address
+             *     Caddy forwarded in X-Paddock-Client-IP when the peer is a trusted proxy. The IP allow list is checked
+             *     against it.
+             */
+            client_ip: string;
             step_up?: components["schemas"]["MeStepUp"];
             api_token?: components["schemas"]["MeApiToken"];
         };

@@ -3381,7 +3381,7 @@ components:
         name: { type: string }
     Me:
       type: object
-      required: [id, username, display_name, role, organization, locale, revocation_enabled]
+      required: [id, username, display_name, role, organization, locale, revocation_enabled, client_ip]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -3397,6 +3397,12 @@ components:
           description: |
             PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
             dead man's switch answer 403 revocation_disabled.
+        client_ip:
+          type: string
+          description: |
+            The client address the server resolved for this request (plan M7a decision 15): the peer, or the address
+            Caddy forwarded in X-Paddock-Client-IP when the peer is a trusted proxy. The IP allow list is checked
+            against it.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
         api_token:

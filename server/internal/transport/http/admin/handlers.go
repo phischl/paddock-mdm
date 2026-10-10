@@ -62,8 +62,9 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 		return nil, err
 	}
 	out := h.toMe(me)
+	p, _ := principal.From(ctx)
+	out.ClientIp = p.IP
 	if h.stepUpTiming != nil {
-		p, _ := principal.From(ctx)
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
 			MaxAuthAgeSeconds: int(h.stepUpTiming.maxAuthAge.Seconds()),

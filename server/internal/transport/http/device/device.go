@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -83,6 +84,8 @@ type Deps struct {
 	PerIPLimit   int
 	Now          func() time.Time
 	CheckinDelay func() int // seconds until the next check-in; default 300 × U(0.8, 1.2)
+	// TrustedProxies may name the client through X-Paddock-Client-IP (plan M7a decision 5).
+	TrustedProxies []netip.Prefix
 }
 
 type gateway struct{ d Deps }
@@ -113,7 +116,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		g.fail(w, r, errNotFound)
 	})
-	return httpx.RequestIDMiddleware(httpx.Recover(httpx.AccessLog(countRequests(mux))))
+	return httpx.RequestIDMiddleware(httpx.WithClientIP(d.TrustedProxies)(httpx.Recover(httpx.AccessLog(countRequests(mux)))))
 }
 
 // apiError is a device API problem.

@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -129,7 +131,13 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		checkTLSLinks(c),
 	}
 	if _, ok := c.Services["caddy"]; ok {
-		results = append(results, checkCaddy(c))
+		results = append(results, checkCaddy(c), checkEdgeClientAddress(c))
+	}
+	if usesAny(c, []string{"PADDOCK_TRUSTED_PROXY_CIDRS"}) {
+		results = append(results, checkRoleTrustedProxies(c))
+	}
+	if _, ok := c.Services["paddock-api"]; ok {
+		results = append(results, checkAllowlistBypass(c))
 	}
 	if usesAny(c, releaseKeyVars) {
 		results = append(results, checkReleaseKeys(c, o))
@@ -475,28 +483,123 @@ func checkCaddy(c Config) Result {
 	if env(s, "PADDOCK_ACME_EMAIL") == "" {
 		f = append(f, "PADDOCK_ACME_EMAIL is not set")
 	}
-	found := false
+	mounts := map[string]string{}
 	for _, v := range s.Volumes {
-		if v.Target != "/etc/caddy/Caddyfile" {
+		mounts[v.Target] = v.Source
+	}
+	caddyfile, found := mounts["/etc/caddy/Caddyfile"]
+	if !found {
+		f = append(f, "no Caddyfile mounted")
+	} else if b, err := os.ReadFile(caddyfile); err != nil { //nolint:gosec // operator configuration
+		f = append(f, "Caddyfile unreadable: "+caddyfile)
+	} else {
+		f = append(f, caddyfileFindings(caddyfile, string(b))...)
+	}
+	// The edge guards and the entrypoint belong next to the Caddyfile (plan M7a decisions 2 and 6; an operator
+	// bundle ships them in the same directory).
+	for target, name := range map[string]string{"/etc/caddy/guards.caddy": "guards.caddy", "/paddock/entrypoint.sh": "entrypoint.sh"} {
+		src, ok := mounts[target]
+		switch {
+		case !ok:
+			f = append(f, fmt.Sprintf("%s is not mounted (expected %s next to the Caddyfile)", target, name))
+		case found && src != filepath.Join(filepath.Dir(caddyfile), name):
+			f = append(f, fmt.Sprintf("%s is mounted from %s, not from %s next to the Caddyfile", target, src, name))
+		}
+	}
+	return result("Caddy: public ACME certificates, edge guards and entrypoint mounted", f)
+}
+
+// caddyfileFindings reports tls internal and the client address options the Caddyfile sets itself: trusted_proxies
+// and client_ip_headers come from the entrypoint only (plan M7a decision 24).
+func caddyfileFindings(path, content string) []string {
+	var f []string
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
 			continue
 		}
-		found = true
-		b, err := os.ReadFile(v.Source)
-		if err != nil {
-			f = append(f, "Caddyfile unreadable: "+v.Source)
+		switch {
+		case len(fields) >= 2 && fields[0] == "tls" && fields[1] == "internal":
+			f = append(f, "Caddyfile uses tls internal: "+path)
+		case fields[0] == "trusted_proxies" || fields[0] == "trusted_proxies_strict" || fields[0] == "client_ip_headers":
+			f = append(f, fmt.Sprintf("Caddyfile declares %s itself (only caddy/entrypoint.sh may): %s", fields[0], path))
+		}
+	}
+	return f
+}
+
+// edgeHeaders are the values of PADDOCK_EDGE_CLIENT_IP_HEADER allowed in production: exactly one.
+var edgeHeaders = []string{"none", "X-Forwarded-For", "CF-Connecting-IP"}
+
+// checkEdgeClientAddress checks the trusted proxies and the client address header of the edge (plan M7a decisions 1
+// and 24): one known header, proxies exactly when a header is read, no /0, the servers block on every listener.
+func checkEdgeClientAddress(c Config) Result {
+	var f []string
+	s := c.Services["caddy"]
+	header := env(s, "PADDOCK_EDGE_CLIENT_IP_HEADER")
+	if header == "" {
+		header = "none"
+	}
+	proxies := strings.Fields(env(s, "PADDOCK_EDGE_TRUSTED_PROXIES"))
+	if !slices.Contains(edgeHeaders, header) {
+		f = append(f, fmt.Sprintf("PADDOCK_EDGE_CLIENT_IP_HEADER %q is not exactly one of none, X-Forwarded-For, CF-Connecting-IP", header))
+	}
+	switch {
+	case header != "none" && len(proxies) == 0:
+		f = append(f, fmt.Sprintf("PADDOCK_EDGE_CLIENT_IP_HEADER is %s but PADDOCK_EDGE_TRUSTED_PROXIES is empty: no trusted proxy may send it", header))
+	case header == "none" && len(proxies) > 0:
+		f = append(f, "PADDOCK_EDGE_TRUSTED_PROXIES is set but PADDOCK_EDGE_CLIENT_IP_HEADER is none")
+	}
+	for _, p := range proxies {
+		if p == "private_ranges" {
 			continue
 		}
-		for _, line := range strings.Split(string(b), "\n") {
-			if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "tls" && fields[1] == "internal" {
-				f = append(f, "Caddyfile uses tls internal: "+v.Source)
-				break
+		if problem := rangeProblem(p, true); problem != "" {
+			f = append(f, "PADDOCK_EDGE_TRUSTED_PROXIES: "+problem)
+		}
+	}
+	if v := env(s, "PADDOCK_EDGE_SERVERS_LISTENER"); v != "" {
+		f = append(f, fmt.Sprintf("PADDOCK_EDGE_SERVERS_LISTENER is %q: production applies the servers block to every listener", v))
+	}
+	return result("edge client address", f)
+}
+
+// rangeProblem describes why s is not an acceptable trusted range: unparsable, or a /0 that trusts every address.
+// Single addresses are accepted where the consumer accepts them (Caddy does, the roles do not).
+func rangeProblem(s string, addrOK bool) string {
+	if a, err := netip.ParseAddr(s); err == nil && a.Zone() == "" && addrOK {
+		return ""
+	}
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return fmt.Sprintf("%s is not a CIDR", s)
+	}
+	if p.Bits() == 0 {
+		return fmt.Sprintf("%s trusts every address", s)
+	}
+	return ""
+}
+
+// checkRoleTrustedProxies checks PADDOCK_TRUSTED_PROXY_CIDRS of every role (plan M7a decisions 4 and 24).
+func checkRoleTrustedProxies(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		for _, p := range strings.Fields(env(c.Services[name], "PADDOCK_TRUSTED_PROXY_CIDRS")) {
+			if problem := rangeProblem(p, false); problem != "" {
+				f = append(f, fmt.Sprintf("%s: PADDOCK_TRUSTED_PROXY_CIDRS: %s", name, problem))
 			}
 		}
 	}
-	if !found {
-		f = append(f, "no Caddyfile mounted")
+	return result("role trusted proxies", f)
+}
+
+// checkAllowlistBypass fails while the api bypasses the application IP allow list (plan M7a decision 22).
+func checkAllowlistBypass(c Config) Result {
+	var f []string
+	if v, err := strconv.ParseBool(env(c.Services["paddock-api"], "PADDOCK_IP_ALLOWLIST_BYPASS")); err == nil && v {
+		f = append(f, "paddock-api: PADDOCK_IP_ALLOWLIST_BYPASS is true (break-glass; remove it once access is restored)")
 	}
-	return result("Caddy uses certificates of a public ACME CA", f)
+	return result("ip allow list bypass is off", f)
 }
 
 func checkReleaseKeys(c Config, o Options) Result {

@@ -46,7 +46,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-licenses ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses ## Run all linters, govulncheck, the license gate and the server image build
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
@@ -80,6 +80,12 @@ lint-prometheus:
 	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/prometheus:/etc/prometheus:ro -w /etc/prometheus --entrypoint sh \
 		$(PROMETHEUS_IMAGE) -c 'promtool check config prometheus.yml && promtool check rules alerts.yml && \
 			promtool test rules alerts_test.yml'
+
+# Edge entrypoint (plan M7a step 1): validation messages, the rendered servers block and `caddy validate` of both
+# Caddyfiles with that block, in the pinned Caddy image.
+.PHONY: lint-caddy
+lint-caddy:
+	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/caddy:/test:ro --entrypoint sh $(CADDY_IMAGE) /test/entrypoint_test.sh
 
 .PHONY: lint-go
 lint-go:

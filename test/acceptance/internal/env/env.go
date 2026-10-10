@@ -113,6 +113,30 @@ func NewHTTPClient() (*http.Client, error) {
 	return authflow.NewClient(filepath.Join(dir, "caddy-root.crt"))
 }
 
+// HeaderClient is NewHTTPClient with a transport that sets headers on every request, for gates that simulate a
+// client behind a proxy (plan M7a gates A1, A2, A4). It has its own cookie jar; share a session by assigning Jar.
+func HeaderClient(headers map[string]string) (*http.Client, error) {
+	c, err := NewHTTPClient()
+	if err != nil {
+		return nil, err
+	}
+	c.Transport = headerTransport{base: c.Transport, headers: headers}
+	return c, nil
+}
+
+type headerTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	for k, v := range t.headers {
+		r.Header.Set(k, v)
+	}
+	return t.base.RoundTrip(r)
+}
+
 // Password returns the password of a dev user.
 func Password(user string) (string, error) {
 	f, ok := passwordFiles[user]
