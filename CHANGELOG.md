@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, the entries with search and sorting, add and edit dialogs with a "use my address" button and client-side CIDR
   validation, removal through the confirmation modal, and the typed confirmation of a change that would lock the
   administrator out or switch the list off.
+- Operator bundle (M7b step 3, ADR 0022): `paddock-deploy-<version>.tar.gz` holds the production Compose files, their
+  configuration, the bootstrap scripts, `versions.env` with the Paddock images by tag and digest, `SHA256SUMS`, a
+  README and the entry script `./paddock` (`version`, `verify`, `secrets`, `pull`, `check`, `up`, `down`, `ps`, `logs`,
+  `compose`, `bao`, `bootstrap openbao|buckets|audit-bucket|fleet`, `agent-release`, `migrate-from`). `./paddock check`
+  runs `prod-check` from the server image. `make bundle` builds a local bundle of the local images; the drift test
+  `make bundle-test` (part of `make test`) proves that the bundle renders the same production configurations as
+  `deploy/compose/`, ships every mounted file and image reference, and builds reproducibly.
 
 ### Changed
 
@@ -54,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator initialized and unsealed; `openbao-bootstrap.sh` keeps the development init and unseal. The audit bucket,
   bundles bucket and Fleet bootstraps no longer refuse production. `gen-prod-secrets.sh` takes the host from
   `PADDOCK_HOST` when no argument is given.
+- `make prod-secrets` and `make prod-check` are removed (M7b step 3): production hosts use the operator bundle's
+  `./paddock secrets` and `./paddock check`; installing from source means building the images and a local bundle.
 
 ### Fixed
 

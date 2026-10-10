@@ -144,6 +144,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
+	bash deploy/bundle/bundle_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -187,40 +188,21 @@ dev-release-key: ## Generate the password-less development agent and revocation 
 			echo "created development release key $(RELEASE_KEY_DIR)/$$key.pub" || exit 1; fi; \
 	done
 
-# --- Production (plan M6a, docs/operations/install.md) ------------------------------------------------------------
-# HOST is the host of the two-host topology (controlplane or audit). A HOST variable inherited from the shell (zsh sets
-# it to the machine name) is ignored; pass it on the make command line.
-ifeq ($(origin HOST),environment)
-HOST := controlplane
-endif
-HOST ?= controlplane
-PROD_FILES_controlplane := $(call lib_files,PROD_FILES_controlplane)
-PROD_FILES_audit        := $(call lib_files,PROD_FILES_audit)
-PROD_FILES               = $(PROD_FILES_$(HOST))
-comma                   := ,
-space                   := $(subst ,, )
-PROD_COMPOSE             = docker compose --project-directory $(COMPOSE_DIR) -p paddock \
-	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env $(foreach f,$(PROD_FILES),-f $(COMPOSE_DIR)/$(f))
+# --- Operator bundle (plan M7b decisions 20–22, ADR 0022, docs/operations/install.md) -----------------------------
+# Production hosts run the bundle's ./paddock; make is not used there. `make bundle` builds a local bundle that
+# references the local images by tag (from source: make image image-compiler image-pgbackrest bundle).
+comma          := ,
+space          := $(subst ,, )
+BUNDLE_VERSION  = $(or $(RELEASE_VERSION),0.0.0-local)
 
-.PHONY: prod-secrets
-prod-secrets: ## Generate the production secrets of one host (HOST=controlplane|audit; idempotent, prints no secret)
-	@test -n "$(PROD_FILES)" || { echo "usage: make prod-secrets HOST=controlplane|audit"; exit 2; }
-	$(COMPOSE_DIR)/scripts/gen-prod-secrets.sh $(HOST)
+.PHONY: bundle
+bundle: ## Build a local operator bundle of the local images (IMAGE, COMPILER_IMAGE, PGBACKREST_IMAGE) into dist/bundle/
+	LOCAL_SERVER_IMAGE=$(IMAGE) LOCAL_COMPILER_IMAGE=$(COMPILER_IMAGE) LOCAL_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) \
+		deploy/bundle/build.sh --version $(BUNDLE_VERSION) --channel local --images local --out dist/bundle
 
-# The check runs from source in the pinned Go image, so the host needs neither Go nor a built image; the repository is
-# mounted read-only at its own path, where Compose resolved the secret files. ONLINE=1 (audit host) also reads the
-# audit bucket's Object Lock configuration on the network paddock_audit-store.
-.PHONY: prod-check
-prod-check: ## Check the production configuration of one host (HOST=controlplane|audit, ONLINE=1): PASS/FAIL checklist
-	@test -n "$(PROD_FILES)" || { echo "usage: make prod-check HOST=controlplane|audit [ONLINE=1]"; exit 2; }
-	@set -o pipefail; $(PROD_COMPOSE) --profile '*' config --format json | \
-		docker run --rm -i $(if $(ONLINE),--network paddock_audit-store,) \
-			-v $(CURDIR):$(CURDIR):ro -w $(CURDIR) -v paddock-gomod:/go/pkg/mod \
-			-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false $(GO_BUILD_IMAGE) \
-			go run ./server/cmd/paddock-server prod-check --host $(HOST) \
-				--compose-files $(subst $(space),$(comma),$(strip $(PROD_FILES))) \
-				--dev-release-key $(CURDIR)/$(RELEASE_KEY_DIR)/minisign.pub \
-				--dev-release-key $(CURDIR)/$(RELEASE_KEY_DIR)/revoke-minisign.pub $(if $(ONLINE),--online,)
+.PHONY: bundle-test
+bundle-test: ## Drift test of the operator bundle against deploy/compose/ (part of make test)
+	bash deploy/bundle/bundle_test.sh
 
 # Agent builds (plan M2b decisions 5, 17, 18, 25). VERSION is the agent version; TAGS adds build tags, e.g.
 # TAGS=paddock_dev for the development probation and drift interval (system tests). The supervisor gets the release
