@@ -12,7 +12,7 @@ import (
 )
 
 // prodCheck renders the control plane's production configuration with env set and runs paddock-server prod-check
-// over it, as `make prod-check HOST=controlplane` does; it returns the checklist whatever the exit code.
+// over it, as `./paddock check` on the control plane does; it returns the checklist whatever the exit code.
 func prodCheck(t *testing.T, env ...string) string {
 	t.Helper()
 	ctx := testContext(t, 5*time.Minute)

@@ -17,7 +17,7 @@ import (
 var errProdCheckFailed = errors.New("prod-check: at least one item failed")
 
 // runProdCheck reads `docker compose config --format json` from stdin and prints the production checklist (plan M6a
-// decision 2). `make prod-check` runs it with the host's Compose files.
+// decision 2). `./paddock check` runs it with the host's Compose files.
 func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	fs := flag.NewFlagSet("prod-check", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

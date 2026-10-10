@@ -117,7 +117,7 @@ func compose(ctx context.Context, env []string, stdin io.Reader, args []string) 
 }
 
 // ProdFiles returns the Compose files of a production host from the Makefile (PROD_FILES_<host>), the list
-// `make prod-check HOST=<host>` checks.
+// `./paddock check` checks on a host.
 func ProdFiles(host string) ([]string, error) {
 	root, err := RepoRoot()
 	if err != nil {
