@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs `prod-check` from the server image. `make bundle` builds a local bundle of the local images; the drift test
   `make bundle-test` (part of `make test`) proves that the bundle renders the same production configurations as
   `deploy/compose/`, ships every mounted file and image reference, and builds reproducibly.
+- Published images (M7b step 4, ADR 0022): `make release-images` builds `paddock-server`, `paddock-compiler` and the
+  new `paddock-pgbackrest` with `docker buildx` for `linux/amd64` and `linux/arm64`, pushes them to `ghcr.io/phischl/`
+  with the OCI labels of the release and records index and platform digests in `images.txt`. Tags: a plain `x.y.z`
+  gets `<version>`, `<major>.<minor>` and, as the highest plain version among the tags, `latest`; a pre-release only
+  its version; the new edge channel (`RELEASE_CHANNEL=edge`, versions `edge-<yyyymmdd>-<sha7>`) `edge` and its
+  version. `release-sbom` writes one SPDX SBOM per image and platform from the registry, `release-sign` signs every
+  image recursively, attests each SBOM on its platform manifest and signs `SHA256SUMS` and the bundle tarball;
+  `release-packages`, `release-bundle` and `release-sums` complete the release, and `release-artifacts` runs them all
+  locally.
 
 ### Changed
 
