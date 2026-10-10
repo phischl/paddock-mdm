@@ -210,3 +210,49 @@ func TestAttentionRowsAreUnique(t *testing.T) {
 		t.Fatalf("%d rows with %d keys (%v), want 3 and 3", rows, keys, err)
 	}
 }
+
+// TestAgentOutdatedPreReleases (PDK-022): agent_outdated compares a device's agent version with the current release
+// (the most recently completed rollout) for equality, not by order, so every other pre-release of the sequence is
+// flagged and the current one is not. The rollouts are rolled back: the current release is platform-wide.
+func TestAgentOutdatedPreReleases(t *testing.T) {
+	h := newStalenessHarness(t)
+	sequence := []string{"0.1.0-alpha.1", "0.1.0-alpha.2", "0.1.0-beta.1", "0.1.0-rc.1", "0.1.0"}
+	devices := make([]uuid.UUID, len(sequence))
+	for i, v := range sequence {
+		devices[i] = h.device(t, "active", time.Now())
+		h.exec(t, "UPDATE device_status SET agent_version = $2 WHERE device_id = $1", devices[i], v)
+	}
+	ctx := context.Background()
+	for i, current := range sequence {
+		t.Run(current, func(t *testing.T) {
+			tx, err := h.super.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			for j, v := range sequence {
+				if _, err := tx.Exec(ctx, "INSERT INTO agent_release (version, status, created_by, published_at) VALUES ($1, 'published', 't', now()) ON CONFLICT DO NOTHING", v); err != nil {
+					t.Fatal(err)
+				}
+				// The current release completed last, the others earlier; all of them after any rollout of other tests.
+				days := j
+				if j == i {
+					days = len(sequence)
+				}
+				if _, err := tx.Exec(ctx, `INSERT INTO agent_rollout (version, status, started_by, updated_at) VALUES ($1, 'completed', 't', now() + interval '100 years' + $2 * interval '1 day')
+					ON CONFLICT (version) DO UPDATE SET status = 'completed', updated_at = EXCLUDED.updated_at`, v, days); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for j, d := range devices {
+				var flagged bool
+				if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM attention_condition WHERE device_id = $1 AND kind = 'agent_outdated')", d).Scan(&flagged); err != nil {
+					t.Fatal(err)
+				}
+				if flagged != (j != i) {
+					t.Errorf("current %s, device on %s: agent_outdated %v", current, sequence[j], flagged)
+				}
+			}
+		})
+	}
+}

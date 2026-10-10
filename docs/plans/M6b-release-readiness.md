@@ -64,3 +64,10 @@ One commit per step.
 ## 5. Stop conditions
 A required tool is not available under an allowed license; a German string cannot be expressed without concatenation
 (report the key); M0 §11 S2/S6/S7/S8.
+
+## Amendment 2026-10-09 (architect, plan M7c)
+- Decision 6: the portal has a light and a dark theme (ADR 0023). README screenshots are written in both themes by
+  `e2e/screenshots.spec.ts` with `PADDOCK_E2E_SCREENSHOTS=1`: `docs/assets/screenshots/<name>-light.png` and
+  `<name>-dark.png` for `overview`, `devices`, `device`, `audit` at 1440×900. The README shows the light variant with a
+  `<picture>` whose `<source media="(prefers-color-scheme: dark)">` points at the dark variant. The amendment of
+  2026-10-08 ("light only") is superseded.

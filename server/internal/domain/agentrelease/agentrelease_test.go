@@ -8,7 +8,7 @@ import (
 )
 
 func TestValidate(t *testing.T) {
-	for _, v := range []string{"1.0.0", "0.4.12-rc.1", "2.0.0+build.7"} {
+	for _, v := range append([]string{"1.0.0", "0.4.12-rc.1", "2.0.0+build.7"}, alphaSequence...) {
 		if ValidateVersion(v) != nil {
 			t.Errorf("%s rejected", v)
 		}
@@ -143,6 +143,23 @@ func TestPercent(t *testing.T) {
 	if Percent(RolloutRunning, []int{1, 10, 100}, 1) != 10 || Percent(RolloutCompleted, []int{1}, 0) != 100 ||
 		Percent(RolloutHalted, []int{100}, 0) != 0 {
 		t.Error("percent")
+	}
+}
+
+// alphaSequence is the release order of Paddock's pre-releases (PDK-022).
+var alphaSequence = []string{"0.1.0-alpha.1", "0.1.0-alpha.2", "0.1.0-beta.1", "0.1.0-rc.1", "0.1.0"}
+
+// TestOfferForPreReleases: the offer compares the device's version only for equality (the supervisor refuses what is
+// not newer), so a device on any other pre-release of the sequence is offered the release and one on it is not.
+func TestOfferForPreReleases(t *testing.T) {
+	in := uuid.MustParse("0190f000-0000-7000-8000-00000000000d")
+	for _, release := range alphaSequence {
+		o := Offer{Version: release, Status: RolloutCompleted, Waves: []int{100}, Artifacts: map[string]Artifact{"amd64": {SHA256: "ab"}}}
+		for _, running := range alphaSequence {
+			if _, ok := o.For(in, "amd64", running); ok != (running != release) {
+				t.Errorf("release %s, device on %s: offered %v", release, running, ok)
+			}
+		}
 	}
 }
 

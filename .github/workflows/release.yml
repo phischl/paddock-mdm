@@ -46,7 +46,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+          prerelease=()
+          case "$version" in *-*) prerelease=(--prerelease) ;; esac # x.y.z-alpha.N, -beta.N, -rc.N
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag "${prerelease[@]}" \
             --title "Paddock $version" \
             --notes "Draft. Agent binaries and packages are unsigned (-unsigned); sign them offline before publishing (docs/operations/agent-releases.md)." \
             dist/release/"$version"/*
