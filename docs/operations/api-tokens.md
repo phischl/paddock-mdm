@@ -29,6 +29,11 @@ Send the secret as `Authorization: Bearer <secret>` instead of the session cooki
 `X-Paddock-CSRF: 1` like portal requests; `paddockctl` does it for you. `GET /api/v1/me` with a token describes the
 token (`api_token: {id, name, expires_at}`). *Last used* is updated at most once a minute.
 
+Token requests are subject to the IP allow list of the administrative surfaces like portal sessions
+(`docs/operations/ip-allowlist.md`): while the platform administrators keep entries in it, a token works only from
+the listed ranges, so a CI runner needs a stable egress address (self-hosted runner, NAT gateway or VPN) that is on
+the list; a refused request answers `403 ip_not_allowed`.
+
 ## Revocation
 
 An organization administrator revokes any token of the organization, and an operator the tokens it created. A request
