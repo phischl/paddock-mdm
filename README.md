@@ -19,12 +19,28 @@ and German.
 
 <p align="center">
   <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/overview-dark.png">
+    <img src="docs/assets/screenshots/overview-light.png" alt="The overview of the Paddock portal" width="800">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/devices-dark.png">
     <img src="docs/assets/screenshots/devices-light.png" alt="The device list of the Paddock portal" width="800">
   </picture>
 </p>
 
 <p align="center">
   <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/device-dark.png">
+    <img src="docs/assets/screenshots/device-light.png" alt="A device page of the Paddock portal" width="800">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screenshots/audit-dark.png">
     <img src="docs/assets/screenshots/audit-light.png" alt="The audit log of the Paddock portal" width="800">
   </picture>
 </p>
