@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signing step first, then creates, uploads and publishes the release through the same use cases and audit events as
   the admin API, with the system actor of the host commands, and prints the release as JSON. A published release or a
   wrong signature is refused without storing anything.
+- Release gates for the bundle (M7b step 6): `deploy/bundle/ci/smoke.sh` installs a bundle on one machine as two hosts
+  (projects `paddock-cp` and `paddock-audit`) by the installation guide — secrets, OpenBao initialization and
+  configuration, buckets, Fleet, `./paddock check` on both hosts against the unmodified production files, start,
+  probes through Caddy, a pgBackRest backup, an agent release with throwaway keys and a second `./paddock up` that
+  must not recreate a container — with the CI overlay `deploy/bundle/ci/compose.ci.yaml` for internal TLS.
+  `deploy/bundle/ci/prune-edge.sh` deletes edge image versions older than 30 days whose tags are all
+  `edge-<date>-<sha>` and keeps releases, `edge`, `latest` and untagged versions (tested in `make test`).
 
 ### Changed
 
@@ -77,6 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PADDOCK_HOST` when no argument is given.
 - `make prod-secrets` and `make prod-check` are removed (M7b step 3): production hosts use the operator bundle's
   `./paddock secrets` and `./paddock check`; installing from source means building the images and a local bundle.
+
+### Fixed
+
+- The bucket bootstraps no longer fail when a generated RustFS root credential begins with `-` (a random
+  base64url value does so now and then): `rc alias set` takes the credentials after `--`.
 
 ## [0.1.0-alpha.1] - 2026-10-09
 

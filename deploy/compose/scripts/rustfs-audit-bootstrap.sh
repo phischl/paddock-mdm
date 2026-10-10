@@ -28,7 +28,7 @@ aws() {
 rc() {
   docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
     -e WRITER_ACCESS_KEY -e WRITER_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c \
-    "rc alias set audit $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
+    "rc alias set -- audit $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
 }
 
 for _ in $(seq 1 30); do

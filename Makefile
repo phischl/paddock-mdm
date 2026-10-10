@@ -144,8 +144,10 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
+	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
+	bash deploy/bundle/ci/prune-edge_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi

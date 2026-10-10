@@ -47,7 +47,7 @@ rc() {
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
     -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
     --entrypoint sh "$RC_IMAGE" -c \
-    "rc alias set bundles $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
+    "rc alias set -- bundles $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
 }
 
 for _ in $(seq 1 30); do
