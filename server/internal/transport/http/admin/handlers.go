@@ -91,7 +91,11 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.UpdateMe200JSONResponse(h.toMe(me)), nil
+	out := h.toMe(me)
+	// The portal replaces its session with this answer; without the address the IP allow list page would lose it.
+	p, _ := principal.From(ctx)
+	out.ClientIp = p.IP
+	return adminapi.UpdateMe200JSONResponse(out), nil
 }
 
 func (h *handlers) toMe(me app.Me) adminapi.Me {

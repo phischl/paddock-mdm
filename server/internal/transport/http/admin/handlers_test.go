@@ -718,6 +718,9 @@ func TestRoleBoundaries(t *testing.T) {
 	if theme.status != http.StatusOK || m.Theme != adminapi.MeThemeDark || m.Locale != adminapi.MeLocaleEn {
 		t.Fatalf("set theme: %d %s", theme.status, theme.body)
 	}
+	if m.ClientIp == "" {
+		t.Fatalf("PATCH /me without client_ip: %s", theme.body)
+	}
 	e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "de"}}).decode(t, &m)
 	if m.Theme != adminapi.MeThemeDark || m.Locale != adminapi.MeLocaleDe {
 		t.Fatalf("locale patch changed the theme: %+v", m)
