@@ -108,7 +108,7 @@ describe('navigation drawer', () => {
 
     const platform = await mountApp({ ...admin, role: 'platform_admin', organization: null }, '/platform/organizations')
     expect(groupLabels(platform.w)).toEqual(['Overview', 'Platform'])
-    expect(linkLabels(platform.w)).toEqual(['Start', 'Organizations', 'Agent releases'])
+    expect(linkLabels(platform.w)).toEqual(['Start', 'Organizations', 'Agent releases', 'IP allow list'])
     expect(platform.w.find('[data-testid="app-bar-attention"]').exists()).toBe(false)
     expect(platform.w.find('[data-testid="org-name"]').exists()).toBe(false)
   })

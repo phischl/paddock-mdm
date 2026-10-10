@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (audited as `platform.ip_allowlist_disabled` and `platform.ip_allowlist_changed` with actor system) and the api
   variable `PADDOCK_IP_ALLOWLIST_BYPASS` (default `false`; `prod-check` fails and the alert
   `PaddockIPAllowlistBypassed` fires while it is set). Runbook: `docs/operations/ip-allowlist.md`.
+- Portal page *IP allow list* for platform administrators (M7a step 4): the own address and whether the list covers
+  it, the entries with search and sorting, add and edit dialogs with a "use my address" button and client-side CIDR
+  validation, removal through the confirmation modal, and the typed confirmation of a change that would lock the
+  administrator out or switch the list off.
 
 ### Fixed
 
