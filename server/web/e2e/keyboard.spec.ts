@@ -53,7 +53,7 @@ test('organization admin works the portal from the keyboard', async ({ page }) =
   // The switch turns single-key shortcuts off; Ctrl K keeps working.
   await page.goto('/attention')
   await page.keyboard.press('Shift+?')
-  await help.getByRole('switch', { name: 'Single-key shortcuts' }).click()
+  await help.getByLabel('Single-key shortcuts').click()
   await help.getByRole('button', { name: 'Close' }).click()
   try {
     await page.keyboard.press('g')

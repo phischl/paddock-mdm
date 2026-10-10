@@ -112,6 +112,7 @@ test('organization admin manages updates, holds and install now', async ({ page,
   await dialog.getByTestId('install-submit').click()
   await expect(dialog).toBeHidden()
   await expect(header.getByRole('status')).toHaveText('The device installs the packages at its next check-in.')
+  await page.getByRole('tab', { name: 'Commands' }).click()
   await expect(page.getByRole('cell', { name: 'Install packages now' })).toBeVisible()
 
   // Device group: install now for the members.

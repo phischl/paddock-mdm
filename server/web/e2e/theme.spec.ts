@@ -40,7 +40,8 @@ test('organization admin stores the theme on the account', async ({ page }) => {
     await openUserMenu(page)
     await page.getByTestId('theme-menu').click()
     await page.getByTestId('theme-system').click()
-    expect((await (await page.request.get('/api/v1/me')).json()).theme).toBe('system')
+    // Under a light system preference the page does not change, so wait for the stored value instead.
+    await expect.poll(async () => (await (await page.request.get('/api/v1/me')).json()).theme).toBe('system')
     await page.emulateMedia({ colorScheme: 'dark' })
     await page.reload()
     await expect(html).toHaveAttribute('data-theme', 'dark')

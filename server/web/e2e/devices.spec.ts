@@ -58,7 +58,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   const enrolled = enrollDevice(config, hostname)
   expect(enrolled.status).toBe('pending')
   await mainNav(page).getByRole('link', { name: 'Devices' }).click()
-  await expect(page.getByRole('heading', { name: 'Devices', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Devices' })).toBeVisible()
   await page.getByTestId('list-search').getByRole('searchbox').fill(hostname)
   const row = page.getByRole('row').filter({ hasText: hostname })
   await expect(row).toContainText('Pending approval')
@@ -80,6 +80,9 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await page.getByTestId('device-groups').locator('input').fill(groupName)
   await page.getByRole('option', { name: groupName }).click()
   await page.keyboard.press('Escape')
+  // Leaving the field collapses it by a line (narrow device pane, plan M7c decision 29); a click that blurs it would
+  // land below the moved button.
+  await page.getByTestId('device-groups').getByRole('combobox', { name: 'Device groups' }).blur()
   await page.getByTestId('save-device-groups').click()
   await expect(page.getByRole('main').getByRole('status')).toHaveText('Device groups saved.')
 
