@@ -18,15 +18,21 @@ IMAGE         ?= paddock-server:dev
 UID           := $(shell id -u)
 GID           := $(shell id -g)
 
+# The Compose file sets live in scripts/lib.sh (plan M7b decision 18); lib_files reads one of its variables.
+# SECRETS_DIR is not exported: lib.sh takes an exported SECRETS_DIR as an override, and this one is relative.
+LIB_SH    := $(COMPOSE_DIR)/scripts/lib.sh
+lib_files  = $(shell sed -n 's/^$(1)="\(.*\)"$$/\1/p' $(LIB_SH))
+unexport SECRETS_DIR
+
 # BACKUP=1 adds the backups (plan M6a; compose.backup.yaml with the development wiring of compose.backup.dev.yaml).
-BACKUP_FILES := $(if $(BACKUP),-f $(COMPOSE_DIR)/compose.backup.yaml -f $(COMPOSE_DIR)/compose.backup.dev.yaml,)
+BACKUP_FILES := $(if $(BACKUP),$(call lib_files,DEV_BACKUP_FILES),)
 ifneq ($(BACKUP),)
 export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
 endif
 
 COMPOSE := docker compose --project-directory $(COMPOSE_DIR) -p paddock \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
-	-f $(COMPOSE_DIR)/compose.yaml -f $(COMPOSE_DIR)/compose.audit.yaml -f $(COMPOSE_DIR)/compose.dev.yaml $(BACKUP_FILES)
+	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES),-f $(COMPOSE_DIR)/$(f))
 
 NODE_RUN := docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 	-v $(CURDIR):/src -w /src/$(WEB_DIR) $(NODE_IMAGE)
@@ -188,8 +194,8 @@ ifeq ($(origin HOST),environment)
 HOST := controlplane
 endif
 HOST ?= controlplane
-PROD_FILES_controlplane := compose.yaml compose.prod.yaml compose.backup.yaml
-PROD_FILES_audit        := compose.audit.yaml compose.audit.prod.yaml
+PROD_FILES_controlplane := $(call lib_files,PROD_FILES_controlplane)
+PROD_FILES_audit        := $(call lib_files,PROD_FILES_audit)
 PROD_FILES               = $(PROD_FILES_$(HOST))
 comma                   := ,
 space                   := $(subst ,, )

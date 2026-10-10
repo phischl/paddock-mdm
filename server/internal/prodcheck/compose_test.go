@@ -27,16 +27,17 @@ func composeDir(t *testing.T) string {
 	return dir
 }
 
-// prodFiles reads the Compose files of a host from the Makefile (PROD_FILES_<host>), the list `make prod-check` uses.
+// prodFiles reads the Compose files of a host from scripts/lib.sh (PROD_FILES_<host>), the single list the operator
+// bundle and its ./paddock check use (plan M7b decision 18).
 func prodFiles(t *testing.T, host string) []string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(composeDir(t), "..", "..", "Makefile"))
+	b, err := os.ReadFile(filepath.Join(composeDir(t), "scripts", "lib.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?m)^PROD_FILES_` + host + `\s*:=\s*(.+)$`).FindSubmatch(b)
+	m := regexp.MustCompile(`(?m)^PROD_FILES_` + host + `="(.+)"$`).FindSubmatch(b)
 	if m == nil {
-		t.Fatalf("no PROD_FILES_%s in the Makefile", host)
+		t.Fatalf("no PROD_FILES_%s in scripts/lib.sh", host)
 	}
 	return strings.Fields(string(m[1]))
 }

@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PADDOCK_PGBACKREST_IMAGE` only; the development overlays `compose.dev.yaml` and `compose.backup.dev.yaml` build
   them from source, so `make up` is unchanged. The server image cross-compiles (portal and Go build on the build
   platform) for `linux/amd64` and `linux/arm64`; `make lint-image` also builds the arm64 Go stage.
+- Bootstrap scripts are production-capable (M7b step 2): `scripts/lib.sh` holds the Compose file sets of both hosts
+  and of the development stack (the Makefile and the `prod-check` tests read them from there), selects them by
+  `PADDOCK_ENV` and the new `.env` setting `PADDOCK_HOST=controlplane|audit`, and names the Compose project after
+  `PADDOCK_PROJECT` (default `paddock`). The OpenBao configuration (keys, policies, AppRoles, now including the audit
+  writer's credentials for the audit host) moves into `openbao-configure.sh`, which runs against an OpenBao that the
+  operator initialized and unsealed; `openbao-bootstrap.sh` keeps the development init and unseal. The audit bucket,
+  bundles bucket and Fleet bootstraps no longer refuse production. `gen-prod-secrets.sh` takes the host from
+  `PADDOCK_HOST` when no argument is given.
 
 ### Fixed
 
