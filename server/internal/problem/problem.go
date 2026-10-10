@@ -87,8 +87,10 @@ var (
 	RenderFailed = &Error{Code: "render_failed", Status: http.StatusInternalServerError}
 	// IP allow list (plan M7a decision 13): the client address is outside the application allow list (recorded as
 	// denied); a change needs the caller's explicit confirmation because it would exclude their own address or switch
-	// the feature off.
+	// the feature off. IPAllowlistUnavailable refuses every request while the api has not loaded the list yet
+	// (fail closed).
 	IPNotAllowed                = &Error{Code: "ip_not_allowed", Status: http.StatusForbidden}
+	IPAllowlistUnavailable      = &Error{Code: "ip_allowlist_unavailable", Status: http.StatusServiceUnavailable}
 	LockoutConfirmationRequired = &Error{Code: "lockout_confirmation_required", Status: http.StatusConflict}
 	DisableConfirmationRequired = &Error{Code: "disable_confirmation_required", Status: http.StatusConflict}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.

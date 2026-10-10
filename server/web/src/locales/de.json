@@ -139,6 +139,7 @@
     "package_on_hold": "Ein Paket wird zurückgehalten: Das Zurückhalten hat Vorrang vor einer Sofortinstallation.",
     "too_many_devices": "Die Gruppe hat mehr als 500 aktive Geräte: Installieren Sie auf kleineren Gruppen.",
     "ip_not_allowed": "Ihre Adresse steht nicht auf der IP-Freigabeliste.",
+    "ip_allowlist_unavailable": "Das Portal startet und kann die IP-Freigabeliste noch nicht prüfen. Versuchen Sie es gleich noch einmal.",
     "lockout_confirmation_required": "Diese Änderung würde Ihre eigene Adresse aus der Freigabeliste entfernen.",
     "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten."
   },

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,10 +60,18 @@ type IPGuard struct {
 	bypass  bool
 	set     atomic.Pointer[ipallowlist.Set]
 	ready   atomic.Bool
+
+	// reloads numbers every Reload at its start; mu serialises load and store, and stored is the number of the
+	// reload whose set is installed, so a reload that read the list earlier never replaces a newer set (a periodic
+	// reload racing the writer's synchronous one, decision 18).
+	reloads atomic.Uint64
+	mu      sync.Mutex
+	stored  uint64
 }
 
-// NewIPGuard creates a guard that allows everything until the first load; Ready reports the first load (or the
-// bypass). bypass is PADDOCK_IP_ALLOWLIST_BYPASS (decision 22).
+// NewIPGuard creates a guard that refuses every request with 503 until the first load, because an unloaded list is
+// not a known-empty one (fail closed); Ready reports the first load (or the bypass). bypass is
+// PADDOCK_IP_ALLOWLIST_BYPASS (decision 22).
 func NewIPGuard(load func(context.Context) ([]netip.Prefix, error), version app.Version, denials *app.IPDenials, bypass bool) *IPGuard {
 	g := &IPGuard{load: load, version: version, denials: denials, bypass: bypass}
 	empty := ipallowlist.NewSet(nil)
@@ -79,11 +88,18 @@ func (g *IPGuard) Ready() bool { return g.ready.Load() }
 
 // Reload reads the list synchronously (used after a write in this process); a failure keeps the last set.
 func (g *IPGuard) Reload(ctx context.Context) error {
+	n := g.reloads.Add(1)
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	prefixes, err := g.load(ctx)
 	if err != nil {
 		metricIPAllowlistReloadErrors.Inc()
 		return fmt.Errorf("load ip allow list: %w", err)
 	}
+	if n < g.stored {
+		return nil
+	}
+	g.stored = n
 	s := ipallowlist.NewSet(prefixes)
 	g.set.Store(&s)
 	g.ready.Store(true)
@@ -160,9 +176,15 @@ func (g *IPGuard) Run(ctx context.Context) error {
 }
 
 // Middleware refuses every request from an address outside the list: 403 ip_not_allowed as problem details under
-// /api/, a plain 403 elsewhere. The response reveals nothing about the list.
+// /api/, a plain 403 elsewhere. Until the list is loaded every request is refused with 503
+// ip_allowlist_unavailable (a plain 503 outside /api/), without a denial event. The response reveals nothing about
+// the list.
 func (g *IPGuard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !g.bypass && !g.ready.Load() {
+			refuse(w, r, problem.IPAllowlistUnavailable, "503 Service Unavailable\n")
+			return
+		}
 		ip, ok := httpx.ClientAddr(r)
 		if g.allows(ip, ok) {
 			next.ServeHTTP(w, r)
@@ -172,16 +194,21 @@ func (g *IPGuard) Middleware(next http.Handler) http.Handler {
 		if g.denials != nil && ok {
 			g.denials.Note(ip, time.Now())
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			httpx.WriteProblem(w, r, problem.IPNotAllowed)
-			return
-		}
-		h := w.Header()
-		h.Set("Content-Type", "text/plain; charset=utf-8")
-		h.Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = io.WriteString(w, "403 Forbidden\n")
+		refuse(w, r, problem.IPNotAllowed, "403 Forbidden\n")
 	})
+}
+
+// refuse answers with p as problem details under /api/ and with the plain text body elsewhere.
+func refuse(w http.ResponseWriter, r *http.Request, p *problem.Error, body string) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		httpx.WriteProblem(w, r, p)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	w.WriteHeader(p.Status)
+	_, _ = io.WriteString(w, body)
 }
 
 func (g *IPGuard) allows(ip netip.Addr, ok bool) bool {

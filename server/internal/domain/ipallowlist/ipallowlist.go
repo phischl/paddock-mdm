@@ -70,6 +70,10 @@ const (
 	ConsequenceDisable Consequence = "disable" // the last entry would be removed: the feature switches off
 )
 
+// Unconfirmed is the confirmation of a change sent without the confirm parameter; "none" is not a confirmation
+// (the contract's confirm enum is lockout|disable).
+const Unconfirmed Consequence = ""
+
 // ConsequenceOf: Disable when before is non-empty and after is empty; Lockout when after is non-empty and no prefix of
 // after contains caller (an invalid caller address counts as not contained); otherwise None.
 func ConsequenceOf(before, after []netip.Prefix, caller netip.Addr) Consequence {

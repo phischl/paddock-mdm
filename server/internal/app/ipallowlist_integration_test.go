@@ -145,7 +145,7 @@ func TestIPAllowlistRoleCannotRead(t *testing.T) {
 func TestIPAllowlistLifecycle(t *testing.T) {
 	h := newAllowlistHarness(t)
 	ctx, id := h.ctx()
-	if _, err := h.list.Create(ctx, "198.51.100.0/24", "office", ipallowlist.ConsequenceNone); !errors.Is(err, problem.LockoutConfirmationRequired) {
+	if _, err := h.list.Create(ctx, "198.51.100.0/24", "office", ipallowlist.Unconfirmed); !errors.Is(err, problem.LockoutConfirmationRequired) {
 		t.Fatalf("first entry excluding the caller: %v", err)
 	}
 	if got := h.event(id); got != "platform.ip_allowlist_changed:failure:lockout_confirmation_required" {
@@ -155,7 +155,7 @@ func TestIPAllowlistLifecycle(t *testing.T) {
 		t.Fatal("a refused change must not propagate")
 	}
 	ctx, id = h.ctx()
-	mine, err := h.list.Create(ctx, " 192.0.2.9/32 ", " gate host ", ipallowlist.ConsequenceNone)
+	mine, err := h.list.Create(ctx, " 192.0.2.9/32 ", " gate host ", ipallowlist.Unconfirmed)
 	if err != nil || !mine.CoversCaller || mine.Label != "gate host" || mine.CreatedBy != "root@test" {
 		t.Fatalf("own address: %+v %v", mine, err)
 	}
@@ -170,19 +170,19 @@ func TestIPAllowlistLifecycle(t *testing.T) {
 		t.Fatalf("propagation: reloads %d bumps %d", h.reloads, h.version.bumps)
 	}
 	ctx, _ = h.ctx()
-	office, err := h.list.Create(ctx, "198.51.100.0/24", "office", ipallowlist.ConsequenceNone)
+	office, err := h.list.Create(ctx, "198.51.100.0/24", "office", ipallowlist.Unconfirmed)
 	if err != nil || office.CoversCaller {
 		t.Fatalf("second entry: %+v %v", office, err)
 	}
 	ctx, id = h.ctx()
-	if _, err := h.list.Create(ctx, "198.51.100.0/24", "again", ipallowlist.ConsequenceNone); !errors.Is(err, problem.AlreadyExists) {
+	if _, err := h.list.Create(ctx, "198.51.100.0/24", "again", ipallowlist.Unconfirmed); !errors.Is(err, problem.AlreadyExists) {
 		t.Fatalf("duplicate: %v", err)
 	}
 	if got := h.event(id); got != "platform.ip_allowlist_changed:failure:already_exists" {
 		t.Fatal(got)
 	}
 	ctx, id = h.ctx()
-	if _, err := h.list.Create(ctx, "10.0.0.1/8", "bad", ipallowlist.ConsequenceNone); !errors.Is(err, problem.InvalidRequest) {
+	if _, err := h.list.Create(ctx, "10.0.0.1/8", "bad", ipallowlist.Unconfirmed); !errors.Is(err, problem.InvalidRequest) {
 		t.Fatalf("host bits: %v", err)
 	}
 	if got := h.event(id); got != "platform.ip_allowlist_changed:failure:invalid_request" {
@@ -191,7 +191,7 @@ func TestIPAllowlistLifecycle(t *testing.T) {
 
 	ctx, id = h.ctx()
 	label := "branch office"
-	updated, err := h.list.Update(ctx, office.ID, nil, &label, ipallowlist.ConsequenceNone)
+	updated, err := h.list.Update(ctx, office.ID, nil, &label, ipallowlist.Unconfirmed)
 	if err != nil || updated.Label != label || updated.CIDR != office.CIDR {
 		t.Fatalf("label update: %+v %v", updated, err)
 	}
@@ -199,30 +199,30 @@ func TestIPAllowlistLifecycle(t *testing.T) {
 		t.Fatalf("update params %v", p)
 	}
 	ctx, _ = h.ctx()
-	if _, err := h.list.Update(ctx, office.ID, nil, nil, ipallowlist.ConsequenceNone); !errors.Is(err, problem.InvalidRequest) {
+	if _, err := h.list.Update(ctx, office.ID, nil, nil, ipallowlist.Unconfirmed); !errors.Is(err, problem.InvalidRequest) {
 		t.Fatalf("empty update: %v", err)
 	}
 	ctx, _ = h.ctx()
 	wide := "192.0.2.0/24"
-	if _, err := h.list.Update(ctx, mine.ID, &wide, nil, ipallowlist.ConsequenceNone); err != nil {
+	if _, err := h.list.Update(ctx, mine.ID, &wide, nil, ipallowlist.Unconfirmed); err != nil {
 		t.Fatalf("widening the own entry keeps the caller covered: %v", err)
 	}
 	ctx, _ = h.ctx()
 	elsewhere := "203.0.113.0/24"
-	if _, err := h.list.Update(ctx, mine.ID, &elsewhere, nil, ipallowlist.ConsequenceNone); !errors.Is(err, problem.LockoutConfirmationRequired) {
+	if _, err := h.list.Update(ctx, mine.ID, &elsewhere, nil, ipallowlist.Unconfirmed); !errors.Is(err, problem.LockoutConfirmationRequired) {
 		t.Fatalf("moving the own entry away: %v", err)
 	}
 	ctx, _ = h.ctx()
-	if _, err := h.list.Update(ctx, uuid.New(), &label, nil, ipallowlist.ConsequenceNone); !errors.Is(err, problem.NotFound) {
+	if _, err := h.list.Update(ctx, uuid.New(), &label, nil, ipallowlist.Unconfirmed); !errors.Is(err, problem.NotFound) {
 		t.Fatalf("unknown id: %v", err)
 	}
 
 	ctx, _ = h.ctx()
-	if err := h.list.Delete(ctx, mine.ID, ipallowlist.ConsequenceNone); !errors.Is(err, problem.LockoutConfirmationRequired) {
+	if err := h.list.Delete(ctx, mine.ID, ipallowlist.Unconfirmed); !errors.Is(err, problem.LockoutConfirmationRequired) {
 		t.Fatalf("removing the own coverage: %v", err)
 	}
 	ctx, id = h.ctx()
-	if err := h.list.Delete(ctx, office.ID, ipallowlist.ConsequenceNone); err != nil {
+	if err := h.list.Delete(ctx, office.ID, ipallowlist.Unconfirmed); err != nil {
 		t.Fatalf("removing another entry: %v", err)
 	}
 	if p := h.params(id); p["action"] != "removed" || p["entries"] != float64(1) {
@@ -247,7 +247,7 @@ func TestIPAllowlistLifecycle(t *testing.T) {
 	noStepUp := h.platform
 	noStepUp.StepUpAt = time.Time{}
 	ctx = principal.With(httpx.WithRequestID(context.Background(), "nostepup-"+uuid.NewString()), noStepUp)
-	if _, err := h.list.Create(ctx, "192.0.2.9/32", "x", ipallowlist.ConsequenceNone); !errors.Is(err, problem.StepUpRequired) {
+	if _, err := h.list.Create(ctx, "192.0.2.9/32", "x", ipallowlist.Unconfirmed); !errors.Is(err, problem.StepUpRequired) {
 		t.Fatalf("without step-up: %v", err)
 	}
 	if got := h.event(httpx.RequestID(ctx)); got != "platform.ip_allowlist_changed:denied:step_up_required" {
@@ -256,7 +256,7 @@ func TestIPAllowlistLifecycle(t *testing.T) {
 	// A failing version bump is logged, not returned: the replicas reload periodically.
 	h.version.fail = true
 	ctx, _ = h.ctx()
-	if _, err := h.list.Create(ctx, "192.0.2.9/32", "x", ipallowlist.ConsequenceNone); err != nil {
+	if _, err := h.list.Create(ctx, "192.0.2.9/32", "x", ipallowlist.Unconfirmed); err != nil {
 		t.Fatalf("with Valkey down: %v", err)
 	}
 }
@@ -266,12 +266,12 @@ func TestIPAllowlistLifecycle(t *testing.T) {
 func TestIPAllowlistConcurrentWriters(t *testing.T) {
 	h := newAllowlistHarness(t)
 	ctx, _ := h.ctx()
-	a, err := h.list.Create(ctx, "192.0.2.9/32", "a", ipallowlist.ConsequenceNone)
+	a, err := h.list.Create(ctx, "192.0.2.9/32", "a", ipallowlist.Unconfirmed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, _ = h.ctx()
-	b, err := h.list.Create(ctx, "192.0.2.0/24", "b", ipallowlist.ConsequenceNone)
+	b, err := h.list.Create(ctx, "192.0.2.0/24", "b", ipallowlist.Unconfirmed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestIPAllowlistConcurrentWriters(t *testing.T) {
 		for _, id := range []uuid.UUID{a.ID, b.ID} {
 			go func() {
 				ctx, _ := h.ctx()
-				results <- h.list.Delete(ctx, id, ipallowlist.ConsequenceNone)
+				results <- h.list.Delete(ctx, id, ipallowlist.Unconfirmed)
 			}()
 		}
 		var ok, refused int
@@ -306,11 +306,11 @@ func TestIPAllowlistConcurrentWriters(t *testing.T) {
 		if _, err := h.list.DisableAll(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if a, err = h.list.Create(ctx, "192.0.2.9/32", "a", ipallowlist.ConsequenceNone); err != nil {
+		if a, err = h.list.Create(ctx, "192.0.2.9/32", "a", ipallowlist.Unconfirmed); err != nil {
 			t.Fatal(err)
 		}
 		ctx, _ = h.ctx()
-		if b, err = h.list.Create(ctx, "192.0.2.0/24", "b", ipallowlist.ConsequenceNone); err != nil {
+		if b, err = h.list.Create(ctx, "192.0.2.0/24", "b", ipallowlist.Unconfirmed); err != nil {
 			t.Fatal(err)
 		}
 	}

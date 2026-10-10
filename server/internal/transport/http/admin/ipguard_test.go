@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
@@ -28,6 +30,87 @@ func guardHandler(g *admin.IPGuard) http.Handler {
 	})))
 }
 
+// expectUnavailable requires the fail-closed refusal of an unloaded list for an address the list would allow, under
+// /api/ and for the portal.
+func expectUnavailable(t *testing.T, h http.Handler, when string) {
+	t.Helper()
+	rec := guardGet(h, "/api/v1/me", "198.51.100.7:1")
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Content-Type") != "application/problem+json" ||
+		!strings.Contains(rec.Body.String(), `"code":"ip_allowlist_unavailable"`) {
+		t.Fatalf("%s: api request %d %s", when, rec.Code, rec.Body.String())
+	}
+	rec = guardGet(h, "/", "198.51.100.7:1")
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
+		rec.Body.String() != "503 Service Unavailable\n" || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("%s: page request %d %q", when, rec.Code, rec.Body.String())
+	}
+}
+
+// TestIPGuardLoadFailing: while every load fails the guard stays closed and not ready; the first successful load
+// opens it.
+func TestIPGuardLoadFailing(t *testing.T) {
+	ctx := context.Background()
+	loadErr := errors.New("paddock_platform unreachable")
+	g := admin.NewIPGuard(func(context.Context) ([]netip.Prefix, error) {
+		return prefixes("198.51.100.0/24"), loadErr
+	}, nil, nil, false)
+	h := guardHandler(g)
+	for range 3 {
+		if err := g.Reload(ctx); err == nil {
+			t.Fatal("reload with a failing load")
+		}
+		if g.Ready() {
+			t.Fatal("ready after a failed load")
+		}
+		expectUnavailable(t, h, "while the load fails")
+	}
+	loadErr = nil
+	if err := g.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec := guardGet(h, "/api/v1/me", "198.51.100.7:1"); rec.Code != http.StatusOK {
+		t.Fatalf("after the first successful load: %d", rec.Code)
+	}
+}
+
+// TestIPGuardReloadOrder: a reload that read the list before a change (the periodic one) never replaces the set of
+// a reload that started after it (the writer's synchronous one); the newer list stays installed.
+func TestIPGuardReloadOrder(t *testing.T) {
+	ctx := context.Background()
+	inLoad := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	g := admin.NewIPGuard(func(context.Context) ([]netip.Prefix, error) {
+		if calls.Add(1) == 1 {
+			close(inLoad)
+			<-release
+			return prefixes("198.51.100.0/24"), nil
+		}
+		return prefixes("192.0.2.0/24"), nil
+	}, nil, nil, false)
+	stale := make(chan error, 1)
+	go func() { stale <- g.Reload(ctx) }()
+	<-inLoad
+	fresh := make(chan error, 1)
+	go func() { fresh <- g.Reload(ctx) }()
+	// Give the second reload time to start (it then waits for the first, or without serialisation stores first).
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	if err := <-stale; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-fresh; err != nil {
+		t.Fatal(err)
+	}
+	h := guardHandler(g)
+	if rec := guardGet(h, "/api/v1/me", "192.0.2.1:1"); rec.Code != http.StatusOK {
+		t.Fatalf("the newer list is installed: %d", rec.Code)
+	}
+	if rec := guardGet(h, "/api/v1/me", "198.51.100.7:1"); rec.Code != http.StatusForbidden {
+		t.Fatalf("the stale list is not installed: %d", rec.Code)
+	}
+}
+
 func guardGet(h http.Handler, path, remote string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodGet, "https://admin.test"+path, nil)
 	r.RemoteAddr = remote
@@ -36,8 +119,8 @@ func guardGet(h http.Handler, path, remote string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// TestIPGuard: allowed and denied requests (problem details under /api/, plain text elsewhere), readiness, the
-// bypass and a failing reload that keeps the last set (plan M7a decision 17).
+// TestIPGuard: refusal before the first load, allowed and denied requests (problem details under /api/, plain text
+// elsewhere), readiness, the bypass and a failing reload that keeps the last set (plan M7a decision 17).
 func TestIPGuard(t *testing.T) {
 	ctx := context.Background()
 	list := prefixes("198.51.100.0/24", "2001:db8::/32")
@@ -47,9 +130,7 @@ func TestIPGuard(t *testing.T) {
 	if g.Ready() {
 		t.Fatal("ready before the first load")
 	}
-	if rec := guardGet(h, "/api/v1/me", "192.0.2.1:1"); rec.Code != http.StatusOK {
-		t.Fatalf("before the first load every address is allowed: %d", rec.Code)
-	}
+	expectUnavailable(t, h, "before the first load")
 	if err := g.Reload(ctx); err != nil || !g.Ready() {
 		t.Fatalf("reload: %v ready %v", err, g.Ready())
 	}

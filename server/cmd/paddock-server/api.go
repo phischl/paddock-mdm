@@ -234,9 +234,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		func(ctx context.Context) error { stepUp.Discover(ctx); <-ctx.Done(); return nil },
 		func(ctx context.Context) error {
 			if allowlistBypass {
-				if err := ipAllowlist.RecordBypass(ctx); err != nil {
-					slog.ErrorContext(ctx, "recording the ip allow list bypass failed", "error", err)
-				}
+				// The bypass is often set while PostgreSQL is still starting or unreachable; its audit event must
+				// still be recorded once it is reachable (plan M7a decision 22).
+				go retryUntilDone(ctx, "recording the ip allow list bypass", time.Second, time.Minute, ipAllowlist.RecordBypass)
 			}
 			return ipGuard.Run(ctx)
 		},

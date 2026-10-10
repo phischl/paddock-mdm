@@ -25,14 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Application IP allow list (M7a step 2, ADR 0021): platform administrators manage the allow list of the portal and
   the admin API under `/api/platform/v1/ip-allowlist` (every write needs a fresh step-up); while it has entries,
   every api replica refuses sessions and API tokens from other addresses with 403 `ip_not_allowed` before any session
-  or token is read, and follows changes within 2 s through a Valkey change counter. A change that would exclude the
+  or token is read, and follows changes within 2 s through a Valkey change counter. Until a replica has loaded the
+  list it refuses every request with 503 `ip_allowlist_unavailable` (fail closed). A change that would exclude the
   caller's own address or remove the last entry is refused with 409 until confirmed (`confirm=lockout` or
-  `confirm=disable`). New audit codes `platform.ip_allowlist_changed`, `platform.ip_allowlist_denied` (aggregated per
-  address and 10-minute window, at most 41 events per window and replica) and `platform.ip_allowlist_disabled`;
+  `confirm=disable`; any other value is 400). New audit codes `platform.ip_allowlist_changed`, `platform.ip_allowlist_denied` (aggregated per
+  address and 10-minute window, at most 41 events per window and replica; `distinct_ips_capped` marks a summary of
+  more than 10 000 addresses) and `platform.ip_allowlist_disabled`;
   metrics `paddock_ip_allowlist_*`. Migration 00036 adds the platform table `ip_allowlist_entry`.
 - Break-glass of the IP allow list (M7a step 3): `paddock-server admin allowlist show|disable|add` on the host
   (audited as `platform.ip_allowlist_disabled` and `platform.ip_allowlist_changed` with actor system) and the api
-  variable `PADDOCK_IP_ALLOWLIST_BYPASS` (default `false`; `prod-check` fails and the alert
+  variable `PADDOCK_IP_ALLOWLIST_BYPASS` (default `false`; its audit event is retried until PostgreSQL is reachable;
+  `prod-check` fails and the alert
   `PaddockIPAllowlistBypassed` fires while it is set). Runbook: `docs/operations/ip-allowlist.md`.
 - Portal page *IP allow list* for platform administrators (M7a step 4): the own address and whether the list covers
   it, the entries with search and sorting, add and edit dialogs with a "use my address" button and client-side CIDR

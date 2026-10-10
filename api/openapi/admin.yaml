@@ -151,6 +151,11 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: The api has not loaded the IP allow list yet and refuses every request (ip_allowlist_unavailable, fail closed).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
     patch:
       operationId: updateMe
       tags: [me]

@@ -81,12 +81,14 @@ func TestIPAllowlistEndpoints(t *testing.T) {
 		t.Fatalf("host bits: %d %s", r.status, r.body)
 	}
 	e.expectEvent(r, "platform.ip_allowlist_changed:failure:invalid_request")
-	r = e.do(call{method: "POST", path: base + "?confirm=bogus", cookie: su, skipReqCheck: true,
-		body: map[string]string{"cidr": "192.0.2.0/24", "label": "test"}})
-	if r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" {
-		t.Fatalf("unknown confirm: %d %s", r.status, r.body)
+	for _, confirm := range []string{"bogus", "none"} {
+		r = e.do(call{method: "POST", path: base + "?confirm=" + confirm, cookie: su, skipReqCheck: true,
+			body: map[string]string{"cidr": "192.0.2.0/24", "label": "test"}})
+		if r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" {
+			t.Fatalf("confirm=%s: %d %s", confirm, r.status, r.body)
+		}
+		e.expectEvent(r, "platform.ip_allowlist_changed:failure:invalid_request")
 	}
-	e.expectEvent(r, "platform.ip_allowlist_changed:failure:invalid_request")
 	r = e.do(call{method: "POST", path: base, cookie: su, rawBody: "{", skipReqCheck: true})
 	if r.status != http.StatusBadRequest {
 		t.Fatalf("malformed body: %d %s", r.status, r.body)

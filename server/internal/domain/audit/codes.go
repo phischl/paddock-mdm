@@ -888,9 +888,9 @@ var registry = map[Code]Definition{
 	CodePlatformIPAllowlistDenied: {
 		Code: CodePlatformIPAllowlistDenied, Emitted: true,
 		Description: "A request to the admin surface was refused because the client address is outside the IP allow list (actor: anonymous with the address); aggregated per address and window.",
-		Params:      []string{"ip", "count", "window_seconds", "first_at", "last_at", "aggregated", "distinct_ips"},
+		Params:      []string{"ip", "count", "window_seconds", "first_at", "last_at", "aggregated", "distinct_ips", "distinct_ips_capped"},
 		Outcomes:    []Outcome{OutcomeDenied},
-		Note:        "Per api replica and window (10 minutes): the first denial of an address is recorded at once (count 1, aggregated false) for at most 20 addresses; at the window's end one summary per address with further denials (count, first_at, last_at, aggregated true) and one for every address beyond the 20 (ip empty, distinct_ips). The immediate and summary events of one address and window share the correlation ID ipal-<window start>-<ip>. Edge denials are not audited; the exact count is the metric paddock_ip_allowlist_denied_total. Platform pseudo-organization.",
+		Note:        "Per api replica and window (10 minutes): the first denial of an address is recorded at once (count 1, aggregated false) for at most 20 addresses; at the window's end one summary per address with further denials (count, first_at, last_at, aggregated true) and one for every address beyond the 20 (ip empty, distinct_ips; distinct_ips_capped true when more than 10000 addresses made distinct_ips a lower bound). The immediate and summary events of one address and window share the correlation ID ipal-<window start>-<ip>. Edge denials are not audited; the exact count is the metric paddock_ip_allowlist_denied_total. Platform pseudo-organization.",
 	},
 	CodePlatformIPAllowlistDisabled: {
 		Code: CodePlatformIPAllowlistDisabled, Emitted: true,

@@ -146,7 +146,7 @@ func lockedPrefixes(ctx context.Context, q *pgstore.Queries) ([]netip.Prefix, er
 // set of ranges as it is (a label change) has no consequence.
 func checkConsequence(rec Recorder, before, after []netip.Prefix, caller netip.Addr, confirm ipallowlist.Consequence) error {
 	switch confirm {
-	case ipallowlist.ConsequenceNone, ipallowlist.ConsequenceLockout, ipallowlist.ConsequenceDisable:
+	case ipallowlist.Unconfirmed, ipallowlist.ConsequenceLockout, ipallowlist.ConsequenceDisable:
 	default:
 		return problem.InvalidRequest.WithDetail("confirm must be lockout or disable")
 	}
@@ -411,7 +411,7 @@ func (a *IPAllowlist) AddBreakGlass(ctx context.Context, cidr, label string) (IP
 	spec.Actor = &adminActor
 	err := a.runner.RunTx(systemPlatform(ctx), ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		p, _ := principal.From(ctx)
-		item, err := a.add(ctx, q, rec, p, cidr, label, ipallowlist.ConsequenceNone, netip.Addr{})
+		item, err := a.add(ctx, q, rec, p, cidr, label, ipallowlist.Unconfirmed, netip.Addr{})
 		out = item
 		return err
 	})

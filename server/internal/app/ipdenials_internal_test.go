@@ -98,6 +98,36 @@ func TestIPDenialsCap(t *testing.T) {
 	}
 }
 
+// TestIPDenialsDistinctCap: a scan rotating far more addresses than MaxDistinctDenials remembers at most that many;
+// every denial is still counted and the summary marks distinct_ips as a lower bound.
+func TestIPDenialsDistinctCap(t *testing.T) {
+	h := newDenialHarness(time.Minute)
+	total := MaxImmediateDenials + MaxDistinctDenials + 500
+	for i := range total {
+		h.note(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 14: byte(i >> 8), 15: byte(i)}).String())
+	}
+	h.flush()
+	if n := len(h.d.otherIPs); n != MaxDistinctDenials {
+		t.Fatalf("%d remembered addresses, want %d", n, MaxDistinctDenials)
+	}
+	h.now = h.now.Add(2 * time.Minute)
+	got := h.flush()
+	if len(got) != 1 {
+		t.Fatalf("summary of the others: %d events", len(got))
+	}
+	p := got[0].Params
+	if p["count"] != total-MaxImmediateDenials || p["distinct_ips"] != MaxDistinctDenials || p["distinct_ips_capped"] != true {
+		t.Fatalf("capped summary: %+v", p)
+	}
+	h.note("2001:db8::1")
+	h.note("2001:db8::2")
+	h.now = h.now.Add(2 * time.Minute)
+	h.flush()
+	if h.d.capped || len(h.d.otherIPs) != 0 {
+		t.Fatalf("a new window starts uncapped: capped %v, %d addresses", h.d.capped, len(h.d.otherIPs))
+	}
+}
+
 // TestIPDenialsNoteNeverBlocks: Note returns at once however many denials are queued (the recorder may be down).
 func TestIPDenialsNoteNeverBlocks(t *testing.T) {
 	h := newDenialHarness(time.Minute)

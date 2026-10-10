@@ -25,12 +25,13 @@ run() {
 	status=$?
 }
 
+# expect_fail HEADER PROXIES MESSAGE [LISTENER]
 expect_fail() {
-	run "$1" "$2" ""
+	run "$1" "$2" "${4:-}"
 	case $out in
 	*"$3"*) [ $status -eq 1 ] && return ;;
 	esac
-	echo "FAIL header=[$1] proxies=[$2]: status $status, output [$out], want [$3]"
+	echo "FAIL header=[$1] proxies=[$2] listener=[${4:-}]: status $status, output [$out], want [$3]"
 	failures=$((failures + 1))
 }
 
@@ -54,9 +55,16 @@ expect_fail "X-Forwarded-For" "10.0.0.0/33" "caddy: PADDOCK_EDGE_TRUSTED_PROXIES
 expect_fail "X-Forwarded-For" "10.0.0.256" "caddy: PADDOCK_EDGE_TRUSTED_PROXIES: not an address or CIDR: 10.0.0.256"
 expect_fail "X-Forwarded-For" "example.com" "caddy: PADDOCK_EDGE_TRUSTED_PROXIES: not an address or CIDR: example.com"
 expect_fail "X-Forwarded-For" "2001:db8::/129" "caddy: PADDOCK_EDGE_TRUSTED_PROXIES: not an address or CIDR: 2001:db8::/129"
+nl='
+'
+for listener in "8443" ":" ":0" ":08443" ":65536" ":123456" ":84a3" "0.0.0.0:8443" ":8443 {" ":8443${nl}servers {"; do
+	expect_fail "X-Forwarded-For" "10.0.0.0/8" "caddy: PADDOCK_EDGE_SERVERS_LISTENER: not empty or :<port>" "$listener"
+done
+expect_fail "none" "" "caddy: PADDOCK_EDGE_SERVERS_LISTENER: not empty or :<port>" ":443}"
 
 expect_block "none" "" "" ""
 expect_block "" "" "" ""
+expect_block "none" "" ":65535" ""
 tab=$(printf '\t')
 expect_block "CF-Connecting-IP" "173.245.48.0/20  2400:cb00::/32" "" "servers {
 ${tab}trusted_proxies static 173.245.48.0/20 2400:cb00::/32

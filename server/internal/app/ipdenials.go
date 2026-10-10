@@ -21,6 +21,11 @@ import (
 // decision 20); further addresses are counted and summarized at the window's end.
 const MaxImmediateDenials = 20
 
+// MaxDistinctDenials bounds the addresses beyond MaxImmediateDenials that are remembered per window, so that a scan
+// rotating source addresses (one IPv6 /64) cannot exhaust the api's memory; past it denials are only counted and
+// distinct_ips becomes a lower bound (distinct_ips_capped).
+const MaxDistinctDenials = 10000
+
 // IPDenials aggregates the denials of the IP allow list per address and window so that a scan never floods the
 // audit log: at most MaxImmediateDenials immediate events, one summary per address with further denials and one for
 // the addresses beyond the cap — 2 × MaxImmediateDenials + 1 events per window and replica.
@@ -35,6 +40,7 @@ type IPDenials struct {
 	seen     map[netip.Addr]*denialCount
 	others   int // denials of the addresses beyond the cap
 	otherIPs map[netip.Addr]struct{}
+	capped   bool // otherIPs reached MaxDistinctDenials in the current window
 	pending  []ActionSpec
 	wake     chan struct{}
 }
@@ -68,7 +74,11 @@ func (d *IPDenials) Note(ip netip.Addr, at time.Time) {
 		d.pending = append(d.pending, d.spec(ip, map[string]any{"ip": ip.String(), "count": 1, "aggregated": false}))
 	default:
 		d.others++
-		d.otherIPs[ip] = struct{}{}
+		if _, known := d.otherIPs[ip]; !known && len(d.otherIPs) >= MaxDistinctDenials {
+			d.capped = true
+		} else {
+			d.otherIPs[ip] = struct{}{}
+		}
 	}
 	d.mu.Unlock()
 	select {
@@ -93,12 +103,14 @@ func (d *IPDenials) roll(at time.Time) {
 	}
 	if d.others > 0 {
 		d.pending = append(d.pending, d.spec(netip.Addr{}, map[string]any{
-			"ip": "", "count": d.others, "distinct_ips": len(d.otherIPs), "aggregated": true,
+			"ip": "", "count": d.others, "distinct_ips": len(d.otherIPs), "distinct_ips_capped": d.capped,
+			"aggregated": true,
 		}))
 	}
 	d.seen = map[netip.Addr]*denialCount{}
 	d.otherIPs = map[netip.Addr]struct{}{}
 	d.others = 0
+	d.capped = false
 	d.start = time.Time{}
 }
 

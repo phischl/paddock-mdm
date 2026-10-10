@@ -7,7 +7,7 @@
 #                               the client address through a header (empty: Caddy is the first proxy).
 # PADDOCK_EDGE_CLIENT_IP_HEADER none, X-Forwarded-For or CF-Connecting-IP (development may list both; the first
 #                               non-empty header wins). X-Forwarded-For is read right to left.
-# PADDOCK_EDGE_SERVERS_LISTENER the listener the block applies to (empty: every listener).
+# PADDOCK_EDGE_SERVERS_LISTENER the listener the block applies to: empty (every listener) or :<port>.
 set -eu
 
 fail() {
@@ -70,6 +70,15 @@ valid_range() {
 	[ -z "$bits" ] && return 0
 	[ "$bits" -ge 1 ] && [ "$bits" -le "$max" ]
 }
+
+# The listener is pasted into Caddy's global options: anything but :<port> could inject further options (a second
+# servers block trusting every address past the /0 check below).
+case $listener in
+'') ;;
+:*[!0-9]* | : | :0* | :??????*) fail "PADDOCK_EDGE_SERVERS_LISTENER: not empty or :<port>: $listener" ;;
+:*) [ "${listener#:}" -le 65535 ] || fail "PADDOCK_EDGE_SERVERS_LISTENER: not empty or :<port>: $listener" ;;
+*) fail "PADDOCK_EDGE_SERVERS_LISTENER: not empty or :<port>: $listener" ;;
+esac
 
 headers=
 for h in $header; do

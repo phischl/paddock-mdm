@@ -139,6 +139,7 @@
     "package_on_hold": "A package is held: holds win over an immediate install.",
     "too_many_devices": "The group has more than 500 active devices: install on smaller groups.",
     "ip_not_allowed": "Your address is not on the IP allow list.",
+    "ip_allowlist_unavailable": "The portal is starting and cannot check the IP allow list yet. Try again in a moment.",
     "lockout_confirmation_required": "This change would remove your own address from the allow list.",
     "disable_confirmation_required": "This change would switch the allow list off."
   },

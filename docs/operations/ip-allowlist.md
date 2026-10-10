@@ -87,7 +87,12 @@ list page as *Your current address*.
   of the list. They are audited as `platform.ip_allowlist_denied`, aggregated per address and 10-minute window: the
   first denial of an address at once (at most 20 addresses per window), the rest as one summary per address and one
   for every further address at the window's end — at most 41 events per window and replica however large a scan.
-  The exact count is the metric `paddock_ip_allowlist_denied_total`.
+  The exact count is the metric `paddock_ip_allowlist_denied_total`. The summary of the further addresses remembers
+  at most 10 000 of them; beyond that `distinct_ips` is a lower bound and `distinct_ips_capped` is `true`.
+- Until an api replica has loaded the list (after a start, and for as long as PostgreSQL refuses the load) it
+  refuses every request with `503 ip_allowlist_unavailable` under `/api/` and a plain `503 Service Unavailable`
+  elsewhere, because an unloaded list is not an empty one (fail closed). `PADDOCK_IP_ALLOWLIST_BYPASS=true` lifts
+  this together with the list.
 
 ## Egress addresses for `paddockctl` and CI
 
@@ -124,7 +129,7 @@ example after a provider change or a mistaken entry. Access is restored on the c
 | Code | When |
 | --- | --- |
 | `platform.ip_allowlist_changed` | an entry was added, updated or removed (params `action`, `cidr`, `label`, `previous_cidr`, `previous_label`, `entries`, `consequence`); denied without step-up or for a non-platform principal; failure for an unconfirmed consequence, a duplicate or an invalid range |
-| `platform.ip_allowlist_denied` | a request was refused by the application list (params `ip`, `count`, `window_seconds`, `first_at`, `last_at`, `aggregated`, `distinct_ips`); edge denials are not audited |
+| `platform.ip_allowlist_denied` | a request was refused by the application list (params `ip`, `count`, `window_seconds`, `first_at`, `last_at`, `aggregated`, `distinct_ips`, `distinct_ips_capped`); edge denials are not audited |
 | `platform.ip_allowlist_disabled` | the list was switched off on the host (`method: cli`, `entries_removed`, `removed`) or the api started with the bypass (`method: env`) |
 
 Metrics of the api: `paddock_ip_allowlist_entries`, `paddock_ip_allowlist_enabled`, `paddock_ip_allowlist_bypass`,

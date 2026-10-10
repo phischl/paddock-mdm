@@ -22,7 +22,7 @@ func toIPAllowlistEntry(i app.IPAllowlistItem) adminapi.IpAllowlistEntry {
 // confirmOf maps the optional confirm query parameter; the use case validates the value.
 func confirmOf[T ~string](c *T) ipallowlist.Consequence {
 	if c == nil {
-		return ipallowlist.ConsequenceNone
+		return ipallowlist.Unconfirmed
 	}
 	return ipallowlist.Consequence(*c)
 }
