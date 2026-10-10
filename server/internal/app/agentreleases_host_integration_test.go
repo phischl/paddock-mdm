@@ -102,3 +102,33 @@ func TestAgentReleasePublishFromHostRefusesBadSignatures(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentReleasePublishFromHostAuditsRefusedCreation: an invalid version and a release without a binary are refused
+// with exactly one failed agent_release.created event of the host actor, as the API records an invalid version.
+func TestAgentReleasePublishFromHostAuditsRefusedCreation(t *testing.T) {
+	h := newReleaseHarness(t, false)
+	ctx := httpx.WithRequestID(context.Background(), uuid.NewString())
+	for name, tc := range map[string]struct {
+		version string
+		noBin   bool
+	}{
+		"invalid version": {version: "not a version " + uuid.NewString()},
+		"no agent binary": {version: uniqueVersion(), noBin: true},
+	} {
+		arts, pkgs := h.hostFiles(tc.version)
+		if tc.noBin {
+			arts = nil
+		}
+		if _, err := h.releases.PublishFromHost(ctx, tc.version, arts, pkgs); !errors.Is(err, problem.InvalidRequest) {
+			t.Errorf("%s: %v, want invalid_request", name, err)
+		}
+		if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1`, tc.version); n != 1 {
+			t.Errorf("%s: %d audit events, want exactly the failed creation", name, n)
+		}
+		if n := countRows(t, h.super, `SELECT count(*) FROM action WHERE target->>'id' = $1
+			AND code = 'agent_release.created' AND outcome = 'failure' AND params->>'version' = $1
+			AND actor->>'type' = 'system' AND actor->>'display' = 'paddock-server admin'`, tc.version); n != 1 {
+			t.Errorf("%s: no failed agent_release.created event of the host actor", name)
+		}
+	}
+}

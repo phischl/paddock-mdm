@@ -146,12 +146,8 @@ func (a *AgentReleases) get(ctx context.Context, version string) (ReleaseDetail,
 
 // Create creates a draft release.
 func (a *AgentReleases) Create(ctx context.Context, version string) (pgstore.AgentRelease, error) {
-	spec := SpecAgentReleaseCreate
-	spec.Params = map[string]any{"version": version}
-	t := releaseTarget(version)
-	spec.Target = &t
 	var out pgstore.AgentRelease
-	err := a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
+	err := a.runner.RunTx(ctx, ScopePlatform, createSpec(version), func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 		if err := agentrelease.ValidateVersion(version); err != nil {
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}
@@ -163,6 +159,14 @@ func (a *AgentReleases) Create(ctx context.Context, version string) (pgstore.Age
 		return err
 	})
 	return out, err
+}
+
+func createSpec(version string) ActionSpec {
+	spec := SpecAgentReleaseCreate
+	spec.Params = map[string]any{"version": version}
+	t := releaseTarget(version)
+	spec.Target = &t
+	return spec
 }
 
 // UploadArtifact verifies the binary's minisign signature with the release public key, requires its trusted comment
@@ -368,14 +372,16 @@ type HostPackage struct {
 // publishes it, through the same use cases as the admin API and with the system actor of the host commands
 // (`paddock-server admin agent-release`, plan M7b decision 31). Every file is verified before anything is created or
 // stored, so a wrong signature leaves the release untouched; the refusal is audited as the failed upload of that file,
-// as the API records it. A published release is refused.
+// as the API records it. An invalid version or a release without a binary is audited as a failed creation. A
+// published release is refused.
 func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, artifacts []HostArtifact, packages []HostPackage) (ReleaseDetail, error) {
 	ctx = systemPlatform(ctx)
 	if err := agentrelease.ValidateVersion(version); err != nil {
-		return ReleaseDetail{}, problem.InvalidRequest.WithDetail(err.Error())
+		return ReleaseDetail{}, a.refuse(ctx, createSpec(version), problem.InvalidRequest.WithDetail(err.Error()))
 	}
 	if len(artifacts) == 0 {
-		return ReleaseDetail{}, problem.InvalidRequest.WithDetail("a release needs at least one agent binary")
+		return ReleaseDetail{}, a.refuse(ctx, createSpec(version),
+			problem.InvalidRequest.WithDetail("a release needs at least one agent binary"))
 	}
 	for _, art := range artifacts {
 		comment, err := checkFile(a.verify, art.Arch, art.Binary, base64.StdEncoding.EncodeToString(art.Minisig))
@@ -383,7 +389,7 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 			err = checkBinaryComment(comment, version, art.Arch)
 		}
 		if err != nil {
-			return ReleaseDetail{}, a.refuseUpload(ctx, uploadSpec(version, art.Arch, art.Binary, "binary", "", ""),
+			return ReleaseDetail{}, a.refuse(ctx, uploadSpec(version, art.Arch, art.Binary, "binary", "", ""),
 				fmt.Errorf("paddockd %s: %w", art.Arch, err))
 		}
 	}
@@ -395,7 +401,7 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 			_, err = checkFile(a.packageVerifier(pkg.Name), pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
 		}
 		if err != nil {
-			return ReleaseDetail{}, a.refuseUpload(ctx, uploadSpec(version, pkg.Arch, pkg.Deb, "deb", pkg.Name, pkg.PackageVersion),
+			return ReleaseDetail{}, a.refuse(ctx, uploadSpec(version, pkg.Arch, pkg.Deb, "deb", pkg.Name, pkg.PackageVersion),
 				fmt.Errorf("package %s %s: %w", pkg.Name, pkg.Arch, err))
 		}
 	}
@@ -429,9 +435,8 @@ func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, art
 	return a.get(ctx, version)
 }
 
-// refuseUpload records one failed upload event for a file the host command refused before uploading, and returns the
-// refusal.
-func (a *AgentReleases) refuseUpload(ctx context.Context, spec ActionSpec, refusal error) error {
+// refuse records one failed event of spec for a host command refused before any use case ran, and returns the refusal.
+func (a *AgentReleases) refuse(ctx context.Context, spec ActionSpec, refusal error) error {
 	if err := a.runner.RunTxRefusal(ctx, ScopePlatform, spec, refusal,
 		func(context.Context, *pgstore.Queries, Recorder) error { return nil }); err != nil && !errors.Is(err, refusal) {
 		return errors.Join(refusal, err)
