@@ -694,7 +694,8 @@
         "explanation": "Außerbetriebnahme widerruft die Identität des Geräts dauerhaft, es erhält keine Konfiguration mehr. Das lässt sich nicht rückgängig machen.",
         "label": "Außer Betrieb nehmen …"
       }
-    }
+    },
+    "contactFilter": "Kontakt"
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -1115,10 +1116,11 @@
     "withoutVulnerabilities": "Ohne zugeordnete CVEs",
     "backToVulnerabilities": "Zurück zu den Schwachstellen",
     "nvdLink": "Details in der National Vulnerability Database",
-    "tile": {
-      "title": "Schwachstellen",
-      "criticalHigh": "{count, plural, =0 {Kein Gerät hat kritische oder hohe Befunde} one {# Gerät hat kritische oder hohe Befunde} other {# Geräte haben kritische oder hohe Befunde}}",
-      "unknown": "{count, plural, =0 {Kein Gerät hat Befunde mit unbekanntem Schweregrad} one {# Gerät hat Befunde mit unbekanntem Schweregrad} other {# Geräte haben Befunde mit unbekanntem Schweregrad}}"
+    "empty": {
+      "vulnerabilities": {
+        "title": "Noch keine Funde",
+        "description": "Funde erscheinen nach dem ersten Inventar-Abgleich eines Geräts."
+      }
     }
   },
   "updates": {
@@ -1216,6 +1218,11 @@
       "sudo_apply_failed": "Gerät öffnen",
       "revocation_pending": "Gerät öffnen",
       "revocation_expired": "Gerät öffnen"
+    },
+    "more": "+{count}",
+    "empty": {
+      "title": "Kein Handlungsbedarf",
+      "description": "Jedes Gerät ist online, verschlüsselt und läuft mit dem aktuellen Agent – oder ist außer Betrieb genommen."
     }
   },
   "palette": {
@@ -1277,5 +1284,67 @@
   "time": {
     "never": "nie",
     "now": "jetzt"
+  },
+  "overview": {
+    "title": "Übersicht",
+    "subtitle": "{org} · {count, plural, one {# registriertes Gerät} other {# registrierte Geräte}} · aktualisiert {time}",
+    "kpi": {
+      "online": "Online",
+      "silent": "Ohne Kontakt",
+      "presumedLost": "Vermutlich verloren",
+      "encrypted": "Verschlüsselt",
+      "notEncrypted": "Nicht verschlüsselt",
+      "criticalHigh": "Kritische / hohe CVEs",
+      "securityOverdue": "Sicherheitsupdates überfällig",
+      "rebootRequired": "Neustart erforderlich",
+      "ofActive": "von {count} aktiven",
+      "silentNote": "davon {count} kritisch",
+      "presumedLostNote": "außer Betrieb nehmen, sperren oder behalten",
+      "notEncryptedNote": "{partial} teilweise · {notReported} nicht gemeldet",
+      "devicesAffected": "betroffene Geräte",
+      "securityOverdueNote": "kein erfolgreicher Lauf in 48 h",
+      "activeDevices": "aktive Geräte"
+    },
+    "attention": {
+      "title": "Handlungsbedarf",
+      "caption": "nach Gerät gruppiert, schwerwiegendste zuerst",
+      "open": "Liste öffnen",
+      "device": "Gerät",
+      "conditions": "Befunde",
+      "os": "Ubuntu {release}"
+    },
+    "vulnerabilities": {
+      "title": "Schwachstellen",
+      "caption": "Geräte nach höchster Ubuntu-Priorität",
+      "barLabel": "Geräte nach höchstem Schweregrad: {segments}",
+      "segment": "{level} {count}",
+      "devices": "{count, plural, one {# Gerät} other {# Geräte}}",
+      "levels": {
+        "critical": "Kritisch",
+        "high": "Hoch",
+        "medium": "Mittel",
+        "low": "Niedrig",
+        "unknown": "Unbekannt",
+        "none": "Keine Funde"
+      }
+    },
+    "updates": {
+      "title": "Updates und Agent-Rollout",
+      "securityOverdue": "Sicherheitsupdates überfällig (> 48 h)",
+      "rebootRequired": "Neustart erforderlich",
+      "agent": "Agent {version}",
+      "agentOnCurrent": "{on} / {active} auf dem aktuellen Release",
+      "agentNone": "Noch kein Agent-Release veröffentlicht",
+      "osReleases": "Ubuntu-Versionen",
+      "osRelease": "{release}: {count}",
+      "unknownRelease": "unbekannt"
+    },
+    "audit": {
+      "title": "Letzte Audit-Ereignisse",
+      "open": "Audit-Protokoll",
+      "code": "Code",
+      "empty": "Keine Ereignisse in den letzten Tagen."
+    },
+    "keyboardHint": "Tastatur: {mod} K Befehlspalette · j / k bewegen · Enter öffnen · g d Geräte. Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog."
   }
 }

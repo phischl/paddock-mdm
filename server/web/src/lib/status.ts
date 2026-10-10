@@ -1,6 +1,6 @@
 import type {
-  AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceState, DiskState,
-  RevocationStatus,
+  AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceContact, DeviceState,
+  DiskState, RevocationStatus,
 } from '../api/client'
 
 /**
@@ -14,9 +14,6 @@ export interface StatusView {
   /** Message key of the label. */
   label: string
 }
-
-/** The contact state of a device as GET /api/v1/devices derives it (plan M7c §6.2). */
-export type DeviceContact = 'never' | 'ok' | 'stale_warning' | 'stale_critical' | 'presumed_lost'
 
 export function deviceStatus(d: { state: DeviceState; contact: DeviceContact }): StatusView {
   switch (d.state) {

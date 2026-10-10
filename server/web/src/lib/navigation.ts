@@ -99,6 +99,11 @@ export const navigationGroups: readonly NavigationGroup[] = [
   },
 ]
 
+/** The shortcut of the navigation item of a path, for hints next to links to it; '' when it has none. */
+export function shortcutOf(to: string): string {
+  return navigationGroups.flatMap((g) => g.items).find((i) => i.to === to)?.shortcut ?? ''
+}
+
 /** The sequence shortcuts (g + key) of the visible items: key → route. */
 export function shortcutRoutes(groups: NavigationGroup[]): Record<string, string> {
   const out: Record<string, string> = {}

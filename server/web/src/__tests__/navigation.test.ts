@@ -6,7 +6,7 @@ import App from '../App.vue'
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import { useSessionStore } from '../stores/session'
-import { navigationGroups, shortcutRoutes, visibleNavigation, type NavigationAccess, type NavigationGroup } from '../lib/navigation'
+import { navigationGroups, shortcutOf, shortcutRoutes, visibleNavigation, type NavigationAccess, type NavigationGroup } from '../lib/navigation'
 import { icons } from '../lib/icons.gen'
 import type { Me } from '../api/client'
 import { settleConfirm, useConfirm } from '../composables/useConfirm'
@@ -117,6 +117,8 @@ describe('navigation drawer', () => {
     expect(shortcutRoutes(navigationGroups as NavigationGroup[])).toEqual({
       o: '/', a: '/attention', d: '/devices', s: '/software', v: '/vulnerabilities', l: '/audit',
     })
+    expect(shortcutOf('/attention')).toBe('g a')
+    expect(shortcutOf('/device-groups')).toBe('')
   })
 
   it('shows the attention pill in the app bar with a label, not a bare badge', async () => {

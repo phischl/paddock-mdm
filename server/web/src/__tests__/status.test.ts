@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentRolloutStatus, AttentionKind, AuditOutcome, DeviceCommandStatus, DeviceState, DiskState, RevocationStatus } from '../api/client'
+import type {
+  AgentRolloutStatus, AttentionKind, AuditOutcome, DeviceCommandStatus, DeviceContact, DeviceState, DiskState, RevocationStatus,
+} from '../api/client'
 import {
   actorStatus, attentionRank, attentionStatus, commandStatus, deviceStatus, encryptionStatus, outcomeStatus, releaseStatus, revocationStatus,
-  rolloutStatus, tokenStatus, userLockStatus, type DeviceContact, type Status,
+  rolloutStatus, tokenStatus, userLockStatus, type Status,
 } from '../lib/status'
 import en from '../locales/en.json'
 

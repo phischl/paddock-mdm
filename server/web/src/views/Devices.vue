@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
 import type { Device } from '../api/client'
-import { allGroups, groupFilter, listDevices, stateFilter } from '../lib/devices'
+import { allGroups, contactFilter, groupFilter, listDevices, stateFilter } from '../lib/devices'
 import { diskStateFilter } from '../lib/disk'
 import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
@@ -14,7 +14,7 @@ onMounted(async () => {
   groups.value = await allGroups()
 })
 
-const filters = computed(() => [stateFilter, groupFilter(groups.value), diskStateFilter])
+const filters = computed(() => [stateFilter, contactFilter, groupFilter(groups.value), diskStateFilter])
 const columns: ListColumn[] = [
   { key: 'hostname', title: 'devices.hostname', sortable: true },
   { key: 'state', title: 'devices.state', sortable: true },

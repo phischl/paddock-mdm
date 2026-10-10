@@ -16,7 +16,7 @@ test('organization admin manages updates, holds and install now', async ({ page,
   test.setTimeout(180_000)
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
-  await expect(page).toHaveURL(/\/(attention|device-groups)$/)
+  await expect(page).toHaveURL(/\/$/)
   const stamp = Date.now()
   const hostname = `e2e-upd-${stamp}`
   const groupName = `E2E updates ${stamp}`

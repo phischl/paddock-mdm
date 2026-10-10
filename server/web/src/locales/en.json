@@ -694,7 +694,8 @@
         "explanation": "Retiring revokes the device's identity permanently and it stops receiving configuration. This cannot be undone.",
         "label": "Retire…"
       }
-    }
+    },
+    "contactFilter": "Contact"
   },
   "tokens": {
     "title": "Enrollment tokens",
@@ -1115,10 +1116,11 @@
     "withoutVulnerabilities": "Without matched CVEs",
     "backToVulnerabilities": "Back to vulnerabilities",
     "nvdLink": "Details in the National Vulnerability Database",
-    "tile": {
-      "title": "Vulnerabilities",
-      "criticalHigh": "{count, plural, =0 {No device has critical or high findings} one {# device has critical or high findings} other {# devices have critical or high findings}}",
-      "unknown": "{count, plural, =0 {No device has findings of unknown severity} one {# device has findings of unknown severity} other {# devices have findings of unknown severity}}"
+    "empty": {
+      "vulnerabilities": {
+        "title": "No findings yet",
+        "description": "Findings appear after the first inventory sync of a device."
+      }
     }
   },
   "updates": {
@@ -1216,6 +1218,11 @@
       "sudo_apply_failed": "Open device",
       "revocation_pending": "Open device",
       "revocation_expired": "Open device"
+    },
+    "more": "+{count}",
+    "empty": {
+      "title": "Nothing needs attention",
+      "description": "Every device is online, encrypted and running the current agent, or has been retired."
     }
   },
   "palette": {
@@ -1277,5 +1284,67 @@
   "time": {
     "never": "never",
     "now": "now"
+  },
+  "overview": {
+    "title": "Overview",
+    "subtitle": "{org} · {count, plural, one {# enrolled device} other {# enrolled devices}} · updated {time}",
+    "kpi": {
+      "online": "Online",
+      "silent": "Silent",
+      "presumedLost": "Presumed lost",
+      "encrypted": "Encrypted",
+      "notEncrypted": "Not encrypted",
+      "criticalHigh": "Critical / high CVEs",
+      "securityOverdue": "Security updates overdue",
+      "rebootRequired": "Reboot required",
+      "ofActive": "of {count} active",
+      "silentNote": "{count} of them critical",
+      "presumedLostNote": "retire, lock or keep",
+      "notEncryptedNote": "{partial} partial · {notReported} not reported",
+      "devicesAffected": "devices affected",
+      "securityOverdueNote": "no successful run in 48 h",
+      "activeDevices": "active devices"
+    },
+    "attention": {
+      "title": "Attention",
+      "caption": "grouped by device, most severe first",
+      "open": "Open list",
+      "device": "Device",
+      "conditions": "Conditions",
+      "os": "Ubuntu {release}"
+    },
+    "vulnerabilities": {
+      "title": "Vulnerabilities",
+      "caption": "devices by highest Ubuntu priority",
+      "barLabel": "Devices by highest severity: {segments}",
+      "segment": "{level} {count}",
+      "devices": "{count, plural, one {# device} other {# devices}}",
+      "levels": {
+        "critical": "Critical",
+        "high": "High",
+        "medium": "Medium",
+        "low": "Low",
+        "unknown": "Unknown",
+        "none": "No findings"
+      }
+    },
+    "updates": {
+      "title": "Updates and agent rollout",
+      "securityOverdue": "Security updates overdue (> 48 h)",
+      "rebootRequired": "Reboot required",
+      "agent": "Agent {version}",
+      "agentOnCurrent": "{on} / {active} on the current release",
+      "agentNone": "No agent release published yet",
+      "osReleases": "Ubuntu releases",
+      "osRelease": "{release}: {count}",
+      "unknownRelease": "unknown"
+    },
+    "audit": {
+      "title": "Recent audit activity",
+      "open": "Audit log",
+      "code": "Code",
+      "empty": "No events in the last days."
+    },
+    "keyboardHint": "Keyboard: {mod} K palette · j / k move · Enter open · g d devices. Destructive actions never have a shortcut; they always open the confirm dialog."
   }
 }
