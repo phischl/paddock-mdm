@@ -63,6 +63,7 @@ needs a documented reason to deviate, **MAY** is a genuine degree of freedom.
 | Portal | Vue 3 + TypeScript SPA (Vuetify), BFF cookie session, ICU messages via FormatJS | [0015](adr/0015-portal-frontend.md) |
 | Lists and confirmations | One list contract (page, page size, sort, search, filters) for every list; modals instead of browser dialogs | [0018](adr/0018-list-and-dialog-conventions.md) |
 | Administrative perimeter | IP allow list at the edge and in the api, managed by platform admins; client address derived once by Caddy from configurable trusted proxies | [0021](adr/0021-ip-allowlist.md) |
+| Portal design system | Tokens for a light and a dark theme, self-hosted OFL fonts, vendored ISC icons, command palette without destructive shortcuts | [0023](adr/0023-portal-design-system.md) |
 | Backup (A11), Observability (A12), Deployment | pgBackRest + OpenBao snapshots; OpenTelemetry + Prometheus; Docker Compose in v1, Kubernetes-ready | [0016](adr/0016-operations-backup-observability-deployment.md) |
 | User lock on the device (F2) | Two paths: Authentik for online logins, agent blocks locally at the next check-in (event-triggered on network-up and resume) and locks active sessions | – (§9.5) |
 | Object storage product | RustFS (accepted), S3 API with Object Lock only; gated by the WORM acceptance test | [0017](adr/0017-object-storage-product.md) |
