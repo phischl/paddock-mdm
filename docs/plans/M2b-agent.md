@@ -255,3 +255,16 @@ change beyond §6.1; system tests cannot run on the VMs without changing `test/v
 | R1 | VM system tests are slow (boots, installs) | Run per VM in sequence; snapshot restore per test file, not per test |
 | R2 | NetworkManager not present on servers | Timer fallback (decision 8) |
 | R3 | Supervisor size limit too tight | Report; do not move logic into the agent that belongs to the supervisor |
+
+## Amendment 2026-10-10
+
+Decision 16, probation health (PDK-031): the criterion "`/run/paddock/last-checkin` newer than the switch time" is
+replaced. The kernel stamps files with its coarse clock, up to one tick behind the switch time taken from the clock, so
+a check-in right after the switch could be dated before it and a healthy update was rolled back. The rule now is:
+
+- The supervisor removes `/run/paddock/last-checkin` while no agent runs: at the switch, after the old child has
+  exited and before the new one starts, and when it resumes an interrupted probation, before it starts the child.
+- The probation passes only if, at its deadline, the new child runs and has recreated the mark.
+- If the mark cannot be removed (any error other than "does not exist"), the probation ends in a rollback with the
+  reason "check-in mark could not be cleared", without waiting for the deadline. A resumed probation rolls back from
+  the supervisor's loop, after the child has started, never before it.

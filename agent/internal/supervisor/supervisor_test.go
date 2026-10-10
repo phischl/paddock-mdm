@@ -1,10 +1,12 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -474,6 +476,81 @@ func TestResumeProbationIgnoresAnEarlierCheckin(t *testing.T) {
 	f.waitFor("the supervisor removed the earlier check-in", func() bool { return !f.checkedIn() })
 	if r := f.endProbation("B"); r.Outcome != outcomeRolledBack || f.active() != "A" {
 		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+}
+
+// lockedBuffer collects the supervisor's log, which its goroutine writes while the test reads.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLog redirects slog until the test ends; call it before fake.start so the supervisor stops first.
+func captureLog(t *testing.T) *lockedBuffer {
+	t.Helper()
+	b := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(b, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return b
+}
+
+// keepCheckinMark makes the check-in mark a non-empty directory, which os.Remove cannot remove.
+func (f *fake) keepCheckinMark() {
+	f.t.Helper()
+	if err := os.MkdirAll(filepath.Join(f.cfg.LastCheckin, "stuck"), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// TestRollbackWhenTheCheckinMarkSurvivesTheSwitch (PDK-031): a mark that cannot be removed at the switch would pass
+// a new agent that never checks in, so the probation rolls back without waiting for its deadline.
+func TestRollbackWhenTheCheckinMarkSurvivesTheSwitch(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("1.0.0", 0, "trap '' HUP; exec sleep 300"))
+	f.keepCheckinMark()
+	f.start()
+	f.stage("1.1.0", script("1.1.0", 0, "trap '' HUP; exec sleep 300"), nil)
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	if !strings.Contains(log.String(), "check-in mark could not be cleared") {
+		t.Fatalf("rollback reason missing from the log:\n%s", log.String())
+	}
+}
+
+// TestRollbackWhenTheCheckinMarkSurvivesTheResume (PDK-031): the same for a probation that a restarted supervisor
+// resumes; the rollback happens in the loop, after the current agent started, never in resumeProbation.
+func TestRollbackWhenTheCheckinMarkSurvivesTheResume(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
+	if err := flip(f.cfg.Slots, "B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}); err != nil {
+		t.Fatal(err)
+	}
+	f.keepCheckinMark()
+	f.start()
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	if !strings.Contains(log.String(), "check-in mark could not be cleared") {
+		t.Fatalf("rollback reason missing from the log:\n%s", log.String())
 	}
 }
 

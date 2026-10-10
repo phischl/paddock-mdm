@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `paddock-supervisor` no longer rolls back a healthy agent update whose first check-in follows the switch within one kernel clock tick: the file system dated such a check-in before the switch. The supervisor now removes `/run/paddock/last-checkin` while no agent runs, and a probation passes if the new agent recreated it.
+- `paddock-supervisor` no longer rolls back a healthy agent update whose first check-in follows the switch within one kernel clock tick: the file system dated such a check-in before the switch. The supervisor now removes `/run/paddock/last-checkin` while no agent runs, and a probation passes if the new agent recreated it. If the supervisor cannot remove the mark, it rolls the update back.
 
 ## [0.1.0-alpha.1] - 2026-10-09
 
