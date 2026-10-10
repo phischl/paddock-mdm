@@ -116,20 +116,20 @@ func compose(ctx context.Context, env []string, stdin io.Reader, args []string) 
 	return composeFiles(ctx, env, stdin, ".env", []string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml"}, args)
 }
 
-// ProdFiles returns the Compose files of a production host from the Makefile (PROD_FILES_<host>), the list
-// `./paddock check` checks on a host.
+// ProdFiles returns the Compose files of a production host from deploy/compose/scripts/lib.sh (PROD_FILES_<host>,
+// the single list since plan M7b decision 18), the list `./paddock check` checks on a host.
 func ProdFiles(host string) ([]string, error) {
 	root, err := RepoRoot()
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	b, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "scripts", "lib.sh"))
 	if err != nil {
 		return nil, err
 	}
-	m := regexp.MustCompile(`(?m)^PROD_FILES_` + host + `\s*:=\s*(.+)$`).FindSubmatch(b)
+	m := regexp.MustCompile(`(?m)^PROD_FILES_` + host + `="(.+)"$`).FindSubmatch(b)
 	if m == nil {
-		return nil, fmt.Errorf("no PROD_FILES_%s in the Makefile", host)
+		return nil, fmt.Errorf("no PROD_FILES_%s in deploy/compose/scripts/lib.sh", host)
 	}
 	return strings.Fields(string(m[1])), nil
 }
