@@ -16,7 +16,30 @@
     "languageFailed": "The language could not be saved.",
     "userMenu": "User menu of {name}",
     "showNavigation": "Show the navigation",
-    "hideNavigation": "Hide the navigation"
+    "hideNavigation": "Hide the navigation",
+    "commandField": "Search or run a command",
+    "commandPlaceholder": "Jump to a device, page, CVE or action…",
+    "theme": "Theme",
+    "themeMenu": "Choose the theme (current: {theme})",
+    "themes": {
+      "system": "System",
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "themeToggle": {
+      "toDark": "Switch to the dark theme",
+      "toLight": "Switch to the light theme"
+    },
+    "themeFailed": "The theme could not be saved.",
+    "density": "Density",
+    "densityMenu": "Choose the density (current: {density})",
+    "densities": {
+      "compact": "Compact",
+      "comfortable": "Comfortable"
+    },
+    "shortcuts": "Keyboard shortcuts",
+    "collapseNavigation": "Collapse the navigation",
+    "expandNavigation": "Expand the navigation"
   },
   "nav": {
     "deviceGroups": "Device groups",
@@ -50,7 +73,10 @@
       "inventory": "Inventory",
       "organization": "Organization",
       "platform": "Platform"
-    }
+    },
+    "overview": "Overview",
+    "attentionPill": "{count, plural, one {# needs attention} other {# need attention}}",
+    "shortcut": "Shortcut: {keys}"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -1160,5 +1186,54 @@
       "revocation_pending": "Open device",
       "revocation_expired": "Open device"
     }
+  },
+  "palette": {
+    "title": "Command palette",
+    "placeholder": "Type to search pages, devices, groups or a CVE…",
+    "groups": {
+      "pages": "Pages",
+      "devices": "Devices",
+      "groups": "Device groups",
+      "cve": "CVE",
+      "actions": "Actions"
+    },
+    "noMatches": "No matches",
+    "openCve": "Open {cve}",
+    "actions": {
+      "darkTheme": "Switch to the dark theme",
+      "lightTheme": "Switch to the light theme",
+      "systemTheme": "Use the system theme",
+      "language": "Switch to {language}",
+      "collapseNav": "Collapse the navigation",
+      "expandNav": "Expand the navigation",
+      "shortcuts": "Keyboard shortcuts",
+      "compact": "Compact density",
+      "comfortable": "Comfortable density",
+      "dangerZone": "Go to the danger zone of {hostname}"
+    }
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "close": "Close",
+    "keys": "Keys",
+    "action": "Action",
+    "singleKey": "Single-key shortcuts",
+    "singleKeyHint": "Off: only {mod} K and Esc work. Every shortcut has a button or link on the screen.",
+    "palette": "Open the command palette",
+    "escape": "Close the palette or this dialog",
+    "goOverview": "Go to Overview",
+    "goAttention": "Go to Attention",
+    "goDevices": "Go to Devices",
+    "goSoftware": "Go to Software",
+    "goVulnerabilities": "Go to Vulnerabilities",
+    "goAudit": "Go to Audit log",
+    "listMove": "Move the row cursor down / up in the list",
+    "listOpen": "Open the row under the cursor",
+    "nav": "Collapse or expand the navigation",
+    "help": "Show this dialog",
+    "tabs": "Switch the tabs of a device page",
+    "never": "Destructive actions never have a shortcut; they always open the confirm dialog.",
+    "paletteKey": "{mod} K",
+    "keyEsc": "Esc"
   }
 }

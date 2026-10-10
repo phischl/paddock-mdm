@@ -29,7 +29,7 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .nav-groups { padding: 0 8px 8px; }
 .nav-groups .v-list-item { margin-bottom: 2px; }
 @media (max-width: 599.98px) {
-  .brand .app-name, .user-button-name { display: none; }
+  .brand .app-name, .brand .pd-brand-sep, .user-button .user-button-name { display: none; }
   .brand .org-name { margin-left: 0; }
 }
 
@@ -107,3 +107,96 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .v-table .v-data-table__td, .v-table td { border-bottom: 1px solid var(--pd-border-subtle) !important; }
 .v-table tbody tr:hover { background: var(--pd-row-hover); }
 .v-table td, .v-table th { font-variant-numeric: tabular-nums; }
+
+/* Status chips (plan M7c decision 19): a dot and a label, never colour alone. */
+.pd-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; line-height: 16px; font-weight: 500;
+  padding: 1px 6px; border-radius: var(--pd-radius-xs); white-space: nowrap; vertical-align: middle;
+}
+.pd-chip-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: currentColor; }
+.pd-chip--ok { color: var(--pd-status-ok-fg); background: var(--pd-status-ok-bg); }
+.pd-chip--ok .pd-chip-dot { background: var(--pd-status-ok-mark); }
+.pd-chip--warn { color: var(--pd-status-warn-fg); background: var(--pd-status-warn-bg); }
+.pd-chip--warn .pd-chip-dot { background: var(--pd-status-warn-mark); }
+.pd-chip--critical { color: var(--pd-status-critical-fg); background: var(--pd-status-critical-bg); }
+.pd-chip--critical .pd-chip-dot { background: var(--pd-status-critical-mark); }
+.pd-chip--info { color: var(--pd-status-info-fg); background: var(--pd-status-info-bg); }
+.pd-chip--info .pd-chip-dot { background: var(--pd-status-info-mark); }
+.pd-chip--neutral { color: var(--pd-status-neutral-fg); background: var(--pd-status-neutral-bg); }
+.pd-chip--neutral .pd-chip-dot { background: var(--pd-status-neutral-mark); }
+.pd-chip--sev-critical { color: var(--pd-sev-critical-fg); background: var(--pd-sev-critical-bg); }
+.pd-chip--sev-critical .pd-chip-dot { background: var(--pd-sev-critical-mark); }
+.pd-chip--sev-high { color: var(--pd-sev-high-fg); background: var(--pd-sev-high-bg); }
+.pd-chip--sev-high .pd-chip-dot { background: var(--pd-sev-high-mark); }
+.pd-chip--sev-medium { color: var(--pd-sev-medium-fg); background: var(--pd-sev-medium-bg); }
+.pd-chip--sev-medium .pd-chip-dot { background: var(--pd-sev-medium-mark); }
+.pd-chip--sev-low { color: var(--pd-sev-low-fg); background: var(--pd-sev-low-bg); }
+.pd-chip--sev-low .pd-chip-dot { background: var(--pd-sev-low-mark); }
+.pd-chip--sev-unknown { color: var(--pd-sev-unknown-fg); background: var(--pd-sev-unknown-bg); }
+.pd-chip--sev-unknown .pd-chip-dot { background: var(--pd-sev-unknown-mark); }
+a.pd-pill { border-radius: var(--pd-radius-pill); padding: 3px 10px; text-decoration: none; margin-right: 4px; }
+a.pd-pill:hover { filter: brightness(0.95); }
+
+/* Shell: app bar, command field, navigation drawer (plan M7c decisions 13–15). */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.pd-appbar.v-toolbar {
+  background: var(--pd-surface-1); color: var(--pd-text-primary); border-bottom: 1px solid var(--pd-border);
+}
+.pd-appbar .v-toolbar__content { gap: 4px; padding-right: 8px; }
+.pd-logo { margin: 0 6px 0 2px; }
+.brand { flex: 0 1 auto; min-width: 0; }
+.brand .v-toolbar-title__placeholder { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.brand .pd-brand-sep { color: var(--pd-text-muted); }
+.brand .org-name { margin-left: 0; }
+.pd-command {
+  flex: 1 1 280px; max-width: 520px; min-width: 0; margin: 0 auto; display: flex; align-items: center; gap: 8px;
+  background: var(--pd-surface-input); border: 1px solid var(--pd-border-strong); border-radius: var(--pd-radius-sm);
+  padding: 3px 10px; color: var(--pd-text-muted); cursor: text;
+}
+.pd-command:focus-within { box-shadow: var(--pd-focus-ring); }
+.pd-command input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--pd-text-primary); font: inherit; }
+.pd-command input::placeholder { color: var(--pd-text-muted); }
+.pd-avatar {
+  display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--pd-surface-3);
+  color: var(--pd-text-primary); font-weight: 600; font-size: 11px;
+}
+.user-button-name { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; margin-left: 8px; }
+.pd-user-name { font-size: 12.5px; }
+.pd-nav.v-navigation-drawer { background: var(--pd-surface-2); color: var(--pd-text-primary); border-right: 1px solid var(--pd-border); overflow-y: auto; }
+.pd-nav .nav-groups { padding: 8px 8px 16px; }
+.pd-nav-group { margin-bottom: 12px; }
+.pd-nav-heading { color: var(--pd-text-muted); padding: 4px 8px; margin: 0; }
+.pd-nav-divider { border: 0; border-top: 1px solid var(--pd-border); margin: 6px 4px; }
+.pd-nav-item {
+  display: flex; align-items: center; gap: 8px; min-height: var(--pd-nav-item-height); padding: 0 8px; border-radius: var(--pd-radius-sm);
+  color: var(--pd-text-secondary); text-decoration: none; margin-bottom: 2px; position: relative;
+}
+.pd-nav-item:hover { background: var(--pd-row-hover); color: var(--pd-text-primary); }
+.pd-nav-item[aria-current="page"] { background: var(--pd-surface-3); color: var(--pd-text-primary); font-weight: 500; }
+.pd-nav-item .pd-icon { flex: none; }
+.pd-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pd-nav-shortcut { color: var(--pd-text-muted); }
+.pd-nav--rail .pd-nav-item { justify-content: center; padding: 0; }
+.pd-nav--rail .pd-nav-label, .pd-nav--rail .pd-nav-shortcut { display: none; }
+@media (max-width: 599.98px) {
+  .pd-nav-item, .v-btn { min-height: 44px; }
+}
+
+/* Command palette (plan M7c decision 16). */
+.pd-palette {
+  background: var(--pd-surface-1); color: var(--pd-text-primary); border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-lg); box-shadow: var(--pd-shadow-overlay); overflow: hidden;
+}
+.pd-palette-field { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--pd-border); color: var(--pd-text-muted); }
+.pd-palette-field input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--pd-text-primary); font: inherit; font-size: 14px; }
+.pd-palette-list { list-style: none; margin: 0; padding: 6px; max-height: 60vh; overflow-y: auto; }
+.pd-palette-group { color: var(--pd-text-muted); padding: 8px 8px 4px; }
+.pd-palette-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--pd-radius-sm); cursor: pointer; }
+.pd-palette-option--active { background: var(--pd-surface-3); box-shadow: inset var(--pd-focus-ring); }
+.pd-palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pd-palette-empty { padding: 12px 8px; }
+.pd-shortcuts { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.pd-shortcuts th { text-align: left; font-weight: 500; color: var(--pd-text-secondary); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--pd-border); }
+.pd-shortcuts td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--pd-border-subtle); vertical-align: top; }
+.v-overlay__scrim { background: var(--pd-scrim); opacity: 1; }
+.pd-shortcuts-keys kbd + kbd { margin-left: 4px; }

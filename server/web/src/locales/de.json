@@ -16,7 +16,30 @@
     "languageFailed": "Die Sprache konnte nicht gespeichert werden.",
     "userMenu": "Benutzermenü von {name}",
     "showNavigation": "Navigation einblenden",
-    "hideNavigation": "Navigation ausblenden"
+    "hideNavigation": "Navigation ausblenden",
+    "commandField": "Suchen oder Befehl ausführen",
+    "commandPlaceholder": "Zu Gerät, Seite, CVE oder Aktion springen …",
+    "theme": "Erscheinungsbild",
+    "themeMenu": "Erscheinungsbild wählen (aktuell: {theme})",
+    "themes": {
+      "system": "System",
+      "light": "Hell",
+      "dark": "Dunkel"
+    },
+    "themeToggle": {
+      "toDark": "Zum dunklen Erscheinungsbild wechseln",
+      "toLight": "Zum hellen Erscheinungsbild wechseln"
+    },
+    "themeFailed": "Das Erscheinungsbild konnte nicht gespeichert werden.",
+    "density": "Dichte",
+    "densityMenu": "Dichte wählen (aktuell: {density})",
+    "densities": {
+      "compact": "Kompakt",
+      "comfortable": "Komfortabel"
+    },
+    "shortcuts": "Tastenkürzel",
+    "collapseNavigation": "Navigation einklappen",
+    "expandNavigation": "Navigation ausklappen"
   },
   "nav": {
     "deviceGroups": "Gerätegruppen",
@@ -50,7 +73,10 @@
       "inventory": "Inventar",
       "organization": "Organisation",
       "platform": "Plattform"
-    }
+    },
+    "overview": "Übersicht",
+    "attentionPill": "{count, plural, one {# braucht Aufmerksamkeit} other {# brauchen Aufmerksamkeit}}",
+    "shortcut": "Tastenkürzel: {keys}"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -1160,5 +1186,54 @@
       "revocation_pending": "Gerät öffnen",
       "revocation_expired": "Gerät öffnen"
     }
+  },
+  "palette": {
+    "title": "Befehlspalette",
+    "placeholder": "Seiten, Geräte, Gruppen oder eine CVE suchen …",
+    "groups": {
+      "pages": "Seiten",
+      "devices": "Geräte",
+      "groups": "Gerätegruppen",
+      "cve": "CVE",
+      "actions": "Aktionen"
+    },
+    "noMatches": "Keine Treffer",
+    "openCve": "{cve} öffnen",
+    "actions": {
+      "darkTheme": "Zum dunklen Erscheinungsbild wechseln",
+      "lightTheme": "Zum hellen Erscheinungsbild wechseln",
+      "systemTheme": "Erscheinungsbild des Systems verwenden",
+      "language": "Zu {language} wechseln",
+      "collapseNav": "Navigation einklappen",
+      "expandNav": "Navigation ausklappen",
+      "shortcuts": "Tastenkürzel",
+      "compact": "Kompakte Dichte",
+      "comfortable": "Komfortable Dichte",
+      "dangerZone": "Zum Gefahrenbereich von {hostname} springen"
+    }
+  },
+  "shortcuts": {
+    "title": "Tastenkürzel",
+    "close": "Schließen",
+    "keys": "Tasten",
+    "action": "Aktion",
+    "singleKey": "Einzeltasten-Kürzel",
+    "singleKeyHint": "Aus: nur {mod} K und Esc wirken. Jedes Kürzel hat eine Schaltfläche oder einen Link auf dem Bildschirm.",
+    "palette": "Befehlspalette öffnen",
+    "escape": "Palette oder diesen Dialog schließen",
+    "goOverview": "Zur Übersicht",
+    "goAttention": "Zu Handlungsbedarf",
+    "goDevices": "Zu Geräte",
+    "goSoftware": "Zu Software",
+    "goVulnerabilities": "Zu Schwachstellen",
+    "goAudit": "Zum Audit-Protokoll",
+    "listMove": "Zeilencursor in der Liste nach unten / oben bewegen",
+    "listOpen": "Zeile unter dem Cursor öffnen",
+    "nav": "Navigation ein- oder ausklappen",
+    "help": "Diesen Dialog anzeigen",
+    "tabs": "Reiter einer Geräteseite wechseln",
+    "never": "Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog.",
+    "paletteKey": "{mod} K",
+    "keyEsc": "Esc"
   }
 }
