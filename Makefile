@@ -129,6 +129,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
+	bash packaging/release_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -213,6 +214,9 @@ prod-check: ## Check the production configuration of one host (HOST=controlplane
 # does) and REVOKE_TAGS (plan M4c decision 13): paddock_revoke_testtarget for the system tests only, never in a release
 # (agent-release refuses it).
 VERSION                 ?= 0.0.0-dev
+# The Debian version of VERSION: a SemVer pre-release 0.1.0-alpha.1 becomes 0.1.0~alpha.1, which sorts before 0.1.0
+# (nfpm's semver handling names the package so; `deb` checks that it did).
+DEB_VERSION              = $(shell printf '%s' '$(VERSION)' | sed 's/-/~/')
 TAGS                    ?=
 REVOKE_TAGS             ?=
 RELEASE_PUBLIC_KEY_FILE ?= $(RELEASE_KEY_DIR)/minisign.pub
@@ -237,9 +241,10 @@ deb: agent ## Build the paddock-supervisor, paddock-agent and paddock-revoke Deb
 	cp bin/agent/amd64/paddockd bin/agent/amd64/paddock-supervisor bin/agent/amd64/paddock-revoke bin/deb/stage/
 	for pkg in paddock-supervisor paddock-agent paddock-revoke; do \
 		printf '%s (%s) unstable; urgency=medium\n\n  * Release %s; see CHANGELOG.md.\n\n -- Paddock <paddock@paddock-mdm.invalid>  %s\n' \
-			$$pkg $(VERSION) $(VERSION) "$$(date -R -u)" | gzip -9n >bin/deb/stage/$$pkg.changelog.gz && \
+			$$pkg $(DEB_VERSION) $(VERSION) "$$(date -R -u)" | gzip -9n >bin/deb/stage/$$pkg.changelog.gz && \
 		docker run --rm -u $(UID):$(GID) -v $(CURDIR):/src -w /src -e ARCH=amd64 -e VERSION=$(VERSION) $(NFPM_IMAGE) \
 			package --config packaging/nfpm/$$pkg.yaml --packager deb --target bin/deb/ || exit 1; \
+		test -f bin/deb/$${pkg}_$(DEB_VERSION)_amd64.deb || { echo "nfpm did not build bin/deb/$${pkg}_$(DEB_VERSION)_amd64.deb"; exit 1; }; \
 	done
 	@ls -1 bin/deb/*.deb
 
@@ -391,11 +396,12 @@ logs: ## Show logs of the stack
 
 # --- Release (plan M6b decision 4, docs/operations/agent-releases.md "Server release") ----------------------------
 # The release workflow (.github/workflows/release.yml, tags v*.*.*) calls these targets. RELEASE_VERSION is the
-# version without the leading v. release-artifacts builds the two server images, the Debian packages and paddockd
-# for amd64 and arm64 (unsigned: the release keys stay offline, minisign), the SBOMs and SHA256SUMS into
-# dist/release/<version>/; PUSH=1 also pushes the images and records their digests. release-sign signs the pushed
-# images keyless with cosign (GitHub OIDC), attaches each SBOM as a signed attestation and signs SHA256SUMS; with
-# DRY_RUN=1 it checks its inputs and prints the cosign commands instead of running them.
+# version without the leading v: x.y.z or a pre-release x.y.z-alpha.N, -beta.N, -rc.N. Every image carries exactly
+# that version as its tag, never latest (packaging/release_test.sh checks it). release-artifacts builds the two server
+# images, the Debian packages and paddockd for amd64 and arm64 (unsigned: the release keys stay offline, minisign), the
+# SBOMs and SHA256SUMS into dist/release/<version>/; PUSH=1 also pushes the images and records their digests.
+# release-sign signs the pushed images keyless with cosign (GitHub OIDC), attaches each SBOM as a signed attestation
+# and signs SHA256SUMS; with DRY_RUN=1 it checks its inputs and prints the cosign commands instead of running them.
 RELEASE_VERSION        ?=
 RELEASE_REGISTRY       ?= ghcr.io/phischl
 RELEASE_SERVER_REPO    ?= $(RELEASE_REGISTRY)/paddock-server
@@ -414,7 +420,8 @@ COSIGN_RUN = docker run --rm -u $(UID):$(GID) --tmpfs /tmp:rw,mode=1777 -e HOME=
 
 .PHONY: release-check
 release-check:
-	@echo "$(RELEASE_VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "usage: RELEASE_VERSION=x.y.z (without v)"; exit 2; }
+	@echo "$(RELEASE_VERSION)" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$$' || \
+		{ echo "usage: RELEASE_VERSION=x.y.z or x.y.z-alpha.N, -beta.N, -rc.N (without v)"; exit 2; }
 
 # The supervisor compiles in the release public key (line 2 of the minisign file): a release must name the production
 # key explicitly, line 2 must be a minisign Ed25519 public key (42 bytes, "Ed"), and it must not be the development
@@ -437,12 +444,27 @@ release-artifacts: release-key-check ## Build the release RELEASE_VERSION into d
 	rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
 	$(MAKE) --no-print-directory release-images
 	$(MAKE) --no-print-directory deb VERSION=$(RELEASE_VERSION) RELEASE_PUBLIC_KEY_FILE=$(RELEASE_PUBLIC_KEY_FILE) TAGS= REVOKE_TAGS=
-	@for f in bin/deb/*.deb; do b=$$(basename "$$f" .deb); cp "$$f" "$(RELEASE_DIR)/$$b-unsigned.deb" || exit 1; done
+	$(MAKE) --no-print-directory release-debs
 	@for arch in amd64 arm64; do cp bin/agent/$$arch/paddockd $(RELEASE_DIR)/paddockd_$(RELEASE_VERSION)_linux_$$arch-unsigned || exit 1; done
 	$(MAKE) --no-print-directory release-sbom
+	$(MAKE) --no-print-directory release-names-check
 	cd $(RELEASE_DIR) && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name images.txt ! -name '*.sigstore.json' \
 		-printf '%f\n' | LC_ALL=C sort | xargs sha256sum >SHA256SUMS
 	@ls -1 $(RELEASE_DIR)
+
+# GitHub renames release assets with characters such as ~, so a pre-release's packages (Debian version x.y.z~alpha.N
+# inside) are published as <name>_<release version>_<arch>-unsigned.deb, and SHA256SUMS names the files as published.
+RELEASE_DEB_DIR ?= bin/deb
+
+.PHONY: release-debs
+release-debs: release-check
+	@for f in $(RELEASE_DEB_DIR)/*.deb; do b=$$(basename "$$f" .deb); \
+		cp "$$f" "$(RELEASE_DIR)/$${b%%_*}_$(RELEASE_VERSION)_$${b##*_}-unsigned.deb" || exit 1; done
+
+.PHONY: release-names-check
+release-names-check:
+	@bad=$$(find $(RELEASE_DIR) -maxdepth 1 -type f -printf '%f\n' | grep -v '^[A-Za-z0-9._+-]*$$' || true); \
+		test -z "$$bad" || { echo "release file names GitHub would rename: $$bad"; exit 2; }
 
 .PHONY: release-images
 release-images: release-check

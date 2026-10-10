@@ -7,15 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [0.1.0-alpha.1] - 2026-10-09
 
-- CI: the trivy job saves its vulnerability database cache again (the cache step failed on root-owned files).
-- `docs/architecture.md`: five table-of-contents links point to their sections again.
+**Alpha.** This is a pre-release for evaluation, not for production fleets. Revocation (Lock, Destroy, dead man's
+switch) stays behind the feature flag `PADDOCK_REVOCATION_ENABLED` until its code has passed the second-person
+review and the hardware acceptance. There are no upgrade guarantees between alpha releases: an alpha may change
+data, configuration or APIs without a migration path.
 
-## [0.1.0] - 2026-10-08
-
-First public release (prepared, not tagged yet: the product owner sets the date when tagging `v0.1.0`). Paddock
-manages Linux workstations — signed configuration, identity and device login, sudo rights, managed local
+First public release, published as an alpha pre-release. Paddock manages Linux workstations — signed configuration, identity and device login, sudo rights, managed local
 administrator, disk encryption with escrow, updates and inventory, tamper detection and a WORM audit trail — with
 an English and German portal, a license-checked supply chain and a compliance pack (`docs/compliance/`).
 Revocation (Lock, Destroy, dead man's switch) ships disabled until an installation has passed its hardware
@@ -23,6 +22,13 @@ acceptance.
 
 ### Added
 
+- Pre-release versions (PDK-022): `make release-check` and the release workflow accept `x.y.z` and the SemVer
+  pre-releases `x.y.z-alpha.N`, `x.y.z-beta.N` and `x.y.z-rc.N`, nothing else. A pre-release's Debian packages carry
+  the version `x.y.z~alpha.N` (`~beta.N`, `~rc.N`), which sorts before `x.y.z`, so apt and dpkg upgrade from an alpha
+  to the release; the release assets are still named with the release version
+  (`paddock-agent_0.1.0-alpha.1_amd64-unsigned.deb`), because GitHub renames asset names with `~` and they must
+  match `SHA256SUMS`; its images are tagged with exactly that version, never `latest`. Agents update along
+  `0.1.0-alpha.1 < 0.1.0-alpha.2 < 0.1.0-beta.1 < 0.1.0-rc.1 < 0.1.0` and refuse a step back.
 - WAL archive lag alert (M6a decision 8, `docs/operations/monitoring.md`): the worker exports `paddock_backup_wal_last_archived_timestamp_seconds{stanza}` (the newest archived WAL segment of `paddock` and `authentik`, read with a bounded listing of the backup bucket, never a full one) and `paddock_backup_wal_stanzas`; `PaddockWALArchiveLag` fires when a database's newest archived segment is older than 15 minutes for 10 minutes, `PaddockWALArchiveLagMissing` when the age of a stanza is never exported for 30 minutes. Before, only the 26-hour backup alert watched the backups.
 - Restore runbook and drill (M6a step 3, A11, `docs/operations/restore.md`): the runbook restores both PostgreSQL databases with pgBackRest to the latest archived point, OpenBao from its newest snapshot into a fresh OpenBao, and then runs `paddock-server admin bump-bundle-seq --by 1000000`, `rebuild-cache` and `recompile --all` in the order of plan M6c. `make restore-drill` runs it on the development stack (`make up BACKUP=1`) with the acceptance subset and prints the measured RTO; it refuses unless `deploy/compose/.env` (not the process environment) says `PADDOCK_ENV=development`, no production secrets exist and the running stack uses no production overlay. A restore fails when it cannot stage the WAL up to the newest archived segment. `paddock-server backup decrypt <in> -` writes to stdout.
 - Monitoring (M6a step 4, A12, `docs/operations/monitoring.md`): the Compose profile `observability` runs Prometheus (`PROMETHEUS_IMAGE`, pinned; `prometheus` on the control plane, `prometheus-audit` on the audit host; development: started by `make up`, published on `127.0.0.1:9091`) with the alert rules of `deploy/compose/prometheus/alerts.yml`: role down, RabbitMQ dead-letter queues (critical for `dlq.audit.writer`), audit writer lag above 10 minutes and no audit consumer, compile latency p95 above 30 s, gateway 5xx rate, OpenBao sealed or unreachable, OSV data stale (M5c), backup older than 26 hours, certificate expiry within 14 days. RabbitMQ enables its bundled plugin `rabbitmq_prometheus`. The worker exports `paddock_openbao_sealed`, `paddock_openbao_reachable` and, with `PADDOCK_TLS_PROBE_HOSTS` (production overlay), `paddock_tls_certificate_expiry_timestamp_seconds{host}` and `paddock_tls_probe_success{host}`; `paddock_backup_last_success_timestamp_seconds` reads 0 for a kind without any backup, and a kind that cannot be listed no longer hides the others or stops the snapshot. The alerts `PaddockBackupAgeMissing`, `PaddockOpenBaoHealthMissing` and `PaddockCertificateExpiryMissing` (with `paddock_backup_kinds`, `paddock_tls_probe_hosts`) fire when those series never appear. Alertmanager and Grafana are not bundled. `make lint-prometheus` (part of `make lint`) checks the configuration and runs the rule tests. The install guide lists the outbound HTTPS the control plane needs, including Ubuntu's OSV feed for the worker.
@@ -209,6 +215,8 @@ acceptance.
 
 ### Fixed
 
+- CI: the trivy job saves its vulnerability database cache again (the cache step failed on root-owned files).
+- `docs/architecture.md`: five table-of-contents links point to their sections again.
 - Two declarative applies (`PUT /api/v1/config`, `paddockctl apply`) in the same organization at the same time could deadlock, and PostgreSQL rolled one back (an audited failure). Applies and dry runs of an organization now run one after another; the second one plans against the first one's result.
 - The attention count in the portal navigation is no longer a live region, so screen readers do not announce it on every page change; its label still names the number of open conditions.
 - An organization administrator who opens another page while the start page is still deciding stays there instead of being sent to the attention list a moment later.
@@ -288,5 +296,5 @@ acceptance.
   in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
-[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0
+[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.1...HEAD
+[0.1.0-alpha.1]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.1

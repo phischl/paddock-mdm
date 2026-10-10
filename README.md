@@ -29,8 +29,11 @@ and German.
   </picture>
 </p>
 
-Status: release 0.1.0 in preparation (milestones M0–M6b). Revocation (Lock, Destroy, dead man's switch) ships
-disabled until an installation has passed its hardware acceptance (`docs/operations/revocation-acceptance.md`).
+> [!WARNING]
+> **Alpha.** Paddock 0.1.0-alpha.1 is the first public pre-release (milestones M0–M6b), meant for evaluation, not
+> for production fleets. There are no upgrade guarantees between alpha releases. Revocation (Lock, Destroy, dead
+> man's switch) stays disabled behind `PADDOCK_REVOCATION_ENABLED` until its code has passed the second-person review
+> and an installation has passed its hardware acceptance (`docs/operations/revocation-acceptance.md`).
 
 | Read | For |
 | --- | --- |

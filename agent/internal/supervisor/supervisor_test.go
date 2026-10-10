@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -314,10 +315,48 @@ func TestReleaseBinding(t *testing.T) {
 	})
 }
 
+// alphaSequence is the release order of Paddock's pre-releases (PDK-022): alpha, beta and release candidates of a
+// version precede the version itself.
+var alphaSequence = []string{"0.1.0-alpha.1", "0.1.0-alpha.2", "0.1.0-beta.1", "0.1.0-rc.1", "0.1.0"}
+
+// TestPreReleaseSequence: the supervisor updates along the pre-release sequence and refuses every step back to an
+// earlier pre-release.
+func TestPreReleaseSequence(t *testing.T) {
+	t.Run("updates", func(t *testing.T) {
+		f := newFake(t)
+		f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script(alphaSequence[0], 0, f.good()))
+		f.start()
+		slot := "A"
+		for i, v := range alphaSequence[1:] {
+			_ = os.Remove(f.cfg.Result)
+			slot = map[string]string{"A": "B", "B": "A"}[slot]
+			f.stageAfterCheckin(v, script(v, 0, f.good()))
+			f.waitFor("the new agent checked in", f.checkedIn)
+			if r := f.endProbation(slot); r.Outcome != outcomeUpdated || r.Version != v || r.FromVersion != alphaSequence[i] {
+				t.Fatalf("%s → %s: result %+v", alphaSequence[i], v, r)
+			}
+		}
+	})
+	active := alphaSequence[2]
+	for _, v := range alphaSequence[:3] {
+		t.Run("refuses "+v+" over "+active, func(t *testing.T) {
+			f := newFake(t)
+			f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script(active, 0, f.good()))
+			f.start()
+			f.stage(v, script(v, 0, f.good()), nil)
+			if r := f.waitResult(10 * time.Second); r.Outcome != outcomeDowngradeRefused || r.FromVersion != active || f.active() != "A" {
+				t.Fatalf("result %+v, current %s", r, f.active())
+			}
+			f.expectStagingClean()
+		})
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
-	// Ascending by SemVer 2.0.0 precedence (its own example list, plus build metadata and wide numbers).
-	ordered := []string{"0.0.0-dev", "0.9.0", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta",
-		"1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.2.0", "1.10.0", "2.0.0", "10.0.0"}
+	// Ascending by SemVer 2.0.0 precedence (its own example list, Paddock's pre-release sequence, build metadata and
+	// wide numbers).
+	ordered := slices.Concat([]string{"0.0.0-dev"}, alphaSequence, []string{"0.9.0", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta",
+		"1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.2.0", "1.10.0", "2.0.0", "10.0.0"})
 	for i, a := range ordered {
 		for j, b := range ordered {
 			if got, want := compareVersions(a, b), cmpIndex(i, j); got != want {
