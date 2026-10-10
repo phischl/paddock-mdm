@@ -1,3 +1,5 @@
+import type { IconName } from './icons.gen'
+
 /** What the signed-in administrator may see; the session store provides these flags. */
 export interface NavigationAccess {
   isPlatform: boolean
@@ -7,10 +9,12 @@ export interface NavigationAccess {
   canReadGroups: boolean
 }
 
-/** One entry of the navigation drawer; label is a message key. */
+/** One entry of the navigation drawer; label is a message key, shortcut the g-sequence that opens it (plan M7c). */
 export interface NavigationItem {
   to: string
   label: string
+  icon: IconName
+  shortcut?: string
   visible: (access: NavigationAccess) => boolean
   testid?: string
 }
@@ -33,68 +37,84 @@ export const navigationGroups: readonly NavigationGroup[] = [
     key: 'overview',
     label: 'nav.groups.overview',
     items: [
-      { to: '/', label: 'nav.start', visible: () => true },
-      { to: '/attention', label: 'nav.attention', visible: orgReader, testid: 'nav-attention' },
+      { to: '/', label: 'nav.overview', icon: 'layout-dashboard', shortcut: 'g o', visible: () => true },
+      { to: '/attention', label: 'nav.attention', icon: 'bell', shortcut: 'g a', visible: orgReader, testid: 'nav-attention' },
     ],
   },
   {
     key: 'devices',
     label: 'nav.groups.devices',
     items: [
-      { to: '/devices', label: 'nav.devices', visible: orgReader },
-      { to: '/device-groups', label: 'nav.deviceGroups', visible: orgReader },
-      { to: '/enrollment-tokens', label: 'nav.enrollmentTokens', visible: (a) => a.canWrite },
+      { to: '/devices', label: 'nav.devices', icon: 'laptop', shortcut: 'g d', visible: orgReader },
+      { to: '/device-groups', label: 'nav.deviceGroups', icon: 'folder', visible: orgReader },
+      { to: '/enrollment-tokens', label: 'nav.enrollmentTokens', icon: 'ticket', visible: (a) => a.canWrite },
     ],
   },
   {
     key: 'configuration',
     label: 'nav.groups.configuration',
     items: [
-      { to: '/permission-profiles', label: 'nav.permissionProfiles', visible: orgReader },
-      { to: '/managed-files', label: 'nav.managedFiles', visible: orgReader },
-      { to: '/managed-units', label: 'nav.managedUnits', visible: orgReader },
-      { to: '/package-holds', label: 'nav.packageHolds', visible: orgReader },
-      { to: '/change-sets', label: 'nav.changeSets', visible: orgReader },
+      { to: '/permission-profiles', label: 'nav.permissionProfiles', icon: 'shield-check', visible: orgReader },
+      { to: '/managed-files', label: 'nav.managedFiles', icon: 'file-text', visible: orgReader },
+      { to: '/managed-units', label: 'nav.managedUnits', icon: 'cog', visible: orgReader },
+      { to: '/package-holds', label: 'nav.packageHolds', icon: 'package', visible: orgReader },
+      { to: '/change-sets', label: 'nav.changeSets', icon: 'diff', visible: orgReader },
     ],
   },
   {
     key: 'security',
     label: 'nav.groups.security',
     items: [
-      { to: '/revocations', label: 'nav.revocations', visible: (a) => a.canDelete },
-      { to: '/settings/dms', label: 'nav.dms', visible: orgReader },
-      { to: '/settings/login', label: 'nav.loginSettings', visible: orgReader },
+      { to: '/revocations', label: 'nav.revocations', icon: 'lock', visible: (a) => a.canDelete },
+      { to: '/settings/dms', label: 'nav.dms', icon: 'timer', visible: orgReader },
+      { to: '/settings/login', label: 'nav.loginSettings', icon: 'log-in', visible: orgReader },
     ],
   },
   {
     key: 'inventory',
     label: 'nav.groups.inventory',
     items: [
-      { to: '/software', label: 'nav.software', visible: orgReader },
-      { to: '/vulnerabilities', label: 'nav.vulnerabilities', visible: orgReader },
+      { to: '/software', label: 'nav.software', icon: 'package-search', shortcut: 'g s', visible: orgReader },
+      { to: '/vulnerabilities', label: 'nav.vulnerabilities', icon: 'bug', shortcut: 'g v', visible: orgReader },
     ],
   },
   {
     key: 'organization',
     label: 'nav.groups.organization',
     items: [
-      { to: '/users', label: 'nav.users', visible: orgReader },
-      { to: '/user-groups', label: 'nav.userGroups', visible: orgReader },
-      { to: '/api-tokens', label: 'nav.apiTokens', visible: orgReader },
-      { to: '/settings/updates', label: 'nav.updateSettings', visible: orgReader },
-      { to: '/audit', label: 'nav.audit', visible: (a) => a.canReadAudit },
+      { to: '/users', label: 'nav.users', icon: 'user', visible: orgReader },
+      { to: '/user-groups', label: 'nav.userGroups', icon: 'users', visible: orgReader },
+      { to: '/api-tokens', label: 'nav.apiTokens', icon: 'key', visible: orgReader },
+      { to: '/settings/updates', label: 'nav.updateSettings', icon: 'refresh-cw', visible: orgReader },
+      { to: '/audit', label: 'nav.audit', icon: 'scroll-text', shortcut: 'g l', visible: (a) => a.canReadAudit },
     ],
   },
   {
     key: 'platform',
     label: 'nav.groups.platform',
     items: [
-      { to: '/platform/organizations', label: 'nav.organizations', visible: (a) => a.isPlatform },
-      { to: '/platform/agent-releases', label: 'nav.agentReleases', visible: (a) => a.isPlatform },
-      { to: '/platform/ip-allowlist', label: 'nav.ipAllowlist', visible: (a) => a.isPlatform },
+      { to: '/platform/organizations', label: 'nav.organizations', icon: 'building-complex', visible: (a) => a.isPlatform },
+      { to: '/platform/agent-releases', label: 'nav.agentReleases', icon: 'rocket', visible: (a) => a.isPlatform },
+      { to: '/platform/ip-allowlist', label: 'nav.ipAllowlist', icon: 'globe-lock', visible: (a) => a.isPlatform },
     ],
   },
 ]
+
+/** The shortcut of the navigation item of a path, for hints next to links to it; '' when it has none. */
+export function shortcutOf(to: string): string {
+  return navigationGroups.flatMap((g) => g.items).find((i) => i.to === to)?.shortcut ?? ''
+}
+
+/** The sequence shortcuts (g + key) of the visible items: key → route. */
+export function shortcutRoutes(groups: NavigationGroup[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const g of groups) {
+    for (const i of g.items) {
+      if (i.shortcut?.startsWith('g ')) out[i.shortcut.slice(2)] = i.to
+    }
+  }
+  return out
+}
 
 /** The groups with the items the administrator may see; a group without any is left out. */
 export function visibleNavigation(access: NavigationAccess): NavigationGroup[] {

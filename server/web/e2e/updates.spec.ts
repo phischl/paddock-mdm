@@ -16,7 +16,7 @@ test('organization admin manages updates, holds and install now', async ({ page,
   test.setTimeout(180_000)
   const csp = watchCSP(page)
   await login(page, 'alice@acme.test', 'dev_alice_password')
-  await expect(page).toHaveURL(/\/(attention|device-groups)$/)
+  await expect(page).toHaveURL(/\/$/)
   const stamp = Date.now()
   const hostname = `e2e-upd-${stamp}`
   const groupName = `E2E updates ${stamp}`
@@ -100,7 +100,9 @@ test('organization admin manages updates, holds and install now', async ({ page,
   const card = page.getByTestId('device-updates')
   await expect(card.getByTestId('device-holds')).toHaveText(held)
   await expect(card.getByTestId('last-regular-run')).toHaveText('None reported yet')
-  await card.getByTestId('install-now').click()
+  // Install now is in the header band (plan M7c decision 29).
+  const header = page.getByTestId('device-header')
+  await header.getByTestId('install-now').click()
   dialog = page.getByRole('dialog', { name: `Install packages on ${hostname}` })
   await dialog.getByLabel('Packages').fill(`htop ${held}`)
   await expectAccessible(page)
@@ -109,7 +111,7 @@ test('organization admin manages updates, holds and install now', async ({ page,
   await dialog.getByLabel('Packages').fill('htop')
   await dialog.getByTestId('install-submit').click()
   await expect(dialog).toBeHidden()
-  await expect(card.getByRole('status')).toHaveText('The device installs the packages at its next check-in.')
+  await expect(header.getByRole('status')).toHaveText('The device installs the packages at its next check-in.')
   await expect(page.getByRole('cell', { name: 'Install packages now' })).toBeVisible()
 
   // Device group: install now for the members.

@@ -3,7 +3,6 @@ import { useI18n } from 'vue-i18n'
 import CvssScore from '../components/CvssScore.vue'
 import DataList from '../components/DataList.vue'
 import SeverityChip from '../components/SeverityChip.vue'
-import VulnerabilityTile from '../components/VulnerabilityTile.vue'
 import type { Vulnerability } from '../api/client'
 import { listVulnerabilities, severityFilter } from '../lib/inventory'
 import type { ListColumn } from '../lib/listQuery'
@@ -21,7 +20,6 @@ const columns: ListColumn[] = [
 <template>
   <section class="page">
     <h1>{{ t('inventory.vulnerabilitiesTitle') }}</h1>
-    <VulnerabilityTile />
     <p class="summary">
       {{ t('inventory.severityHintOrganization') }}
     </p>
@@ -32,6 +30,9 @@ const columns: ListColumn[] = [
       searchable
       default-sort="-cve"
       item-value="cve"
+      empty-icon="bug"
+      empty-title="inventory.empty.vulnerabilities.title"
+      empty-description="inventory.empty.vulnerabilities.description"
       data-testid="vulnerability-list"
     >
       <template #[`item.cve`]="{ item }: { item: Vulnerability }">

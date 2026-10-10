@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import type { AgentRelease } from '../api/client'
 import { agentReleaseFilters, listAgentReleases } from '../lib/agentReleases'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
+import { releaseStatus, rolloutStatus } from '../lib/status'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 
 const columns: ListColumn[] = [
   { key: 'version', title: 'agentReleases.version', sortable: true },
@@ -28,6 +30,9 @@ const columns: ListColumn[] = [
       searchable
       default-sort="-created_at"
       item-value="version"
+      empty-icon="rocket"
+      empty-title="agentReleases.empty.title"
+      empty-description="agentReleases.empty.description"
       data-testid="agent-release-list"
     >
       <template #[`item.version`]="{ item }: { item: AgentRelease }">
@@ -36,13 +41,24 @@ const columns: ListColumn[] = [
         </RouterLink>
       </template>
       <template #[`item.status`]="{ item }: { item: AgentRelease }">
-        {{ t('agentReleases.statuses.' + item.status) }}
+        <StatusChip
+          :status="releaseStatus(item.status).status"
+          :label="t(releaseStatus(item.status).label)"
+        />
       </template>
       <template #[`item.rollout_status`]="{ item }: { item: AgentRelease }">
-        {{ item.rollout_status ? t('agentReleases.rolloutStatuses.' + item.rollout_status) : t('agentReleases.noRollout') }}
+        <StatusChip
+          v-if="item.rollout_status"
+          :status="rolloutStatus(item.rollout_status).status"
+          :label="t(rolloutStatus(item.rollout_status).label)"
+        />
+        <span
+          v-else
+          class="pd-muted"
+        >{{ t('agentReleases.noRollout') }}</span>
       </template>
       <template #[`item.created_at`]="{ item }: { item: AgentRelease }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
     </DataList>
   </section>

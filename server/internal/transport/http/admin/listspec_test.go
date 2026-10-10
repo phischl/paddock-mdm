@@ -35,6 +35,7 @@ var lists = map[string]struct {
 	"listManagedFiles":       {managedFileList, "postgres/queries/managed_config.sql", "ListManagedFiles", "id"},
 	"listManagedUnits":       {managedUnitList, "postgres/queries/managed_config.sql", "ListManagedUnits", "id"},
 	"listAttention":          {attentionList, "postgres/queries/attention.sql", "ListAttention", "id"},
+	"listAttentionDevices":   {attentionDeviceList, "postgres/queries/attention.sql", "ListAttentionDevices", "hostname, device_id"},
 	"listPackageHolds":       {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},

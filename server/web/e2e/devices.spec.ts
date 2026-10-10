@@ -70,7 +70,8 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   const approve = page.getByRole('dialog', { name: 'Approve device' })
   await expect(approve.getByRole('button', { name: 'Cancel' })).toBeFocused()
   await approve.getByRole('button', { name: 'Approve' }).click()
-  await expect(page.getByTestId('device-state')).toHaveText('Active')
+  // Plan M7c decision 29: the state chip of an active device names its contact state.
+  await expect(page.getByTestId('device-state')).toHaveText(/^(Online|Never contacted)$/)
 
   // Group membership and a managed file for the group.
   const res = await page.request.post('/api/v1/device-groups', { headers: { 'X-Paddock-CSRF': '1' }, data: { name: groupName } })
@@ -97,13 +98,16 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await expect(page).toHaveURL(/[?&]q=/)
   await expect(page.getByRole('cell', { name: path, exact: true })).toBeVisible()
 
-  // The device detail shows the file in the effective configuration.
+  // The device detail shows the file in the effective configuration (Configuration tab).
   await page.goto('/devices/' + enrolled.device_id)
+  await page.getByTestId('tab-configuration').click()
+  await expect(page).toHaveURL(new RegExp(`/devices/${enrolled.device_id}/configuration`))
   await expect(page.getByTestId('effective-files')).toContainText(path)
   await expect(page.getByTestId('effective-files')).toContainText(groupName)
   await expectAccessible(page)
 
-  // Retiring requires typing the hostname.
+  // Retiring requires typing the hostname; it sits in the danger zone of the Overview tab.
+  await page.getByTestId('tab-overview').click()
   await page.getByTestId('device-retire').click()
   const retire = page.getByRole('dialog', { name: 'Retire device' })
   await expect(retire.getByRole('button', { name: 'Retire' })).toBeDisabled()

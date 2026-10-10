@@ -12,7 +12,7 @@ import (
 )
 
 const getAdminAccount = `-- name: GetAdminAccount :one
-SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at FROM admin_account WHERE id = $1
+SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme FROM admin_account WHERE id = $1
 `
 
 func (q *Queries) GetAdminAccount(ctx context.Context, id uuid.UUID) (AdminAccount, error) {
@@ -27,12 +27,13 @@ func (q *Queries) GetAdminAccount(ctx context.Context, id uuid.UUID) (AdminAccou
 		&i.Role,
 		&i.Locale,
 		&i.LastLoginAt,
+		&i.Theme,
 	)
 	return i, err
 }
 
 const getAdminAccountBySubject = `-- name: GetAdminAccountBySubject :one
-SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at FROM admin_account WHERE authentik_sub = $1
+SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme FROM admin_account WHERE authentik_sub = $1
 `
 
 func (q *Queries) GetAdminAccountBySubject(ctx context.Context, authentikSub string) (AdminAccount, error) {
@@ -47,12 +48,13 @@ func (q *Queries) GetAdminAccountBySubject(ctx context.Context, authentikSub str
 		&i.Role,
 		&i.Locale,
 		&i.LastLoginAt,
+		&i.Theme,
 	)
 	return i, err
 }
 
 const getPlatformAdmin = `-- name: GetPlatformAdmin :one
-SELECT id, authentik_sub, username, display_name, locale, last_login_at FROM platform_admin WHERE id = $1
+SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme FROM platform_admin WHERE id = $1
 `
 
 func (q *Queries) GetPlatformAdmin(ctx context.Context, id uuid.UUID) (PlatformAdmin, error) {
@@ -65,12 +67,13 @@ func (q *Queries) GetPlatformAdmin(ctx context.Context, id uuid.UUID) (PlatformA
 		&i.DisplayName,
 		&i.Locale,
 		&i.LastLoginAt,
+		&i.Theme,
 	)
 	return i, err
 }
 
 const getPlatformAdminBySubject = `-- name: GetPlatformAdminBySubject :one
-SELECT id, authentik_sub, username, display_name, locale, last_login_at FROM platform_admin WHERE authentik_sub = $1
+SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme FROM platform_admin WHERE authentik_sub = $1
 `
 
 func (q *Queries) GetPlatformAdminBySubject(ctx context.Context, authentikSub string) (PlatformAdmin, error) {
@@ -83,21 +86,25 @@ func (q *Queries) GetPlatformAdminBySubject(ctx context.Context, authentikSub st
 		&i.DisplayName,
 		&i.Locale,
 		&i.LastLoginAt,
+		&i.Theme,
 	)
 	return i, err
 }
 
-const updateAdminAccountLocale = `-- name: UpdateAdminAccountLocale :one
-UPDATE admin_account SET locale = $1 WHERE id = $2 RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at
+const updateAdminAccountSettings = `-- name: UpdateAdminAccountSettings :one
+UPDATE admin_account
+SET locale = coalesce($1, locale), theme = coalesce($2, theme)
+WHERE id = $3 RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme
 `
 
-type UpdateAdminAccountLocaleParams struct {
-	Locale string
+type UpdateAdminAccountSettingsParams struct {
+	Locale *string
+	Theme  *string
 	ID     uuid.UUID
 }
 
-func (q *Queries) UpdateAdminAccountLocale(ctx context.Context, arg UpdateAdminAccountLocaleParams) (AdminAccount, error) {
-	row := q.db.QueryRow(ctx, updateAdminAccountLocale, arg.Locale, arg.ID)
+func (q *Queries) UpdateAdminAccountSettings(ctx context.Context, arg UpdateAdminAccountSettingsParams) (AdminAccount, error) {
+	row := q.db.QueryRow(ctx, updateAdminAccountSettings, arg.Locale, arg.Theme, arg.ID)
 	var i AdminAccount
 	err := row.Scan(
 		&i.ID,
@@ -108,21 +115,25 @@ func (q *Queries) UpdateAdminAccountLocale(ctx context.Context, arg UpdateAdminA
 		&i.Role,
 		&i.Locale,
 		&i.LastLoginAt,
+		&i.Theme,
 	)
 	return i, err
 }
 
-const updatePlatformAdminLocale = `-- name: UpdatePlatformAdminLocale :one
-UPDATE platform_admin SET locale = $1 WHERE id = $2 RETURNING id, authentik_sub, username, display_name, locale, last_login_at
+const updatePlatformAdminSettings = `-- name: UpdatePlatformAdminSettings :one
+UPDATE platform_admin
+SET locale = coalesce($1, locale), theme = coalesce($2, theme)
+WHERE id = $3 RETURNING id, authentik_sub, username, display_name, locale, last_login_at, theme
 `
 
-type UpdatePlatformAdminLocaleParams struct {
-	Locale string
+type UpdatePlatformAdminSettingsParams struct {
+	Locale *string
+	Theme  *string
 	ID     uuid.UUID
 }
 
-func (q *Queries) UpdatePlatformAdminLocale(ctx context.Context, arg UpdatePlatformAdminLocaleParams) (PlatformAdmin, error) {
-	row := q.db.QueryRow(ctx, updatePlatformAdminLocale, arg.Locale, arg.ID)
+func (q *Queries) UpdatePlatformAdminSettings(ctx context.Context, arg UpdatePlatformAdminSettingsParams) (PlatformAdmin, error) {
+	row := q.db.QueryRow(ctx, updatePlatformAdminSettings, arg.Locale, arg.Theme, arg.ID)
 	var i PlatformAdmin
 	err := row.Scan(
 		&i.ID,
@@ -131,6 +142,7 @@ func (q *Queries) UpdatePlatformAdminLocale(ctx context.Context, arg UpdatePlatf
 		&i.DisplayName,
 		&i.Locale,
 		&i.LastLoginAt,
+		&i.Theme,
 	)
 	return i, err
 }
@@ -140,7 +152,7 @@ INSERT INTO admin_account (id, organization_id, authentik_sub, username, display
 VALUES ($1, $2, $3, $4, $5, $6, now())
 ON CONFLICT (authentik_sub) DO UPDATE
 SET username = EXCLUDED.username, display_name = EXCLUDED.display_name, role = EXCLUDED.role, last_login_at = now()
-RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at
+RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme
 `
 
 type UpsertAdminAccountParams struct {
@@ -171,6 +183,7 @@ func (q *Queries) UpsertAdminAccount(ctx context.Context, arg UpsertAdminAccount
 		&i.Role,
 		&i.Locale,
 		&i.LastLoginAt,
+		&i.Theme,
 	)
 	return i, err
 }
@@ -180,7 +193,7 @@ INSERT INTO platform_admin (id, authentik_sub, username, display_name, last_logi
 VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (authentik_sub) DO UPDATE
 SET username = EXCLUDED.username, display_name = EXCLUDED.display_name, last_login_at = now()
-RETURNING id, authentik_sub, username, display_name, locale, last_login_at
+RETURNING id, authentik_sub, username, display_name, locale, last_login_at, theme
 `
 
 type UpsertPlatformAdminParams struct {
@@ -205,6 +218,7 @@ func (q *Queries) UpsertPlatformAdmin(ctx context.Context, arg UpsertPlatformAdm
 		&i.DisplayName,
 		&i.Locale,
 		&i.LastLoginAt,
+		&i.Theme,
 	)
 	return i, err
 }

@@ -51,12 +51,13 @@ test('organization admin requests and cancels revocations of a device', async ({
   await expect(card.getByTestId('revocation-disabled')).toHaveCount(0)
   await expectAccessible(page)
 
-  // Lock: reason, step-up, typed hostname.
-  await card.getByLabel('Reason').fill('E2E: laptop reported stolen')
+  // Lock: step-up, then the reason and the typed hostname in the dialog (plan M7c decision 24).
   await stepUp(page, () => card.getByTestId('revocation-lock').click(), 'alice@acme.test', 'dev_alice_password', 'dev_alice_totp_key')
   const lock = page.getByRole('dialog', { name: 'Lock the device' })
   await expect(lock.getByRole('button', { name: 'Lock device' })).toBeDisabled()
   await lock.getByTestId('confirm-typed').locator('input').fill(hostname)
+  await expect(lock.getByRole('button', { name: 'Lock device' })).toBeDisabled()
+  await lock.getByTestId('confirm-reason').locator('textarea').fill('E2E: laptop reported stolen')
   await expect(lock.getByRole('button', { name: 'Lock device' })).toBeEnabled()
   await expectAccessible(page)
   await lock.getByRole('button', { name: 'Cancel' }).click()
@@ -67,10 +68,10 @@ test('organization admin requests and cancels revocations of a device', async ({
 
   // Destroy: waits for a second administrator.
   await authAgePassed(page)
-  await card.getByLabel('Reason').fill('E2E: decommissioned')
   await stepUp(page, () => card.getByTestId('revocation-destroy').click(), 'alice@acme.test', 'dev_alice_password', 'dev_alice_totp_key')
   const destroy = page.getByRole('dialog', { name: 'Destroy the device' })
   await expect(destroy).toContainText('A second administrator must approve this request')
+  await destroy.getByTestId('confirm-reason').locator('textarea').fill('E2E: decommissioned')
   await destroy.getByTestId('confirm-typed').locator('input').fill(hostname)
   await expect(destroy.getByRole('button', { name: 'Destroy device' })).toBeEnabled()
   await destroy.getByRole('button', { name: 'Destroy device' }).click()

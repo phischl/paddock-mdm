@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 )
@@ -37,6 +39,38 @@ func (a *Attention) List(ctx context.Context, query AttentionQuery) (Listed[pgst
 		out.Count = int(n)
 		out.Items, err = q.ListAttention(ctx, pgstore.ListAttentionParams{
 			QPattern: query.Page.QPattern, Kinds: kinds, Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
+		})
+		return err
+	})
+	return out, err
+}
+
+// AttentionDeviceQuery selects a page of the attention list grouped by device (plan M7c decision 27).
+type AttentionDeviceQuery struct {
+	Page  ListPage
+	Kinds []string
+	// DeviceID selects one device exactly (its page reads its conditions with it).
+	DeviceID *uuid.UUID
+}
+
+// ListDevices returns one page of devices with open conditions, every condition of a device most severe first.
+func (a *Attention) ListDevices(ctx context.Context, query AttentionDeviceQuery) (Listed[pgstore.ListAttentionDevicesRow], error) {
+	var out Listed[pgstore.ListAttentionDevicesRow]
+	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+		return out, err
+	}
+	err := a.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		kinds := nilIfEmpty(query.Kinds)
+		device := nullID(query.DeviceID)
+		n, err := q.CountAttentionDevices(ctx, pgstore.CountAttentionDevicesParams{
+			QPattern: query.Page.QPattern, Kinds: kinds, DeviceID: device, CountLimit: countLimit,
+		})
+		if err != nil {
+			return fmt.Errorf("count attention devices: %w", err)
+		}
+		out.Count = int(n)
+		out.Items, err = q.ListAttentionDevices(ctx, pgstore.ListAttentionDevicesParams{
+			QPattern: query.Page.QPattern, Kinds: kinds, DeviceID: device, Sort: query.Page.Sort, SkipRows: query.Page.Offset, MaxRows: query.Page.Limit,
 		})
 		return err
 	})

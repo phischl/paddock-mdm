@@ -19,6 +19,11 @@ test('organization admin switches the portal to German', async ({ page }) => {
     await page.keyboard.press('Escape')
 
     // The choice is stored on the account, not in the browser: a reload keeps it.
+    await page.goto('/')
+    await expect(page.getByRole('heading', { level: 1, name: 'Übersicht' })).toBeVisible()
+    await expect(page.getByTestId('overview-attention').getByRole('heading', { name: 'Handlungsbedarf' })).toBeVisible()
+    await expect(page.getByTestId('overview-updates').getByRole('heading', { name: 'Updates und Agent-Rollout' })).toBeVisible()
+    await expectAccessible(page)
     await page.goto('/devices')
     await expect(page.getByRole('heading', { level: 1, name: 'Geräte' })).toBeVisible()
     await expect(page.getByRole('columnheader', { name: 'Letzter Kontakt' })).toBeVisible()

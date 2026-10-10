@@ -1,0 +1,24 @@
+/* Type scale of the design spec §2 (plan M7c decision 11). */
+.pd-type-title { font-family: var(--pd-font-sans); font-size: 18px; line-height: 24px; font-weight: 600; }
+.pd-type-title-mono { font-family: var(--pd-font-mono); font-size: 20px; line-height: 26px; font-weight: 500; }
+.pd-type-section { font-family: var(--pd-font-sans); font-size: 13px; line-height: 18px; font-weight: 600; }
+.pd-type-body { font-family: var(--pd-font-sans); font-size: 13px; line-height: 19px; font-weight: 400; }
+.pd-type-table { font-family: var(--pd-font-sans); font-size: 12.5px; line-height: 18px; font-weight: 400; }
+.pd-type-label { font-family: var(--pd-font-sans); font-size: 12px; line-height: 16px; font-weight: 500; }
+.pd-type-caption { font-family: var(--pd-font-sans); font-size: 11px; line-height: 15px; font-weight: 400; }
+.pd-type-overline {
+  font-family: var(--pd-font-sans); font-size: 11px; line-height: 15px; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.pd-type-kpi { font-family: var(--pd-font-mono); font-size: 22px; line-height: 28px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.pd-type-data { font-family: var(--pd-font-mono); font-size: 12px; line-height: 18px; font-weight: 400; }
+.pd-type-kbd { font-family: var(--pd-font-mono); font-size: 11px; line-height: 14px; font-weight: 400; }
+
+.mono { font-family: var(--pd-font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.pd-muted { color: var(--pd-text-muted); }
+.pd-secondary { color: var(--pd-text-secondary); }
+.pd-tabular { font-variant-numeric: tabular-nums; }
+kbd.pd-kbd {
+  font-family: var(--pd-font-mono); font-size: 11px; line-height: 14px; color: var(--pd-text-secondary);
+  border: 1px solid var(--pd-border-strong); border-radius: var(--pd-radius-xs); padding: 0 5px; white-space: nowrap;
+}

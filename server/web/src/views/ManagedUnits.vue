@@ -2,17 +2,17 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import TimeCell from '../components/TimeCell.vue'
 import ManagedUnitForm from '../components/ManagedUnitForm.vue'
 import type { ManagedUnit } from '../api/client'
 import { groupFilter } from '../lib/devices'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { deleteManagedUnit, listManagedUnits, saveManagedUnit, type UnitInput } from '../lib/managedConfig'
 import { useManagedPage } from '../lib/managedPage'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const problemText = useProblemText()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
@@ -62,8 +62,20 @@ const columns = computed<ListColumn[]>(() => [
       searchable
       default-sort="unit"
       item-value="id"
+      empty-icon="cog"
+      empty-title="managed.units.empty.title"
+      empty-description="managed.units.empty.description"
       data-testid="managed-unit-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="session.canWrite"
+          color="primary"
+          @click="openDialog(null)"
+        >
+          {{ t('managed.units.create') }}
+        </v-btn>
+      </template>
       <template #[`item.device_group_id`]="{ item }: { item: ManagedUnit }">
         {{ groupName(item.device_group_id) }}
       </template>
@@ -71,10 +83,10 @@ const columns = computed<ListColumn[]>(() => [
         {{ t('managed.units.wantedState', { enabled: String(item.enabled), active: String(item.active) }) }}
       </template>
       <template #[`item.updated_at`]="{ item }: { item: ManagedUnit }">
-        {{ formatDateTime(item.updated_at, locale) }}
+        <TimeCell :iso="item.updated_at" />
       </template>
       <template #[`item.created_at`]="{ item }: { item: ManagedUnit }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
       <template #[`item.actions`]="{ item }: { item: ManagedUnit }">
         <div class="row-actions">

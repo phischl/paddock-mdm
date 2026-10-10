@@ -9,12 +9,18 @@ import { useProblemText } from '../lib/problems'
 import { listRevocations, requestRevocation, timeline, volumeResults, type RevokeAction, type VolumeResult } from '../lib/revocations'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import PdIcon from './PdIcon'
+import StatusChip from './StatusChip.vue'
+import { revocationStatus } from '../lib/status'
 
 /**
- * Lock and Destroy of a device (plan M4c decision 18): the reason, a step-up, the typed hostname, then the request;
- * below it the revocation timeline of the device's latest requests. A Destroy waits for a second administrator.
+ * The danger zone of a device (plan M7c decision 24; plan M4c decision 18 flows unchanged): Lock, Destroy and
+ * Retire, each with its own explanation, button and confirm dialog; the reason is collected in the dialog, no
+ * shared field. Lock and Destroy go through a step-up, the typed hostname and the request; a Destroy waits for a
+ * second administrator. Below the rows: the revocation timeline of the device's latest requests.
  */
-const props = defineProps<{ deviceId: string; hostname: string; revocable: boolean; presumedSelfLockedAt: string | null }>()
+const props = defineProps<{ deviceId: string; hostname: string; revocable: boolean; presumedSelfLockedAt: string | null; retirable: boolean }>()
+const emit = defineEmits<{ retire: [] }>()
 
 const { t, locale } = useI18n()
 const router = useRouter()
@@ -22,7 +28,6 @@ const confirm = useConfirm()
 const problemText = useProblemText()
 const session = useSessionStore()
 
-const reason = ref('')
 const problem = ref('')
 const requested = ref<RevocationRequest | null>(null)
 const requests = ref<RevocationRequest[]>([])
@@ -46,23 +51,22 @@ async function load(): Promise<void> {
   }
 }
 
-/** The request starts with a step-up; the reason waits in the step-up's pending action (it is not a secret). */
+/** The request starts with a step-up; the confirm dialog with the reason follows on return. */
 function start(action: RevokeAction): void {
   problem.value = ''
   requested.value = null
-  startStepUp(stepUpAction(action), props.deviceId, { reason: reason.value.trim() })
+  startStepUp(stepUpAction(action), props.deviceId, {})
 }
 
 async function resume(): Promise<void> {
   for (const action of ['lock', 'destroy'] as RevokeAction[]) {
-    const resumed = resumeStepUp<{ reason: string }>(stepUpAction(action), props.deviceId)
+    const resumed = resumeStepUp<Record<string, never>>(stepUpAction(action), props.deviceId)
     if (!resumed) continue
     await router.replace(withoutStepUpParam())
     if (resumed.failed) {
       problem.value = 'step_up_failed'
       return
     }
-    reason.value = resumed.payload.reason
     await revoke(action)
     return
   }
@@ -70,18 +74,18 @@ async function resume(): Promise<void> {
 
 async function revoke(action: RevokeAction): Promise<void> {
   const key = 'devices.revocation.' + action
-  const confirmed = await confirm({
+  const answer = await confirm({
     title: t(key + '.title'), message: t(key + '.confirm', { hostname: props.hostname }), confirmLabel: t(key + '.label'),
     destructive: true, requireTypedText: props.hostname,
+    reason: { label: t('devices.revocation.reason'), hint: t('devices.revocation.reasonHint'), required: true, maxLength: 500 },
   })
-  if (!confirmed) return
-  const res = await requestRevocation(props.deviceId, action, props.hostname, reason.value.trim())
+  if (!answer) return
+  const res = await requestRevocation(props.deviceId, action, props.hostname, answer.reason)
   if (typeof res === 'string') {
     problem.value = res
     return
   }
   requested.value = res
-  reason.value = ''
   await load()
 }
 
@@ -95,15 +99,27 @@ onMounted(async () => {
 <template>
   <section
     v-if="session.canDelete"
-    class="revocation"
+    id="danger-zone"
+    class="pd-danger"
+    :aria-labelledby="'danger-zone-title'"
     data-testid="revocation"
   >
-    <h2>{{ t('devices.revocation.title') }}</h2>
+    <div class="pd-danger-header">
+      <PdIcon name="triangle-alert" />
+      <h2
+        id="danger-zone-title"
+        tabindex="-1"
+        class="pd-danger-title"
+      >
+        {{ t('devices.danger.title') }}
+      </h2>
+      <span class="pd-danger-caption pd-type-caption">{{ t('devices.danger.caption') }}</span>
+    </div>
     <v-alert
       v-if="presumedSelfLockedAt"
       type="warning"
       variant="tonal"
-      class="conflict"
+      class="conflict pd-danger-alert"
       data-testid="presumed-self-locked"
     >
       {{ t('devices.revocation.presumedSelfLocked', { at: formatDateTime(presumedSelfLockedAt, locale) }) }}
@@ -112,52 +128,81 @@ onMounted(async () => {
       v-if="!session.me?.revocation_enabled"
       type="info"
       variant="tonal"
-      class="conflict"
+      class="conflict pd-danger-alert"
       data-testid="revocation-disabled"
     >
       {{ t('revocations.disabled') }}
     </v-alert>
     <template v-else-if="revocable">
-      <p class="summary">
-        {{ t('devices.revocation.hint') }}
-      </p>
-      <v-text-field
-        id="revocation-reason"
-        v-model="reason"
-        :label="t('devices.revocation.reason')"
-        :hint="t('devices.revocation.reasonHint')"
-        persistent-hint
-        counter="500"
-        maxlength="500"
-        autocomplete="off"
-      />
-      <div class="form-actions">
+      <div
+        class="pd-danger-row"
+        data-testid="danger-lock"
+      >
+        <div class="pd-danger-text">
+          <div class="pd-danger-row-title">
+            {{ t('devices.danger.lock.title') }}
+          </div>
+          <p>{{ t('devices.danger.lock.explanation') }}</p>
+        </div>
+        <v-btn
+          color="error"
+          variant="flat"
+          data-testid="revocation-lock"
+          @click="start('lock')"
+        >
+          {{ t('devices.danger.lock.label') }}
+        </v-btn>
+      </div>
+      <div
+        class="pd-danger-row"
+        data-testid="danger-destroy"
+      >
+        <div class="pd-danger-text">
+          <div class="pd-danger-row-title">
+            {{ t('devices.danger.destroy.title') }}
+          </div>
+          <p>{{ t('devices.danger.destroy.explanation') }}</p>
+        </div>
         <v-btn
           color="error"
           variant="outlined"
           data-testid="revocation-destroy"
           @click="start('destroy')"
         >
-          {{ t('devices.revocation.destroy.label') }}
-        </v-btn>
-        <v-btn
-          color="error"
-          data-testid="revocation-lock"
-          @click="start('lock')"
-        >
-          {{ t('devices.revocation.lock.label') }}
+          {{ t('devices.danger.destroy.label') }}
         </v-btn>
       </div>
     </template>
+    <div
+      v-if="retirable"
+      class="pd-danger-row"
+      data-testid="danger-retire"
+    >
+      <div class="pd-danger-text">
+        <div class="pd-danger-row-title">
+          {{ t('devices.danger.retire.title') }}
+        </div>
+        <p>{{ t('devices.danger.retire.explanation') }}</p>
+      </div>
+      <v-btn
+        color="error"
+        variant="outlined"
+        data-testid="device-retire"
+        @click="emit('retire')"
+      >
+        {{ t('devices.danger.retire.label') }}
+      </v-btn>
+    </div>
     <p
       v-if="problem"
-      class="form-error"
+      class="form-error pd-danger-note"
       role="alert"
     >
       {{ problemText(problem) }}
     </p>
     <p
       v-if="requested"
+      class="pd-danger-note"
       role="status"
       data-testid="revocation-requested"
     >
@@ -165,7 +210,7 @@ onMounted(async () => {
     </p>
     <v-table
       v-if="requests.length > 0"
-      class="table"
+      class="table pd-danger-timeline"
       data-testid="revocation-timeline"
     >
       <caption>{{ t('devices.revocation.timeline') }}</caption>
@@ -189,8 +234,11 @@ onMounted(async () => {
         >
           <td>{{ t('revocations.actions.' + r.action) }}</td>
           <td>
-            {{ t('revocations.statuses.' + r.status) }}
-            <span v-if="r.rejection">({{ r.rejection }})</span>
+            <StatusChip
+              :status="revocationStatus(r.status).status"
+              :label="t(revocationStatus(r.status).label)"
+            />
+            <span v-if="r.rejection"> ({{ r.rejection }})</span>
           </td>
           <td>
             <ol class="timeline">

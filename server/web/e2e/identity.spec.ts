@@ -117,6 +117,7 @@ test('organization admin manages users, groups, profiles and device logins', asy
   const enrolled = JSON.parse(execFileSync(devicesim, ['enroll', '--hostname', hostname], { input: config, encoding: 'utf8', timeout: 90_000 }))
   await page.goto('/devices/' + enrolled.device_id)
   await expect(page.getByRole('heading', { name: hostname })).toBeVisible()
+  await page.getByTestId('tab-access').click()
   await expect(page.getByTestId('agent-too-old')).toBeVisible()
   await page.getByTestId('login-users').locator('input').fill(username)
   await page.getByRole('option', { name: username }).click()

@@ -20,11 +20,12 @@ SELECT count(*) FROM (
     AND ($3::text[] IS NULL OR code = ANY($3::text[]))
     AND ($4::text[] IS NULL OR outcome = ANY($4::text[]))
     AND ($5::text[] IS NULL OR actor->>'type' = ANY($5::text[]))
-    AND ($6::text IS NULL
-         OR code ILIKE $6::text ESCAPE '\'
-         OR actor->>'display' ILIKE $6::text ESCAPE '\'
-         OR target->>'display' ILIKE $6::text ESCAPE '\')
-  LIMIT $7
+    AND ($6::text IS NULL OR target->>'id' = $6::text)
+    AND ($7::text IS NULL
+         OR code ILIKE $7::text ESCAPE '\'
+         OR actor->>'display' ILIKE $7::text ESCAPE '\'
+         OR target->>'display' ILIKE $7::text ESCAPE '\')
+  LIMIT $8
 ) matching
 `
 
@@ -34,6 +35,7 @@ type CountAuditEventsParams struct {
 	Codes      []string
 	Outcomes   []string
 	ActorTypes []string
+	TargetID   *string
 	QPattern   *string
 	CountLimit int32
 }
@@ -45,6 +47,7 @@ func (q *Queries) CountAuditEvents(ctx context.Context, arg CountAuditEventsPara
 		arg.Codes,
 		arg.Outcomes,
 		arg.ActorTypes,
+		arg.TargetID,
 		arg.QPattern,
 		arg.CountLimit,
 	)
@@ -233,19 +236,20 @@ WHERE occurred_at >= $1 AND occurred_at < $2
   AND ($3::text[] IS NULL OR code = ANY($3::text[]))
   AND ($4::text[] IS NULL OR outcome = ANY($4::text[]))
   AND ($5::text[] IS NULL OR actor->>'type' = ANY($5::text[]))
-  AND ($6::text IS NULL
-       OR code ILIKE $6::text ESCAPE '\'
-       OR actor->>'display' ILIKE $6::text ESCAPE '\'
-       OR target->>'display' ILIKE $6::text ESCAPE '\')
+  AND ($6::text IS NULL OR target->>'id' = $6::text)
+  AND ($7::text IS NULL
+       OR code ILIKE $7::text ESCAPE '\'
+       OR actor->>'display' ILIKE $7::text ESCAPE '\'
+       OR target->>'display' ILIKE $7::text ESCAPE '\')
 ORDER BY
-  CASE WHEN $7::text = 'occurred_at' THEN occurred_at END ASC,
-  CASE WHEN $7::text = '-occurred_at' THEN occurred_at END DESC,
-  CASE WHEN $7::text = 'code' THEN code END ASC,
-  CASE WHEN $7::text = '-code' THEN code END DESC,
-  CASE WHEN $7::text = 'outcome' THEN outcome END ASC,
-  CASE WHEN $7::text = '-outcome' THEN outcome END DESC,
+  CASE WHEN $8::text = 'occurred_at' THEN occurred_at END ASC,
+  CASE WHEN $8::text = '-occurred_at' THEN occurred_at END DESC,
+  CASE WHEN $8::text = 'code' THEN code END ASC,
+  CASE WHEN $8::text = '-code' THEN code END DESC,
+  CASE WHEN $8::text = 'outcome' THEN outcome END ASC,
+  CASE WHEN $8::text = '-outcome' THEN outcome END DESC,
   event_id
-LIMIT $9 OFFSET $8
+LIMIT $10 OFFSET $9
 `
 
 type ListAuditEventsParams struct {
@@ -254,6 +258,7 @@ type ListAuditEventsParams struct {
 	Codes      []string
 	Outcomes   []string
 	ActorTypes []string
+	TargetID   *string
 	QPattern   *string
 	Sort       string
 	SkipRows   int32
@@ -269,6 +274,7 @@ func (q *Queries) ListAuditEvents(ctx context.Context, arg ListAuditEventsParams
 		arg.Codes,
 		arg.Outcomes,
 		arg.ActorTypes,
+		arg.TargetID,
 		arg.QPattern,
 		arg.Sort,
 		arg.SkipRows,

@@ -36,6 +36,7 @@ type AdminAccount struct {
 	Role           string
 	Locale         string
 	LastLoginAt    *time.Time
+	Theme          string
 }
 
 type AgentArtifact struct {
@@ -484,6 +485,7 @@ type PlatformAdmin struct {
 	DisplayName  string
 	Locale       string
 	LastLoginAt  *time.Time
+	Theme        string
 }
 
 type ProfileAssignment struct {

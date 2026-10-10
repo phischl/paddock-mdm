@@ -1,6 +1,6 @@
 import {
-  api, listPage, problemCode, type Attention, type AttentionKind, type AttentionSort, type DeviceCommand,
-  type DeviceUpdates, type PackageHold, type PackageHoldSort, type UpdateSettings, type UpdateSettingsUpdate,
+  api, listPage, problemCode, type Attention, type AttentionDevice, type AttentionDeviceSort, type AttentionKind,
+  type AttentionSort, type DeviceCommand, type DeviceUpdates, type PackageHold, type PackageHoldSort, type UpdateSettings, type UpdateSettingsUpdate,
 } from '../api/client'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
@@ -173,6 +173,21 @@ export async function listAttention(p: ListParams): Promise<Page<Attention>> {
       params: { query: { page: p.page, page_size: p.page_size, sort: p.sort as AttentionSort, q: p.q, kind: p.kind as AttentionKind[] } },
     }),
   )
+}
+
+/** One page of the attention list grouped by device, every condition of a device most severe first. */
+export async function listAttentionDevices(p: ListParams): Promise<Page<AttentionDevice>> {
+  return listPage(
+    await api.GET('/api/v1/attention/devices', {
+      params: { query: { page: p.page, page_size: p.page_size, sort: p.sort as AttentionDeviceSort, q: p.q, kind: p.kind as AttentionKind[] } },
+    }),
+  )
+}
+
+/** The open conditions of one device (its page), selected by id; null when it has none. */
+export async function attentionOf(deviceID: string): Promise<AttentionDevice | null> {
+  const { data } = await api.GET('/api/v1/attention/devices', { params: { query: { device_id: deviceID, page_size: 10 } } })
+  return data?.items[0] ?? null
 }
 
 /** The number of open conditions (navigation badge, landing page); 0 when the list cannot be read. */

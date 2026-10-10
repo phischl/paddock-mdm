@@ -43,6 +43,7 @@ type Deps struct {
 	Inventory     *app.Inventory
 	Updates       *app.Updates
 	Attention     *app.Attention
+	Overview      *app.Overview
 	// IPAllowlist and IPGuard are the IP allow list of the administrative surfaces (plan M7a decisions 12 and 17);
 	// a nil IPGuard installs no enforcement (serveAPI always installs one).
 	IPAllowlist *app.IPAllowlist
@@ -162,8 +163,8 @@ func NewHandler(d Deps) http.Handler {
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
-		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, apiTokens: d.APITokens, declarative: d.Declarative,
-		ipAllowlist: d.IPAllowlist, now: d.Now,
+		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
+		declarative: d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

@@ -229,6 +229,12 @@ var isolationFixtures = map[string]isolationFixture{
 	"DELETE /api/v1/device-groups/{id}": {kind: isoItem, request: func(t *testing.T, w *isolationWorld) (string, any) {
 		return "/api/v1/device-groups/" + globexGroup(t, w), nil
 	}},
+	"GET /api/v1/overview": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/overview", nil
+	}},
+	"GET /api/v1/attention/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/attention/devices?page_size=100", nil
+	}},
 	"GET /api/v1/audit-events": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/audit-events?page_size=100", nil
 	}},
@@ -487,6 +493,8 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/devices": {
 		{"q": {"globex-iso"}},
 		{"state": {"active"}, "sort": {"-last_contact_at"}, "page_size": {"100"}},
+		{"contact": {"never", "ok"}, "page_size": {"100"}},
+		{"security_updates": {"overdue"}, "page_size": {"100"}},
 	},
 	"/api/v1/change-sets": {
 		{"q": {"carol"}},
@@ -501,6 +509,7 @@ var listIsolationQueries = map[string][]url.Values{
 	"/api/v1/package-holds": {{"q": {"globex-iso"}}, {"sort": {"-created_at"}, "page_size": {"100"}}},
 	// globex's waiting Destroy (seedGlobexDevices) is a revocation_pending condition.
 	"/api/v1/attention":                  {{"q": {"globex-iso"}}, {"kind": {"revocation_pending"}, "page_size": {"100"}}},
+	"/api/v1/attention/devices":          {{"q": {"globex-iso"}}, {"kind": {"revocation_pending"}, "sort": {"hostname"}, "page_size": {"100"}}},
 	"/api/v1/device-groups/{id}/devices": {{"q": {"globex-iso"}}, {"state": {"active"}}},
 	"/api/v1/users":                      {{"q": {"globex-iso"}}, {"source": {"local"}, "sort": {"-created_at"}, "page_size": {"100"}}},
 	"/api/v1/user-groups":                {{"q": {"globex-iso"}}},
@@ -546,4 +555,17 @@ func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 	}
 	delete(s, "updated_at")
 	return s
+}
+
+// listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c
+// decision 31: the audit log's target_id); the gate runs them like listIsolationQueries.
+var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
+	"/api/v1/attention/devices": {
+		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexDevice}} },
+	},
+	"/api/v1/audit-events": {
+		func(w *isolationWorld) url.Values {
+			return url.Values{"target_id": {w.globexDevice}, "page_size": {"100"}}
+		},
+	},
 }

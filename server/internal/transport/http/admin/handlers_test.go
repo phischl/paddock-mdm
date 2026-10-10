@@ -349,7 +349,9 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Revocations:   app.NewRevocations(runner, orgPool, e.stepUps, true),
 		DMS:           app.NewDMS(runner, orgPool, discardCommands{}, true, false),
 		Inventory:     app.NewInventory(orgPool),
-		AuditLog:      app.NewAuditLog(reader),
+		AuditLog:      app.NewAuditLog(reader, orgPool),
+		Attention:     app.NewAttention(orgPool),
+		Overview:      app.NewOverview(orgPool),
 		Runner:        runner,
 		Keys:          keys,
 		OIDC:          admin.NewOIDC(admin.OIDCConfig{}),
@@ -705,6 +707,33 @@ func TestRoleBoundaries(t *testing.T) {
 	bad := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "fr"}, skipReqCheck: true})
 	if bad.status != http.StatusBadRequest {
 		t.Fatalf("unsupported locale: %d", bad.status)
+	}
+	// The theme preference is stored on the account like the locale (plan M7c decision 1); a locale-only patch
+	// keeps it, the default is system.
+	if m.Theme != adminapi.MeThemeSystem {
+		t.Fatalf("default theme %q, want system", m.Theme)
+	}
+	theme := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"theme": "dark"}})
+	theme.decode(t, &m)
+	if theme.status != http.StatusOK || m.Theme != adminapi.MeThemeDark || m.Locale != adminapi.MeLocaleEn {
+		t.Fatalf("set theme: %d %s", theme.status, theme.body)
+	}
+	e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: map[string]any{"locale": "de"}}).decode(t, &m)
+	if m.Theme != adminapi.MeThemeDark || m.Locale != adminapi.MeLocaleDe {
+		t.Fatalf("locale patch changed the theme: %+v", m)
+	}
+	e.do(call{method: "GET", path: "/api/v1/me", cookie: alice}).decode(t, &m)
+	if m.Theme != adminapi.MeThemeDark {
+		t.Fatalf("GET /me theme %q, want dark", m.Theme)
+	}
+	for _, body := range []map[string]any{{"theme": "blue"}, {}} {
+		if r := e.do(call{method: "PATCH", path: "/api/v1/me", cookie: alice, body: body, skipReqCheck: true}); r.status != http.StatusBadRequest || r.problemCode(t) != "invalid_request" {
+			t.Fatalf("PATCH /me %v: %d %s", body, r.status, r.body)
+		}
+	}
+	e.do(call{method: "PATCH", path: "/api/v1/me", cookie: root, body: map[string]any{"theme": "light"}}).decode(t, &m)
+	if m.Theme != adminapi.MeThemeLight {
+		t.Fatalf("platform admin theme: %+v", m)
 	}
 	unknown := e.do(call{method: "GET", path: "/api/v1/me", cookie: &http.Cookie{Name: admin.SessionCookie, Value: "forged"}})
 	if unknown.status != http.StatusUnauthorized {

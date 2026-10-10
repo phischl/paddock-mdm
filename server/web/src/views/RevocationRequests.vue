@@ -3,20 +3,22 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import type { RevocationRequest } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { listRevocations, revocationFilters, reviewRevocation, reviewVerbs, type ReviewVerb } from '../lib/revocations'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { revocationStatus } from '../lib/status'
 
 /**
  * The organization's revocation requests (plan M4c decision 18): a Destroy waits here for a second administrator, who
  * approves or rejects it after a step-up and with the typed hostname; its requester can cancel it.
  */
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const router = useRouter()
 const confirm = useConfirm()
 const problemText = useProblemText()
@@ -120,6 +122,9 @@ onMounted(resume)
       searchable
       default-sort="-requested_at"
       item-value="id"
+      empty-icon="lock"
+      empty-title="revocations.empty.title"
+      empty-description="revocations.empty.description"
       data-testid="revocation-list"
     >
       <template #[`item.hostname`]="{ item }: { item: RevocationRequest }">
@@ -131,11 +136,18 @@ onMounted(resume)
         {{ t('revocations.actions.' + item.action) }}
       </template>
       <template #[`item.status`]="{ item }: { item: RevocationRequest }">
-        {{ t('revocations.statuses.' + item.status) }}
-        <span v-if="item.rejection">({{ item.rejection }})</span>
+        <StatusChip
+          :status="revocationStatus(item.status).status"
+          :label="t(revocationStatus(item.status).label)"
+          :title="item.rejection || undefined"
+        />
+        <span
+          v-if="item.rejection"
+          class="pd-type-caption pd-muted"
+        >({{ item.rejection }})</span>
       </template>
       <template #[`item.requested_at`]="{ item }: { item: RevocationRequest }">
-        {{ formatDateTime(item.requested_at, locale) }}
+        <TimeCell :iso="item.requested_at" />
       </template>
       <template #[`item.requested_by_username`]="{ item }: { item: RevocationRequest }">
         {{ item.requested_by_username ?? t('revocations.deadMansSwitch') }}

@@ -105,8 +105,20 @@ func (h *handlers) ListDevices(ctx context.Context, req adminapi.ListDevicesRequ
 	if err != nil {
 		return nil, err
 	}
+	contacts, err := listing.Enum("contact", req.Params.Contact)
+	if err != nil {
+		return nil, err
+	}
+	var security []adminapi.ListDevicesParamsSecurityUpdates
+	if req.Params.SecurityUpdates != nil {
+		security = append(security, *req.Params.SecurityUpdates)
+	}
+	overdue, err := listing.Enum("security_updates", &security)
+	if err != nil {
+		return nil, err
+	}
 	res, err := h.devices.List(ctx, app.DeviceQuery{Page: params.ListPage(), States: states, GroupID: req.Params.DeviceGroupId,
-		DiskStates: diskStates})
+		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0})
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +152,7 @@ func toDeviceRows(rows []pgstore.ListDevicesRow) []adminapi.Device {
 		if s := adminapi.DiskState(r.DiskState); s.Valid() {
 			items[i].DiskState = &s
 		}
+		items[i].Contact = adminapi.DeviceContact(r.Contact)
 	}
 	return items
 }
@@ -160,7 +173,8 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 	base := toDevice(d.Device, d.Status)
 	out := adminapi.DeviceDetail{
-		Id: base.Id, Hostname: base.Hostname, State: base.State, HardwareUuid: base.HardwareUuid, MachineId: base.MachineId,
+		Id: base.Id, Hostname: base.Hostname, State: base.State, Contact: adminapi.DeviceContact(d.Contact),
+		HardwareUuid: base.HardwareUuid, MachineId: base.MachineId,
 		OsRelease: base.OsRelease, EnrollmentTokenId: base.EnrollmentTokenId, EnrolledAt: base.EnrolledAt,
 		StateChangedAt: base.StateChangedAt, BundleVersion: base.BundleVersion, LastContactAt: base.LastContactAt,
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion,
@@ -266,7 +280,9 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	if err != nil {
 		return adminapi.Device{}, err
 	}
-	return toDevice(d.Device, d.Status), nil
+	out := toDevice(d.Device, d.Status)
+	out.Contact = adminapi.DeviceContact(d.Contact)
+	return out, nil
 }
 
 func (h *handlers) SetDeviceGroups(ctx context.Context, req adminapi.SetDeviceGroupsRequestObject) (adminapi.SetDeviceGroupsResponseObject, error) {

@@ -1,21 +1,27 @@
 import { createRouter, createWebHistory, type RouteLocationRaw } from 'vue-router'
 import { useSessionStore } from './stores/session'
-import { attentionCount } from './lib/updates'
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', name: 'home', component: () => import('./views/Home.vue') },
+    { path: '/', name: 'home', component: () => import('./views/Overview.vue') },
     { path: '/attention', name: 'attention', component: () => import('./views/Attention.vue') },
     { path: '/login-denied', name: 'login-denied', component: () => import('./views/LoginDenied.vue'), meta: { public: true } },
     { path: '/device-groups', name: 'device-groups', component: () => import('./views/DeviceGroups.vue') },
     { path: '/device-groups/:id', name: 'device-group', component: () => import('./views/DeviceGroupDetail.vue') },
     { path: '/devices', name: 'devices', component: () => import('./views/Devices.vue') },
-    { path: '/devices/:id', name: 'device', component: () => import('./views/DeviceDetail.vue') },
-    { path: '/devices/:id/software', name: 'device-software', component: () => import('./views/DeviceSoftware.vue') },
     {
-      path: '/devices/:id/vulnerabilities', name: 'device-vulnerabilities',
-      component: () => import('./views/DeviceVulnerabilities.vue'),
+      // The device frame (pane, header band, tabs) loads the device once; the tabs are its children (plan M7c decision 29).
+      path: '/devices/:id', component: () => import('./views/DeviceDetail.vue'),
+      children: [
+        { path: '', name: 'device', component: () => import('./views/DeviceOverview.vue') },
+        { path: 'software', name: 'device-software', component: () => import('./views/DeviceSoftware.vue') },
+        { path: 'vulnerabilities', name: 'device-vulnerabilities', component: () => import('./views/DeviceVulnerabilities.vue') },
+        { path: 'access', name: 'device-access', component: () => import('./views/DeviceAccess.vue') },
+        { path: 'configuration', name: 'device-configuration', component: () => import('./views/DeviceConfiguration.vue') },
+        { path: 'commands', name: 'device-commands', component: () => import('./views/DeviceCommands.vue') },
+        { path: 'audit', name: 'device-audit', component: () => import('./views/DeviceAudit.vue') },
+      ],
     },
     { path: '/software', name: 'software', component: () => import('./views/Software.vue') },
     { path: '/vulnerabilities', name: 'vulnerabilities', component: () => import('./views/Vulnerabilities.vue') },
@@ -48,7 +54,10 @@ export const router = createRouter({
   ],
 })
 
-/** Start page by role. */
+/**
+ * Start page by role (plan M7c decision 28): administrators and operators start on the overview, auditors on the
+ * audit log, platform administrators on the organizations.
+ */
 export function homeFor(role: string | null | undefined): RouteLocationRaw {
   switch (role) {
     case 'platform_admin':
@@ -56,24 +65,15 @@ export function homeFor(role: string | null | undefined): RouteLocationRaw {
     case 'org_auditor':
       return { name: 'audit' }
     default:
-      return { name: 'device-groups' }
+      return { name: 'home' }
   }
 }
 
-// navigations counts the guarded navigations: vue-router follows a redirect even when a later navigation started
-// while the guard waited, so a slow start page decision would take the user away from where they went meanwhile.
-let navigations = 0
-
 router.beforeEach(async (to) => {
-  const navigation = ++navigations
   if (to.meta.public) return true
   const session = useSessionStore()
   const me = await session.load()
   if (!me) return false // the API client redirects to the login
-  // Organization administrators start on the attention list while it has entries (plan M5b decision 11).
-  if (to.name === 'home' && me.role === 'org_admin' && (await attentionCount()) > 0) {
-    return navigation === navigations ? { name: 'attention' } : false
-  }
-  if (to.name === 'home') return homeFor(me.role)
+  if (to.name === 'home' && (me.role === 'platform_admin' || me.role === 'org_auditor')) return homeFor(me.role)
   return true
 })

@@ -3,11 +3,13 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import EffectiveProfileView from '../components/EffectiveProfileView.vue'
+import StatusChip from '../components/StatusChip.vue'
 import type { UserDetail, UserEffectiveProfile, UserGroup } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { allDevices } from '../lib/devices'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
+import { userLockStatus } from '../lib/status'
 import { allUserGroups } from '../lib/userGroups'
 import { deleteUser, getEffectiveProfile, getUser, setLocked, updateUser } from '../lib/users'
 import { useSessionStore } from '../stores/session'
@@ -211,8 +213,13 @@ async function saveEdit(): Promise<void> {
             <th scope="row">
               {{ t('users.lockState') }}
             </th>
-            <td data-testid="user-lock-state">
-              {{ user.locked && user.locked_at ? t('users.lockedSince', { at: formatDateTime(user.locked_at, locale) }) : t('users.notLocked') }}
+            <td>
+              <StatusChip
+                :status="userLockStatus(user.locked).status"
+                :label="t('users.notLocked')"
+              >
+                <span data-testid="user-lock-state">{{ user.locked && user.locked_at ? t('users.lockedSince', { at: formatDateTime(user.locked_at, locale) }) : t('users.notLocked') }}</span>
+              </StatusChip>
             </td>
           </tr>
           <tr>

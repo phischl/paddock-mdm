@@ -962,6 +962,40 @@ export interface paths {
         patch: operations["updatePackageHold"];
         trace?: never;
     };
+    "/api/v1/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The numbers of the overview page, computed in one transaction; never cached. */
+        get: operations["getOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attention/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The attention list grouped by device: one item per device with an open condition, its conditions most severe first. A kind filter selects devices with at least one matching condition; all conditions of the device are listed. */
+        get: operations["listAttentionDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attention": {
         parameters: {
             query?: never;
@@ -1976,6 +2010,11 @@ export interface components {
             /** @enum {string} */
             locale: "en" | "de";
             /**
+             * @description Portal theme preference; system follows prefers-color-scheme. An API token answers system.
+             * @enum {string}
+             */
+            theme: "system" | "light" | "dark";
+            /**
              * @description PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
              *     dead man's switch answer 403 revocation_disabled.
              */
@@ -2009,9 +2048,12 @@ export interface components {
             /** @description The oldest login a step-up callback accepts (max_age). */
             max_auth_age_seconds: number;
         };
+        /** @description A patch of the account settings; at least one field. */
         MeUpdate: {
             /** @enum {string} */
-            locale: "en" | "de";
+            locale?: "en" | "de";
+            /** @enum {string} */
+            theme?: "system" | "light" | "dark";
         };
         DeviceGroup: {
             /** Format: uuid */
@@ -2230,7 +2272,15 @@ export interface components {
             id: string;
             display?: string;
         };
+        AuditDeviceRef: {
+            /** Format: uuid */
+            id: string;
+            /** @description Current hostname, resolved at read time; null when the organization has no such device. */
+            hostname: string | null;
+        };
         AuditEvent: {
+            /** @description The device the event concerns (target of type device, else params.device_id); read-time enrichment, the stored event is unchanged. */
+            device: components["schemas"]["AuditDeviceRef"] | null;
             /** Format: uuid */
             event_id: string;
             /** Format: date-time */
@@ -2471,6 +2521,11 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /**
+         * @description Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; ok otherwise. Devices that are not active report ok or never.
+         * @enum {string}
+         */
+        DeviceContact: "never" | "ok" | "stale_warning" | "stale_critical" | "presumed_lost";
         /** @enum {string} */
         DeviceState: "pending" | "active" | "rejected" | "quarantined" | "retired";
         Device: {
@@ -2478,6 +2533,7 @@ export interface components {
             id: string;
             hostname: string;
             state: components["schemas"]["DeviceState"];
+            contact: components["schemas"]["DeviceContact"];
             hardware_uuid: string | null;
             machine_id: string | null;
             os_release: {
@@ -2845,6 +2901,122 @@ export interface components {
             total_capped: boolean;
             /** @description Applied sort. */
             sort: string;
+        };
+        AttentionCondition: {
+            kind: components["schemas"]["AttentionKind"];
+            /** Format: date-time */
+            since: string;
+            detail: string;
+        };
+        AttentionDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            state: components["schemas"]["DeviceState"];
+            os_release: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            last_contact_at: string | null;
+            /**
+             * @description Of the most severe condition.
+             * @enum {string}
+             */
+            severity: "info" | "warn" | "critical";
+            /**
+             * Format: date-time
+             * @description Newest condition.
+             */
+            since: string;
+            conditions: components["schemas"]["AttentionCondition"][];
+        };
+        AttentionDevicePage: {
+            items: components["schemas"]["AttentionDevice"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        Overview: {
+            /** Format: date-time */
+            generated_at: string;
+            devices: components["schemas"]["OverviewDevices"];
+            encryption: components["schemas"]["OverviewEncryption"];
+            vulnerabilities: components["schemas"]["OverviewVulnerabilities"];
+            updates: components["schemas"]["OverviewUpdates"];
+            attention: components["schemas"]["OverviewAttention"];
+        };
+        OverviewDevices: {
+            /** @description pending + active + quarantined */
+            total: number;
+            active: number;
+            pending: number;
+            quarantined: number;
+            retired: number;
+            rejected: number;
+            /** @description Active devices in contact (none of the buckets below). */
+            online: number;
+            /** @description Active devices with an open stale_warning alert. */
+            silent: number;
+            /** @description Active devices with an open stale_critical alert. */
+            silent_critical: number;
+            presumed_lost: number;
+            never_contacted: number;
+        };
+        OverviewEncryption: {
+            /** @description Active devices whose disk state is compliant. */
+            encrypted: number;
+            not_encrypted: number;
+            /** @description unmanaged, tpm_missing, tpm_pin_missing or escrow_pending. */
+            partial: number;
+            not_reported: number;
+        };
+        OverviewVulnerabilities: {
+            by_highest_severity: components["schemas"]["OverviewSeverityBuckets"];
+            /** @description Distinct CVEs of critical or high severity, counted like GET /api/v1/vulnerabilities?severity=critical&severity=high. */
+            critical_high_cves: number;
+            /** @description The CVEs with the highest severity, then the most devices. */
+            top: components["schemas"]["OverviewTopCVE"][];
+        };
+        /** @description Active or quarantined devices by the severity of their worst finding; none = no findings. */
+        OverviewSeverityBuckets: {
+            critical: number;
+            high: number;
+            medium: number;
+            low: number;
+            unknown: number;
+            none: number;
+        };
+        OverviewTopCVE: {
+            cve: string;
+            severity: components["schemas"]["Severity"];
+            devices: number;
+            packages: string[];
+        };
+        OverviewUpdates: {
+            /** @description Active devices counted like GET /api/v1/devices?state=active&security_updates=overdue. */
+            security_overdue: number;
+            reboot_required: number;
+            agent: components["schemas"]["OverviewAgent"];
+            os_releases: components["schemas"]["OverviewOSRelease"][];
+        };
+        OverviewAgent: {
+            current_version: string | null;
+            on_current: number;
+            outdated: number;
+            unknown: number;
+        };
+        OverviewOSRelease: {
+            release: string;
+            devices: number;
+        };
+        OverviewAttention: {
+            conditions: number;
+            devices: number;
         };
         /** @enum {string} */
         RevocationAction: "lock" | "destroy" | "self_lock";
@@ -3583,6 +3755,8 @@ export interface components {
         PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
+        /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
+        AttentionDeviceSort: "severity" | "-severity" | "hostname" | "-hostname" | "since" | "-since";
         /** @description Only definitions scoped to this device group. */
         DeviceGroupFilter: string;
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -3946,6 +4120,8 @@ export interface operations {
                 sort?: components["parameters"]["AuditEventSort"];
                 /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
                 q?: components["parameters"]["Search"];
+                /** @description Exact target id (for example a device id). */
+                target_id?: string;
                 /** @description RFC 3339; default to - 7 days. */
                 from?: string;
                 /** @description RFC 3339; default now. The range may span at most 92 days (400 range_too_large). */
@@ -4414,6 +4590,10 @@ export interface operations {
                 device_group_id?: string;
                 /** @description Repeatable. Disk encryption state of the last check-in (plan M4b decision 14). */
                 disk_state?: components["schemas"]["DiskState"][];
+                /** @description Repeatable. Contact state of the device (plan M7c §12 open point 1). */
+                contact?: components["schemas"]["DeviceContact"][];
+                /** @description overdue = devices that have contacted Paddock but report no successful security update run within the last 48 hours (the overview's "Security updates overdue", plan M7c amendment 2026-10-10). */
+                security_updates?: "overdue";
             };
             header?: never;
             path?: never;
@@ -5731,6 +5911,63 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    getOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The overview of the organization's fleet. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Overview"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    listAttentionDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
+                sort?: components["parameters"]["AttentionDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only this device (exact match; the device page reads its conditions with it). */
+                device_id?: string;
+                /** @description Repeatable. */
+                kind?: components["schemas"]["AttentionKind"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of devices with their open conditions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttentionDevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     listAttention: {

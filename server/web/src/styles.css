@@ -1,78 +1,369 @@
-/* Paddock portal layout. Components come from Vuetify (theme colors in src/plugins/vuetify.ts); this file only
-   arranges pages. Colors meet WCAG 2.1 AA contrast. */
-:root {
-  --danger: #a4161a;
-  --muted: #4a5551;
-  --focus: #1f6feb;
+/* Paddock portal layout (ADR 0023). Colours come only from the --pd-* tokens of styles/tokens.css (both themes) and
+   Vuetify's --v-theme-* variables; src/__tests__/noHexColors.test.ts fails on a literal colour here. */
+body, .v-application {
+  font-family: var(--pd-font-sans);
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--pd-text-primary);
 }
-
-:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.75rem; }
+.v-application { background: var(--pd-surface-0); }
+a { color: var(--pd-link); }
+a:hover, a:focus-visible { color: var(--pd-link-hover); }
+:focus-visible { outline: none; box-shadow: var(--pd-focus-ring); border-radius: var(--pd-radius-xs); }
+h1 { font-size: 18px; line-height: 24px; font-weight: 600; margin: 0 0 0.75rem; }
+h2 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
+h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 
 .skip-link { position: absolute; left: -9999px; top: 0; }
-.skip-link:focus { left: 1rem; top: 1rem; background: #fff; padding: 0.5rem 1rem; z-index: 3000; }
+.skip-link:focus {
+  left: 1rem; top: 1rem; background: var(--pd-surface-1); color: var(--pd-text-primary); padding: 0.5rem 1rem; z-index: 3000;
+  border: 1px solid var(--pd-border); border-radius: var(--pd-radius-sm);
+}
 
-/* App bar and navigation drawer (the drawer replaced the app bar links, which did not fit). */
-.brand .app-name { font-weight: 700; }
-.brand .org-name { margin-left: 0.75rem; font-size: 1rem; font-weight: 400; }
+/* App bar and navigation drawer. */
+.brand .app-name { font-weight: 600; }
+.brand .org-name { margin-left: 0.75rem; font-size: 13px; font-weight: 400; color: var(--pd-text-secondary); }
 .user-button { text-transform: none; letter-spacing: normal; }
-.user-button .v-avatar { font-weight: 700; }
+.user-button .v-avatar { font-weight: 600; }
 .user-button-name { margin-left: 0.5rem; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-groups { padding: 0 8px 8px; }
 .nav-groups .v-list-item { margin-bottom: 2px; }
 @media (max-width: 599.98px) {
-  .brand .app-name, .user-button-name { display: none; }
+  .brand .app-name, .brand .pd-brand-sep, .user-button .user-button-name { display: none; }
   .brand .org-name { margin-left: 0; }
 }
 
-.page { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
+.page { max-width: 1240px; margin: 0 auto; padding: 16px 20px 32px; }
 .page.narrow { max-width: 36rem; }
-.page-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-.summary { color: var(--muted); margin-top: 0; }
+.page-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.summary { color: var(--pd-text-muted); margin-top: 0; }
+@media (max-width: 599.98px) {
+  .page { padding: 12px 16px 24px; }
+}
+
+/* Panels: bordered surfaces with a header line (design spec §4). */
+.pd-panel {
+  background: var(--pd-surface-1); border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md);
+}
+.pd-panel-header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--pd-border);
+}
+.pd-panel-header .pd-panel-link { margin-left: auto; font-size: 12px; text-decoration: none; }
+.pd-panel-body { padding: 12px 14px; }
+.v-card { border: 1px solid var(--pd-border); }
 
 .form { display: flex; flex-direction: column; gap: 0.5rem; }
-.form-error { color: var(--danger); font-weight: 600; }
+.form-error { color: var(--pd-status-critical-fg); font-weight: 600; }
 .form-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
-.filters { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-bottom: 1rem; }
+.filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; }
 .filters .v-input { flex: 0 1 14rem; }
 
-.table { margin-bottom: 1rem; }
+.table { margin-bottom: 0.75rem; }
 .list-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
-.list-footer .page-size { flex: 0 0 10rem; }
+.list-footer .page-size { flex: 0 0 9rem; }
 .list-footer .v-pagination { margin-left: auto; }
-.row-actions { display: flex; gap: 0.5rem; }
-.outcome-success { color: #1d5d2f; }
-.outcome-failure, .outcome-denied { color: var(--danger); font-weight: 600; }
-.outcome-unknown { color: #7a4b00; font-weight: 600; }
+.row-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 
 .link-button {
   display: inline-flex; align-items: center; justify-content: center;
-  background: #1f5135; color: #fff; border-radius: 4px; padding: 0.5rem 1rem; text-decoration: none;
+  background: rgb(var(--v-theme-primary)); color: rgb(var(--v-theme-on-primary)); border-radius: var(--pd-radius-sm);
+  padding: 0.4rem 0.9rem; text-decoration: none;
 }
-.link-button:hover { background: #163b27; }
+.link-button:hover { filter: brightness(0.9); color: rgb(var(--v-theme-on-primary)); }
 
-.facts th { width: 14rem; font-weight: 600; text-align: left; }
+.facts th { width: 14rem; font-weight: 500; text-align: left; color: var(--pd-text-secondary); vertical-align: top; }
+.facts td { font-family: var(--pd-font-mono); font-size: 12px; overflow-wrap: anywhere; }
 .form-row { display: flex; gap: 1rem; }
 .form-row > * { flex: 1; }
-.config-text textarea { font-family: ui-monospace, monospace; }
+.config-text textarea { font-family: var(--pd-font-mono); }
 .conflict { margin-bottom: 1rem; }
-.state-quarantined, .state-rejected, .state-retired { color: var(--danger); font-weight: 600; }
-.state-pending { color: #7a4b00; font-weight: 600; }
-.mono { font-family: ui-monospace, monospace; word-break: break-all; }
 .timeline { margin: 0; padding-left: 1.25rem; }
 
 /* Identity and privileges (plan M3a step 5). */
-.badge { display: inline-block; border-radius: 4px; padding: 0 0.4rem; font-size: 0.8125rem; border: 1px solid currentColor; }
-.badge-synced { color: #1d4f7a; }
-.badge-local { color: var(--muted); }
-.badge-warning { color: #7a4b00; font-weight: 600; margin-left: 0.5rem; }
-.badge-danger { color: var(--danger); font-weight: 600; margin-left: 0.5rem; }
 .chip-link { margin-right: 0.75rem; }
-.command { display: block; font-family: ui-monospace, monospace; word-break: break-all; }
-.settings-form fieldset { border: 0; padding: 0; margin: 0 0 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
-.settings-form legend { font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem; }
+.command { display: block; font-family: var(--pd-font-mono); overflow-wrap: anywhere; }
+/* Settings forms (plan M7c decision 25): one panel per fieldset, fields as wide as their content. */
+.settings-form { max-width: 48rem; }
+.settings-form fieldset {
+  background: var(--pd-surface-1); border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md);
+  padding: 12px 14px 14px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 0.5rem; min-width: 0;
+}
+.settings-form legend { font-size: 13px; line-height: 18px; font-weight: 600; padding: 0 4px; margin-left: -4px; }
+.settings-form .v-input { max-width: 24rem; width: 100%; }
+.settings-form .v-input:has(input[type="number"]), .settings-form .v-input:has(input[type="time"]),
+.settings-form .v-input.pd-field-short { max-width: 12rem; }
+.settings-form .v-switch, .settings-form .v-input:has(textarea) { max-width: none; }
 
 /* Local administrator (plan M4a step 6). */
 .revealed-password { display: flex; gap: 0.5rem; align-items: center; }
 .revealed-password .v-text-field { flex: 1; }
-.revealed-password input { font-family: ui-monospace, monospace; }
+.revealed-password input { font-family: var(--pd-font-mono); }
+
+/* Vuetify tables on the token surfaces (design spec §4). */
+.v-table { background: var(--pd-surface-1); color: var(--pd-text-primary); font-size: 12.5px; }
+.v-table .v-data-table__th, .v-table th {
+  background: var(--pd-table-head); color: var(--pd-text-secondary); font-size: 12px; font-weight: 500;
+  border-bottom: 1px solid var(--pd-border) !important;
+}
+.v-table .v-data-table__td, .v-table td { border-bottom: 1px solid var(--pd-border-subtle) !important; }
+.v-table tbody tr:hover { background: var(--pd-row-hover); }
+.v-table td, .v-table th { font-variant-numeric: tabular-nums; }
+
+/* Status chips (plan M7c decision 19): a dot and a label, never colour alone. */
+.pd-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; line-height: 16px; font-weight: 500;
+  padding: 1px 6px; border-radius: var(--pd-radius-xs); white-space: nowrap; vertical-align: middle;
+}
+.pd-chip-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: currentColor; }
+.pd-chip--ok { color: var(--pd-status-ok-fg); background: var(--pd-status-ok-bg); }
+.pd-chip--ok .pd-chip-dot { background: var(--pd-status-ok-mark); }
+.pd-chip--warn { color: var(--pd-status-warn-fg); background: var(--pd-status-warn-bg); }
+.pd-chip--warn .pd-chip-dot { background: var(--pd-status-warn-mark); }
+.pd-chip--critical { color: var(--pd-status-critical-fg); background: var(--pd-status-critical-bg); }
+.pd-chip--critical .pd-chip-dot { background: var(--pd-status-critical-mark); }
+.pd-chip--info { color: var(--pd-status-info-fg); background: var(--pd-status-info-bg); }
+.pd-chip--info .pd-chip-dot { background: var(--pd-status-info-mark); }
+.pd-chip--neutral { color: var(--pd-status-neutral-fg); background: var(--pd-status-neutral-bg); }
+.pd-chip--neutral .pd-chip-dot { background: var(--pd-status-neutral-mark); }
+.pd-chip--sev-critical { color: var(--pd-sev-critical-fg); background: var(--pd-sev-critical-bg); }
+.pd-chip--sev-critical .pd-chip-dot { background: var(--pd-sev-critical-mark); }
+.pd-chip--sev-high { color: var(--pd-sev-high-fg); background: var(--pd-sev-high-bg); }
+.pd-chip--sev-high .pd-chip-dot { background: var(--pd-sev-high-mark); }
+.pd-chip--sev-medium { color: var(--pd-sev-medium-fg); background: var(--pd-sev-medium-bg); }
+.pd-chip--sev-medium .pd-chip-dot { background: var(--pd-sev-medium-mark); }
+.pd-chip--sev-low { color: var(--pd-sev-low-fg); background: var(--pd-sev-low-bg); }
+.pd-chip--sev-low .pd-chip-dot { background: var(--pd-sev-low-mark); }
+.pd-chip--sev-unknown { color: var(--pd-sev-unknown-fg); background: var(--pd-sev-unknown-bg); }
+.pd-chip--sev-unknown .pd-chip-dot { background: var(--pd-sev-unknown-mark); }
+a.pd-pill { border-radius: var(--pd-radius-pill); padding: 3px 10px; text-decoration: none; margin-right: 4px; }
+a.pd-pill:hover { filter: brightness(0.95); }
+
+/* Shell: app bar, command field, navigation drawer (plan M7c decisions 13–15). */
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.pd-appbar.v-toolbar {
+  background: var(--pd-surface-1); color: var(--pd-text-primary); border-bottom: 1px solid var(--pd-border);
+}
+.pd-appbar .v-toolbar__content { gap: 4px; padding-right: 8px; }
+.pd-logo { margin: 0 6px 0 2px; }
+.brand { flex: 0 1 auto; min-width: 0; }
+.brand .v-toolbar-title__placeholder { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.brand .pd-brand-sep { color: var(--pd-text-muted); }
+.brand .org-name { margin-left: 0; }
+.pd-command {
+  flex: 1 1 280px; max-width: 520px; min-width: 0; margin: 0 auto; display: flex; align-items: center; gap: 8px;
+  background: var(--pd-surface-input); border: 1px solid var(--pd-border-strong); border-radius: var(--pd-radius-sm);
+  padding: 3px 10px; color: var(--pd-text-muted); cursor: text;
+}
+.pd-command:focus-within { box-shadow: var(--pd-focus-ring); }
+.pd-command input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--pd-text-primary); font: inherit; }
+.pd-command input::placeholder { color: var(--pd-text-muted); }
+.pd-avatar {
+  display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--pd-surface-3);
+  color: var(--pd-text-primary); font-weight: 600; font-size: 11px;
+}
+.user-button-name { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; margin-left: 8px; }
+.pd-user-name { font-size: 12.5px; }
+.pd-nav.v-navigation-drawer { background: var(--pd-surface-2); color: var(--pd-text-primary); border-right: 1px solid var(--pd-border); overflow-y: auto; }
+.pd-nav .nav-groups { padding: 8px 8px 16px; }
+.pd-nav-group { margin-bottom: 12px; }
+.pd-nav-heading { color: var(--pd-text-muted); padding: 4px 8px; margin: 0; }
+.pd-nav-divider { border: 0; border-top: 1px solid var(--pd-border); margin: 6px 4px; }
+.pd-nav-item {
+  display: flex; align-items: center; gap: 8px; min-height: var(--pd-nav-item-height); padding: 0 8px; border-radius: var(--pd-radius-sm);
+  color: var(--pd-text-secondary); text-decoration: none; margin-bottom: 2px; position: relative;
+}
+.pd-nav-item:hover { background: var(--pd-row-hover); color: var(--pd-text-primary); }
+.pd-nav-item[aria-current="page"] { background: var(--pd-surface-3); color: var(--pd-text-primary); font-weight: 500; }
+.pd-nav-item .pd-icon { flex: none; }
+.pd-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pd-nav-shortcut { color: var(--pd-text-muted); }
+.pd-nav--rail .pd-nav-item { justify-content: center; padding: 0; }
+.pd-nav--rail .pd-nav-label, .pd-nav--rail .pd-nav-shortcut { display: none; }
+@media (max-width: 599.98px) {
+  .pd-nav-item, .v-btn { min-height: 44px; }
+}
+
+/* Command palette (plan M7c decision 16). */
+.pd-palette {
+  background: var(--pd-surface-1); color: var(--pd-text-primary); border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-lg); box-shadow: var(--pd-shadow-overlay); overflow: hidden;
+}
+.pd-palette-field { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--pd-border); color: var(--pd-text-muted); }
+.pd-palette-field input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--pd-text-primary); font: inherit; font-size: 14px; }
+.pd-palette-list { list-style: none; margin: 0; padding: 6px; max-height: 60vh; overflow-y: auto; }
+.pd-palette-group { color: var(--pd-text-muted); padding: 8px 8px 4px; }
+.pd-palette-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--pd-radius-sm); cursor: pointer; }
+.pd-palette-option--active { background: var(--pd-surface-3); box-shadow: inset var(--pd-focus-ring); }
+.pd-palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pd-palette-empty { padding: 12px 8px; }
+.pd-shortcuts { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.pd-shortcuts th { text-align: left; font-weight: 500; color: var(--pd-text-secondary); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--pd-border); }
+.pd-shortcuts td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--pd-border-subtle); vertical-align: top; }
+.v-overlay__scrim { background: var(--pd-scrim); opacity: 1; }
+.pd-shortcuts-keys kbd + kbd { margin-left: 4px; }
+
+/* Lists (plan M7c decision 21): table cells, cards below 600 px, row cursor, empty states, expanded rows. */
+.pd-cell-mono, .v-table .pd-cell-mono { font-family: var(--pd-font-mono); font-size: 12px; }
+.pd-cell-primary a { font-family: var(--pd-font-mono); font-size: 12px; text-decoration: none; }
+.pd-cell-primary a:hover, .pd-cell-primary a:focus-visible { text-decoration: underline; }
+.v-table .v-data-table__td.pd-cell-primary { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Audit sentences wrap (they are the row's content); identifiers and codes stay on one line. */
+.v-table .v-data-table__td.pd-cell-primary:has(.audit-text) { max-width: none; white-space: normal; }
+.v-table .v-data-table__td.pd-cell-mono { white-space: nowrap; }
+.v-table .v-data-table__td { padding-top: var(--pd-row-pad) !important; padding-bottom: var(--pd-row-pad) !important; height: auto !important; overflow-wrap: anywhere; }
+.v-table .v-data-table__td.pd-cell-expand { width: 2.5rem; }
+.v-table tbody tr.pd-row-cursor > td { box-shadow: inset 0 0 0 2px var(--pd-focus); }
+.v-table tbody tr.pd-row-cursor:focus-visible { outline: none; }
+.v-table tbody tr[aria-current="true"] > td { background: var(--pd-surface-3); }
+.pd-expanded-row > td { background: var(--pd-surface-2); }
+.pd-expanded { padding: 8px 4px; }
+.pd-expanded dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.pd-expanded dt { color: var(--pd-text-secondary); }
+.pd-expanded dd { margin: 0; font-family: var(--pd-font-mono); font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 959.98px) { .pd-hide-md { display: none !important; } }
+@media (max-width: 599.98px) { .pd-hide-sm { display: none !important; } }
+.pd-cards-panel { position: relative; background: var(--pd-surface-1); border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md); overflow-x: hidden; }
+.pd-cards { list-style: none; margin: 0; padding: 0; }
+.pd-card { position: relative; padding: 10px 12px; border-bottom: 1px solid var(--pd-border-subtle); display: flex; flex-direction: column; gap: 4px; }
+.pd-card:last-child { border-bottom: 0; }
+.pd-card--clickable { cursor: pointer; }
+.pd-card.pd-row-cursor { box-shadow: inset 0 0 0 2px var(--pd-focus); outline: none; }
+.pd-card.pd-row-current, .pd-card[aria-current="true"] { background: var(--pd-surface-3); }
+.pd-card-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 24px; }
+.pd-card-primary { font-family: var(--pd-font-mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.pd-card-primary a { text-decoration: none; }
+.pd-card-meta { display: flex; flex-wrap: wrap; gap: 2px 0; }
+.pd-card-meta-item + .pd-card-meta-item::before { content: " · "; white-space: pre; }
+.pd-card-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.pd-card .pd-expand-toggle { position: absolute; top: 6px; right: 6px; }
+.data-list--cards .pd-card-meta-item.pd-cell-mono { font-size: 11px; }
+.pd-list-empty { padding: 20px 14px; text-align: center; background: var(--pd-surface-1); border: 1px solid var(--pd-border); border-top: 0; border-radius: 0 0 var(--pd-radius-md) var(--pd-radius-md); margin: -0.75rem 0 0.75rem; }
+.pd-list-empty-text { margin: 0 0 8px; color: var(--pd-text-secondary); }
+.pd-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--pd-text-muted); padding: 8px 0; }
+.pd-empty-title { margin: 0; color: var(--pd-text-primary); }
+.pd-empty-text { margin: 0; max-width: 36rem; }
+.pd-empty-action { margin-top: 6px; }
+.pd-time { white-space: nowrap; }
+.pd-actor { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.v-table .v-data-table__th { white-space: nowrap; }
+.v-table { table-layout: auto; }
+@media (max-width: 599.98px) {
+  .list-footer .page-size { flex: 0 0 8rem; }
+  .list-footer .v-pagination { margin-left: 0; }
+  .v-table .v-data-table__td, .v-table .v-data-table__th { padding-top: 12px !important; padding-bottom: 12px !important; }
+  .v-btn.v-btn--size-default, .v-btn.v-btn--size-small { min-height: 44px; }
+  .v-field--variant-outlined .v-field__input { min-height: 44px; }
+}
+
+/* Danger zone (plan M7c decision 24): always the last section of a detail page. */
+.pd-danger { background: var(--pd-danger-surface); border: 1px solid var(--pd-danger-border); border-radius: var(--pd-radius-md); margin-top: 10px; color: var(--pd-text-primary); }
+.pd-danger-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--pd-danger-border); color: var(--pd-danger-title); }
+.pd-danger-title { color: var(--pd-danger-title); margin: 0; }
+.pd-danger-caption { color: var(--pd-danger-text); }
+.pd-danger-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 14px; border-bottom: 1px solid var(--pd-danger-divider); }
+.pd-danger-row:last-of-type { border-bottom: 0; }
+.pd-danger-text { flex: 1 1 420px; min-width: 0; }
+.pd-danger-text p { margin: 0; color: var(--pd-danger-text); font-size: 12.5px; }
+.pd-danger-row-title { font-weight: 600; }
+.pd-danger .v-btn.bg-error { background: var(--pd-danger-solid) !important; color: var(--pd-text-on-danger) !important; }
+.pd-danger .v-btn--variant-outlined.text-error { color: var(--pd-danger-outline-text) !important; border-color: var(--pd-danger-border); }
+.pd-danger-alert, .pd-danger-note { margin: 12px 14px; }
+.pd-danger-timeline { margin: 0 14px 14px; }
+
+/* Overview (plan M7c decision 28): KPI strip, panels in a grid, compact tables; one column below 1100 px. */
+.pd-block { display: block; }
+.pd-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.pd-truncate { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.pd-panel h2 { margin: 0; }
+.pd-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 14px; overflow: hidden; }
+.pd-kpi {
+  display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; color: var(--pd-text-primary); text-decoration: none;
+  border-right: 1px solid var(--pd-border-subtle); border-bottom: 1px solid var(--pd-border-subtle); margin: 0 -1px -1px 0;
+}
+a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary); }
+.pd-kpi-label { display: inline-flex; align-items: center; gap: 6px; color: var(--pd-text-secondary); }
+.pd-kpi-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.pd-kpi-dot--ok { background: var(--pd-status-ok-mark); }
+.pd-kpi-dot--warn { background: var(--pd-status-warn-mark); }
+.pd-kpi-dot--critical { background: var(--pd-status-critical-mark); }
+.pd-kpi-dot--info { background: var(--pd-status-info-mark); }
+.pd-kpi-dot--neutral { background: var(--pd-status-neutral-mark); }
+.pd-overview-grid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 14px; align-items: start; }
+.pd-overview-attention, .pd-overview-audit { grid-column: 1 / -1; }
+@media (max-width: 1099.98px) { .pd-overview-grid { grid-template-columns: minmax(0, 1fr); } }
+.pd-overview-hint { margin-top: 14px; }
+.pd-placeholder { background: var(--pd-surface-3); border-radius: var(--pd-radius-md); margin-bottom: 14px; }
+.pd-placeholder--strip { height: 76px; }
+.pd-placeholder--panel { height: 240px; }
+.pd-table-scroll { overflow-x: auto; }
+.pd-table { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.pd-table th {
+  text-align: left; background: var(--pd-table-head); color: var(--pd-text-secondary); font-size: 12px; font-weight: 500;
+  padding: var(--pd-row-pad) 14px; border-bottom: 1px solid var(--pd-border); white-space: nowrap;
+}
+.pd-table td { padding: var(--pd-row-pad) 14px; border-bottom: 1px solid var(--pd-border-subtle); vertical-align: middle; }
+.pd-table tbody tr:last-child td { border-bottom: 0; }
+.pd-table tbody tr:hover { background: var(--pd-row-hover); }
+.pd-table .pd-cell-primary { max-width: 16rem; }
+.pd-table .pd-cell-actions { text-align: right; white-space: nowrap; }
+.pd-facts { display: flex; flex-direction: column; gap: 0; margin: 0; }
+.pd-facts > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--pd-border-subtle); }
+.pd-facts > div:last-child { border-bottom: 0; }
+.pd-facts dt { color: var(--pd-text-secondary); }
+.pd-facts dd { margin: 0; text-align: right; }
+.pd-sevbar { margin-bottom: 12px; }
+.pd-sevbar-track { display: flex; height: 10px; border-radius: var(--pd-radius-xs); overflow: hidden; gap: 1px; background: var(--pd-surface-1); }
+.pd-sevbar-segment { flex: 1 1 0; min-width: 3px; }
+.pd-sevbar-segment--critical { background: var(--pd-sev-critical-mark); }
+.pd-sevbar-segment--high { background: var(--pd-sev-high-mark); }
+.pd-sevbar-segment--medium { background: var(--pd-sev-medium-mark); }
+.pd-sevbar-segment--low { background: var(--pd-sev-low-mark); }
+.pd-sevbar-segment--unknown { background: var(--pd-sev-unknown-mark); }
+.pd-sevbar-segment--none { background: var(--pd-sev-none-mark); }
+.pd-sevbar-segment--empty { background: var(--pd-surface-3); }
+.pd-sevbar-legend { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+.pd-sevbar-item { display: inline-flex; align-items: center; gap: 5px; }
+.pd-sevbar-dot { width: 8px; height: 8px; border-radius: 2px; }
+.pd-top-cves { list-style: none; margin: 0; padding: 0; }
+.pd-top-cves li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 6px 0; border-top: 1px solid var(--pd-border-subtle); }
+.pd-top-cve-id { display: flex; flex-direction: column; flex: 1 1 12rem; min-width: 0; }
+
+/* Device split view (plan M7c decision 29): list pane, header band, tabs; the pane disappears below 960 px. */
+.pd-device { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 100%; }
+.pd-device-pane { background: var(--pd-surface-2); border-right: 1px solid var(--pd-border); overflow-y: auto; max-height: calc(100vh - 44px); position: sticky; top: 44px; }
+.pd-pane { padding: 10px; }
+.pd-pane .filters .v-input { flex: 1 1 100%; }
+.pd-device-main { max-width: none; margin: 0; min-width: 0; }
+.pd-device-back { display: none; margin: 0 0 6px; }
+@media (max-width: 959.98px) {
+  .pd-device { grid-template-columns: minmax(0, 1fr); }
+  .pd-device-pane { display: none; }
+  .pd-device-back { display: block; }
+}
+.pd-device-header { margin-bottom: 8px; }
+.pd-breadcrumb { display: flex; gap: 6px; color: var(--pd-text-secondary); margin-bottom: 4px; min-width: 0; }
+.pd-breadcrumb .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pd-device-title { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.pd-device-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; max-width: 100%; }
+.pd-device-name h1 { margin: 0; max-width: 100%; }
+.pd-device-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pd-device-meta { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 6px 0 0; }
+.pd-device-notice { margin: 6px 0 0; }
+.pd-device-tabs { border-bottom: 1px solid var(--pd-border); margin-bottom: 12px; }
+.pd-tab-count { margin-left: 6px; font-family: var(--pd-font-mono); font-size: 11px; }
+.pd-tab-count--critical { color: var(--pd-status-critical-fg); }
+.pd-device-overview { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 12px; align-items: start; }
+.pd-device-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pd-device-wide { grid-column: 1 / -1; }
+@media (max-width: 1099.98px) { .pd-device-overview { grid-template-columns: minmax(0, 1fr); } }
+.pd-device-tab { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pd-device-col > section:not(.pd-panel), .pd-device-tab > section:not(.pd-panel) {
+  background: var(--pd-surface-1); border: 1px solid var(--pd-border); border-radius: var(--pd-radius-md); padding: 10px 14px;
+}
+.pd-health { list-style: none; margin: 0; padding: 4px 14px; }
+.pd-health li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--pd-border-subtle); }
+.pd-health li:last-child { border-bottom: 0; }
+.pd-health-label { color: var(--pd-text-secondary); }
+.pd-identity dd { overflow-wrap: anywhere; min-width: 0; }
+.pd-identity-id { display: inline-flex; align-items: center; gap: 2px; }
+.pd-device-col .facts th { width: 45%; }

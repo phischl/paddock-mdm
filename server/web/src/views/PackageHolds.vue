@@ -2,10 +2,10 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataList from '../components/DataList.vue'
+import TimeCell from '../components/TimeCell.vue'
 import PackageHoldForm from '../components/PackageHoldForm.vue'
 import type { PackageHold } from '../api/client'
 import { groupFilter } from '../lib/devices'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { useManagedPage } from '../lib/managedPage'
 import { useProblemText } from '../lib/problems'
@@ -13,7 +13,7 @@ import { deletePackageHold, listPackageHolds, savePackageHold, type HoldInput } 
 import { useSessionStore } from '../stores/session'
 
 /** Package holds (plan M5b decision 2): held packages are left out of every update and refused by install now. */
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const problemText = useProblemText()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
@@ -67,8 +67,20 @@ const columns = computed<ListColumn[]>(() => [
       searchable
       default-sort="package"
       item-value="id"
+      empty-icon="package"
+      empty-title="updates.holds.empty.title"
+      empty-description="updates.holds.empty.description"
       data-testid="hold-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="session.canWrite"
+          color="primary"
+          @click="openDialog(null)"
+        >
+          {{ t('updates.holds.create') }}
+        </v-btn>
+      </template>
       <template #[`item.version`]="{ item }: { item: PackageHold }">
         {{ item.version ?? t('updates.holds.installedVersion') }}
       </template>
@@ -79,10 +91,10 @@ const columns = computed<ListColumn[]>(() => [
         {{ item.reason || '–' }}
       </template>
       <template #[`item.updated_at`]="{ item }: { item: PackageHold }">
-        {{ formatDateTime(item.updated_at, locale) }}
+        <TimeCell :iso="item.updated_at" />
       </template>
       <template #[`item.created_at`]="{ item }: { item: PackageHold }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
       <template #[`item.actions`]="{ item }: { item: PackageHold }">
         <div class="row-actions">
