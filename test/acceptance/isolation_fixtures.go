@@ -196,6 +196,9 @@ type isolationFixture struct {
 	kind isolationKind
 	// request returns the concrete path and body for alice; item fixtures create the globex resource first.
 	request func(t *testing.T, w *isolationWorld) (path string, body any)
+	// ownAttempts marks the audit-event list: alice's own failed or denied attempts are left out of the leak check
+	// (withoutOwnFailedAttempts), because the item checks record them with the globex ID alice sent.
+	ownAttempts bool
 }
 
 // globexGroup creates a device group in globex as carol and returns its ID.
@@ -239,7 +242,7 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/attention/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/attention/devices?page_size=100", nil
 	}},
-	"GET /api/v1/audit-events": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
+	"GET /api/v1/audit-events": {kind: isoList, ownAttempts: true, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/audit-events?page_size=100", nil
 	}},
 

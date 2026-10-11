@@ -2,6 +2,8 @@ package acceptance
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -85,8 +87,15 @@ func TestOrganizationIsolation(t *testing.T) {
 					t.Fatalf("HTTP %d: %s", res.Status, res.Body)
 				}
 			}
-			if leaked := containsAny(res.Body, w.globexIDs); leaked != "" {
-				t.Fatalf("response contains globex ID %s: %s", leaked, res.Body)
+			checked := res.Body
+			if fx.ownAttempts {
+				var err error
+				if checked, err = withoutOwnFailedAttempts(res.Body, env.Alice); err != nil {
+					t.Fatalf("%v: %s", err, res.Body)
+				}
+			}
+			if leaked := containsAny(checked, w.globexIDs); leaked != "" {
+				t.Fatalf("response contains globex ID %s: %s", leaked, checked)
 			}
 		})
 	}
@@ -203,6 +212,78 @@ func TestOrganizationIsolation(t *testing.T) {
 		if leaked := containsAny([]byte(e.EventID+" "+e.CorrelationID), w.globexIDs); leaked != "" {
 			t.Fatalf("acme audit log contains globex event %s", leaked)
 		}
+	}
+}
+
+// withoutOwnFailedAttempts returns the items of an audit-event list page without the failed or denied attempts of the
+// administrator caller. Such an event is acme's own record of a request the caller made with a globex ID it supplied
+// itself (exactly one audit event per attempt, also for the 404 of an item check); the ID in its target is not a
+// leak, and whether it lands on the first page depends only on ordering. Everything else stays in the leak check:
+// events of any other actor (a globex event is never the caller's) and successful events of the caller (a success
+// naming a globex object means acme acted on it). TestWithoutOwnFailedAttempts proves both.
+func withoutOwnFailedAttempts(body []byte, caller string) ([]byte, error) {
+	var page struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, fmt.Errorf("audit-event list: %w", err)
+	}
+	if page.Items == nil {
+		return nil, fmt.Errorf("audit-event list without items")
+	}
+	kept := make([]json.RawMessage, 0, len(page.Items))
+	for _, raw := range page.Items {
+		var e env.AuditEvent
+		if err := json.Unmarshal(raw, &e); err != nil {
+			return nil, fmt.Errorf("audit event: %w", err)
+		}
+		own := e.Actor.Type == "admin" && e.Actor.Display == caller
+		if own && (e.Outcome == "failure" || e.Outcome == "denied") {
+			continue
+		}
+		kept = append(kept, raw)
+	}
+	out, err := json.Marshal(kept)
+	if err != nil {
+		return nil, fmt.Errorf("audit-event list: %w", err)
+	}
+	return out, nil
+}
+
+// TestWithoutOwnFailedAttempts shows that the audit-log leak check still catches a real leak: only the caller's own
+// failed or denied attempts are left out, never a globex event or a successful acme event naming a globex object.
+func TestWithoutOwnFailedAttempts(t *testing.T) {
+	const globexID = "01a12aac-2a8f-71b9-a11b-ca3a8c07bf67"
+	event := func(actorType, display, outcome string) string {
+		return `{"actor":{"type":"` + actorType + `","display":"` + display + `"},"code":"managed_file.deleted",` +
+			`"outcome":"` + outcome + `","params":{},"target":{"type":"managed_file","id":"` + globexID + `"}}`
+	}
+	for _, tc := range []struct {
+		name  string
+		event string
+		leak  bool
+	}{
+		{"own failed attempt", event("admin", env.Alice, "failure"), false},
+		{"own denied attempt", event("admin", env.Alice, "denied"), false},
+		{"own successful action on a globex object", event("admin", env.Alice, "success"), true},
+		{"own attempt of unknown outcome", event("admin", env.Alice, "unknown"), true},
+		{"globex event", event("admin", env.Carol, "success"), true},
+		{"failed globex event", event("admin", env.Carol, "failure"), true},
+		{"other acme admin's failed attempt", event("admin", env.Dave, "failure"), true},
+		{"device event", event("device", env.Alice, "failure"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checked, err := withoutOwnFailedAttempts([]byte(`{"items":[`+tc.event+`],"total":1}`), env.Alice)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if leaked := containsAny(checked, []string{globexID}) != ""; leaked != tc.leak {
+				t.Fatalf("leak detected = %v, want %v: %s", leaked, tc.leak, checked)
+			}
+		})
+	}
+	if _, err := withoutOwnFailedAttempts([]byte(`{"title":"not a list"}`), env.Alice); err == nil {
+		t.Fatal("a response without items passed the check unseen")
 	}
 }
 
