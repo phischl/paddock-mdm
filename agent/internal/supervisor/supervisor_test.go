@@ -238,9 +238,7 @@ func TestUpdateSuccess(t *testing.T) {
 	if f.active() != "B" {
 		t.Fatalf("current → %s, want B", f.active())
 	}
-	if _, err := os.Stat(f.cfg.ProbationLog); !os.IsNotExist(err) {
-		t.Fatal("probation log left behind")
-	}
+	f.waitNoProbationLog()
 	f.expectStagingClean()
 	// The next update goes into the other slot again.
 	_ = os.Remove(f.cfg.Result)
@@ -788,6 +786,16 @@ func (f *fake) expectNoProbationLog() {
 	}
 }
 
+// waitNoProbationLog waits until the probation log is gone; the supervisor removes it only after the result is
+// written (PDK-058), so a test that has just seen the result can still see the log.
+func (f *fake) waitNoProbationLog() {
+	f.t.Helper()
+	f.waitFor("the probation log was removed", func() bool {
+		_, err := os.Stat(f.cfg.ProbationLog)
+		return os.IsNotExist(err)
+	})
+}
+
 // writeRollingBack writes the probation log of a rollback from B to A that waits for a durable flip back.
 func (f *fake) writeRollingBack() {
 	f.t.Helper()
@@ -816,7 +824,7 @@ func TestRollbackWaitsForADurableFlipBack(t *testing.T) {
 	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || r.FromVersion != "1.0.0" || f.active() != "A" {
 		t.Fatalf("result %+v, current %s", r, f.active())
 	}
-	f.expectNoProbationLog()
+	f.waitNoProbationLog()
 	sf.expectProvenByNewRename(t)
 }
 
@@ -840,7 +848,7 @@ func TestUpdateWaitsForADurableSwitch(t *testing.T) {
 	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeUpdated || r.Version != "1.1.0" || f.active() != "B" {
 		t.Fatalf("result %+v, current %s", r, f.active())
 	}
-	f.expectNoProbationLog()
+	f.waitNoProbationLog()
 	sf.expectProvenByNewRename(t)
 }
 
@@ -860,7 +868,7 @@ func TestResumeARollbackThatWaitsForADurableFlipBack(t *testing.T) {
 	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
 		t.Fatalf("result %+v, current %s", r, f.active())
 	}
-	f.expectNoProbationLog()
+	f.waitNoProbationLog()
 }
 
 // TestRestartAfterALostFlipBackDecidesAgain (PDK-045): a power loss takes the unsynced flip back with it, so current
@@ -883,7 +891,7 @@ func TestRestartAfterALostFlipBackDecidesAgain(t *testing.T) {
 	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
 		t.Fatalf("result %+v, current %s", r, f.active())
 	}
-	f.expectNoProbationLog()
+	f.waitNoProbationLog()
 }
 
 // TestResumedProbationWaitsForADurableSwitch (PDK-045): a restarted supervisor cannot know whether the switch was ever
@@ -909,7 +917,7 @@ func TestResumedProbationWaitsForADurableSwitch(t *testing.T) {
 	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeUpdated || r.Version != "1.1.0" || f.active() != "B" {
 		t.Fatalf("result %+v, current %s", r, f.active())
 	}
-	f.expectNoProbationLog()
+	f.waitNoProbationLog()
 	sf.expectProvenByNewRename(t)
 }
 
@@ -1314,4 +1322,44 @@ func TestFailedResultWriteKeepsTheRecordedOutcome(t *testing.T) {
 	broken.Store(false)
 	f.start()
 	f.expectSameResult(result{Version: "1.1.0", FromVersion: "1.0.0", Outcome: outcomeUpdated, At: kept.DecidedAt}, "B")
+}
+
+// TestUnrecordedOutcomeIsNotDecidedAgain (PDK-063): if recording the outcome fails and writing the result fails only
+// at its directory sync, after the rename, the result is in place although its write reported an error. The probation
+// log, which then holds no outcome, is removed all the same, so a restart cannot run the probation again and write a
+// second, contradicting result; here it would roll back at once, because the check-in mark cannot be cleared.
+func TestUnrecordedOutcomeIsNotDecidedAgain(t *testing.T) {
+	f := newFake(t)
+	var resultRenamed atomic.Bool
+	f.cfg.SyncFile = func(file *os.File) error {
+		switch file.Name() {
+		case f.cfg.ProbationLog + ".tmp":
+			if data, err := os.ReadFile(file.Name()); err == nil && bytes.Contains(data, []byte(`"outcome"`)) {
+				return fmt.Errorf("syncing %s: %w", file.Name(), syscall.EIO)
+			}
+		case f.cfg.Result + ".tmp":
+			resultRenamed.Store(true)
+		case f.dir:
+			if resultRenamed.CompareAndSwap(true, false) {
+				return fmt.Errorf("syncing %s: %w", file.Name(), syscall.EIO)
+			}
+		}
+		return file.Sync()
+	}
+	f.start()
+	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, f.good()))
+	f.waitFor("the new agent checked in", f.checkedIn)
+	first := f.endProbation("B")
+	if first.Outcome != outcomeUpdated || first.Version != "1.1.0" {
+		t.Fatalf("result %+v", first)
+	}
+	f.waitSent()
+	f.stop()
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
+	if err := os.Remove(f.cfg.LastCheckin); err != nil {
+		t.Fatal(err)
+	}
+	f.keepCheckinMark()
+	f.start()
+	f.expectSameResult(first, "B")
 }

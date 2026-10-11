@@ -52,7 +52,7 @@ type Config struct {
 	Now          func() time.Time       // clock of the probation; nil is time.Now (tests inject one)
 	Sleep        func(time.Duration)    // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
 	SyncDir      func(dir string) error // syncs slots after a flip, staging before a drop; nil is fsync (tests inject failures)
-	SyncFile     func(*os.File) error   // syncs a state file before its rename; nil is fsync (tests inject failures)
+	SyncFile     func(*os.File) error   // syncs a state file before its rename and its directory after; nil is fsync (tests inject failures)
 }
 
 // rollbackAttempts bounds the attempts to flip current back to the previous slot; the waits between them double from
@@ -450,20 +450,24 @@ func (s *Supervisor) restartChild() {
 // that the probation ends in exactly one result even if a power loss brings the removed log back (PDK-058).
 func (s *Supervisor) conclude(p *probation, outcome string) {
 	p.Outcome, p.DecidedAt = outcome, time.Now().UTC()
-	if err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); err != nil {
+	err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile)
+	if err != nil {
 		// The result is the device's only report of the probation, so it is written all the same; only a power loss
 		// before the log's removal is durable can then let a restart decide again.
 		slog.Error("recording the outcome in the probation log failed", "error", err)
 	}
-	s.report(p)
+	s.report(p, err == nil)
 }
 
-// report writes the recorded result of p and removes the probation log once the result is written. If writing the
-// result fails, the log stays: when it holds the recorded outcome, the next start writes the result again (PDK-063).
-// The same result written twice is reported once: the agent turns a result into an event once per "at"
-// (agent.reportUpdate), and the server counts an outcome once per device and release.
-func (s *Supervisor) report(p *probation) {
-	if s.finishAt(p.Version, p.FromVersion, p.Outcome, p.DecidedAt) != nil {
+// report writes the result of p and removes the probation log once the result is written. If writing the result
+// fails and the log holds the recorded outcome (recorded), the log stays, so the next start writes the same result
+// again (PDK-063). Without a recorded outcome the log is removed all the same: a failed write may still have put the
+// result in place (its last step, the directory sync, follows the rename), and a log without an outcome would let the
+// next start run the probation again and contradict that result; a lost result is the lesser evil. The same result
+// written twice is reported once: the agent turns a result into an event once per "at" (agent.reportUpdate), and the
+// server counts an outcome once per device and release.
+func (s *Supervisor) report(p *probation, recorded bool) {
+	if s.finishAt(p.Version, p.FromVersion, p.Outcome, p.DecidedAt) != nil && recorded {
 		return
 	}
 	_ = os.Remove(s.cfg.ProbationLog)
@@ -511,7 +515,7 @@ func (s *Supervisor) resumeProbation() {
 	}
 	if p.Outcome != "" {
 		slog.Info("the probation already ended; writing its result again", "version", p.Version, "outcome", p.Outcome)
-		s.report(&p)
+		s.report(&p, true)
 		return
 	}
 	if p.RollingBack && s.activeSlot() == p.FromSlot {
@@ -547,7 +551,8 @@ func (s *Supervisor) resumeProbation() {
 // start drops a log that came back again. If the sync fails, the log stays for that retry.
 func (s *Supervisor) dropProbation(version string) {
 	s.cleanup(version)
-	if err := s.cfg.SyncDir(s.cfg.Staging); err != nil {
+	// A staging directory that does not exist holds no request that a power loss could bring back.
+	if err := s.cfg.SyncDir(s.cfg.Staging); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		slog.Error("syncing the staging directory failed; the probation log stays until the next start", "error", err)
 		return
 	}
@@ -616,7 +621,8 @@ func install(bin []byte, path string) error {
 }
 
 // writeJSON replaces path with v atomically. It syncs the content with sync before the rename: a new file renamed into
-// place unsynced can come back empty after a power loss, and an empty probation log is dropped (PDK-059).
+// place unsynced can come back empty after a power loss, and an empty probation log is dropped (PDK-059). It syncs the
+// directory after the rename with sync as well, so an error returned at that step leaves path already replaced.
 func writeJSON(path string, v any, sync func(*os.File) error) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -636,15 +642,17 @@ func writeJSON(path string, v any, sync func(*os.File) error) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	return syncDirWith(filepath.Dir(path), sync)
 }
 
 func syncFile(f *os.File) error { return f.Sync() }
 
-func syncDir(dir string) error {
+func syncDir(dir string) error { return syncDirWith(dir, syncFile) }
+
+func syncDirWith(dir string, sync func(*os.File) error) error {
 	d, err := os.Open(dir) //nolint:gosec // our own directories
 	if err != nil {
 		return err
 	}
-	return errors.Join(d.Sync(), d.Close())
+	return errors.Join(sync(d), d.Close())
 }
