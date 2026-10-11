@@ -185,6 +185,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fields exposed through `NativeTypes` and `ParseStructTag`). The library is only pulled in by the build-time code
   generator `sqlc`; Paddock's own code does not evaluate CEL and the shipped binaries do not contain it, so running
   installations were not exposed.
+- Every GitHub Action in the CI, release and image-prune workflows is pinned to a full commit SHA (PDK-050), not
+  only those of the release signing and publishing jobs: a re-pointed tag can no longer change the release build that
+  produces the agent and package bytes before they are signed. Dependabot keeps the pins up to date.
 
 ## [0.1.0-alpha.1] - 2026-10-09
 
