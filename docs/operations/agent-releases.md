@@ -6,7 +6,7 @@ How agent releases are signed, uploaded and rolled out (plan M2b §3.2–3.3, de
 
 | Key | Where | Used by |
 | --- | --- | --- |
-| Release key (minisign, Ed25519) | **offline**; the secret key never touches CI, the control plane or a device | release manager, to sign `paddockd` |
+| Release key (minisign, Ed25519) | secret of the protected GitHub environment `release` (ADR 0006 amendment 2026-10-11), with an offline copy at the custodians; never on the control plane or a device | sign job of the release workflow, to sign `paddockd` and the `paddock-agent` and `paddock-supervisor` packages; release manager, offline, for fleetd and the fallback |
 | Release public key | compiled into `paddock-supervisor` (`-ldflags -X main.releasePublicKey=…`) and given to the api role (`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) | supervisor (verifies before installing), api (refuses uploads that do not verify) |
 | Revocation release key (minisign, Ed25519) | **offline**, two holders (architecture §13.1) | release managers, to sign the `paddock-revoke` package |
 | Revocation release public key | given to the api role (`PADDOCK_REVOKE_RELEASE_PUBLIC_KEY_FILE`) | api (refuses a `paddock-revoke` package that does not verify with it, and any other package signed with it) |
@@ -30,20 +30,33 @@ Generate once on an offline machine with a passphrase, store the secret key and 
 minisign -G -p paddock-release.pub -s paddock-release.key   # offline; choose a strong passphrase
 ```
 
-Sign each binary offline and copy only the binary and its `.minisig` back. The trusted comment is part of the
-signature and must be exactly `paddock-agent version=<version> arch=<arch>` (`amd64` or `arm64`): the server refuses
-other comments at upload (422 `release_signature_mismatch`), and the supervisor installs a binary only as the
-version and architecture its comment names (plan M4b.1 decision 10):
+Then give the key to the release workflow (once, and again after a rotation):
+
+1. Create the GitHub environment `release` (*Settings → Environments*): deployment branches and tags *Selected* with
+   the tag rule `v*` only, and the maintainer (two-factor authentication on) as *Required reviewer*.
+2. Add the environment secrets `PADDOCK_RELEASE_KEY` (the complete content of `paddock-release.key`, both lines) and
+   `PADDOCK_RELEASE_KEY_PASSPHRASE` (the passphrase). Never as repository secrets: only the environment's tag rule and
+   approval keep them away from other workflows and refs.
+3. Set the repository variable `PADDOCK_RELEASE_PUBLIC_KEY` to the complete two-line `paddock-release.pub`.
+
+The trusted comment is part of the signature and must be exactly `paddock-agent version=<version> arch=<arch>`
+(`amd64` or `arm64`): the server refuses other comments at upload (422 `release_signature_mismatch`), and the
+supervisor installs a binary only as the version and architecture its comment names (plan M4b.1 decision 10). The
+workflow and the offline fallback both sign with it:
 
 ```sh
 minisign -S -s paddock-release.key -m paddockd -t "paddock-agent version=<version> arch=<arch>"
 ```
 
+minisign reads the passphrase from stdin when stdin is not a terminal (one line; minisign 0.11 of Ubuntu 24.04 and
+`aead.dev/minisign` alike). `packaging/sign-release.sh`, which the sign job runs, pipes it from the environment
+variable `PADDOCK_RELEASE_KEY_PASSPHRASE`, so it never appears on a command line.
+
 ## Releasing
 
 1. Build `paddockd` for each architecture with the version injected
    (`-ldflags "-X github.com/phischl/paddock-mdm/agent/internal/buildinfo.Version=<version>"`, `CGO_ENABLED=0`).
-2. Sign it (above).
+2. Sign it (above; the release workflow does it for a tagged release).
 3. **Production:** put the signed files on the control-plane host (layout in `docs/operations/install.md` section 10)
    and run `./paddock agent-release <version> <dir>` in the bundle directory. It runs
    `paddock-server admin agent-release` in the `paddock-api` service, which verifies every signature first, then
@@ -105,16 +118,17 @@ decision 23). Its build job calls, in this order:
    workflow's GitHub OIDC identity, Sigstore's public good instance; no key to keep), attaches each SBOM as a signed
    SPDX attestation to its platform manifest, and signs `SHA256SUMS` and the bundle (`*.sigstore.json`).
 
-A smoke job then installs the bundle on one runner as two hosts (`deploy/bundle/ci/smoke.sh`: anonymous pull,
-`./paddock check` on both, start, probes, a backup, an agent release with throwaway keys, idempotence); only after
-it passes does the publish job create the draft release.
+A sign job then signs the agent files with the agent release key (*Signing in the release workflow*, below), a smoke
+job installs the bundle on one runner as two hosts (`deploy/bundle/ci/smoke.sh`: anonymous pull, `./paddock check` on
+both, start, probes, a backup, an agent release with throwaway keys, idempotence), and only after both pass does the
+publish job create the draft release.
 
 `<version>` is `x.y.z` or a pre-release `x.y.z-alpha.N`, `x.y.z-beta.N` or `x.y.z-rc.N` (`make release-check`
 refuses anything else). Image tags: a pre-release gets only `<version>`; a plain `x.y.z` gets `<version>`,
 `<major>.<minor>` and, when it is the highest plain `x.y.z` among the repository's `v*` tags, `latest` (a patch of an
 older minor never moves `latest`). The Debian packages of a pre-release carry the Debian version `x.y.z~alpha.N`
 (`~beta.N`, `~rc.N`) inside, which sorts before `x.y.z`, but their release files are named with the release version,
-`<name>_0.1.0-alpha.1_amd64-unsigned.deb`: GitHub renames asset names with characters such as `~`, and `SHA256SUMS`
+`<name>_0.1.0-alpha.1_amd64.deb`: GitHub renames asset names with characters such as `~`, and `SHA256SUMS`
 names the files exactly as published (`make release-sums` refuses file names outside `[A-Za-z0-9._+-]`). Agents and
 supervisors order the versions by SemVer precedence (`0.1.0-alpha.1 < 0.1.0-alpha.2 < 0.1.0-beta.1 < 0.1.0-rc.1 <
 0.1.0`).
@@ -129,10 +143,11 @@ signature (`cosign verify`, below) instead of trusting the tag, so an unsigned i
 release, or delete the tags, before announcing it. The three packages on `ghcr.io` must be public (a one-time
 setting per package in its GitHub settings); the smoke job pulls anonymously and fails on a private package.
 
-The workflow attaches the files to a **draft** GitHub release. Debian packages and agent binaries carry the suffix
-`-unsigned`: CI never holds the release keys, so they are not releasable as they are. Locally,
-`make release-artifacts` runs the same targets without pushing (`release-images` and `release-sbom` print their
-commands, the bundle references the local images), and `make release-sign DRY_RUN=1` prints the cosign commands.
+The workflow attaches the files to a **draft** GitHub release: `paddockd_<version>_linux_<arch>` and the
+`paddock-agent` and `paddock-supervisor` packages with their `.minisig`, and
+`paddock-revoke_<version>_<arch>-unsigned.deb`, which CI never signs. Locally, `make release-artifacts` runs the same
+targets without pushing (`release-images` and `release-sbom` print their commands, the bundle references the local
+images; the agent files stay `-unsigned`), and `make release-sign DRY_RUN=1` prints the cosign commands.
 Verify a published image with
 
 ```sh
@@ -153,23 +168,45 @@ are unsupported and never for production. Verify them with the identity
 (`ghcr-prune.yml`, `deploy/bundle/ci/prune-edge.sh`) deletes image versions older than 30 days whose tags are all
 `edge-<date>-<sha>`; releases, `edge`, `latest` and untagged versions stay.
 
-### Offline signing of the agent artifacts
+### Signing in the release workflow
 
-On the offline signing machine, for each draft release:
+The `sign` job runs after `build` in the GitHub environment `release` (ADR 0006 amendment 2026-10-11). GitHub admits
+it only for a `v*` tag and holds it until the maintainer approves the deployment (*Review deployments* on the run
+page); without approval the run stops there and nothing is published. The job:
 
-1. Download the `-unsigned` files, `SHA256SUMS` and `SHA256SUMS.sigstore.json`; check the bundle with
-   `cosign verify-blob` (above) and the files with `sha256sum -c SHA256SUMS` (the asset names are the names in
-   `SHA256SUMS`, also for a pre-release).
-2. Remove the suffix (`paddockd_<version>_linux_amd64-unsigned` → `paddockd`,
-   `paddock-agent_<version>_amd64-unsigned.deb` → `paddock-agent_<version>_amd64.deb`, …; `<version>` is the release
-   version, e.g. `0.1.0-alpha.1`, while `dpkg-deb -f` shows the Debian version `0.1.0~alpha.1`; the upload takes
-   name, version and architecture from the URL, not from the file name) and sign every binary and package as
-   described under *Keys*: `paddockd` and the `paddock-agent` and `paddock-supervisor` packages with the
-   agent release key, the `paddock-revoke` package with the revocation release key (two holders).
+1. builds `minisign` from the module pinned in `agent/go.sum` (`aead.dev/minisign`, the library the server and the
+   supervisor verify with) before the key exists, without a build cache;
+2. writes `PADDOCK_RELEASE_KEY` with umask 077 to a file under `$RUNNER_TEMP` and runs `packaging/sign-release.sh`:
+   `paddockd` for amd64 and arm64 and every `paddock-agent` and `paddock-supervisor` package, each with the trusted
+   comment `paddock-agent version=<version> arch=<arch>`, under the final name without `-unsigned`, then verifies each
+   signature and trusted comment against `PADDOCK_RELEASE_PUBLIC_KEY`;
+3. deletes the key file in an `always()` step and uploads only the signed files and their `.minisig` (artifact
+   `release-signed`).
+
+The build and smoke jobs never see the key. The publish job replaces the `-unsigned` agent files with the signed ones
+(`make release-merge-signed`, which refuses an agent file left unsigned and any signed `paddock-revoke`), recomputes
+`SHA256SUMS` over the published names (`make release-sums`) and re-signs it keyless (`make release-sign-sums`), so
+the checksums and their Sigstore signature cover exactly the files of the draft release.
+
+Then, for each draft release:
+
+1. Download the files, `SHA256SUMS` and `SHA256SUMS.sigstore.json`; check the checksums with `cosign verify-blob`
+   (above), the files with `sha256sum -c SHA256SUMS` (the asset names are the names in `SHA256SUMS`, also for a
+   pre-release) and each agent file with `minisign -V -p paddock-release.pub -m <file>`.
+2. **paddock-revoke (offline, unchanged):** the two holders of the revocation release key sign
+   `paddock-revoke_<version>_<arch>-unsigned.deb` offline as `paddock-revoke_<version>_<arch>.deb` (two-person rule).
 3. Build fleetd for the release with `make fleetd-deb` (needs outbound HTTPS to Fleet's update server) and sign it
-   with the agent release key.
-4. Upload and publish through the platform API as under *Releasing*, then attach the `.minisig` files to the GitHub
+   offline with the custodians' copy of the agent release key.
+4. Upload and publish through the platform API as under *Releasing* (`<version>` is the release version, e.g.
+   `0.1.0-alpha.1`, while `dpkg-deb -f` shows the Debian version `0.1.0~alpha.1`; the upload takes name, version and
+   architecture from the URL, not from the file name), then attach the remaining `.minisig` files to the GitHub
    release and publish it. Tagging and publishing a release are the product owner's decision.
+
+**Offline fallback.** If the sign job cannot run (environment or secrets unavailable, GitHub outage), sign on the
+offline machine with the custodians' copy as before: check the inputs against their `SHA256SUMS`, remove the suffix
+(`paddockd_<version>_linux_amd64-unsigned` → `paddockd`, `paddock-agent_<version>_amd64-unsigned.deb` →
+`paddock-agent_<version>_amd64.deb`, …) of the files of the workflow artifact `release` or of a local
+`make release-artifacts`, and sign each as under *Keys*.
 
 ## Rolling out
 
@@ -211,6 +248,7 @@ Troubleshooting on a device: `journalctl -u paddock-supervisor`, `readlink /opt/
 
 `.github/workflows/release.yml` runs on tags `v*.*.*`. Before the first tag, set the repository variable
 `PADDOCK_RELEASE_PUBLIC_KEY` to the **complete two-line** production minisign public key (`untrusted comment:` line plus
-key line, as in the `.pub` file). The workflow refuses to run without it and `make release-key-check` refuses a
-development key. It pushes the server images, signs them keylessly, and creates a **draft** release with the unsigned
-agent artifacts; sign those offline as described above before publishing the release.
+key line, as in the `.pub` file), and create the environment `release` with its two secrets (*Production key*). The
+workflow refuses to run without them and `make release-key-check` refuses a development key. It pushes the server
+images, signs them keylessly, signs the agent files in the `sign` job after the maintainer's approval, and creates a
+**draft** release; sign `paddock-revoke` offline as described above before publishing the release.

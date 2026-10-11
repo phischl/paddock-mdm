@@ -211,9 +211,12 @@ audit bucket without Object Lock COMPLIANCE of at least 400 days.
 
 ## 10. First agent release
 
-The agent binaries and packages are not part of the bundle: the release manager signs them offline and attaches them
-with their `.minisig` files to the GitHub release (`docs/operations/agent-releases.md`). Put them on the control plane
-in this layout and publish them:
+The agent binaries and packages are not part of the bundle: the release workflow signs `paddockd` and the
+`paddock-agent` and `paddock-supervisor` packages and attaches them with their `.minisig` files to the GitHub release;
+`paddock-revoke` is attached `-unsigned` and signed offline by the revocation key holders, fleetd is built and signed
+by the release manager (`docs/operations/agent-releases.md`). Put them on the control plane in this layout (the
+signature covers the content, not the file name, so `paddockd_<version>_linux_amd64` becomes `amd64/paddockd`) and
+publish them:
 
 ```
 <dir>/amd64/paddockd  <dir>/amd64/paddockd.minisig          (and arm64/ when released)

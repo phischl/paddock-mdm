@@ -526,8 +526,10 @@ release-images: release-check ## Build and push the three images for RELEASE_PLA
 	done; \
 	[ -n "$(DRY_RUN)" ] || cat $(RELEASE_DIR)/images.txt
 
-# Agent binaries and Debian packages, unsigned (the release keys stay offline, minisign). GitHub renames release assets
-# with characters such as ~, so a pre-release's packages (Debian version x.y.z~alpha.N inside) are published as
+# Agent binaries and Debian packages, unsigned; the sign job of the release workflow signs paddockd and the
+# paddock-agent and paddock-supervisor packages (packaging/sign-release.sh, ADR 0006 amendment 2026-10-11), and
+# paddock-revoke stays unsigned (revocation release key offline). GitHub renames release assets with characters such
+# as ~, so a pre-release's packages (Debian version x.y.z~alpha.N inside) are named
 # <name>_<release version>_<arch>-unsigned.deb.
 RELEASE_DEB_DIR ?= bin/deb
 
@@ -547,6 +549,25 @@ release-debs: release-check
 release-names-check:
 	@bad=$$(find $(RELEASE_DIR) -maxdepth 1 -type f -printf '%f\n' | grep -v '^[A-Za-z0-9._+-]*$$' || true); \
 		test -z "$$bad" || { echo "release file names GitHub would rename: $$bad"; exit 2; }
+
+# The publish job replaces each -unsigned agent file with its signed file and .minisig from RELEASE_SIGNED_DIR (the
+# sign job's output) before release-sums, so SHA256SUMS names the published files. No paddockd, paddock-agent or
+# paddock-supervisor file may stay unsigned; paddock-revoke is never in RELEASE_SIGNED_DIR.
+RELEASE_SIGNED_DIR ?=
+
+.PHONY: release-merge-signed
+release-merge-signed: release-check
+	@test -d "$(RELEASE_SIGNED_DIR)" || { echo "usage: make release-merge-signed RELEASE_SIGNED_DIR=<dir of the sign job>"; exit 2; }
+	@set -e; for f in "$(RELEASE_SIGNED_DIR)"/*; do b=$$(basename "$$f"); \
+		case "$$b" in \
+			paddock-revoke_*) echo "$$b: paddock-revoke is never signed in CI"; exit 2 ;; \
+			*.minisig) test -f "$(RELEASE_SIGNED_DIR)/$${b%.minisig}" || { echo "$$b without its file"; exit 2; } ;; \
+			*.deb) test -f "$$f.minisig" || { echo "$$b without $$b.minisig"; exit 2; }; rm -f "$(RELEASE_DIR)/$${b%.deb}-unsigned.deb" ;; \
+			*) test -f "$$f.minisig" || { echo "$$b without $$b.minisig"; exit 2; }; rm -f "$(RELEASE_DIR)/$$b-unsigned" ;; \
+		esac; cp "$$f" "$(RELEASE_DIR)/$$b"; done
+	@left=$$(find $(RELEASE_DIR) -maxdepth 1 -type f \( -name 'paddockd_*-unsigned' -o -name 'paddock-agent_*-unsigned.deb' \
+		-o -name 'paddock-supervisor_*-unsigned.deb' \) -printf '%f\n'); \
+		test -z "$$left" || { echo "agent files without a signed counterpart: $$left"; exit 2; }
 
 # One SPDX SBOM per image and platform, read by syft from the registry (decision 7).
 .PHONY: release-sbom
@@ -602,6 +623,14 @@ release-sign: release-check ## Sign the images recursively, attest their SBOMs p
 	bundle=paddock-deploy-$(RELEASE_VERSION).tar.gz; \
 	test -n "$(DRY_RUN)" || test -s $(RELEASE_DIR)/$$bundle || { echo "missing $(RELEASE_DIR)/$$bundle: run make release-bundle"; exit 2; }; \
 	run $(COSIGN_RUN) sign-blob --yes --bundle /work/$$bundle.sigstore.json /work/$$bundle
+
+# The publish job re-signs SHA256SUMS after release-merge-signed and release-sums, so the signature covers the final
+# asset names (keyless, the same identity as release-sign).
+.PHONY: release-sign-sums
+release-sign-sums: release-check ## Sign SHA256SUMS keyless with cosign (DRY_RUN=1 prints)
+	@test -s $(RELEASE_DIR)/SHA256SUMS || { echo "missing $(RELEASE_DIR)/SHA256SUMS: run make release-sums"; exit 2; }
+	@set -e; $(RELEASE_RUN); [ -n "$(DRY_RUN)" ] || rm -f $(RELEASE_DIR)/SHA256SUMS.sigstore.json; \
+	run $(COSIGN_RUN) sign-blob --yes --bundle /work/SHA256SUMS.sigstore.json /work/SHA256SUMS
 
 # --- Security scans (CI jobs `secrets` and `trivy`) --------------------------------------------------------------
 TRIVY_CACHE     ?= $(HOME)/.cache/trivy
