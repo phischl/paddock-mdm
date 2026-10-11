@@ -1142,3 +1142,10 @@ Stop and report (no silent workaround) when:
    field later without a migration of existing behaviour.
 7. *Latin-ext for JetBrains Mono.* Default: the full upstream woff2 (covers it); no subset.
 8. *README picture element with dark source.* Default: yes (§6.9); GitHub renders `<picture>` with media sources.
+
+## Amendment 2026-10-11 (architect, PDK-040)
+
+The agent row of the *Updates and agent rollout* panel names the release of the most recent completed rollout
+(`paddock_current_agent_version()`). Its empty text is "No agent rollout completed yet" instead of "No agent release
+published yet": a release can be published while no rollout has completed. Showing the latest published release is a
+separate decision (overview contract change).
