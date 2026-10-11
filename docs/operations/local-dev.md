@@ -80,7 +80,8 @@ client behind a proxy: Caddy's `client_ip` matcher, its access log and — throu
 the gateway all see that address, and `GET /api/v1/me` returns it as `client_ip`. The untrusted case is the second
 listener `https://admin.paddock.localhost:8444` (`PADDOCK_HTTPS_UNTRUSTED_PORT`): there no peer is trusted and every
 such header is ignored. The application allow list is managed in the portal as in production; the gates leave it
-empty, and `pc run --rm --no-deps paddock-worker admin allowlist disable` switches it off after a failed run.
+empty, and `(. deploy/compose/scripts/lib.sh && compose run --rm --no-deps paddock-worker admin allowlist disable)`,
+run from the repository root, switches it off after a failed run.
 
 ## Valkey
 
