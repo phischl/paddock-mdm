@@ -116,8 +116,10 @@ jobs:
         id: pins
         run: |
           for v in BINFMT_IMAGE BUILDKIT_IMAGE; do
+            n="$(grep -c "^$v=" deploy/compose/versions.env || true)"
+            [[ "$n" == 1 ]] || { echo "$v must be set exactly once in versions.env (found $n)"; exit 1; }
             ref="$(sed -n "s/^$v=//p" deploy/compose/versions.env)"
-            [[ "$ref" =~ ^[^@]+:[^@]+@sha256:[0-9a-f]{64}$ ]] || { echo "$v in versions.env is not tag@sha256:<digest>"; exit 1; }
+            [[ "$ref" =~ ^[a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] || { echo "$v in versions.env is not tag@sha256:<digest>"; exit 1; }
             echo "$v=$ref" >> "$GITHUB_OUTPUT"
           done
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
