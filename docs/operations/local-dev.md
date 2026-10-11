@@ -26,6 +26,12 @@ make dev-seed        # organizations acme and globex, test users in their groups
 (WORM bucket and writer credential) and `make bundles-bootstrap` (bundles bucket, compiler and gateway credentials)
 itself; all are idempotent and can also be run on their own.
 
+The Paddock images are built from source by the `build:` sections of `compose.dev.yaml` and
+`compose.backup.dev.yaml`; the production Compose files reference images only, so that the operator bundle
+(`deploy/bundle/`, ADR 0022) is a plain copy of them. `make bundle-test` checks that the bundle renders the same
+production configuration as `deploy/compose/`. The Compose file sets of every host live in
+`deploy/compose/scripts/lib.sh`.
+
 ## Files and services
 
 | Path | Purpose |
@@ -41,7 +47,8 @@ Paddock services carry the Compose profile `paddock`.
 
 Development-only test hooks (empty = off, honoured only with `PADDOCK_ENV=development`): `PADDOCK_TEST_EXTERNAL_DELAY`
 (paddock-api delays external calls) and `PADDOCK_REAPER_THRESHOLD` (outbox relay finalizes stuck actions sooner).
-The acceptance gate A3 sets them while it runs.
+The acceptance gate A3 sets them while it runs. `PADDOCK_TEST_IP_ALLOWLIST_WINDOW` (default 20s in the dev stack,
+10m in production) shortens the aggregation window of the IP allow list denials for gate A1 (plan M7a).
 
 ## Hostnames and TLS
 
@@ -61,6 +68,19 @@ container as well, so containers use exactly the same URLs as the browser (the O
 Caddy uses its internal CA (`tls internal`). The one-shot service `caddy-ca-export` copies the root certificate to
 `.secrets/caddy-root.crt`; Paddock containers trust it through `SSL_CERT_FILE`. Browsers show a warning unless you
 import that certificate.
+
+### Edge allow list and client address in development
+
+The development Caddy applies the same guards as production (`caddy/guards.caddy`, `docs/operations/ip-allowlist.md`)
+with defaults made for the gates: `PADDOCK_ADMIN_ALLOWED_CIDRS` admits the private ranges (the host) and the
+documentation networks `198.51.100.0/24`, `192.0.2.0/24` and `2001:db8::/32`, while `203.0.113.0/24` is refused at
+the edge. Caddy trusts the host as a proxy (`PADDOCK_EDGE_TRUSTED_PROXIES=private_ranges`) and reads both
+`CF-Connecting-IP` and `X-Forwarded-For` (the first non-empty one wins), so a request with such a header simulates a
+client behind a proxy: Caddy's `client_ip` matcher, its access log and — through `X-Paddock-Client-IP` — the api and
+the gateway all see that address, and `GET /api/v1/me` returns it as `client_ip`. The untrusted case is the second
+listener `https://admin.paddock.localhost:8444` (`PADDOCK_HTTPS_UNTRUSTED_PORT`): there no peer is trusted and every
+such header is ignored. The application allow list is managed in the portal as in production; the gates leave it
+empty, and `pc run --rm --no-deps paddock-worker admin allowlist disable` switches it off after a failed run.
 
 ## Valkey
 

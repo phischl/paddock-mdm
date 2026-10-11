@@ -14,9 +14,10 @@ OpenBao holds Paddock's keys (ADR 0006):
 
 Storage is the integrated Raft backend on the `openbao-data` volume (`deploy/compose/openbao/config.hcl`).
 
-In development, `make up` (`deploy/compose/scripts/openbao-bootstrap.sh`) does all of the following automatically and
-stores the unseal shares and the root token in `deploy/compose/.secrets/openbao/`. **The script refuses to run with
-`PADDOCK_ENV=production`; production follows this runbook.**
+In development, `make up` (`deploy/compose/scripts/openbao-bootstrap.sh`) initializes and unseals OpenBao with
+stored shares in `deploy/compose/.secrets/openbao/` and then runs `openbao-configure.sh`. **The development bootstrap
+refuses to run with `PADDOCK_ENV=production`; production initializes as below and runs the same configuration with
+`./paddock bootstrap openbao`.**
 
 ## 1. Production initialization (once)
 
@@ -28,7 +29,11 @@ Preparation:
 - Five custodians, each with a PGP key pair whose public key is exported as `custodian-N.asc` (base64-encoded,
   binary format, as `bao operator init` expects). Record the assignment (name ↔ share number) in the operations log.
 - One additional PGP key for the initial root token (`root.asc`), held by the platform owner.
-- OpenBao running and reachable from the operator workstation (`BAO_ADDR`, TLS in production).
+- The control plane's infrastructure running (`./paddock up --infra`, `docs/operations/install.md` section 6).
+
+Initialize from the workstation that holds the public keys, with the bao CLI against the control plane's interconnect
+endpoint (`BAO_ADDR=https://<control-plane interconnect address>:8200`, `BAO_CACERT` = the control plane's
+`.secrets/internal-ca/bundle.crt`):
 
 ```sh
 bao operator init -key-shares=5 -key-threshold=3 \
@@ -37,75 +42,25 @@ bao operator init -key-shares=5 -key-threshold=3 \
 ```
 
 Hand each encrypted share to its custodian (`Unseal Key N` is encrypted for `custodian-N`). Then three custodians
-unseal (section 2), and the root token holder configures OpenBao:
+unseal (section 2), and the root token holder configures OpenBao on the control-plane host, in the bundle directory:
 
 ```sh
-export BAO_TOKEN=<decrypted root token>
-bao secrets enable transit
-bao secrets enable -path=secret kv-v2
-bao auth enable approle
-for key in audit-chain bundle-signing command-signing revocation-signing time-ticket; do
-  bao write "transit/keys/$key" type=ed25519 exportable=false allow_plaintext_backup=false
-done
-bao write transit/keys/escrow-wrap type=rsa-4096 exportable=false allow_plaintext_backup=false
-bao kv put secret/paddock/session current="$(head -c 32 /dev/urandom | base64 -w0)" \
-  previous="$(head -c 32 /dev/urandom | base64 -w0)"
+read -rs BAO_TOKEN && export BAO_TOKEN   # the decrypted root token, typed without echo
+./paddock bootstrap openbao
 ```
 
-Policies and AppRoles (identical to the development bootstrap):
+It enables `transit`, `secret` (kv-v2) and `approle`, creates the transit keys `audit-chain`, `bundle-signing`,
+`command-signing`, `revocation-signing`, `time-ticket` (Ed25519) and `escrow-wrap` (RSA-4096), the KV secret
+`secret/paddock/session`, the seven policies and AppRoles of `deploy/compose/scripts/openbao-configure.sh` (the same
+as in development: each role reads or signs only with its own keys; `paddock-revocation-issuer` is the only role that
+signs revocations, `paddock-backup` may only read Raft snapshots), and writes each AppRole's role ID and secret ID to
+`.secrets/approle/<role>/`. It is idempotent: a stored secret ID is kept. The roles read them as files referenced by
+`PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`: `paddock-escrow-reader` reaches the escrow-reader
+and never the api, `paddock-revocation-issuer` the revocation-issuer and no other role, `paddock-backup` the worker.
+Copy `.secrets/approle/paddock-audit-writer/` to the audit host (`docs/operations/install.md` section 4).
 
-```sh
-bao policy write paddock-api - <<'EOF'
-path "secret/data/paddock/session" { capabilities = ["read"] }
-path "transit/keys/bundle-signing" { capabilities = ["read"] }
-path "transit/keys/revocation-signing" { capabilities = ["read"] }
-EOF
-bao policy write paddock-audit-writer - <<'EOF'
-path "transit/sign/audit-chain" { capabilities = ["update"] }
-path "transit/keys/audit-chain" { capabilities = ["read"] }
-EOF
-bao policy write paddock-compiler - <<'EOF'
-path "transit/sign/bundle-signing" { capabilities = ["update"] }
-path "transit/keys/bundle-signing" { capabilities = ["read"] }
-path "transit/sign/time-ticket" { capabilities = ["update"] }
-path "transit/keys/time-ticket" { capabilities = ["read"] }
-path "transit/keys/command-signing" { capabilities = ["read"] }
-path "transit/keys/revocation-signing" { capabilities = ["read"] }
-path "transit/keys/escrow-wrap" { capabilities = ["read"] }
-EOF
-bao policy write paddock-worker - <<'EOF'
-path "transit/sign/command-signing" { capabilities = ["update"] }
-EOF
-bao policy write paddock-escrow-reader - <<'EOF'
-path "transit/decrypt/escrow-wrap" { capabilities = ["update"] }
-EOF
-# The only role that can sign revocations (plan M4c decision 2).
-bao policy write paddock-revocation-issuer - <<'EOF'
-path "transit/sign/revocation-signing" { capabilities = ["update"] }
-path "transit/keys/revocation-signing" { capabilities = ["read"] }
-EOF
-# Raft snapshots for the backup and nothing else (plan M6a decision 5; used by paddock-worker).
-bao policy write paddock-backup - <<'EOF'
-path "sys/storage/raft/snapshot" { capabilities = ["read"] }
-EOF
-for role in paddock-api paddock-audit-writer paddock-compiler paddock-worker paddock-escrow-reader \
-  paddock-revocation-issuer paddock-backup; do
-  bao write "auth/approle/role/$role" token_policies="$role" token_ttl=1h token_max_ttl=4h
-done
-```
-
-Deliver role ID and secret ID of each AppRole to the host of the role (control plane: `paddock-api`,
-`paddock-compiler`, `paddock-worker`, `paddock-escrow-reader` to the escrow-reader and never to the api,
-`paddock-revocation-issuer` to the revocation-issuer and to no other role, `paddock-backup` to the worker as
-`approle/paddock-backup/`; audit host: `paddock-audit-writer`) as files referenced by
-`PADDOCK_OPENBAO_ROLE_ID_FILE` / `PADDOCK_OPENBAO_SECRET_ID_FILE`:
-
-```sh
-bao read -field=role_id auth/approle/role/paddock-api/role-id
-bao write -f -field=secret_id auth/approle/role/paddock-api/secret-id
-```
-
-Then take the first snapshot (section 5) and finally revoke the root token (`bao token revoke -self`). A new root token can be generated later only with three
+Then take the first snapshot (section 5) and finally revoke the root token
+(`./paddock bao token revoke -self` with `BAO_TOKEN` still exported, then `unset BAO_TOKEN`). A new root token can be generated later only with three
 custodians (`bao operator generate-root`).
 
 ## 2. Unseal after a restart

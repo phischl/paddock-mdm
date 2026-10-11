@@ -1,0 +1,100 @@
+{
+  "sets": [
+    {
+      "name": "IBM Plex Sans",
+      "license": "OFL-1.1",
+      "source": "https://github.com/IBM/plex",
+      "release": "@ibm/plex-sans@1.1.0",
+      "asset": "ibm-plex-sans.zip",
+      "dir": "fonts/ibm-plex-sans",
+      "license_file": "LICENSE.txt",
+      "files": {
+        "IBMPlexSans-Medium-Latin1.woff2": "b5610af04d0d4b5a14a621d96d974b993e945a065db1a8861918f69ef9321934",
+        "IBMPlexSans-Medium-Latin2.woff2": "46fbe4f398e7ff3cc7773a1156b1efef0f81e4d034f682369c221de587f443ca",
+        "IBMPlexSans-Regular-Latin1.woff2": "b5ad7bd39f996144915f0ad9849a90183b27d8c28ad97ed98af5b1bebc51f6b1",
+        "IBMPlexSans-Regular-Latin2.woff2": "fcfa82e0d46ed01a8df38610b451860ca7e7518770c52fdd2a1d136247c40f28",
+        "IBMPlexSans-SemiBold-Latin1.woff2": "fff0ab3a88b0b4aa0b693e4f0201359a15183b08e3fa5696d1918d8f0ade8ad5",
+        "IBMPlexSans-SemiBold-Latin2.woff2": "2bc85a8e53540c4c211f7af36e806bb045ba7da8946bb221d87144c12c83d577",
+        "LICENSE.txt": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da"
+      }
+    },
+    {
+      "name": "JetBrains Mono",
+      "license": "OFL-1.1",
+      "source": "https://github.com/JetBrains/JetBrainsMono",
+      "release": "v2.304",
+      "asset": "JetBrainsMono-2.304.zip",
+      "dir": "fonts/jetbrains-mono",
+      "license_file": "OFL.txt",
+      "files": {
+        "JetBrainsMono-Medium.woff2": "086c48dfbea9ddaff1320f7e09399b8e2924e88ce67453721255db3bdbb5a353",
+        "JetBrainsMono-Regular.woff2": "a9cb1cd82332b23a47e3a1239d25d13c86d16c4220695e34b243effa999f45f2",
+        "OFL.txt": "30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad"
+      }
+    },
+    {
+      "name": "Lucide",
+      "license": "ISC",
+      "source": "https://github.com/lucide-icons/lucide",
+      "release": "1.55.0",
+      "asset": "lucide-icons-1.55.0.zip",
+      "dir": "icons/lucide",
+      "license_file": "LICENSE",
+      "aliases": {
+        "building-2": "building-complex",
+        "filter": "funnel",
+        "circle-help": "circle-question-mark"
+      },
+      "files": {
+        "LICENSE": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57",
+        "arrow-left.svg": "c5f4b88076108eb1a0d95336e1aa7e7bb1419a3a92af96f6247d88cd3456f933",
+        "bell.svg": "394889e9631fe3a9a63be9a479a95b451b708e432d895978d21d9130b5ee5dbe",
+        "bug.svg": "c4fddf0d43b4c4f0b8fc52eb8810173c8d8bd25618034a70f162d85e8189d69d",
+        "building-complex.svg": "e0d46029dac60bf48ecac4532d39e15772cf484e4d230a6b40aee98775ffae85",
+        "check.svg": "7f33acc9a77a61659531044525fc008edebe215bf4dcf1c789c8674ad3277db0",
+        "chevron-down.svg": "66ea878e72ed3488bb3b464c39dfdccee8d1f78e560dccea40e5e12da0e87e87",
+        "chevron-left.svg": "83b0681aa38bf55e9d52a1e4b4cced624abe1fe7678ecafda133a574f1161d93",
+        "chevron-right.svg": "2758143d7b2434e4aa7307dfd34405c87909ff4052f21b5f3f40d45224b4f19b",
+        "circle-check.svg": "9711e045a5999f8a3b0782eb88e09b04e0559bc7b379dcc0a4ae645223e10345",
+        "circle-question-mark.svg": "975db087da041530dbf59ba1e61a7b99c3519fad43dae6375e42ccc74ba63924",
+        "circle-x.svg": "bcd8788901e6f29e1b231a81ba5e707d083d06cb4848a28f29407fab4f8e0b64",
+        "cog.svg": "8b00c44388d173ca490d4bfde8ed28f58c23902fd84b8da9e5052578bfe633cf",
+        "copy.svg": "ea80e566c7a12628a447cb53179b19aea4f60b9143e2becd0d0f20bf260e5718",
+        "diff.svg": "0b768d090cdb42c3849ad1fb7951dd984db39fc3dc3b44eb6ec76b85c0648226",
+        "ellipsis.svg": "4f495cc72013ffdfec677f03b33a150f7b4dd741979283fd6853a09024bca112",
+        "external-link.svg": "3891241b8c3bfc3a8a930078f26ffc5a7e9763da6d0162ace2050b28d4c1d1fe",
+        "file-text.svg": "52ca55846c202335fb870c8aa23e9345630ec10489303756d62e750f7109605c",
+        "folder.svg": "f0d92b94b797a8ab7d4c4ae33c3236c47f64068351b4e14bdb5014ee42898a39",
+        "funnel.svg": "288f869330602e29a640099ffc5d6ac01caadad2ef6f8aac1138b8bf91ccd752",
+        "globe-lock.svg": "9ec600439ab9dee6bc0e250a9afb351cf5a82bfb8eebf85c7926a4e7453c4d1d",
+        "hard-drive.svg": "324363c40f54e4ca843de0ad1d023b063b70a26a83bb2e0a9e9f4aad9af37378",
+        "inbox.svg": "1838482c53d0846badef9be96fdcf7a167064241bd4891efa995c77ebec5f187",
+        "info.svg": "bc977a64eb96f3e9c1041ffd09a3fceb70e3e65c02b571f76064062ed31f3cb9",
+        "key.svg": "1f0bdf32374dacfca8cfc7f942c59d27a438e409dccaef11a8ce57de9365ae60",
+        "keyboard.svg": "f509925ca81964ed06251ad4702e989bb81a566ffc74d15c2226b4f07ded67be",
+        "laptop.svg": "b8389056d3b7125670b60a4bd03e6d4ecc440e228f4140e7b66c4e97dcb0dc70",
+        "layout-dashboard.svg": "281ab865b4c04dab32a04023473e448f58be6a7ad90769450ac3349d79dc4aed",
+        "lock.svg": "d2cfe60cac8deaef36442b5c8218c1e61abe18222784b2a370ea090d13fca840",
+        "log-in.svg": "80c1d2a429824e86166775e3f81e84bd9e5630ed5da85d209eb87d91ccd3e936",
+        "menu.svg": "af6491988ac1ba30dc5414f485bc48713e957e1edb0fbef4a0dd8691c3c21598",
+        "monitor.svg": "d1a443233345724859de8e4fb48968ba91e885e12ddbd710701548bd91b39428",
+        "moon.svg": "205b959e940d5841f0ce1d09c933153da9d9c94130a54d5cc0c68c2af1d403da",
+        "package-search.svg": "7dd4dac899a3515426a68b1190347e2d0583cebca5cba31069e5d4d923b5b5da",
+        "package.svg": "69d6bc7650d26c4d24dd55eb22791607b982ce7637073944c256f1f61575509d",
+        "panel-left.svg": "029f67b9e3eeb7ddf7c7c499b174c50388725e8ea50d4ea59ed7dbaf8d61cb82",
+        "refresh-cw.svg": "2e10dd403c85a24f163d59fc6151aa21147fe9402e1305dfc8979208caee8944",
+        "rocket.svg": "2b7887d9a5623f2e5e4a5d32716f93829d61b458e03b6eae33a6df648b9eb855",
+        "scroll-text.svg": "57739b59816cedf5b2fd92559784431ce59f3d14eb77eabb659591b6789e223d",
+        "search.svg": "283d371c2e433817bb9c0c8310caa6c77fa4177c0f4f1168d9c83b97af7389dc",
+        "shield-check.svg": "8d4fcdbde5bba4abb1a2f6fe53e37ceb6343a1d5449a9d88f6f97c1971d26c4e",
+        "sun.svg": "a3955c8b0425fcc5c9ba12d2bdd77fe53b2cd5dd05e7742a56f342e996fb2ef8",
+        "ticket.svg": "37dfe2d23041dd13224fef9d1cb7db4b4f589b661b850f23f57105e843534a2f",
+        "timer.svg": "6771297be65225d462c930865b6f9ee1617aa453885be4c8116a7512a77ac2b6",
+        "triangle-alert.svg": "4866f38b8560d410f21e3226413e0b77997b6dfbb6931fadfe0a0d5aef9ffeb4",
+        "user.svg": "eae3b3b2400031ddd5ec869327d127a96014e5f63aa6e06658dd5d4e90661aa8",
+        "users.svg": "eeed488a1ec95ba730dd69996536fb65061d6ea273afb2429ae47e65eebf401c",
+        "x.svg": "4a9cdab38fbb96162e7dace28e33f4ca0e49d8963a6162abc3d4691b7d675117"
+      }
+    }
+  ]
+}

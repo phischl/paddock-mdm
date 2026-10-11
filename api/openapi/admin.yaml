@@ -30,6 +30,7 @@ security:
 tags:
   - name: auth
   - name: me
+  - name: overview
   - name: device-groups
   - name: enrollment-tokens
   - name: api-tokens
@@ -146,6 +147,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Me" }
         "401": { $ref: "#/components/responses/Problem" }
+        "403":
+          description: The client address is outside the IP allow list (ip_not_allowed, plan M7a decision 17).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "503":
+          description: The api has not loaded the IP allow list yet and refuses every request (ip_allowlist_unavailable, fail closed).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
     patch:
       operationId: updateMe
       tags: [me]
@@ -278,12 +289,16 @@ paths:
         sort: [occurred_at, code, outcome]
         default_sort: -occurred_at
         search: [code, actor.display, target.display]
-        filters: [from, to, code, outcome, actor_type]
+        filters: [from, to, code, outcome, actor_type, target_id]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
         - $ref: "#/components/parameters/AuditEventSort"
         - $ref: "#/components/parameters/Search"
+        - name: target_id
+          in: query
+          description: Exact target id (for example a device id).
+          schema: { type: string, format: uuid }
         - name: from
           in: query
           description: RFC 3339; default to - 7 days.
@@ -695,7 +710,7 @@ paths:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
         search: [hostname, hardware_uuid]
-        filters: [state, device_group_id, disk_state]
+        filters: [state, device_group_id, disk_state, contact, security_updates]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -714,6 +729,20 @@ paths:
           schema:
             type: array
             items: { $ref: "#/components/schemas/DiskState" }
+        - name: contact
+          in: query
+          description: Repeatable. Contact state of the device (plan M7c §12 open point 1).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/DeviceContact" }
+        - name: security_updates
+          in: query
+          description: >-
+            overdue = devices that have contacted Paddock but report no successful security update run within the last
+            48 hours (the overview's "Security updates overdue", plan M7c amendment 2026-10-10).
+          schema: { type: string, enum: [overdue] }
       responses:
         "200":
           description: One page of devices.
@@ -1689,6 +1718,58 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/overview:
+    get:
+      operationId: getOverview
+      tags: [overview]
+      description: "Roles: org_admin, org_operator, org_auditor. The numbers of the overview page, computed in one transaction; never cached."
+      responses:
+        "200":
+          description: The overview of the organization's fleet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Overview" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/attention/devices:
+    get:
+      operationId: listAttentionDevices
+      tags: [devices]
+      description: >-
+        Roles: org_admin, org_operator, org_auditor. The attention list grouped by device: one item per device with an
+        open condition, its conditions most severe first. A kind filter selects devices with at least one matching
+        condition; all conditions of the device are listed.
+      x-paddock-list:
+        sort: [severity, hostname, since]
+        default_sort: -severity
+        search: [hostname]
+        filters: [kind, device_id]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AttentionDeviceSort"
+        - $ref: "#/components/parameters/Search"
+        - name: device_id
+          in: query
+          description: Only this device (exact match; the device page reads its conditions with it).
+          schema: { type: string, format: uuid }
+        - name: kind
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/AttentionKind" }
+      responses:
+        "200":
+          description: One page of devices with their open conditions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttentionDevicePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/attention:
     get:
       operationId: listAttention
@@ -2814,6 +2895,135 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /api/platform/v1/ip-allowlist:
+    get:
+      operationId: listIpAllowlist
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin. The IP allow list of the administrative surfaces (plan M7a decision 16): while it has
+        entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions
+        and API tokens alike. Sessions only: platform tokens do not exist.
+      x-paddock-list:
+        sort: [cidr, label, created_at]
+        default_sort: cidr
+        search: [label, cidr]
+        filters: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/IpAllowlistSort"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: One page of entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpAllowlistEntryPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createIpAllowlistEntry
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin; requires a step-up within the step-up window (403 step_up_required). Adds a range.
+        409 lockout_confirmation_required when the list would no longer cover the caller's own address (repeat with
+        confirm=lockout); 409 already_exists for a duplicate CIDR. Every attempt is audited.
+      x-paddock-audit: platform.ip_allowlist_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/Confirm"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IpAllowlistEntryCreate" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpAllowlistEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/ip-allowlist/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getIpAllowlistEntry
+      tags: [platform]
+      security:
+        - session: []
+      description: "Roles: platform_admin. One entry."
+      responses:
+        "200":
+          description: The entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpAllowlistEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: updateIpAllowlistEntry
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin; requires a step-up (403 step_up_required). Changes the range and/or the label (at least
+        one). 409 lockout_confirmation_required when the caller's own address would no longer be covered (repeat with
+        confirm=lockout); 409 already_exists for a duplicate CIDR.
+      x-paddock-audit: platform.ip_allowlist_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/Confirm"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IpAllowlistEntryUpdate" }
+      responses:
+        "200":
+          description: The changed entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IpAllowlistEntry" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteIpAllowlistEntry
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin; requires a step-up (403 step_up_required). Removes the entry. 409
+        lockout_confirmation_required when the caller's own address would no longer be covered (repeat with
+        confirm=lockout); 409 disable_confirmation_required when it is the last entry, which switches the allow list
+        off for everyone (repeat with confirm=disable).
+      x-paddock-audit: platform.ip_allowlist_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+        - $ref: "#/components/parameters/Confirm"
+      responses:
+        "204":
+          description: Removed.
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases:
     get:
       operationId: listAgentReleases
@@ -3131,10 +3341,27 @@ components:
         type: string
         enum: [occurred_at, -occurred_at, code, -code, outcome, -outcome]
         default: -occurred_at
+    IpAllowlistSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [cidr, -cidr, label, -label, created_at, -created_at]
+        default: cidr
+    Confirm:
+      name: confirm
+      in: query
+      description: |
+        Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+        disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+      schema:
+        type: string
+        enum: [lockout, disable]
     AgentReleaseSort:
       name: sort
       in: query
-      description: Sort field; "-" prefix sorts descending. The version is the tie-breaker.
+      description: Sort field; "-" prefix sorts descending. version sorts by SemVer precedence (0.2.0 before 0.10.0, a pre-release before its release). The version is the tie-breaker.
       schema:
         type: string
         enum: [version, -version, created_at, -created_at, status, -status]
@@ -3291,6 +3518,14 @@ components:
         type: string
         enum: [since, -since, kind, -kind, hostname, -hostname]
         default: -since
+    AttentionDeviceSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers.
+      schema:
+        type: string
+        enum: [severity, -severity, hostname, -hostname, since, -since]
+        default: -severity
     DeviceGroupFilter:
       name: device_group_id
       in: query
@@ -3381,7 +3616,7 @@ components:
         name: { type: string }
     Me:
       type: object
-      required: [id, username, display_name, role, organization, locale, revocation_enabled]
+      required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -3392,11 +3627,21 @@ components:
             - $ref: "#/components/schemas/MeOrganization"
           nullable: true
         locale: { type: string, enum: [en, de] }
+        theme:
+          type: string
+          enum: [system, light, dark]
+          description: Portal theme preference; system follows prefers-color-scheme. An API token answers system.
         revocation_enabled:
           type: boolean
           description: |
             PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
             dead man's switch answer 403 revocation_disabled.
+        client_ip:
+          type: string
+          description: |
+            The client address the server resolved for this request (plan M7a decision 15): the peer, or the address
+            Caddy forwarded in X-Paddock-Client-IP when the peer is a trusted proxy. The IP allow list is checked
+            against it.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
         api_token:
@@ -3425,10 +3670,12 @@ components:
         max_auth_age_seconds: { type: integer, description: The oldest login a step-up callback accepts (max_age). }
     MeUpdate:
       type: object
-      required: [locale]
+      description: A patch of the account settings; at least one field.
+      minProperties: 1
       additionalProperties: false
       properties:
         locale: { type: string, enum: [en, de] }
+        theme: { type: string, enum: [system, light, dark] }
     DeviceGroup:
       type: object
       required: [id, name, description, created_at, updated_at]
@@ -3486,6 +3733,45 @@ components:
         published_at: { type: string, format: date-time }
         artifact_count: { type: integer }
         rollout_status: { $ref: "#/components/schemas/AgentRolloutStatus" }
+    IpAllowlistEntry:
+      type: object
+      required: [id, cidr, label, created_by, created_at, updated_at, covers_caller]
+      properties:
+        id: { type: string, format: uuid }
+        cidr: { type: string, description: "Canonical CIDR: a.b.c.d/n or <ipv6>/n." }
+        label: { type: string }
+        created_by: { type: string, description: "Display name of the platform administrator, or paddock-server admin." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        covers_caller: { type: boolean, description: "The range contains the caller's own client address (client_ip of GET /api/v1/me)." }
+    IpAllowlistEntryCreate:
+      type: object
+      required: [cidr, label]
+      properties:
+        cidr:
+          type: string
+          description: |
+            IPv4 or IPv6 range with a prefix of at least 1 and the host bits zero; a single address is /32 or /128.
+            IPv4-mapped IPv6 is refused. The detail of a 400 names the canonical form.
+        label: { type: string, minLength: 1, maxLength: 64 }
+    IpAllowlistEntryUpdate:
+      type: object
+      description: At least one field.
+      properties:
+        cidr: { type: string }
+        label: { type: string, minLength: 1, maxLength: 64 }
+    IpAllowlistEntryPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/IpAllowlistEntry" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
     AgentReleasePage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
@@ -3624,10 +3910,26 @@ components:
         type: { type: string }
         id: { type: string }
         display: { type: string }
+    AuditDeviceRef:
+      type: object
+      required: [id, hostname]
+      properties:
+        id: { type: string, format: uuid }
+        hostname:
+          type: string
+          nullable: true
+          description: Current hostname, resolved at read time; null when the organization has no such device.
     AuditEvent:
       type: object
-      required: [event_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id]
+      required: [event_id, occurred_at, recorded_at, code, outcome, source, actor, target, params, correlation_id, device]
       properties:
+        device:
+          allOf:
+            - $ref: "#/components/schemas/AuditDeviceRef"
+          nullable: true
+          description: >-
+            The device the event concerns (target of type device, else params.device_id); read-time enrichment, the
+            stored event is unchanged.
         event_id: { type: string, format: uuid }
         occurred_at: { type: string, format: date-time }
         recorded_at: { type: string, format: date-time }
@@ -3880,17 +4182,24 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    DeviceContact:
+      type: string
+      enum: [never, ok, stale_warning, stale_critical, presumed_lost]
+      description: >-
+        Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet;
+        ok otherwise. Devices that are not active report ok or never.
     DeviceState:
       type: string
       enum: [pending, active, rejected, quarantined, retired]
     Device:
       type: object
       required: [id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at,
-                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version]
+                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version, contact]
       properties:
         id: { type: string, format: uuid }
         hostname: { type: string }
         state: { $ref: "#/components/schemas/DeviceState" }
+        contact: { $ref: "#/components/schemas/DeviceContact" }
         hardware_uuid: { type: string, nullable: true }
         machine_id: { type: string, nullable: true }
         os_release:
@@ -4301,6 +4610,141 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    AttentionCondition:
+      type: object
+      required: [kind, since, detail]
+      properties:
+        kind: { $ref: "#/components/schemas/AttentionKind" }
+        since: { type: string, format: date-time }
+        detail: { type: string }
+    AttentionDevice:
+      type: object
+      required: [device_id, hostname, state, os_release, last_contact_at, severity, since, conditions]
+      properties:
+        device_id: { type: string, format: uuid }
+        hostname: { type: string }
+        state: { $ref: "#/components/schemas/DeviceState" }
+        os_release:
+          type: object
+          additionalProperties: { type: string }
+        last_contact_at: { type: string, format: date-time, nullable: true }
+        severity: { type: string, enum: [info, warn, critical], description: Of the most severe condition. }
+        since: { type: string, format: date-time, description: Newest condition. }
+        conditions:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/AttentionCondition" }
+    AttentionDevicePage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AttentionDevice" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, description: "Matching items, counted up to 10000." }
+        total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
+        sort: { type: string, description: Applied sort. }
+    Overview:
+      type: object
+      required: [generated_at, devices, encryption, vulnerabilities, updates, attention]
+      properties:
+        generated_at: { type: string, format: date-time }
+        devices: { $ref: "#/components/schemas/OverviewDevices" }
+        encryption: { $ref: "#/components/schemas/OverviewEncryption" }
+        vulnerabilities: { $ref: "#/components/schemas/OverviewVulnerabilities" }
+        updates: { $ref: "#/components/schemas/OverviewUpdates" }
+        attention: { $ref: "#/components/schemas/OverviewAttention" }
+    OverviewDevices:
+      type: object
+      required: [total, active, pending, quarantined, retired, rejected, online, silent, silent_critical, presumed_lost, never_contacted]
+      properties:
+        total: { type: integer, description: "pending + active + quarantined" }
+        active: { type: integer }
+        pending: { type: integer }
+        quarantined: { type: integer }
+        retired: { type: integer }
+        rejected: { type: integer }
+        online: { type: integer, description: "Active devices in contact (none of the buckets below)." }
+        silent: { type: integer, description: "Active devices with an open stale_warning alert." }
+        silent_critical: { type: integer, description: "Active devices with an open stale_critical alert." }
+        presumed_lost: { type: integer }
+        never_contacted: { type: integer }
+    OverviewEncryption:
+      type: object
+      required: [encrypted, not_encrypted, partial, not_reported]
+      properties:
+        encrypted: { type: integer, description: "Active devices whose disk state is compliant." }
+        not_encrypted: { type: integer }
+        partial: { type: integer, description: "unmanaged, tpm_missing, tpm_pin_missing or escrow_pending." }
+        not_reported: { type: integer }
+    OverviewVulnerabilities:
+      type: object
+      required: [by_highest_severity, critical_high_cves, top]
+      properties:
+        by_highest_severity: { $ref: "#/components/schemas/OverviewSeverityBuckets" }
+        critical_high_cves:
+          type: integer
+          description: "Distinct CVEs of critical or high severity, counted like GET /api/v1/vulnerabilities?severity=critical&severity=high."
+
+        top:
+          type: array
+          maxItems: 5
+          description: "The CVEs with the highest severity, then the most devices."
+          items: { $ref: "#/components/schemas/OverviewTopCVE" }
+    OverviewSeverityBuckets:
+      type: object
+      description: "Active or quarantined devices by the severity of their worst finding; none = no findings."
+      required: [critical, high, medium, low, unknown, none]
+      properties:
+        critical: { type: integer }
+        high: { type: integer }
+        medium: { type: integer }
+        low: { type: integer }
+        unknown: { type: integer }
+        none: { type: integer }
+    OverviewTopCVE:
+      type: object
+      required: [cve, severity, devices, packages]
+      properties:
+        cve: { type: string }
+        severity: { $ref: "#/components/schemas/Severity" }
+        devices: { type: integer }
+        packages:
+          type: array
+          maxItems: 3
+          items: { type: string }
+    OverviewUpdates:
+      type: object
+      required: [security_overdue, reboot_required, agent, os_releases]
+      properties:
+        security_overdue: { type: integer, description: "Active devices counted like GET /api/v1/devices?state=active&security_updates=overdue." }
+        reboot_required: { type: integer }
+        agent: { $ref: "#/components/schemas/OverviewAgent" }
+        os_releases:
+          type: array
+          items: { $ref: "#/components/schemas/OverviewOSRelease" }
+    OverviewAgent:
+      type: object
+      required: [current_version, on_current, outdated, unknown]
+      properties:
+        current_version: { type: string, nullable: true }
+        on_current: { type: integer }
+        outdated: { type: integer }
+        unknown: { type: integer }
+    OverviewOSRelease:
+      type: object
+      required: [release, devices]
+      properties:
+        release: { type: string }
+        devices: { type: integer }
+    OverviewAttention:
+      type: object
+      required: [conditions, devices]
+      properties:
+        conditions: { type: integer }
+        devices: { type: integer }
     RevocationAction:
       type: string
       enum: [lock, destroy, self_lock]

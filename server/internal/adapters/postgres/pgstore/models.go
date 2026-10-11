@@ -6,6 +6,7 @@ package pgstore
 
 import (
 	"encoding/json"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,7 @@ type AdminAccount struct {
 	Role           string
 	Locale         string
 	LastLoginAt    *time.Time
+	Theme          string
 }
 
 type AgentArtifact struct {
@@ -65,6 +67,7 @@ type AgentRelease struct {
 	CreatedBy   string
 	CreatedAt   time.Time
 	PublishedAt *time.Time
+	VersionKey  string
 }
 
 type AgentRollout struct {
@@ -332,6 +335,15 @@ type InventoryPolicyResult struct {
 	AlertedAt      *time.Time
 }
 
+type IpAllowlistEntry struct {
+	ID        uuid.UUID
+	Cidr      netip.Prefix
+	Label     string
+	CreatedBy string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type ManagedFile struct {
 	ID             uuid.UUID
 	OrganizationID uuid.UUID
@@ -473,6 +485,7 @@ type PlatformAdmin struct {
 	DisplayName  string
 	Locale       string
 	LastLoginAt  *time.Time
+	Theme        string
 }
 
 type ProfileAssignment struct {

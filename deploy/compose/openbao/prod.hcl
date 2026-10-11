@@ -1,5 +1,5 @@
 # OpenBao production configuration (plan M6a decision 1, compose.prod.yaml): TLS on the listener with the certificate
-# of the control plane's internal CA (`make prod-secrets`), whose SANs cover openbao, 127.0.0.1 and the interconnect
+# of the control plane's internal CA (`./paddock secrets`), whose SANs cover openbao, 127.0.0.1 and the interconnect
 # address the audit writer uses. Integrated Raft storage on the openbao-data volume.
 ui            = false
 api_addr      = "https://openbao:8200"

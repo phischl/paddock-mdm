@@ -15,8 +15,8 @@ The Compose profile `observability` runs Prometheus (pinned `PROMETHEUS_IMAGE`) 
 | Development | `prometheus`, published on `127.0.0.1:9091` | both |
 
 ```sh
-pc --profile paddock --profile observability up -d     # control plane (pc: docs/operations/install.md)
-pa --profile paddock --profile observability up -d     # audit host
+./paddock up      # control plane and audit host: starts the profiles paddock and observability
+                  # (docs/operations/install.md)
 ```
 
 Prometheus is not published in production. Reach it through an SSH tunnel, for example
@@ -51,6 +51,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockOpenBaoSealed` | OpenBao is sealed (`docs/operations/openbao.md` section 2) | critical |
 | `PaddockOpenBaoUnreachable` | the worker cannot reach OpenBao for 5 minutes | critical |
 | `PaddockOSVStale` | Ubuntu's vulnerability data has not been updated for 3 days (`docs/operations/vulnerability-data.md`) | warning |
+| `PaddockIPAllowlistBypassed` | an api runs with `PADDOCK_IP_ALLOWLIST_BYPASS=true` for 15 minutes: the application IP allow list is not enforced (`docs/operations/ip-allowlist.md`) | warning |
 | `PaddockBackupStale` | the newest backup of a kind (postgres, authentik, openbao, fleet) is older than 26 hours (`docs/operations/restore.md`) | critical |
 | `PaddockWALArchiveLag` | the newest archived WAL segment of a database (stanza `paddock` or `authentik`) is older than 15 minutes for 10 minutes: the RPO of minutes no longer holds (check the `pgbackrest` containers and their spool volumes) | critical |
 | `PaddockCertificateExpiry` | a public certificate expires within 14 days | warning |
@@ -72,3 +73,4 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `paddock_openbao_sealed`, `paddock_openbao_reachable` | worker: OpenBao's `sys/health` every 30 s |
 | `paddock_tls_certificate_expiry_timestamp_seconds{host}`, `paddock_tls_probe_success{host}`, `paddock_tls_probe_hosts` | worker: TLS handshake with Caddy for each name of `PADDOCK_TLS_PROBE_HOSTS` every 15 minutes, verified against the system trust store like a client (production; Caddy exports no certificate metrics). An expired, untrusted or wrong-name certificate reads `paddock_tls_probe_success` 0 |
 | `paddock_osv_stale`, `paddock_osv_last_success_timestamp_seconds` | worker (M5c) |
+| `paddock_ip_allowlist_entries`, `paddock_ip_allowlist_enabled`, `paddock_ip_allowlist_bypass`, `paddock_ip_allowlist_denied_total`, `paddock_ip_allowlist_reload_errors_total`, `paddock_ip_allowlist_last_reload_timestamp_seconds` | api (M7a): the cached IP allow list of each replica, the break-glass bypass, denied requests (exact count; the audit log aggregates them) and the reloads from PostgreSQL |

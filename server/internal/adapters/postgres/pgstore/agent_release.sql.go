@@ -196,7 +196,7 @@ func (q *Queries) FleetdPackage(ctx context.Context, arch string) ([]FleetdPacka
 }
 
 const getAgentRelease = `-- name: GetAgentRelease :one
-SELECT version, status, created_by, created_at, published_at FROM agent_release WHERE version = $1
+SELECT version, status, created_by, created_at, published_at, version_key FROM agent_release WHERE version = $1
 `
 
 func (q *Queries) GetAgentRelease(ctx context.Context, version string) (AgentRelease, error) {
@@ -208,6 +208,7 @@ func (q *Queries) GetAgentRelease(ctx context.Context, version string) (AgentRel
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.PublishedAt,
+		&i.VersionKey,
 	)
 	return i, err
 }
@@ -241,7 +242,7 @@ func (q *Queries) GetAgentRollout(ctx context.Context, version string) (AgentRol
 const insertAgentRelease = `-- name: InsertAgentRelease :one
 
 INSERT INTO agent_release (version, created_by) VALUES ($1, $2)
-RETURNING version, status, created_by, created_at, published_at
+RETURNING version, status, created_by, created_at, published_at, version_key
 `
 
 type InsertAgentReleaseParams struct {
@@ -260,6 +261,7 @@ func (q *Queries) InsertAgentRelease(ctx context.Context, arg InsertAgentRelease
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.PublishedAt,
+		&i.VersionKey,
 	)
 	return i, err
 }
@@ -438,15 +440,15 @@ func (q *Queries) ListAgentPackages(ctx context.Context, version string) ([]Agen
 
 const listAgentReleases = `-- name: ListAgentReleases :many
 
-SELECT agent_release.version, agent_release.status, agent_release.created_by, agent_release.created_at, agent_release.published_at,
+SELECT agent_release.version, agent_release.status, agent_release.created_by, agent_release.created_at, agent_release.published_at, agent_release.version_key,
        coalesce((SELECT ro.status FROM agent_rollout ro WHERE ro.version = agent_release.version), '')::text AS rollout_status, -- '' = none
        (SELECT count(*) FROM agent_artifact a WHERE a.version = agent_release.version)::int AS artifact_count
 FROM agent_release
 WHERE ($1::text IS NULL OR version ILIKE $1::text ESCAPE '\')
   AND ($2::text[] IS NULL OR status = ANY($2::text[]))
 ORDER BY
-  CASE WHEN $3::text = 'version' THEN version END ASC,
-  CASE WHEN $3::text = '-version' THEN version END DESC,
+  CASE WHEN $3::text = 'version' THEN version_key END ASC, -- SemVer precedence (PDK-025)
+  CASE WHEN $3::text = '-version' THEN version_key END DESC,
   CASE WHEN $3::text = 'created_at' THEN created_at END ASC,
   CASE WHEN $3::text = '-created_at' THEN created_at END DESC,
   CASE WHEN $3::text = 'status' THEN status END ASC,
@@ -469,6 +471,7 @@ type ListAgentReleasesRow struct {
 	CreatedBy     string
 	CreatedAt     time.Time
 	PublishedAt   *time.Time
+	VersionKey    string
 	RolloutStatus string
 	ArtifactCount int32
 }
@@ -495,6 +498,7 @@ func (q *Queries) ListAgentReleases(ctx context.Context, arg ListAgentReleasesPa
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.PublishedAt,
+			&i.VersionKey,
 			&i.RolloutStatus,
 			&i.ArtifactCount,
 		); err != nil {
@@ -550,7 +554,7 @@ func (q *Queries) ListRunningAgentRollouts(ctx context.Context) ([]AgentRollout,
 const publishAgentRelease = `-- name: PublishAgentRelease :one
 UPDATE agent_release SET status = 'published', published_at = now()
 WHERE version = $1
-RETURNING version, status, created_by, created_at, published_at
+RETURNING version, status, created_by, created_at, published_at, version_key
 `
 
 func (q *Queries) PublishAgentRelease(ctx context.Context, version string) (AgentRelease, error) {
@@ -562,6 +566,7 @@ func (q *Queries) PublishAgentRelease(ctx context.Context, version string) (Agen
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.PublishedAt,
+		&i.VersionKey,
 	)
 	return i, err
 }

@@ -3,15 +3,16 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import ProfileForm from '../components/ProfileForm.vue'
 import type { PermissionProfile } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { classFilter, createProfile, listProfiles, type ProfileInput } from '../lib/profiles'
 import { useSessionStore } from '../stores/session'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const router = useRouter()
 const confirm = useConfirm()
 const session = useSessionStore()
@@ -64,8 +65,20 @@ async function onCreate(input: ProfileInput): Promise<void> {
       searchable
       default-sort="name"
       item-value="id"
+      empty-icon="shield-check"
+      empty-title="profiles.empty.title"
+      empty-description="profiles.empty.description"
       data-testid="profile-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="session.canWrite"
+          color="primary"
+          @click="problem = ''; open = true"
+        >
+          {{ t('profiles.create') }}
+        </v-btn>
+      </template>
       <template #[`item.name`]="{ item }: { item: PermissionProfile }">
         <RouterLink :to="{ name: 'permission-profile', params: { id: item.id } }">
           {{ item.name }}
@@ -73,21 +86,23 @@ async function onCreate(input: ProfileInput): Promise<void> {
       </template>
       <template #[`item.class`]="{ item }: { item: PermissionProfile }">
         {{ t('profiles.classes.' + item.class) }}
-        <span
+        <StatusChip
           v-if="item.root_equivalent"
-          class="badge badge-warning"
-        >{{ t('profiles.rootEquivalentBadge') }}</span>
-        <span
+          status="warn"
+          :label="t('profiles.rootEquivalentBadge')"
+        />
+        <StatusChip
           v-if="item.invalid_commands.length > 0"
-          class="badge badge-danger"
+          status="critical"
+          :label="t('profiles.invalidBadge')"
           data-testid="profile-invalid"
-        >{{ t('profiles.invalidBadge') }}</span>
+        />
       </template>
       <template #[`item.commands`]="{ item }: { item: PermissionProfile }">
         {{ t('profiles.commandCount', { count: item.commands.length }) }}
       </template>
       <template #[`item.updated_at`]="{ item }: { item: PermissionProfile }">
-        {{ formatDateTime(item.updated_at, locale) }}
+        <TimeCell :iso="item.updated_at" />
       </template>
     </DataList>
 

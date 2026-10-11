@@ -17,6 +17,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/jackc/pgx/v5"
 
+	semverpkg "github.com/phischl/paddock-mdm/pkg/semver"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
@@ -163,16 +164,16 @@ func TestListContract(t *testing.T) {
 				}
 				keys := make([]string, len(page.Items))
 				for i, it := range page.Items {
-					keys[i] = rankKey(field, fmt.Sprint(it[field]))
+					keys[i] = rankKey(path, field, fmt.Sprint(it[field]))
 				}
 				if s[0] == '-' {
 					reverse(keys, nullsLast[field])
 				}
 				schema := prop.Value
-				if _, ok := ranks[field]; ok {
+				if _, ok := rankOrder(path, field); ok {
 					schema = openapi3.NewIntegerSchema()
 				}
-				if err := order.ascending(keys, schema); err != nil {
+				if err := order.ascending(keys, schema, semverSorts[path] == field); err != nil {
 					t.Errorf("sort=%s: %v", s, err)
 				}
 				t.Logf("sort=%s: %d of %d items in order", s, len(page.Items), page.Total)
@@ -233,8 +234,9 @@ func newCollation(t *testing.T) *collation {
 
 // ascending reports the first adjacent pair out of ascending order. Missing values (null) sort after every value,
 // as PostgreSQL orders NULL in ascending order (and first in descending order, which the caller reverses). Numbers
-// compare as numbers, date-time strings as times, other strings in the database's collation.
-func (c *collation) ascending(keys []string, prop *openapi3.Schema) error {
+// compare as numbers, date-time strings as times, agent versions (semver) by SemVer precedence, other strings in the
+// database's collation.
+func (c *collation) ascending(keys []string, prop *openapi3.Schema, semver bool) error {
 	for i := 1; i < len(keys); i++ {
 		a, b := keys[i-1], keys[i]
 		var ok bool
@@ -255,6 +257,8 @@ func (c *collation) ascending(keys []string, prop *openapi3.Schema) error {
 				return fmt.Errorf("not RFC 3339: %q, %q", a, b)
 			}
 			ok = !ta.After(tb)
+		case semver:
+			ok = semverpkg.Compare(a, b) <= 0
 		default:
 			if err := c.conn.QueryRow(c.ctx, "SELECT $1::text <= $2::text", a, b).Scan(&ok); err != nil {
 				return err
@@ -279,10 +283,29 @@ var nullsLast = map[string]bool{"cvss_score": true, "severity": true}
 // missing from a rank are the field's missing values.
 var ranks = map[string][]string{"severity": {"low", "medium", "high", "critical"}}
 
+// collectionRanks override ranks for one collection: the attention list grouped by device ranks the severity of its
+// conditions (plan M7c step 5), not of findings.
+var collectionRanks = map[string]map[string][]string{
+	"/api/v1/attention/devices": {"severity": {"info", "warn", "critical"}},
+}
+
+// semverSorts are the sort fields that order by SemVer precedence (PDK-025), not as text: agent releases, not the
+// Debian package versions of the software lists.
+var semverSorts = map[string]string{"/api/platform/v1/agent-releases": "version"}
+
+// rankOrder returns the rank of a sort field of a collection, lowest first.
+func rankOrder(path, field string) ([]string, bool) {
+	if order, ok := collectionRanks[path][field]; ok {
+		return order, true
+	}
+	order, ok := ranks[field]
+	return order, ok
+}
+
 // rankKey turns the value of a ranked field into its rank, or nullKey for an unranked value (unknown); other fields'
 // values stay.
-func rankKey(field, value string) string {
-	order, ok := ranks[field]
+func rankKey(path, field, value string) string {
+	order, ok := rankOrder(path, field)
 	if !ok {
 		return value
 	}

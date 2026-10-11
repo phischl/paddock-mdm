@@ -75,6 +75,7 @@ onMounted(async () => {
         <v-text-field
           id="security-daily-at"
           v-model="form.security_daily_at"
+          class="pd-field-short"
           :label="t('updates.settings.securityDailyAt')"
           :hint="t('updates.settings.securityDailyAtHint')"
           persistent-hint

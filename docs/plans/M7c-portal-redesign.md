@@ -963,6 +963,9 @@ Follow-ups: toast component; bulk actions with row selection; per-organization b
   2026-10-08 ("light only") is superseded.
 ```
 
+### Amendment 2026-10-10 (architect)
+AC1 holds by construction: every linked KPI is counted with the query of the list it links to — devices KPIs link to `/devices?state=active&…` (`contact`, `disk_state`, new filter `security_updates=overdue`, 48 h), "Critical/high CVEs" counts distinct CVEs (`Overview.vulnerabilities.critical_high_cves`) like `/vulnerabilities?severity=critical&severity=high`; `GET /api/v1/attention/devices` gains an exact `device_id` filter for the device page.
+
 ## 7. Implementation steps
 
 Each step ends in a lint-clean, test-green, committable state; one commit per step (`feat(portal): …` /

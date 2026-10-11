@@ -7,6 +7,10 @@ package pgstore
 
 import (
 	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 const countAttention = `-- name: CountAttention :one
@@ -26,6 +30,36 @@ type CountAttentionParams struct {
 
 func (q *Queries) CountAttention(ctx context.Context, arg CountAttentionParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countAttention, arg.QPattern, arg.Kinds, arg.CountLimit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countAttentionDevices = `-- name: CountAttentionDevices :one
+SELECT count(*) FROM (
+  SELECT 1 FROM attention_condition c
+  WHERE ($1::text IS NULL OR c.hostname ILIKE $1::text ESCAPE '\')
+    AND ($2::text[] IS NULL OR c.kind = ANY($2::text[]))
+    AND ($3::uuid IS NULL OR c.device_id = $3::uuid)
+  GROUP BY c.device_id
+  LIMIT $4
+) matching
+`
+
+type CountAttentionDevicesParams struct {
+	QPattern   *string
+	Kinds      []string
+	DeviceID   uuid.NullUUID
+	CountLimit int32
+}
+
+func (q *Queries) CountAttentionDevices(ctx context.Context, arg CountAttentionDevicesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAttentionDevices,
+		arg.QPattern,
+		arg.Kinds,
+		arg.DeviceID,
+		arg.CountLimit,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -80,6 +114,99 @@ func (q *Queries) ListAttention(ctx context.Context, arg ListAttentionParams) ([
 			&i.Since,
 			&i.Detail,
 			&i.ID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAttentionDevices = `-- name: ListAttentionDevices :many
+
+WITH ranked AS (
+  SELECT c.device_id, c.hostname, c.kind, c.since, c.detail,
+         CASE WHEN c.kind IN ('presumed_lost', 'stale_critical', 'quarantined', 'revocation_expired') THEN 2
+              WHEN c.kind = 'revocation_pending' THEN 0
+              ELSE 1 END AS rank
+  FROM attention_condition c
+), grouped AS (
+  SELECT r.device_id, r.hostname, max(r.rank)::int AS severity, max(r.since)::timestamptz AS since,
+         json_agg(json_build_object('kind', r.kind, 'since', r.since, 'detail', r.detail) ORDER BY r.rank DESC, r.since DESC) AS conditions
+  FROM ranked r
+  WHERE ($4::text IS NULL OR r.hostname ILIKE $4::text ESCAPE '\')
+    AND ($5::text[] IS NULL OR EXISTS (
+          SELECT 1 FROM attention_condition k WHERE k.device_id = r.device_id AND k.kind = ANY($5::text[])))
+    AND ($6::uuid IS NULL OR r.device_id = $6::uuid)
+  GROUP BY r.device_id, r.hostname
+), page AS (
+  SELECT g.device_id, g.hostname, g.severity, g.since, g.conditions, d.state, d.os_release, s.last_contact_at
+  FROM grouped g JOIN device d ON d.id = g.device_id LEFT JOIN device_status s ON s.device_id = d.id
+)
+SELECT device_id, hostname, severity, since, conditions, state, os_release, last_contact_at
+FROM page
+ORDER BY
+  CASE WHEN $1::text = 'severity' THEN severity END ASC,
+  CASE WHEN $1::text = '-severity' THEN severity END DESC,
+  CASE WHEN $1::text = 'hostname' THEN hostname END ASC,
+  CASE WHEN $1::text = '-hostname' THEN hostname END DESC,
+  CASE WHEN $1::text = 'since' THEN since END ASC,
+  CASE WHEN $1::text = '-since' THEN since END DESC,
+  hostname, device_id
+LIMIT $3 OFFSET $2
+`
+
+type ListAttentionDevicesParams struct {
+	Sort     string
+	SkipRows int32
+	MaxRows  int32
+	QPattern *string
+	Kinds    []string
+	DeviceID uuid.NullUUID
+}
+
+type ListAttentionDevicesRow struct {
+	DeviceID      uuid.UUID
+	Hostname      string
+	Severity      int32
+	Since         time.Time
+	Conditions    []byte
+	State         string
+	OsRelease     json.RawMessage
+	LastContactAt *time.Time
+}
+
+// The attention list grouped by device (plan M7c decision 27): one row per device with an open condition, its
+// conditions most severe first (critical 2, warn 1, info 0; see the portal's attentionStatus). A kind filter selects
+// the devices with at least one matching condition; every condition of the device is listed.
+func (q *Queries) ListAttentionDevices(ctx context.Context, arg ListAttentionDevicesParams) ([]ListAttentionDevicesRow, error) {
+	rows, err := q.db.Query(ctx, listAttentionDevices,
+		arg.Sort,
+		arg.SkipRows,
+		arg.MaxRows,
+		arg.QPattern,
+		arg.Kinds,
+		arg.DeviceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAttentionDevicesRow{}
+	for rows.Next() {
+		var i ListAttentionDevicesRow
+		if err := rows.Scan(
+			&i.DeviceID,
+			&i.Hostname,
+			&i.Severity,
+			&i.Since,
+			&i.Conditions,
+			&i.State,
+			&i.OsRelease,
+			&i.LastContactAt,
 		); err != nil {
 			return nil, err
 		}

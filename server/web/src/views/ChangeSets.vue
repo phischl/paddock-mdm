@@ -3,6 +3,8 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ChangeSetPlan from '../components/ChangeSetPlan.vue'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import type { ChangeSet } from '../api/client'
 import { changeSetFilters, listChangeSets } from '../lib/changeSets'
 import { formatDateTime } from '../lib/format'
@@ -37,21 +39,22 @@ const columns = computed<ListColumn[]>(() => [
       searchable
       default-sort="-applied_at"
       item-value="id"
+      empty-icon="diff"
+      empty-title="changeSets.empty.title"
+      empty-description="changeSets.empty.description"
       data-testid="change-set-list"
     >
       <template #[`item.applied_at`]="{ item }: { item: ChangeSet }">
-        {{ formatDateTime(item.applied_at, locale) }}
+        <TimeCell :iso="item.applied_at" />
       </template>
       <template #[`item.actor`]="{ item }: { item: ChangeSet }">
         {{ item.actor.display }}
       </template>
       <template #[`item.source`]="{ item }: { item: ChangeSet }">
-        <v-chip
-          size="small"
-          variant="tonal"
-        >
-          {{ t('changeSets.sources.' + item.source) }}
-        </v-chip>
+        <StatusChip
+          status="neutral"
+          :label="t('changeSets.sources.' + item.source)"
+        />
       </template>
       <template #[`item.created`]="{ item }: { item: ChangeSet }">
         {{ item.summary.created }}

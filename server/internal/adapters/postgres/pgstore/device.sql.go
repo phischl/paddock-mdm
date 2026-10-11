@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countDevices = `-- name: CountDevices :one
@@ -21,19 +22,27 @@ SELECT count(*) FROM (
          OR hardware_uuid ILIKE $1::text ESCAPE '\')
     AND ($2::text[] IS NULL OR state = ANY($2::text[]))
     AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
-    AND ($4::uuid IS NULL OR EXISTS (
+    AND ($4::text[] IS NULL
+         OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY($4::text[]))
+    AND ($5::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
+           device_status.login_state -> 'updates_security' IS NULL
+           OR device_status.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
+           OR (device_status.login_state -> 'updates_security' ->> 'occurred_at')::timestamptz < now() - $5::interval)))
+    AND ($6::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_group_member m
-          WHERE m.device_id = device.id AND m.device_group_id = $4::uuid))
-  LIMIT $5
+          WHERE m.device_id = device.id AND m.device_group_id = $6::uuid))
+  LIMIT $7
 ) matching
 `
 
 type CountDevicesParams struct {
-	QPattern      *string
-	States        []string
-	DiskStates    []string
-	DeviceGroupID uuid.NullUUID
-	CountLimit    int32
+	QPattern              *string
+	States                []string
+	DiskStates            []string
+	Contacts              []string
+	SecurityOverdueWindow pgtype.Interval
+	DeviceGroupID         uuid.NullUUID
+	CountLimit            int32
 }
 
 func (q *Queries) CountDevices(ctx context.Context, arg CountDevicesParams) (int64, error) {
@@ -41,6 +50,8 @@ func (q *Queries) CountDevices(ctx context.Context, arg CountDevicesParams) (int
 		arg.QPattern,
 		arg.States,
 		arg.DiskStates,
+		arg.Contacts,
+		arg.SecurityOverdueWindow,
 		arg.DeviceGroupID,
 		arg.CountLimit,
 	)
@@ -61,6 +72,19 @@ type DeleteDeviceGroupMemberParams struct {
 func (q *Queries) DeleteDeviceGroupMember(ctx context.Context, arg DeleteDeviceGroupMemberParams) error {
 	_, err := q.db.Exec(ctx, deleteDeviceGroupMember, arg.DeviceGroupID, arg.DeviceID)
 	return err
+}
+
+const deviceContact = `-- name: DeviceContact :one
+SELECT paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id)::text AS contact
+FROM device LEFT JOIN device_status ON device_status.device_id = device.id
+WHERE device.id = $1
+`
+
+func (q *Queries) DeviceContact(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, deviceContact, id)
+	var contact string
+	err := row.Scan(&contact)
+	return contact, err
 }
 
 const getDevice = `-- name: GetDevice :one
@@ -335,6 +359,36 @@ func (q *Queries) ListDeviceGroupsOfDevice(ctx context.Context, deviceID uuid.UU
 	return items, nil
 }
 
+const listDeviceHostnames = `-- name: ListDeviceHostnames :many
+SELECT id, hostname FROM device WHERE id = ANY($1::uuid[])
+`
+
+type ListDeviceHostnamesRow struct {
+	ID       uuid.UUID
+	Hostname string
+}
+
+// The devices of the caller's organization among ids (RLS bounds it): the audit list resolves hostnames with it.
+func (q *Queries) ListDeviceHostnames(ctx context.Context, ids []uuid.UUID) ([]ListDeviceHostnamesRow, error) {
+	rows, err := q.db.Query(ctx, listDeviceHostnames, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeviceHostnamesRow{}
+	for rows.Next() {
+		var i ListDeviceHostnamesRow
+		if err := rows.Scan(&i.ID, &i.Hostname); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeviceIdentityKeys = `-- name: ListDeviceIdentityKeys :many
 SELECT key_id, organization_id, device_id, public_key, key_protection, status, created_at FROM device_identity_key WHERE device_id = $1 ORDER BY created_at, key_id
 `
@@ -370,37 +424,47 @@ func (q *Queries) ListDeviceIdentityKeys(ctx context.Context, deviceID uuid.UUID
 const listDevices = `-- name: ListDevices :many
 
 SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device_status.last_contact_at, device_status.applied_bundle_version,
-       device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state -- '' = none
+       device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
+       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id)::text AS contact
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 WHERE ($1::text IS NULL
        OR hostname ILIKE $1::text ESCAPE '\'
        OR hardware_uuid ILIKE $1::text ESCAPE '\')
   AND ($2::text[] IS NULL OR state = ANY($2::text[]))
   AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
-  AND ($4::uuid IS NULL OR EXISTS (
+  AND ($4::text[] IS NULL
+       OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY($4::text[]))
+  -- security_updates=overdue (plan M7c amendment 2026-10-10): contacted, but no successful security run within the window.
+  AND ($5::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
+         device_status.login_state -> 'updates_security' IS NULL
+         OR device_status.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
+         OR (device_status.login_state -> 'updates_security' ->> 'occurred_at')::timestamptz < now() - $5::interval)))
+  AND ($6::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m
-        WHERE m.device_id = device.id AND m.device_group_id = $4::uuid))
+        WHERE m.device_id = device.id AND m.device_group_id = $6::uuid))
 ORDER BY
-  CASE WHEN $5::text = 'hostname' THEN hostname END ASC,
-  CASE WHEN $5::text = '-hostname' THEN hostname END DESC,
-  CASE WHEN $5::text = 'last_contact_at' THEN last_contact_at END ASC,
-  CASE WHEN $5::text = '-last_contact_at' THEN last_contact_at END DESC,
-  CASE WHEN $5::text = 'enrolled_at' THEN enrolled_at END ASC,
-  CASE WHEN $5::text = '-enrolled_at' THEN enrolled_at END DESC,
-  CASE WHEN $5::text = 'state' THEN state END ASC,
-  CASE WHEN $5::text = '-state' THEN state END DESC,
+  CASE WHEN $7::text = 'hostname' THEN hostname END ASC,
+  CASE WHEN $7::text = '-hostname' THEN hostname END DESC,
+  CASE WHEN $7::text = 'last_contact_at' THEN last_contact_at END ASC,
+  CASE WHEN $7::text = '-last_contact_at' THEN last_contact_at END DESC,
+  CASE WHEN $7::text = 'enrolled_at' THEN enrolled_at END ASC,
+  CASE WHEN $7::text = '-enrolled_at' THEN enrolled_at END DESC,
+  CASE WHEN $7::text = 'state' THEN state END ASC,
+  CASE WHEN $7::text = '-state' THEN state END DESC,
   id
-LIMIT $7 OFFSET $6
+LIMIT $9 OFFSET $8
 `
 
 type ListDevicesParams struct {
-	QPattern      *string
-	States        []string
-	DiskStates    []string
-	DeviceGroupID uuid.NullUUID
-	Sort          string
-	SkipRows      int32
-	MaxRows       int32
+	QPattern              *string
+	States                []string
+	DiskStates            []string
+	Contacts              []string
+	SecurityOverdueWindow pgtype.Interval
+	DeviceGroupID         uuid.NullUUID
+	Sort                  string
+	SkipRows              int32
+	MaxRows               int32
 }
 
 type ListDevicesRow struct {
@@ -409,6 +473,7 @@ type ListDevicesRow struct {
 	AppliedBundleVersion *int64
 	AgentVersion         *string
 	DiskState            string
+	Contact              string
 }
 
 // List queries (ADR 0018): see device_group.sql. Sort and search columns are unambiguous across the join.
@@ -417,6 +482,8 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 		arg.QPattern,
 		arg.States,
 		arg.DiskStates,
+		arg.Contacts,
+		arg.SecurityOverdueWindow,
 		arg.DeviceGroupID,
 		arg.Sort,
 		arg.SkipRows,
@@ -446,6 +513,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.AppliedBundleVersion,
 			&i.AgentVersion,
 			&i.DiskState,
+			&i.Contact,
 		); err != nil {
 			return nil, err
 		}

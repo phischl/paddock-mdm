@@ -3,14 +3,15 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import type { UpstreamGroup, UserGroup } from '../api/client'
-import { formatDateTime } from '../lib/format'
 import { searchText, type ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { createUserGroup, groupSlugPattern, groupSourceFilter, listUpstreamGroups, listUserGroups, slugFrom } from '../lib/userGroups'
 import { useSessionStore } from '../stores/session'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const router = useRouter()
 const problemText = useProblemText()
 const session = useSessionStore()
@@ -108,18 +109,33 @@ async function submit(): Promise<void> {
       searchable
       default-sort="name"
       item-value="id"
+      empty-icon="users"
+      empty-title="userGroups.empty.title"
+      empty-description="userGroups.empty.description"
       data-testid="user-group-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="session.canWrite"
+          color="primary"
+          @click="openDialog(false)"
+        >
+          {{ t('userGroups.create') }}
+        </v-btn>
+      </template>
       <template #[`item.name`]="{ item }: { item: UserGroup }">
         <RouterLink :to="{ name: 'user-group', params: { id: item.id } }">
           {{ item.name }}
         </RouterLink>
       </template>
       <template #[`item.source`]="{ item }: { item: UserGroup }">
-        <span :class="'badge badge-' + item.source">{{ t('userGroups.sources.' + item.source) }}</span>
+        <StatusChip
+          status="neutral"
+          :label="t('userGroups.sources.' + item.source)"
+        />
       </template>
       <template #[`item.created_at`]="{ item }: { item: UserGroup }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
     </DataList>
 

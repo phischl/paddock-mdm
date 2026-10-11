@@ -211,9 +211,10 @@ func TestAttentionRowsAreUnique(t *testing.T) {
 	}
 }
 
-// TestAgentOutdatedPreReleases (PDK-022): agent_outdated compares a device's agent version with the current release
-// (the most recently completed rollout) for equality, not by order, so every other pre-release of the sequence is
-// flagged and the current one is not. The rollouts are rolled back: the current release is platform-wide.
+// TestAgentOutdatedPreReleases (PDK-022, PDK-025): agent_outdated flags a device whose agent version is older than the
+// current release (the most recently completed rollout) by SemVer precedence: the earlier pre-releases of the
+// sequence are flagged, the current one and newer ones are not. The rollouts are rolled back: the current release is
+// platform-wide.
 func TestAgentOutdatedPreReleases(t *testing.T) {
 	h := newStalenessHarness(t)
 	sequence := []string{"0.1.0-alpha.1", "0.1.0-alpha.2", "0.1.0-beta.1", "0.1.0-rc.1", "0.1.0"}
@@ -221,6 +222,13 @@ func TestAgentOutdatedPreReleases(t *testing.T) {
 	for i, v := range sequence {
 		devices[i] = h.device(t, "active", time.Now())
 		h.exec(t, "UPDATE device_status SET agent_version = $2 WHERE device_id = $1", devices[i], v)
+	}
+	// Newer than every release of the sequence (and lexically smaller), and no semantic version at all.
+	others := map[string]bool{"0.10.0": false, "not-a-version": true}
+	otherDevices := map[string]uuid.UUID{}
+	for v := range others {
+		otherDevices[v] = h.device(t, "active", time.Now())
+		h.exec(t, "UPDATE device_status SET agent_version = $2 WHERE device_id = $1", otherDevices[v], v)
 	}
 	ctx := context.Background()
 	for i, current := range sequence {
@@ -249,10 +257,44 @@ func TestAgentOutdatedPreReleases(t *testing.T) {
 				if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM attention_condition WHERE device_id = $1 AND kind = 'agent_outdated')", d).Scan(&flagged); err != nil {
 					t.Fatal(err)
 				}
-				if flagged != (j != i) {
+				if flagged != (j < i) {
 					t.Errorf("current %s, device on %s: agent_outdated %v", current, sequence[j], flagged)
 				}
 			}
+			for v, want := range others {
+				var flagged bool
+				if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM attention_condition WHERE device_id = $1 AND kind = 'agent_outdated')", otherDevices[v]).Scan(&flagged); err != nil {
+					t.Fatal(err)
+				}
+				if flagged != want {
+					t.Errorf("current %s, device on %s: agent_outdated %v, want %v", current, v, flagged, want)
+				}
+			}
 		})
+	}
+}
+
+// TestCurrentAgentVersionTieBreak (PDK-025): of two rollouts completed at the same time, the higher version by SemVer
+// precedence is the current release (0.10.0, not the lexically larger 0.9.0). Rolled back like the test above.
+func TestCurrentAgentVersionTieBreak(t *testing.T) {
+	h := newStalenessHarness(t)
+	ctx := context.Background()
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, v := range []string{"0.9.0", "0.10.0"} {
+		if _, err := tx.Exec(ctx, "INSERT INTO agent_release (version, status, created_by, published_at) VALUES ($1, 'published', 't', now()) ON CONFLICT DO NOTHING", v); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_rollout (version, status, started_by, updated_at) VALUES ($1, 'completed', 't', '2200-01-01T00:00:00Z')
+			ON CONFLICT (version) DO UPDATE SET status = 'completed', updated_at = EXCLUDED.updated_at`, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var current string
+	if err := tx.QueryRow(ctx, "SELECT paddock_current_agent_version()").Scan(&current); err != nil || current != "0.10.0" {
+		t.Fatalf("current release %q (%v), want 0.10.0", current, err)
 	}
 }

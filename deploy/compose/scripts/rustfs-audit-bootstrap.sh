@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# Development bootstrap of the WORM audit bucket (plan M0 §6.8): bucket paddock-audit with Object Lock, default
-# retention COMPLIANCE / 400 days, writer user restricted to put/get/list/retention. Idempotent.
+# Bootstrap of the WORM audit bucket on the bundled RustFS (plan M0 §6.8, M7b decision 19): bucket paddock-audit with
+# Object Lock, default retention COMPLIANCE / 400 days, writer user restricted to put/get/list/retention. Idempotent.
 # Refuses to continue when the bucket exists without Object Lock (Object Lock cannot be enabled afterwards).
-# Production: follow docs/operations/audit-bucket.md.
+# Development: make up; production: ./paddock bootstrap audit-bucket (docs/operations/audit-bucket.md).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-require_development
-
 BUCKET="${PADDOCK_AUDIT_S3_BUCKET:-paddock-audit}"
 DEFAULT_RETENTION_DAYS=400
-NETWORK="paddock_audit-store"
-ENDPOINT="http://audit-rustfs:9000"
+NETWORK="${NETWORK:-${PADDOCK_PROJECT}_audit-store}"
+ENDPOINT="${ENDPOINT:-http://audit-rustfs:9000}"
 
 AWS_ACCESS_KEY_ID="$(cat "$SECRETS_DIR/rustfs_audit_root_user")"
 AWS_SECRET_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_audit_root_password")"
@@ -30,7 +28,7 @@ aws() {
 rc() {
   docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
     -e WRITER_ACCESS_KEY -e WRITER_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c \
-    "rc alias set audit $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
+    "rc alias set -- audit $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
 }
 
 for _ in $(seq 1 30); do

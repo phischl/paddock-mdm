@@ -18,15 +18,21 @@ IMAGE         ?= paddock-server:dev
 UID           := $(shell id -u)
 GID           := $(shell id -g)
 
+# The Compose file sets live in scripts/lib.sh (plan M7b decision 18); lib_files reads one of its variables.
+# SECRETS_DIR is not exported: lib.sh takes an exported SECRETS_DIR as an override, and this one is relative.
+LIB_SH    := $(COMPOSE_DIR)/scripts/lib.sh
+lib_files  = $(shell sed -n 's/^$(1)="\(.*\)"$$/\1/p' $(LIB_SH))
+unexport SECRETS_DIR
+
 # BACKUP=1 adds the backups (plan M6a; compose.backup.yaml with the development wiring of compose.backup.dev.yaml).
-BACKUP_FILES := $(if $(BACKUP),-f $(COMPOSE_DIR)/compose.backup.yaml -f $(COMPOSE_DIR)/compose.backup.dev.yaml,)
+BACKUP_FILES := $(if $(BACKUP),$(call lib_files,DEV_BACKUP_FILES),)
 ifneq ($(BACKUP),)
 export PADDOCK_BACKUP_S3_ENDPOINT ?= https://backup-s3-tls:9443
 endif
 
 COMPOSE := docker compose --project-directory $(COMPOSE_DIR) -p paddock \
 	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env \
-	-f $(COMPOSE_DIR)/compose.yaml -f $(COMPOSE_DIR)/compose.audit.yaml -f $(COMPOSE_DIR)/compose.dev.yaml $(BACKUP_FILES)
+	$(foreach f,$(call lib_files,DEV_FILES) $(BACKUP_FILES),-f $(COMPOSE_DIR)/$(f))
 
 NODE_RUN := docker run --rm -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
 	-v $(CURDIR):/src -w /src/$(WEB_DIR) $(NODE_IMAGE)
@@ -46,7 +52,7 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-licenses ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses ## Run all linters, govulncheck, the license gate and the server image build
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
@@ -81,6 +87,12 @@ lint-prometheus:
 		$(PROMETHEUS_IMAGE) -c 'promtool check config prometheus.yml && promtool check rules alerts.yml && \
 			promtool test rules alerts_test.yml'
 
+# Edge entrypoint (plan M7a step 1): validation messages, the rendered servers block and `caddy validate` of both
+# Caddyfiles with that block, in the pinned Caddy image.
+.PHONY: lint-caddy
+lint-caddy:
+	docker run --rm -v $(CURDIR)/$(COMPOSE_DIR)/caddy:/test:ro --entrypoint sh $(CADDY_IMAGE) /test/entrypoint_test.sh
+
 .PHONY: lint-go
 lint-go:
 	docker run --rm -v $(CURDIR):/src -w /src \
@@ -101,11 +113,14 @@ lint-vuln:
 			for m in $(GO_MODULES); do echo "govulncheck $$m"; go tool govulncheck -test -C /src/$$m ./...; done'
 
 # The build stage of the server image compiles the Go workspace, so a commit that breaks the image fails lint (plan
-# M2.1 decision 5); the compiler image (with visudo) is built as well (plan M3a decision 17).
+# M2.1 decision 5); the compiler image (with visudo) is built as well (plan M3a decision 17). The build stage is also
+# cross-compiled for arm64 (on the build platform, no QEMU), so a commit that breaks the published arm64 images fails
+# lint too (plan M7b decision 20).
 .PHONY: lint-image
 lint-image:
-	@for target in build compiler; do \
-		docker build --target $$target -f $(COMPOSE_DIR)/Dockerfile \
+	@for target in build compiler build/linux/arm64; do \
+		docker build --target $${target%%/*} $$(case $$target in */*) echo --platform $${target#*/};; esac) \
+			-f $(COMPOSE_DIR)/Dockerfile \
 			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
 			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) \
 			--build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) . || exit 1; \
@@ -129,7 +144,12 @@ test: ## Unit and integration tests (requires Docker)
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
+	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
+	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh
+	bash $(COMPOSE_DIR)/scripts/fleet-bootstrap_test.sh
 	bash packaging/release_test.sh
+	bash deploy/bundle/bundle_test.sh
+	bash deploy/bundle/ci/prune-edge_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -173,40 +193,21 @@ dev-release-key: ## Generate the password-less development agent and revocation 
 			echo "created development release key $(RELEASE_KEY_DIR)/$$key.pub" || exit 1; fi; \
 	done
 
-# --- Production (plan M6a, docs/operations/install.md) ------------------------------------------------------------
-# HOST is the host of the two-host topology (controlplane or audit). A HOST variable inherited from the shell (zsh sets
-# it to the machine name) is ignored; pass it on the make command line.
-ifeq ($(origin HOST),environment)
-HOST := controlplane
-endif
-HOST ?= controlplane
-PROD_FILES_controlplane := compose.yaml compose.prod.yaml compose.backup.yaml
-PROD_FILES_audit        := compose.audit.yaml compose.audit.prod.yaml
-PROD_FILES               = $(PROD_FILES_$(HOST))
-comma                   := ,
-space                   := $(subst ,, )
-PROD_COMPOSE             = docker compose --project-directory $(COMPOSE_DIR) -p paddock \
-	--env-file $(COMPOSE_DIR)/versions.env --env-file $(COMPOSE_DIR)/.env $(foreach f,$(PROD_FILES),-f $(COMPOSE_DIR)/$(f))
+# --- Operator bundle (plan M7b decisions 20–22, ADR 0022, docs/operations/install.md) -----------------------------
+# Production hosts run the bundle's ./paddock; make is not used there. `make bundle` builds a local bundle that
+# references the local images by tag (from source: make image image-compiler image-pgbackrest bundle).
+comma          := ,
+space          := $(subst ,, )
+BUNDLE_VERSION  = $(or $(RELEASE_VERSION),0.0.0-local)
 
-.PHONY: prod-secrets
-prod-secrets: ## Generate the production secrets of one host (HOST=controlplane|audit; idempotent, prints no secret)
-	@test -n "$(PROD_FILES)" || { echo "usage: make prod-secrets HOST=controlplane|audit"; exit 2; }
-	$(COMPOSE_DIR)/scripts/gen-prod-secrets.sh $(HOST)
+.PHONY: bundle
+bundle: ## Build a local operator bundle of the local images (IMAGE, COMPILER_IMAGE, PGBACKREST_IMAGE) into dist/bundle/
+	LOCAL_SERVER_IMAGE=$(IMAGE) LOCAL_COMPILER_IMAGE=$(COMPILER_IMAGE) LOCAL_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) \
+		deploy/bundle/build.sh --version $(BUNDLE_VERSION) --channel local --images local --out dist/bundle
 
-# The check runs from source in the pinned Go image, so the host needs neither Go nor a built image; the repository is
-# mounted read-only at its own path, where Compose resolved the secret files. ONLINE=1 (audit host) also reads the
-# audit bucket's Object Lock configuration on the network paddock_audit-store.
-.PHONY: prod-check
-prod-check: ## Check the production configuration of one host (HOST=controlplane|audit, ONLINE=1): PASS/FAIL checklist
-	@test -n "$(PROD_FILES)" || { echo "usage: make prod-check HOST=controlplane|audit [ONLINE=1]"; exit 2; }
-	@set -o pipefail; $(PROD_COMPOSE) --profile '*' config --format json | \
-		docker run --rm -i $(if $(ONLINE),--network paddock_audit-store,) \
-			-v $(CURDIR):$(CURDIR):ro -w $(CURDIR) -v paddock-gomod:/go/pkg/mod \
-			-e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false $(GO_BUILD_IMAGE) \
-			go run ./server/cmd/paddock-server prod-check --host $(HOST) \
-				--compose-files $(subst $(space),$(comma),$(strip $(PROD_FILES))) \
-				--dev-release-key $(CURDIR)/$(RELEASE_KEY_DIR)/minisign.pub \
-				--dev-release-key $(CURDIR)/$(RELEASE_KEY_DIR)/revoke-minisign.pub $(if $(ONLINE),--online,)
+.PHONY: bundle-test
+bundle-test: ## Drift test of the operator bundle against deploy/compose/ (part of make test)
+	bash deploy/bundle/bundle_test.sh
 
 # Agent builds (plan M2b decisions 5, 17, 18, 25). VERSION is the agent version; TAGS adds build tags, e.g.
 # TAGS=paddock_dev for the development probation and drift interval (system tests). The supervisor gets the release
@@ -394,40 +395,73 @@ ci: lint test web ## Everything CI runs
 logs: ## Show logs of the stack
 	$(COMPOSE) --profile paddock logs --no-color --tail 300
 
-# --- Release (plan M6b decision 4, docs/operations/agent-releases.md "Server release") ----------------------------
-# The release workflow (.github/workflows/release.yml, tags v*.*.*) calls these targets. RELEASE_VERSION is the
-# version without the leading v: x.y.z or a pre-release x.y.z-alpha.N, -beta.N, -rc.N. Every image carries exactly
-# that version as its tag, never latest (packaging/release_test.sh checks it). release-artifacts builds the two server
-# images, the Debian packages and paddockd for amd64 and arm64 (unsigned: the release keys stay offline, minisign), the
-# SBOMs and SHA256SUMS into dist/release/<version>/; PUSH=1 also pushes the images and records their digests.
-# release-sign signs the pushed images keyless with cosign (GitHub OIDC), attaches each SBOM as a signed attestation
-# and signs SHA256SUMS; with DRY_RUN=1 it checks its inputs and prints the cosign commands instead of running them.
-RELEASE_VERSION        ?=
-RELEASE_REGISTRY       ?= ghcr.io/phischl
-RELEASE_SERVER_REPO    ?= $(RELEASE_REGISTRY)/paddock-server
-RELEASE_COMPILER_REPO  ?= $(RELEASE_REGISTRY)/paddock-compiler
-RELEASE_DIR             = dist/release/$(RELEASE_VERSION)
-RELEASE_SOURCE         ?= https://github.com/phischl/paddock-mdm
-DOCKER_CONFIG_DIR      ?= $(HOME)/.docker
-RELEASE_IMAGES          = server=$(RELEASE_SERVER_REPO):$(RELEASE_VERSION) compiler=$(RELEASE_COMPILER_REPO):$(RELEASE_VERSION)
+# --- Release (plan M6b decision 4, plan M7b decisions 4–7 and 20, docs/operations/agent-releases.md) ---------------
+# The release workflow (.github/workflows/release.yml, tags v*.*.*) and the edge job of ci.yml call these targets, in
+# this order: release-images PUSH=1, release-packages (stable only), release-sbom, release-bundle, release-sums,
+# release-sign. RELEASE_VERSION is the version without the leading v: for RELEASE_CHANNEL=stable x.y.z or a pre-release
+# x.y.z-alpha.N, -beta.N, -rc.N; for RELEASE_CHANNEL=edge edge-<yyyymmdd>-<sha7>. Images: a pre-release is tagged with
+# its version only; a plain x.y.z also with <major>.<minor> and, only when it is the highest plain x.y.z among the v*
+# tags, latest; an edge build with its version and edge, never latest (packaging/release_test.sh checks the rules).
+# Everything lands in dist/release/<version>/. DRY_RUN=1 prints the docker, syft and cosign commands instead.
+RELEASE_VERSION         ?=
+RELEASE_CHANNEL         ?= stable
+RELEASE_PLATFORMS       ?= linux/amd64,linux/arm64
+RELEASE_REGISTRY        ?= ghcr.io/phischl
+RELEASE_SERVER_REPO     ?= $(RELEASE_REGISTRY)/paddock-server
+RELEASE_COMPILER_REPO   ?= $(RELEASE_REGISTRY)/paddock-compiler
+RELEASE_PGBACKREST_REPO ?= $(RELEASE_REGISTRY)/paddock-pgbackrest
+RELEASE_DIR             ?= dist/release/$(RELEASE_VERSION)
+RELEASE_SOURCE          ?= https://github.com/phischl/paddock-mdm
+DOCKER_CONFIG_DIR       ?= $(HOME)/.docker
+# Extra flags of every docker buildx build, e.g. the workflow's layer cache (--cache-from/--cache-to type=gha).
+RELEASE_BUILDX_FLAGS    ?=
+RELEASE_IMAGES           = server=$(RELEASE_SERVER_REPO):$(RELEASE_VERSION) compiler=$(RELEASE_COMPILER_REPO):$(RELEASE_VERSION) \
+	pgbackrest=$(RELEASE_PGBACKREST_REPO):$(RELEASE_VERSION)
+
+# Tag rules (decisions 4–5). RELEASE_GIT_TAGS is overridable for the tests.
+RELEASE_GIT_TAGS        ?= $(shell git tag --list 'v*' 2>/dev/null)
+RELEASE_PLAIN            = $(shell printf '%s' '$(RELEASE_VERSION)' | grep -Ex '[0-9]+\.[0-9]+\.[0-9]+')
+RELEASE_HIGHEST          = $(shell printf '%s\n' $(patsubst v%,%,$(RELEASE_GIT_TAGS)) '$(RELEASE_VERSION)' | \
+	grep -Ex '[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+RELEASE_LATEST           = $(if $(filter stable,$(RELEASE_CHANNEL)),$(if $(RELEASE_PLAIN),$(filter $(RELEASE_VERSION),$(RELEASE_HIGHEST))))
+RELEASE_TAGS             = $(RELEASE_VERSION) $(if $(filter edge,$(RELEASE_CHANNEL)),edge,$(if $(RELEASE_PLAIN),$(basename $(RELEASE_VERSION)) \
+	$(if $(RELEASE_LATEST),latest)))
+RELEASE_COMMIT          := $(shell git rev-parse HEAD 2>/dev/null)
+RELEASE_CREATED         := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 SYFT_RUN   = docker run --rm -u $(UID):$(GID) --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp -e SYFT_CHECK_FOR_APP_UPDATE=false \
-	-v $(CURDIR)/$(RELEASE_DIR):/work -w /work $(SYFT_IMAGE)
+	-e DOCKER_CONFIG=/docker -v $(DOCKER_CONFIG_DIR):/docker:ro -v $(CURDIR)/$(RELEASE_DIR):/work -w /work $(SYFT_IMAGE)
 # cosign reads the registry login of the docker CLI and, in GitHub Actions, the OIDC token request variables.
 COSIGN_RUN = docker run --rm -u $(UID):$(GID) --tmpfs /tmp:rw,mode=1777 -e HOME=/tmp -e DOCKER_CONFIG=/docker \
 	-e ACTIONS_ID_TOKEN_REQUEST_URL -e ACTIONS_ID_TOKEN_REQUEST_TOKEN -e SIGSTORE_ID_TOKEN \
 	-v $(DOCKER_CONFIG_DIR):/docker:ro -v $(CURDIR)/$(RELEASE_DIR):/work -w /work $(COSIGN_IMAGE)
+# release_run (shell): runs its arguments, or prints them with DRY_RUN=1.
+RELEASE_RUN = run() { if [ -n "$(DRY_RUN)" ]; then echo "dry-run: $$*"; else "$$@"; fi; }
+# release_platforms (shell): "<key> <os/arch> <manifest digest> <repo>" per platform of images.txt; with DRY_RUN=1 and
+# no pushed images, placeholders for RELEASE_PLATFORMS.
+RELEASE_PLATFORM_LINES = platforms() { \
+	if [ -s $(RELEASE_DIR)/images.txt ]; then \
+		sed -n -E 's|^([a-z]+)/([a-z0-9]+/[a-z0-9]+)=([^@]+)@(sha256:[0-9a-f]+)$$|\1 \2 \4 \3|p' $(RELEASE_DIR)/images.txt; \
+	else for entry in $(RELEASE_IMAGES); do key=$${entry%%=*}; repo=$${entry\#*=}; repo=$${repo%:*}; \
+		for p in $(subst $(comma), ,$(RELEASE_PLATFORMS)); do echo "$$key $$p sha256:<$$p-digest> $$repo"; done; done; fi; }; \
+	index() { sed -n "s|^$$1=\([^:]*\):[^@]*@\(sha256:[0-9a-f]*\)$$|\1@\2|p" $(RELEASE_DIR)/images.txt 2>/dev/null || true; }
 
 .PHONY: release-check
 release-check:
-	@echo "$(RELEASE_VERSION)" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$$' || \
-		{ echo "usage: RELEASE_VERSION=x.y.z or x.y.z-alpha.N, -beta.N, -rc.N (without v)"; exit 2; }
+	@case "$(RELEASE_CHANNEL)" in \
+		stable) echo "$(RELEASE_VERSION)" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$$' || \
+			{ echo "usage: RELEASE_VERSION=x.y.z or x.y.z-alpha.N, -beta.N, -rc.N (without v)"; exit 2; } ;; \
+		edge) echo "$(RELEASE_VERSION)" | grep -Eq '^edge-[0-9]{8}-[0-9a-f]{7}$$' || \
+			{ echo "usage: RELEASE_VERSION=edge-YYYYMMDD-sha7 RELEASE_CHANNEL=edge"; exit 2; } ;; \
+		*) echo "usage: RELEASE_CHANNEL=stable|edge"; exit 2 ;; \
+	esac
 
 # The supervisor compiles in the release public key (line 2 of the minisign file): a release must name the production
 # key explicitly, line 2 must be a minisign Ed25519 public key (42 bytes, "Ed"), and it must not be the development
 # key's line 2 (whatever the comment line) nor be built with build tags.
 .PHONY: release-key-check
 release-key-check: release-check
+	@test "$(RELEASE_CHANNEL)" = stable || { echo "agent packages are released on the stable channel only"; exit 2; }
 	@test "$(origin RELEASE_PUBLIC_KEY_FILE)" != file || { echo "set RELEASE_PUBLIC_KEY_FILE to the production release public key"; exit 2; }
 	@test -s "$(RELEASE_PUBLIC_KEY_FILE)" || { echo "missing $(RELEASE_PUBLIC_KEY_FILE)"; exit 2; }
 	@key=$$(sed -n 2p "$(RELEASE_PUBLIC_KEY_FILE)" | tr -d '\r'); \
@@ -440,21 +474,69 @@ release-key-check: release-check
 	@test -z "$(TAGS)$(REVOKE_TAGS)" || { echo "a release is built without TAGS and REVOKE_TAGS"; exit 2; }
 
 .PHONY: release-artifacts
-release-artifacts: release-key-check ## Build the release RELEASE_VERSION into dist/release/<version>/: images (PUSH=1 pushes), unsigned debs and agent binaries, SBOMs, SHA256SUMS
+release-artifacts: release-key-check ## Build the release RELEASE_VERSION locally into dist/release/<version>/: images (only with PUSH=1), unsigned debs and agent binaries, SBOMs, bundle, SHA256SUMS
 	rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
-	$(MAKE) --no-print-directory release-images
+	$(MAKE) --no-print-directory release-images $(if $(PUSH),,DRY_RUN=1)
+	$(MAKE) --no-print-directory release-packages
+	$(MAKE) --no-print-directory release-sbom $(if $(PUSH),,DRY_RUN=1)
+	$(MAKE) --no-print-directory release-bundle
+	$(MAKE) --no-print-directory release-sums
+	@ls -1 $(RELEASE_DIR)
+
+# Multi-platform images (decision 2), pushed with every tag of RELEASE_TAGS and the labels of decision 6; images.txt
+# records the index digest and the platform manifest digests (§6.3), attestation manifests excluded.
+.PHONY: release-images
+release-images: release-check ## Build and push the three images for RELEASE_PLATFORMS with the tags and labels of the channel (PUSH=1; DRY_RUN=1 prints)
+	@test -n "$(PUSH)$(DRY_RUN)" || { echo "release-images pushes multi-platform images: set PUSH=1 (DRY_RUN=1 prints the commands)"; exit 2; }
+	@set -e; $(RELEASE_RUN); mkdir -p $(RELEASE_DIR); [ -n "$(DRY_RUN)" ] || : >$(RELEASE_DIR)/images.txt; \
+	meta=$$(mktemp); trap 'rm -f "$$meta"' EXIT; \
+	for entry in $(RELEASE_IMAGES); do \
+		key=$${entry%%=*}; repo=$${entry#*=}; repo=$${repo%:*}; target=; dockerfile=$(COMPOSE_DIR)/Dockerfile; \
+		case $$key in \
+			server) desc="Paddock server with the embedded portal: every role but the compiler, prod-check and the admin commands" ;; \
+			compiler) desc="Paddock compiler role: the server binary on Debian with visudo"; target="--target compiler" ;; \
+			pgbackrest) desc="pgBackRest for the backups of the Paddock databases"; dockerfile=$(COMPOSE_DIR)/pgbackrest/Dockerfile ;; \
+		esac; \
+		tags=; for t in $(RELEASE_TAGS); do tags="$$tags -t $$repo:$$t"; done; \
+		run docker buildx build --platform $(RELEASE_PLATFORMS) --push $$target -f $$dockerfile $(RELEASE_BUILDX_FLAGS) \
+			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
+			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) --build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) \
+			--label org.opencontainers.image.source=$(RELEASE_SOURCE) \
+			--label org.opencontainers.image.url=$(RELEASE_SOURCE) \
+			--label org.opencontainers.image.documentation=$(RELEASE_SOURCE)/blob/main/docs/operations/install.md \
+			--label org.opencontainers.image.title=$$(basename $$repo) \
+			--label "org.opencontainers.image.description=$$desc" \
+			--label org.opencontainers.image.version=$(RELEASE_VERSION) \
+			--label org.opencontainers.image.revision=$(RELEASE_COMMIT) \
+			--label org.opencontainers.image.created=$(RELEASE_CREATED) \
+			--label org.opencontainers.image.licenses=MIT \
+			--label org.opencontainers.image.vendor=Paddock \
+			--label io.paddock.channel=$(RELEASE_CHANNEL) \
+			--metadata-file "$$meta" $$tags .; \
+		[ -z "$(DRY_RUN)" ] || continue; \
+		digest=$$(grep -oE '"containerimage.digest": *"sha256:[0-9a-f]{64}"' "$$meta" | grep -oE 'sha256:[0-9a-f]{64}'); \
+		test -n "$$digest" || { echo "no index digest of $$repo in the buildx metadata"; exit 1; }; \
+		echo "$$key=$$repo:$(RELEASE_VERSION)@$$digest" >>$(RELEASE_DIR)/images.txt; \
+		docker buildx imagetools inspect "$$repo@$$digest" \
+			--format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{.Digest}}{{"\n"}}{{end}}' | \
+			while read -r platform pdigest; do \
+				case "$$platform" in ""|unknown/*) continue ;; esac; \
+				echo "$$key/$$platform=$$repo@$$pdigest" >>$(RELEASE_DIR)/images.txt; \
+			done; \
+	done; \
+	[ -n "$(DRY_RUN)" ] || cat $(RELEASE_DIR)/images.txt
+
+# Agent binaries and Debian packages, unsigned (the release keys stay offline, minisign). GitHub renames release assets
+# with characters such as ~, so a pre-release's packages (Debian version x.y.z~alpha.N inside) are published as
+# <name>_<release version>_<arch>-unsigned.deb.
+RELEASE_DEB_DIR ?= bin/deb
+
+.PHONY: release-packages
+release-packages: release-key-check ## Build the unsigned agent binaries and Debian packages of RELEASE_VERSION into dist/release/<version>/
+	mkdir -p $(RELEASE_DIR)
 	$(MAKE) --no-print-directory deb VERSION=$(RELEASE_VERSION) RELEASE_PUBLIC_KEY_FILE=$(RELEASE_PUBLIC_KEY_FILE) TAGS= REVOKE_TAGS=
 	$(MAKE) --no-print-directory release-debs
 	@for arch in amd64 arm64; do cp bin/agent/$$arch/paddockd $(RELEASE_DIR)/paddockd_$(RELEASE_VERSION)_linux_$$arch-unsigned || exit 1; done
-	$(MAKE) --no-print-directory release-sbom
-	$(MAKE) --no-print-directory release-names-check
-	cd $(RELEASE_DIR) && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name images.txt ! -name '*.sigstore.json' \
-		-printf '%f\n' | LC_ALL=C sort | xargs sha256sum >SHA256SUMS
-	@ls -1 $(RELEASE_DIR)
-
-# GitHub renames release assets with characters such as ~, so a pre-release's packages (Debian version x.y.z~alpha.N
-# inside) are published as <name>_<release version>_<arch>-unsigned.deb, and SHA256SUMS names the files as published.
-RELEASE_DEB_DIR ?= bin/deb
 
 .PHONY: release-debs
 release-debs: release-check
@@ -466,50 +548,60 @@ release-names-check:
 	@bad=$$(find $(RELEASE_DIR) -maxdepth 1 -type f -printf '%f\n' | grep -v '^[A-Za-z0-9._+-]*$$' || true); \
 		test -z "$$bad" || { echo "release file names GitHub would rename: $$bad"; exit 2; }
 
-.PHONY: release-images
-release-images: release-check
-	@for entry in $(RELEASE_IMAGES); do \
-		target=$${entry%%=*}; ref=$${entry#*=}; \
-		docker build $$([ "$$target" = compiler ] && echo --target compiler) -f $(COMPOSE_DIR)/Dockerfile \
-			--build-arg GO_BUILD_IMAGE=$(GO_BUILD_IMAGE) --build-arg NODE_IMAGE=$(NODE_IMAGE) \
-			--build-arg RUNTIME_IMAGE=$(RUNTIME_IMAGE) --build-arg COMPILER_RUNTIME_IMAGE=$(COMPILER_RUNTIME_IMAGE) \
-			--label org.opencontainers.image.source=$(RELEASE_SOURCE) \
-			--label org.opencontainers.image.version=$(RELEASE_VERSION) \
-			--label org.opencontainers.image.revision=$$(git rev-parse HEAD) \
-			--label org.opencontainers.image.licenses=MIT -t $$ref . || exit 1; \
-	done
-	@mkdir -p $(RELEASE_DIR) && : >$(RELEASE_DIR)/images.txt
-	@if [ -n "$(PUSH)" ]; then for entry in $(RELEASE_IMAGES); do ref=$${entry#*=}; \
-		docker push $$ref >/dev/null || exit 1; \
-		docker inspect --format '{{index .RepoDigests 0}}' $$ref >>$(RELEASE_DIR)/images.txt || exit 1; \
-	done; cat $(RELEASE_DIR)/images.txt; else echo "images built, not pushed (PUSH=1 pushes)"; fi
-
-# SPDX SBOM per image from a docker save archive (no Docker socket in the syft container).
+# One SPDX SBOM per image and platform, read by syft from the registry (decision 7).
 .PHONY: release-sbom
-release-sbom: release-check ## SPDX SBOM per release image with syft into dist/release/<version>/
-	@for entry in $(RELEASE_IMAGES); do \
-		target=$${entry%%=*}; ref=$${entry#*=}; name=$$(basename $${ref%:*}); \
-		docker save -o $(RELEASE_DIR)/$$name.tar $$ref || exit 1; \
-		$(SYFT_RUN) docker-archive:/work/$$name.tar --source-name $${ref%:*} --source-version $(RELEASE_VERSION) \
-			-o spdx-json=/work/$${name}_$(RELEASE_VERSION).spdx.json || { rm -f $(RELEASE_DIR)/$$name.tar $(RELEASE_DIR)/$${name}_$(RELEASE_VERSION).spdx.json; exit 1; }; \
-		rm -f $(RELEASE_DIR)/$$name.tar; echo "SBOM $(RELEASE_DIR)/$${name}_$(RELEASE_VERSION).spdx.json"; \
+release-sbom: release-check ## SPDX SBOM per pushed image and platform with syft into dist/release/<version>/ (DRY_RUN=1 prints)
+	@if [ -z "$(DRY_RUN)" ] && ! [ -s $(RELEASE_DIR)/images.txt ]; then echo "no pushed images: run make release-images PUSH=1"; exit 2; fi
+	@set -e; $(RELEASE_RUN); $(RELEASE_PLATFORM_LINES); mkdir -p $(RELEASE_DIR); \
+	platforms | while read -r key platform pdigest repo; do \
+		digest=$$(index $$key); digest=$${digest:-$$repo@sha256:<index digest>}; \
+		sbom=$$(basename $$repo)_$(RELEASE_VERSION)_$${platform%%/*}_$${platform#*/}.spdx.json; \
+		run $(SYFT_RUN) registry:$$digest --platform $$platform --source-name $$repo --source-version $(RELEASE_VERSION) \
+			-o spdx-json=/work/$$sbom; \
+		[ -n "$(DRY_RUN)" ] || echo "SBOM $(RELEASE_DIR)/$$sbom"; \
 	done
 
+# The operator bundle of the pushed images (decisions 11–13); without pushed images (a local release-artifacts) a
+# bundle of the local images. Only the tarball stays in the release directory.
+.PHONY: release-bundle
+release-bundle: release-check ## Operator bundle paddock-deploy-<version>.tar.gz of the pushed images into dist/release/<version>/
+	@mkdir -p $(RELEASE_DIR)
+	@if grep -q '^server=' $(RELEASE_DIR)/images.txt 2>/dev/null; then \
+		deploy/bundle/build.sh --version $(RELEASE_VERSION) --channel $(RELEASE_CHANNEL) --images $(RELEASE_DIR)/images.txt --out $(RELEASE_DIR); \
+	else echo "no pushed images: bundle of the local images"; \
+		LOCAL_SERVER_IMAGE=$(IMAGE) LOCAL_COMPILER_IMAGE=$(COMPILER_IMAGE) LOCAL_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) \
+		deploy/bundle/build.sh --version $(RELEASE_VERSION) --channel local --images local --out $(RELEASE_DIR); fi
+	rm -rf $(RELEASE_DIR)/paddock-deploy-$(RELEASE_VERSION)
+
+# SHA256SUMS over the final asset names; images.txt (an input of the workflow) and the signatures are not assets of it.
+.PHONY: release-sums
+release-sums: release-check release-names-check ## SHA256SUMS over dist/release/<version>/
+	cd $(RELEASE_DIR) && find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name images.txt ! -name '*.sigstore.json' \
+		-printf '%f\n' | LC_ALL=C sort | xargs sha256sum >SHA256SUMS
+	@cat $(RELEASE_DIR)/SHA256SUMS
+
+# Keyless with the workflow's GitHub OIDC identity (decision 7): every index recursively (index and platform manifests),
+# one SBOM attestation per platform manifest, SHA256SUMS and the bundle tarball as blobs.
 .PHONY: release-sign
-release-sign: release-check ## Sign the pushed images and attest their SBOMs keyless with cosign, sign SHA256SUMS (DRY_RUN=1 prints the commands)
-	@test -s $(RELEASE_DIR)/SHA256SUMS || { echo "missing $(RELEASE_DIR)/SHA256SUMS: run make release-artifacts"; exit 2; }
-	@if [ -z "$(DRY_RUN)" ] && ! [ -s $(RELEASE_DIR)/images.txt ]; then echo "no pushed images: run make release-artifacts PUSH=1"; exit 2; fi
-	@set -e; run() { if [ -n "$(DRY_RUN)" ]; then echo "dry-run: cosign $$*"; else $(COSIGN_RUN) "$$@"; fi; }; \
-	for entry in $(RELEASE_IMAGES); do \
-		ref=$${entry#*=}; repo=$${ref%:*}; name=$$(basename $$repo); \
-		digest=$$(grep -F "$$repo@" $(RELEASE_DIR)/images.txt 2>/dev/null || true); \
-		if [ -z "$$digest" ]; then \
-			test -n "$(DRY_RUN)" || { echo "no digest of $$ref in images.txt"; exit 2; }; digest="$$repo@sha256:<digest after push>"; fi; \
-		test -s $(RELEASE_DIR)/$${name}_$(RELEASE_VERSION).spdx.json || { echo "missing SBOM of $$ref"; exit 2; }; \
-		run sign --yes "$$digest"; \
-		run attest --yes --type spdxjson --predicate /work/$${name}_$(RELEASE_VERSION).spdx.json "$$digest"; \
+release-sign: release-check ## Sign the images recursively, attest their SBOMs per platform, sign SHA256SUMS and the bundle keyless with cosign (DRY_RUN=1 prints)
+	@test -s $(RELEASE_DIR)/SHA256SUMS || { echo "missing $(RELEASE_DIR)/SHA256SUMS: run make release-sums"; exit 2; }
+	@if [ -z "$(DRY_RUN)" ] && ! [ -s $(RELEASE_DIR)/images.txt ]; then echo "no pushed images: run make release-images PUSH=1"; exit 2; fi
+	@set -e; $(RELEASE_RUN); $(RELEASE_PLATFORM_LINES); \
+	for entry in $(RELEASE_IMAGES); do key=$${entry%%=*}; repo=$${entry#*=}; repo=$${repo%:*}; \
+		digest=$$(index $$key); \
+		if [ -z "$$digest" ]; then test -n "$(DRY_RUN)" || { echo "no index digest of $$key in images.txt"; exit 2; }; \
+			digest="$$repo@sha256:<index digest>"; fi; \
+		run $(COSIGN_RUN) sign --yes --recursive "$$digest"; \
 	done; \
-	run sign-blob --yes --bundle /work/SHA256SUMS.sigstore.json /work/SHA256SUMS
+	platforms | while read -r key platform pdigest repo; do \
+		sbom=$$(basename $$repo)_$(RELEASE_VERSION)_$${platform%%/*}_$${platform#*/}.spdx.json; \
+		test -n "$(DRY_RUN)" || test -s $(RELEASE_DIR)/$$sbom || { echo "missing $(RELEASE_DIR)/$$sbom: run make release-sbom"; exit 2; }; \
+		run $(COSIGN_RUN) attest --yes --type spdxjson --predicate /work/$$sbom "$$repo@$$pdigest"; \
+	done; \
+	run $(COSIGN_RUN) sign-blob --yes --bundle /work/SHA256SUMS.sigstore.json /work/SHA256SUMS; \
+	bundle=paddock-deploy-$(RELEASE_VERSION).tar.gz; \
+	test -n "$(DRY_RUN)" || test -s $(RELEASE_DIR)/$$bundle || { echo "missing $(RELEASE_DIR)/$$bundle: run make release-bundle"; exit 2; }; \
+	run $(COSIGN_RUN) sign-blob --yes --bundle /work/$$bundle.sigstore.json /work/$$bundle
 
 # --- Security scans (CI jobs `secrets` and `trivy`) --------------------------------------------------------------
 TRIVY_CACHE     ?= $(HOME)/.cache/trivy

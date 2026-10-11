@@ -13,6 +13,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
+	"github.com/phischl/paddock-mdm/server/internal/allowlistcache"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/bundlesign"
 	"github.com/phischl/paddock-mdm/server/internal/config"
@@ -82,6 +83,13 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	if devStepUp.Window > 0 {
 		runnerOpts = append(runnerOpts, app.WithStepUpWindow(devStepUp.Window))
 	}
+	// IP allow list (plan M7a decisions 20 and 22): the denial window is shortened by the gates in development only;
+	// the bypass is the break-glass of a locked-out platform, reported by prod-check.
+	denialWindow := ipDenialWindow
+	if common.Development() {
+		denialWindow = l.Duration("PADDOCK_TEST_IP_ALLOWLIST_WINDOW", ipDenialWindow)
+	}
+	allowlistBypass := l.Bool("PADDOCK_IP_ALLOWLIST_BYPASS", false)
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -141,6 +149,16 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		return out, err
 	}
 	ak := authentik.New(authentikURL, authentikToken)
+	allowlistVersion := allowlistcache.NewVersion(vk)
+	ipAllowlist := app.NewIPAllowlist(runner, platformPool, allowlistVersion)
+	ipDenials := app.NewIPDenials(runner, denialWindow, time.Now)
+	ipGuard := admin.NewIPGuard(ipAllowlist.Load, allowlistVersion, ipDenials, allowlistBypass)
+	// The writing replica enforces its own change before it answers (plan M7a decision 18).
+	ipAllowlist.AfterChange(func(ctx context.Context) {
+		if err := ipGuard.Reload(ctx); err != nil {
+			slog.WarnContext(ctx, "ip allow list not reloaded after a change", "error", err)
+		}
+	})
 	handler := admin.NewHandler(admin.Deps{
 		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
 		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
@@ -162,10 +180,13 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		DMS:           app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
 		Updates:       app.NewUpdates(runner, orgPool),
 		Attention:     app.NewAttention(orgPool),
+		Overview:      app.NewOverview(orgPool),
 		Inventory:     app.NewInventory(orgPool),
 		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
 		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development()),
-		AuditLog:      app.NewAuditLog(auditReader),
+		AuditLog:      app.NewAuditLog(auditReader, orgPool),
+		IPAllowlist:   ipAllowlist,
+		IPGuard:       ipGuard,
 		Runner:        runner,
 		Keys:          keys,
 		OIDC:          oidc,
@@ -176,6 +197,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		// Development only: LoadDevStepUp refuses the variables in production.
 		StepUpMaxAuthAge: devStepUp.MaxAuthAge,
 		ExposeStepUp:     common.Development(),
+		TrustedProxies:   common.TrustedProxies,
 	})
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	slog.InfoContext(ctx, "api starting", "addr", httpAddr, "public_url", publicURL)
@@ -197,6 +219,9 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 				if !oidc.Ready() || !stepUp.Ready() {
 					notReady = errors.Join(notReady, errors.New("oidc providers not discovered"))
 				}
+				if !ipGuard.Ready() {
+					notReady = errors.Join(notReady, errors.New("ip allow list not loaded"))
+				}
 				return errors.Join(orgPool.Ping(ctx), platformPool.Ping(ctx), auditReader.Ping(ctx), notReady)
 			})
 		},
@@ -208,6 +233,18 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		},
 		func(ctx context.Context) error { oidc.Discover(ctx); <-ctx.Done(); return nil },
 		func(ctx context.Context) error { stepUp.Discover(ctx); <-ctx.Done(); return nil },
+		func(ctx context.Context) error {
+			if allowlistBypass {
+				// The bypass is often set while PostgreSQL is still starting or unreachable; its audit event must
+				// still be recorded once it is reachable (plan M7a decision 22).
+				go retryUntilDone(ctx, "recording the ip allow list bypass", time.Second, time.Minute, ipAllowlist.RecordBypass)
+			}
+			return ipGuard.Run(ctx)
+		},
+		ipDenials.Run,
 		func(ctx context.Context) error { return listenAndServe(ctx, srv) },
 	)
 }
+
+// ipDenialWindow is the aggregation window of the IP allow list denials (plan M7a decision 20).
+const ipDenialWindow = 10 * time.Minute

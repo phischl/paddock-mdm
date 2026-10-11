@@ -80,8 +80,13 @@ func TOTP(user string) (*authflow.TOTP, error) {
 
 // StepUp runs a step-up authentication of the portal session as the dev user and returns the portal URL it returned
 // to; it contains stepup=failed when Paddock refused the step-up. For another user than the session's own, the login
-// hint is removed from the authorization request (authflow.StepUp).
+// hint is removed from the authorization request (authflow.StepUp). Step-ups of the same session run one after
+// another.
 func (p *Portal) StepUp(ctx context.Context, user, returnTo string) (string, error) {
+	// The session's cookie jar holds one pending step-up (Paddock's step-up state cookie, Authentik's flow state):
+	// parallel step-ups overwrite each other's and Paddock refuses all but one with stepup=failed.
+	p.stepUpMu.Lock()
+	defer p.stepUpMu.Unlock()
 	password, err := Password(user)
 	if err != nil {
 		return "", err
@@ -111,6 +116,30 @@ func NewHTTPClient() (*http.Client, error) {
 		return nil, err
 	}
 	return authflow.NewClient(filepath.Join(dir, "caddy-root.crt"))
+}
+
+// HeaderClient is NewHTTPClient with a transport that sets headers on every request, for gates that simulate a
+// client behind a proxy (plan M7a gates A1, A2, A4). It has its own cookie jar; share a session by assigning Jar.
+func HeaderClient(headers map[string]string) (*http.Client, error) {
+	c, err := NewHTTPClient()
+	if err != nil {
+		return nil, err
+	}
+	c.Transport = headerTransport{base: c.Transport, headers: headers}
+	return c, nil
+}
+
+type headerTransport struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (t headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	for k, v := range t.headers {
+		r.Header.Set(k, v)
+	}
+	return t.base.RoundTrip(r)
 }
 
 // Password returns the password of a dev user.
@@ -148,6 +177,7 @@ type Portal struct {
 	Final  string
 	// LoginRequestID is the correlation ID of the admin.login event of this sign-in.
 	LoginRequestID string
+	stepUpMu       sync.Mutex
 }
 
 // Response is an API answer.

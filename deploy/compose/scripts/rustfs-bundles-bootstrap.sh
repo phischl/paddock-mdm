@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Development bootstrap of the control-plane buckets: paddock-bundles (plan M2a decision 3) and
-# paddock-agent-artifacts (plan M2b decision 19; public-read below packages/, plan M4b decision 1), both without
-# versioning and without Object Lock, and paddock-escrow (plan M4b decision 13, versioning on, no Object Lock); a
+# Bootstrap of the control-plane buckets on the bundled RustFS (plan M7b decision 19): paddock-bundles (plan M2a
+# decision 3) and paddock-agent-artifacts (plan M2b decision 19; public-read below packages/, plan M4b decision 1), both
+# without versioning and without Object Lock, and paddock-escrow (plan M4b decision 13, versioning on, no Object Lock); a
 # user for the compiler with read/write on bundles, a user for the api with read/write on artifacts and read on
 # escrow, a user for the worker with read on escrow, and a user for the gateway with read-only access to bundles and
 # artifacts and write access to escrowed headers only (the gateway only computes presigned URLs with it), and a user
@@ -12,13 +12,11 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-require_development
-
 BUCKET="${PADDOCK_BUNDLES_S3_BUCKET:-paddock-bundles}"
 ARTIFACTS_BUCKET="${PADDOCK_ARTIFACTS_S3_BUCKET:-paddock-agent-artifacts}"
 ESCROW_BUCKET="${PADDOCK_ESCROW_S3_BUCKET:-paddock-escrow}"
-NETWORK="paddock_cp"
-ENDPOINT="http://rustfs:9000"
+NETWORK="${NETWORK:-${PADDOCK_PROJECT}_cp}"
+ENDPOINT="${ENDPOINT:-http://rustfs:9000}"
 
 AWS_ACCESS_KEY_ID="$(cat "$SECRETS_DIR/rustfs_root_user")"
 AWS_SECRET_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_root_password")"
@@ -49,7 +47,7 @@ rc() {
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
     -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
     --entrypoint sh "$RC_IMAGE" -c \
-    "rc alias set bundles $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
+    "rc alias set -- bundles $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
 }
 
 for _ in $(seq 1 30); do

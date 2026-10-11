@@ -18,6 +18,9 @@ openbao_wait() {
   return 1
 }
 
+# openbao_unseal <share> submits one unseal share on stdin, so that it never appears on a command line.
+openbao_unseal() { printf '%s' "$1" | bao write sys/unseal key=- >/dev/null; }
+
 # openbao_unsealed waits until OpenBao reports unsealed.
 openbao_unsealed() {
   for _ in $(seq 1 30); do
@@ -33,14 +36,14 @@ openbao_unsealed() {
 # <share>" lines, as `bao operator init` prints them).
 openbao_restore_snapshot() {
   local work="$1" init_file="$2" tmp_key i
-  # shellcheck disable=SC2034 # the caller's bao reads it (dynamic scope)
-  local BAO_TOKEN
+  # Exported, because the caller's bao passes it to the container by name only (never on a command line).
+  local -x BAO_TOKEN
   # A fresh OpenBao takes a snapshot only after its own initialization; the snapshot brings back the original
   # barrier and seal configuration.
   bao operator init -key-shares=1 -key-threshold=1 -format=json >"$work/init.json"
   tmp_key="$(grep -A1 '"unseal_keys_b64"' "$work/init.json" | tail -1 | tr -d ' ",')"
   BAO_TOKEN="$(grep '"root_token"' "$work/init.json" | cut -d'"' -f4)"
-  bao operator unseal "$tmp_key" >/dev/null
+  openbao_unseal "$tmp_key"
   openbao_unsealed
   bao operator raft snapshot restore -force /tmp/snapshot
   # shellcheck disable=SC2034 # the original shares unseal without the temporary root token
@@ -50,7 +53,7 @@ openbao_restore_snapshot() {
   bao_restart
   openbao_wait
   for i in 1 2 3; do
-    bao operator unseal "$(sed -n "s/^Unseal Key $i: //p" "$init_file")" >/dev/null
+    openbao_unseal "$(sed -n "s/^Unseal Key $i: //p" "$init_file")"
   done
   openbao_unsealed
 }

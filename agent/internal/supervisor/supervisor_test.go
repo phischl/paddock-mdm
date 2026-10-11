@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -382,33 +381,6 @@ func TestPreReleaseSequence(t *testing.T) {
 			f.expectStagingClean()
 		})
 	}
-}
-
-func TestCompareVersions(t *testing.T) {
-	// Ascending by SemVer 2.0.0 precedence (its own example list, Paddock's pre-release sequence, build metadata and
-	// wide numbers).
-	ordered := slices.Concat([]string{"0.0.0-dev"}, alphaSequence, []string{"0.9.0", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta",
-		"1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.2.0", "1.10.0", "2.0.0", "10.0.0"})
-	for i, a := range ordered {
-		for j, b := range ordered {
-			if got, want := compareVersions(a, b), cmpIndex(i, j); got != want {
-				t.Errorf("compare(%s, %s) = %d, want %d", a, b, got, want)
-			}
-		}
-	}
-	if compareVersions("1.0.0+build.1", "1.0.0+build.2") != 0 || compareVersions("0.2.1700000000-good", "0.1.0") != 1 {
-		t.Error("build metadata or system test versions ordered wrongly")
-	}
-}
-
-func cmpIndex(i, j int) int {
-	switch {
-	case i < j:
-		return -1
-	case i > j:
-		return 1
-	}
-	return 0
 }
 
 func TestUpdateWithoutReleaseKeyIsRefused(t *testing.T) {

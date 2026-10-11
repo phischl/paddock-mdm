@@ -6,7 +6,7 @@
 #               (the restore uses this credential), list
 #   worker      write below openbao/, list (backup age of every kind)
 #   fleet       write below fleet/
-# Idempotent. Usage: rustfs-backup-bootstrap.sh [Compose project] (default paddock).
+# Idempotent. Usage: rustfs-backup-bootstrap.sh [Compose project] (default PADDOCK_PROJECT, else paddock).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,10 +15,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 require_development
 
-PROJECT="${1:-paddock}"
+PROJECT="${1:-$PADDOCK_PROJECT}"
 BUCKET="${PADDOCK_BACKUP_S3_BUCKET:-paddock-backup}"
-NETWORK="${PROJECT}_audit-store"
-ENDPOINT="http://audit-rustfs:9000"
+NETWORK="${NETWORK:-${PROJECT}_audit-store}"
+ENDPOINT="${ENDPOINT:-http://audit-rustfs:9000}"
 
 AWS_ACCESS_KEY_ID="$(cat "$SECRETS_DIR/rustfs_audit_root_user")"
 AWS_SECRET_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_audit_root_password")"
@@ -31,7 +31,7 @@ aws() {
 rc() {
   docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
     -e USER_ACCESS_KEY -e USER_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c \
-    "rc alias set backup $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
+    "rc alias set -- backup $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
 }
 
 for _ in $(seq 1 30); do

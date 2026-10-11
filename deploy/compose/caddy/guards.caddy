@@ -1,0 +1,35 @@
+# Edge allow lists shared by Caddyfile (development) and Caddyfile.prod (plan M7a decisions 3, 6–8).
+# PADDOCK_ADMIN_ALLOWED_CIDRS: ranges that may use the administrative surfaces (space-separated; default: every
+# address). PADDOCK_INTERNAL_CIDRS: ranges of the Paddock roles, which use Authentik's API through Caddy.
+# client_ip is the address resolved through the trusted proxies of PADDOCK_EDGE_TRUSTED_PROXIES.
+(admin_site) {
+	@admin_denied not client_ip {$PADDOCK_ADMIN_ALLOWED_CIDRS}
+	handle @admin_denied {
+		respond 403
+	}
+	reverse_proxy paddock-api:8080 {
+		header_up X-Paddock-Client-IP {client_ip}
+	}
+}
+
+(authentik_site) {
+	# Public: OAuth/OIDC endpoints, the device-code page, the flow executor (logins, MFA enrollment, step-up,
+	# recovery) and its assets. Everything else is administrative.
+	@denied_other {
+		not path /application/o/* /device /device/* /if/flow/* /flows/* /api/v3/* /static/* /media/* /.well-known/* /favicon.ico
+		not client_ip {$PADDOCK_ADMIN_ALLOWED_CIDRS}
+	}
+	handle @denied_other {
+		respond 403
+	}
+	@denied_api {
+		path /api/v3/*
+		not path /api/v3/flows/executor/* /api/v3/root/config/ /api/v3/core/brands/current/
+		not client_ip {$PADDOCK_ADMIN_ALLOWED_CIDRS}
+		not client_ip {$PADDOCK_INTERNAL_CIDRS}
+	}
+	handle @denied_api {
+		respond 403
+	}
+	reverse_proxy authentik-server:9000
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"mime"
 	"net/http"
 	"path"
 	"strings"
@@ -17,6 +18,15 @@ import (
 
 // cspNoncePlaceholder is the literal in index.html (<meta name="csp-nonce">) replaced by the per-response nonce.
 const cspNoncePlaceholder = "__CSP_NONCE__"
+
+// RegisterPortalMIMETypes adds the types Go's built-in table lacks and the distroless image has no /etc/mime.types
+// for: the vendored fonts must be served as font/woff2 (plan M7c decision 8).
+func RegisterPortalMIMETypes() error {
+	if err := mime.AddExtensionType(".woff2", "font/woff2"); err != nil {
+		return fmt.Errorf("register woff2 MIME type: %w", err)
+	}
+	return nil
+}
 
 // StaticHandler serves the portal build: files as they are, and index.html for every other path (SPA fallback)
 // with a fresh CSP style nonce per response.
@@ -29,6 +39,9 @@ type StaticHandler struct {
 // NewStaticHandler reads index.html once. It fails if index.html exists but does not contain the nonce placeholder
 // exactly once. A build without index.html (portal not built) is accepted and answers 404.
 func NewStaticHandler(files fs.FS) (*StaticHandler, error) {
+	if err := RegisterPortalMIMETypes(); err != nil {
+		return nil, err
+	}
 	s := &StaticHandler{files: files}
 	index, err := fs.ReadFile(files, "index.html")
 	if errors.Is(err, fs.ErrNotExist) {

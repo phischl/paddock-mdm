@@ -4,16 +4,18 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import ApiTokenForm from '../components/ApiTokenForm.vue'
 import DataList from '../components/DataList.vue'
+import StatusChip from '../components/StatusChip.vue'
+import TimeCell from '../components/TimeCell.vue'
 import type { ApiToken, ApiTokenCreated } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { apiTokenFilters, createApiToken, listApiTokens, revokeApiToken, type ApiTokenInput } from '../lib/apiTokens'
-import { formatDateTime } from '../lib/format'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { tokenStatus } from '../lib/status'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const problemText = useProblemText()
 const confirm = useConfirm()
 const router = useRouter()
@@ -31,7 +33,7 @@ const columns = computed<ListColumn[]>(() => [
   { key: 'name', title: 'common.name', sortable: true },
   { key: 'prefix', title: 'apiTokens.prefix' },
   { key: 'role', title: 'apiTokens.role' },
-  { key: 'status', title: 'apiTokens.status' },
+  { key: 'status', title: 'apiTokens.status', role: 'status' },
   { key: 'created_by', title: 'apiTokens.createdBy' },
   { key: 'created_at', title: 'common.createdAt', sortable: true },
   { key: 'expires_at', title: 'apiTokens.expires', sortable: true },
@@ -136,38 +138,55 @@ async function onRevoke(token: ApiToken): Promise<void> {
       searchable
       default-sort="name"
       item-value="id"
+      empty-icon="key"
+      empty-title="apiTokens.empty.title"
+      empty-description="apiTokens.empty.description"
       data-testid="api-token-list"
     >
+      <template #empty-action>
+        <v-btn
+          v-if="session.canWrite"
+          color="primary"
+          @click="openCreate"
+        >
+          {{ t('apiTokens.create') }}
+        </v-btn>
+      </template>
       <template #[`item.name`]="{ item }: { item: ApiToken }">
         <span :class="{ 'token-inactive': item.status !== 'active' }">{{ item.name }}</span>
       </template>
       <template #[`item.prefix`]="{ item }: { item: ApiToken }">
-        <code>{{ item.prefix }}…</code>
+        <span class="mono">{{ item.prefix }}…</span>
       </template>
       <template #[`item.role`]="{ item }: { item: ApiToken }">
         {{ t('apiTokens.roles.' + item.role) }}
       </template>
       <template #[`item.status`]="{ item }: { item: ApiToken }">
-        <v-chip
-          size="small"
-          :color="item.status === 'active' ? 'success' : undefined"
-          :variant="item.status === 'active' ? 'tonal' : 'outlined'"
+        <StatusChip
+          :status="tokenStatus(item.status, 'apiTokens.statuses').status"
+          :label="t(tokenStatus(item.status, 'apiTokens.statuses').label)"
           :data-testid="'api-token-status-' + item.status"
-        >
-          {{ t('apiTokens.statuses.' + item.status) }}
-        </v-chip>
+        />
       </template>
       <template #[`item.created_by`]="{ item }: { item: ApiToken }">
         {{ item.created_by.display }}
       </template>
       <template #[`item.created_at`]="{ item }: { item: ApiToken }">
-        {{ formatDateTime(item.created_at, locale) }}
+        <TimeCell :iso="item.created_at" />
       </template>
       <template #[`item.expires_at`]="{ item }: { item: ApiToken }">
-        {{ formatDateTime(item.expires_at, locale) }}
+        <TimeCell :iso="item.expires_at" />
       </template>
       <template #[`item.last_used_at`]="{ item }: { item: ApiToken }">
-        {{ item.last_used_at ? formatDateTime(item.last_used_at, locale) : t('apiTokens.neverUsed') }}
+        <TimeCell
+          v-if="item.last_used_at"
+          :iso="item.last_used_at"
+          mode="relative"
+        />
+        <span
+          v-else
+          class="pd-muted"
+        >{{ t('apiTokens.neverUsed') }}</span>
       </template>
       <template #[`item.actions`]="{ item }: { item: ApiToken }">
         <v-btn
@@ -239,5 +258,5 @@ async function onRevoke(token: ApiToken): Promise<void> {
 </template>
 
 <style scoped>
-.token-inactive { color: var(--muted); }
+.token-inactive { color: var(--pd-text-muted); }
 </style>

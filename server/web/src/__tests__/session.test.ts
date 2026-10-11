@@ -5,7 +5,7 @@ import { useSessionStore } from '../stores/session'
 
 const me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice', role: 'org_admin',
-  organization: null, locale: 'de', revocation_enabled: false,
+  organization: null, locale: 'de', theme: 'system', revocation_enabled: false,
 }
 const GET = vi.fn()
 const PATCH = vi.fn()
@@ -45,5 +45,45 @@ describe('session locale (plan M6b decision 2)', () => {
     expect(await session.setLocale('de')).toBe(false)
     expect(i18n.global.locale.value).toBe('en')
     expect(session.me?.locale).toBe('en')
+  })
+})
+
+describe('session theme (plan M7c decision 6)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    GET.mockReset()
+    PATCH.mockReset()
+  })
+  afterEach(() => applyLocale('en'))
+
+  it('stores the theme on the account and applies it', async () => {
+    GET.mockResolvedValue({ data: { ...me, locale: 'en', theme: 'light' } })
+    PATCH.mockResolvedValue({ data: { ...me, locale: 'en', theme: 'dark' } })
+    const session = useSessionStore()
+    await session.load()
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(await session.setTheme('dark')).toBe(true)
+    expect(PATCH).toHaveBeenCalledWith('/api/v1/me', { params: { header: { 'X-Paddock-CSRF': '1' } }, body: { theme: 'dark' } })
+    expect(session.me?.theme).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(localStorage.getItem('paddock.theme')).toBe('dark')
+  })
+
+  it('keeps the previous theme when the account cannot be updated', async () => {
+    GET.mockResolvedValue({ data: { ...me, locale: 'en', theme: 'light' } })
+    PATCH.mockResolvedValue({ error: { code: 'internal' } })
+    const session = useSessionStore()
+    await session.load()
+    expect(await session.setTheme('dark')).toBe(false)
+    expect(session.me?.theme).toBe('light')
+    expect(document.documentElement.dataset.theme).toBe('light')
+  })
+
+  it('refuses a value that is not a theme preference without asking the server', async () => {
+    GET.mockResolvedValue({ data: { ...me, locale: 'en', theme: 'light' } })
+    const session = useSessionStore()
+    await session.load()
+    expect(await session.setTheme('sepia' as never)).toBe(false)
+    expect(PATCH).not.toHaveBeenCalled()
   })
 })

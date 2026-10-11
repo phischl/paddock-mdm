@@ -962,6 +962,40 @@ export interface paths {
         patch: operations["updatePackageHold"];
         trace?: never;
     };
+    "/api/v1/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The numbers of the overview page, computed in one transaction; never cached. */
+        get: operations["getOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attention/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The attention list grouped by device: one item per device with an open condition, its conditions most severe first. A kind filter selects devices with at least one matching condition; all conditions of the device are listed. */
+        get: operations["listAttentionDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attention": {
         parameters: {
             query?: never;
@@ -1701,6 +1735,62 @@ export interface paths {
         patch: operations["updateOrganization"];
         trace?: never;
     };
+    "/api/platform/v1/ip-allowlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The IP allow list of the administrative surfaces (plan M7a decision 16): while it has
+         *     entries, the portal and the admin API answer 403 ip_not_allowed to every client address outside it, sessions
+         *     and API tokens alike. Sessions only: platform tokens do not exist.
+         */
+        get: operations["listIpAllowlist"];
+        put?: never;
+        /**
+         * @description Roles: platform_admin; requires a step-up within the step-up window (403 step_up_required). Adds a range.
+         *     409 lockout_confirmation_required when the list would no longer cover the caller's own address (repeat with
+         *     confirm=lockout); 409 already_exists for a duplicate CIDR. Every attempt is audited.
+         */
+        post: operations["createIpAllowlistEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/ip-allowlist/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: platform_admin. One entry. */
+        get: operations["getIpAllowlistEntry"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Roles: platform_admin; requires a step-up (403 step_up_required). Removes the entry. 409
+         *     lockout_confirmation_required when the caller's own address would no longer be covered (repeat with
+         *     confirm=lockout); 409 disable_confirmation_required when it is the last entry, which switches the allow list
+         *     off for everyone (repeat with confirm=disable).
+         */
+        delete: operations["deleteIpAllowlistEntry"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Roles: platform_admin; requires a step-up (403 step_up_required). Changes the range and/or the label (at least
+         *     one). 409 lockout_confirmation_required when the caller's own address would no longer be covered (repeat with
+         *     confirm=lockout); 409 already_exists for a duplicate CIDR.
+         */
+        patch: operations["updateIpAllowlistEntry"];
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases": {
         parameters: {
             query?: never;
@@ -1920,10 +2010,21 @@ export interface components {
             /** @enum {string} */
             locale: "en" | "de";
             /**
+             * @description Portal theme preference; system follows prefers-color-scheme. An API token answers system.
+             * @enum {string}
+             */
+            theme: "system" | "light" | "dark";
+            /**
              * @description PADDOCK_REVOCATION_ENABLED of this installation (plan M4c decision 1). While false, Lock, Destroy and the
              *     dead man's switch answer 403 revocation_disabled.
              */
             revocation_enabled: boolean;
+            /**
+             * @description The client address the server resolved for this request (plan M7a decision 15): the peer, or the address
+             *     Caddy forwarded in X-Paddock-Client-IP when the peer is a trusted proxy. The IP allow list is checked
+             *     against it.
+             */
+            client_ip: string;
             step_up?: components["schemas"]["MeStepUp"];
             api_token?: components["schemas"]["MeApiToken"];
         };
@@ -1947,9 +2048,12 @@ export interface components {
             /** @description The oldest login a step-up callback accepts (max_age). */
             max_auth_age_seconds: number;
         };
+        /** @description A patch of the account settings; at least one field. */
         MeUpdate: {
             /** @enum {string} */
-            locale: "en" | "de";
+            locale?: "en" | "de";
+            /** @enum {string} */
+            theme?: "system" | "light" | "dark";
         };
         DeviceGroup: {
             /** Format: uuid */
@@ -1997,6 +2101,45 @@ export interface components {
             published_at?: string;
             artifact_count: number;
             rollout_status?: components["schemas"]["AgentRolloutStatus"];
+        };
+        IpAllowlistEntry: {
+            /** Format: uuid */
+            id: string;
+            /** @description Canonical CIDR: a.b.c.d/n or <ipv6>/n. */
+            cidr: string;
+            label: string;
+            /** @description Display name of the platform administrator, or paddock-server admin. */
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** @description The range contains the caller's own client address (client_ip of GET /api/v1/me). */
+            covers_caller: boolean;
+        };
+        IpAllowlistEntryCreate: {
+            /**
+             * @description IPv4 or IPv6 range with a prefix of at least 1 and the host bits zero; a single address is /32 or /128.
+             *     IPv4-mapped IPv6 is refused. The detail of a 400 names the canonical form.
+             */
+            cidr: string;
+            label: string;
+        };
+        /** @description At least one field. */
+        IpAllowlistEntryUpdate: {
+            cidr?: string;
+            label?: string;
+        };
+        IpAllowlistEntryPage: {
+            items: components["schemas"]["IpAllowlistEntry"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
         };
         AgentReleasePage: {
             items: components["schemas"]["AgentRelease"][];
@@ -2129,7 +2272,15 @@ export interface components {
             id: string;
             display?: string;
         };
+        AuditDeviceRef: {
+            /** Format: uuid */
+            id: string;
+            /** @description Current hostname, resolved at read time; null when the organization has no such device. */
+            hostname: string | null;
+        };
         AuditEvent: {
+            /** @description The device the event concerns (target of type device, else params.device_id); read-time enrichment, the stored event is unchanged. */
+            device: components["schemas"]["AuditDeviceRef"] | null;
             /** Format: uuid */
             event_id: string;
             /** Format: date-time */
@@ -2370,6 +2521,11 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        /**
+         * @description Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; ok otherwise. Devices that are not active report ok or never.
+         * @enum {string}
+         */
+        DeviceContact: "never" | "ok" | "stale_warning" | "stale_critical" | "presumed_lost";
         /** @enum {string} */
         DeviceState: "pending" | "active" | "rejected" | "quarantined" | "retired";
         Device: {
@@ -2377,6 +2533,7 @@ export interface components {
             id: string;
             hostname: string;
             state: components["schemas"]["DeviceState"];
+            contact: components["schemas"]["DeviceContact"];
             hardware_uuid: string | null;
             machine_id: string | null;
             os_release: {
@@ -2744,6 +2901,122 @@ export interface components {
             total_capped: boolean;
             /** @description Applied sort. */
             sort: string;
+        };
+        AttentionCondition: {
+            kind: components["schemas"]["AttentionKind"];
+            /** Format: date-time */
+            since: string;
+            detail: string;
+        };
+        AttentionDevice: {
+            /** Format: uuid */
+            device_id: string;
+            hostname: string;
+            state: components["schemas"]["DeviceState"];
+            os_release: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            last_contact_at: string | null;
+            /**
+             * @description Of the most severe condition.
+             * @enum {string}
+             */
+            severity: "info" | "warn" | "critical";
+            /**
+             * Format: date-time
+             * @description Newest condition.
+             */
+            since: string;
+            conditions: components["schemas"]["AttentionCondition"][];
+        };
+        AttentionDevicePage: {
+            items: components["schemas"]["AttentionDevice"][];
+            page: number;
+            page_size: number;
+            /** @description Matching items, counted up to 10000. */
+            total: number;
+            /** @description More than 10000 items match; total is 10000. */
+            total_capped: boolean;
+            /** @description Applied sort. */
+            sort: string;
+        };
+        Overview: {
+            /** Format: date-time */
+            generated_at: string;
+            devices: components["schemas"]["OverviewDevices"];
+            encryption: components["schemas"]["OverviewEncryption"];
+            vulnerabilities: components["schemas"]["OverviewVulnerabilities"];
+            updates: components["schemas"]["OverviewUpdates"];
+            attention: components["schemas"]["OverviewAttention"];
+        };
+        OverviewDevices: {
+            /** @description pending + active + quarantined */
+            total: number;
+            active: number;
+            pending: number;
+            quarantined: number;
+            retired: number;
+            rejected: number;
+            /** @description Active devices in contact (none of the buckets below). */
+            online: number;
+            /** @description Active devices with an open stale_warning alert. */
+            silent: number;
+            /** @description Active devices with an open stale_critical alert. */
+            silent_critical: number;
+            presumed_lost: number;
+            never_contacted: number;
+        };
+        OverviewEncryption: {
+            /** @description Active devices whose disk state is compliant. */
+            encrypted: number;
+            not_encrypted: number;
+            /** @description unmanaged, tpm_missing, tpm_pin_missing or escrow_pending. */
+            partial: number;
+            not_reported: number;
+        };
+        OverviewVulnerabilities: {
+            by_highest_severity: components["schemas"]["OverviewSeverityBuckets"];
+            /** @description Distinct CVEs of critical or high severity, counted like GET /api/v1/vulnerabilities?severity=critical&severity=high. */
+            critical_high_cves: number;
+            /** @description The CVEs with the highest severity, then the most devices. */
+            top: components["schemas"]["OverviewTopCVE"][];
+        };
+        /** @description Active or quarantined devices by the severity of their worst finding; none = no findings. */
+        OverviewSeverityBuckets: {
+            critical: number;
+            high: number;
+            medium: number;
+            low: number;
+            unknown: number;
+            none: number;
+        };
+        OverviewTopCVE: {
+            cve: string;
+            severity: components["schemas"]["Severity"];
+            devices: number;
+            packages: string[];
+        };
+        OverviewUpdates: {
+            /** @description Active devices counted like GET /api/v1/devices?state=active&security_updates=overdue. */
+            security_overdue: number;
+            reboot_required: number;
+            agent: components["schemas"]["OverviewAgent"];
+            os_releases: components["schemas"]["OverviewOSRelease"][];
+        };
+        OverviewAgent: {
+            current_version: string | null;
+            on_current: number;
+            outdated: number;
+            unknown: number;
+        };
+        OverviewOSRelease: {
+            release: string;
+            devices: number;
+        };
+        OverviewAttention: {
+            conditions: number;
+            devices: number;
         };
         /** @enum {string} */
         RevocationAction: "lock" | "destroy" | "self_lock";
@@ -3435,7 +3708,14 @@ export interface components {
         DeviceGroupSort: "name" | "-name" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The event_id is the tie-breaker. */
         AuditEventSort: "occurred_at" | "-occurred_at" | "code" | "-code" | "outcome" | "-outcome";
-        /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        IpAllowlistSort: "cidr" | "-cidr" | "label" | "-label" | "created_at" | "-created_at";
+        /**
+         * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+         *     disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+         */
+        Confirm: "lockout" | "disable";
+        /** @description Sort field; "-" prefix sorts descending. version sorts by SemVer precedence (0.2.0 before 0.10.0, a pre-release before its release). The version is the tie-breaker. */
         AgentReleaseSort: "version" | "-version" | "created_at" | "-created_at" | "status" | "-status";
         /** @description Semantic version of an agent release. */
         Version: string;
@@ -3475,6 +3755,8 @@ export interface components {
         PackageHoldSort: "package" | "-package" | "created_at" | "-created_at" | "updated_at" | "-updated_at";
         /** @description Sort field; "-" prefix sorts descending. The row id is the tie-breaker. */
         AttentionSort: "since" | "-since" | "kind" | "-kind" | "hostname" | "-hostname";
+        /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
+        AttentionDeviceSort: "severity" | "-severity" | "hostname" | "-hostname" | "since" | "-since";
         /** @description Only definitions scoped to this device group. */
         DeviceGroupFilter: string;
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -3632,6 +3914,24 @@ export interface operations {
                 };
             };
             401: components["responses"]["Problem"];
+            /** @description The client address is outside the IP allow list (ip_not_allowed, plan M7a decision 17). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The api has not loaded the IP allow list yet and refuses every request (ip_allowlist_unavailable, fail closed). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     updateMe: {
@@ -3820,6 +4120,8 @@ export interface operations {
                 sort?: components["parameters"]["AuditEventSort"];
                 /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
                 q?: components["parameters"]["Search"];
+                /** @description Exact target id (for example a device id). */
+                target_id?: string;
                 /** @description RFC 3339; default to - 7 days. */
                 from?: string;
                 /** @description RFC 3339; default now. The range may span at most 92 days (400 range_too_large). */
@@ -4288,6 +4590,10 @@ export interface operations {
                 device_group_id?: string;
                 /** @description Repeatable. Disk encryption state of the last check-in (plan M4b decision 14). */
                 disk_state?: components["schemas"]["DiskState"][];
+                /** @description Repeatable. Contact state of the device (plan M7c §12 open point 1). */
+                contact?: components["schemas"]["DeviceContact"][];
+                /** @description overdue = devices that have contacted Paddock but report no successful security update run within the last 48 hours (the overview's "Security updates overdue", plan M7c amendment 2026-10-10). */
+                security_updates?: "overdue";
             };
             header?: never;
             path?: never;
@@ -5607,6 +5913,63 @@ export interface operations {
             404: components["responses"]["Problem"];
         };
     };
+    getOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The overview of the organization's fleet. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Overview"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    listAttentionDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. severity is the rank of the most severe condition; hostname, then device_id, are the tie-breakers. */
+                sort?: components["parameters"]["AttentionDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only this device (exact match; the device page reads its conditions with it). */
+                device_id?: string;
+                /** @description Repeatable. */
+                kind?: components["schemas"]["AttentionKind"][];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of devices with their open conditions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttentionDevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
     listAttention: {
         parameters: {
             query?: {
@@ -6907,13 +7270,179 @@ export interface operations {
             409: components["responses"]["Problem"];
         };
     };
+    listIpAllowlist: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["IpAllowlistSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IpAllowlistEntryPage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    createIpAllowlistEntry: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+                 *     disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+                 */
+                confirm?: components["parameters"]["Confirm"];
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IpAllowlistEntryCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IpAllowlistEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    getIpAllowlistEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IpAllowlistEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    deleteIpAllowlistEntry: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+                 *     disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+                 */
+                confirm?: components["parameters"]["Confirm"];
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    updateIpAllowlistEntry: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Acknowledges the consequence a previous attempt answered with 409: lockout (lockout_confirmation_required) or
+                 *     disable (disable_confirmation_required). A value that does not match the computed consequence is ignored.
+                 */
+                confirm?: components["parameters"]["Confirm"];
+            };
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IpAllowlistEntryUpdate"];
+            };
+        };
+        responses: {
+            /** @description The changed entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IpAllowlistEntry"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
     listAgentReleases: {
         parameters: {
             query?: {
                 /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
                 page?: components["parameters"]["Page"];
                 page_size?: components["parameters"]["PageSize"];
-                /** @description Sort field; "-" prefix sorts descending. The version is the tie-breaker. */
+                /** @description Sort field; "-" prefix sorts descending. version sorts by SemVer precedence (0.2.0 before 0.10.0, a pre-release before its release). The version is the tie-breaker. */
                 sort?: components["parameters"]["AgentReleaseSort"];
                 /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
                 q?: components["parameters"]["Search"];

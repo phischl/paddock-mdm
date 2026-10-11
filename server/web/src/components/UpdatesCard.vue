@@ -1,42 +1,27 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DeviceReport, DeviceUpdates } from '../api/client'
-import InstallNowDialog from './InstallNowDialog.vue'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
-import { getDeviceUpdates, installNow } from '../lib/updates'
-import { useSessionStore } from '../stores/session'
+import { getDeviceUpdates } from '../lib/updates'
 
 /**
  * The updates of a device (plan M5b decision 12): the last security and regular runs, a pending reboot, the holds
- * that apply to it with conflicting versions, and Install now.
+ * that apply to it with conflicting versions. Install now is in the device's header band (plan M7c decision 29);
+ * refresh changes when a command was issued there.
  */
-const props = defineProps<{ deviceId: string; hostname: string; active: boolean }>()
-const emit = defineEmits<{ changed: [] }>()
+const props = defineProps<{ deviceId: string; refresh: number }>()
 
 const { t, locale } = useI18n()
 const problemText = useProblemText()
-const session = useSessionStore()
 const state = ref<DeviceUpdates | null>(null)
 const problem = ref('')
-const notice = ref('')
-const dialog = ref(false)
 
 async function load(): Promise<void> {
   const s = await getDeviceUpdates(props.deviceId)
   if (typeof s === 'string') problem.value = s
   else state.value = s
-}
-
-async function install(packages: string[]): Promise<{ problem: string; detail?: string } | null> {
-  const res = await installNow(props.deviceId, packages)
-  return 'problem' in res ? res : null
-}
-
-function done(): void {
-  notice.value = t('updates.installNow.requested')
-  emit('changed')
 }
 
 /** The summary of an updates.run report. */
@@ -53,6 +38,7 @@ function heldBack(r: DeviceReport | null): string {
 }
 
 onMounted(load)
+watch(() => props.refresh, load)
 </script>
 
 <template>
@@ -60,29 +46,13 @@ onMounted(load)
     class="device-updates"
     data-testid="device-updates"
   >
-    <div class="page-header">
-      <h2>{{ t('updates.device.title') }}</h2>
-      <v-btn
-        v-if="session.canWrite && active"
-        color="primary"
-        data-testid="install-now"
-        @click="dialog = true"
-      >
-        {{ t('updates.installNow.label') }}
-      </v-btn>
-    </div>
+    <h2>{{ t('updates.device.title') }}</h2>
     <p
       v-if="problem"
       class="form-error"
       role="alert"
     >
       {{ problemText(problem) }}
-    </p>
-    <p
-      v-if="notice"
-      role="status"
-    >
-      {{ notice }}
     </p>
     <template v-if="state">
       <v-alert
@@ -143,11 +113,5 @@ onMounted(load)
         </tbody>
       </v-table>
     </template>
-    <InstallNowDialog
-      v-model="dialog"
-      :title="t('updates.installNow.titleDevice', { hostname })"
-      :install="install"
-      @done="done"
-    />
   </section>
 </template>

@@ -42,7 +42,7 @@ describe('disk encryption card', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     useSessionStore().me = {
-      id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', organization: null, revocation_enabled: true,
+      id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', theme: 'system', organization: null, revocation_enabled: true,
     } as never
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/devices/:id', component: { render: () => null } }] })
     await router.push('/devices/d1')

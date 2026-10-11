@@ -35,12 +35,59 @@ for v in "" 0.1 v0.1.0 0.1.0-foo 0.1.0-alpha 0.1.0-alpha.01 0.1.0-alpha.1.2 0.1.
 done
 
 for v in 0.1.0 0.1.0-alpha.1; do
-  check "image tags of $v" "$(value RELEASE_IMAGES RELEASE_VERSION="$v")" \
-    "server=ghcr.io/phischl/paddock-server:$v compiler=ghcr.io/phischl/paddock-compiler:$v"
-  recipe="$(make -n -C "$root" --no-print-directory release-images RELEASE_VERSION="$v" PUSH=1)"
-  if grep -qF "paddock-server:$v" <<<"$recipe" && ! grep -q latest <<<"$recipe"; then got=0; else got=1; fi
-  check "release-images of $v builds and pushes $v, never latest" "$got" 0
+  check "images of $v" "$(value RELEASE_IMAGES RELEASE_VERSION="$v")" \
+    "server=ghcr.io/phischl/paddock-server:$v compiler=ghcr.io/phischl/paddock-compiler:$v pgbackrest=ghcr.io/phischl/paddock-pgbackrest:$v"
 done
+
+# Tags (plan M7b decisions 4-5): a pre-release only its version; a plain x.y.z also <major>.<minor> and latest only as
+# the highest plain x.y.z among the v* tags; an edge build its version and edge, never latest.
+tags() { value RELEASE_TAGS RELEASE_GIT_TAGS="v0.1.0-alpha.1 v1.1.0 v1.0.0 v1.2.0-rc.1" "$@" | xargs; }
+check "tags of a new highest stable 1.1.1" "$(tags RELEASE_VERSION=1.1.1)" "1.1.1 1.1 latest"
+check "tags of the tagged highest stable 1.1.0" "$(tags RELEASE_VERSION=1.1.0)" "1.1.0 1.1 latest"
+check "tags of the older stable 1.0.1" "$(tags RELEASE_VERSION=1.0.1)" "1.0.1 1.0"
+check "tags of the pre-release 1.2.0-rc.1" "$(tags RELEASE_VERSION=1.2.0-rc.1)" "1.2.0-rc.1"
+check "tags of the pre-release 9.0.0-alpha.1" "$(tags RELEASE_VERSION=9.0.0-alpha.1)" "9.0.0-alpha.1"
+check "tags of an edge build" "$(tags RELEASE_VERSION=edge-20261010-abcdef0 RELEASE_CHANNEL=edge)" \
+  "edge-20261010-abcdef0 edge"
+
+if make -s -C "$root" --no-print-directory release-check RELEASE_VERSION=edge-20261010-abcdef0 RELEASE_CHANNEL=edge \
+  >/dev/null 2>&1; then got=0; else got=1; fi
+check "release-check accepts the edge version edge-20261010-abcdef0" "$got" 0
+for v in 0.1.0 edge-2026101-abcdef0 edge-20261010-ABCDEF0 edge-20261010-abcdef01 edge; do
+  if make -s -C "$root" --no-print-directory release-check RELEASE_VERSION="$v" RELEASE_CHANNEL=edge >/dev/null 2>&1; then
+    got=0
+  else got=1; fi
+  check "release-check rejects the edge version '$v'" "$got" 1
+done
+if make -s -C "$root" --no-print-directory release-check RELEASE_VERSION=edge-20261010-abcdef0 >/dev/null 2>&1; then
+  got=0
+else got=1; fi
+check "release-check rejects an edge version on the stable channel" "$got" 1
+
+# The printed buildx commands: three multi-platform images, every label of decision 6, never latest for a pre-release.
+dry_dir="$(mktemp -d)"
+recipe="$(make -s -C "$root" --no-print-directory release-images RELEASE_VERSION=0.1.0-alpha.1 DRY_RUN=1 \
+  RELEASE_DIR="$dry_dir")"
+check "release-images builds three images" \
+  "$(grep -c 'docker buildx build --platform linux/amd64,linux/arm64 --push' <<<"$recipe")" 3
+if grep -q latest <<<"$recipe"; then got=1; else got=0; fi
+check "release-images never tags a pre-release latest" "$got" 0
+for label in source url documentation title description version revision created licenses vendor; do
+  check "label org.opencontainers.image.$label on every image" \
+    "$(grep -c "org.opencontainers.image.$label=" <<<"$recipe")" 3
+done
+check "label io.paddock.channel on every image" "$(grep -c 'io.paddock.channel=stable' <<<"$recipe")" 3
+
+# The printed cosign commands: every index recursively, one attestation per image and platform, both blobs.
+echo sums >"$dry_dir/SHA256SUMS"
+signing="$(make -s -C "$root" --no-print-directory release-sign RELEASE_VERSION=0.1.0 DRY_RUN=1 RELEASE_DIR="$dry_dir")"
+check "release-sign signs three indexes recursively" "$(grep -c 'sign --yes --recursive' <<<"$signing")" 3
+check "release-sign attests six platform manifests" "$(grep -c 'attest --yes --type spdxjson' <<<"$signing")" 6
+check "release-sign signs SHA256SUMS" \
+  "$(grep -c 'sign-blob --yes --bundle /work/SHA256SUMS.sigstore.json /work/SHA256SUMS' <<<"$signing")" 1
+check "release-sign signs the bundle" \
+  "$(grep -c 'sign-blob --yes --bundle /work/paddock-deploy-0.1.0.tar.gz.sigstore.json' <<<"$signing")" 1
+rm -rf "$dry_dir"
 
 sequence=(0.1.0-alpha.1 0.1.0-alpha.2 0.1.0-beta.1 0.1.0-rc.1 0.1.0)
 debian=(0.1.0~alpha.1 0.1.0~alpha.2 0.1.0~beta.1 0.1.0~rc.1 0.1.0)

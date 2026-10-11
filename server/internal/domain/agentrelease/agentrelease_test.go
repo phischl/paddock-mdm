@@ -149,14 +149,15 @@ func TestPercent(t *testing.T) {
 // alphaSequence is the release order of Paddock's pre-releases (PDK-022).
 var alphaSequence = []string{"0.1.0-alpha.1", "0.1.0-alpha.2", "0.1.0-beta.1", "0.1.0-rc.1", "0.1.0"}
 
-// TestOfferForPreReleases: the offer compares the device's version only for equality (the supervisor refuses what is
-// not newer), so a device on any other pre-release of the sequence is offered the release and one on it is not.
+// TestOfferForPreReleases (PDK-025): the offer orders versions like the supervisor, so a device on an earlier
+// pre-release of the sequence is offered the release, and one on it or on a newer one is not (it would refuse a
+// downgrade).
 func TestOfferForPreReleases(t *testing.T) {
 	in := uuid.MustParse("0190f000-0000-7000-8000-00000000000d")
-	for _, release := range alphaSequence {
+	for i, release := range alphaSequence {
 		o := Offer{Version: release, Status: RolloutCompleted, Waves: []int{100}, Artifacts: map[string]Artifact{"amd64": {SHA256: "ab"}}}
-		for _, running := range alphaSequence {
-			if _, ok := o.For(in, "amd64", running); ok != (running != release) {
+		for j, running := range alphaSequence {
+			if _, ok := o.For(in, "amd64", running); ok != (j < i) {
 				t.Errorf("release %s, device on %s: offered %v", release, running, ok)
 			}
 		}
@@ -175,6 +176,16 @@ func TestOfferFor(t *testing.T) {
 	}
 	if _, ok := o.For(in, "amd64", "1.1.0"); ok {
 		t.Error("offered to a device that runs the version")
+	}
+	for _, newer := range []string{"1.1.1", "1.10.0", "2.0.0-alpha.1", "1.1.0+build.2"} {
+		if _, ok := o.For(in, "amd64", newer); ok {
+			t.Errorf("offered to a device on %s, which is not older than the release", newer)
+		}
+	}
+	for _, older := range []string{"1.0.10", "1.1.0-rc.1", "0.0.0-dev", "", "unknown"} {
+		if _, ok := o.For(in, "amd64", older); !ok {
+			t.Errorf("not offered to a device on %q", older)
+		}
 	}
 	if _, ok := o.For(in, "arm64", "1.0.0"); ok {
 		t.Error("offered without an artifact for the arch")

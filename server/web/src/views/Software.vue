@@ -27,6 +27,9 @@ const columns: ListColumn[] = [
       searchable
       default-sort="name"
       item-value="key"
+      empty-icon="package-search"
+      empty-title="inventory.empty.software.title"
+      empty-description="inventory.empty.software.description"
       data-testid="software-list"
     >
       <template #[`item.has_vulnerabilities`]="{ item }: { item: Keyed<SoftwareSummary> }">

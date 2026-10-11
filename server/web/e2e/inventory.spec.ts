@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
 import { login } from './auth'
-import { expectAccessible, expectAdminStartPage, mainNav, watchCSP } from './checks'
+import { expectAccessible, mainNav, watchCSP } from './checks'
 import { test } from './cleanup'
 
 // The reference device client (test/acceptance/cmd/devicesim), built by `make e2e`.
@@ -10,8 +10,8 @@ const csrf = { 'X-Paddock-CSRF': '1' }
 
 // Plan M5a decision 10: a device that reported its packages through Fleet shows them in its Software tab and on the
 // organization's Software page; the Vulnerabilities pages filter and sort by severity (unknown included: Ubuntu has
-// not rated the CVE or its data is missing) and the start page carries the vulnerability tile; accessible and without
-// CSP violations.
+// not rated the CVE or its data is missing) and the overview carries the severity legend (plan M7c decision 28);
+// accessible and without CSP violations.
 test('organization admin sees the software and vulnerabilities of devices', async ({ page, cleanup }) => {
   test.setTimeout(300_000)
   const csp = watchCSP(page)
@@ -22,11 +22,12 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   const tokenName = `E2E inventory token ${stamp}`
   cleanup.remove('/api/v1/enrollment-tokens', tokenName)
 
-  // The start page tile counts devices with critical or high findings and those with findings of unknown severity.
-  await expectAdminStartPage(page)
-  const tile = page.getByTestId('vulnerability-tile')
-  await expect(tile.getByRole('link', { name: /critical or high findings/ })).toBeVisible()
-  await expect(tile.getByRole('link', { name: /findings of unknown severity/ })).toBeVisible()
+  // The overview counts devices by their worst finding; the legend links to the filtered vulnerability list.
+  await expect(page).toHaveURL(/\/$/)
+  const vulnerabilities = page.getByTestId('overview-vulnerabilities')
+  await expect(vulnerabilities.getByRole('link', { name: /Critical/ })).toBeVisible()
+  await expect(vulnerabilities.getByRole('link', { name: /High/ })).toBeVisible()
+  await expect(vulnerabilities.getByRole('link', { name: /Unknown/ })).toBeVisible()
   await expectAccessible(page)
 
   // A simulated device whose osquery host reported two packages to Fleet; the worker syncs within a round.
@@ -52,7 +53,8 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   const software = page.getByTestId('device-software-list')
   await expect(software.getByRole('row').filter({ hasText: pkg })).toContainText('1.0-1')
   await expect(software.getByRole('row').filter({ hasText: 'apport' })).toContainText('deb_packages')
-  await page.getByTestId('list-search').getByRole('searchbox').fill(pkg)
+  // The device pane beside the tab has its own list; the tab's search is the one inside the software list.
+  await software.getByTestId('list-search').getByRole('searchbox').fill(pkg)
   await expect(page).toHaveURL(/[?&]q=/)
   await expect(software.getByRole('row').filter({ hasText: 'apport' })).toHaveCount(0)
   await expectAccessible(page)
@@ -82,9 +84,9 @@ test('organization admin sees the software and vulnerabilities of devices', asyn
   await expect(page).toHaveURL(/sort=device_count/)
   await expectAccessible(page)
 
-  // The organization's Vulnerabilities page with the severity filter of the tile.
-  await page.goto('/device-groups')
-  await tile.getByRole('link', { name: /findings of unknown severity/ }).click()
+  // The organization's Vulnerabilities page with the severity filter of the overview's legend.
+  await page.goto('/')
+  await page.getByTestId('overview-vulnerabilities').getByRole('link', { name: /Unknown/ }).click()
   await expect(page).toHaveURL(/\/vulnerabilities\?.*severity=unknown/)
   await expect(page.getByRole('heading', { name: 'Vulnerabilities', exact: true })).toBeVisible()
   await expect(page.getByTestId('list-filter-severity')).toContainText('Unknown')

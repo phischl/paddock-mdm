@@ -4,8 +4,10 @@ ARG NODE_IMAGE
 ARG RUNTIME_IMAGE
 ARG COMPILER_RUNTIME_IMAGE
 
-# Portal: built in the pinned Node image, embedded into the binary.
-FROM ${NODE_IMAGE} AS web
+# Portal: built in the pinned Node image, embedded into the binary. The portal and the Go build run on the build
+# platform and cross-compile, so a multi-platform build needs QEMU only for the Debian-based compiler stage (plan M7b
+# decision 2).
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS web
 WORKDIR /src/server/web
 COPY server/web/package.json server/web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
@@ -13,7 +15,8 @@ COPY server/web/ ./
 COPY docs/assets/logo/ /src/docs/assets/logo/
 RUN npm run build
 
-FROM ${GO_BUILD_IMAGE} AS build
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build
+ARG TARGETOS TARGETARCH
 WORKDIR /src
 ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-trimpath
 COPY go.work go.work.sum ./
@@ -29,7 +32,7 @@ COPY pkg/ pkg/
 COPY server/ server/
 COPY --from=web /src/server/web/dist/ server/web/dist/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    go build -ldflags="-s -w" -o /out/paddock-server ./server/cmd/paddock-server
+    GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /out/paddock-server ./server/cmd/paddock-server
 
 # Compiler: the same binary in a Debian image whose visudo validates every rendered sudoers file (plan M3a decision
 # 17). The compiler never runs sudo, so the image keeps no setuid binaries; visudo refuses to run for a uid without a

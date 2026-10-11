@@ -48,14 +48,6 @@ services:
   paddock-audit-migrate:
     <<: &paddock-audit
       image: ${PADDOCK_IMAGE:-paddock-server:dev}
-      build:
-        context: ../..
-        dockerfile: deploy/compose/Dockerfile
-        args:
-          GO_BUILD_IMAGE: ${GO_BUILD_IMAGE}
-          NODE_IMAGE: ${NODE_IMAGE}
-          RUNTIME_IMAGE: ${RUNTIME_IMAGE}
-          COMPILER_RUNTIME_IMAGE: ${COMPILER_RUNTIME_IMAGE}
       profiles: [paddock]
       read_only: true
       tmpfs: [/tmp]

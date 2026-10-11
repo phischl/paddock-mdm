@@ -4,11 +4,16 @@ import { createVueI18nAdapter } from 'vuetify/locale/adapters/vue-i18n'
 import { useI18n } from 'vue-i18n'
 import 'vuetify/styles'
 import { i18n } from '../i18n'
+import { pdIconSet } from '../components/PdIconSet'
+import { cachedPreference, installThemeSwitcher, resolveTheme, systemPrefersDark, vuetifyThemeName } from '../lib/theme'
+import { paddockDark, paddockLight } from './theme'
 
 const noncePlaceholder = '__CSP_NONCE__'
 
-/** Viewport width from which the navigation drawer is permanent (and can be hidden); below it is temporary. */
+/** Viewport width from which the navigation drawer is expanded by default; 600–1279 px starts as a rail. */
 export const navigationBreakpoint = 1280
+/** Below this width the drawer is a temporary overlay, lists render as cards and filters open in a sheet. */
+export const mobileBreakpoint = 600
 
 /**
  * The per-response CSP style nonce the server writes into <meta name="csp-nonce">; undefined if the tag is
@@ -20,37 +25,32 @@ export function cspNonce(): string | undefined {
 }
 
 /**
- * Vuetify with the Paddock theme (WCAG 2.1 AA contrast), the icon paths bundled with Vuetify (no icon font) and
- * Vuetify's own strings from the shared vue-i18n instance ($vuetify.*). The theme style sheet is the only <style>
- * element Vuetify injects; it carries the CSP nonce.
+ * Vuetify with the two Paddock themes (ADR 0023; tokens in plugins/theme.ts), the vendored Lucide icons as the
+ * icon set "pd" (icon="pd:laptop"), Vuetify's own icon paths for its internals, and Vuetify's strings from the
+ * shared vue-i18n instance ($vuetify.*). The theme style sheet is the only <style> element Vuetify injects; it
+ * carries the CSP nonce.
  */
 export const vuetify = createVuetify({
   theme: {
     cspNonce: cspNonce(),
-    defaultTheme: 'paddock',
-    themes: {
-      paddock: {
-        dark: false,
-        // Vuetify's default (0.60) leaves field labels below 4.5:1 contrast.
-        variables: { 'medium-emphasis-opacity': 0.7 },
-        colors: {
-          background: '#f6f7f5',
-          surface: '#ffffff',
-          primary: '#1f5135',
-          secondary: '#4a5551',
-          error: '#a4161a',
-          success: '#1d5d2f',
-          warning: '#7a4b00',
-        },
-      },
-    },
+    // The first paint already uses the cached preference resolved against the system: no inline script, the CSP
+    // stays unchanged.
+    defaultTheme: vuetifyThemeName(resolveTheme(cachedPreference(), systemPrefersDark())),
+    themes: { paddockLight, paddockDark },
   },
-  icons: { defaultSet: 'mdi', aliases, sets: { mdi } },
+  icons: { defaultSet: 'mdi', aliases, sets: { mdi, pd: pdIconSet } },
   locale: { adapter: createVueI18nAdapter({ i18n, useI18n }) },
   defaults: {
-    VTextField: { variant: 'outlined', density: 'comfortable' },
-    VTextarea: { variant: 'outlined', density: 'comfortable' },
-    VSelect: { variant: 'outlined', density: 'comfortable' },
-    VBtn: { variant: 'flat' },
+    VBtn: { rounded: 'sm', variant: 'outlined', density: 'compact' },
+    VTextField: { variant: 'outlined', density: 'compact' },
+    VTextarea: { variant: 'outlined', density: 'compact' },
+    VSelect: { variant: 'outlined', density: 'compact' },
+    VAutocomplete: { variant: 'outlined', density: 'compact' },
+    VDataTableServer: { density: 'compact' },
+    VListItem: { density: 'compact' },
+    VChip: { size: 'small', rounded: 'sm' },
+    VNavigationDrawer: { width: 220, railWidth: 52 },
   },
 })
+
+installThemeSwitcher((name) => void vuetify.theme.change(name, false))

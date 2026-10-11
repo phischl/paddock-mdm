@@ -7,12 +7,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Client address behind proxies and CDNs (M7a step 1, ADR 0021): Caddy reads the client address from
+  `PADDOCK_EDGE_CLIENT_IP_HEADER` (`none`, `X-Forwarded-For` right to left, or `CF-Connecting-IP`) only when the peer
+  is in `PADDOCK_EDGE_TRUSTED_PROXIES`, validated by the new Caddy entrypoint `caddy/entrypoint.sh` (no `/0`, header
+  and proxies together or neither). Caddy forwards the resolved address as `X-Paddock-Client-IP`, which the roles
+  accept only from `PADDOCK_TRUSTED_PROXY_CIDRS` (default: private ranges) and use for the gateway's per-address
+  limit, audit actors and access logs; `X-Forwarded-For` is no longer read by any role. `GET /api/v1/me` returns
+  `client_ip`. The edge allow list moves into the shared snippet file `caddy/guards.caddy`:
+  `PADDOCK_ADMIN_ALLOWED_CIDRS` now also restricts Authentik's administrative paths on `auth.` (`/if/admin/`,
+  `/if/user/`, `/api/v3/` except the flow executor), while logins and the device-code approval stay public;
+  `PADDOCK_INTERNAL_CIDRS` admits the Paddock roles to Authentik's API. An operator bundle of `Caddyfile.prod` needs
+  `caddy/guards.caddy` and `caddy/entrypoint.sh` next to it. `prod-check` gains the items `edge client address`,
+  `role trusted proxies` and `ip allow list bypass is off` and checks the two mounts. The development stack trusts
+  private ranges, reads both headers and adds the untrusted listener 8444 for the gates.
+- Application IP allow list (M7a step 2, ADR 0021): platform administrators manage the allow list of the portal and
+  the admin API under `/api/platform/v1/ip-allowlist` (every write needs a fresh step-up); while it has entries,
+  every api replica refuses sessions and API tokens from other addresses with 403 `ip_not_allowed` before any session
+  or token is read, and follows changes within 2 s through a Valkey change counter. Until a replica has loaded the
+  list it refuses every request with 503 `ip_allowlist_unavailable` (fail closed). A change that would exclude the
+  caller's own address or remove the last entry is refused with 409 until confirmed (`confirm=lockout` or
+  `confirm=disable`; any other value is 400). New audit codes `platform.ip_allowlist_changed`, `platform.ip_allowlist_denied` (aggregated per
+  address and 10-minute window, at most 41 events per window and replica; `distinct_ips_capped` marks a summary of
+  more than 10 000 addresses) and `platform.ip_allowlist_disabled`;
+  metrics `paddock_ip_allowlist_*`. Migration 00036 adds the platform table `ip_allowlist_entry`.
+- Break-glass of the IP allow list (M7a step 3): `paddock-server admin allowlist show|disable|add` on the host
+  (audited as `platform.ip_allowlist_disabled` and `platform.ip_allowlist_changed` with actor system) and the api
+  variable `PADDOCK_IP_ALLOWLIST_BYPASS` (default `false`; its audit event is retried until PostgreSQL is reachable;
+  `prod-check` fails and the alert
+  `PaddockIPAllowlistBypassed` fires while it is set). Runbook: `docs/operations/ip-allowlist.md`.
+- Portal page *IP allow list* for platform administrators (M7a step 4): the own address and whether the list covers
+  it, the entries with search and sorting, add and edit dialogs with a "use my address" button and client-side CIDR
+  validation, removal through the confirmation modal, and the typed confirmation of a change that would lock the
+  administrator out or switch the list off.
+- Screenshots and glossary (M7c step 10): `PADDOCK_E2E_SCREENSHOTS=1 make e2e` writes the README screenshots of the overview, the device list, a device and the audit log in the light and the dark theme, plus a visual review set at 390, 1280 and 1920 px (not committed); the German glossary has the terms of the redesigned portal (Übersicht, Befehlspalette, Gefahrenbereich, Erscheinungsbild, Dichte, Tastenkürzel and the status chips).
+- Status chips, empty states and phone layout everywhere (M7c step 9): device, token, API token, revocation, agent release and rollout, organization, user lock, user and group source, change set source and permission profile badges are chips with a dot and a label; list timestamps are mono, one line, relative for last contact and last use. Every empty list says what it is for and, when the role may act, offers the next step (for example *Create device group*; the device list links to the enrollment tokens). Settings forms show one panel per section with fields as wide as their content. At 390 px no page scrolls horizontally, lists are cards and filters open in a sheet. New end-to-end gates check the phone layout and run the accessibility check in the light and the dark theme.
+- Audit log and attention pages (M7c step 8): audit sentences name a device by its hostname instead of its ID, a Device column links to it, timestamps are one mono line, the actor carries a type chip, the outcome is a chip, and a row expands to the stored event fields and params, shown unchanged. A device's new Audit tab lists its events (administrators and auditors). The attention page lists one row per device with its open conditions as chips, most severe first, and one action.
+- Device split view (M7c step 7): a device opens beside the device list (a pane with search and filters that keeps the list the administrator came from; hidden below 960 px), under a header band with the hostname, status chips (contact, encryption, logins suspended, locked), Ubuntu release, agent version and last contact, and the primary actions — approve, reject or release for new and quarantined devices, *Install updates…* and *Rotate admin password…* for active ones. The device's sections are tabs with their own URLs (Overview, Software, Vulnerabilities, Login & sudo, Configuration, Commands; `Alt+1…9`). The Overview tab shows health and compliance at a glance, identity with a copyable device ID, device groups, the local administrator, disk encryption, updates and the top findings; Lock, Destroy and Retire sit in the danger zone at its end, each with its own explanation and dialog, and the reason for a Lock or Destroy is entered in the dialog.
+- Portal overview (M7c step 6): administrators and operators start on a new overview page with the fleet numbers (online, silent, presumed lost, encrypted, not encrypted, the number of distinct critical or high CVEs, security updates overdue, reboots required), each linked to its pre-filtered list, the attention list grouped by device, a severity bar of devices by their worst finding with the top CVEs, updates and the agent rollout, and the recent audit activity (administrators and auditors). Every KPI number equals the total of the list it opens: the device KPIs open the active devices filtered by contact, disk state or overdue security updates, and *Critical / high CVEs* counts distinct CVEs like the vulnerability list. Auditors start on the audit log. The device list filters by contact state and by overdue security updates (`GET /api/v1/devices?security_updates=overdue`, no successful run in 48 hours); `GET /api/v1/attention/devices` filters by `device_id`; the overview reports `vulnerabilities.critical_high_cves`. The vulnerability tile on the device groups and vulnerabilities pages is replaced by the overview.
+- Overview and grouped attention API (M7c step 5, ADR 0023): `GET /api/v1/overview` returns the organization's fleet numbers in one transaction (devices by state and contact, encryption, devices by their worst finding and the top CVEs, security updates overdue for more than 48 hours, reboots required, agent rollout, Ubuntu releases, open attention conditions and devices); `GET /api/v1/attention/devices` lists the attention conditions grouped by device, most severe first, with the `kind` filter and the sorts `severity`, `hostname` and `since`; devices carry a derived `contact` state (`never`, `ok`, `stale_warning`, `stale_critical`, `presumed_lost`) and `GET /api/v1/devices` filters by it; audit events carry the device they concern with its current hostname (`device`, resolved at read time; the stored event is unchanged) and `GET /api/v1/audit-events` filters by `target_id`. Database migrations `00038` (paddock) and `00003` (audit) run automatically.
+- Shared portal components (M7c step 4): status chips with a dot and a label (`StatusChip`, one vocabulary ok / warn / critical / info / neutral; `SeverityChip` on its own scale with an orange *high*), an actor chip for audit events, mono timestamps (`YYYY-MM-DD HH:MM`, the time only for today, relative in tables with the absolute value as tooltip), empty states with the next step, a danger zone card for Lock, Destroy and Retire (each with its own explanation and dialog; the reason is typed in the confirm dialog, which also requires the hostname and keeps Cancel focused), and list extensions: cards below 600 px with the filters in a sheet, a row cursor (`j`/`k`, Enter/`o`), expandable rows, "Clear filters" on an empty filtered list, and query prefixes so two lists share one page.
+- Portal shell (M7c step 3): a 44 px app bar with the organization name, a command field that opens the command palette (`Ctrl K` / `⌘ K`, `/`; pages, devices, device groups, a CVE id and non-destructive actions such as switching the theme, language, density or navigation), a labelled attention pill ("3 need attention") instead of the bare badge, a theme toggle, and a user menu with language, theme (System / Light / Dark, stored on the account), density (Compact / Comfortable, per browser) and the keyboard-shortcut help. The navigation drawer has icons, overline group headers, `g`-shortcut hints, one Tab stop with Up/Down/Home/End, collapses to a 52 px rail with tooltips (`[`; expanded by default from 1280 px, a rail between 600 and 1279 px, a temporary drawer below) and scrolls independently. Global shortcuts: `g o/a/d/s/v/l` navigate, `j`/`k`/Enter work in lists, `?` lists every shortcut; single-key shortcuts can be switched off in the help dialog; no shortcut or palette entry performs a destructive or security-relevant action.
+- Portal design system (M7c step 2, ADR 0023): the portal ships with a light and a dark theme built on one token set (`--pd-*`, `server/web/src/plugins/theme.ts`), self-hosted IBM Plex Sans and JetBrains Mono (OFL-1.1, upstream woff2 files unmodified, licence texts next to them) and vendored Lucide icons (ISC); no font or icon leaves the portal origin. The api role serves `.woff2` as `font/woff2`. `make lint` fails when a vendored font or icon is missing, changed, unlisted in `server/web/src/assets/vendored.json`, under another licence or not recorded in `docs/compliance/third-party.md`, and when the generated icon module is out of date (`npm run gen:icons`).
+- Portal theme preference on the account (M7c step 1, ADR 0023): `GET /api/v1/me` returns `theme` (`system`, `light` or `dark`; `system` follows the operating system's preference) and `PATCH /api/v1/me` accepts a patch of `locale` and/or `theme` (at least one field; an unsupported value or an empty patch answers 400). Database migration `00037` runs automatically.
+- Operator bundle (M7b step 3, ADR 0022): `paddock-deploy-<version>.tar.gz` holds the production Compose files, their
+  configuration, the bootstrap scripts, `versions.env` with the Paddock images by tag and digest, `SHA256SUMS`, a
+  README and the entry script `./paddock` (`version`, `verify`, `secrets`, `pull`, `check`, `up`, `down`, `ps`, `logs`,
+  `compose`, `bao`, `bootstrap openbao|buckets|audit-bucket|fleet`, `agent-release`, `migrate-from`). `./paddock check`
+  runs `prod-check` from the server image. `make bundle` builds a local bundle of the local images; the drift test
+  `make bundle-test` (part of `make test`) proves that the bundle renders the same production configurations as
+  `deploy/compose/`, ships every mounted file and image reference, and builds reproducibly.
+- Published images (M7b step 4, ADR 0022): `make release-images` builds `paddock-server`, `paddock-compiler` and the
+  new `paddock-pgbackrest` with `docker buildx` for `linux/amd64` and `linux/arm64`, pushes them to `ghcr.io/phischl/`
+  with the OCI labels of the release and records index and platform digests in `images.txt`. Tags: a plain `x.y.z`
+  gets `<version>`, `<major>.<minor>` and, as the highest plain version among the tags, `latest`; a pre-release only
+  its version; the new edge channel (`RELEASE_CHANNEL=edge`, versions `edge-<yyyymmdd>-<sha7>`) `edge` and its
+  version. `release-sbom` writes one SPDX SBOM per image and platform from the registry, `release-sign` signs every
+  image recursively, attests each SBOM on its platform manifest and signs `SHA256SUMS` and the bundle tarball;
+  `release-packages`, `release-bundle` and `release-sums` complete the release, and `release-artifacts` runs them all
+  locally.
+- Agent releases from the host (M7b step 5): `paddock-server admin agent-release --version <v> --dir <dir>` (in the
+  bundle: `./paddock agent-release <v> <dir>`) verifies every signed `paddockd` and Debian package of the offline
+  signing step first, then creates, uploads and publishes the release through the same use cases and audit events as
+  the admin API, with the system actor of the host commands, and prints the release as JSON. A published release or a
+  wrong signature is refused without storing anything.
+- Release gates for the bundle (M7b step 6): `deploy/bundle/ci/smoke.sh` installs a bundle on one machine as two hosts
+  (projects `paddock-cp` and `paddock-audit`) by the installation guide — secrets, OpenBao initialization and
+  configuration, buckets, Fleet, `./paddock check` on both hosts against the unmodified production files, start,
+  probes through Caddy, a pgBackRest backup, an agent release with throwaway keys and a second `./paddock up` that
+  must not recreate a container — with the CI overlay `deploy/bundle/ci/compose.ci.yaml` for internal TLS.
+  `deploy/bundle/ci/prune-edge.sh` deletes edge image versions older than 30 days whose tags are all
+  `edge-<date>-<sha>` and keeps releases, `edge`, `latest` and untagged versions (tested in `make test`).
+- Upgrade and rollback runbook `docs/operations/upgrade.md` (M7b step 7): new bundle next to the running one,
+  `./paddock migrate-from`, check, backup, `./paddock up`; rollback by the release's `Schema:` line. The installation
+  guide is rewritten for the bundle (download and signature check, `./paddock secrets|bootstrap|check|up`, first
+  agent release, installing from source with a local bundle); ADR 0022 records the distribution decision. M7b adds no
+  database migration.
+
+### Changed
+
+- Production Compose files carry no `build:` sections any more (M7b step 1, ADR 0022): `compose.yaml`,
+  `compose.audit.yaml` and `compose.backup.yaml` reference the images `PADDOCK_IMAGE`, `PADDOCK_COMPILER_IMAGE` and
+  `PADDOCK_PGBACKREST_IMAGE` only; the development overlays `compose.dev.yaml` and `compose.backup.dev.yaml` build
+  them from source, so `make up` is unchanged. The server image cross-compiles (portal and Go build on the build
+  platform) for `linux/amd64` and `linux/arm64`; `make lint-image` also builds the arm64 Go stage.
+- Bootstrap scripts are production-capable (M7b step 2): `scripts/lib.sh` holds the Compose file sets of both hosts
+  and of the development stack (the Makefile and the `prod-check` tests read them from there), selects them by
+  `PADDOCK_ENV` and the new `.env` setting `PADDOCK_HOST=controlplane|audit`, and names the Compose project after
+  `PADDOCK_PROJECT` (default `paddock`). The OpenBao configuration (keys, policies, AppRoles, now including the audit
+  writer's credentials for the audit host) moves into `openbao-configure.sh`, which runs against an OpenBao that the
+  operator initialized and unsealed; `openbao-bootstrap.sh` keeps the development init and unseal. The audit bucket,
+  bundles bucket and Fleet bootstraps no longer refuse production. `gen-prod-secrets.sh` takes the host from
+  `PADDOCK_HOST` when no argument is given.
+- `make prod-secrets` and `make prod-check` are removed (M7b step 3): production hosts use the operator bundle's
+  `./paddock secrets` and `./paddock check`; installing from source means building the images and a local bundle.
+
 ### Fixed
 
+- Agent versions compare by SemVer order, not as text or for equality (PDK-025): the attention list flags a device
+  as `agent_outdated` only when its agent is older than the current release, and the server offers a device an agent
+  update only when the release is newer than its agent, so a device that is ahead of the last completed rollout is
+  neither flagged nor offered an older release. An update a device refuses as a downgrade no longer counts toward a
+  rollout's failure rate. `GET /api/platform/v1/agent-releases?sort=version` sorts 0.2.0 before 0.10.0 and a
+  pre-release before its release, and the newest release among equally recent ones is the highest version.
+- The bucket bootstraps no longer fail when a generated RustFS root credential begins with `-` (a random
+  base64url value does so now and then): `rc alias set` takes the credentials after `--`.
+- The OpenBao scripts no longer put a secret on a command line: the root token reaches the container by name only,
+  the session keys and the unseal shares go through stdin (`openbao-configure.sh`, `openbao-bootstrap.sh`, the restore
+  drill); a test of `make test` refuses `-e NAME=$value` and secret arguments in the bootstrap and bundle scripts.
+- `fleet-bootstrap.sh` replaces the API-only user `paddock` only when Fleet rejects the stored token with 401; when
+  Fleet is unreachable, answers otherwise or does not answer within 10 seconds, or when the stored token file exists
+  but cannot be read, it stops without touching the user, so a passing outage no longer rotates the token.
+- `paddock-server admin agent-release` audits every refusal like the admin API: an invalid version or a release
+  without an agent binary records a failed `agent_release.created` event, a refused file a failed
+  `agent_release.artifact_uploaded` event.
 - `paddock-supervisor` no longer rolls back a healthy agent update whose first check-in follows the switch within one
   kernel clock tick: the file system dated such a check-in before the switch. The supervisor now removes
   `/run/paddock/last-checkin` while no agent runs, and a probation passes if the new agent recreated it. If the
   supervisor cannot remove the mark, it rolls the update back.
+
 
 ### Security
 

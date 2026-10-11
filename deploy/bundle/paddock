@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# Entry point of the operator bundle (plan M7b decision 16, ADR 0022): every operation of a production host, with the
+# Compose files of PADDOCK_HOST and the project PADDOCK_PROJECT of .env. Never prints a secret.
+set -euo pipefail
+
+BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat >&2 <<'EOF'
+usage: ./paddock <command> [arguments]
+  version                         print the bundle version
+  verify                          check the shipped files against SHA256SUMS
+  secrets                         generate this host's secrets into .secrets/ (idempotent)
+  pull                            pull every image of this host
+  check [--online]                production checklist (prod-check) of this host's configuration
+  up [--infra]                    start the stack and wait until healthy (--infra: infrastructure only)
+  down [--volumes]                stop the stack (--volumes also deletes the data)
+  ps                              list the services
+  logs [service...]               show the last log lines
+  compose <args...>               docker compose with this host's files
+  bao <args...>                   the bao CLI inside the openbao container (BAO_TOKEN from the environment)
+  bootstrap openbao|buckets|audit-bucket|fleet
+                                  configure OpenBao, the buckets or Fleet (docs/operations/install.md)
+  agent-release <version> <dir>   upload and publish signed agent artifacts (control plane)
+  migrate-from <old dir>          take over .env and .secrets/ of the bundle directory of the running version
+EOF
+  exit 2
+}
+
+die() {
+  echo "paddock: $1" >&2
+  exit "${2:-1}"
+}
+
+cmd="${1:-}"
+(($#)) && shift
+case "$cmd" in
+  version)
+    cat "$BUNDLE_DIR/VERSION"
+    exit 0
+    ;;
+  verify)
+    cd "$BUNDLE_DIR"
+    sha256sum -c --quiet SHA256SUMS
+    echo "all shipped files unchanged"
+    exit 0
+    ;;
+  migrate-from)
+    old="${1:-}"
+    [[ $# -eq 1 && -d "$old" ]] || die "usage: ./paddock migrate-from <old bundle directory>" 2
+    old="$(cd "$old" && pwd)"
+    [[ "$old" != "$BUNDLE_DIR" ]] || die "migrate-from: <old dir> is this directory" 2
+    [[ ! -e "$BUNDLE_DIR/.env" ]] || die "migrate-from: .env exists here; refusing to overwrite it"
+    [[ ! -e "$BUNDLE_DIR/.secrets" ]] || die "migrate-from: .secrets/ exists here; refusing to overwrite it"
+    [[ -f "$old/.env" && -d "$old/.secrets" ]] || die "migrate-from: $old has no .env and .secrets/"
+    cp -a "$old/.env" "$BUNDLE_DIR/.env"
+    cp -a "$old/.secrets" "$BUNDLE_DIR/.secrets"
+    echo "copied .env and .secrets/ from $old"
+    exit 0
+    ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release) ;;
+  *) usage ;;
+esac
+
+# dotenv <name>: the value in .env only; the process environment does not count for the host settings.
+dotenv() { grep "^$1=" "$BUNDLE_DIR/.env" | tail -1 | cut -d= -f2- || true; }
+[[ -f "$BUNDLE_DIR/.env" ]] || die "missing .env: cp .env.example .env, then set PADDOCK_HOST and the settings of this host" 2
+[[ "$(dotenv PADDOCK_ENV)" == production ]] || die "PADDOCK_ENV in .env must be production (the bundle is for production hosts)" 2
+PADDOCK_HOST="$(dotenv PADDOCK_HOST)"
+[[ "$PADDOCK_HOST" == controlplane || "$PADDOCK_HOST" == audit ]] ||
+  die "PADDOCK_HOST in .env must be controlplane or audit (is '${PADDOCK_HOST}')" 2
+PADDOCK_ENV=production
+export PADDOCK_ENV PADDOCK_HOST
+
+# shellcheck source=../compose/scripts/lib.sh
+. "$BUNDLE_DIR/scripts/lib.sh"
+
+# tty_flag prints -T unless stdin and stdout are terminals, so that piped and redirected output stays plain.
+tty_flag() { [[ -t 0 && -t 1 ]] || printf -- '-T'; }
+
+require_host() {
+  [[ "$PADDOCK_HOST" == "$1" ]] || die "$2 runs on the $1 host (PADDOCK_HOST is $PADDOCK_HOST)" 2
+}
+
+case "$cmd" in
+  secrets)
+    exec "$BUNDLE_DIR/scripts/gen-prod-secrets.sh" "$PADDOCK_HOST"
+    ;;
+  pull)
+    compose --profile '*' pull "$@"
+    ;;
+  check)
+    online=
+    case "${1:-}" in
+      "") ;;
+      --online) online=1 ;;
+      *) die "usage: ./paddock check [--online]" 2 ;;
+    esac
+    # The check reads the production configuration exactly as shipped: no extra Compose files (the CI overlay).
+    files="$(PADDOCK_COMPOSE_EXTRA='' compose_files)"
+    names="$(xargs -n1 basename <<<"$files" | paste -sd, -)"
+    # The configuration names host paths (secret files, mounted files), hence the bundle directory at its own path;
+    # root, because .secrets/ is the operator's 0700 directory and the image's default user is 65532.
+    PADDOCK_COMPOSE_EXTRA='' compose --profile '*' config --format json |
+      docker run --rm -i --user 0:0 ${online:+--network "${PADDOCK_PROJECT}_audit-store"} \
+        -v "$BUNDLE_DIR:$BUNDLE_DIR:ro" -w "$BUNDLE_DIR" "$PADDOCK_IMAGE" \
+        prod-check --host "$PADDOCK_HOST" --compose-files "$names" ${online:+--online}
+    ;;
+  up)
+    profiles=(--profile paddock --profile observability)
+    case "${1:-}" in
+      "") ;;
+      --infra) profiles=() ;;
+      *) die "usage: ./paddock up [--infra]" 2 ;;
+    esac
+    if [[ "$PADDOCK_HOST" == controlplane && "$(uname -m)" != x86_64 ]]; then
+      die "the control plane needs an amd64 host: the Fleet image (fleetdm/fleet) is published for linux/amd64 only"
+    fi
+    compose "${profiles[@]}" up -d
+    "$BUNDLE_DIR/scripts/wait-healthy.sh" "${profiles[@]}"
+    ;;
+  down)
+    case "${1:-}" in
+      "") compose --profile paddock --profile observability down ;;
+      --volumes) compose --profile paddock --profile observability down -v ;;
+      *) die "usage: ./paddock down [--volumes]" 2 ;;
+    esac
+    ;;
+  ps)
+    compose --profile '*' ps "$@"
+    ;;
+  logs)
+    compose --profile '*' logs --no-color --tail 300 "$@"
+    ;;
+  compose)
+    compose "$@"
+    ;;
+  bao)
+    # shellcheck disable=SC2046
+    compose exec $(tty_flag) -e BAO_ADDR=https://127.0.0.1:8200 -e BAO_CACERT=/run/secrets/internal_ca_bundle \
+      ${BAO_TOKEN:+-e BAO_TOKEN} openbao bao "$@"
+    ;;
+  bootstrap)
+    case "${1:-}" in
+      openbao)
+        require_host controlplane "bootstrap openbao"
+        "$BUNDLE_DIR/scripts/openbao-configure.sh"
+        ;;
+      buckets)
+        require_host controlplane "bootstrap buckets"
+        "$BUNDLE_DIR/scripts/rustfs-bundles-bootstrap.sh"
+        ;;
+      audit-bucket)
+        require_host audit "bootstrap audit-bucket"
+        "$BUNDLE_DIR/scripts/rustfs-audit-bootstrap.sh"
+        ;;
+      fleet)
+        require_host controlplane "bootstrap fleet"
+        "$BUNDLE_DIR/scripts/fleet-bootstrap.sh"
+        ;;
+      *) die "usage: ./paddock bootstrap openbao|buckets|audit-bucket|fleet" 2 ;;
+    esac
+    ;;
+  agent-release)
+    [[ $# -eq 2 && -d "$2" ]] || die "usage: ./paddock agent-release <version> <dir>" 2
+    require_host controlplane "agent-release"
+    release_dir="$(cd "$2" && pwd)"
+    # shellcheck disable=SC2046
+    compose run --rm --no-deps $(tty_flag) -v "$release_dir:/release:ro" paddock-api \
+      admin agent-release --version "$1" --dir /release
+    ;;
+esac

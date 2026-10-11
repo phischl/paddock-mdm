@@ -1,0 +1,27 @@
+name: ghcr-prune
+
+on:
+  schedule:
+    - cron: "41 3 * * 0" # weekly: remove edge images older than 30 days
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Dry run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: deploy/bundle/ci/prune-edge.sh --dry-run --api-base /users/phischl paddock-server paddock-compiler paddock-pgbackrest
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: deploy/bundle/ci/prune-edge.sh --api-base /users/phischl paddock-server paddock-compiler paddock-pgbackrest

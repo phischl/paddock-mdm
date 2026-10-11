@@ -45,6 +45,8 @@ type handlers struct {
 	inventory   *app.Inventory
 	updates     *app.Updates
 	attention   *app.Attention
+	ipAllowlist *app.IPAllowlist
+	overview    *app.Overview
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).
@@ -62,8 +64,9 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 		return nil, err
 	}
 	out := h.toMe(me)
+	p, _ := principal.From(ctx)
+	out.ClientIp = p.IP
 	if h.stepUpTiming != nil {
-		p, _ := principal.From(ctx)
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
 			MaxAuthAgeSeconds: int(h.stepUpTiming.maxAuthAge.Seconds()),
@@ -77,17 +80,28 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 }
 
 func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObject) (adminapi.UpdateMeResponseObject, error) {
-	me, err := h.accounts.UpdateLocale(ctx, string(req.Body.Locale))
+	var settings app.AccountSettings
+	if req.Body.Locale != nil {
+		settings.Locale = (*string)(req.Body.Locale)
+	}
+	if req.Body.Theme != nil {
+		settings.Theme = (*string)(req.Body.Theme)
+	}
+	me, err := h.accounts.UpdateSettings(ctx, settings)
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.UpdateMe200JSONResponse(h.toMe(me)), nil
+	out := h.toMe(me)
+	// The portal replaces its session with this answer; without the address the IP allow list page would lose it.
+	p, _ := principal.From(ctx)
+	out.ClientIp = p.IP
+	return adminapi.UpdateMe200JSONResponse(out), nil
 }
 
 func (h *handlers) toMe(me app.Me) adminapi.Me {
 	out := adminapi.Me{
 		Id: me.ID, Username: me.Username, DisplayName: me.DisplayName, Role: adminapi.MeRole(me.Role),
-		Locale: adminapi.MeLocale(me.Locale), RevocationEnabled: h.revocations.Enabled(),
+		Locale: adminapi.MeLocale(me.Locale), Theme: adminapi.MeTheme(me.Theme), RevocationEnabled: h.revocations.Enabled(),
 	}
 	if me.Organization != nil {
 		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name}
@@ -178,7 +192,7 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 	}
 	res, err := h.audit.List(ctx, app.AuditQuery{
 		From: req.Params.From, To: req.Params.To, Codes: listing.Strings(req.Params.Code), Outcomes: outcomes,
-		ActorTypes: actorTypes, Page: params.ListPage(),
+		ActorTypes: actorTypes, TargetID: req.Params.TargetId, Page: params.ListPage(),
 	})
 	if err != nil {
 		return nil, err
@@ -187,6 +201,9 @@ func (h *handlers) ListAuditEvents(ctx context.Context, req adminapi.ListAuditEv
 	for i, e := range res.Items {
 		if items[i], err = toAuditEvent(e); err != nil {
 			return nil, err
+		}
+		if d, ok := res.Devices[e.EventID]; ok {
+			items[i].Device = &adminapi.AuditDeviceRef{Id: d.ID, Hostname: d.Hostname}
 		}
 	}
 	return adminapi.ListAuditEvents200JSONResponse(listing.NewPage(items, params, res.Count)), nil

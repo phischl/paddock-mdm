@@ -218,6 +218,8 @@ type Me struct {
 	Role         principal.Role
 	Organization *pgstore.Organization
 	Locale       string
+	// Theme is the portal theme preference: system, light or dark (plan M7c decision 1).
+	Theme string
 	// APIToken is the token of a request made with an API token (nil for sessions, plan M6c decision 10).
 	APIToken *MeAPIToken
 }
@@ -245,7 +247,7 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 			if err != nil {
 				return notFound(err)
 			}
-			me.Username, me.DisplayName, me.Locale = acc.Username, acc.DisplayName, acc.Locale
+			me.Username, me.DisplayName, me.Locale, me.Theme = acc.Username, acc.DisplayName, acc.Locale, acc.Theme
 			return nil
 		})
 		return me, unauthenticatedIfGone(err)
@@ -259,7 +261,7 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 		if err != nil {
 			return notFound(err)
 		}
-		me.Username, me.DisplayName, me.Locale, me.Organization = acc.Username, acc.DisplayName, acc.Locale, &org
+		me.Username, me.DisplayName, me.Locale, me.Theme, me.Organization = acc.Username, acc.DisplayName, acc.Locale, acc.Theme, &org
 		return nil
 	})
 	return me, unauthenticatedIfGone(err)
@@ -268,7 +270,7 @@ func (a *Accounts) GetMe(ctx context.Context) (Me, error) {
 // tokenMe answers GET /api/v1/me for a request made with an API token from the token, not from the account of the
 // administrator who created it.
 func (a *Accounts) tokenMe(ctx context.Context, p principal.Principal) (Me, error) {
-	me := Me{ID: p.APITokenID, Username: p.APITokenName, DisplayName: p.APITokenName, Role: p.Role, Locale: "en"}
+	me := Me{ID: p.APITokenID, Username: p.APITokenName, DisplayName: p.APITokenName, Role: p.Role, Locale: "en", Theme: ThemeSystem}
 	err := a.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		tok, err := q.GetApiToken(ctx, p.APITokenID)
 		if err != nil {
@@ -288,31 +290,65 @@ func (a *Accounts) tokenMe(ctx context.Context, p principal.Principal) (Me, erro
 // SupportedLocales are the catalogs of the portal (plan M6b decision 2: English and German).
 var SupportedLocales = []string{"en", "de"}
 
-// UpdateLocale stores the administrator's locale.
-func (a *Accounts) UpdateLocale(ctx context.Context, locale string) (Me, error) {
+// ThemeSystem is the default theme preference: the portal follows prefers-color-scheme.
+const ThemeSystem = "system"
+
+// SupportedThemes are the portal theme preferences (plan M7c decision 1).
+var SupportedThemes = []string{ThemeSystem, "light", "dark"}
+
+// AccountSettings is a patch of the account settings; a nil field is left unchanged.
+type AccountSettings struct {
+	Locale *string
+	Theme  *string
+}
+
+// ErrEmptySettings: a settings patch without any field.
+var ErrEmptySettings = problem.InvalidRequest.WithDetail("no setting to update")
+
+// ValidateAccountSettings checks a settings patch: at least one field, every present field a supported value.
+func ValidateAccountSettings(s AccountSettings) error {
+	if s.Locale == nil && s.Theme == nil {
+		return ErrEmptySettings
+	}
+	if s.Locale != nil && !contains(SupportedLocales, *s.Locale) {
+		return problem.InvalidRequest.WithDetail("unsupported locale")
+	}
+	if s.Theme != nil && !contains(SupportedThemes, *s.Theme) {
+		return problem.InvalidRequest.WithDetail("unsupported theme")
+	}
+	return nil
+}
+
+func contains(values []string, v string) bool {
+	for _, x := range values {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateSettings stores the administrator's locale and theme preference; not a privileged action (no audit).
+func (a *Accounts) UpdateSettings(ctx context.Context, s AccountSettings) (Me, error) {
 	p, ok := principal.From(ctx)
 	if !ok {
 		return Me{}, problem.Unauthenticated
 	}
-	supported := false
-	for _, l := range SupportedLocales {
-		supported = supported || l == locale
-	}
 	if p.APITokenID != uuid.Nil {
 		return Me{}, problem.Forbidden.WithDetail("an API token has no account settings")
 	}
-	if !supported {
-		return Me{}, problem.InvalidRequest.WithDetail("unsupported locale")
+	if err := ValidateAccountSettings(s); err != nil {
+		return Me{}, err
 	}
 	var err error
 	if p.Kind == principal.KindPlatformAdmin {
 		err = a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-			_, err := q.UpdatePlatformAdminLocale(ctx, pgstore.UpdatePlatformAdminLocaleParams{ID: p.ID, Locale: locale})
+			_, err := q.UpdatePlatformAdminSettings(ctx, pgstore.UpdatePlatformAdminSettingsParams{ID: p.ID, Locale: s.Locale, Theme: s.Theme})
 			return notFound(err)
 		})
 	} else {
 		err = a.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-			_, err := q.UpdateAdminAccountLocale(ctx, pgstore.UpdateAdminAccountLocaleParams{ID: p.ID, Locale: locale})
+			_, err := q.UpdateAdminAccountSettings(ctx, pgstore.UpdateAdminAccountSettingsParams{ID: p.ID, Locale: s.Locale, Theme: s.Theme})
 			return notFound(err)
 		})
 	}

@@ -35,9 +35,11 @@ var lists = map[string]struct {
 	"listManagedFiles":       {managedFileList, "postgres/queries/managed_config.sql", "ListManagedFiles", "id"},
 	"listManagedUnits":       {managedUnitList, "postgres/queries/managed_config.sql", "ListManagedUnits", "id"},
 	"listAttention":          {attentionList, "postgres/queries/attention.sql", "ListAttention", "id"},
+	"listAttentionDevices":   {attentionDeviceList, "postgres/queries/attention.sql", "ListAttentionDevices", "hostname, device_id"},
 	"listPackageHolds":       {packageHoldList, "postgres/queries/updates.sql", "ListPackageHolds", "id"},
 
 	"listAgentReleases": {agentReleaseList, "postgres/queries/agent_release.sql", "ListAgentReleases", "version"},
+	"listIpAllowlist":   {ipAllowlistList, "postgres/queries/ip_allowlist.sql", "ListIPAllowlistEntries", "id"},
 
 	"listDeviceSoftware":        {deviceSoftwareList, "postgres/queries/inventory.sql", "ListDeviceSoftware", "name, version, source"},
 	"listDeviceVulnerabilities": {findingList, "postgres/queries/inventory.sql", "ListDeviceVulnerabilities", "cve, software_name, software_version"},
@@ -54,6 +56,12 @@ var lists = map[string]struct {
 	"listProfileAssignments": {profileAssignmentList, "postgres/queries/privilege.sql", "ListProfileAssignments", "id"},
 	// Authentik groups, listed from the identity provider and sorted in memory: no query.
 	"listUpstreamGroups": {upstreamGroupList, "", "", ""},
+}
+
+// sortColumns names the column a sort value orders by where it is not the column of that name: releases sort by
+// their SemVer key (PDK-025).
+var sortColumns = map[string]map[string]string{
+	"listAgentReleases": {"version": "version_key"},
 }
 
 // TestListSpecsMatchContract keeps the handlers' list definitions equal to x-paddock-list and the sort enum of the
@@ -144,9 +152,13 @@ func TestListQueriesSortBranches(t *testing.T) {
 			continue
 		}
 		for _, f := range l.spec.Sort {
+			column := f
+			if c, ok := sortColumns[id][f]; ok {
+				column = c
+			}
 			for _, branch := range []string{
-				"CASE WHEN @sort::text = '" + f + "' THEN " + f + " END ASC",
-				"CASE WHEN @sort::text = '-" + f + "' THEN " + f + " END DESC",
+				"CASE WHEN @sort::text = '" + f + "' THEN " + column + " END ASC",
+				"CASE WHEN @sort::text = '-" + f + "' THEN " + column + " END DESC",
 			} {
 				if !strings.Contains(query, branch) {
 					t.Errorf("%s: %s lacks %q", id, l.queryName, branch)

@@ -10,7 +10,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/s3test"
 )
 
-// TestDefaultRetention reads the Object Lock configuration `make prod-check ONLINE=1` checks (plan M6a decision 2).
+// TestDefaultRetention reads the Object Lock configuration `./paddock check --online` checks (plan M6a decision 2).
 func TestDefaultRetention(t *testing.T) {
 	ctx := context.Background()
 	locked := s3test.Start(t, "paddock-audit")

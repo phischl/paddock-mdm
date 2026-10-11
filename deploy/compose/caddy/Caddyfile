@@ -4,21 +4,34 @@
 	https_port {$PADDOCK_HTTPS_PORT}
 	auto_https disable_redirects
 	admin 127.0.0.1:2019
+	# Trusted proxies and the client address header, rendered by /paddock/entrypoint.sh (plan M7a decision 2).
+	{$CADDY_SERVERS_BLOCK}
 }
+
+import /etc/caddy/guards.caddy
 
 admin.{$PADDOCK_DOMAIN} {
 	tls internal
-	reverse_proxy paddock-api:8080
+	import admin_site
+}
+
+# The untrusted listener of the acceptance gates (plan M7a decision 9): the servers block above is bound to the main
+# listener only, so here every client address header is ignored and the peer is the client.
+https://admin.{$PADDOCK_DOMAIN}:{$PADDOCK_HTTPS_UNTRUSTED_PORT} {
+	tls internal
+	import admin_site
 }
 
 auth.{$PADDOCK_DOMAIN} {
 	tls internal
-	reverse_proxy authentik-server:9000
+	import authentik_site
 }
 
 device.{$PADDOCK_DOMAIN} {
 	tls internal
-	reverse_proxy paddock-gateway:8081
+	reverse_proxy paddock-gateway:8081 {
+		header_up X-Paddock-Client-IP {client_ip}
+	}
 }
 
 # Bundles are served only through presigned GET URLs (architecture §7.3); everything else is refused at the edge.

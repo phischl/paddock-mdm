@@ -1,5 +1,5 @@
 import {
-  api, listPage, problemCode, type Device, type DeviceDetail, type DeviceReport, type DeviceSort, type DeviceState, type DiskState,
+  api, listPage, problemCode, type Device, type DeviceContact, type DeviceDetail, type DeviceReport, type DeviceSort, type DeviceState, type DiskState,
   type EffectiveConfig,
 } from '../api/client'
 import { maxListDepth, type ListFilter, type ListParams, type Page } from './listQuery'
@@ -10,6 +10,19 @@ export const deviceStates: DeviceState[] = ['pending', 'active', 'quarantined', 
 export const stateFilter: ListFilter = {
   kind: 'enum', key: 'state', label: 'devices.state',
   options: deviceStates.map((value) => ({ value, title: 'devices.states.' + value })),
+}
+
+export const deviceContacts: DeviceContact[] = ['ok', 'stale_warning', 'stale_critical', 'presumed_lost', 'never']
+
+/** The contact filter of the device list (plan M7c §12 open point 1): the overview's KPI cells link to it. */
+export const contactFilter: ListFilter = {
+  kind: 'enum', key: 'contact', label: 'devices.contactFilter',
+  options: deviceContacts.map((value) => ({ value, title: 'devices.contact.' + value })),
+}
+
+/** The security update filter (plan M7c amendment 2026-10-10): the overview's "Security updates overdue" links to it. */
+export const securityFilter: ListFilter = {
+  kind: 'enum', key: 'security_updates', label: 'devices.securityFilter', options: [{ value: 'overdue', title: 'devices.securityUpdates.overdue' }],
 }
 
 /** The device group filter; options are the organization's groups. */
@@ -25,6 +38,8 @@ export async function listDevices(p: ListParams): Promise<Page<Device>> {
         query: {
           page: p.page, page_size: p.page_size, sort: p.sort as DeviceSort, q: p.q, state: p.state as DeviceState[],
           device_group_id: ((p.device_group_id as string[] | undefined) ?? [])[0], disk_state: p.disk_state as DiskState[],
+          contact: p.contact as DeviceContact[],
+          security_updates: ((p.security_updates as string[] | undefined) ?? [])[0] as 'overdue' | undefined,
         },
       },
     }),

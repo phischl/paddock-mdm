@@ -70,6 +70,7 @@ WHERE occurred_at >= @from_time AND occurred_at < @to_time
   AND (sqlc.narg(codes)::text[] IS NULL OR code = ANY(sqlc.narg(codes)::text[]))
   AND (sqlc.narg(outcomes)::text[] IS NULL OR outcome = ANY(sqlc.narg(outcomes)::text[]))
   AND (sqlc.narg(actor_types)::text[] IS NULL OR actor->>'type' = ANY(sqlc.narg(actor_types)::text[]))
+  AND (sqlc.narg(target_id)::text IS NULL OR target->>'id' = sqlc.narg(target_id)::text)
   AND (sqlc.narg(q_pattern)::text IS NULL
        OR code ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
        OR actor->>'display' ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
@@ -91,6 +92,7 @@ SELECT count(*) FROM (
     AND (sqlc.narg(codes)::text[] IS NULL OR code = ANY(sqlc.narg(codes)::text[]))
     AND (sqlc.narg(outcomes)::text[] IS NULL OR outcome = ANY(sqlc.narg(outcomes)::text[]))
     AND (sqlc.narg(actor_types)::text[] IS NULL OR actor->>'type' = ANY(sqlc.narg(actor_types)::text[]))
+    AND (sqlc.narg(target_id)::text IS NULL OR target->>'id' = sqlc.narg(target_id)::text)
     AND (sqlc.narg(q_pattern)::text IS NULL
          OR code ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
          OR actor->>'display' ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'

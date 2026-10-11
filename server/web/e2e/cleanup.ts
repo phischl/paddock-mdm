@@ -4,6 +4,9 @@ const csrf = { 'X-Paddock-CSRF': '1' }
 const tokens = '/api/v1/enrollment-tokens'
 // API tokens are revoked, never deleted; a test may have revoked one itself (409 invalid_state).
 const apiTokens = '/api/v1/api-tokens'
+// Removing an IP allow list entry may need a confirmation (plan M7a decision 12): disable for the last entry,
+// lockout for the test's own address.
+const ipAllowlist = '/api/platform/v1/ip-allowlist'
 
 /**
  * Test data hygiene (plan M2.2 decision 7): what a test creates is removed through the admin API when the test ends,
@@ -36,6 +39,12 @@ async function removeFound(request: APIRequestContext, collection: string, q: st
     if (collection === apiTokens) {
       const revoked = await request.post(`${collection}/${id}/revoke`, { headers: csrf })
       expect([200, 409], `cleanup: revoke ${collection}/${id}`).toContain(revoked.status())
+      continue
+    }
+    if (collection === ipAllowlist) {
+      let removed = await request.delete(`${collection}/${id}?confirm=disable`, { headers: csrf })
+      if (removed.status() === 409) removed = await request.delete(`${collection}/${id}?confirm=lockout`, { headers: csrf })
+      expect(removed.status(), `cleanup: remove ${collection}/${id}`).toBe(204)
       continue
     }
     const removed = collection === tokens

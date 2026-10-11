@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api, type Me } from '../api/client'
 import { applyLocale, type PortalLocale } from '../i18n'
+import { applyTheme, isThemePreference, type ThemePreference } from '../lib/theme'
 
 export const useSessionStore = defineStore('session', () => {
   const me = ref<Me | null>(null)
@@ -19,7 +20,10 @@ export const useSessionStore = defineStore('session', () => {
     if (!loading.value) {
       loading.value = api.GET('/api/v1/me').then(({ data }) => {
         me.value = data ?? null
-        if (me.value) applyLocale(me.value.locale)
+        if (me.value) {
+          applyLocale(me.value.locale)
+          applyTheme(me.value.theme)
+        }
         return me.value
       })
     }
@@ -38,11 +42,24 @@ export const useSessionStore = defineStore('session', () => {
     return true
   }
 
+  /** Stores the theme preference on the account and applies it; false if it failed (plan M7c decision 6). */
+  async function setTheme(theme: ThemePreference): Promise<boolean> {
+    if (!isThemePreference(theme)) return false
+    const { data } = await api.PATCH('/api/v1/me', {
+      params: { header: { 'X-Paddock-CSRF': '1' } },
+      body: { theme },
+    })
+    if (!data) return false
+    me.value = { ...data, step_up: me.value?.step_up }
+    applyTheme(data.theme)
+    return true
+  }
+
   async function logout(): Promise<void> {
     const { data } = await api.POST('/api/auth/logout', { params: { header: { 'X-Paddock-CSRF': '1' } } })
     me.value = null
     window.location.assign(data?.end_session_url ?? '/')
   }
 
-  return { me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, load, setLocale, logout }
+  return { me, role, isPlatform, canWrite, canDelete, canReadAudit, canReadGroups, load, setLocale, setTheme, logout }
 })

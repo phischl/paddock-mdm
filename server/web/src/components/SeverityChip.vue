@@ -2,18 +2,24 @@
 import { useI18n } from 'vue-i18n'
 import type { Severity } from '../api/client'
 
-/** The severity of a finding as a chip: Ubuntu's priority (ADR 0020); unknown is a finding Ubuntu has not rated. */
+/**
+ * The severity of a finding as a chip on the severity scale (ADR 0020, plan M7c decision 7): Ubuntu's priority;
+ * unknown is a finding Ubuntu has not rated. A dot and a label, never colour alone.
+ */
 defineProps<{ severity: Severity }>()
 const { t } = useI18n()
-const colors: Record<Severity, string> = { critical: 'error', high: 'warning', medium: 'info', low: 'success', unknown: 'default' }
 </script>
 
 <template>
-  <v-chip
-    size="small"
-    :color="colors[severity]"
-    variant="tonal"
+  <span
+    class="pd-chip"
+    :class="'pd-chip--sev-' + severity"
+    :data-severity="severity"
   >
+    <span
+      class="pd-chip-dot"
+      aria-hidden="true"
+    />
     {{ t('inventory.severities.' + severity) }}
-  </v-chip>
+  </span>
 </template>

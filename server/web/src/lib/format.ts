@@ -10,19 +10,24 @@ type Exists = (key: string) => boolean
 
 /**
  * Renders an audit event from the message key audit.<code> with its params. Events themselves are never
- * translated or rewritten; unknown codes or incomplete params fall back to the raw code.
+ * translated or rewritten; unknown codes or incomplete params fall back to the raw code. The device an event
+ * concerns names it by its current hostname (resolved by the server at read time, plan M7c decision 32); the
+ * target id is the last resort.
  */
 export function auditText(t: Translate, te: Exists, ev: AuditEvent): string {
   const key = 'audit.' + ev.code
   if (!te(key)) return ev.code
+  const hostname = ev.target?.display ? undefined : (ev.device?.hostname ?? undefined)
+  const fallback = ev.target?.display || ev.target?.id || ''
+  const deviceTarget = ev.target?.type === 'device' && ev.target.id === ev.device?.id
   const values: Record<string, unknown> = {
     ...ev.params,
     actor: ev.actor.display ?? ev.actor.type,
-    target: ev.target?.display ?? ev.target?.id ?? '',
+    target: (deviceTarget ? hostname : undefined) ?? fallback,
   }
   if (values.name === undefined) values.name = ev.target?.display ?? ''
   if (values.slug === undefined) values.slug = ev.target?.display ?? ''
-  if (values.hostname === undefined) values.hostname = ev.target?.display ?? ev.target?.id ?? ''
+  if (values.hostname === undefined) values.hostname = hostname ?? fallback
   try {
     return t(key, values)
   } catch {

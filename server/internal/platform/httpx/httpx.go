@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -156,10 +158,82 @@ func AccessLog(next http.Handler) http.Handler {
 	})
 }
 
-// ClientIP is the client address: the first X-Forwarded-For entry set by the reverse proxy, else RemoteAddr.
+// ClientIPHeader is the canonical client address header Caddy sets (plan M7a decision 3).
+const ClientIPHeader = "X-Paddock-Client-IP"
+
+type clientIPKey struct{}
+
+// WithClientIP resolves the client address once per request and stores it in the context (plan M7a decision 5).
+// Only a peer inside trusted may name the client, and only through ClientIPHeader; every other header is ignored.
+func WithClientIP(trusted []netip.Prefix) func(http.Handler) http.Handler {
+	var lastWarn atomic.Int64
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			addr, ok := resolveClient(r, trusted, &lastWarn)
+			if ok {
+				r = r.WithContext(context.WithValue(r.Context(), clientIPKey{}, addr))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func resolveClient(r *http.Request, trusted []netip.Prefix, lastWarn *atomic.Int64) (netip.Addr, bool) {
+	peer, ok := peerAddr(r)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	if !containsAny(trusted, peer) {
+		return peer, true
+	}
+	v := r.Header.Get(ClientIPHeader)
+	if a, ok := parseAddr(v); ok {
+		return a, true
+	}
+	now := time.Now().Unix()
+	if last := lastWarn.Load(); now-last >= 60 && lastWarn.CompareAndSwap(last, now) {
+		slog.WarnContext(r.Context(), "client ip header unparsable", "header", ClientIPHeader, "peer", peer.String())
+	}
+	return peer, true
+}
+
+func containsAny(prefixes []netip.Prefix, a netip.Addr) bool {
+	for _, p := range prefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseAddr(s string) (netip.Addr, bool) {
+	a, err := netip.ParseAddr(strings.TrimSpace(s))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return a.WithZone("").Unmap(), true
+}
+
+func peerAddr(r *http.Request) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return parseAddr(host)
+}
+
+// ClientAddr is ClientIP as netip.Addr; ok is false when none could be parsed.
+func ClientAddr(r *http.Request) (addr netip.Addr, ok bool) {
+	if a, ok := r.Context().Value(clientIPKey{}).(netip.Addr); ok {
+		return a, true
+	}
+	return peerAddr(r)
+}
+
+// ClientIP returns the address resolved by WithClientIP as a string; without the middleware, the host of RemoteAddr.
 func ClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		return strings.TrimSpace(strings.Split(xff, ",")[0])
+	if a, ok := ClientAddr(r); ok {
+		return a.String()
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

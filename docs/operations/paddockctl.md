@@ -30,6 +30,11 @@ token_file: /home/ops/.config/paddockctl/token
 
 Flags come after the command: `paddockctl get config -o json --url https://admin.example.org`.
 
+When the platform administrators keep entries in the IP allow list (`docs/operations/ip-allowlist.md`), `paddockctl`
+works only from the listed ranges — from inside the office network or through its VPN — and a CI pipeline needs a
+stable egress address on the list (self-hosted runner, NAT gateway or VPN); hosted runners without a fixed address
+cannot be allow-listed. A refused request is `403 ip_not_allowed`.
+
 ## Commands
 
 | Command | Does |

@@ -1,7 +1,7 @@
 import {
-  api, listPage, problemCode, type DeviceSoftwareSort, type FindingSort, type InstalledSoftware, type Severity,
+  api, listPage, type DeviceSoftwareSort, type FindingSort, type InstalledSoftware, type Severity,
   type SoftwareSort, type SoftwareSummary, type Vulnerability, type VulnerabilityFinding, type VulnerabilitySort,
-  type VulnerabilitySummary, type VulnerableDevice, type VulnerableDeviceSort,
+  type VulnerableDevice, type VulnerableDeviceSort,
 } from '../api/client'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
@@ -100,12 +100,6 @@ export function listVulnerabilityDevices(cve: string): (p: ListParams) => Promis
       ),
       (d) => [d.device_id, d.software_name, d.software_version],
     )
-}
-
-/** The numbers of the start page tile; the problem code on failure. */
-export async function getVulnerabilitySummary(): Promise<VulnerabilitySummary | string> {
-  const { data, error } = await api.GET('/api/v1/vulnerabilities/summary')
-  return data ?? problemCode(error)
 }
 
 /** A CVSS score with one decimal, or a dash when unknown. */

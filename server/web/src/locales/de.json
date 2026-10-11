@@ -16,7 +16,30 @@
     "languageFailed": "Die Sprache konnte nicht gespeichert werden.",
     "userMenu": "Benutzermenü von {name}",
     "showNavigation": "Navigation einblenden",
-    "hideNavigation": "Navigation ausblenden"
+    "hideNavigation": "Navigation ausblenden",
+    "commandField": "Suchen oder Befehl ausführen",
+    "commandPlaceholder": "Zu Gerät, Seite, CVE oder Aktion springen …",
+    "theme": "Erscheinungsbild",
+    "themeMenu": "Erscheinungsbild wählen (aktuell: {theme})",
+    "themes": {
+      "system": "System",
+      "light": "Hell",
+      "dark": "Dunkel"
+    },
+    "themeToggle": {
+      "toDark": "Zum dunklen Erscheinungsbild wechseln",
+      "toLight": "Zum hellen Erscheinungsbild wechseln"
+    },
+    "themeFailed": "Das Erscheinungsbild konnte nicht gespeichert werden.",
+    "density": "Dichte",
+    "densityMenu": "Dichte wählen (aktuell: {density})",
+    "densities": {
+      "compact": "Kompakt",
+      "comfortable": "Komfortabel"
+    },
+    "shortcuts": "Tastenkürzel",
+    "collapseNavigation": "Navigation einklappen",
+    "expandNavigation": "Navigation ausklappen"
   },
   "nav": {
     "deviceGroups": "Gerätegruppen",
@@ -27,6 +50,7 @@
     "managedFiles": "Verwaltete Dateien",
     "managedUnits": "Verwaltete Units",
     "agentReleases": "Agent-Releases",
+    "ipAllowlist": "IP-Freigabeliste",
     "users": "Benutzer",
     "userGroups": "Gruppen",
     "permissionProfiles": "Berechtigungsprofile",
@@ -50,7 +74,10 @@
       "inventory": "Inventar",
       "organization": "Organisation",
       "platform": "Plattform"
-    }
+    },
+    "overview": "Übersicht",
+    "attentionPill": "{count, plural, one {# braucht Aufmerksamkeit} other {# brauchen Aufmerksamkeit}}",
+    "shortcut": "Tastenkürzel: {keys}"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -78,7 +105,12 @@
     "rangeCapped": "{from, number}–{to, number} von über {total, number} Ergebnissen",
     "cappedHint": "Mehr als {total, number} Ergebnisse passen. Schränken Sie Suche oder Filter ein, um alle zu sehen.",
     "noResults": "Keine Ergebnisse passen zu Suche oder Filtern.",
-    "loading": "Ergebnisse werden geladen"
+    "loading": "Ergebnisse werden geladen",
+    "filters": "Filter",
+    "filtersCount": "Filter ({count})",
+    "clearFilters": "Filter zurücksetzen",
+    "toggleDetails": "Details der Zeile {n} anzeigen",
+    "applyFilters": "Anwenden"
   },
   "confirm": {
     "typeToConfirm": "Geben Sie zur Bestätigung {text} ein"
@@ -94,7 +126,11 @@
     "editLabel": "{name} bearbeiten",
     "deleteLabel": "{name} löschen",
     "back": "Zurück zu den Gerätegruppen",
-    "members": "Geräte in dieser Gruppe"
+    "members": "Geräte in dieser Gruppe",
+    "empty": {
+      "title": "Noch keine Gerätegruppen",
+      "description": "Gruppen begrenzen Konfiguration, zurückgehaltene Pakete und Anmelderegeln auf eine Menge von Geräten."
+    }
   },
   "validation": {
     "nameRequired": "Geben Sie einen Namen ein.",
@@ -136,7 +172,11 @@
     "revocation_rejected": "Der Widerruf wurde abgelehnt.",
     "invalid_schedule": "Der Zeitplan ist ungültig: Verwenden Sie Wochentage (Mon … Sun, durch Kommas getrennt) und HH:MM, z. B. „Sat 04:00“.",
     "package_on_hold": "Ein Paket wird zurückgehalten: Das Zurückhalten hat Vorrang vor einer Sofortinstallation.",
-    "too_many_devices": "Die Gruppe hat mehr als 500 aktive Geräte: Installieren Sie auf kleineren Gruppen."
+    "too_many_devices": "Die Gruppe hat mehr als 500 aktive Geräte: Installieren Sie auf kleineren Gruppen.",
+    "ip_not_allowed": "Ihre Adresse steht nicht auf der IP-Freigabeliste.",
+    "ip_allowlist_unavailable": "Das Portal startet und kann die IP-Freigabeliste noch nicht prüfen. Versuchen Sie es gleich noch einmal.",
+    "lockout_confirmation_required": "Diese Änderung würde Ihre eigene Adresse aus der Freigabeliste entfernen.",
+    "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten."
   },
   "audit": {
     "title": "Audit-Protokoll",
@@ -258,7 +298,10 @@
       "osv_stale": "Die Schwachstellendaten von Ubuntu wurden seit 3 Tagen nicht aktualisiert",
       "bundle_seq_bumped": "{actor} hat die Bundle-Sequenz von {devices} Geräten um {by} erhöht (Wiederherstellung)",
       "cache_rebuilt": "{actor} hat den Geräte-Cache von {organizations} Organisationen neu aufgebaut (Wiederherstellung)",
-      "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)"
+      "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)",
+      "ip_allowlist_changed": "{action, select, added {{actor} hat {cidr} ({label}) zur IP-Freigabeliste hinzugefügt} updated {{actor} hat den Eintrag {previous_cidr} der IP-Freigabeliste zu {cidr} ({label}) geändert} other {{actor} hat {cidr} ({label}) aus der IP-Freigabeliste entfernt}}",
+      "ip_allowlist_denied": "{aggregated, select, true {{count, number} Anfragen von {ip} wurden durch die IP-Freigabeliste abgewiesen} other {Eine Anfrage von {ip} wurde durch die IP-Freigabeliste abgewiesen}}",
+      "ip_allowlist_disabled": "{method, select, env {Die IP-Freigabeliste wird auf der API umgangen (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} hat die IP-Freigabeliste abgeschaltet: {entries_removed, number} Einträge entfernt}}"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -319,6 +362,20 @@
       "rotated": "Das Gerät {target} hat das Passwort {generation, number} des lokalen Administrators gesetzt",
       "rotation_failed": "Das Gerät {target} konnte das Passwort seines lokalen Administrators nicht rotieren ({reason})",
       "login": "Der lokale Administrator hat sich an {target} angemeldet ({service})"
+    },
+    "deviceColumn": "Gerät",
+    "codeColumn": "Code",
+    "empty": {
+      "title": "Keine Ereignisse in diesem Zeitraum",
+      "description": "Erweitern Sie den Zeitraum oder setzen Sie die Filter zurück."
+    },
+    "details": {
+      "event_id": "Ereignis-ID",
+      "correlation_id": "Korrelations-ID",
+      "source": "Quelle",
+      "actor_ip": "IP-Adresse",
+      "step_up": "Identitätsbestätigung",
+      "error_code": "Fehlercode"
     }
   },
   "organizations": {
@@ -332,6 +389,10 @@
       "active": "Aktiv",
       "provisioning_failed": "Einrichtung fehlgeschlagen",
       "suspended": "Ausgesetzt"
+    },
+    "empty": {
+      "title": "Noch keine Organisationen",
+      "description": "Legen Sie die erste Organisation an, um ihre Administratoren aufzunehmen."
     }
   },
   "agentReleases": {
@@ -389,6 +450,10 @@
         "title": "Rollout fortsetzen?",
         "confirm": "Agent {version} wird den Geräten der aktuellen Welle erneut angeboten."
       }
+    },
+    "empty": {
+      "title": "Noch keine Agent-Releases",
+      "description": "Laden Sie ein signiertes Release hoch, um einen gestaffelten Rollout zu starten."
     }
   },
   "loginDenied": {
@@ -637,7 +702,86 @@
         "shared": "{device}: teilt seine LUKS-UUID mit einem anderen Volume"
       }
     },
-    "presumedLost": "Vermutlich verloren seit {at}"
+    "presumedLost": "Vermutlich verloren seit {at}",
+    "contact": {
+      "ok": "Online",
+      "stale_warning": "Ohne Kontakt",
+      "stale_critical": "Ohne Kontakt (kritisch)",
+      "presumed_lost": "Vermutlich verloren",
+      "never": "Nie verbunden"
+    },
+    "danger": {
+      "title": "Gefahrenbereich — Widerruf",
+      "caption": "Separat signierter Pfad. Jede Aktion öffnet einen Bestätigungsdialog und wird im Audit-Protokoll festgehalten.",
+      "lock": {
+        "title": "Sperren",
+        "explanation": "Sperren löscht jeden Keyslot des Root-Volumes und jedes weiteren verschlüsselten Volumes, dessen Header Paddock hinterlegt hat, und startet das Gerät neu; jedes lässt sich aus dem hinterlegten Header wiederherstellen (das Root-Volume mit dem Wiederherstellungsschlüssel, die anderen mit ihren eigenen Passphrasen). Verschlüsselte Volumes ohne hinterlegten Header löscht ein Sperren nicht.",
+        "label": "Gerät sperren …"
+      },
+      "destroy": {
+        "title": "Zerstören",
+        "explanation": "Zerstören löscht jedes verschlüsselte Volume und die Hinterlegung, die Daten sind nicht wiederherstellbar. Erfordert die Eingabe des Hostnamens; ein zweiter Organisationsadministrator muss zustimmen.",
+        "label": "Zerstören anfordern …"
+      },
+      "retire": {
+        "title": "Außer Betrieb nehmen",
+        "explanation": "Außerbetriebnahme widerruft die Identität des Geräts dauerhaft, es erhält keine Konfiguration mehr. Das lässt sich nicht rückgängig machen.",
+        "label": "Außer Betrieb nehmen …"
+      }
+    },
+    "contactFilter": "Kontakt",
+    "pane": "Geräte filtern",
+    "breadcrumb": "Pfadnavigation",
+    "header": {
+      "install": "Updates installieren…",
+      "rotate": "Admin-Passwort rotieren…",
+      "os": "Ubuntu",
+      "agent": "Agent",
+      "lastContact": "letzter Kontakt",
+      "unknown": "unbekannt"
+    },
+    "tabs": {
+      "overview": "Übersicht",
+      "access": "Anmeldung & sudo",
+      "configuration": "Konfiguration",
+      "commands": "Befehle",
+      "audit": "Audit"
+    },
+    "health": {
+      "title": "Zustand und Konformität",
+      "contact": "Kontakt",
+      "encryption": "Festplattenverschlüsselung",
+      "agent": "Agent-Version",
+      "security": "Sicherheitsupdates",
+      "reboot": "Neustart",
+      "login": "Anmeldekonfiguration",
+      "sudo": "sudo-Konfiguration",
+      "notReported": "Nicht gemeldet",
+      "securityOk": "Letzter Lauf erfolgreich",
+      "securityFailed": "Letzter Lauf fehlgeschlagen",
+      "configApplied": "Angewendet",
+      "configFailed": "Fehlgeschlagen",
+      "agentCurrent": "Aktuell",
+      "agentOutdated": "Veraltet",
+      "rebootRequired": "Neustart erforderlich",
+      "rebootNone": "Nicht erforderlich"
+    },
+    "copyId": "Geräte-ID kopieren",
+    "copied": "Kopiert.",
+    "noReportYet": "Keine Meldung seit der Registrierung – der Agent hat sich nicht verbunden",
+    "findings": {
+      "title": "Software und Schwachstellen",
+      "all": "{count, plural, one {Der Fund} other {Alle # Funde}}"
+    },
+    "empty": {
+      "title": "Noch keine Geräte",
+      "description": "Geräte erscheinen hier, nachdem sie sich mit einem Registrierungstoken registriert haben.",
+      "action": "Registrierungstoken erstellen"
+    },
+    "securityFilter": "Sicherheitsupdates",
+    "securityUpdates": {
+      "overdue": "Überfällig (kein erfolgreicher Lauf in 48 h)"
+    }
   },
   "tokens": {
     "title": "Registrierungstoken",
@@ -667,7 +811,11 @@
     "config": "Registrierungskonfiguration",
     "copy": "Kopieren",
     "copied": "In die Zwischenablage kopiert.",
-    "done": "Fertig"
+    "done": "Fertig",
+    "empty": {
+      "title": "Noch keine Registrierungstokens",
+      "description": "Ein Token erlaubt einem Gerät die Registrierung; seine Konfiguration wird beim Erstellen einmal angezeigt."
+    }
   },
   "apiTokens": {
     "title": "API-Tokens",
@@ -701,7 +849,50 @@
     "revoke": "Widerrufen",
     "revokeTitle": "API-Token widerrufen",
     "revokeConfirm": "Das API-Token {name} widerrufen? Anfragen damit werden ab sofort abgelehnt.",
-    "revokeLabel": "{name} widerrufen"
+    "revokeLabel": "{name} widerrufen",
+    "empty": {
+      "title": "Noch keine API-Tokens",
+      "description": "API-Tokens erlauben CI und paddockctl die Nutzung der Admin-API mit einer Rolle und einem Ablaufdatum."
+    }
+  },
+  "ipAllowlist": {
+    "title": "IP-Freigabeliste",
+    "empty": {
+      "title": "Keine Einträge in der Freigabeliste",
+      "description": "Die Freigabeliste ist aus. Fügen Sie zuerst Ihre eigene Adresse hinzu, dann die Bereiche, aus denen Ihre Administratoren arbeiten."
+    },
+    "summary": "Solange diese Liste Einträge hat, können nur die aufgeführten Adressbereiche das Portal und die Admin-API öffnen — mit Sitzung oder API-Token. Anmeldungen an Geräten und die Freigabe am Telefon sind nicht betroffen. Jede Änderung braucht eine Step-up-Anmeldung und steht im Audit-Log.",
+    "yourAddress": "Ihre aktuelle Adresse: {ip}",
+    "statusOff": "Die Freigabeliste ist aus: keine Einträge. Wer sich anmelden kann, kann das Portal nutzen.",
+    "statusCovered": "Aktiv mit {count} Einträgen; Ihre Adresse ist durch {cidrs} abgedeckt.",
+    "statusNotCovered": "Aktiv mit {count} Einträgen; Ihre Adresse ist nicht abgedeckt. Sie werden ausgesperrt, sobald Ihre Sitzung endet.",
+    "add": "Eintrag hinzufügen",
+    "addTitle": "Neuer Eintrag der Freigabeliste",
+    "editTitle": "Eintrag der Freigabeliste bearbeiten",
+    "cidr": "Bereich (CIDR)",
+    "cidrHint": "IPv4- oder IPv6-Bereich, z. B. 203.0.113.0/24 oder 2001:db8::/32; eine einzelne Adresse ist /32 oder /128.",
+    "label": "Bezeichnung",
+    "labelHint": "Wofür der Bereich steht, z. B. das Büro oder das VPN; höchstens 64 Zeichen.",
+    "useMyAddress": "Meine Adresse verwenden ({ip})",
+    "createdBy": "Hinzugefügt von",
+    "coversYou": "deckt Sie ab",
+    "saved": "Die Freigabeliste wurde gespeichert.",
+    "edit": "Bearbeiten",
+    "editLabel": "{cidr} bearbeiten",
+    "remove": "Entfernen",
+    "removeLabel": "{cidr} entfernen",
+    "removeTitle": "Eintrag der Freigabeliste entfernen",
+    "removeConfirm": "{cidr} ({label}) aus der Freigabeliste entfernen?",
+    "confirmChange": "Änderung bestätigen",
+    "confirmLockoutTitle": "Das sperrt Sie aus",
+    "confirmLockout": "Diese Änderung entfernt Ihre eigene Adresse {ip} aus der Liste. Sie verlieren den Zugang, sobald Ihre Sitzung endet.",
+    "confirmDisableTitle": "Das schaltet die Freigabeliste ab",
+    "confirmDisable": "Das Entfernen des letzten Eintrags schaltet die Freigabeliste für alle ab.",
+    "cidrInvalid": "Geben Sie einen Bereich als a.b.c.d/n oder als IPv6-Adresse gefolgt von /n an.",
+    "cidrZero": "Ein /0-Bereich ist nicht erlaubt: Er würde jede Adresse zulassen.",
+    "cidrHostBits": "Die Host-Bits müssen null sein.",
+    "cidrMapped": "IPv4-gemappte IPv6-Bereiche sind nicht erlaubt; verwenden Sie die IPv4-Form.",
+    "labelInvalid": "Die Bezeichnung braucht 1 bis 64 Zeichen ohne Steuerzeichen."
   },
   "changeSets": {
     "title": "Änderungssätze",
@@ -731,7 +922,11 @@
     "field": "Feld",
     "before": "Vorher",
     "after": "Nachher",
-    "close": "Schließen"
+    "close": "Schließen",
+    "empty": {
+      "title": "Noch keine Änderungssätze",
+      "description": "Änderungssätze werden aufgezeichnet, wenn paddockctl oder die API eine Konfiguration anwendet."
+    }
   },
   "managed": {
     "scope": "Gilt für",
@@ -750,7 +945,11 @@
       "mode": "Modus",
       "owner": "Besitzer",
       "group": "Gruppe",
-      "content": "Inhalt"
+      "content": "Inhalt",
+      "empty": {
+        "title": "Noch keine verwalteten Dateien",
+        "description": "Verwaltete Dateien werden auf jedes Gerät ihres Geltungsbereichs geschrieben und unverändert gehalten."
+      }
     },
     "units": {
       "title": "Verwaltete Units",
@@ -763,7 +962,11 @@
       "enabled": "Beim Systemstart aktiviert",
       "active": "Läuft",
       "wanted": "Sollzustand",
-      "wantedState": "{enabled, select, true {aktiviert} other {deaktiviert}}, {active, select, true {läuft} other {gestoppt}}"
+      "wantedState": "{enabled, select, true {aktiviert} other {deaktiviert}}, {active, select, true {läuft} other {gestoppt}}",
+      "empty": {
+        "title": "Noch keine verwalteten Units",
+        "description": "Verwaltete Units halten systemd-Dienste in ihrem Geltungsbereich aktiviert oder deaktiviert."
+      }
     }
   },
   "users": {
@@ -799,7 +1002,11 @@
     "unlockTitle": "Benutzer entsperren",
     "unlockConfirm": "{username} entsperren? Der Benutzer meldet sich erneut mit dem Gerätecode an und richtet eine neue PIN ein.",
     "deleteTitle": "Benutzer löschen",
-    "deleteConfirm": "{username} mit allen Gruppenmitgliedschaften und Berechtigungen löschen? Das kann nicht rückgängig gemacht werden."
+    "deleteConfirm": "{username} mit allen Gruppenmitgliedschaften und Berechtigungen löschen? Das kann nicht rückgängig gemacht werden.",
+    "empty": {
+      "title": "Noch keine Benutzer",
+      "description": "Benutzer werden aus dem Verzeichnis synchronisiert oder hier angelegt."
+    }
   },
   "userGroups": {
     "title": "Gruppen",
@@ -830,7 +1037,11 @@
     "remove": "Entfernen",
     "removeTitle": "Mitglied entfernen",
     "removeConfirm": "{username} aus {group} entfernen? Der Benutzer verliert die Anmeldungen und Berechtigungen der Gruppe.",
-    "removeLabel": "{username} entfernen"
+    "removeLabel": "{username} entfernen",
+    "empty": {
+      "title": "Noch keine Gruppen",
+      "description": "Gruppen bündeln Benutzer für Anmeldezuweisung und Berechtigungsprofile."
+    }
   },
   "profiles": {
     "title": "Berechtigungsprofile",
@@ -903,7 +1114,11 @@
       "command": "Befehl {item}",
       "scalar": "{item}: {value}"
     },
-    "allCommands": "Alle Befehle"
+    "allCommands": "Alle Befehle",
+    "empty": {
+      "title": "Noch keine Berechtigungsprofile",
+      "description": "Profile vergeben sudo-Rechte an Benutzer oder Gruppen auf ihren Geräten."
+    }
   },
   "loginSettings": {
     "title": "Anmeldung & Rechte",
@@ -955,6 +1170,10 @@
       "failed": "Fehlgeschlagen",
       "expired": "Abgelaufen",
       "cancelled": "Abgebrochen"
+    },
+    "empty": {
+      "title": "Noch keine Befehle",
+      "description": "Befehle erscheinen, wenn das Passwort rotiert, Pakete installiert oder das Gerät gesperrt wird."
     }
   },
   "revocations": {
@@ -1003,6 +1222,10 @@
         "confirm": "Ihre Anforderung, {hostname} zu vernichten, wird zurückgezogen; mit dem Gerät geschieht nichts.",
         "done": "Die Vernichtung von {hostname} wurde zurückgezogen."
       }
+    },
+    "empty": {
+      "title": "Keine Widerrufe",
+      "description": "Sperr- und Vernichtungsanfragen dieser Organisation erscheinen hier mit ihrem Fortschritt."
     }
   },
   "dms": {
@@ -1026,7 +1249,6 @@
   "inventory": {
     "deviceTabs": "Gerätebereiche",
     "tabs": {
-      "details": "Details",
       "software": "Software",
       "vulnerabilities": "Schwachstellen"
     },
@@ -1058,10 +1280,23 @@
     "withoutVulnerabilities": "Ohne zugeordnete CVEs",
     "backToVulnerabilities": "Zurück zu den Schwachstellen",
     "nvdLink": "Details in der National Vulnerability Database",
-    "tile": {
-      "title": "Schwachstellen",
-      "criticalHigh": "{count, plural, =0 {Kein Gerät hat kritische oder hohe Befunde} one {# Gerät hat kritische oder hohe Befunde} other {# Geräte haben kritische oder hohe Befunde}}",
-      "unknown": "{count, plural, =0 {Kein Gerät hat Befunde mit unbekanntem Schweregrad} one {# Gerät hat Befunde mit unbekanntem Schweregrad} other {# Geräte haben Befunde mit unbekanntem Schweregrad}}"
+    "empty": {
+      "vulnerabilities": {
+        "title": "Noch keine Funde",
+        "description": "Funde erscheinen nach dem ersten Inventar-Abgleich eines Geräts."
+      },
+      "deviceVulnerabilities": {
+        "title": "Keine Funde für dieses Gerät",
+        "description": "Für das Gerät wurden keine CVEs gefunden."
+      },
+      "software": {
+        "title": "Noch keine Software inventarisiert",
+        "description": "Das Inventar füllt sich nach dem ersten Abgleich eines Geräts mit fleetd."
+      },
+      "deviceSoftware": {
+        "title": "Noch keine Software gemeldet",
+        "description": "Die Liste füllt sich nach dem ersten Inventar-Abgleich des Geräts."
+      }
     }
   },
   "updates": {
@@ -1102,7 +1337,11 @@
       "versionInvalid": "Geben Sie eine Debian-Version ein: Buchstaben, Ziffern, ., +, :, ~ und -.",
       "reasonInvalid": "Höchstens 500 Zeichen.",
       "deleteTitle": "Paket freigeben?",
-      "deleteConfirm": "Geräte dürfen {name} bei ihren nächsten Updates wieder aktualisieren."
+      "deleteConfirm": "Geräte dürfen {name} bei ihren nächsten Updates wieder aktualisieren.",
+      "empty": {
+        "title": "Noch keine zurückgehaltenen Pakete",
+        "description": "Ein zurückgehaltenes Paket bleibt in seinem Geltungsbereich auf seiner Version oder außerhalb der Updates."
+      }
     },
     "installNow": {
       "label": "Sofort installieren",
@@ -1131,10 +1370,8 @@
   },
   "attention": {
     "title": "Handlungsbedarf",
-    "summary": "Geräte, die einen Administrator brauchen, eine Zeile pro offenem Befund. Öffnen Sie das Gerät, um es außer Betrieb zu nehmen, zu sperren oder freizugeben.",
+    "summary": "Geräte, die einen Administrator brauchen, nach Gerät gruppiert mit ihren offenen Befunden. Öffnen Sie das Gerät, um es außer Betrieb zu nehmen, zu sperren oder freizugeben.",
     "kind": "Befund",
-    "since": "Seit",
-    "detail": "Detail",
     "open": "{hostname} öffnen",
     "kinds": {
       "stale_warning": "Ohne Kontakt (Warnung)",
@@ -1159,6 +1396,135 @@
       "sudo_apply_failed": "Gerät öffnen",
       "revocation_pending": "Gerät öffnen",
       "revocation_expired": "Gerät öffnen"
+    },
+    "more": "+{count}",
+    "empty": {
+      "title": "Kein Handlungsbedarf",
+      "description": "Jedes Gerät ist online, verschlüsselt und läuft mit dem aktuellen Agent – oder ist außer Betrieb genommen."
+    },
+    "device": "Gerät",
+    "conditions": "Befunde"
+  },
+  "palette": {
+    "title": "Befehlspalette",
+    "placeholder": "Seiten, Geräte, Gruppen oder eine CVE suchen …",
+    "groups": {
+      "pages": "Seiten",
+      "devices": "Geräte",
+      "groups": "Gerätegruppen",
+      "cve": "CVE",
+      "actions": "Aktionen"
+    },
+    "noMatches": "Keine Treffer",
+    "openCve": "{cve} öffnen",
+    "actions": {
+      "darkTheme": "Zum dunklen Erscheinungsbild wechseln",
+      "lightTheme": "Zum hellen Erscheinungsbild wechseln",
+      "systemTheme": "Erscheinungsbild des Systems verwenden",
+      "language": "Zu {language} wechseln",
+      "collapseNav": "Navigation einklappen",
+      "expandNav": "Navigation ausklappen",
+      "shortcuts": "Tastenkürzel",
+      "compact": "Kompakte Dichte",
+      "comfortable": "Komfortable Dichte",
+      "dangerZone": "Zum Gefahrenbereich von {hostname} springen"
     }
+  },
+  "shortcuts": {
+    "title": "Tastenkürzel",
+    "close": "Schließen",
+    "keys": "Tasten",
+    "action": "Aktion",
+    "singleKey": "Einzeltasten-Kürzel",
+    "singleKeyHint": "Aus: nur {mod} K und Esc wirken. Jedes Kürzel hat eine Schaltfläche oder einen Link auf dem Bildschirm.",
+    "palette": "Befehlspalette öffnen",
+    "escape": "Palette oder diesen Dialog schließen",
+    "goOverview": "Zur Übersicht",
+    "goAttention": "Zu Handlungsbedarf",
+    "goDevices": "Zu Geräte",
+    "goSoftware": "Zu Software",
+    "goVulnerabilities": "Zu Schwachstellen",
+    "goAudit": "Zum Audit-Protokoll",
+    "listMove": "Zeilencursor in der Liste nach unten / oben bewegen",
+    "listOpen": "Zeile unter dem Cursor öffnen",
+    "nav": "Navigation ein- oder ausklappen",
+    "help": "Diesen Dialog anzeigen",
+    "tabs": "Reiter einer Geräteseite wechseln",
+    "never": "Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog.",
+    "paletteKey": "{mod} K",
+    "keyEsc": "Esc"
+  },
+  "status": {
+    "encrypted": "Verschlüsselt",
+    "notReported": "Nicht gemeldet",
+    "locked": "Gesperrt",
+    "active": "Aktiv",
+    "loginsSuspended": "Anmeldungen ausgesetzt"
+  },
+  "time": {
+    "never": "nie",
+    "now": "jetzt"
+  },
+  "overview": {
+    "title": "Übersicht",
+    "subtitle": "{org} · {count, plural, one {# registriertes Gerät} other {# registrierte Geräte}} · aktualisiert {time}",
+    "kpi": {
+      "online": "Online",
+      "silent": "Ohne Kontakt",
+      "presumedLost": "Vermutlich verloren",
+      "encrypted": "Verschlüsselt",
+      "notEncrypted": "Nicht verschlüsselt",
+      "criticalHigh": "Kritische / hohe CVEs",
+      "securityOverdue": "Sicherheitsupdates überfällig",
+      "rebootRequired": "Neustart erforderlich",
+      "ofActive": "von {count} aktiven",
+      "silentNote": "davon {count} kritisch",
+      "presumedLostNote": "außer Betrieb nehmen, sperren oder behalten",
+      "notEncryptedNote": "{partial} teilweise · {notReported} nicht gemeldet",
+      "securityOverdueNote": "kein erfolgreicher Lauf in 48 h",
+      "activeDevices": "aktive Geräte",
+      "cvesNote": "CVEs in der Organisation"
+    },
+    "attention": {
+      "title": "Handlungsbedarf",
+      "caption": "nach Gerät gruppiert, schwerwiegendste zuerst",
+      "open": "Liste öffnen",
+      "device": "Gerät",
+      "conditions": "Befunde",
+      "os": "Ubuntu {release}"
+    },
+    "vulnerabilities": {
+      "title": "Schwachstellen",
+      "caption": "Geräte nach höchster Ubuntu-Priorität",
+      "barLabel": "Geräte nach höchstem Schweregrad: {segments}",
+      "segment": "{level} {count}",
+      "devices": "{count, plural, one {# Gerät} other {# Geräte}}",
+      "levels": {
+        "critical": "Kritisch",
+        "high": "Hoch",
+        "medium": "Mittel",
+        "low": "Niedrig",
+        "unknown": "Unbekannt",
+        "none": "Keine Funde"
+      }
+    },
+    "updates": {
+      "title": "Updates und Agent-Rollout",
+      "securityOverdue": "Sicherheitsupdates überfällig (> 48 h)",
+      "rebootRequired": "Neustart erforderlich",
+      "agent": "Agent {version}",
+      "agentOnCurrent": "{on} / {active} auf dem aktuellen Release",
+      "agentNone": "Noch kein Agent-Release veröffentlicht",
+      "osReleases": "Ubuntu-Versionen",
+      "osRelease": "{release}: {count}",
+      "unknownRelease": "unbekannt"
+    },
+    "audit": {
+      "title": "Letzte Audit-Ereignisse",
+      "open": "Audit-Protokoll",
+      "code": "Code",
+      "empty": "Keine Ereignisse in den letzten Tagen."
+    },
+    "keyboardHint": "Tastatur: {mod} K Befehlspalette · j / k bewegen · Enter öffnen · g d Geräte. Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog."
   }
 }

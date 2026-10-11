@@ -1,20 +1,55 @@
 #!/usr/bin/env bash
-# Development bootstrap of Fleet (plan M5a decision 1): the initial setup with the admin user (secret
+# Bootstrap of Fleet (plan M5a decision 1, M7b decision 19): the initial setup with the admin user (secret
 # fleet_admin_password), the API-only user paddock with the global role admin, whose API token is written to
 # .secrets/fleet_api_token, and the global enroll secret (secret fleet_enroll_secret). Fleet's settings are applied
 # and checked by paddock-worker at every start and sync round (plan M5a decision 2). Idempotent: a valid token is
-# kept; an invalid or missing one is replaced by a new API-only user.
+# kept; only a token Fleet rejects with 401 is replaced by a new API-only user. Any other answer (Fleet unreachable,
+# 5xx) stops the script without touching the user (PDK-024 review 1).
 set -euo pipefail
+
+# fleet_token_action <stored token> <HTTP status of GET /api/latest/fleet/me with it>: create (no token stored yet),
+# keep (200), rotate (401) or fail (anything else, including no answer).
+fleet_token_action() {
+  if [[ -z "$1" ]]; then
+    echo create
+    return
+  fi
+  case "$2" in
+    200) echo keep ;;
+    401) echo rotate ;;
+    *) echo fail ;;
+  esac
+}
+
+# read_token_file <file>: the stored token; empty when the file is absent (first install). A file that exists but cannot
+# be read fails, so the script never mistakes it for "no token" and replaces a user whose token it holds (PDK-024
+# review 2).
+read_token_file() {
+  [[ -e "$1" ]] || return 0
+  [[ -r "$1" ]] || { echo "fleet: cannot read $1; nothing changed" >&2; return 1; }
+  cat "$1"
+}
+
+# fleet_me_status <port> <timeout seconds>: the HTTP status of GET /api/latest/fleet/me at 127.0.0.1:<port> with
+# $TOKEN, empty when there is no answer within the timeout. bash's /dev/tcp needs no HTTP client in the image, and the
+# token stays in the environment.
+fleet_me_status() {
+  timeout "$2" bash -c '
+    exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 0
+    printf "GET /api/latest/fleet/me HTTP/1.0\r\nHost: localhost\r\nAuthorization: Bearer %s\r\n\r\n" "$TOKEN" >&3
+    head -1 <&3 | cut -d" " -f2' _ "$1" 2>/dev/null || true
+}
+
+# Sourced by the test for the functions above only.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-require_development
-
 ADMIN_PASSWORD="$(cat "$SECRETS_DIR/fleet_admin_password")"
 ENROLL_SECRET="$(cat "$SECRETS_DIR/fleet_enroll_secret")"
-TOKEN="$(cat "$SECRETS_DIR/fleet_api_token" 2>/dev/null || true)"
+TOKEN="$(read_token_file "$SECRETS_DIR/fleet_api_token")"
 export ADMIN_PASSWORD ENROLL_SECRET TOKEN
 
 # Secrets travel as inherited environment variables, never as command-line arguments; fleetctl reads EMAIL, NAME,
@@ -22,8 +57,12 @@ export ADMIN_PASSWORD ENROLL_SECRET TOKEN
 # namespace.
 fleet="$(compose ps -q fleet)"
 [[ -n "$fleet" ]] || { echo "fleet is not running" >&2; exit 1; }
-out="$(docker run --rm -i --network "container:$fleet" -e HOME=/tmp -e ADMIN_PASSWORD -e ENROLL_SECRET -e TOKEN \
-  --entrypoint sh "$FLEETCTL_IMAGE" -s <<'SCRIPT'
+fleetctl_sh() {
+  docker run --rm -i --network "container:$fleet" -e HOME=/tmp -e ADMIN_PASSWORD -e ENROLL_SECRET -e TOKEN -e ACTION \
+    --entrypoint sh "$FLEETCTL_IMAGE" -s
+}
+
+fleetctl_sh <<'SCRIPT'
 set -eu
 admin=admin@paddock-mdm.invalid
 fleetctl config set --address http://localhost:8080 >/dev/null
@@ -37,11 +76,31 @@ elif ! grep -qi "already been set up\|already been setup" /tmp/setup; then
   cat /tmp/setup >&2
   exit 1
 fi
+SCRIPT
+
+# The exact status of /me decides; a Fleet that accepts the connection and never answers fails after 10 seconds.
+status=
+if [[ -n "$TOKEN" ]]; then
+  status="$(docker run --rm -i --network "container:$fleet" -e TOKEN --entrypoint bash "$FLEETCTL_IMAGE" \
+    -c "$(declare -f fleet_me_status); fleet_me_status 8080 10" || true)"
+fi
+ACTION="$(fleet_token_action "$TOKEN" "$status")"
+export ACTION
+case "$ACTION" in
+  keep) echo "fleet: API token of the API-only user paddock is valid" ;;
+  rotate) echo "fleet: Fleet rejects the stored API token (401); replacing the API-only user paddock" ;;
+  fail)
+    echo "fleet: checking the stored API token failed (HTTP status '${status:-none}'); nothing changed" >&2
+    exit 1
+    ;;
+esac
+
+out="$(fleetctl_sh <<'SCRIPT'
+set -eu
+admin=admin@paddock-mdm.invalid
+fleetctl config set --address http://localhost:8080 >/dev/null
 EMAIL="$admin" PASSWORD="$ADMIN_PASSWORD" fleetctl login >/dev/null
-printf 'contexts:\n  default:\n    address: http://localhost:8080\n    token: "%s"\n' "$TOKEN" >/tmp/paddock.yml
-if [ -n "$TOKEN" ] && fleetctl api --config /tmp/paddock.yml /api/latest/fleet/me >/dev/null 2>&1; then
-  echo "fleet: API token of the API-only user paddock is valid" >&2
-else
+if [ "$ACTION" != keep ]; then
   # Fleet names API-only users admin+<random>@…, so earlier users of Paddock are found by name; their tokens die with
   # them.
   for id in $(fleetctl api /api/latest/fleet/users | awk -F': ' '

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/phischl/paddock-mdm/pkg/semver"
 )
 
 // Release and rollout states.
@@ -237,10 +239,13 @@ type Artifact struct {
 	ObjectKey string `json:"object_key"`
 }
 
-// For returns the artifact a device with arch and agent version should update to, if it is eligible.
+// For returns the artifact a device with arch and agent version should update to, if it is eligible and the release
+// is newer than its agent (PDK-025): the supervisor refuses anything else as a downgrade. An agent version that is no
+// semantic version is offered the release, as the supervisor lets any signed release replace such an agent.
 func (o Offer) For(device uuid.UUID, arch, agentVersion string) (Artifact, bool) {
 	a, ok := o.Artifacts[arch]
-	if !ok || agentVersion == o.Version || !Eligible(device, Percent(o.Status, o.Waves, o.CurrentWave)) {
+	if !ok || (versionPattern.MatchString(agentVersion) && semver.Compare(o.Version, agentVersion) <= 0) ||
+		!Eligible(device, Percent(o.Status, o.Waves, o.CurrentWave)) {
 		return Artifact{}, false
 	}
 	return a, true

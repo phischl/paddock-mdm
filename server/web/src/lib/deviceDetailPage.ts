@@ -1,17 +1,26 @@
-import { computed, ref } from 'vue'
+import { computed, ref, type InjectionKey } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { DeviceDetail, EffectiveConfig, EffectiveSudo, User, UserGroup } from '../api/client'
+import type {
+  AttentionKind, DeviceDetail, DeviceUpdates, DiskState, EffectiveConfig, EffectiveSudo, RevocationRequest, User, UserGroup,
+} from '../api/client'
 import { useConfirm, type ConfirmOptions } from '../composables/useConfirm'
 import {
   actionsFor, allGroups, getDevice, getEffectiveConfig, runDeviceAction, setDeviceGroups, setLoginAssignment,
   setLoginsSuspended, type DeviceAction,
 } from './devices'
+import { getDisk } from './disk'
 import { getEffectiveSudo } from './profiles'
+import { listRevocations } from './revocations'
+import { attentionOf, getDeviceUpdates } from './updates'
 import { allUserGroups } from './userGroups'
 import { allUsers } from './users'
 import { useSessionStore } from '../stores/session'
 
-/** State and handlers of the device detail page. */
+/** The device page's state, provided by the frame to its tabs (plan M7c decision 29). */
+export type DevicePage = ReturnType<typeof useDeviceDetailPage>
+export const deviceDetailKey: InjectionKey<DevicePage> = Symbol('deviceDetail')
+
+/** State and handlers of the device detail page: the frame loads the device once, its tabs share it. */
 export function useDeviceDetailPage(id: () => string) {
   const { t } = useI18n()
   const confirm = useConfirm()
@@ -28,6 +37,12 @@ export function useDeviceDetailPage(id: () => string) {
   const loginGroups = ref<string[]>([])
   const loginSaved = ref(false)
   const sudo = ref<EffectiveSudo | null>(null)
+  const diskState = ref<DiskState | null>(null)
+  const updates = ref<DeviceUpdates | null>(null)
+  const conditions = ref<AttentionKind[]>([])
+  const revocations = ref<RevocationRequest[]>([])
+  /** Bumped after an action that changes what the cards show (a command was issued); the cards reload on it. */
+  const refresh = ref(0)
 
   async function load(): Promise<void> {
     const [d, c, g, s] = await Promise.all([getDevice(id()), getEffectiveConfig(id()), allGroups(), getEffectiveSudo(id())])
@@ -36,12 +51,35 @@ export function useDeviceDetailPage(id: () => string) {
       return
     }
     device.value = d
+    await loadStatus(d)
     config.value = typeof c === 'string' ? null : c
     groups.value = g
     selectedGroups.value = d.groups.map((x) => x.id)
     loginUsers.value = d.login_assignment.users.map((u) => u.id)
     loginGroups.value = d.login_assignment.groups.map((x) => x.id)
     sudo.value = typeof s === 'string' ? null : s
+  }
+
+  /** The sources of the header chips and the health rows; a source that cannot be read leaves its row unknown. */
+  async function loadStatus(d: DeviceDetail): Promise<void> {
+    const [disk, u, attention, revs] = await Promise.all([
+      getDisk(d.id),
+      getDeviceUpdates(d.id),
+      attentionOf(d.id).catch(() => null),
+      session.canDelete
+        ? listRevocations(d.id)({ page: 1, page_size: 10, sort: '-requested_at' }).catch(() => null)
+        : Promise.resolve(null),
+    ])
+    diskState.value = typeof disk === 'string' ? null : disk.state
+    updates.value = typeof u === 'string' ? null : u
+    conditions.value = attention?.conditions.map((c) => c.kind) ?? []
+    revocations.value = revs?.items ?? []
+  }
+
+  /** Reloads the device after a command was issued and tells the cards to reload. */
+  async function changed(): Promise<void> {
+    refresh.value++
+    await load()
   }
 
   /** Users and groups for the login assignment (writers only). */
@@ -121,5 +159,6 @@ export function useDeviceDetailPage(id: () => string) {
   return {
     device, config, groups, selectedGroups, problem, saved, actions, load, run, saveGroups,
     users, userGroups, loginUsers, loginGroups, loginSaved, sudo, loadSubjects, saveLogin, toggleSuspension,
+    diskState, updates, conditions, revocations, refresh, changed,
   }
 }

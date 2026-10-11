@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -109,10 +110,15 @@ type ReleaseDetail struct {
 
 // Get returns a release with artifacts, rollout and its counts.
 func (a *AgentReleases) Get(ctx context.Context, version string) (ReleaseDetail, error) {
-	var d ReleaseDetail
 	if _, err := RequirePlatform(ctx); err != nil {
-		return d, err
+		return ReleaseDetail{}, err
 	}
+	return a.get(ctx, version)
+}
+
+// get reads a release without a principal check; for Get and the host command.
+func (a *AgentReleases) get(ctx context.Context, version string) (ReleaseDetail, error) {
+	var d ReleaseDetail
 	err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
 		if d.Release, err = q.GetAgentRelease(ctx, version); err != nil {
@@ -140,12 +146,8 @@ func (a *AgentReleases) Get(ctx context.Context, version string) (ReleaseDetail,
 
 // Create creates a draft release.
 func (a *AgentReleases) Create(ctx context.Context, version string) (pgstore.AgentRelease, error) {
-	spec := SpecAgentReleaseCreate
-	spec.Params = map[string]any{"version": version}
-	t := releaseTarget(version)
-	spec.Target = &t
 	var out pgstore.AgentRelease
-	err := a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
+	err := a.runner.RunTx(ctx, ScopePlatform, createSpec(version), func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 		if err := agentrelease.ValidateVersion(version); err != nil {
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}
@@ -159,6 +161,14 @@ func (a *AgentReleases) Create(ctx context.Context, version string) (pgstore.Age
 	return out, err
 }
 
+func createSpec(version string) ActionSpec {
+	spec := SpecAgentReleaseCreate
+	spec.Params = map[string]any{"version": version}
+	t := releaseTarget(version)
+	spec.Target = &t
+	return spec
+}
+
 // UploadArtifact verifies the binary's minisign signature with the release public key, requires its trusted comment
 // to name the release and arch (plan M4b.1 decision 12), and stores it as the artifact of arch. Published releases
 // are immutable.
@@ -168,10 +178,7 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 		Version: version, Arch: arch, Sha256: hex.EncodeToString(sum[:]), Size: int64(len(binary)), Minisig: minisigB64,
 		ObjectKey: agentrelease.ObjectKey(version, arch),
 	}
-	spec := SpecAgentReleaseUpload
-	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": art.Sha256, "size": art.Size, "kind": "binary"}
-	t := releaseTarget(version)
-	spec.Target = &t
+	spec := uploadSpec(version, arch, binary, "binary", "", "")
 	var out pgstore.AgentArtifact
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
@@ -179,10 +186,7 @@ func (a *AgentReleases) UploadArtifact(ctx context.Context, version, arch string
 			if err != nil {
 				return err
 			}
-			if v, signedArch, ok := releasesig.Parse(comment); !ok || v != version || signedArch != arch {
-				return problem.ReleaseSignatureMismatch.WithDetail(fmt.Sprintf("the signed comment must be %q", releasesig.Comment(version, arch)))
-			}
-			return nil
+			return checkBinaryComment(comment, version, arch)
 		},
 		func(ctx context.Context) error {
 			return a.store.Put(ctx, art.ObjectKey, "application/octet-stream", "no-store", binary)
@@ -213,25 +217,17 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 		Version: version, Name: name, Arch: arch, Sha256: hex.EncodeToString(sum[:]), Size: int64(len(deb)),
 		Minisig: minisigB64, ObjectKey: agentrelease.PackageObjectKey(version, name, packageVersion, arch),
 	}
-	spec := SpecAgentReleaseUpload
-	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": pkg.Sha256, "size": pkg.Size, "kind": "deb", "name": name}
+	spec := uploadSpec(version, arch, deb, "deb", name, packageVersion)
 	if packageVersion != "" {
 		pkg.PackageVersion = &packageVersion
-		spec.Params["package_version"] = packageVersion
 	}
-	t := releaseTarget(version)
-	spec.Target = &t
 	var out pgstore.AgentPackage
 	err := a.runner.RunExternal(ctx, ScopePlatform, spec,
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder) error {
 			if err := agentrelease.ValidatePackage(name, packageVersion); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
-			verify := a.verify
-			if name == agentrelease.PackageRevoke {
-				verify = a.verifyRevoke
-			}
-			_, err := a.checkUpload(ctx, q, verify, version, arch, deb, minisigB64)
+			_, err := a.checkUpload(ctx, q, a.packageVerifier(name), version, arch, deb, minisigB64)
 			return err
 		},
 		func(ctx context.Context) error {
@@ -252,10 +248,44 @@ func (a *AgentReleases) UploadPackage(ctx context.Context, version, name, packag
 	return out, err
 }
 
-// checkUpload validates an upload of a release file — architecture, size, signature, and a draft release — and
-// returns the signature's trusted comment.
-func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, verify VerifyRelease, version, arch string, body []byte,
-	minisigB64 string) (string, error) {
+// uploadSpec is the audited action of uploading one release file: kind binary, or deb with the package name and, for
+// fleet-osquery, its package version.
+func uploadSpec(version, arch string, body []byte, kind, name, packageVersion string) ActionSpec {
+	sum := sha256.Sum256(body)
+	spec := SpecAgentReleaseUpload
+	spec.Params = map[string]any{"version": version, "arch": arch, "sha256": hex.EncodeToString(sum[:]), "size": int64(len(body)),
+		"kind": kind}
+	if name != "" {
+		spec.Params["name"] = name
+	}
+	if packageVersion != "" {
+		spec.Params["package_version"] = packageVersion
+	}
+	t := releaseTarget(version)
+	spec.Target = &t
+	return spec
+}
+
+// packageVerifier is the verifier of a package; paddock-revoke's is the revocation release key's.
+func (a *AgentReleases) packageVerifier(name string) VerifyRelease {
+	if name == agentrelease.PackageRevoke {
+		return a.verifyRevoke
+	}
+	return a.verify
+}
+
+// checkBinaryComment requires the trusted comment of an agent binary to name its release and arch (plan M4b.1
+// decision 12).
+func checkBinaryComment(comment, version, arch string) error {
+	if v, signedArch, ok := releasesig.Parse(comment); !ok || v != version || signedArch != arch {
+		return problem.ReleaseSignatureMismatch.WithDetail(fmt.Sprintf("the signed comment must be %q", releasesig.Comment(version, arch)))
+	}
+	return nil
+}
+
+// checkFile validates a release file on its own — architecture, size and signature — and returns the signature's
+// trusted comment.
+func checkFile(verify VerifyRelease, arch string, body []byte, minisigB64 string) (string, error) {
 	if err := agentrelease.ValidateArch(arch); err != nil {
 		return "", problem.InvalidRequest.WithDetail(err.Error())
 	}
@@ -270,6 +300,17 @@ func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, ver
 	}
 	if !ok {
 		return "", problem.InvalidRequest.WithDetail("X-Paddock-Minisig does not verify with the release public key of the file")
+	}
+	return comment, nil
+}
+
+// checkUpload validates an upload of a release file — the file itself (checkFile) and a draft release — and returns
+// the signature's trusted comment.
+func (a *AgentReleases) checkUpload(ctx context.Context, q *pgstore.Queries, verify VerifyRelease, version, arch string, body []byte,
+	minisigB64 string) (string, error) {
+	comment, err := checkFile(verify, arch, body, minisigB64)
+	if err != nil {
+		return "", err
 	}
 	r, err := q.GetAgentRelease(ctx, version)
 	if err != nil {
@@ -312,6 +353,95 @@ func (a *AgentReleases) Publish(ctx context.Context, version string) (pgstore.Ag
 		return err
 	})
 	return out, err
+}
+
+// HostArtifact is an agent binary of a release with its minisign signature file.
+type HostArtifact struct {
+	Arch            string
+	Binary, Minisig []byte
+}
+
+// HostPackage is a Debian package of a release with its minisign signature file; PackageVersion is fleet-osquery's
+// fleetd version and empty for every other package.
+type HostPackage struct {
+	Name, PackageVersion, Arch string
+	Deb, Minisig               []byte
+}
+
+// PublishFromHost creates the release version (or continues its draft), uploads every artifact and package and
+// publishes it, through the same use cases as the admin API and with the system actor of the host commands
+// (`paddock-server admin agent-release`, plan M7b decision 31). Every file is verified before anything is created or
+// stored, so a wrong signature leaves the release untouched; the refusal is audited as the failed upload of that file,
+// as the API records it. An invalid version or a release without a binary is audited as a failed creation. A
+// published release is refused.
+func (a *AgentReleases) PublishFromHost(ctx context.Context, version string, artifacts []HostArtifact, packages []HostPackage) (ReleaseDetail, error) {
+	ctx = systemPlatform(ctx)
+	if err := agentrelease.ValidateVersion(version); err != nil {
+		return ReleaseDetail{}, a.refuse(ctx, createSpec(version), problem.InvalidRequest.WithDetail(err.Error()))
+	}
+	if len(artifacts) == 0 {
+		return ReleaseDetail{}, a.refuse(ctx, createSpec(version),
+			problem.InvalidRequest.WithDetail("a release needs at least one agent binary"))
+	}
+	for _, art := range artifacts {
+		comment, err := checkFile(a.verify, art.Arch, art.Binary, base64.StdEncoding.EncodeToString(art.Minisig))
+		if err == nil {
+			err = checkBinaryComment(comment, version, art.Arch)
+		}
+		if err != nil {
+			return ReleaseDetail{}, a.refuse(ctx, uploadSpec(version, art.Arch, art.Binary, "binary", "", ""),
+				fmt.Errorf("paddockd %s: %w", art.Arch, err))
+		}
+	}
+	for _, pkg := range packages {
+		err := agentrelease.ValidatePackage(pkg.Name, pkg.PackageVersion)
+		if err != nil {
+			err = problem.InvalidRequest.WithDetail(err.Error())
+		} else {
+			_, err = checkFile(a.packageVerifier(pkg.Name), pkg.Arch, pkg.Deb, base64.StdEncoding.EncodeToString(pkg.Minisig))
+		}
+		if err != nil {
+			return ReleaseDetail{}, a.refuse(ctx, uploadSpec(version, pkg.Arch, pkg.Deb, "deb", pkg.Name, pkg.PackageVersion),
+				fmt.Errorf("package %s %s: %w", pkg.Name, pkg.Arch, err))
+		}
+	}
+
+	if _, err := a.Create(ctx, version); err != nil {
+		if !errors.Is(err, problem.AlreadyExists) {
+			return ReleaseDetail{}, err
+		}
+		d, err := a.get(ctx, version)
+		if err != nil {
+			return ReleaseDetail{}, err
+		}
+		if d.Release.Status != agentrelease.StatusDraft {
+			return ReleaseDetail{}, problem.InvalidState.WithDetail("release " + version + " is already published")
+		}
+	}
+	for _, art := range artifacts {
+		if _, err := a.UploadArtifact(ctx, version, art.Arch, art.Binary, base64.StdEncoding.EncodeToString(art.Minisig)); err != nil {
+			return ReleaseDetail{}, fmt.Errorf("paddockd %s: %w", art.Arch, err)
+		}
+	}
+	for _, pkg := range packages {
+		if _, err := a.UploadPackage(ctx, version, pkg.Name, pkg.PackageVersion, pkg.Arch, pkg.Deb,
+			base64.StdEncoding.EncodeToString(pkg.Minisig)); err != nil {
+			return ReleaseDetail{}, fmt.Errorf("package %s %s: %w", pkg.Name, pkg.Arch, err)
+		}
+	}
+	if _, err := a.Publish(ctx, version); err != nil {
+		return ReleaseDetail{}, err
+	}
+	return a.get(ctx, version)
+}
+
+// refuse records one failed event of spec for a host command refused before any use case ran, and returns the refusal.
+func (a *AgentReleases) refuse(ctx context.Context, spec ActionSpec, refusal error) error {
+	if err := a.runner.RunTxRefusal(ctx, ScopePlatform, spec, refusal,
+		func(context.Context, *pgstore.Queries, Recorder) error { return nil }); err != nil && !errors.Is(err, refusal) {
+		return errors.Join(refusal, err)
+	}
+	return refusal
 }
 
 // RolloutOptions override the rollout defaults; nil keeps the default.
