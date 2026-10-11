@@ -386,7 +386,8 @@ func TestAuditExactlyOnce(t *testing.T) {
 // restarts containers, and returns only once the audit pipeline is back to its normal lag (PDK-028).
 func TestAuditExternalFailures(t *testing.T) {
 	w := newAuditWorld(t)
-	// Registered first, so it runs last: after the subtests' cleanups have restarted and recreated the services.
+	// Runs after the subtests have restarted and recreated the services, and before the world's own cleanups, which
+	// were registered earlier, close the index pool.
 	t.Cleanup(func() { waitAuditCaughtUp(t, w.root, w.idx) })
 
 	t.Run("authentik unreachable", func(t *testing.T) {
