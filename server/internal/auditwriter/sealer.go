@@ -232,7 +232,7 @@ func (s *Sealer) sealDay(ctx context.Context, org uuid.UUID, day time.Time, prev
 			return err
 		}
 		key := ManifestKey(org, day)
-		if err := s.writer.store.PutLocked(ctx, key, "application/json", file, s.writer.RetainUntil(day)); err != nil {
+		if err := putLocked(ctx, s.writer.store, putObjectManifest, key, "application/json", file, s.writer.RetainUntil(day)); err != nil {
 			return err
 		}
 		return q.InsertAuditManifest(ctx, auditstore.InsertAuditManifestParams{

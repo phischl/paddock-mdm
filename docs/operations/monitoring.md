@@ -46,6 +46,7 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockDLQ` | any other `dlq.*` queue holds messages | warning |
 | `PaddockAuditWriterLag` | `audit.writer` has not drained for 10 minutes (lag > 10 min) | critical |
 | `PaddockAuditWriterNotConsuming` | `audit.writer` has no consumer for 5 minutes (visible on the control plane) | critical |
+| `PaddockAuditWriterTransactionSlow` | the audit writer's transaction p95 is above 5 s for 5 minutes (see [Attributing a slow audit writer](#attributing-a-slow-audit-writer)) | warning |
 | `PaddockCompileLatencyHigh` | bundle compilation p95 above 30 s for 10 minutes | warning |
 | `PaddockGateway5xx` | more than 5 % of the device API's responses are 5xx for 10 minutes | warning |
 | `PaddockOpenBaoSealed` | OpenBao is sealed (`docs/operations/openbao.md` section 2) | critical |
@@ -74,3 +75,22 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `paddock_tls_certificate_expiry_timestamp_seconds{host}`, `paddock_tls_probe_success{host}`, `paddock_tls_probe_hosts` | worker: TLS handshake with Caddy for each name of `PADDOCK_TLS_PROBE_HOSTS` every 15 minutes, verified against the system trust store like a client (production; Caddy exports no certificate metrics). An expired, untrusted or wrong-name certificate reads `paddock_tls_probe_success` 0 |
 | `paddock_osv_stale`, `paddock_osv_last_success_timestamp_seconds` | worker (M5c) |
 | `paddock_ip_allowlist_entries`, `paddock_ip_allowlist_enabled`, `paddock_ip_allowlist_bypass`, `paddock_ip_allowlist_denied_total`, `paddock_ip_allowlist_reload_errors_total`, `paddock_ip_allowlist_last_reload_timestamp_seconds` | api (M7a): the cached IP allow list of each replica, the break-glass bypass, denied requests (exact count; the audit log aggregates them) and the reloads from PostgreSQL |
+| `paddock_audit_writer_transaction_seconds{result}` | audit writer: duration of each writer transaction, one per organization of a batch, from acquiring the connection to commit (`committed`) or rollback (`rolled_back`, e.g. a failed put or `transaction_timeout`); it includes the WORM put of the transaction |
+| `paddock_audit_worm_put_seconds{object,result}` | audit writer: duration of each WORM put (`PutLocked`) to the audit bucket; `object` is `events` (inside the writer transaction) or `manifest` (the daily seal), `result` is `ok` or `error` |
+
+Both histograms use the buckets 5 ms to 41 s and carry no organization or other identifying labels.
+
+### Attributing a slow audit writer
+
+A writer transaction is the database work plus one WORM put of `object="events"`. When transactions are slow
+(`PaddockAuditWriterTransactionSlow`, or messages sit unacked in `audit.writer`), compare the two on the audit host's
+Prometheus over the same window:
+
+```promql
+histogram_quantile(0.95, sum by (le) (rate(paddock_audit_writer_transaction_seconds_bucket[5m])))
+histogram_quantile(0.95, sum by (le) (rate(paddock_audit_worm_put_seconds_bucket{object="events"}[5m])))
+```
+
+If the put accounts for most of the transaction, the WORM store (audit-rustfs) is slow; if the transaction is slow
+while the put stays fast, the time is spent in audit-postgres (connection, partition DDL, index inserts, commit).
+A `result="rolled_back"` transaction near `transaction_timeout` (5 minutes) is a stall the writer gave up on.
