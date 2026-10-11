@@ -133,12 +133,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rollback failed: current still points at the new agent` at error level, keeps the new agent running and reports
   the update as failed (`agent.update_failed` with outcome `self_test_failed`), which counts toward the rollout's
   failure rate as a rollback does.
+- After a rollback, `paddock-supervisor` no longer ends the agent it has just restarted: its check-in request
+  (SIGHUP) could arrive before the agent was ready for it, the agent exited with `signal: hangup` and only came back
+  after the restart back-off. The supervisor now ignores SIGHUP (and no longer exits on one itself), so the agent
+  starts with SIGHUP ignored until it handles check-in requests; it checks in at start anyway, so no update result
+  goes unreported.
 - Portal device page, Login & sudo tab: the user and group fields of the login assignment no longer shrink by a line
   when they lose focus, so a click on Save or Suspend logins right after picking an entry lands on the button.
 
-
 ### Security
 
+- The RustFS bucket bootstraps (`./paddock bootstrap audit-bucket` and the bundles, artifacts and escrow buckets, plus
+  the development backup bucket) no longer put a RustFS root password or user secret key on a command line, where
+  `ps` showed it to every user of the host (PDK-036): the root credentials reach the rc client as `RC_HOST_<alias>`
+  by name only, and each user's secret key is set from the environment (`rc admin user passwd
+  --password-from-env`). A user is created with a throwaway secret and gets its policy only after that, and every
+  bootstrap run now sets each user's secret key to the value in its secret file: after changing a RustFS user secret
+  file, re-run the bootstrap and restart the services that use that credential. A bootstrap creates a user only when
+  RustFS reports it as missing and aborts on any other error, so a transient failure never resets an existing
+  user's secret. A test of `make test` refuses credentials as arguments of `rc`/`mc alias set` and `admin user add`.
 - The worker's certificate probe (`PADDOCK_TLS_PROBE_HOSTS`) verifies each public certificate against the system
   trust store and the hostname, like a client. An expired, untrusted or wrong-name certificate now reads
   `paddock_tls_probe_success` 0 and raises `PaddockCertificateProbeFailing`, instead of reporting its expiry.

@@ -526,6 +526,26 @@ func TestRollbackWhenTheCheckinMarkSurvivesTheResume(t *testing.T) {
 	}
 }
 
+// waitSent waits for a watchdog notice that the Run loop sends after the current one; after an update result showed
+// up, its arrival proves that finish returned and so sent the check-in request.
+func (f *fake) waitSent() {
+	f.t.Helper()
+	for len(f.notices) > 0 {
+		<-f.notices
+	}
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case n := <-f.notices:
+			if n == "WATCHDOG=1" {
+				return
+			}
+		case <-deadline:
+			f.t.Fatal("timed out waiting for the next watchdog notice")
+		}
+	}
+}
+
 // resumeFailingProbation prepares a supervisor that resumes a probation of 1.1.0 in slot B and rolls it back on its
 // first tick, because the check-in mark cannot be cleared; sleep replaces the waits between flip attempts.
 func (f *fake) resumeFailingProbation(sleep func(time.Duration)) {
@@ -609,6 +629,34 @@ func TestRollbackRetriesTheFlipBack(t *testing.T) {
 	}
 	if got := w.String(); got != "[250ms]" {
 		t.Fatalf("waits between the flip attempts %s", got)
+	}
+}
+
+// TestRollbackKeepsTheRestartedAgentAlive (PDK-035): the check-in request (SIGHUP) that follows a rollback reaches the
+// old agent right after its start, before it could install a handler; it must not end the agent. The old agent sets
+// no trap and waits on a FIFO that the test opens only after the request was sent, so it can only go on if it survived.
+// The result file becomes visible before finish sends the request; a watchdog notice that arrives after the result
+// proves the request was sent, because only the Run loop notifies and finish runs inside a tick after its notice.
+func TestRollbackKeepsTheRestartedAgentAlive(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	fifo, alive := filepath.Join(f.dir, "go-on"), filepath.Join(f.dir, "alive")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("1.0.0", 0, "read x < "+fifo+"; : > "+alive+"; exec sleep 300"))
+	f.resumeFailingProbation(nil)
+	f.start()
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.waitSent()
+	if err := os.WriteFile(fifo, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.waitFor("the restarted agent went on", func() bool { _, err := os.Stat(alive); return err == nil })
+	if strings.Contains(log.String(), "agent exited") {
+		t.Fatalf("the check-in request ended the restarted agent:\n%s", log.String())
 	}
 }
 
