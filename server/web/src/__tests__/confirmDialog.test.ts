@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { defineComponent, h, nextTick } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { VDialog } from 'vuetify/components'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import { pendingConfirm, settleConfirm, useConfirm } from '../composables/useConfirm'
 import { createPortalI18n } from '../i18n'
@@ -33,6 +34,29 @@ describe('ConfirmDialog', () => {
     await nextTick()
     expect(document.activeElement).toBe(el('confirm-cancel'))
     expect(el('confirm-dialog')?.textContent).toContain('Delete Laptops?')
+  })
+
+  it('keeps focus in a field the user moved to before the opening transition ended (PDK-047)', async () => {
+    const w = mountDialog({ requireTypedText: 'acme' })
+    await flushPromises()
+    const input = el('confirm-typed')?.querySelector('input') as HTMLInputElement
+    input.focus()
+    w.findComponent(VDialog).vm.$emit('afterEnter')
+    await nextTick()
+    expect(document.activeElement).toBe(input)
+    input.value = 'acme'
+    input.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect((el('confirm-accept') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('focuses Cancel again after the opening transition when focus left the dialog', async () => {
+    const w = mountDialog()
+    await flushPromises()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    w.findComponent(VDialog).vm.$emit('afterEnter')
+    await nextTick()
+    expect(document.activeElement).toBe(el('confirm-cancel'))
   })
 
   it('emits confirm and cancel', async () => {
