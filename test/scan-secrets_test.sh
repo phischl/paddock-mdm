@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regression test of `make scan-secrets` (PDK-057, `make test`): in a scratch repository, a secret added only in a
 # merge resolution and removed by a later commit fails the history scan, in a clean merge and in the resolution of a
-# conflict alike; a clean history with merges passes; a git error or a range without commits fails. The secret is a
+# conflict alike; a clean history with merges and a range of clean merges only pass; a git error, a range without
+# commits or an empty non-merge commit (0 scanned) fails. The secret is a
 # generated fake GitHub token that is never printed (the scan runs with --redact).
 set -euo pipefail
 
@@ -71,7 +72,16 @@ printf 'one\nTWO\nthree\n' >"$r/notes.txt"
 g commit -q -am 'drop the token'
 evil_conflict="$(g rev-parse HEAD)"
 
+# An empty non-merge commit: gitleaks scans 0 commits although the range holds a commit that is not a merge.
+g switch -q -c empty "$clean"
+g commit -q --allow-empty -m empty
+empty="$(g rev-parse HEAD)"
+evil_merge="$(g rev-parse "$evil_clean~1")"
+
 expect "a clean history with a merge" pass "$clean"
+expect "a range of one clean merge commit" pass "$clean ^$clean^1 ^$clean^2"
+expect "a range of one merge commit that adds a secret" leak "$evil_merge ^$evil_merge^1 ^$evil_merge^2"
+expect "a range of one empty non-merge commit" fail "$clean..$empty"
 expect "a secret added in a clean merge and removed later" leak "$evil_clean"
 expect "the same, scanned as a pull request range" leak "$clean~1..$evil_clean"
 expect "a secret added in a conflict resolution and removed later" leak "$evil_conflict"
