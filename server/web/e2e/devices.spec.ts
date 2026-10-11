@@ -80,9 +80,6 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await page.getByTestId('device-groups').locator('input').fill(groupName)
   await page.getByRole('option', { name: groupName }).click()
   await page.keyboard.press('Escape')
-  // Leaving the field collapses it by a line (narrow device pane, plan M7c decision 29); a click that blurs it would
-  // land below the moved button.
-  await page.getByTestId('device-groups').getByRole('combobox', { name: 'Device groups' }).blur()
   await page.getByTestId('save-device-groups').click()
   await expect(page.getByRole('main').getByRole('status')).toHaveText('Device groups saved.')
 

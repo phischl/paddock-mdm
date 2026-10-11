@@ -126,6 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel clock tick: the file system dated such a check-in before the switch. The supervisor now removes
   `/run/paddock/last-checkin` while no agent runs, and a probation passes if the new agent recreated it. If the
   supervisor cannot remove the mark, it rolls the update back.
+- Portal device page: a click on Save right after picking a device group saves the groups again. The group field no
+  longer shrinks by a line when it loses focus, so the Save button stays where the click lands.
 
 
 ### Security
