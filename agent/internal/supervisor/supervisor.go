@@ -48,9 +48,11 @@ type Config struct {
 	SelfTest     time.Duration // self-test timeout
 	Tick         time.Duration // watchdog and probation check interval
 	MaxBackoff   time.Duration
-	Notify       func(state string)  // sd_notify
-	Now          func() time.Time    // clock of the probation; nil is time.Now (tests inject one)
-	Sleep        func(time.Duration) // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
+	Notify       func(state string)     // sd_notify
+	Now          func() time.Time       // clock of the probation; nil is time.Now (tests inject one)
+	Sleep        func(time.Duration)    // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
+	SyncDir      func(dir string) error // syncs the slot directory after a flip; nil is fsync (tests inject failures)
+	SyncFile     func(*os.File) error   // syncs a state file before its rename; nil is fsync (tests inject failures)
 }
 
 // rollbackAttempts bounds the attempts to flip current back to the previous slot; the waits between them double from
@@ -68,9 +70,13 @@ type probation struct {
 	FromSlot    string    `json:"from_slot"`
 	ToSlot      string    `json:"to_slot"`
 	SwitchedAt  time.Time `json:"switched_at"`
+	// RollingBack marks a rollback whose flip to FromSlot happened but is not known to be durable; its result waits.
+	RollingBack bool `json:"rolling_back,omitempty"`
 	deadline    time.Time
 	exits       int
 	markKept    bool // the check-in mark could not be removed, so it cannot prove a check-in of the new agent
+	unsynced    bool // the switch to ToSlot is not known to be durable, so it must be confirmed before "updated"
+	passed      bool // healthy at the deadline; only the confirmation of the switch is outstanding
 }
 
 type selfTest struct {
@@ -87,8 +93,10 @@ type Supervisor struct {
 	backoff   time.Duration
 	restart   <-chan time.Time
 	probation *probation
-	testing   bool
-	tested    chan selfTest
+	// rolledBack is a rollback that waits for a durable flip back before it reports rolled_back (PDK-045).
+	rolledBack *probation
+	testing    bool
+	tested     chan selfTest
 }
 
 // New creates a supervisor.
@@ -98,6 +106,12 @@ func New(cfg Config) *Supervisor {
 	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = time.Sleep
+	}
+	if cfg.SyncDir == nil {
+		cfg.SyncDir = syncDir
+	}
+	if cfg.SyncFile == nil {
+		cfg.SyncFile = syncFile
 	}
 	return &Supervisor{cfg: cfg, exited: make(chan error, 1), tested: make(chan selfTest, 1), backoff: time.Second}
 }
@@ -170,7 +184,8 @@ func (s *Supervisor) stop() {
 func (s *Supervisor) onExit(err error) {
 	s.child = nil
 	slog.Warn("agent exited", "error", err)
-	if s.probation != nil {
+	// A passed probation only waits for its switch to become durable; the release proved healthy and stays.
+	if s.probation != nil && !s.probation.passed {
 		if s.probation.exits++; s.probation.exits >= 3 {
 			s.rollback("crash loop")
 			return
@@ -188,7 +203,7 @@ var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+
 
 // onRequest verifies a staged release and starts its self-test in the inactive slot.
 func (s *Supervisor) onRequest(ctx context.Context) {
-	if s.testing || s.probation != nil {
+	if s.testing || s.probation != nil || s.rolledBack != nil {
 		slog.Warn("update request ignored: an update is in progress")
 		return
 	}
@@ -268,15 +283,21 @@ func (s *Supervisor) onSelfTest(r selfTest) {
 		return
 	}
 	p := &probation{Version: r.version, FromVersion: from, FromSlot: s.activeSlot(), ToSlot: r.slot, SwitchedAt: s.cfg.Now()}
-	err := writeJSON(s.cfg.ProbationLog, p)
+	err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile)
 	if err == nil {
-		err = flip(s.cfg.Slots, r.slot)
+		err = flip(s.cfg.Slots, r.slot, s.cfg.SyncDir)
 	}
-	if err != nil {
+	// A failed directory sync after the rename leaves current on the new slot: the synced probation log stays, so the
+	// probation runs and a restart re-checks current against it; "updated" waits until the switch is durable.
+	if err != nil && s.activeSlot() != r.slot {
 		slog.Error("switching slots failed", "error", err)
 		_ = os.Remove(s.cfg.ProbationLog)
 		s.finish(r.version, from, outcomeSelfTestFailed)
 		return
+	}
+	if err != nil {
+		slog.Warn("switched slots, but syncing the slot directory failed", "slot", r.slot, "error", err)
+		p.unsynced = true
 	}
 	slog.Info("switched to the new agent version; probation started", "version", r.version, "slot", r.slot, "probation", s.cfg.Probation)
 	p.deadline = p.SwitchedAt.Add(s.cfg.Probation)
@@ -300,20 +321,30 @@ func (s *Supervisor) forgetCheckin() error {
 // checkProbation ends a probation at its deadline: healthy is a running child that checked in after the switch, i.e.
 // set the check-in mark that forgetCheckin removed before the child started.
 func (s *Supervisor) checkProbation() {
+	if s.rolledBack != nil {
+		s.confirmRollback()
+		return
+	}
 	p := s.probation
 	if p == nil {
 		return
 	}
-	// A mark that survived the switch would pass an agent that never checks in; without proof, fail safe at once.
-	if p.markKept {
-		s.rollback("check-in mark could not be cleared")
-		return
+	if !p.passed {
+		// A mark that survived the switch would pass an agent that never checks in; without proof, fail safe at once.
+		if p.markKept {
+			s.rollback("check-in mark could not be cleared")
+			return
+		}
+		if s.cfg.Now().Before(p.deadline) {
+			return
+		}
+		if _, err := os.Stat(s.cfg.LastCheckin); s.child == nil || err != nil {
+			s.rollback("not healthy at the end of the probation")
+			return
+		}
+		p.passed = true
 	}
-	if s.cfg.Now().Before(p.deadline) {
-		return
-	}
-	if _, err := os.Stat(s.cfg.LastCheckin); s.child == nil || err != nil {
-		s.rollback("not healthy at the end of the probation")
+	if p.unsynced && !s.confirmFlip(p.ToSlot) {
 		return
 	}
 	slog.Info("probation passed", "version", p.Version)
@@ -324,11 +355,25 @@ func (s *Supervisor) checkProbation() {
 
 // rollback flips back to the previous slot and restarts the old agent. It reports rolled_back only if current then
 // points at the previous slot; otherwise the new agent keeps running and the release counts as failed on this device.
+// A flip back whose directory sync failed reports nothing yet: the probation log, marked RollingBack and synced, stays
+// until confirmRollback has made the flip durable, so a restart after a lost flip still finds the probation.
 func (s *Supervisor) rollback(reason string) {
 	p := s.probation
 	s.probation = nil
 	slog.Error("rolling back", "version", p.Version, "to_version", p.FromVersion, "reason", reason)
-	err := s.flipBack(p.FromSlot)
+	durable, err := s.flipBack(p.FromSlot)
+	if err == nil && !durable {
+		p.RollingBack = true
+		if werr := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); werr != nil {
+			// The log written at the switch still names ToSlot, so a restart resumes the probation or drops it, and
+			// reports nothing in either case.
+			slog.Error("marking the probation log as rolling back failed", "error", werr)
+		}
+		s.rolledBack = p
+		s.restartChild()
+		slog.Warn("rolled back; the result waits until the flip back is durable", "version", p.Version, "slot", p.FromSlot)
+		return
+	}
 	_ = os.Remove(s.cfg.ProbationLog)
 	s.restartChild()
 	if err != nil {
@@ -341,27 +386,55 @@ func (s *Supervisor) rollback(reason string) {
 }
 
 // flipBack points current at slot, retrying with back-off. It succeeds exactly when current then points at slot: a
-// failed directory sync after the rename leaves the flip done, a rename that failed leaves it undone.
-func (s *Supervisor) flipBack(slot string) error {
+// failed directory sync after the rename leaves the flip done but not durable (durable false), a rename that failed
+// leaves it undone. It does not retry a failed sync: on Linux an fsync after an I/O error can succeed although the
+// change was lost, so only confirmFlip, a new rename followed by a successful sync, makes the flip durable.
+func (s *Supervisor) flipBack(slot string) (durable bool, err error) {
 	wait := rollbackRetryWait
 	for attempt := 1; ; attempt++ {
-		err := flip(s.cfg.Slots, slot)
+		err := flip(s.cfg.Slots, slot, s.cfg.SyncDir)
 		if s.activeSlot() == slot {
 			if err != nil {
 				slog.Warn("flipped back, but syncing the slot directory failed", "slot", slot, "error", err)
 			}
-			return nil
+			return err == nil, nil
 		}
 		if err == nil {
 			err = fmt.Errorf("current does not point at slot %s after the flip", slot)
 		}
 		if attempt == rollbackAttempts {
-			return err
+			return false, err
 		}
 		slog.Warn("flipping back failed; retrying", "slot", slot, "attempt", attempt, "in", wait, "error", err)
 		s.cfg.Sleep(wait)
 		wait *= 2
 	}
+}
+
+// confirmRollback reports a rollback once its flip back is durable.
+func (s *Supervisor) confirmRollback() {
+	p := s.rolledBack
+	if !s.confirmFlip(p.FromSlot) {
+		return
+	}
+	s.rolledBack = nil
+	_ = os.Remove(s.cfg.ProbationLog)
+	s.finish(p.Version, p.FromVersion, outcomeRolledBack)
+}
+
+// confirmFlip makes current -> slot durable while current already points at slot: it renames a new symlink over
+// current and syncs the slot directory. The new rename is a change of its own, so a successful sync proves it durable,
+// unlike a sync retried after a failure. It reports false, and leaves current alone, if that is not proven.
+func (s *Supervisor) confirmFlip(slot string) bool {
+	if active := s.activeSlot(); active != slot {
+		slog.Error("cannot confirm the slot flip: current points elsewhere", "slot", slot, "active_slot", active)
+		return false
+	}
+	if err := flip(s.cfg.Slots, slot, s.cfg.SyncDir); err != nil {
+		slog.Warn("the slot flip is not durable yet; the update result waits", "slot", slot, "error", err)
+		return false
+	}
+	return true
 }
 
 func (s *Supervisor) restartChild() {
@@ -375,7 +448,7 @@ func (s *Supervisor) restartChild() {
 func (s *Supervisor) finish(version, from, outcome string) {
 	s.cleanup(version)
 	res := map[string]any{"version": version, "from_version": from, "outcome": outcome, "at": time.Now().UTC()}
-	if err := writeJSON(s.cfg.Result, res); err != nil {
+	if err := writeJSON(s.cfg.Result, res, s.cfg.SyncFile); err != nil {
 		slog.Error("writing the update result failed", "error", err)
 	}
 	if s.child != nil {
@@ -397,10 +470,24 @@ func (s *Supervisor) resumeProbation() {
 	if err != nil {
 		return
 	}
-	if json.Unmarshal(data, &p) != nil || s.activeSlot() != p.ToSlot {
-		_ = os.Remove(s.cfg.ProbationLog) // the flip never happened
+	if json.Unmarshal(data, &p) != nil {
+		_ = os.Remove(s.cfg.ProbationLog)
 		return
 	}
+	if p.RollingBack && s.activeSlot() == p.FromSlot {
+		s.rolledBack = &p
+		slog.Info("resuming a rollback that waits for a durable flip back", "version", p.Version)
+		return
+	}
+	// A rollback flip lost with the power leaves current on ToSlot: the probation runs again and decides anew.
+	if s.activeSlot() != p.ToSlot {
+		// The flip never happened, or a rollback flip back survived whose log could not be marked rolling_back.
+		_ = os.Remove(s.cfg.ProbationLog)
+		return
+	}
+	p.RollingBack = false
+	// The previous supervisor may have seen the switch's sync fail; only a confirmed flip may end in "updated".
+	p.unsynced = true
 	p.SwitchedAt = s.cfg.Now()
 	p.deadline = p.SwitchedAt.Add(s.cfg.Probation)
 	s.probation = &p
@@ -435,8 +522,8 @@ func (s *Supervisor) version(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// flip points current at slot with one atomic rename of a new symlink.
-func flip(slots, slot string) error {
+// flip points current at slot with one atomic rename of a new symlink and syncs slots with sync.
+func flip(slots, slot string, sync func(string) error) error {
 	tmp := filepath.Join(slots, ".current.tmp")
 	_ = os.Remove(tmp)
 	if err := os.Symlink(slot, tmp); err != nil {
@@ -445,7 +532,7 @@ func flip(slots, slot string) error {
 	if err := os.Rename(tmp, filepath.Join(slots, "current")); err != nil {
 		return err
 	}
-	return syncDir(slots)
+	return sync(slots)
 }
 
 // install copies bin to path atomically (0755).
@@ -470,20 +557,31 @@ func install(bin []byte, path string) error {
 	return syncDir(filepath.Dir(path))
 }
 
-func writeJSON(path string, v any) error {
+// writeJSON replaces path with v atomically. It syncs the content with sync before the rename: a new file renamed into
+// place unsynced can come back empty after a power loss, and an empty probation log is dropped (PDK-059).
+func writeJSON(path string, v any, sync func(*os.File) error) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // our own state files
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	_, err = f.Write(data)
+	err = errors.Join(err, sync(f), f.Close())
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	return syncDir(filepath.Dir(path))
 }
+
+func syncFile(f *os.File) error { return f.Sync() }
 
 func syncDir(dir string) error {
 	d, err := os.Open(dir) //nolint:gosec // our own directories

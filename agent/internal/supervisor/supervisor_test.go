@@ -417,10 +417,10 @@ func TestRollbackOnProbationTimeout(t *testing.T) {
 func TestResumeProbation(t *testing.T) {
 	f := newFake(t)
 	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "exit 1"))
-	if err := flip(f.cfg.Slots, "B"); err != nil {
+	if err := flip(f.cfg.Slots, "B", syncDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}); err != nil {
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}, syncFile); err != nil {
 		t.Fatal(err)
 	}
 	f.start()
@@ -434,10 +434,10 @@ func TestResumeProbation(t *testing.T) {
 func TestResumeProbationIgnoresAnEarlierCheckin(t *testing.T) {
 	f := newFake(t)
 	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
-	if err := flip(f.cfg.Slots, "B"); err != nil {
+	if err := flip(f.cfg.Slots, "B", syncDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}); err != nil {
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}, syncFile); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(f.cfg.LastCheckin, nil, 0o600); err != nil {
@@ -510,10 +510,10 @@ func TestRollbackWhenTheCheckinMarkSurvivesTheResume(t *testing.T) {
 	log := captureLog(t)
 	f := newFake(t)
 	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
-	if err := flip(f.cfg.Slots, "B"); err != nil {
+	if err := flip(f.cfg.Slots, "B", syncDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}); err != nil {
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}, syncFile); err != nil {
 		t.Fatal(err)
 	}
 	f.keepCheckinMark()
@@ -551,10 +551,10 @@ func (f *fake) waitSent() {
 func (f *fake) resumeFailingProbation(sleep func(time.Duration)) {
 	f.t.Helper()
 	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
-	if err := flip(f.cfg.Slots, "B"); err != nil {
+	if err := flip(f.cfg.Slots, "B", syncDir); err != nil {
 		f.t.Fatal(err)
 	}
-	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}); err != nil {
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}, syncFile); err != nil {
 		f.t.Fatal(err)
 	}
 	f.keepCheckinMark()
@@ -686,5 +686,310 @@ func TestRestartsTheAgentAndPetsTheWatchdog(t *testing.T) {
 	}
 	if _, err := os.Stat(f.cfg.Result); !os.IsNotExist(err) {
 		t.Fatal("a plain restart wrote an update result")
+	}
+}
+
+// syncFault is the supervisor's injected sync of the slot directory: it fails with EIO while broken and records, for
+// every call, which symlink current was and whether the sync succeeded.
+type syncFault struct {
+	mu     sync.Mutex
+	broken bool
+	calls  []syncCall
+}
+
+type syncCall struct {
+	current os.FileInfo
+	ok      bool
+}
+
+func (s *syncFault) sync(dir string) error {
+	current, _ := os.Lstat(filepath.Join(dir, "current"))
+	s.mu.Lock()
+	broken := s.broken
+	s.calls = append(s.calls, syncCall{current: current, ok: !broken})
+	s.mu.Unlock()
+	if broken {
+		return fmt.Errorf("syncing %s: %w", dir, syscall.EIO)
+	}
+	return syncDir(dir)
+}
+
+// expectProvenByNewRename checks that the first successful sync after the last failed one saw another symlink current
+// than the failed one: only a sync that follows a new rename proves the flip durable, a retried sync does not.
+func (s *syncFault) expectProvenByNewRename(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	failed := -1
+	for i, c := range s.calls {
+		if !c.ok {
+			failed = i
+		}
+	}
+	if failed < 0 || failed+1 >= len(s.calls) {
+		t.Fatalf("no successful sync after a failed one in %d syncs", len(s.calls))
+	}
+	before, after := s.calls[failed].current, s.calls[failed+1].current
+	if before == nil || after == nil || os.SameFile(before, after) {
+		t.Fatal("the sync that confirmed the flip followed no new rename of current")
+	}
+}
+
+func (s *syncFault) set(broken bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.broken = broken
+}
+
+func (s *syncFault) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.calls)
+}
+
+// waitSyncs waits until the supervisor synced the slot directory n times in all, and fails on any update result
+// meanwhile; a sync after the flip's own is a confirmation attempt in a later tick, so by then a result of the flip
+// would have been written.
+func (f *fake) waitSyncs(sf *syncFault, n int) {
+	f.t.Helper()
+	f.waitFor(fmt.Sprintf("%d syncs of the slot directory", n), func() bool {
+		f.expectNoResult()
+		return sf.count() >= n
+	})
+}
+
+func (f *fake) expectNoResult() {
+	f.t.Helper()
+	if data, err := os.ReadFile(f.cfg.Result); err == nil {
+		f.t.Fatalf("an update result before the flip was durable: %s", data)
+	}
+}
+
+// expectProbationLog checks that the probation log is still on disk and whether it marks a rollback.
+func (f *fake) expectProbationLog(rollingBack bool) {
+	f.t.Helper()
+	var p probation
+	data, err := os.ReadFile(f.cfg.ProbationLog)
+	if err == nil {
+		err = json.Unmarshal(data, &p)
+	}
+	if err != nil || p.RollingBack != rollingBack || p.ToSlot != "B" {
+		f.t.Fatalf("probation log %s, error %v; want to_slot B, rolling_back %t", data, err, rollingBack)
+	}
+}
+
+func (f *fake) expectNoProbationLog() {
+	f.t.Helper()
+	if _, err := os.Stat(f.cfg.ProbationLog); !os.IsNotExist(err) {
+		f.t.Fatal("probation log left behind")
+	}
+}
+
+// writeRollingBack writes the probation log of a rollback from B to A that waits for a durable flip back.
+func (f *fake) writeRollingBack() {
+	f.t.Helper()
+	p := probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B", RollingBack: true}
+	if err := writeJSON(f.cfg.ProbationLog, p, syncFile); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// TestRollbackWaitsForADurableFlipBack (PDK-045): a flip back whose directory sync failed is visible but may be lost
+// with the power. The supervisor runs the old agent, keeps the probation log marked as rolling back and reports
+// rolled_back only after a new flip was synced.
+func TestRollbackWaitsForADurableFlipBack(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	f.resumeFailingProbation(nil)
+	f.start()
+	f.waitSyncs(sf, 2)
+	if f.active() != "A" {
+		t.Fatalf("current → %s, want A", f.active())
+	}
+	f.expectNoResult()
+	f.expectProbationLog(true)
+	sf.set(false)
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || r.FromVersion != "1.0.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.expectNoProbationLog()
+	sf.expectProvenByNewRename(t)
+}
+
+// TestUpdateWaitsForADurableSwitch (PDK-045): a switch whose directory sync failed still starts the new agent and its
+// probation; the synced probation log stays, and "updated" follows only after a new flip was synced.
+func TestUpdateWaitsForADurableSwitch(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{}
+	f.cfg.SyncDir = sf.sync
+	f.start()
+	sf.set(true)
+	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, f.good()))
+	f.waitFor("the new agent checked in", func() bool { f.expectNoResult(); return f.checkedIn() })
+	f.waitFor("current → B", func() bool { return f.active() == "B" })
+	f.clock.set(testProbation + time.Minute)
+	defer f.clock.set(0)
+	f.waitSyncs(sf, 2)
+	f.expectNoResult()
+	f.expectProbationLog(false)
+	sf.set(false)
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeUpdated || r.Version != "1.1.0" || f.active() != "B" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.expectNoProbationLog()
+	sf.expectProvenByNewRename(t)
+}
+
+// TestResumeARollbackThatWaitsForADurableFlipBack (PDK-045): after a restart, a rollback whose flip back is visible
+// but unconfirmed is reported once a new flip was synced, not dropped as a flip that never happened.
+func TestResumeARollbackThatWaitsForADurableFlipBack(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+	f.writeRollingBack()
+	f.start()
+	f.waitSyncs(sf, 1)
+	f.expectNoResult()
+	f.expectProbationLog(true)
+	sf.set(false)
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.expectNoProbationLog()
+}
+
+// TestRestartAfterALostFlipBackDecidesAgain (PDK-045): a power loss takes the unsynced flip back with it, so current
+// points at the new slot again. The probation log is still there, so the restarted supervisor resumes the probation
+// and decides again, here a rollback, instead of leaving the new agent running without one.
+func TestRestartAfterALostFlipBackDecidesAgain(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	f.resumeFailingProbation(nil)
+	f.start()
+	f.waitSyncs(sf, 2)
+	f.expectNoResult()
+	f.stop()
+	if err := flip(f.cfg.Slots, "B", syncDir); err != nil {
+		t.Fatal(err)
+	}
+	sf.set(false)
+	f.start()
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.expectNoProbationLog()
+}
+
+// TestResumedProbationWaitsForADurableSwitch (PDK-045): a restarted supervisor cannot know whether the switch was ever
+// synced, so a resumed probation that passes reports "updated" only after a new flip was synced.
+func TestResumedProbationWaitsForADurableSwitch(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+	if err := flip(f.cfg.Slots, "B", syncDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}, syncFile); err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	f.waitFor("the resumed agent checked in", f.checkedIn)
+	f.clock.set(testProbation + time.Minute)
+	defer f.clock.set(0)
+	f.waitSyncs(sf, 1)
+	f.expectProbationLog(false)
+	sf.set(false)
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeUpdated || r.Version != "1.1.0" || f.active() != "B" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.expectNoProbationLog()
+	sf.expectProvenByNewRename(t)
+}
+
+// TestUpdateRequestWhileARollbackWaits (PDK-045): a release staged while a rollback waits for a durable flip back is
+// ignored; it neither switches slots nor overwrites the rolling_back log, and the rollback is still reported.
+func TestUpdateRequestWhileARollbackWaits(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	f.resumeFailingProbation(nil)
+	f.start()
+	f.waitSyncs(sf, 2)
+	f.stage("1.2.0", script("1.2.0", 0, f.good()), nil)
+	f.waitFor("the update request was ignored", func() bool {
+		f.expectNoResult()
+		if f.active() != "A" {
+			t.Fatalf("the staged release switched current to %s", f.active())
+		}
+		return strings.Contains(log.String(), "update request ignored")
+	})
+	f.expectProbationLog(true)
+	sf.set(false)
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+}
+
+// TestPassedProbationIsNotRolledBackWhileItsSwitchWaits (PDK-045): once the new agent was healthy at the deadline,
+// only the confirmation of the switch is outstanding; later exits of the agent are restarted, not rolled back.
+func TestPassedProbationIsNotRolledBackWhileItsSwitchWaits(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	die, runs := filepath.Join(f.dir, "die"), filepath.Join(f.dir, "runs")
+	run := "trap '' HUP; echo x >> " + runs + "; : > " + f.cfg.LastCheckin + "; while [ ! -e " + die + " ]; do sleep 0.05; done; exit 1"
+	f.start()
+	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, run))
+	f.waitFor("the new agent checked in", func() bool { f.expectNoResult(); return f.checkedIn() })
+	f.clock.set(testProbation + time.Minute)
+	defer f.clock.set(0)
+	f.waitSyncs(sf, 2)
+	if err := os.WriteFile(die, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.waitFor("the new agent exited and was restarted three times", func() bool {
+		f.expectNoResult()
+		if f.active() != "B" {
+			t.Fatalf("a passed release was rolled back: current → %s", f.active())
+		}
+		data, _ := os.ReadFile(runs) //nolint:gosec // test file
+		return strings.Count(string(data), "x") >= 4
+	})
+	sf.set(false)
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeUpdated || r.Version != "1.1.0" || f.active() != "B" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+}
+
+// TestProbationLogIsSyncedBeforeTheSwitch (PDK-059): writeJSON syncs the file before the rename, and a switch whose
+// probation log could not be synced does not happen, because a log lost with the power would drop the probation.
+func TestProbationLogIsSyncedBeforeTheSwitch(t *testing.T) {
+	f := newFake(t)
+	f.cfg.SyncFile = func(file *os.File) error {
+		if strings.HasPrefix(filepath.Base(file.Name()), filepath.Base(f.cfg.ProbationLog)) {
+			return fmt.Errorf("syncing %s: %w", file.Name(), syscall.EIO)
+		}
+		return file.Sync()
+	}
+	f.start()
+	f.stage("1.1.0", script("1.1.0", 0, f.good()), nil)
+	f.waitFor("an update result", func() bool {
+		if f.active() != "A" {
+			t.Fatalf("switched to %s without a synced probation log", f.active())
+		}
+		_, err := os.Stat(f.cfg.Result)
+		return err == nil
+	})
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeSelfTestFailed || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.expectNoProbationLog()
+	if _, err := os.Stat(f.cfg.ProbationLog + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("temporary probation log left behind")
 	}
 }
