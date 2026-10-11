@@ -1231,6 +1231,22 @@ func TestDropKeepsTheLogUntilTheRequestRemovalIsSynced(t *testing.T) {
 	f.expectNoResult()
 }
 
+// TestDropWithoutAStagingDirectoryRemovesTheLog (PDK-064): a staging directory that does not exist holds no request
+// that a power loss could bring back, so its failed sync (ENOENT) does not keep the log of a dropped probation.
+func TestDropWithoutAStagingDirectoryRemovesTheLog(t *testing.T) {
+	f := newFake(t)
+	if err := os.RemoveAll(f.cfg.Staging); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}, syncFile); err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	f.waitReady()
+	f.expectNoProbationLog()
+	f.expectNoResult()
+}
+
 // recordBeforeResult is the supervisor's injected file sync: when it syncs the update result, it checks that the
 // probation log on disk already records that result's outcome and time (PDK-058). It counts the checks.
 func (f *fake) recordBeforeResult() *atomic.Int32 {
@@ -1337,6 +1353,7 @@ func TestFailedResultWriteKeepsTheRecordedOutcome(t *testing.T) {
 func TestUnrecordedOutcomeIsNotDecidedAgain(t *testing.T) {
 	f := newFake(t)
 	var resultRenamed atomic.Bool
+	var dirFaults atomic.Int32
 	f.cfg.SyncFile = func(file *os.File) error {
 		switch file.Name() {
 		case f.cfg.ProbationLog + ".tmp":
@@ -1347,6 +1364,7 @@ func TestUnrecordedOutcomeIsNotDecidedAgain(t *testing.T) {
 			resultRenamed.Store(true)
 		case f.dir:
 			if resultRenamed.CompareAndSwap(true, false) {
+				dirFaults.Add(1)
 				return fmt.Errorf("syncing %s: %w", file.Name(), syscall.EIO)
 			}
 		}
@@ -1360,6 +1378,11 @@ func TestUnrecordedOutcomeIsNotDecidedAgain(t *testing.T) {
 		t.Fatalf("result %+v", first)
 	}
 	f.waitSent()
+	// Without the fault the result write succeeds and removes the log on the normal path, so the test would prove
+	// nothing about the double fault (PDK-064).
+	if n := dirFaults.Load(); n != 1 {
+		t.Fatalf("the directory sync after the result's rename failed %d times, want 1", n)
+	}
 	f.stop()
 	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
 	if err := os.Remove(f.cfg.LastCheckin); err != nil {
