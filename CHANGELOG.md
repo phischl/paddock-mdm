@@ -129,8 +129,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file is scanned with the base's version, so an allowlist for a new false positive lands in its own pull request
   first. A `.gitleaksignore` a pull request adds is no longer picked up on its own, inline `gitleaks:allow` comments
   are ignored, and a `.gitleaks.toml` that extends another file (`[extend] path`) fails the scan. A pull request still
-  runs its own `ci.yml` and `Makefile`, so the scan's integrity rests on code review of `.github/` and the `Makefile`:
-  `.gitleaks.toml`, `.gitleaksignore`, `Makefile`, `.github/` and `deploy/compose/scripts/` have a code owner, which
+  runs its own `ci.yml` and `Makefile`, so the scan's integrity rests on code review of `.github/`, the `Makefile` and
+  `deploy/compose/versions.env` (read by the Makefile; it pins the gitleaks image): `.gitleaks.toml`,
+  `.gitleaksignore`, `Makefile`, `.github/`, `deploy/compose/versions.env` and `deploy/compose/scripts/` have a code owner, which
   GitHub enforces only once branch protection requires code-owner review (see `docs/operations/secret-scan.md`).
 
 ### Fixed
