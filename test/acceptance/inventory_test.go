@@ -185,6 +185,7 @@ var (
 // acme never sees globex's inventory (nor the other way round). Fleet free reports no CVSS score or severity: the
 // findings are "unknown".
 func TestInventoryF3SoftwareAndVulnerabilities(t *testing.T) {
+	waitFleetVulnerabilityData(t, acmeCVE, globexCVE)
 	alice, carol := login(t, env.Alice), login(t, env.Carol)
 	suffix := uniqueSuffix()
 	acmeDevice := activeDevice(t, alice, "", "inv-f3-acme-"+suffix)
@@ -200,18 +201,31 @@ func TestInventoryF3SoftwareAndVulnerabilities(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	triggerFleetVulnerabilities(t)
 
 	acmeFindings := "/api/v1/devices/" + acmeDevice.DeviceID + "/vulnerabilities"
 	globexFindings := "/api/v1/devices/" + globexDevice.DeviceID + "/vulnerabilities"
+	var triggered time.Time
+	var triggerErr error
 	for deadline := start.Add(10 * time.Minute); ; time.Sleep(10 * time.Second) {
+		// A run matches only the software Fleet had stored when it started, and Fleet refuses a trigger while a run is
+		// pending: trigger again until both devices' findings are in instead of relying on one run.
+		if time.Since(triggered) >= fleetRetrigger {
+			if triggerErr = triggerFleetVulnerabilities(t); triggerErr != nil {
+				t.Log(triggerErr)
+			}
+			triggered = time.Now()
+		}
 		a, g := listInventory(t, alice, acmeFindings), listInventory(t, carol, globexFindings)
 		if slices.Contains(a.field("cve"), acmeCVE) && slices.Contains(g.field("cve"), globexCVE) {
 			t.Logf("inventory and vulnerabilities in the portal after %s", time.Since(start).Round(time.Second))
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no findings within 10 minutes: acme %v, globex %v", a.field("cve"), g.field("cve"))
+			t.Fatalf("no findings within 10 minutes: acme %v, globex %v; software acme %v, globex %v; last trigger error: %v; "+
+				"errors of Fleet's vulnerability job: %s", a.field("cve"), g.field("cve"),
+				listInventory(t, alice, "/api/v1/devices/"+acmeDevice.DeviceID+"/software").field("name"),
+				listInventory(t, carol, "/api/v1/devices/"+globexDevice.DeviceID+"/software").field("name"),
+				triggerErr, fleetVulnerabilityErrors(t, start))
 		}
 		for _, h := range hosts { // keep the hosts online and answering
 			if _, err := h.Answer(testContext(t, time.Minute)); err != nil {
