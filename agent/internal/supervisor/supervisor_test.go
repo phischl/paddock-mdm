@@ -526,6 +526,92 @@ func TestRollbackWhenTheCheckinMarkSurvivesTheResume(t *testing.T) {
 	}
 }
 
+// resumeFailingProbation prepares a supervisor that resumes a probation of 1.1.0 in slot B and rolls it back on its
+// first tick, because the check-in mark cannot be cleared; sleep replaces the waits between flip attempts.
+func (f *fake) resumeFailingProbation(sleep func(time.Duration)) {
+	f.t.Helper()
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
+	if err := flip(f.cfg.Slots, "B"); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}); err != nil {
+		f.t.Fatal(err)
+	}
+	f.keepCheckinMark()
+	f.cfg.Sleep = sleep
+}
+
+// blockFlip makes the flip's temporary symlink path a non-empty directory, so every flip fails until unblockFlip;
+// unlike a read-only directory, this also holds for root.
+func (f *fake) blockFlip() {
+	f.t.Helper()
+	if err := os.MkdirAll(filepath.Join(f.cfg.Slots, ".current.tmp", "stuck"), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *fake) unblockFlip() {
+	if err := os.RemoveAll(filepath.Join(f.cfg.Slots, ".current.tmp")); err != nil {
+		f.t.Error(err)
+	}
+}
+
+// waits records the supervisor's waits between flip attempts; the supervisor's goroutine writes while the test reads.
+type waits struct {
+	mu   sync.Mutex
+	list []time.Duration
+}
+
+func (w *waits) add(d time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.list = append(w.list, d)
+}
+
+func (w *waits) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return fmt.Sprint(w.list)
+}
+
+// TestRollbackReportsAFailedFlipBack (PDK-037): if current cannot be flipped back, the supervisor retries with
+// bounded back-off, then reports the release as failed instead of rolled_back, while the new agent keeps running.
+func TestRollbackReportsAFailedFlipBack(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	w := &waits{}
+	f.resumeFailingProbation(w.add)
+	f.blockFlip()
+	f.start()
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeSelfTestFailed || r.Version != "1.1.0" || r.FromVersion != "1.0.0" {
+		t.Fatalf("result %+v", r)
+	}
+	if f.active() != "B" {
+		t.Fatalf("current → %s, want B", f.active())
+	}
+	if got := w.String(); got != "[250ms 500ms 1s 2s]" {
+		t.Fatalf("waits between the flip attempts %s", got)
+	}
+	if !strings.Contains(log.String(), "rollback failed: current still points at the new agent") {
+		t.Fatalf("failed rollback missing from the log:\n%s", log.String())
+	}
+}
+
+// TestRollbackRetriesTheFlipBack (PDK-037): a flip back that fails once and then succeeds is a rollback.
+func TestRollbackRetriesTheFlipBack(t *testing.T) {
+	f := newFake(t)
+	w := &waits{}
+	f.resumeFailingProbation(func(d time.Duration) { w.add(d); f.unblockFlip() })
+	f.blockFlip()
+	f.start()
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	if got := w.String(); got != "[250ms]" {
+		t.Fatalf("waits between the flip attempts %s", got)
+	}
+}
+
 func TestRestartsTheAgentAndPetsTheWatchdog(t *testing.T) {
 	f := newFake(t)
 	runs := filepath.Join(f.dir, "runs")
