@@ -141,7 +141,13 @@ func (f *fake) stageSigned(version string, bin []byte, signer *minisign.PrivateK
 	if err := os.WriteFile(filepath.Join(dir, "paddockd.minisig"), sig, 0o600); err != nil {
 		f.t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.cfg.Staging, "request.json"), []byte(`{"version":"`+version+`"}`), 0o600); err != nil {
+	// The request appears whole, as the agent's rename puts it in place: a supervisor that has just started processes
+	// a request it finds (PDK-061) and must not read one half-written.
+	request := filepath.Join(f.cfg.Staging, "request.json")
+	if err := os.WriteFile(request+".new", []byte(`{"version":"`+version+`"}`), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.Rename(request+".new", request); err != nil {
 		f.t.Fatal(err)
 	}
 	f.usr1 <- syscall.SIGUSR1
@@ -1362,4 +1368,143 @@ func TestUnrecordedOutcomeIsNotDecidedAgain(t *testing.T) {
 	f.keepCheckinMark()
 	f.start()
 	f.expectSameResult(first, "B")
+}
+
+// quiet is a run behaviour that never checks in, so a check-in mark can only come from the new agent.
+const quiet = "trap '' HUP; exec sleep 300"
+
+// TestLeftoverRequestIsProcessedAfterARestart (PDK-061): a restart before the switch, during the verification or the
+// install, leaves the update request without a probation log; so does a SIGUSR1 sent while no supervisor ran. The
+// agent does not signal again while the request is pending, so the restarted supervisor processes it from the staged
+// files and reports exactly one result: a second restart writes nothing new.
+func TestLeftoverRequestIsProcessedAfterARestart(t *testing.T) {
+	_, other, _ := minisign.GenerateKey(rand.Reader)
+	for _, tc := range []struct {
+		name     string
+		selfTest int
+		signer   *minisign.PrivateKey
+		// installing: slot B holds an older release and a partial copy of the new one, as an interrupted install
+		// leaves it.
+		installing    bool
+		outcome, slot string
+	}{
+		{name: "restart during the verification", outcome: outcomeUpdated, slot: "B"},
+		{name: "restart during the install", installing: true, outcome: outcomeUpdated, slot: "B"},
+		{name: "invalid signature", signer: &other, outcome: outcomeSignatureInvalid, slot: "A"},
+		{name: "failing self-test", selfTest: 1, outcome: outcomeSelfTestFailed, slot: "A"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake(t)
+			layout := paths.Layout{Root: f.dir}
+			f.cfg.Staging = layout.Staging()
+			f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("1.0.0", 0, quiet))
+			if tc.installing {
+				f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("0.9.0", 0, quiet))
+				f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd.new"), []byte("#!/bin/sh\nexit"))
+			}
+			f.stage("1.1.0", script("1.1.0", tc.selfTest, f.good()), tc.signer)
+			<-f.usr1
+			f.start()
+			var r result
+			if tc.outcome == outcomeUpdated {
+				f.waitFor("the new agent checked in", f.checkedIn)
+				r = f.endProbation("B")
+				f.waitNoProbationLog()
+			} else {
+				r = f.waitResult(10 * time.Second)
+			}
+			if r.Outcome != tc.outcome || r.Version != "1.1.0" || r.FromVersion != "1.0.0" || f.active() != tc.slot {
+				t.Fatalf("result %+v, current %s", r, f.active())
+			}
+			if update.Pending(layout) {
+				t.Fatal("the update request is still pending after its result")
+			}
+			f.stop()
+			f.start()
+			f.expectSameResult(r, tc.slot)
+		})
+	}
+}
+
+// TestRestartDuringTheSelfTestProcessesTheRequestAgain (PDK-061): a supervisor stopped while the self-test runs
+// leaves the installed release and the request; the restarted supervisor runs the self-test again from scratch and
+// switches.
+func TestRestartDuringTheSelfTestProcessesTheRequestAgain(t *testing.T) {
+	f := newFake(t)
+	layout := paths.Layout{Root: f.dir}
+	f.cfg.Staging = layout.Staging()
+	tested := filepath.Join(f.dir, "self-tested")
+	bin := fmt.Appendf(nil, "#!/bin/sh\ncase \"$1\" in\nversion) echo 1.1.0 ;;\nself-test) [ -e %[1]s ] && exit 0; : >%[1]s; exec sleep 300 ;;\nrun) %[2]s ;;\nesac\n",
+		tested, f.good())
+	f.start()
+	f.stageAfterCheckin("1.1.0", bin)
+	f.waitFor("the self-test started", func() bool {
+		_, err := os.Stat(tested)
+		return err == nil
+	})
+	f.stop()
+	if !update.Pending(layout) || f.active() != "A" {
+		t.Fatalf("pending %t, current %s; want the request left before the switch", update.Pending(layout), f.active())
+	}
+	f.expectNoProbationLog()
+	f.expectNoResult()
+	f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("1.0.0", 0, quiet))
+	if err := os.Remove(f.cfg.LastCheckin); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	f.start()
+	f.waitFor("the new agent checked in", f.checkedIn)
+	if r := f.endProbation("B"); r.Outcome != outcomeUpdated || r.Version != "1.1.0" || r.FromVersion != "1.0.0" {
+		t.Fatalf("result %+v", r)
+	}
+	f.waitNoProbationLog()
+	if update.Pending(layout) {
+		t.Fatal("the update request is still pending after its result")
+	}
+}
+
+// TestRequestThatOutlivedItsResultIsNotProcessedAgain (PDK-061): a request whose release the existing result already
+// names came back after its result was written; processing it again would report the release a second time, so the
+// restarted supervisor only removes it.
+func TestRequestThatOutlivedItsResultIsNotProcessedAgain(t *testing.T) {
+	f := newFake(t)
+	layout := paths.Layout{Root: f.dir}
+	f.cfg.Staging = layout.Staging()
+	first := result{Version: "1.1.0", FromVersion: "1.0.0", Outcome: outcomeRolledBack, At: time.Now().UTC().Add(-time.Minute)}
+	if err := writeJSON(f.cfg.Result, map[string]any{"version": first.Version, "from_version": first.FromVersion,
+		"outcome": first.Outcome, "at": first.At}, syncFile); err != nil {
+		t.Fatal(err)
+	}
+	f.stage("1.1.0", script("1.1.0", 0, f.good()), nil)
+	<-f.usr1
+	f.start()
+	f.waitFor("the request was removed", func() bool { return !update.Pending(layout) })
+	f.expectSameResult(first, "A")
+}
+
+// TestRequestRemovalIsSyncedBeforeTheResult (PDK-061): the removal of the request is synced before the result is
+// written, so a power loss cannot bring back a request whose result exists and let a restart report it again.
+func TestRequestRemovalIsSyncedBeforeTheResult(t *testing.T) {
+	f := newFake(t)
+	var removalSynced, checked atomic.Bool
+	f.cfg.SyncDir = func(dir string) error {
+		if _, err := os.Stat(filepath.Join(f.cfg.Staging, "request.json")); dir == f.cfg.Staging && os.IsNotExist(err) {
+			removalSynced.Store(true)
+		}
+		return syncDir(dir)
+	}
+	f.cfg.SyncFile = func(file *os.File) error {
+		if file.Name() == f.cfg.Result+".tmp" {
+			if !removalSynced.Load() {
+				t.Error("the result was written before the removal of the request was synced")
+			}
+			checked.Store(true)
+		}
+		return file.Sync()
+	}
+	f.start()
+	f.stage("1.1.0", script("1.1.0", 1, f.good()), nil)
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeSelfTestFailed || !checked.Load() {
+		t.Fatalf("result %+v, checked %t", r, checked.Load())
+	}
 }

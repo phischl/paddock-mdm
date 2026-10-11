@@ -51,7 +51,7 @@ type Config struct {
 	Notify       func(state string)     // sd_notify
 	Now          func() time.Time       // clock of the probation; nil is time.Now (tests inject one)
 	Sleep        func(time.Duration)    // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
-	SyncDir      func(dir string) error // syncs slots after a flip, staging before a drop; nil is fsync (tests inject failures)
+	SyncDir      func(dir string) error // syncs slots after a flip, staging before a drop or a result; nil is fsync (tests inject failures)
 	SyncFile     func(*os.File) error   // syncs a state file before its rename and its directory after; nil is fsync (tests inject failures)
 }
 
@@ -132,6 +132,7 @@ func (s *Supervisor) Run(ctx context.Context, usr1 <-chan os.Signal) {
 	s.resumeProbation()
 	s.start()
 	s.cfg.Notify("READY=1")
+	s.resumeRequest(ctx)
 	tick := time.NewTicker(s.cfg.Tick)
 	defer tick.Stop()
 	for {
@@ -478,9 +479,15 @@ func (s *Supervisor) finish(version, from, outcome string) {
 	_ = s.finishAt(version, from, outcome, time.Now().UTC())
 }
 
-// finishAt is finish with the result time at; it returns the error of writing the result.
+// finishAt is finish with the result time at; it returns the error of writing the result. The removal of the request
+// is synced before the result is written, so a power loss cannot bring the request back once its result exists: a
+// restart would process it again (resumeRequest) and report the release a second time. If the sync fails, the result
+// is written all the same; resumeRequest then still recognises the request by the result that names its release.
 func (s *Supervisor) finishAt(version, from, outcome string, at time.Time) error {
 	s.cleanup(version)
+	if err := s.cfg.SyncDir(s.cfg.Staging); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		slog.Error("syncing the staging directory failed", "error", err)
+	}
 	res := map[string]any{"version": version, "from_version": from, "outcome": outcome, "at": at}
 	err := writeJSON(s.cfg.Result, res, s.cfg.SyncFile)
 	if err != nil {
@@ -543,6 +550,33 @@ func (s *Supervisor) resumeProbation() {
 	// Rolling back here would start the old agent before Run starts the current one; checkProbation does it.
 	p.markKept = s.forgetCheckin() != nil
 	slog.Info("resuming probation", "version", p.Version)
+}
+
+// resumeRequest processes an update request that a restarted supervisor (or device) interrupted before the switch,
+// during verification or self-test, or whose SIGUSR1 never arrived (PDK-061). Without a probation log nothing was
+// reported for it yet, and the agent does not signal again while the request keeps update.Pending true, so the
+// request is processed as SIGUSR1 would: signature, version and self-test are checked anew from the staged files,
+// and it ends in exactly one result or a switch with its own probation. A request whose release the existing result
+// already names outlived that result through a power loss; it is removed instead, because processing it again would
+// report the release a second time.
+func (s *Supervisor) resumeRequest(ctx context.Context) {
+	if s.probation != nil || s.rolledBack != nil {
+		return
+	}
+	var req, res struct{ Version string }
+	data, err := os.ReadFile(filepath.Join(s.cfg.Staging, "request.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err == nil && json.Unmarshal(data, &req) == nil && versionPattern.MatchString(req.Version) {
+		if data, err := os.ReadFile(s.cfg.Result); err == nil && json.Unmarshal(data, &res) == nil && res.Version == req.Version {
+			slog.Warn("removing an update request whose result was already written", "version", req.Version)
+			s.cleanup(req.Version)
+			return
+		}
+	}
+	slog.Info("processing an update request left from before the restart", "version", req.Version)
+	s.onRequest(ctx)
 }
 
 // dropProbation gives up a probation that cannot be resumed. A request left behind keeps update.Pending true, so the
