@@ -159,17 +159,19 @@ test('login chip fields keep their height when a click on Save blurs them', asyn
   expect(token.status()).toBe(201)
   const config = JSON.stringify((await token.json()).enrollment_config)
   const enrolled = JSON.parse(execFileSync(devicesim, ['enroll', '--hostname', hostname], { input: config, encoding: 'utf8', timeout: 90_000 }))
-  // Chips of varied widths, so that after some pick the focused input no longer fits next to the last chip.
-  cleanup.remove('/api/v1/users', `-${stamp}@`)
-  cleanup.remove('/api/v1/user-groups', `chips ${stamp}`)
+  // Short chips that grow by one character each: the space left after the last chip on a line sweeps through the
+  // range in which the focused input needs a line of its own, so the condition comes up within a few picks.
+  cleanup.remove('/api/v1/users', `Chips ${stamp}`)
+  cleanup.remove('/api/v1/user-groups', `-${stamp}`)
+  const tail = stamp.slice(-4)
   const users: string[] = []
   const groups: string[] = []
   for (let i = 0; i < 14; i++) {
-    const pad = 'x'.repeat((i * 5) % 11)
-    const user = { username: `c${i}${pad}-${stamp}@acme.test`, display_name: `Chip ${i}` }
+    const pad = 'x'.repeat(i)
+    const user = { username: `${tail}${i}${pad}@acme.test`, display_name: `Chips ${stamp} ${i}` }
     expect((await page.request.post('/api/v1/users', { headers: csrf, data: user })).status()).toBe(201)
     users.push(user.username)
-    const group = { slug: `c${i}-${stamp}`, name: `G${i}${pad} chips ${stamp}` }
+    const group = { slug: `c${i}-${stamp}`, name: `${tail}${i}${pad}` }
     expect((await page.request.post('/api/v1/user-groups', { headers: csrf, data: group })).status()).toBe(201)
     groups.push(group.name)
   }
