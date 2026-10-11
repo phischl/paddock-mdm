@@ -47,9 +47,18 @@ type Config struct {
 	SelfTest     time.Duration // self-test timeout
 	Tick         time.Duration // watchdog and probation check interval
 	MaxBackoff   time.Duration
-	Notify       func(state string) // sd_notify
-	Now          func() time.Time   // clock of the probation; nil is time.Now (tests inject one)
+	Notify       func(state string)  // sd_notify
+	Now          func() time.Time    // clock of the probation; nil is time.Now (tests inject one)
+	Sleep        func(time.Duration) // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
 }
+
+// rollbackAttempts bounds the attempts to flip current back to the previous slot; the waits between them double from
+// rollbackRetryWait. Their sum (3.75 s) stays far below the systemd watchdog (WatchdogSec=60), which the blocked loop
+// cannot pet meanwhile.
+const (
+	rollbackAttempts  = 5
+	rollbackRetryWait = 250 * time.Millisecond
+)
 
 // probation is a switch under observation; it is persisted so that a restarted supervisor resumes it.
 type probation struct {
@@ -85,6 +94,9 @@ type Supervisor struct {
 func New(cfg Config) *Supervisor {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.Sleep == nil {
+		cfg.Sleep = time.Sleep
 	}
 	return &Supervisor{cfg: cfg, exited: make(chan error, 1), tested: make(chan selfTest, 1), backoff: time.Second}
 }
@@ -303,17 +315,46 @@ func (s *Supervisor) checkProbation() {
 	s.finish(p.Version, p.FromVersion, outcomeUpdated)
 }
 
-// rollback flips back to the previous slot and restarts the old agent.
+// rollback flips back to the previous slot and restarts the old agent. It reports rolled_back only if current then
+// points at the previous slot; otherwise the new agent keeps running and the release counts as failed on this device.
 func (s *Supervisor) rollback(reason string) {
 	p := s.probation
 	s.probation = nil
 	slog.Error("rolling back", "version", p.Version, "to_version", p.FromVersion, "reason", reason)
-	if err := flip(s.cfg.Slots, p.FromSlot); err != nil {
-		slog.Error("flipping back failed", "error", err)
-	}
+	err := s.flipBack(p.FromSlot)
 	_ = os.Remove(s.cfg.ProbationLog)
 	s.restartChild()
+	if err != nil {
+		slog.Error("rollback failed: current still points at the new agent", "version", p.Version, "active_slot", s.activeSlot(),
+			"previous_slot", p.FromSlot, "attempts", rollbackAttempts, "error", err)
+		s.finish(p.Version, p.FromVersion, outcomeSelfTestFailed)
+		return
+	}
 	s.finish(p.Version, p.FromVersion, outcomeRolledBack)
+}
+
+// flipBack points current at slot, retrying with back-off. It succeeds exactly when current then points at slot: a
+// failed directory sync after the rename leaves the flip done, a rename that failed leaves it undone.
+func (s *Supervisor) flipBack(slot string) error {
+	wait := rollbackRetryWait
+	for attempt := 1; ; attempt++ {
+		err := flip(s.cfg.Slots, slot)
+		if s.activeSlot() == slot {
+			if err != nil {
+				slog.Warn("flipped back, but syncing the slot directory failed", "slot", slot, "error", err)
+			}
+			return nil
+		}
+		if err == nil {
+			err = fmt.Errorf("current does not point at slot %s after the flip", slot)
+		}
+		if attempt == rollbackAttempts {
+			return err
+		}
+		slog.Warn("flipping back failed; retrying", "slot", slot, "attempt", attempt, "in", wait, "error", err)
+		s.cfg.Sleep(wait)
+		wait *= 2
+	}
 }
 
 func (s *Supervisor) restartChild() {
