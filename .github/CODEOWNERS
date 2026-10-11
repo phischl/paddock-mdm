@@ -14,3 +14,4 @@
 /Makefile                 @phischl
 /.github/                 @phischl
 /deploy/compose/scripts/  @phischl
+/deploy/compose/versions.env  @phischl

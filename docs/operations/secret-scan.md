@@ -16,9 +16,10 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
 
 ## What the scan relies on
 
-A pull request runs its own `.github/workflows/ci.yml`, `Makefile` and scripts. It can therefore change how it is
+A pull request runs its own `.github/workflows/ci.yml`, `Makefile` (including `deploy/compose/versions.env`, which the
+Makefile reads as make syntax and which pins the gitleaks image) and scripts. It can therefore change how it is
 scanned, or skip the scan, and no setting inside the repository prevents that. The scan's integrity rests on code
-review of `.github/`, the `Makefile` and `deploy/compose/scripts/`.
+review of `.github/`, the `Makefile`, `deploy/compose/versions.env` and `deploy/compose/scripts/`.
 
 `.github/CODEOWNERS` names a reviewer for these paths and for `.gitleaks.toml` and `.gitleaksignore`. GitHub enforces
 code owners only once branch protection (or a ruleset) on `main` requires a review from code owners; that is a setting

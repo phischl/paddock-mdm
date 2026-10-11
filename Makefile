@@ -659,7 +659,8 @@ GITLEAKS_REPO ?= $(CURDIR)
 # working directory, which the file scan fills with the pull request's files, so a configuration that extends another
 # file fails; `useDefault` alone is allowed.
 # What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
-# scanned. The scan's integrity therefore rests on code review of .github/ and the Makefile; CODEOWNERS names a
+# scanned. The scan's integrity therefore rests on code review of .github/, the Makefile and
+# deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE); CODEOWNERS names a
 # reviewer for them, but GitHub enforces that only once branch protection requires code-owner review, a setting of the
 # maintainer (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
