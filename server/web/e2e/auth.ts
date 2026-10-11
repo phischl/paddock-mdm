@@ -23,12 +23,21 @@ export async function login(page: Page, username: string, passwordFile: string):
  * browser opens the step-up callback.
  */
 export async function stepUp(page: Page, start: () => Promise<void>, username: string, passwordFile: string, totpKeyFile: string): Promise<void> {
-  const flowPage = /\/if\/flow\/paddock-stepup\//
-  await page.route(flowPage, (route) => route.fulfill({ status: 200, contentType: 'text/html', body: '' }))
-  const request = page.waitForRequest(flowPage)
+  // The portal's own /api/auth/stepup request is held, not the flow page: Playwright does not route requests that a
+  // redirect started, so the flow page loaded in the browser and Authentik's UI ran the flow alongside the executor
+  // API below, which broke the step-up now and then (PDK-047). follow() walks the redirects with the context's cookies.
+  // The URL is taken in the handler: the request event can arrive before it, and an unroute in between would let the
+  // request through.
+  const stepUpStart = /\/api\/auth\/stepup\?/
+  let held!: (url: string) => void
+  const startUrl = new Promise<string>((resolve) => (held = resolve))
+  await page.route(stepUpStart, async (route) => {
+    held(route.request().url())
+    await route.fulfill({ status: 204, body: '' })
+  })
   await start()
-  const url = (await request).url()
-  await page.unroute(flowPage)
+  const url = await startUrl
+  await page.unroute(stepUpStart)
   await follow(page, url, '/api/auth/stepup/callback', username, password(passwordFile), password(totpKeyFile))
 }
 

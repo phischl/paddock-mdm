@@ -103,87 +103,95 @@ watch(() => props.refresh, load)
 
 <template>
   <section
-    class="local-admin"
+    class="pd-panel local-admin"
     data-testid="local-admin"
+    aria-labelledby="device-local-admin-title"
   >
-    <h2>{{ t('devices.localAdmin.title') }}</h2>
-    <p
-      v-if="problem"
-      class="form-error"
-      role="alert"
-    >
-      {{ problemText(problem) }}
-    </p>
-    <template v-if="state">
-      <v-alert
-        v-if="overdue"
-        type="warning"
-        variant="tonal"
-        class="conflict"
-        data-testid="local-admin-overdue"
+    <header class="pd-panel-header">
+      <h2
+        id="device-local-admin-title"
+        class="pd-type-section"
       >
-        {{ t('devices.localAdmin.overdue') }}
-      </v-alert>
-      <v-alert
-        v-if="state.last_rotation_error"
-        type="warning"
-        variant="tonal"
-        class="conflict"
-        data-testid="local-admin-error"
+        {{ t('devices.localAdmin.title') }}
+      </h2>
+    </header>
+    <div class="pd-panel-body">
+      <p
+        v-if="problem"
+        class="form-error"
+        role="alert"
       >
-        {{ t('devices.localAdmin.lastError', {
-          generation: state.last_rotation_error.generation,
-          reason: t('devices.localAdmin.errors.' + state.last_rotation_error.reason),
-          at: formatDateTime(state.last_rotation_error.at, locale),
-        }) }}
-      </v-alert>
-      <v-table class="table facts">
-        <tbody>
-          <tr>
-            <th scope="row">
-              {{ t('devices.localAdmin.account') }}
-            </th>
-            <td>{{ state.username }}</td>
-          </tr>
-          <tr>
-            <th scope="row">
-              {{ t('devices.localAdmin.active') }}
-            </th>
-            <td data-testid="local-admin-active">
-              {{ state.active_generation ?? t('devices.localAdmin.none') }}
-            </td>
-          </tr>
-          <tr v-if="state.pending_generation !== null">
-            <th scope="row">
-              {{ t('devices.localAdmin.pending') }}
-            </th>
-            <td>{{ state.pending_generation }}</td>
-          </tr>
-          <tr>
-            <th scope="row">
-              {{ t('devices.localAdmin.lastRotated') }}
-            </th>
-            <td>{{ state.last_rotated_at ? formatDateTime(state.last_rotated_at, locale) : t('devices.never') }}</td>
-          </tr>
-          <tr>
-            <th scope="row">
-              {{ t('devices.localAdmin.nextRotation') }}
-            </th>
-            <td>{{ state.next_rotation_at ? formatDateTime(state.next_rotation_at, locale) : '–' }}</td>
-          </tr>
-        </tbody>
-      </v-table>
-      <div class="form-actions">
-        <v-btn
-          v-if="session.canDelete && state.active_generation !== null"
-          color="error"
-          data-testid="local-admin-reveal"
-          @click="reveal"
+        {{ problemText(problem) }}
+      </p>
+      <template v-if="state">
+        <v-alert
+          v-if="overdue"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="local-admin-overdue"
         >
-          {{ t('devices.localAdmin.reveal.label') }}
-        </v-btn>
-      </div>
-    </template>
+          {{ t('devices.localAdmin.overdue') }}
+        </v-alert>
+        <v-alert
+          v-if="state.last_rotation_error"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="local-admin-error"
+        >
+          {{ t('devices.localAdmin.lastError', {
+            generation: state.last_rotation_error.generation,
+            reason: t('devices.localAdmin.errors.' + state.last_rotation_error.reason),
+            at: formatDateTime(state.last_rotation_error.at, locale),
+          }) }}
+        </v-alert>
+        <dl class="pd-facts">
+          <div>
+            <dt>
+              {{ t('devices.localAdmin.account') }}
+            </dt>
+            <dd>{{ state.username }}</dd>
+          </div>
+          <div>
+            <dt>
+              {{ t('devices.localAdmin.active') }}
+            </dt>
+            <dd data-testid="local-admin-active">
+              {{ state.active_generation ?? t('devices.localAdmin.none') }}
+            </dd>
+          </div>
+          <div v-if="state.pending_generation !== null">
+            <dt>
+              {{ t('devices.localAdmin.pending') }}
+            </dt>
+            <dd>{{ state.pending_generation }}</dd>
+          </div>
+          <div>
+            <dt>
+              {{ t('devices.localAdmin.lastRotated') }}
+            </dt>
+            <dd>{{ state.last_rotated_at ? formatDateTime(state.last_rotated_at, locale) : t('devices.never') }}</dd>
+          </div>
+          <div>
+            <dt>
+              {{ t('devices.localAdmin.nextRotation') }}
+            </dt>
+            <dd>{{ state.next_rotation_at ? formatDateTime(state.next_rotation_at, locale) : '–' }}</dd>
+          </div>
+        </dl>
+        <div class="form-actions">
+          <v-btn
+            v-if="session.canDelete && state.active_generation !== null"
+            color="error"
+            data-testid="local-admin-reveal"
+            @click="reveal"
+          >
+            {{ t('devices.localAdmin.reveal.label') }}
+          </v-btn>
+        </div>
+      </template>
+    </div>
     <v-dialog
       :model-value="revealed !== null"
       max-width="36rem"

@@ -1514,7 +1514,7 @@
       "rebootRequired": "Neustart erforderlich",
       "agent": "Agent {version}",
       "agentOnCurrent": "{on} / {active} auf dem aktuellen Release",
-      "agentNone": "Noch kein Agent-Release veröffentlicht",
+      "agentNone": "Noch kein Agent-Rollout abgeschlossen",
       "osReleases": "Ubuntu-Versionen",
       "osRelease": "{release}: {count}",
       "unknownRelease": "unbekannt"

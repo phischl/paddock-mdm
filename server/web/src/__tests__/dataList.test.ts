@@ -292,6 +292,15 @@ describe('DataList', () => {
     expect(w.find('[data-testid="list-clear-filters"]').exists()).toBe(false)
   })
 
+  it('shows the empty state below the column headers without an empty table row above it', async () => {
+    const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 0)))
+    const { w } = await mountList('/list', fetch, undefined, { emptyTitle: 'deviceGroups.empty.title' })
+    const table = w.get('table')
+    expect(table.findAll('thead th').map((th) => th.text())).toEqual(['Name', 'Status'])
+    expect(table.findAll('tbody tr')).toHaveLength(0)
+    expect(w.get('[data-testid="empty-state"]').text()).toContain('No device groups yet')
+  })
+
   it('toggles an expanded row with a labelled button', async () => {
     const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 2)))
     const { w } = await mountList('/list', fetch, undefined, { expandable: true }, {

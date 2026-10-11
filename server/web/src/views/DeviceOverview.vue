@@ -99,7 +99,7 @@ async function copyId(): Promise<void> {
           </h2>
         </header>
         <dl
-          class="pd-panel-body pd-facts pd-identity"
+          class="pd-panel-body pd-facts"
           data-testid="device-identity"
         >
           <div>

@@ -30,6 +30,7 @@ const id = useId()
 const typed = ref('')
 const reasonText = ref('')
 const cancelButton = ref<ComponentPublicInstance | null>(null)
+const card = ref<ComponentPublicInstance | null>(null)
 const canConfirm = computed(
   () =>
     (!props.requireTypedText || typed.value === props.requireTypedText) &&
@@ -40,9 +41,18 @@ function focusCancel(): void {
   ;(cancelButton.value?.$el as HTMLElement | undefined)?.focus()
 }
 
-// Focus on Cancel as soon as the dialog renders and again after its transition, when Vuetify would move focus to
-// the dialog container. A new confirmation (other target, other question) starts with empty fields, also when it
-// replaces an open one without closing the dialog: a typed name must never confirm a different request.
+/**
+ * After the transition Vuetify would move focus to the dialog container, so Cancel is focused again, unless focus is
+ * already inside the dialog: someone may be typing into a field already, and taking focus there loses their input.
+ */
+function focusCancelAfterEnter(): void {
+  if ((card.value?.$el as HTMLElement | undefined)?.contains(document.activeElement)) return
+  focusCancel()
+}
+
+// Focus on Cancel as soon as the dialog renders. A new confirmation (other target, other question) starts with empty
+// fields, also when it replaces an open one without closing the dialog: a typed name must never confirm a different
+// request.
 watch(
   () => [props.modelValue, props.title, props.message, props.requireTypedText, props.reason] as const,
   ([open]) => {
@@ -66,9 +76,10 @@ function onConfirm(): void {
     :aria-labelledby="id + '-title'"
     :aria-describedby="id + '-message'"
     @update:model-value="(open: boolean) => !open && emit('cancel')"
-    @after-enter="focusCancel"
+    @after-enter="focusCancelAfterEnter"
   >
     <v-card
+      ref="card"
       data-testid="confirm-dialog"
       @keydown.esc.stop="emit('cancel')"
     >

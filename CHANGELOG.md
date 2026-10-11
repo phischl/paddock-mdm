@@ -141,11 +141,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rollback failed: current still points at the new agent` at error level, keeps the new agent running and reports
   the update as failed (`agent.update_failed` with outcome `self_test_failed`), which counts toward the rollout's
   failure rate as a rollback does.
+- Portal confirmation dialogs no longer take focus away from a field that someone starts typing into while the dialog
+  is still opening. The dialog moved focus back to Cancel when its opening animation ended, so text typed in that
+  moment, such as the hostname of a Lock or Destroy, could be lost and the confirm button stayed disabled.
+- Portal device page: the Disk encryption, Updates and Local administrator panels show their facts in the same
+  label/value rows as the Identity panel, with a panel header, instead of a table with offset values. Empty lists, such
+  as the IP allow list without entries, no longer show an empty row above their empty state.
+- Portal overview: while no agent rollout has completed, the "Updates and agent rollout" panel now says "No agent
+  rollout completed yet" instead of "No agent release published yet". The panel names the release of the most recent
+  completed rollout, so published releases without a completed rollout were wrongly reported as missing.
 - After a rollback, `paddock-supervisor` no longer ends the agent it has just restarted: its check-in request
   (SIGHUP) could arrive before the agent was ready for it, the agent exited with `signal: hangup` and only came back
   after the restart back-off. The supervisor now ignores SIGHUP (and no longer exits on one itself), so the agent
   starts with SIGHUP ignored until it handles check-in requests; it checks in at start anyway, so no update result
   goes unreported.
+- Portal device page, Login & sudo tab: the user and group fields of the login assignment no longer shrink by a line
+  when they lose focus, so a click on Save or Suspend logins right after picking an entry lands on the button.
 
 ### Security
 

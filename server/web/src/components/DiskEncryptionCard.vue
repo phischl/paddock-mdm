@@ -132,68 +132,76 @@ onBeforeUnmount(hide)
 
 <template>
   <section
-    class="disk-encryption"
+    class="pd-panel disk-encryption"
     data-testid="disk-encryption"
+    aria-labelledby="device-disk-title"
   >
-    <h2>{{ t('devices.disk.title') }}</h2>
-    <p
-      v-if="problem"
-      class="form-error"
-      role="alert"
-    >
-      {{ problemText(problem) }}
-    </p>
-    <template v-if="disk">
-      <v-alert
-        v-if="disk.last_keyslot_change"
-        type="warning"
-        variant="tonal"
-        class="conflict"
-        data-testid="disk-keyslot-change"
+    <header class="pd-panel-header">
+      <h2
+        id="device-disk-title"
+        class="pd-type-section"
       >
-        {{ t('devices.disk.keyslotChange', {
-          at: formatDateTime(disk.last_keyslot_change.at, locale),
-          before: disk.last_keyslot_change.before.join(', '),
-          after: disk.last_keyslot_change.after.join(', '),
-        }) }}
-      </v-alert>
-      <v-table class="table facts">
-        <tbody>
-          <tr>
-            <th scope="row">
+        {{ t('devices.disk.title') }}
+      </h2>
+    </header>
+    <div class="pd-panel-body">
+      <p
+        v-if="problem"
+        class="form-error"
+        role="alert"
+      >
+        {{ problemText(problem) }}
+      </p>
+      <template v-if="disk">
+        <v-alert
+          v-if="disk.last_keyslot_change"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="disk-keyslot-change"
+        >
+          {{ t('devices.disk.keyslotChange', {
+            at: formatDateTime(disk.last_keyslot_change.at, locale),
+            before: disk.last_keyslot_change.before.join(', '),
+            after: disk.last_keyslot_change.after.join(', '),
+          }) }}
+        </v-alert>
+        <dl class="pd-facts">
+          <div>
+            <dt>
               {{ t('devices.disk.state') }}
-            </th>
-            <td data-testid="disk-state">
+            </dt>
+            <dd data-testid="disk-state">
               {{ disk.state ? t('devices.disk.states.' + disk.state) : t('devices.disk.notReported') }}
-            </td>
-          </tr>
-          <tr v-if="disk.state">
-            <th scope="row">
+            </dd>
+          </div>
+          <div v-if="disk.state">
+            <dt>
               {{ t('devices.disk.keyslots') }}
-            </th>
-            <td data-testid="disk-tokens">
+            </dt>
+            <dd data-testid="disk-tokens">
               {{ t('devices.disk.keyslotFacts', { count: disk.keyslots, kinds: disk.tokens.join(', '), version: disk.luks_version ?? 2 }) }}
-            </td>
-          </tr>
-          <tr v-if="disk.reported_at">
-            <th scope="row">
+            </dd>
+          </div>
+          <div v-if="disk.reported_at">
+            <dt>
               {{ t('devices.disk.reportedAt') }}
-            </th>
-            <td>{{ formatDateTime(disk.reported_at, locale) }}</td>
-          </tr>
-          <tr>
-            <th scope="row">
+            </dt>
+            <dd>{{ formatDateTime(disk.reported_at, locale) }}</dd>
+          </div>
+          <div>
+            <dt>
               {{ t('devices.disk.recoveryKeyRow') }}
-            </th>
-            <td data-testid="disk-recovery">
+            </dt>
+            <dd data-testid="disk-recovery">
               {{ recovery ? t('devices.disk.escrowFacts', { generation: recovery.generation, at: formatDateTime(recovery.created_at, locale) }) : t('devices.disk.none') }}
-            </td>
-          </tr>
-          <tr v-if="volumes.length > 0 || disk.unresolved.length > 0">
-            <th scope="row">
+            </dd>
+          </div>
+          <div v-if="volumes.length > 0 || disk.unresolved.length > 0">
+            <dt>
               {{ t('devices.disk.volumes') }}
-            </th>
-            <td data-testid="disk-volumes">
+            </dt>
+            <dd data-testid="disk-volumes">
               <div
                 v-for="(v, i) in volumes"
                 :key="'v' + i"
@@ -207,13 +215,13 @@ onBeforeUnmount(hide)
               >
                 {{ t('devices.disk.unresolved', { source }) }}
               </div>
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">
+            </dd>
+          </div>
+          <div>
+            <dt>
               {{ t('devices.disk.headers') }}
-            </th>
-            <td data-testid="disk-headers">
+            </dt>
+            <dd data-testid="disk-headers">
               <span v-if="headers.length === 0">{{ t('devices.disk.none') }}</span>
               <div
                 v-for="h in headers"
@@ -226,43 +234,43 @@ onBeforeUnmount(hide)
                   {{ t('devices.disk.headerFacts', { generation: h.generation, status: t('devices.disk.escrowStatuses.' + h.status), at: formatDateTime(h.created_at, locale) }) }}
                 </template>
               </div>
-            </td>
-          </tr>
-        </tbody>
-      </v-table>
-      <div
-        v-if="session.canDelete"
-        class="form-actions"
-      >
-        <v-btn
-          v-if="recovery"
-          color="error"
-          data-testid="disk-reveal"
-          @click="start('disk-recovery-key')"
+            </dd>
+          </div>
+        </dl>
+        <div
+          v-if="session.canDelete"
+          class="form-actions"
         >
-          {{ t('devices.disk.recoveryKey.label') }}
-        </v-btn>
-        <template v-if="downloadable.length > 0">
           <v-btn
-            v-for="v in downloadable"
-            :key="v.uuid"
+            v-if="recovery"
+            color="error"
+            data-testid="disk-reveal"
+            @click="start('disk-recovery-key')"
+          >
+            {{ t('devices.disk.recoveryKey.label') }}
+          </v-btn>
+          <template v-if="downloadable.length > 0">
+            <v-btn
+              v-for="v in downloadable"
+              :key="v.uuid"
+              variant="outlined"
+              data-testid="disk-header"
+              @click="start('disk-header', v.root ? null : v.uuid ?? null)"
+            >
+              {{ t('devices.disk.header.volumeLabel', { device: v.device }) }}
+            </v-btn>
+          </template>
+          <v-btn
+            v-else-if="header"
             variant="outlined"
             data-testid="disk-header"
-            @click="start('disk-header', v.root ? null : v.uuid ?? null)"
+            @click="start('disk-header')"
           >
-            {{ t('devices.disk.header.volumeLabel', { device: v.device }) }}
+            {{ t('devices.disk.header.label') }}
           </v-btn>
-        </template>
-        <v-btn
-          v-else-if="header"
-          variant="outlined"
-          data-testid="disk-header"
-          @click="start('disk-header')"
-        >
-          {{ t('devices.disk.header.label') }}
-        </v-btn>
-      </div>
-    </template>
+        </div>
+      </template>
+    </div>
     <v-dialog
       :model-value="revealed !== null"
       max-width="40rem"

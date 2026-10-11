@@ -43,75 +43,83 @@ watch(() => props.refresh, load)
 
 <template>
   <section
-    class="device-updates"
+    class="pd-panel device-updates"
     data-testid="device-updates"
+    aria-labelledby="device-updates-title"
   >
-    <h2>{{ t('updates.device.title') }}</h2>
-    <p
-      v-if="problem"
-      class="form-error"
-      role="alert"
-    >
-      {{ problemText(problem) }}
-    </p>
-    <template v-if="state">
-      <v-alert
-        v-if="state.reboot_required"
-        type="info"
-        variant="tonal"
-        class="conflict"
-        data-testid="reboot-required"
+    <header class="pd-panel-header">
+      <h2
+        id="device-updates-title"
+        class="pd-type-section"
       >
-        {{ t('updates.device.rebootRequired') }}
-      </v-alert>
-      <v-alert
-        v-for="c in state.conflicts"
-        :key="c.package"
-        type="warning"
-        variant="tonal"
-        class="conflict"
-        data-testid="hold-conflict"
+        {{ t('updates.device.title') }}
+      </h2>
+    </header>
+    <div class="pd-panel-body">
+      <p
+        v-if="problem"
+        class="form-error"
+        role="alert"
       >
-        {{ t('updates.device.conflict', {
-          package: c.package,
-          versions: c.versions.map((v) => v ?? t('updates.holds.installedVersion')).join(', '),
-          chosen: c.chosen ?? t('updates.holds.installedVersion'),
-        }) }}
-      </v-alert>
-      <v-table class="table facts">
-        <tbody>
-          <tr>
-            <th scope="row">
+        {{ problemText(problem) }}
+      </p>
+      <template v-if="state">
+        <v-alert
+          v-if="state.reboot_required"
+          type="info"
+          variant="tonal"
+          class="conflict"
+          data-testid="reboot-required"
+        >
+          {{ t('updates.device.rebootRequired') }}
+        </v-alert>
+        <v-alert
+          v-for="c in state.conflicts"
+          :key="c.package"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="hold-conflict"
+        >
+          {{ t('updates.device.conflict', {
+            package: c.package,
+            versions: c.versions.map((v) => v ?? t('updates.holds.installedVersion')).join(', '),
+            chosen: c.chosen ?? t('updates.holds.installedVersion'),
+          }) }}
+        </v-alert>
+        <dl class="pd-facts">
+          <div>
+            <dt>
               {{ t('updates.device.lastSecurity') }}
-            </th>
-            <td data-testid="last-security-run">
+            </dt>
+            <dd data-testid="last-security-run">
               {{ runText(state.last_security_run) }}
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">
+            </dd>
+          </div>
+          <div>
+            <dt>
               {{ t('updates.device.lastRegular') }}
-            </th>
-            <td data-testid="last-regular-run">
+            </dt>
+            <dd data-testid="last-regular-run">
               {{ runText(state.last_regular_run) }}
-            </td>
-          </tr>
-          <tr v-if="heldBack(state.last_regular_run)">
-            <th scope="row">
+            </dd>
+          </div>
+          <div v-if="heldBack(state.last_regular_run)">
+            <dt>
               {{ t('updates.device.heldBack') }}
-            </th>
-            <td>{{ heldBack(state.last_regular_run) }}</td>
-          </tr>
-          <tr>
-            <th scope="row">
+            </dt>
+            <dd>{{ heldBack(state.last_regular_run) }}</dd>
+          </div>
+          <div>
+            <dt>
               {{ t('updates.device.holds') }}
-            </th>
-            <td data-testid="device-holds">
+            </dt>
+            <dd data-testid="device-holds">
               {{ state.holds.length === 0 ? t('updates.device.noHolds') : state.holds.map((h) => h.version ? h.package + ' = ' + h.version : h.package).join(', ') }}
-            </td>
-          </tr>
-        </tbody>
-      </v-table>
-    </template>
+            </dd>
+          </div>
+        </dl>
+      </template>
+    </div>
   </section>
 </template>
