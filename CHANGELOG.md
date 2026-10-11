@@ -200,6 +200,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signature check and self-test, and reports one result. It removes a request whose release the existing
   `update-result.json` already names instead, and it syncs the removal of a request before it writes the result, so
   a power failure cannot bring back a request that was already reported.
+- `paddock-supervisor` no longer reports `downgrade_refused` for the agent version that is already running, after a
+  successful update whose request came back after a power failure when the agent had already reported and removed
+  the result. Such a report counted against the release's rollout and made the device refuse its own version as a
+  failed update. The supervisor now removes a leftover request for the active version without a result.
 
 ### Security
 

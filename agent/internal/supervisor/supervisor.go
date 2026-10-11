@@ -558,7 +558,8 @@ func (s *Supervisor) resumeProbation() {
 // request is processed as SIGUSR1 would: signature, version and self-test are checked anew from the staged files,
 // and it ends in exactly one result or a switch with its own probation. A request whose release the existing result
 // already names outlived that result through a power loss; it is removed instead, because processing it again would
-// report the release a second time.
+// report the release a second time. So is a request for the version that current already runs (PDK-066): it outlived
+// the result of its own switch, whose staging sync failed, and the agent has since deleted that result.
 func (s *Supervisor) resumeRequest(ctx context.Context) {
 	if s.probation != nil || s.rolledBack != nil {
 		return
@@ -571,6 +572,16 @@ func (s *Supervisor) resumeRequest(ctx context.Context) {
 	if err == nil && json.Unmarshal(data, &req) == nil && versionPattern.MatchString(req.Version) {
 		if data, err := os.ReadFile(s.cfg.Result); err == nil && json.Unmarshal(data, &res) == nil && res.Version == req.Version {
 			slog.Warn("removing an update request whose result was already written", "version", req.Version)
+			s.cleanup(req.Version)
+			return
+		}
+		// Processing it would write downgrade_refused for the running release: a second, false event that counts
+		// against its rollout and makes the agent mark its own version as failed. Removing it loses no result: the
+		// agent never stages the version it runs (a re-install of the same version), and onRequest would refuse one
+		// anyway. The comparison is exact, not semver: a request for another build of the same version was staged
+		// by the agent on purpose, and without its downgrade_refused the agent would stage it again forever.
+		if req.Version == s.version(s.current()) {
+			slog.Warn("removing an update request for the version that is already active", "version", req.Version)
 			s.cleanup(req.Version)
 			return
 		}
