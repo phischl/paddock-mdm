@@ -993,3 +993,116 @@ func TestProbationLogIsSyncedBeforeTheSwitch(t *testing.T) {
 		t.Fatal("temporary probation log left behind")
 	}
 }
+
+// durableLog is the supervisor's injected file sync; it records the probation log as last synced, which is the log a
+// power loss brings back if its removal was not yet durable.
+type durableLog struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func (d *durableLog) sync(log string) func(*os.File) error {
+	return func(file *os.File) error {
+		if file.Name() == log+".tmp" {
+			data, err := os.ReadFile(file.Name())
+			if err != nil {
+				return err
+			}
+			d.mu.Lock()
+			d.data = data
+			d.mu.Unlock()
+		}
+		return file.Sync()
+	}
+}
+
+// restartAfterLostLogRemoval simulates a power loss after the update result became durable but before the removal of
+// the probation log did: it stops the supervisor, puts the last synced log back, removes the result as an agent that
+// already reported it does, and starts the supervisor again.
+func (f *fake) restartAfterLostLogRemoval(d *durableLog) {
+	f.t.Helper()
+	f.stop()
+	f.expectNoProbationLog()
+	d.mu.Lock()
+	data := d.data
+	d.mu.Unlock()
+	if data == nil {
+		f.t.Fatal("the probation log was never synced")
+	}
+	if err := os.WriteFile(f.cfg.ProbationLog, data, 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.Remove(f.cfg.Result); err != nil {
+		f.t.Fatal(err)
+	}
+	f.start()
+}
+
+// expectSameResult checks that the restarted supervisor writes the result want again, unchanged, so that the agent,
+// which reports a result once per "at", does not report it twice; and that two ticks later it still stands with
+// current on slot.
+func (f *fake) expectSameResult(want result, slot string) {
+	f.t.Helper()
+	check := func() {
+		f.t.Helper()
+		got := f.waitResult(10 * time.Second)
+		if got.Outcome != want.Outcome || got.Version != want.Version || got.FromVersion != want.FromVersion || !got.At.Equal(want.At) {
+			f.t.Fatalf("result after the restart %+v, want the first result %+v", got, want)
+		}
+		if f.active() != slot {
+			f.t.Fatalf("current → %s, want %s", f.active(), slot)
+		}
+	}
+	check()
+	f.waitSent()
+	f.waitSent()
+	check()
+	f.expectNoProbationLog()
+	f.expectStagingClean()
+}
+
+// TestRestartAfterUpdatedDoesNotDecideAgain (PDK-058): a power loss after "updated" was written can bring back the
+// probation log, whose removal was not synced. The restarted supervisor writes the same result again instead of
+// resuming the probation, which here would roll back at once, because the check-in mark cannot be cleared.
+func TestRestartAfterUpdatedDoesNotDecideAgain(t *testing.T) {
+	f := newFake(t)
+	d := &durableLog{}
+	f.cfg.SyncFile = d.sync(f.cfg.ProbationLog)
+	f.start()
+	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, f.good()))
+	f.waitFor("the new agent checked in", f.checkedIn)
+	first := f.endProbation("B")
+	if first.Outcome != outcomeUpdated || first.Version != "1.1.0" {
+		t.Fatalf("result %+v", first)
+	}
+	f.stop()
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, "trap '' HUP; exec sleep 300"))
+	if err := os.Remove(f.cfg.LastCheckin); err != nil {
+		t.Fatal(err)
+	}
+	f.keepCheckinMark()
+	f.restartAfterLostLogRemoval(d)
+	f.expectSameResult(first, "B")
+}
+
+// TestRestartAfterRolledBackDoesNotReportAgain (PDK-058): the same for a rollback whose flip back waited for a durable
+// sync; the log that comes back is marked rolling_back, and the restarted supervisor writes the same rolled_back again
+// instead of confirming the rollback anew with a second result.
+func TestRestartAfterRolledBackDoesNotReportAgain(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	d := &durableLog{}
+	f.cfg.SyncFile = d.sync(f.cfg.ProbationLog)
+	f.resumeFailingProbation(nil)
+	f.start()
+	f.waitSyncs(sf, 2)
+	f.expectProbationLog(true)
+	sf.set(false)
+	first := f.waitResult(10 * time.Second)
+	if first.Outcome != outcomeRolledBack || first.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", first, f.active())
+	}
+	f.restartAfterLostLogRemoval(d)
+	f.expectSameResult(first, "A")
+}

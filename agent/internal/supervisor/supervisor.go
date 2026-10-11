@@ -72,11 +72,16 @@ type probation struct {
 	SwitchedAt  time.Time `json:"switched_at"`
 	// RollingBack marks a rollback whose flip to FromSlot happened but is not known to be durable; its result waits.
 	RollingBack bool `json:"rolling_back,omitempty"`
-	deadline    time.Time
-	exits       int
-	markKept    bool // the check-in mark could not be removed, so it cannot prove a check-in of the new agent
-	unsynced    bool // the switch to ToSlot is not known to be durable, so it must be confirmed before "updated"
-	passed      bool // healthy at the deadline; only the confirmation of the switch is outstanding
+	// Outcome and DecidedAt are the decided result, recorded and synced before update-result.json is written. The
+	// removal of the log that follows is not synced, so a log that comes back after a power loss carries the result
+	// already written, and a restart writes it again unchanged instead of deciding anew (PDK-058).
+	Outcome   string    `json:"outcome,omitempty"`
+	DecidedAt time.Time `json:"decided_at,omitzero"`
+	deadline  time.Time
+	exits     int
+	markKept  bool // the check-in mark could not be removed, so it cannot prove a check-in of the new agent
+	unsynced  bool // the switch to ToSlot is not known to be durable, so it must be confirmed before "updated"
+	passed    bool // healthy at the deadline; only the confirmation of the switch is outstanding
 }
 
 type selfTest struct {
@@ -349,8 +354,7 @@ func (s *Supervisor) checkProbation() {
 	}
 	slog.Info("probation passed", "version", p.Version)
 	s.probation = nil
-	_ = os.Remove(s.cfg.ProbationLog)
-	s.finish(p.Version, p.FromVersion, outcomeUpdated)
+	s.conclude(p, outcomeUpdated)
 }
 
 // rollback flips back to the previous slot and restarts the old agent. It reports rolled_back only if current then
@@ -374,15 +378,14 @@ func (s *Supervisor) rollback(reason string) {
 		slog.Warn("rolled back; the result waits until the flip back is durable", "version", p.Version, "slot", p.FromSlot)
 		return
 	}
-	_ = os.Remove(s.cfg.ProbationLog)
 	s.restartChild()
 	if err != nil {
 		slog.Error("rollback failed: current still points at the new agent", "version", p.Version, "active_slot", s.activeSlot(),
 			"previous_slot", p.FromSlot, "attempts", rollbackAttempts, "error", err)
-		s.finish(p.Version, p.FromVersion, outcomeSelfTestFailed)
+		s.conclude(p, outcomeSelfTestFailed)
 		return
 	}
-	s.finish(p.Version, p.FromVersion, outcomeRolledBack)
+	s.conclude(p, outcomeRolledBack)
 }
 
 // flipBack points current at slot, retrying with back-off. It succeeds exactly when current then points at slot: a
@@ -418,8 +421,7 @@ func (s *Supervisor) confirmRollback() {
 		return
 	}
 	s.rolledBack = nil
-	_ = os.Remove(s.cfg.ProbationLog)
-	s.finish(p.Version, p.FromVersion, outcomeRolledBack)
+	s.conclude(p, outcomeRolledBack)
 }
 
 // confirmFlip makes current -> slot durable while current already points at slot: it renames a new symlink over
@@ -444,10 +446,35 @@ func (s *Supervisor) restartChild() {
 	s.start()
 }
 
+// conclude ends the probation p with outcome. It records the outcome in the probation log before it reports it, so
+// that the probation ends in exactly one result even if a power loss brings the removed log back (PDK-058).
+func (s *Supervisor) conclude(p *probation, outcome string) {
+	p.Outcome, p.DecidedAt = outcome, time.Now().UTC()
+	if err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); err != nil {
+		// The result is the device's only report of the probation, so it is written all the same; only a power loss
+		// before the log's removal is durable can then let a restart decide again.
+		slog.Error("recording the outcome in the probation log failed", "error", err)
+	}
+	s.report(p)
+}
+
+// report writes the recorded result of p and then removes the probation log. Writing the same result again is
+// harmless: the agent turns a result into an event once per "at" (agent.reportUpdate), and the server counts an
+// outcome once per device and release.
+func (s *Supervisor) report(p *probation) {
+	s.finishAt(p.Version, p.FromVersion, p.Outcome, p.DecidedAt)
+	_ = os.Remove(s.cfg.ProbationLog)
+}
+
 // finish cleans the staging directory, writes the update result and asks the agent to check in (SIGHUP).
 func (s *Supervisor) finish(version, from, outcome string) {
+	s.finishAt(version, from, outcome, time.Now().UTC())
+}
+
+// finishAt is finish with the result time at.
+func (s *Supervisor) finishAt(version, from, outcome string, at time.Time) {
 	s.cleanup(version)
-	res := map[string]any{"version": version, "from_version": from, "outcome": outcome, "at": time.Now().UTC()}
+	res := map[string]any{"version": version, "from_version": from, "outcome": outcome, "at": at}
 	if err := writeJSON(s.cfg.Result, res, s.cfg.SyncFile); err != nil {
 		slog.Error("writing the update result failed", "error", err)
 	}
@@ -472,6 +499,11 @@ func (s *Supervisor) resumeProbation() {
 	}
 	if json.Unmarshal(data, &p) != nil {
 		_ = os.Remove(s.cfg.ProbationLog)
+		return
+	}
+	if p.Outcome != "" {
+		slog.Info("the probation already ended; writing its result again", "version", p.Version, "outcome", p.Outcome)
+		s.report(&p)
 		return
 	}
 	if p.RollingBack && s.activeSlot() == p.FromSlot {

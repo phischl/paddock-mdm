@@ -173,6 +173,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goes unreported.
 - Portal device page, Login & sudo tab: the user and group fields of the login assignment no longer shrink by a line
   when they lose focus, so a click on Save or Suspend logins right after picking an entry lands on the button.
+- `paddock-supervisor` no longer reports a second, possibly contradicting result for an agent update after a power
+  failure. A power failure right after the result was written could bring the probation record back; the restarted
+  supervisor then ran the probation again and could report `rolled_back` for a release it had already reported as
+  `updated`, or report a rollback twice. The supervisor now writes the decided outcome into the probation record
+  before the result, and a restart that finds it writes the same result again, which the agent does not report twice.
 
 ### Security
 
