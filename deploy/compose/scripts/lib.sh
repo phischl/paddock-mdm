@@ -68,6 +68,43 @@ compose() {
     --env-file "$COMPOSE_DIR/versions.env" --env-file "$COMPOSE_DIR/.env" "${args[@]}" "$@"
 }
 
+# export_rc_host <alias> <endpoint> <access key variable> <secret key variable>: exports RC_HOST_<alias>, from which
+# the rc client defines the alias, so the RustFS credentials reach the container by name (`-e RC_HOST_<alias>`) and
+# never travel on a command line the way `rc alias set` would put them (PDK-036). Both keys are percent-encoded,
+# which rc decodes.
+export_rc_host() {
+  local alias="$1" endpoint="$2" access="${!3}" secret="${!4}"
+  export "RC_HOST_$alias=${endpoint%%://*}://$(percent_encode "$access"):$(percent_encode "$secret")@${endpoint#*://}"
+}
+
+# percent_encode <value>: the value with every byte outside the URL's unreserved set as %XX.
+percent_encode() {
+  local LC_ALL=C s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~-]) out+="$c" ;;
+      *) out+="$(printf '%%%02X' "'$c")" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# rc_user_absent <command…>: runs the command, an `rc admin user info` of one user, and succeeds when rc reports the
+# user as not found, fails when the user exists and aborts the script on every other error. `rc admin user add` on an
+# existing user replaces its secret and keeps its policy (PDK-036 review 1), so a timeout or an auth failure must not
+# be taken for a missing user. rc v0.1.36 exits 5 for any missing resource, an unknown alias included, hence the text.
+rc_user_absent() {
+  local out status=0
+  out="$("$@" 2>&1 >/dev/null)" || status=$?
+  case "$status" in
+    0) return 1 ;;
+    5) [[ "$out" == *"User '"*"' not found"* ]] && return 0 ;;
+  esac
+  printf 'rc admin user info failed (exit %s): %s\n' "$status" "$out" >&2
+  exit 1
+}
+
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-$(env_value PADDOCK_PROJECT)}"
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-paddock}"
 

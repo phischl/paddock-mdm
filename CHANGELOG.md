@@ -135,6 +135,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The RustFS bucket bootstraps (`./paddock bootstrap audit-bucket` and the bundles, artifacts and escrow buckets, plus
+  the development backup bucket) no longer put a RustFS root password or user secret key on a command line, where
+  `ps` showed it to every user of the host (PDK-036): the root credentials reach the rc client as `RC_HOST_<alias>`
+  by name only, and each user's secret key is set from the environment (`rc admin user passwd
+  --password-from-env`). A user is created with a throwaway secret and gets its policy only after that, and every
+  bootstrap run now sets each user's secret key to the value in its secret file: after changing a RustFS user secret
+  file, re-run the bootstrap and restart the services that use that credential. A bootstrap creates a user only when
+  RustFS reports it as missing and aborts on any other error, so a transient failure never resets an existing
+  user's secret. A test of `make test` refuses credentials as arguments of `rc`/`mc alias set` and `admin user add`.
 - The worker's certificate probe (`PADDOCK_TLS_PROBE_HOSTS`) verifies each public certificate against the system
   trust store and the hostname, like a client. An expired, untrusted or wrong-name certificate now reads
   `paddock_tls_probe_success` 0 and raises `PaddockCertificateProbeFailing`, instead of reporting its expiry.
