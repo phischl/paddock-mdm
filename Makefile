@@ -653,9 +653,14 @@ GITLEAKS_REPO ?= $(CURDIR)
 # resolution is seen (PDK-057). It writes temporary objects, which go to a scratch object directory while the
 # repository stays read-only. gitleaks exits 0 when its git call fails, so an error line fails, and so does a scan of
 # 0 commits, unless the range resolves and holds merge commits only: a clean merge has an empty remerge diff.
+# `--remerge-diff` shows nothing for an octopus merge (more than two parents), so a range with one fails.
 scan-secrets: ## gitleaks over the current branch history (false positives: allowlists in .gitleaks.toml)
 	@repo='$(GITLEAKS_REPO)'; \
 	common=$$(git -C "$$repo" rev-parse --path-format=absolute --git-common-dir) || exit 1; \
+	octopus=$$(git -C "$$repo" rev-list --min-parents=3 --max-count=1 $(GITLEAKS_LOG_OPTS)) || \
+		{ echo "scan-secrets: git cannot resolve $(GITLEAKS_LOG_OPTS)" >&2; exit 1; }; \
+	if [ -n "$$octopus" ]; then echo "scan-secrets: $$octopus is an octopus merge: its changes cannot be scanned" \
+		"(--remerge-diff shows none), and octopus merges are not allowed in Paddock's history" >&2; exit 1; fi; \
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
 	out=$$(docker run --rm --user "$$(id -u):$$(id -g)" -v "$$repo:$$repo:ro" -v "$$common:$$common:ro" \
 		-v "$$tmp:$$tmp" -e GIT_OBJECT_DIRECTORY="$$tmp" -e GIT_ALTERNATE_OBJECT_DIRECTORIES="$$common/objects" \
