@@ -638,7 +638,7 @@ TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-
 COMPILER_IMAGE  ?= paddock-compiler:dev
 PGBACKREST_IMAGE ?= paddock-pgbackrest:dev
 
-.PHONY: scan scan-secrets scan-fs scan-images image-compiler image-pgbackrest
+.PHONY: scan scan-secrets scan-secrets-diff scan-fs scan-images image-compiler image-pgbackrest
 scan: scan-secrets scan-fs scan-images ## Run gitleaks (branch history) and trivy (filesystem and images)
 
 # The current branch only, never --all: a finding on an unrelated stale branch must not fail this scan. CI narrows it
@@ -646,15 +646,40 @@ scan: scan-secrets scan-fs scan-images ## Run gitleaks (branch history) and triv
 GITLEAKS_LOG_OPTS ?= HEAD
 
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path; a scan
-# that still sees no commits fails instead of reporting a green result.
+# that still sees no commits fails instead of reporting a green result. gitleaks reads `git log -p`, which shows no
+# diff for a merge commit, so a range of merge commits only scans 0 commits: that passes only when the range holds no
+# other commit (PDK-057); scan-secrets-diff covers what the merges change.
 scan-secrets: ## gitleaks over the current branch history (false positives: allowlists in .gitleaks.toml)
 	@common=$$(git rev-parse --path-format=absolute --git-common-dir) || exit 1; \
 	out=$$(docker run --rm -v $(CURDIR):$(CURDIR):ro -v "$$common:$$common:ro" -w $(CURDIR) $(GITLEAKS_IMAGE) \
 		git $(CURDIR) --no-banner --redact --log-opts='$(GITLEAKS_LOG_OPTS)' 2>&1); rc=$$?; \
 	printf '%s\n' "$$out"; \
 	commits=$$(printf '%s\n' "$$out" | sed -nE 's/.*[^0-9]([0-9]+) commits scanned.*/\1/p'); \
-	if [ "$${commits:-0}" -eq 0 ]; then echo "scan-secrets: gitleaks scanned 0 commits ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
+	if [ "$${commits:-0}" -eq 0 ]; then \
+		nonmerge=$$(git rev-list --no-merges --max-count=1 $(GITLEAKS_LOG_OPTS)) || exit 1; \
+		merges=$$(git rev-list --merges --max-count=1 $(GITLEAKS_LOG_OPTS)) || exit 1; \
+		if [ -n "$$nonmerge" ] || [ -z "$$merges" ]; then echo "scan-secrets: gitleaks scanned 0 commits ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
+		echo "scan-secrets: $(GITLEAKS_LOG_OPTS) holds only merge commits, which gitleaks git does not diff;" \
+			"0 commits scanned is expected (their changes: make scan-secrets-diff)"; \
+	fi; \
 	exit $$rc
+
+# A secret added only in a merge resolution never shows in `git log -p` (PDK-057), so CI also scans the current
+# content of every file a pull request changes against its merge base, merge commits included.
+GITLEAKS_DIFF_BASE ?= origin/main
+
+scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE (catches secrets added in merges)
+	@base=$$(git merge-base $(GITLEAKS_DIFF_BASE) HEAD) || exit 1; \
+	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	git diff -z --name-only --diff-filter=d "$$base"..HEAD >"$$tmp/files" || exit 1; \
+	n=0; mkdir "$$tmp/src"; \
+	while IFS= read -r -d '' f; do \
+		if [ -f "$$f" ] || [ -L "$$f" ]; then cp -P --parents -- "$$f" "$$tmp/src/" || exit 1; n=$$((n + 1)); fi; \
+	done <"$$tmp/files"; \
+	echo "scan-secrets-diff: $$n file(s) changed in $$base..HEAD"; \
+	if [ "$$n" -eq 0 ]; then echo "scan-secrets-diff: nothing to scan"; exit 0; fi; \
+	docker run --rm -v "$$tmp/src:/scan:ro" -v $(CURDIR)/.gitleaks.toml:/gitleaks.toml:ro -w /scan $(GITLEAKS_IMAGE) \
+		dir . --config /gitleaks.toml --no-banner --redact
 
 scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tree
 	mkdir -p $(TRIVY_CACHE)

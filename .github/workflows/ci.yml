@@ -46,6 +46,12 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: make scan-secrets GITLEAKS_LOG_OPTS="$(git merge-base "origin/$BASE_REF" HEAD)..HEAD"
+      - name: Scan the files the pull request changes, merge commits included
+        # gitleaks git sees no merge diff, so a secret added only in a merge resolution needs this scan (PDK-057).
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: make scan-secrets-diff GITLEAKS_DIFF_BASE="origin/$BASE_REF"
       - name: Scan the full history of the branch
         if: github.event_name != 'pull_request'
         run: make scan-secrets
