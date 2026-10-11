@@ -87,6 +87,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Agent release signing moves into the release workflow (ADR 0006 amendment 2026-10-11): a new job `sign` in the
+  protected GitHub environment `release` (tags `v*` only, maintainer approval for every run), which runs only after the
+  smoke test passed, signs `paddockd` for
+  amd64 and arm64 and the `paddock-agent` and `paddock-supervisor` packages with the agent release key (secrets
+  `PADDOCK_RELEASE_KEY` and `PADDOCK_RELEASE_KEY_PASSPHRASE`) and verifies them against `PADDOCK_RELEASE_PUBLIC_KEY`.
+  The draft release carries them without the `-unsigned` suffix, each with its `.minisig`; `SHA256SUMS` and its
+  Sigstore signature cover the final names. `paddock-revoke` stays `-unsigned` and is signed offline.
+
 - Production Compose files carry no `build:` sections any more (M7b step 1, ADR 0022): `compose.yaml`,
   `compose.audit.yaml` and `compose.backup.yaml` reference the images `PADDOCK_IMAGE`, `PADDOCK_COMPILER_IMAGE` and
   `PADDOCK_PGBACKREST_IMAGE` only; the development overlays `compose.dev.yaml` and `compose.backup.dev.yaml` build

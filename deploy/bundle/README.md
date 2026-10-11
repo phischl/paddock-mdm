@@ -61,6 +61,7 @@ replaces them). To pull the Paddock images from a mirror, set `PADDOCK_IMAGE`, `
 
 ## Agent packages
 
-The agent packages (`paddockd`, the Debian packages and their `.minisig` signatures) are not part of this bundle. They
-are signed offline and attached to the GitHub release of this version:
+The agent packages (`paddockd`, the Debian packages and their `.minisig` signatures) are not part of this bundle. The
+release workflow signs `paddockd`, `paddock-agent` and `paddock-supervisor` and attaches them to the GitHub release of
+this version; `paddock-revoke` is attached unsigned and must be signed offline before use:
 <https://github.com/phischl/paddock-mdm/releases>. Upload them with `./paddock agent-release`.
