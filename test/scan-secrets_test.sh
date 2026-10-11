@@ -6,7 +6,8 @@
 # fails. Both scans take the configuration from GITLEAKS_CONFIG_REF (PDK-065): a pull request that adds a secret and
 # loosens .gitleaks.toml or .gitleaksignore in the same range still fails `make scan-secrets` and
 # `make scan-secrets-diff` with the merge base's configuration, while a pull request that only changes the
-# configuration passes. The secret is a generated fake GitHub token that is never printed (the scan runs with
+# configuration passes. An inline `gitleaks:allow` on the secret does not hide it, and a configuration that extends
+# another file (`[extend] path`) fails. The secret is a generated fake GitHub token that is never printed (the scan runs with
 # --redact).
 set -euo pipefail
 
@@ -43,14 +44,14 @@ expect() {
   verdict "$1" "$2" "${4:-}" "$rc" "$out"
 }
 
-# expect_pr <description> <want> <target> <merge base> [<config ref>]: runs <target> (scan-secrets or
+# expect_pr <description> <want> <target> <merge base> [<config ref> [<reason>]]: runs <target> (scan-secrets or
 # scan-secrets-diff) over the checked-out branch as a pull request from <merge base>, with the configuration from
-# <config ref> (empty: the working tree).
+# <config ref> (empty: the working tree); a fail must print <reason> when one is given.
 expect_pr() {
   local rc=0 out
   out="$(make --no-print-directory -C "$root" "$3" GITLEAKS_REPO="$r" GITLEAKS_LOG_OPTS="$4..HEAD" \
     GITLEAKS_DIFF_BASE="$4" GITLEAKS_CONFIG_REF="${5:-}" 2>&1)" || rc=$?
-  verdict "$1 ($3)" "$2" "" "$rc" "$out"
+  verdict "$1 ($3)" "$2" "${6:-}" "$rc" "$out"
 }
 
 mkdir -p "$r"
@@ -192,6 +193,35 @@ g switch -q -c pr-on-ignored
 printf 'OTHER=1\n' >>"$r/creds.env"
 g commit -q -am 'extend the ignored file'
 expect_pr "a pull request on a file the base's .gitleaksignore covers" pass scan-secrets-diff "$ignored" "$ignored"
+
+# A secret the pull request marks with an inline allow comment.
+g switch -q -c pr-inline-allow "$base"
+printf 'GITHUB_TOKEN=%s # gitleaks:allow\n' "$(token)" >"$r/creds.env"
+g add creds.env
+g commit -q -m 'add allowed credentials'
+for target in scan-secrets scan-secrets-diff; do
+  expect_pr "a secret with an inline gitleaks:allow" leak "$target" "$base" "$base"
+done
+
+# A base configuration that extends another file: gitleaks would read that file from the scanned pull request's
+# files, so the scan refuses it, in the [extend] table and as a dotted key alike.
+for form in table dotted; do
+  g switch -q -c "extend-$form" "$base"
+  if [[ "$form" == table ]]; then
+    printf '[extend] # the default rules and more\nuseDefault = true\n"path" = "extra.toml"\n' >"$r/.gitleaks.toml"
+  else
+    printf 'extend.path = "extra.toml"\n' >"$r/.gitleaks.toml"
+  fi
+  g commit -q -am "extend another file ($form)"
+  extending="$(g rev-parse HEAD)"
+  printf 'side\n' >"$r/extend.txt"
+  g add extend.txt
+  g commit -q -m 'a pull request on the extending base'
+  for target in scan-secrets scan-secrets-diff; do
+    expect_pr "a base configuration with [extend] path ($form)" fail "$target" "$extending" "$extending" \
+      "extends another file"
+  done
+done
 
 if ((failures > 0)); then
   echo "scan-secrets: $failures failure(s)"
