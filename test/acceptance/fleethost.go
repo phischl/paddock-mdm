@@ -35,8 +35,9 @@ func enrollFleetHost(t *testing.T, uuid, hostname string, packages [][2]string) 
 }
 
 // triggerFleetVulnerabilities runs Fleet's vulnerability job now instead of at its next period, as the development
-// administrator through fleetctl in Fleet's network namespace.
-func triggerFleetVulnerabilities(t *testing.T) {
+// administrator through fleetctl in Fleet's network namespace. Fleet refuses a trigger while a run is still pending,
+// so callers that trigger repeatedly only log the error.
+func triggerFleetVulnerabilities(t *testing.T) error {
 	t.Helper()
 	ctx := testContext(t, 5*time.Minute)
 	image, err := stack.Image("FLEETCTL_IMAGE")
@@ -56,9 +57,88 @@ func triggerFleetVulnerabilities(t *testing.T) {
 	out, err := stack.Docker(ctx, nil, "run", "--rm", "--network", "container:"+strings.TrimSpace(fleet), "-e", "HOME=/tmp",
 		"-e", "PASSWORD="+strings.TrimSpace(password), "--entrypoint", "sh", image, "-c", script)
 	if err != nil {
-		t.Fatalf("fleetctl trigger: %v: %s", err, out)
+		return fmt.Errorf("fleetctl trigger: %w: %s", err, strings.TrimSpace(out))
 	}
 	t.Logf("fleetctl trigger: %s", strings.TrimSpace(out))
+	return nil
+}
+
+// fleetRetrigger is how long a gate waits for a triggered run of Fleet's vulnerability job before it triggers again;
+// a run takes well under a minute once Fleet has its data.
+const fleetRetrigger = 2 * time.Minute
+
+// fleetDataTimeout bounds the wait for Fleet's vulnerability data. GitHub's rate limit for requests without a token
+// resets within an hour; Fleet's first runs on a fresh stack (CI) are minutes after its start, and F3 runs about
+// 40 minutes later.
+const fleetDataTimeout = 20 * time.Minute
+
+// waitFleetVulnerabilityData waits until Fleet has the vulnerability data that matches the given CVEs, triggering its
+// vulnerability job again every fleetRetrigger. That data is a precondition of plan M5a AC1, not part of a device's
+// 10 minutes: Fleet downloads it from GitHub without a token, and a shared CI runner may be over GitHub's hourly rate
+// limit when Fleet's runs try (PDK-053); every run tries again.
+func waitFleetVulnerabilityData(t *testing.T, cves ...string) {
+	t.Helper()
+	begin := time.Now()
+	var triggered time.Time
+	for {
+		missing := fleetVulnerabilityDataMissing(t, cves)
+		if len(missing) == 0 {
+			if waited := time.Since(begin); waited > time.Second {
+				t.Logf("Fleet's vulnerability data loaded after %s", waited.Round(time.Second))
+			}
+			return
+		}
+		if time.Since(begin) > fleetDataTimeout {
+			t.Fatalf("Fleet has no %v after %s; errors of its vulnerability job: %s", missing, fleetDataTimeout,
+				fleetVulnerabilityErrors(t, begin))
+		}
+		if time.Since(triggered) >= fleetRetrigger {
+			if err := triggerFleetVulnerabilities(t); err != nil {
+				t.Log(err)
+			}
+			triggered = time.Now()
+		}
+		time.Sleep(15 * time.Second)
+	}
+}
+
+// fleetVulnerabilityDataMissing lists the files of Fleet's vulnerability data that findings of the CVEs need and Fleet
+// has not downloaded yet: the CPE dictionary and the NVD feeds of the CVEs' years. Fleet matches the gates' deb
+// packages through them; its OSV path needs the OS versions that Fleet aggregates only hourly, which a
+// fresh stack (CI) has not done yet when the gate runs.
+func fleetVulnerabilityDataMissing(t *testing.T, cves []string) []string {
+	t.Helper()
+	files := []string{"cpe.sqlite"}
+	for _, cve := range cves {
+		files = append(files, "nvdcve-1.1-"+strings.Split(cve, "-")[1]+".json.gz")
+	}
+	script := "for f in " + strings.Join(files, " ") + "; do test -s \"$FLEET_VULNERABILITIES_DATABASES_PATH/$f\" || echo \"$f\"; done"
+	out, err := stack.Compose(testContext(t, time.Minute), nil, "exec", "-T", "fleet", "sh", "-c", script)
+	if err != nil {
+		t.Fatalf("fleet vulnerability data: %v", err)
+	}
+	return strings.Fields(out)
+}
+
+// fleetVulnerabilityErrors returns the last errors of Fleet's vulnerability job since a time, such as GitHub's rate
+// limit on the download of its data; `make logs` keeps too few lines of Fleet to show them after the whole suite.
+func fleetVulnerabilityErrors(t *testing.T, since time.Time) string {
+	t.Helper()
+	out, err := stack.Compose(testContext(t, time.Minute), nil, "logs", "--no-color", "--no-log-prefix",
+		"--since", since.UTC().Format(time.RFC3339), "fleet")
+	if err != nil {
+		return fmt.Sprintf("fleet logs: %v", err)
+	}
+	var errs []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, `"cron":"vulnerabilities"`) && strings.Contains(line, `"level":"error"`) {
+			errs = append(errs, line[:min(len(line), 400)])
+		}
+	}
+	if len(errs) == 0 {
+		return "none"
+	}
+	return strings.Join(errs[max(0, len(errs)-3):], "\n")
 }
 
 // storeInventory writes packages and findings of a device as paddock-worker's inventory sync stores them, as
