@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -101,8 +102,14 @@ func New(cfg Config) *Supervisor {
 	return &Supervisor{cfg: cfg, exited: make(chan error, 1), tested: make(chan selfTest, 1), backoff: time.Second}
 }
 
-// Run supervises the agent until ctx ends; usr1 delivers update requests from the agent.
+// Run supervises the agent until ctx ends; usr1 delivers update requests from the agent. It ignores SIGHUP for the
+// whole process, so every agent it starts inherits SIGHUP as ignored until the agent installs its own handler.
 func (s *Supervisor) Run(ctx context.Context, usr1 <-chan os.Signal) {
+	// finish asks the agent to check in with SIGHUP, also right after restartChild, before the new agent can have
+	// installed a handler; with the default action that ends it. Only an inherited SIG_IGN covers the agent's whole
+	// start from exec on (the Go runtime keeps it until signal.Notify); a lost request is harmless, because the agent
+	// checks in at start (PDK-035).
+	signal.Ignore(syscall.SIGHUP)
 	s.resumeProbation()
 	s.start()
 	s.cfg.Notify("READY=1")
