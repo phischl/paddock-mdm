@@ -330,6 +330,9 @@ func TestReleaseBinding(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFake(t)
 			f.start()
+			// A request for the active version that the starting supervisor finds counts as left over and is removed
+			// without a result (PDK-066); the first watchdog notice proves that the start is over.
+			f.waitSent()
 			f.stageSigned(tt.version, script(tt.version, 0, f.good()), nil, tt.comment)
 			if r := f.waitResult(10 * time.Second); r.Outcome != tt.outcome || r.FromVersion != "1.0.0" || r.Version != tt.version {
 				t.Fatalf("result %+v", r)
@@ -381,6 +384,7 @@ func TestPreReleaseSequence(t *testing.T) {
 			f := newFake(t)
 			f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script(active, 0, f.good()))
 			f.start()
+			f.waitSent() // as in TestReleaseBinding: the request must reach the running supervisor, not its start
 			f.stage(v, script(v, 0, f.good()), nil)
 			if r := f.waitResult(10 * time.Second); r.Outcome != outcomeDowngradeRefused || r.FromVersion != active || f.active() != "A" {
 				t.Fatalf("result %+v, current %s", r, f.active())
@@ -1529,5 +1533,44 @@ func TestRequestRemovalIsSyncedBeforeTheResult(t *testing.T) {
 	f.stage("1.1.0", script("1.1.0", 1, f.good()), nil)
 	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeSelfTestFailed || !checked.Load() {
 		t.Fatalf("result %+v, checked %t", r, checked.Load())
+	}
+}
+
+// TestRequestForTheActiveVersionIsRemovedWithoutAResult (PDK-066): after "updated" whose staging sync failed, the
+// agent deletes the result once the server accepted it, and a power loss brings back the request, whose removal was
+// never durable. The restarted supervisor finds no result naming the release, but the release is the one current
+// runs; it removes the request without a result instead of reporting downgrade_refused for the running version.
+func TestRequestForTheActiveVersionIsRemovedWithoutAResult(t *testing.T) {
+	f := newFake(t)
+	layout := paths.Layout{Root: f.dir}
+	f.cfg.Staging = layout.Staging()
+	f.cfg.SyncDir = func(dir string) error {
+		if dir == f.cfg.Staging {
+			return fmt.Errorf("syncing %s: %w", dir, syscall.EIO)
+		}
+		return syncDir(dir)
+	}
+	f.start()
+	bin := script("1.1.0", 0, f.good())
+	f.stageAfterCheckin("1.1.0", bin)
+	f.waitFor("the new agent checked in", f.checkedIn)
+	if r := f.endProbation("B"); r.Outcome != outcomeUpdated || r.Version != "1.1.0" {
+		t.Fatalf("result %+v", r)
+	}
+	f.waitNoProbationLog()
+	f.stop()
+	if err := os.Remove(f.cfg.Result); err != nil {
+		t.Fatal(err)
+	}
+	f.stage("1.1.0", bin, nil)
+	<-f.usr1
+	f.start()
+	f.waitFor("the request was removed", func() bool { return !update.Pending(layout) })
+	f.waitSent()
+	f.waitSent()
+	f.expectNoResult()
+	f.expectStagingClean()
+	if f.active() != "B" {
+		t.Fatalf("current → %s, want B", f.active())
 	}
 }
