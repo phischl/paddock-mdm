@@ -128,6 +128,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supervisor cannot remove the mark, it rolls the update back.
 - Portal device page: a click on Save right after picking a device group saves the groups again. The group field no
   longer shrinks by a line when it loses focus, so the Save button stays where the click lands.
+- `paddock-supervisor` no longer reports `rolled_back` when it could not point `/opt/paddock/agent/current` back at
+  the previous slot. It retries the switch back five times within about four seconds; if it still fails, it logs
+  `rollback failed: current still points at the new agent` at error level, keeps the new agent running and reports
+  the update as failed (`agent.update_failed` with outcome `self_test_failed`), which counts toward the rollout's
+  failure rate as a rollback does.
 
 
 ### Security
