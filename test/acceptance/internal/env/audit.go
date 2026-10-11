@@ -3,10 +3,12 @@ package env
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -105,6 +107,28 @@ type IndexEvent struct {
 	ObjectKey     string
 	Params        map[string]any
 	ActorDisplay  string
+}
+
+// RecordingLag returns recorded_at - occurred_at of the event of org with correlationID; found is false while the
+// index has no such event.
+func (a *AuditIndex) RecordingLag(ctx context.Context, org uuid.UUID, correlationID string) (lag time.Duration, found bool, err error) {
+	err = pgx.BeginFunc(ctx, a.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", org.String()); err != nil {
+			return err
+		}
+		var micros int64
+		err := tx.QueryRow(ctx, `SELECT (extract(epoch FROM recorded_at - occurred_at) * 1e6)::bigint
+			FROM audit_event WHERE correlation_id = $1 ORDER BY occurred_at LIMIT 1`, correlationID).Scan(&micros)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		lag, found = time.Duration(micros)*time.Microsecond, true
+		return nil
+	})
+	return lag, found, err
 }
 
 // Events returns the events of org matching where (a SQL condition on audit_event with $1 as argument).

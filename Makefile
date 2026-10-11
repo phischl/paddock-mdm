@@ -644,9 +644,46 @@ scan: scan-secrets scan-fs scan-images ## Run gitleaks (branch history) and triv
 
 # The current branch only, never --all: a finding on an unrelated stale branch must not fail this scan. CI narrows it
 # to a pull request's own commits with GITLEAKS_LOG_OPTS=<merge-base>..HEAD. GITLEAKS_REPO lets the regression test
-# (test/scan-secrets_test.sh) run this recipe against a scratch repository.
+# (test/scan-secrets_test.sh) run both scan recipes against a scratch repository.
 GITLEAKS_LOG_OPTS ?= HEAD
 GITLEAKS_REPO ?= $(CURDIR)
+
+# Both scans read .gitleaks.toml and any .gitleaksignore from GITLEAKS_CONFIG_REF; empty (local runs) means the working
+# tree. CI sets it to a pull request's merge base, so a pull request cannot loosen the scan that checks it (PDK-065):
+# a pull request that changes either file is scanned with the base's version, and an allowlist for a false positive
+# takes effect only once merged, so it lands in its own pull request first. gitleaks always loads the .gitleaksignore
+# at the root of its source and of its working directory, whatever --gitleaks-ignore-path says, so the history scan
+# reads the git dir instead of the checkout, the file scan keeps a changed .gitleaksignore under another name, and
+# both always pass the chosen file (empty when there is none). An inline `gitleaks:allow` comment would let the scanned
+# content allow itself, so both scans pass --ignore-gitleaks-allow. gitleaks resolves an `[extend] path` from its
+# working directory, which the file scan fills with the pull request's files, so a configuration that extends another
+# file fails; `useDefault` alone is allowed.
+# What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
+# scanned. The scan's integrity therefore rests on code review of .github/, the Makefile and
+# deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE); CODEOWNERS names a
+# reviewer for them, but GitHub enforces that only once branch protection requires code-owner review, a setting of the
+# maintainer (docs/operations/secret-scan.md).
+GITLEAKS_CONFIG_REF ?=
+gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
+	if [ -n "$$ref" ]; then \
+		git -C "$$repo" show "$$ref:.gitleaks.toml" >"$$tmp/cfg/gitleaks.toml" || \
+			{ echo "$@: no .gitleaks.toml at $$ref" >&2; exit 1; }; \
+		if git -C "$$repo" cat-file -e "$$ref:.gitleaksignore" 2>/dev/null; then \
+			git -C "$$repo" show "$$ref:.gitleaksignore" >"$$tmp/cfg/gitleaksignore" || exit 1; \
+		else : >"$$tmp/cfg/gitleaksignore"; fi; \
+	else \
+		cp -- "$$repo/.gitleaks.toml" "$$tmp/cfg/gitleaks.toml" || exit 1; \
+		if [ -f "$$repo/.gitleaksignore" ]; then cp -- "$$repo/.gitleaksignore" "$$tmp/cfg/gitleaksignore" || exit 1; \
+		else : >"$$tmp/cfg/gitleaksignore"; fi; \
+	fi; \
+	if awk '{ l = $$0; sub(/\#.*/, "", l) } \
+		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t) } \
+		t == "[extend]" && l ~ /^[[:space:]]*["\047]?path["\047]?[[:space:]]*=/ { f = 1 } \
+		l ~ /^[[:space:]]*["\047]?extend["\047]?[[:space:]]*[.=]/ { f = 1 } \
+		END { exit !f }' "$$tmp/cfg/gitleaks.toml"; then \
+		echo "$@: .gitleaks.toml from $${ref:-the working tree} extends another file ([extend] path);" \
+			"only useDefault is allowed" >&2; exit 1; fi; \
+	echo "$@: configuration from $${ref:-the working tree}"
 
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
 # `--remerge-diff` shows what a merge commit changes beyond its automatic merge, so a secret added only in a merge
@@ -661,11 +698,14 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 		{ echo "scan-secrets: git cannot resolve $(GITLEAKS_LOG_OPTS)" >&2; exit 1; }; \
 	if [ -n "$$octopus" ]; then echo "scan-secrets: $$octopus is an octopus merge: its changes cannot be scanned" \
 		"(--remerge-diff shows none), and octopus merges are not allowed in Paddock's history" >&2; exit 1; fi; \
+	gitdir=$$(git -C "$$repo" rev-parse --absolute-git-dir) || exit 1; \
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	$(gitleaks_config); \
 	out=$$(docker run --rm --user "$$(id -u):$$(id -g)" -v "$$repo:$$repo:ro" -v "$$common:$$common:ro" \
 		-v "$$tmp:$$tmp" -e GIT_OBJECT_DIRECTORY="$$tmp" -e GIT_ALTERNATE_OBJECT_DIRECTORIES="$$common/objects" \
-		-w "$$repo" $(GITLEAKS_IMAGE) \
-		git "$$repo" --no-banner --redact --log-opts='--remerge-diff $(GITLEAKS_LOG_OPTS)' 2>&1); rc=$$?; \
+		-w "$$tmp/cfg" $(GITLEAKS_IMAGE) \
+		git "$$gitdir" --config "$$tmp/cfg/gitleaks.toml" --gitleaks-ignore-path "$$tmp/cfg/gitleaksignore" \
+		--ignore-gitleaks-allow --no-banner --redact --log-opts='--remerge-diff $(GITLEAKS_LOG_OPTS)' 2>&1); rc=$$?; \
 	printf '%s\n' "$$out"; \
 	plain=$$(printf '%s\n' "$$out" | sed -E 's/\x1b\[[0-9;]*m//g'); \
 	if printf '%s\n' "$$plain" | grep -qE '(^|[[:space:]])(ERR|FTL)[[:space:]]|^(fatal|error):'; then \
@@ -687,17 +727,26 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 GITLEAKS_DIFF_BASE ?= origin/main
 
 scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE (catches secrets added in merges)
-	@base=$$(git merge-base '$(GITLEAKS_DIFF_BASE)' HEAD) || exit 1; \
+	@repo='$(GITLEAKS_REPO)'; \
+	base=$$(git -C "$$repo" merge-base '$(GITLEAKS_DIFF_BASE)' HEAD) || exit 1; \
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
-	git diff -z --name-only --diff-filter=d "$$base"..HEAD >"$$tmp/files" || exit 1; \
+	$(gitleaks_config); \
+	git -C "$$repo" diff -z --name-only --diff-filter=d "$$base"..HEAD >"$$tmp/files" || exit 1; \
 	n=0; mkdir "$$tmp/src"; \
 	while IFS= read -r -d '' f; do \
-		if [ -f "$$f" ] || [ -L "$$f" ]; then cp -P --parents -- "$$f" "$$tmp/src/" || exit 1; n=$$((n + 1)); fi; \
+		if [ -f "$$repo/$$f" ] || [ -L "$$repo/$$f" ]; then \
+			(cd "$$repo" && cp -P --parents -- "$$f" "$$tmp/src/") || exit 1; n=$$((n + 1)); fi; \
 	done <"$$tmp/files"; \
+	ign="$$tmp/src/.gitleaksignore"; \
+	if [ -e "$$ign" ] || [ -L "$$ign" ]; then \
+		if [ -e "$$ign.changed" ] || [ -L "$$ign.changed" ]; then echo "scan-secrets-diff: .gitleaksignore.changed" \
+			"is reserved for scanning a changed .gitleaksignore" >&2; exit 1; fi; \
+		mv -- "$$ign" "$$ign.changed" || exit 1; fi; \
 	echo "scan-secrets-diff: $$n file(s) changed in $$base..HEAD"; \
 	if [ "$$n" -eq 0 ]; then echo "scan-secrets-diff: nothing to scan"; exit 0; fi; \
-	docker run --rm -v "$$tmp/src:/scan:ro" -v $(CURDIR)/.gitleaks.toml:/gitleaks.toml:ro -w /scan $(GITLEAKS_IMAGE) \
-		dir . --config /gitleaks.toml --no-banner --redact
+	docker run --rm -v "$$tmp/src:/scan:ro" -v "$$tmp/cfg:/cfg:ro" -w /scan $(GITLEAKS_IMAGE) \
+		dir . --config /cfg/gitleaks.toml --gitleaks-ignore-path /cfg/gitleaksignore --ignore-gitleaks-allow \
+		--no-banner --redact
 
 scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tree
 	mkdir -p $(TRIVY_CACHE)
