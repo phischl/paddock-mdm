@@ -131,6 +131,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rollback failed: current still points at the new agent` at error level, keeps the new agent running and reports
   the update as failed (`agent.update_failed` with outcome `self_test_failed`), which counts toward the rollout's
   failure rate as a rollback does.
+- Portal device page: the Disk encryption, Updates and Local administrator panels show their facts in the same
+  label/value rows as the Identity panel, with a panel header, instead of a table with offset values. Empty lists, such
+  as the IP allow list without entries, no longer show an empty row above their empty state.
 
 
 ### Security

@@ -63,6 +63,12 @@ describe('disk encryption card', () => {
       'Download header of /dev/sda3', 'Download header of /dev/sdb1',
     ])
     expect(document.querySelector('[data-testid="disk-headers"]')?.textContent).toContain('/dev/sdb1, generation 3: escrowed')
+    // PDK-039: the card is a titled panel whose facts are term/value pairs, like the identity panel.
+    const panel = document.querySelector('section[aria-labelledby="device-disk-title"]')
+    expect(panel?.querySelector('h2')?.textContent?.trim()).toBe('Disk encryption')
+    const terms = [...(panel?.querySelectorAll('dl > div > dt') ?? [])].map((d) => d.textContent?.trim())
+    expect(terms).toContain('Recovery key')
+    expect(panel?.querySelector('table')).toBeNull()
     wrapper.unmount()
   })
 })

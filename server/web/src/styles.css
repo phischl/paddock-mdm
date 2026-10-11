@@ -310,7 +310,7 @@ a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary);
 .pd-facts > div { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--pd-border-subtle); }
 .pd-facts > div:last-child { border-bottom: 0; }
 .pd-facts dt { color: var(--pd-text-secondary); }
-.pd-facts dd { margin: 0; text-align: right; }
+.pd-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
 .pd-sevbar { margin-bottom: 12px; }
 .pd-sevbar-track { display: flex; height: 10px; border-radius: var(--pd-radius-xs); overflow: hidden; gap: 1px; background: var(--pd-surface-1); }
 .pd-sevbar-segment { flex: 1 1 0; min-width: 3px; }
@@ -364,6 +364,4 @@ a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary);
 .pd-health li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--pd-border-subtle); }
 .pd-health li:last-child { border-bottom: 0; }
 .pd-health-label { color: var(--pd-text-secondary); }
-.pd-identity dd { overflow-wrap: anywhere; min-width: 0; }
 .pd-identity-id { display: inline-flex; align-items: center; gap: 2px; }
-.pd-device-col .facts th { width: 45%; }
