@@ -171,7 +171,30 @@ describe('overview page (plan M7c decision 28)', () => {
     const w = await mountOverview()
     expect(w.find('[data-testid="overview-attention"]').text()).toContain('Nothing needs attention')
     expect(w.find('[data-testid="overview-vulnerabilities"]').text()).toContain('No findings yet')
-    expect(w.find('[data-testid="overview-updates"]').text()).toContain('No agent release published yet')
+    expect(w.find('[data-testid="overview-updates"]').text()).toContain('No agent rollout completed yet')
+  })
+
+  it('names the agent release of the last completed rollout and how many active devices run it', async () => {
+    overview = overviewOf({
+      updates: {
+        security_overdue: 0, reboot_required: 0, os_releases: [],
+        agent: { current_version: '1.9.1', on_current: 3, outdated: 6, unknown: 1 },
+      },
+    })
+    const w = await mountOverview()
+    const panel = w.get('section[aria-labelledby="overview-updates-title"]')
+    const terms = panel.findAll('dt').map((d) => d.text())
+    expect(terms).toContain('Agent 1.9.1')
+    expect(panel.text()).toContain('3 / 10 on the current release')
+    expect(panel.text()).not.toContain('No agent rollout completed yet')
+  })
+
+  it('says that no rollout has completed while no agent release is current', async () => {
+    overview = overviewOf()
+    const w = await mountOverview()
+    const terms = w.get('section[aria-labelledby="overview-updates-title"]').findAll('dt').map((d) => d.text())
+    expect(terms).toContain('No agent rollout completed yet')
+    expect(terms.join(' ')).not.toContain('published')
   })
 
   it('shows recent audit activity to administrators and hides it from operators', async () => {

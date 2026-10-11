@@ -3,6 +3,7 @@ package acceptance
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -17,6 +18,9 @@ type overview struct {
 	} `json:"encryption"`
 	Updates struct {
 		SecurityOverdue int `json:"security_overdue"`
+		Agent           struct {
+			CurrentVersion *string `json:"current_version"`
+		} `json:"agent"`
 	} `json:"updates"`
 	Devices struct {
 		Total, Active, Pending, Quarantined, Online, Silent int
@@ -138,6 +142,7 @@ func TestOverviewGate(t *testing.T) {
 	}
 	root := login(t, env.PlatformAdmin)
 	expectStatus(t, call(t, root, http.MethodGet, "/api/v1/overview", nil), http.StatusForbidden, "no_organization")
+	expectCurrentAgentRelease(t, root, o.Updates.Agent.CurrentVersion)
 
 	var worst time.Duration
 	for range 5 {
@@ -146,6 +151,41 @@ func TestOverviewGate(t *testing.T) {
 		}
 	}
 	t.Logf("GET /api/v1/overview: slowest of 5 calls %s (plan M7c §12: 300 ms budget)", worst)
+}
+
+// expectCurrentAgentRelease (PDK-040): the agent release the overview names is one whose rollout completed, and there
+// is one exactly when a rollout completed; a release that is only published is not current (plan M7c step 5,
+// paddock_current_agent_version), so the overview shows "No agent rollout completed yet" for it.
+func expectCurrentAgentRelease(t *testing.T, root *env.Portal, current *string) {
+	t.Helper()
+	completed := map[string]bool{}
+	for page := 1; page <= 100; page++ {
+		res := call(t, root, http.MethodGet, "/api/platform/v1/agent-releases?page_size=100&page="+strconv.Itoa(page), nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var p struct {
+			Items []struct {
+				Version       string `json:"version"`
+				RolloutStatus string `json:"rollout_status"`
+			} `json:"items"`
+		}
+		if err := res.JSON(&p); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range p.Items {
+			if r.RolloutStatus == "completed" {
+				completed[r.Version] = true
+			}
+		}
+		if len(p.Items) < 100 {
+			break
+		}
+	}
+	switch {
+	case current == nil && len(completed) > 0:
+		t.Fatalf("updates.agent.current_version is null, but %d rollouts completed", len(completed))
+	case current != nil && !completed[*current]:
+		t.Fatalf("updates.agent.current_version %q is not a release whose rollout completed", *current)
+	}
 }
 
 func listTotalOf(t *testing.T, res env.Response) int {
