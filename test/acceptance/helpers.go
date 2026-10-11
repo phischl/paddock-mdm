@@ -168,6 +168,54 @@ func expectOneIndexEvent(t *testing.T, idx *env.AuditIndex, org uuid.UUID, where
 	return found[0]
 }
 
+// Catch-up check of the audit pipeline (PDK-028). The normal lag is the audit writer's batch wait (5 s) plus margin;
+// the consecutive probes span about half a minute, so a pipeline that is slow only now and then does not pass.
+const (
+	auditNormalLag      = 7 * time.Second
+	auditCatchUpProbes  = 5
+	auditCatchUpTimeout = 5 * time.Minute
+	auditProbeTimeout   = time.Minute
+)
+
+// waitAuditCaughtUp blocks until the outbox → audit-writer pipeline is back to its normal lag: auditCatchUpProbes
+// probe events in a row are in the index within auditNormalLag of their request, with recorded_at - occurred_at
+// within that bound too. A probe is an audited validation failure of the platform administrator without side
+// effects. A gate that stops or recreates services calls it before it returns, so the audit polls of the next gate
+// do not run into the recovery.
+func waitAuditCaughtUp(t *testing.T, root *env.Portal, idx *env.AuditIndex) {
+	t.Helper()
+	ctx := testContext(t, auditCatchUpTimeout+auditProbeTimeout)
+	start := time.Now()
+	for good, n := 0, 1; good < auditCatchUpProbes; n++ {
+		if time.Since(start) > auditCatchUpTimeout {
+			t.Fatalf("audit pipeline not back to its normal lag (%s) after %s", auditNormalLag, auditCatchUpTimeout)
+		}
+		res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", map[string]string{"slug": "Not A Slug", "name": "x"})
+		expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+		sent := time.Now()
+		var lag time.Duration
+		found := false
+		for !found && time.Since(sent) < auditProbeTimeout {
+			time.Sleep(250 * time.Millisecond)
+			var err error
+			// uuid.Nil is the platform pseudo-organization (platformOrg lives in a _test.go file, which this file
+			// cannot reference outside test builds).
+			if lag, found, err = idx.RecordingLag(ctx, uuid.Nil, res.RequestID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		visible := time.Since(sent)
+		if found && visible <= auditNormalLag && lag <= auditNormalLag {
+			good++
+		} else {
+			good = 0
+		}
+		t.Logf("audit probe %d: visible after %s (found %t), recorded_at lag %s; %d of %d in a row within %s",
+			n, visible.Round(10*time.Millisecond), found, lag.Round(10*time.Millisecond), good, auditCatchUpProbes, auditNormalLag)
+	}
+	t.Logf("audit pipeline caught up after %s", time.Since(start).Round(time.Second))
+}
+
 // tempUser creates an Authentik user in groups and deletes it when the test ends.
 func tempUser(t *testing.T, prefix string, groups ...string) (string, string) {
 	t.Helper()
