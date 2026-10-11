@@ -22,7 +22,8 @@ kv_pattern="bao (kv put|write) .* (current|previous|value|[a-z_]*(key|secret|sec
 # `@` (review 1: a variable, a parameter, `$(cat …)`, `$(<file)` or a prefixed secret all slipped through a denylist).
 # Only pipes into od or tr may follow head; a `;`, `&`, `$` or nested `$(` there could append a real secret (PDK-046).
 # od and tr take only options there, tr also a quoted set: any other word is a file operand, which od reads instead
-# of stdin (PDK-056).
+# of stdin (PDK-056). A set holds no `$` or backtick, single-quoted or not: inside an outer `rc "…"` the outer shell
+# expands them.
 # A `#` that starts a word before the command marks a comment, which mentions the command in prose; `${#x}` or `$#`
 # does not, nor does a `#` inside a quoted string (PDK-056). Any whitespace separates arguments, a tab included.
 alias_pattern='(rc|mc)[[:space:]]+alias[[:space:]]+set([[:space:]]+-[^[:space:]]*)*([[:space:]]+[^[:space:]-][^[:space:]]*){3}'
@@ -30,7 +31,7 @@ user_pattern='^([^#]|"[^"]*"|'"'[^']*'"'|[^[:space:]]#+)*(rc|mc)[[:space:]]+admi
 # shellcheck disable=SC2016 # regular expressions, not expansions
 option=' +-[^[:space:]|;&$()<>`"'"'"'\/]*'
 # shellcheck disable=SC2016 # regular expressions, not expansions
-tr_set=' +"[^"$`]*"'"| +'[^']*'"
+tr_set=' +"[^"$`]*"| +'"'[^'"'$`]*'"'"
 throwaway='\\?"\\?\$\(head -c [0-9]+ /dev/urandom( *\| *(od('"$option"')*|tr('"$option|$tr_set"')*))* *\)\\?"'
 
 # scan <extended regular expression> <file…>: the matching lines, with backslash continuations joined so a command
@@ -123,6 +124,12 @@ detects() {
     "rc 'rc admin user add -- a \"\$AK\" \"\$(head -c 24 /dev/urandom|od -An -tx1 /run/secrets/sk)\"'"
   detects 'rc admin user add with a file operand to tr in the throwaway' "$user_pattern" \
     "rc 'rc admin user add -- a \"\$AK\" \"\$(head -c 24 /dev/urandom | od -An -tx1 | tr -d \" \\n\" /run/secrets/sk)\"'"
+  detects "rc admin user add with \$(…) in a single-quoted tr set inside rc \"…\"" "$user_pattern" \
+    $'rc "rc admin user add -- b \\"\\$1\\" \\"\\$(head -c 24 /dev/urandom | od -An | tr -d \'$(rc admin user add -- x $AK $SK)\')\\""'
+  detects "rc admin user add with \$SK in a single-quoted tr set inside rc \"…\"" "$user_pattern" \
+    $'rc "rc admin user add -- b \\"\\$1\\" \\"\\$(head -c 24 /dev/urandom | od -An | tr -d \'$SK\')\\""'
+  detects "rc admin user add with a backtick in a single-quoted tr set inside rc \"…\"" "$user_pattern" \
+    $'rc "rc admin user add -- b \\"\\$1\\" \\"\\$(head -c 24 /dev/urandom | od -An | tr -d \'`cat sk`\')\\""'
   detects 'rc admin user add after a "#" inside double quotes' "$user_pattern" \
     'echo "a #b"; rc admin user add -- a "$AK" "$SK"'
   detects "rc admin user add after a '#' inside single quotes" "$user_pattern" \
