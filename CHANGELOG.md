@@ -194,6 +194,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `paddock-supervisor` no longer loses the result of an agent update when writing `update-result.json` fails, for
   example on a full disk. It keeps the probation record with the decided outcome, and its next start writes the
   result.
+- A device no longer stops accepting agent updates after `paddock-supervisor` restarts while it verifies or
+  self-tests a staged release. The update request stayed behind without a probation record, and the agent waited for
+  it forever. The restarted supervisor now processes such a request again from the staged files, with a new
+  signature check and self-test, and reports one result. It removes a request whose release the existing
+  `update-result.json` already names instead, and it syncs the removal of a request before it writes the result, so
+  a power failure cannot bring back a request that was already reported.
 
 ### Security
 
