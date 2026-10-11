@@ -173,6 +173,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goes unreported.
 - Portal device page, Login & sudo tab: the user and group fields of the login assignment no longer shrink by a line
   when they lose focus, so a click on Save or Suspend logins right after picking an entry lands on the button.
+- `paddock-supervisor` no longer reports a second, possibly contradicting result for an agent update after a power
+  failure. A power failure right after the result was written could bring the probation record back; the restarted
+  supervisor then ran the probation again and could report `rolled_back` for a release it had already reported as
+  `updated`, or report a rollback twice. The supervisor now writes the decided outcome into the probation record
+  before the result, and a restart that finds it writes the same result again, which the agent does not report twice.
+- A device no longer stops accepting agent updates after `paddock-supervisor` restarts with a probation record it
+  cannot resume (unreadable, or `/opt/paddock/agent/current` on neither the new nor a rolled-back slot, for example
+  after a power failure during the switch). The supervisor dropped the record but left the update request behind, so
+  the agent waited for it forever. It now removes the request as well and logs the drop; it reports no result, because
+  it cannot tell which release or what happened, and the agent stages the offered release again.
+- `paddock-supervisor` no longer loses the result of an agent update when writing `update-result.json` fails, for
+  example on a full disk. It keeps the probation record with the decided outcome, and its next start writes the
+  result.
 
 ### Security
 
