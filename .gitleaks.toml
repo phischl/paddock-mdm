@@ -1,16 +1,18 @@
 # gitleaks configuration: the default rules plus allowlists for generated content that changes with every API change.
+# Every path allows an optional `b/` prefix: in the `--remerge-diff` of a merge with a conflict (make scan-secrets,
+# PDK-057) git adds a `remerge CONFLICT` header line, and gitleaks then reports the file as `b/<path>`.
 [extend]
 useDefault = true
 
 [[allowlists]]
 description = "oapi-codegen embeds the OpenAPI spec as gzip+base64 chunks; they are generated, not secrets"
-paths = ['''^server/internal/transport/http/admin/adminapi/adminapi\.gen\.go$''']
+paths = ['''^(b/)?server/internal/transport/http/admin/adminapi/adminapi\.gen\.go$''']
 
 [[allowlists]]
 description = "The vendored-assets manifest records a SHA-256 per icon and font file; a hex digest is not a secret"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^server/web/src/assets/vendored\.json$''']
+paths = ['''^(b/)?server/web/src/assets/vendored\.json$''']
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{64}$''']
 
@@ -21,7 +23,7 @@ regexes = ['''^[0-9a-f]{64}$''']
 description = "Recorded Authentik fixtures: flow and certificate-keypair primary keys are UUIDs, not credentials"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^server/internal/adapters/authentik/testdata/[^/]+\.json$''']
+paths = ['''^(b/)?server/internal/adapters/authentik/testdata/[^/]+\.json$''']
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
 
@@ -29,7 +31,7 @@ regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
 description = "Protocol signing test: the device ID argument is a UUID"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^pkg/protocol/protocol_test\.go$''']
+paths = ['''^(b/)?pkg/protocol/protocol_test\.go$''']
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
 
@@ -37,7 +39,7 @@ regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
 description = "Admin device test: the fake bundle key source returns a fixed Ed25519 public key"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^server/internal/transport/http/admin/devices_test\.go$''']
+paths = ['''^(b/)?server/internal/transport/http/admin/devices_test\.go$''']
 regexTarget = "match"
 regexes = ['''^testBundleKey = "[A-Za-z0-9+/]{43}="$''']
 
@@ -45,7 +47,7 @@ regexes = ['''^testBundleKey = "[A-Za-z0-9+/]{43}="$''']
 description = "Himmelblau repository signing key: a public GPG key fingerprint"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^test/poc/m1/vm-prepare\.sh$''']
+paths = ['''^(b/)?test/poc/m1/vm-prepare\.sh$''']
 regexTarget = "secret"
 regexes = ['''^[0-9A-F]{40}$''']
 
@@ -53,7 +55,7 @@ regexes = ['''^[0-9A-F]{40}$''']
 description = "Dev seed: the hex alphabet of a format check"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^test/acceptance/cmd/devseed/main\.go$''']
+paths = ['''^(b/)?test/acceptance/cmd/devseed/main\.go$''']
 regexTarget = "secret"
 regexes = ['''^0123456789abcdef$''']
 
@@ -61,6 +63,6 @@ regexes = ['''^0123456789abcdef$''']
 description = "System test: the file name of the VM's SSH public key"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^test/system/autoinstall\.go$''']
+paths = ['''^(b/)?test/system/autoinstall\.go$''']
 regexTarget = "secret"
 regexes = ['''^id_ed25519\.pub$''']
