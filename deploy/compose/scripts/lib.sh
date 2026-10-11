@@ -68,6 +68,28 @@ compose() {
     --env-file "$COMPOSE_DIR/versions.env" --env-file "$COMPOSE_DIR/.env" "${args[@]}" "$@"
 }
 
+# export_rc_host <alias> <endpoint> <access key variable> <secret key variable>: exports RC_HOST_<alias>, from which
+# the rc client defines the alias, so the RustFS credentials reach the container by name (`-e RC_HOST_<alias>`) and
+# never travel on a command line the way `rc alias set` would put them (PDK-036). Both keys are percent-encoded,
+# which rc decodes.
+export_rc_host() {
+  local alias="$1" endpoint="$2" access="${!3}" secret="${!4}"
+  export "RC_HOST_$alias=${endpoint%%://*}://$(percent_encode "$access"):$(percent_encode "$secret")@${endpoint#*://}"
+}
+
+# percent_encode <value>: the value with every byte outside the URL's unreserved set as %XX.
+percent_encode() {
+  local LC_ALL=C s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~-]) out+="$c" ;;
+      *) out+="$(printf '%%%02X' "'$c")" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-$(env_value PADDOCK_PROJECT)}"
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-paddock}"
 

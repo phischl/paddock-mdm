@@ -23,15 +23,15 @@ ENDPOINT="${ENDPOINT:-http://audit-rustfs:9000}"
 AWS_ACCESS_KEY_ID="$(cat "$SECRETS_DIR/rustfs_audit_root_user")"
 AWS_SECRET_ACCESS_KEY="$(cat "$SECRETS_DIR/rustfs_audit_root_password")"
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+export_rc_host backup "$ENDPOINT" AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 aws() {
   docker run --rm -i --network "$NETWORK" -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
     -e AWS_DEFAULT_REGION=us-east-1 -e AWS_PAGER= "$AWS_CLI_IMAGE" --endpoint-url "$ENDPOINT" "$@"
 }
 rc() {
-  docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
-    -e USER_ACCESS_KEY -e USER_SECRET_KEY --entrypoint sh "$RC_IMAGE" -c \
-    "rc alias set -- backup $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
+  docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e RC_HOST_backup -e USER_ACCESS_KEY -e USER_SECRET_KEY \
+    --entrypoint sh "$RC_IMAGE" -c "$1"
 }
 
 for _ in $(seq 1 30); do
@@ -65,11 +65,15 @@ for role in pgbackrest worker fleet; do
   USER_ACCESS_KEY="$(cat "$SECRETS_DIR/backup_${role}_access_key")"
   USER_SECRET_KEY="$(cat "$SECRETS_DIR/backup_${role}_secret_key")"
   export USER_ACCESS_KEY USER_SECRET_KEY
-  # Generated keys may start with "-", hence "--" before positional arguments and "--user=".
+  # Generated keys may start with "-", hence "--" before positional arguments and "--user=". rc admin user add takes
+  # the secret only as an argument, so the user is created with a throwaway one and holds no policy until passwd has
+  # set the real secret from the environment; passwd runs on every pass, so an interrupted earlier run cannot leave
+  # the throwaway secret in place.
   if ! rc 'rc admin user info -- backup "$USER_ACCESS_KEY"' >/dev/null 2>&1; then
-    rc 'rc admin user add -- backup "$USER_ACCESS_KEY" "$USER_SECRET_KEY" >/dev/null'
+    rc 'rc admin user add -- backup "$USER_ACCESS_KEY" "$(head -c 24 /dev/urandom | od -An -tx1 | tr -d " \n")" >/dev/null'
     echo "created backup user $role"
   fi
+  rc 'rc admin user passwd --password-from-env USER_SECRET_KEY -- backup "$USER_ACCESS_KEY" >/dev/null'
   rc "rc admin policy attach backup paddock-backup-$role --user=\"\$USER_ACCESS_KEY\" >/dev/null"
 done
 echo "backup bucket bootstrap complete"

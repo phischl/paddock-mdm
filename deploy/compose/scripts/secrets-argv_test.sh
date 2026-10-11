@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regression test (`make test`, PDK-024 review 1): the bootstrap and bundle scripts never put a secret on a command
 # line, where `ps` and /proc show it to every user of the host. A variable reaches a container by name only
-# (`-e NAME` with NAME exported), a value of the bao CLI by stdin (`key=-`, `kv put <path> -`).
+# (`-e NAME` with NAME exported), a value of the bao CLI by stdin (`key=-`, `kv put <path> -`), a RustFS credential of
+# the rc client by environment (`RC_HOST_<alias>`, `--password-from-env`, PDK-036).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -16,6 +17,10 @@ done
 env_pattern="(-e|--env)[ =][\"']?[A-Z_][A-Z0-9_]*=[\"']?\\$"
 unseal_pattern="operator unseal( --)? [\"']?\\$"
 kv_pattern="bao (kv put|write) .* (current|previous|value|[a-z_]*(key|secret|secret_id|token|password))=[\"']?\\$"
+# Positional arguments 3 and 4 of `alias set` are the access and the secret key; the third of `admin user add` is the
+# secret key (a throwaway `$(…)` is allowed, a variable is not).
+alias_pattern='(rc|mc) alias set( +-[^ ]*)*( +[^ -][^ ]*){3}'
+user_pattern='(rc|mc) admin user add( +-[^ ]*)*( +[^ -][^ ]*){2} +\\?["'"'"']?\\?\$[{A-Za-z_$]'
 
 # scan <extended regular expression> <file…>: the matching lines, with backslash continuations joined so a command
 # split over several lines is seen as one.
@@ -43,6 +48,8 @@ check() {
 check "no -e/--env NAME=\$value on a docker command line" "$env_pattern"
 check "no unseal share as an argument" "$unseal_pattern"
 check "no secret value as an argument of bao write or kv put" "$kv_pattern"
+check "no credential as an argument of rc/mc alias set" "$alias_pattern"
+check "no secret key as an argument of rc/mc admin user add" "$user_pattern"
 
 # The checks themselves must see every known form of a violation (review 2: the multi-line kv put of the parent
 # commit of fix round 1 went unnoticed).
@@ -75,6 +82,36 @@ detects() {
     'compose exec -T -e BAO_TOKEN openbao bao kv put secret/paddock/session \' \
     '  current="$(openssl rand -hex 32)" \' \
     '  previous=""'
+  detects 'rc alias set -- <alias> <endpoint> $key $secret in sh -c' "$alias_pattern" \
+    '    "rc alias set -- audit $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"'
+  detects 'rc alias set without --' "$alias_pattern" 'rc alias set audit http://rustfs:9000 "$AK" "$SK"'
+  detects 'mc alias set with options' "$alias_pattern" 'mc alias set --api S3v4 local http://minio:9000 "$AK" "$SK"'
+  detects 'rc admin user add with a "$secret"' "$user_pattern" \
+    "  rc 'rc admin user add -- audit \"\$WRITER_ACCESS_KEY\" \"\$WRITER_SECRET_KEY\" >/dev/null'"
+  detects 'rc admin user add with an escaped indirect secret' "$user_pattern" \
+    '    rc "rc admin user add -- bundles \"\$$1\" \"\$${1/ACCESS/SECRET}\" >/dev/null"'
+  detects 'mc admin user add with a bare $secret' "$user_pattern" 'mc admin user add local $AK $SK'
+}
+
+# ignores <description> <pattern> <sample line…>: scan does not flag the sample, a form the scripts use.
+ignores() {
+  local desc="$1" pattern="$2"
+  shift 2
+  printf '%s\n' "$@" >"$sample"
+  if [[ -z "$(scan "$pattern" "$sample")" ]]; then
+    echo "ok   the check accepts $desc"
+  else
+    echo "FAIL the check flags $desc"
+    failures=$((failures + 1))
+  fi
+}
+
+# shellcheck disable=SC2016 # the samples are script text, not expansions
+{
+  ignores 'rc admin user add with a throwaway $(…) secret' "$user_pattern" \
+    "  rc 'rc admin user add -- audit \"\$WRITER_ACCESS_KEY\" \"\$(head -c 24 /dev/urandom | od -An -tx1)\" >/dev/null'"
+  ignores 'rc admin user passwd --password-from-env' "$user_pattern" \
+    "rc 'rc admin user passwd --password-from-env WRITER_SECRET_KEY -- audit \"\$WRITER_ACCESS_KEY\"'"
 }
 
 if ((failures > 0)); then

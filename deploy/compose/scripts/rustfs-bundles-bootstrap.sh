@@ -35,6 +35,7 @@ ESCROW_REVOCATION_SECRET_KEY="$(cat "$SECRETS_DIR/rustfs_escrow_revocation_secre
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY COMPILER_ACCESS_KEY COMPILER_SECRET_KEY GATEWAY_ACCESS_KEY GATEWAY_SECRET_KEY \
   ARTIFACTS_ACCESS_KEY ARTIFACTS_SECRET_KEY ESCROW_WORKER_ACCESS_KEY ESCROW_WORKER_SECRET_KEY ESCROW_API_ACCESS_KEY \
   ESCROW_API_SECRET_KEY ESCROW_REVOCATION_ACCESS_KEY ESCROW_REVOCATION_SECRET_KEY
+export_rc_host bundles "$ENDPOINT" AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 # Credentials travel as inherited environment variables, never as command-line arguments.
 aws() {
@@ -42,12 +43,11 @@ aws() {
     -e AWS_DEFAULT_REGION=us-east-1 -e AWS_PAGER= "$AWS_CLI_IMAGE" --endpoint-url "$ENDPOINT" "$@"
 }
 rc() {
-  docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+  docker run --rm -i --network "$NETWORK" -e HOME=/tmp -e RC_HOST_bundles \
     -e COMPILER_ACCESS_KEY -e COMPILER_SECRET_KEY -e GATEWAY_ACCESS_KEY -e GATEWAY_SECRET_KEY \
     -e ARTIFACTS_ACCESS_KEY -e ARTIFACTS_SECRET_KEY -e ESCROW_WORKER_ACCESS_KEY -e ESCROW_WORKER_SECRET_KEY \
     -e ESCROW_API_ACCESS_KEY -e ESCROW_API_SECRET_KEY -e ESCROW_REVOCATION_ACCESS_KEY -e ESCROW_REVOCATION_SECRET_KEY \
-    --entrypoint sh "$RC_IMAGE" -c \
-    "rc alias set -- bundles $ENDPOINT \"\$AWS_ACCESS_KEY_ID\" \"\$AWS_SECRET_ACCESS_KEY\" >/dev/null && $1"
+    --entrypoint sh "$RC_IMAGE" -c "$1"
 }
 
 for _ in $(seq 1 30); do
@@ -69,13 +69,16 @@ policy() {
   printf '{"Version":"2012-10-17","Statement":%s}' "$2" |
     rc "cat >/tmp/policy.json && rc admin policy create bundles $1 /tmp/policy.json >/dev/null"
 }
-# user <access key variable> <policy>: create the user once and attach the policy. Generated keys may start with
-# "-", hence "--" before positional arguments and "--user=".
+# user <access key variable> <policy>: create the user once, set its secret and attach the policy. Generated keys may
+# start with "-", hence "--" before positional arguments and "--user=". rc admin user add takes the secret only as an
+# argument, so the user is created with a throwaway one and holds no policy until passwd has set the real secret from
+# the environment; passwd runs on every pass, so an interrupted earlier run cannot leave the throwaway secret in place.
 user() {
   if ! rc "rc admin user info -- bundles \"\$$1\"" >/dev/null 2>&1; then
-    rc "rc admin user add -- bundles \"\$$1\" \"\$${1/ACCESS/SECRET}\" >/dev/null"
+    rc "rc admin user add -- bundles \"\$$1\" \"\$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')\" >/dev/null"
     echo "created bundles user for $2"
   fi
+  rc "rc admin user passwd --password-from-env ${1/ACCESS/SECRET} -- bundles \"\$$1\" >/dev/null"
   rc "rc admin policy attach bundles $2 --user=\"\$$1\" >/dev/null"
 }
 
