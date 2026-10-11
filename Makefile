@@ -639,10 +639,22 @@ COMPILER_IMAGE  ?= paddock-compiler:dev
 PGBACKREST_IMAGE ?= paddock-pgbackrest:dev
 
 .PHONY: scan scan-secrets scan-fs scan-images image-compiler image-pgbackrest
-scan: scan-secrets scan-fs scan-images ## Run gitleaks (full history) and trivy (filesystem and images)
+scan: scan-secrets scan-fs scan-images ## Run gitleaks (branch history) and trivy (filesystem and images)
 
-scan-secrets: ## gitleaks over the full git history (false positives: .gitleaksignore)
-	docker run --rm -v $(CURDIR):/repo $(GITLEAKS_IMAGE) git /repo --no-banner --redact
+# The current branch only, never --all: a finding on an unrelated stale branch must not fail this scan. CI narrows it
+# to a pull request's own commits with GITLEAKS_LOG_OPTS=<merge-base>..HEAD.
+GITLEAKS_LOG_OPTS ?= HEAD
+
+# A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path; a scan
+# that still sees no commits fails instead of reporting a green result.
+scan-secrets: ## gitleaks over the current branch history (false positives: allowlists in .gitleaks.toml)
+	@common=$$(git rev-parse --path-format=absolute --git-common-dir) || exit 1; \
+	out=$$(docker run --rm -v $(CURDIR):$(CURDIR):ro -v "$$common:$$common:ro" -w $(CURDIR) $(GITLEAKS_IMAGE) \
+		git $(CURDIR) --no-banner --redact --log-opts='$(GITLEAKS_LOG_OPTS)' 2>&1); rc=$$?; \
+	printf '%s\n' "$$out"; \
+	commits=$$(printf '%s\n' "$$out" | sed -nE 's/.*[^0-9]([0-9]+) commits scanned.*/\1/p'); \
+	if [ "$${commits:-0}" -eq 0 ]; then echo "scan-secrets: gitleaks scanned 0 commits ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
+	exit $$rc
 
 scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tree
 	mkdir -p $(TRIVY_CACHE)

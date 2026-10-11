@@ -110,6 +110,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PADDOCK_HOST` when no argument is given.
 - `make prod-secrets` and `make prod-check` are removed (M7b step 3): production hosts use the operator bundle's
   `./paddock secrets` and `./paddock check`; installing from source means building the images and a local bundle.
+- The secret scan (`make scan-secrets`, CI job `secrets`) scans the current branch's history instead of every ref
+  (PDK-034): in CI a pull request scans only its own commits and `main` its full history, so a finding on an unrelated
+  branch no longer fails other pull requests. Reviewed false positives are content-based allowlists in `.gitleaks.toml`
+  (file plus exact value shape) instead of commit-bound fingerprints, and `.gitleaksignore` is removed. The scan works
+  from git worktrees and fails when it scanned no commits.
 
 ### Fixed
 
