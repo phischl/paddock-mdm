@@ -651,7 +651,8 @@ GITLEAKS_REPO ?= $(CURDIR)
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
 # `--remerge-diff` shows what a merge commit changes beyond its automatic merge, so a secret added only in a merge
 # resolution is seen (PDK-057). It writes temporary objects, which go to a scratch object directory while the
-# repository stays read-only. gitleaks exits 0 when its git call fails, so an error line or 0 scanned commits fails.
+# repository stays read-only. gitleaks exits 0 when its git call fails, so an error line fails, and so does a scan of
+# 0 commits, unless the range resolves and holds merge commits only: a clean merge has an empty remerge diff.
 scan-secrets: ## gitleaks over the current branch history (false positives: allowlists in .gitleaks.toml)
 	@repo='$(GITLEAKS_REPO)'; \
 	common=$$(git -C "$$repo" rev-parse --path-format=absolute --git-common-dir) || exit 1; \
@@ -665,7 +666,15 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 	if printf '%s\n' "$$plain" | grep -qE '(^|[[:space:]])(ERR|FTL)[[:space:]]|^(fatal|error):'; then \
 		echo "scan-secrets: gitleaks or git reported an error ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
 	commits=$$(printf '%s\n' "$$plain" | sed -nE 's/.*[^0-9]([0-9]+) commits scanned.*/\1/p'); \
-	if [ "$${commits:-0}" -eq 0 ]; then echo "scan-secrets: gitleaks scanned 0 commits ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
+	if [ "$${commits:-0}" -eq 0 ]; then \
+		nonmerge=$$(git -C "$$repo" rev-list --no-merges --max-count=1 $(GITLEAKS_LOG_OPTS)) && \
+		merges=$$(git -C "$$repo" rev-list --merges --max-count=1 $(GITLEAKS_LOG_OPTS)) || \
+			{ echo "scan-secrets: git cannot resolve $(GITLEAKS_LOG_OPTS)" >&2; exit 1; }; \
+		if [ -n "$$nonmerge" ] || [ -z "$$merges" ]; then \
+			echo "scan-secrets: gitleaks scanned 0 commits ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
+		echo "scan-secrets: $(GITLEAKS_LOG_OPTS) holds only merge commits whose remerge diff adds nothing;" \
+			"0 commits scanned is expected"; \
+	fi; \
 	exit $$rc
 
 # Second layer for pull requests: the current content of every file the pull request changes against its merge
