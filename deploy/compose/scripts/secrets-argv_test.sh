@@ -21,11 +21,17 @@ kv_pattern="bao (kv put|write) .* (current|previous|value|[a-z_]*(key|secret|sec
 # secret key. The only value allowed there is the throwaway `"$(head -c <n> /dev/urandom …)"`, which scan reduces to
 # `@` (review 1: a variable, a parameter, `$(cat …)`, `$(<file)` or a prefixed secret all slipped through a denylist).
 # Only pipes into od or tr may follow head; a `;`, `&`, `$` or nested `$(` there could append a real secret (PDK-046).
+# od and tr take only options there, tr also a quoted set: any other word is a file operand, which od reads instead
+# of stdin (PDK-056).
 # A `#` that starts a word before the command marks a comment, which mentions the command in prose; `${#x}` or `$#`
-# does not. Any whitespace separates arguments, a tab included.
+# does not, nor does a `#` inside a quoted string (PDK-056). Any whitespace separates arguments, a tab included.
 alias_pattern='(rc|mc)[[:space:]]+alias[[:space:]]+set([[:space:]]+-[^[:space:]]*)*([[:space:]]+[^[:space:]-][^[:space:]]*){3}'
-user_pattern='^([^#]|[^[:space:]]#+)*(rc|mc)[[:space:]]+admin[[:space:]]+user[[:space:]]+add([[:space:]]+-[^[:space:]]*)*([[:space:]]+[^[:space:]-][^[:space:]]*){2}[[:space:]]+[^[:space:]@>|;&]'
-throwaway='\\?"\\?\$\(head -c [0-9]+ /dev/urandom( *\| *(od|tr)( [^|;&$()<>`]*)?)*\)\\?"'
+user_pattern='^([^#]|"[^"]*"|'"'[^']*'"'|[^[:space:]]#+)*(rc|mc)[[:space:]]+admin[[:space:]]+user[[:space:]]+add([[:space:]]+-[^[:space:]]*)*([[:space:]]+[^[:space:]-][^[:space:]]*){2}[[:space:]]+[^[:space:]@>|;&]'
+# shellcheck disable=SC2016 # regular expressions, not expansions
+option=' +-[^[:space:]|;&$()<>`"'"'"'\/]*'
+# shellcheck disable=SC2016 # regular expressions, not expansions
+tr_set=' +"[^"$`]*"'"| +'[^']*'"
+throwaway='\\?"\\?\$\(head -c [0-9]+ /dev/urandom( *\| *(od('"$option"')*|tr('"$option|$tr_set"')*))* *\)\\?"'
 
 # scan <extended regular expression> <file…>: the matching lines, with backslash continuations joined so a command
 # split over several lines is seen as one, and the throwaway secret as `@`.
@@ -113,6 +119,14 @@ detects() {
     $'rc admin user add --\ta\t"$AK"\t"$SK"'
   detects 'rc alias set with tabs between the arguments' "$alias_pattern" \
     $'rc alias set\taudit\thttp://rustfs:9000\t"$AK"\t"$SK"'
+  detects 'rc admin user add with a file operand to od in the throwaway' "$user_pattern" \
+    "rc 'rc admin user add -- a \"\$AK\" \"\$(head -c 24 /dev/urandom|od -An -tx1 /run/secrets/sk)\"'"
+  detects 'rc admin user add with a file operand to tr in the throwaway' "$user_pattern" \
+    "rc 'rc admin user add -- a \"\$AK\" \"\$(head -c 24 /dev/urandom | od -An -tx1 | tr -d \" \\n\" /run/secrets/sk)\"'"
+  detects 'rc admin user add after a "#" inside double quotes' "$user_pattern" \
+    'echo "a #b"; rc admin user add -- a "$AK" "$SK"'
+  detects "rc admin user add after a '#' inside single quotes" "$user_pattern" \
+    "echo 'a #b'; rc admin user add -- a \"\$AK\" \"\$SK\""
 }
 
 # ignores <description> <pattern> <sample line…>: scan does not flag the sample, a form the scripts use.
@@ -138,6 +152,10 @@ ignores() {
     '  # Generated keys may start with "-". rc admin user add takes the secret only as an argument, so'
   ignores 'rc admin user passwd --password-from-env' "$user_pattern" \
     "rc 'rc admin user passwd --password-from-env WRITER_SECRET_KEY -- audit \"\$WRITER_ACCESS_KEY\"'"
+  ignores 'rc admin user add with a throwaway without spaces around the pipes' "$user_pattern" \
+    "rc 'rc admin user add -- a \"\$AK\" \"\$(head -c 24 /dev/urandom|od -An -tx1|tr -d \" \\n\")\"'"
+  ignores 'a comment with a quoted "#" that mentions rc admin user add' "$user_pattern" \
+    '  # The "#" sign: rc admin user add -- a "$AK" "$SK" would put the secret on the command line'
 }
 
 if ((failures > 0)); then
