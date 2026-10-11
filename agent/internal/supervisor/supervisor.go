@@ -53,8 +53,8 @@ type Config struct {
 }
 
 // rollbackAttempts bounds the attempts to flip current back to the previous slot; the waits between them double from
-// rollbackRetryWait. Their sum (3.75 s) stays far below the systemd watchdog (WatchdogSec=60), which the blocked loop
-// cannot pet meanwhile.
+// rollbackRetryWait. With the waits (3.75 s), five flips and stopping the agent (up to 10 s) the blocked loop stays
+// far below the systemd watchdog (WatchdogSec=60), which it cannot pet meanwhile.
 const (
 	rollbackAttempts  = 5
 	rollbackRetryWait = 250 * time.Millisecond
