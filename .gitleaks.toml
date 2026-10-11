@@ -4,12 +4,13 @@ useDefault = true
 
 [[allowlists]]
 description = "oapi-codegen embeds the OpenAPI spec as gzip+base64 chunks; they are generated, not secrets"
-paths = ['''server/internal/transport/http/admin/adminapi/adminapi\.gen\.go''']
+paths = ['''^server/internal/transport/http/admin/adminapi/adminapi\.gen\.go$''']
 
 [[allowlists]]
 description = "The vendored-assets manifest records a SHA-256 per icon and font file; a hex digest is not a secret"
 condition = "AND"
-paths = ['''server/web/src/assets/vendored\.json''']
+targetRules = ["generic-api-key"]
+paths = ['''^server/web/src/assets/vendored\.json$''']
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{64}$''']
 
@@ -19,41 +20,47 @@ regexes = ['''^[0-9a-f]{64}$''']
 [[allowlists]]
 description = "Recorded Authentik fixtures: flow and certificate-keypair primary keys are UUIDs, not credentials"
 condition = "AND"
-paths = ['''server/internal/adapters/authentik/testdata/[^/]+\.json''']
+targetRules = ["generic-api-key"]
+paths = ['''^server/internal/adapters/authentik/testdata/[^/]+\.json$''']
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
 
 [[allowlists]]
 description = "Protocol signing test: the device ID argument is a UUID"
 condition = "AND"
-paths = ['''pkg/protocol/protocol_test\.go''']
+targetRules = ["generic-api-key"]
+paths = ['''^pkg/protocol/protocol_test\.go$''']
 regexTarget = "secret"
 regexes = ['''^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
 
 [[allowlists]]
 description = "Admin device test: the fake bundle key source returns a fixed Ed25519 public key"
 condition = "AND"
-paths = ['''server/internal/transport/http/admin/devices_test\.go''']
+targetRules = ["generic-api-key"]
+paths = ['''^server/internal/transport/http/admin/devices_test\.go$''']
 regexTarget = "match"
 regexes = ['''^testBundleKey = "[A-Za-z0-9+/]{43}="$''']
 
 [[allowlists]]
 description = "Himmelblau repository signing key: a public GPG key fingerprint"
 condition = "AND"
-paths = ['''test/poc/m1/vm-prepare\.sh''']
+targetRules = ["generic-api-key"]
+paths = ['''^test/poc/m1/vm-prepare\.sh$''']
 regexTarget = "secret"
 regexes = ['''^[0-9A-F]{40}$''']
 
 [[allowlists]]
 description = "Dev seed: the hex alphabet of a format check"
 condition = "AND"
-paths = ['''test/acceptance/cmd/devseed/main\.go''']
+targetRules = ["generic-api-key"]
+paths = ['''^test/acceptance/cmd/devseed/main\.go$''']
 regexTarget = "secret"
 regexes = ['''^0123456789abcdef$''']
 
 [[allowlists]]
 description = "System test: the file name of the VM's SSH public key"
 condition = "AND"
-paths = ['''test/system/autoinstall\.go''']
+targetRules = ["generic-api-key"]
+paths = ['''^test/system/autoinstall\.go$''']
 regexTarget = "secret"
 regexes = ['''^id_ed25519\.pub$''']
