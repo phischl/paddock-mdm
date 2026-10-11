@@ -51,7 +51,7 @@ needs a documented reason to deviate, **MAY** is a genuine degree of freedom.
 | Queue and async processing (A8) | RabbitMQ (quorum queues, no plugins) for ingest and internal events; Valkey for the gateway's hot read path, nonces and locks. Both map 1:1 to managed AWS services (Amazon MQ for RabbitMQ, ElastiCache for Valkey) | [0003](adr/0003-rabbitmq-and-valkey.md) |
 | Agent–server protocol and identity (A5, A6) | HTTPS on 443, per-request signatures with a device key (TPM-bound where available), end-to-end signed payloads | [0004](adr/0004-device-identity-and-protocol.md) |
 | State compilation (A9) | Event-driven compiler, DSSE-signed per-device bundles in object storage, served through short-lived presigned URLs | [0005](adr/0005-state-compilation-and-bundle-format.md) |
-| Key management (A3) | OpenBao Transit, one key and one access policy per purpose; agent release key in the protected CI environment `release`, revocation release key offline | [0006](adr/0006-key-management-with-openbao.md) |
+| Key management (A3) | OpenBao Transit, one key and one access policy per purpose; agent release key in the protected CI environment `release` (offline backup copy with the custodians), revocation release key offline | [0006](adr/0006-key-management-with-openbao.md) |
 | Authentik mapping (A1) | One shared Authentik instance; one application and group tree per Paddock organization; lock by policy group | [0007](adr/0007-authentik-organization-mapping.md) |
 | sudo ownership (A13) | Paddock alone; Himmelblau never grants sudo; sudo-granting local groups are reconciled | [0008](adr/0008-sudo-ownership.md) |
 | Fleet depth (A10) | Fleet behind an `inventory` port; Paddock owns its own normalized model | [0009](adr/0009-fleet-integration-depth.md) |
@@ -1389,6 +1389,7 @@ flowchart TB
   end
 
   subgraph offline[Offline — release managers, YubiKey]
+    rkb[agent-release key, backup copy<br/>custodians: rotation, offline fallback, fleetd]
     rrk[revoke-release key<br/>Ed25519, minisign, two holders]
     apt[apt repository key<br/>OpenPGP]
   end
@@ -1410,6 +1411,7 @@ flowchart TB
   end
 
   rk --> supk
+  rkb -.->|same key| rk
   rrk --> revk
   bs --> agk
   cs --> agk
@@ -1426,7 +1428,7 @@ flowchart TB
 | `time-ticket` | `compiler` | yearly | dead man's switch deferral only |
 | `escrow-wrap` | encrypt: public key on devices; decrypt: `escrow-reader` (api, with step-up) and `revocation-recovery` (CLI, operator) | every 2 years, re-wrap job | escrowed passwords and headers readable |
 | `audit-chain` | `audit-writer` | yearly | can forge future chain seals, cannot alter WORM objects |
-| agent-release | release workflow, environment `release` (ADR 0006 amendment 2026-10-11) | on compromise only, via supervisor package update (signed by apt key) | malicious agent; mitigated by required approval, tag-only deployment, staged rollout and the server and supervisor signature checks |
+| agent-release | release workflow, environment `release` (signing copy); offline backup copy with the custodians for rotation, the offline fallback and fleetd (ADR 0006 amendment 2026-10-11) | on compromise only, via supervisor package update (signed by apt key) | malicious agent; mitigated by required approval, tag-only deployment, staged rollout and the server and supervisor signature checks |
 
 ### 13.2 Operations
 

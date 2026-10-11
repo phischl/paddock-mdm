@@ -6,7 +6,7 @@ How agent releases are signed, uploaded and rolled out (plan M2b §3.2–3.3, de
 
 | Key | Where | Used by |
 | --- | --- | --- |
-| Release key (minisign, Ed25519) | secret of the protected GitHub environment `release` (ADR 0006 amendment 2026-10-11), with an offline copy at the custodians; never on the control plane or a device | sign job of the release workflow, to sign `paddockd` and the `paddock-agent` and `paddock-supervisor` packages; release manager, offline, for fleetd and the fallback |
+| Release key (minisign, Ed25519) | signing copy: secret of the protected GitHub environment `release` (ADR 0006 amendment 2026-10-11); offline backup copy with the custodians; never on the control plane or a device | sign job of the release workflow, to sign `paddockd` and the `paddock-agent` and `paddock-supervisor` packages; custodians, offline, for rotation, the offline fallback and fleetd |
 | Release public key | compiled into `paddock-supervisor` (`-ldflags -X main.releasePublicKey=…`) and given to the api role (`PADDOCK_RELEASE_PUBLIC_KEY_FILE`) | supervisor (verifies before installing), api (refuses uploads that do not verify) |
 | Revocation release key (minisign, Ed25519) | **offline**, two holders (architecture §13.1) | release managers, to sign the `paddock-revoke` package |
 | Revocation release public key | given to the api role (`PADDOCK_REVOKE_RELEASE_PUBLIC_KEY_FILE`) | api (refuses a `paddock-revoke` package that does not verify with it, and any other package signed with it) |
@@ -24,7 +24,8 @@ for `paddock-revoke`). They are for development stacks only.
 ### Production key
 
 Generate once on an offline machine with a passphrase, store the secret key and its passphrase with the custodians
-(see `openbao.md` for the custodian procedure), and publish only the public key:
+as the offline backup copy (see `openbao.md` for the custodian procedure; it serves rotation, the offline fallback and
+fleetd), and publish only the public key:
 
 ```sh
 minisign -G -p paddock-release.pub -s paddock-release.key   # offline; choose a strong passphrase
@@ -38,6 +39,19 @@ Then give the key to the release workflow (once, and again after a rotation):
    `PADDOCK_RELEASE_KEY_PASSPHRASE` (the passphrase). Never as repository secrets: only the environment's tag rule and
    approval keep them away from other workflows and refs.
 3. Set the repository variable `PADDOCK_RELEASE_PUBLIC_KEY` to the complete two-line `paddock-release.pub`.
+4. Restrict the release tags to the maintainer with a tag ruleset (*Settings → Rules → Rulesets → New tag ruleset*):
+   enforcement *Active*, target tags `v*`, rules *Restrict creations*, *Restrict updates* and *Restrict deletions*,
+   bypass list only the *Repository admin* role, which only the maintainer holds. Otherwise anyone with write access
+   could push a `v*` tag on a commit with a changed workflow and ask for the approval. The same with the CLI:
+
+   ```sh
+   gh api --method POST repos/phischl/paddock-mdm/rulesets --input - <<'EOF'
+   {"name": "release tags", "target": "tag", "enforcement": "active",
+    "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+    "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
+    "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]}
+   EOF
+   ```
 
 The trusted comment is part of the signature and must be exactly `paddock-agent version=<version> arch=<arch>`
 (`amd64` or `arm64`): the server refuses other comments at upload (422 `release_signature_mismatch`), and the
@@ -173,7 +187,18 @@ are unsupported and never for production. Verify them with the identity
 The `sign` job runs after `smoke` (only a build that passed the smoke test is signed) in the GitHub environment
 `release` (ADR 0006 amendment 2026-10-11). GitHub admits it only for a `v*` tag and holds it until the maintainer
 approves the deployment (*Review deployments* on the run page); without approval the run stops there and nothing is
-published. The job:
+published.
+
+**Before approving**, the maintainer checks, for the tag `<tag>` of the run:
+
+1. The `sign` job waits for exactly that tag: the run page names `<tag>` and its commit, and the commit equals
+   `git rev-parse <tag>^{commit}` after `git fetch origin --tags`.
+2. The tag's commit is on `main`: `git merge-base --is-ancestor <tag> origin/main` succeeds.
+3. The signing code at the tag is unchanged from `main`:
+   `git diff --exit-code origin/main <tag> -- .github/workflows/release.yml packaging/sign-release.sh agent/go.mod agent/go.sum`
+   prints nothing (`agent/go.sum` pins the minisign the job builds).
+
+If any check fails, reject the deployment. The job:
 
 1. builds `minisign` from the module pinned in `agent/go.sum` (`aead.dev/minisign`, the library the server and the
    supervisor verify with) before the key exists, without a build cache;
@@ -197,14 +222,19 @@ Then, for each draft release:
 2. **paddock-revoke (offline, unchanged):** the two holders of the revocation release key sign
    `paddock-revoke_<version>_<arch>-unsigned.deb` offline as `paddock-revoke_<version>_<arch>.deb` (two-person rule).
 3. Build fleetd for the release with `make fleetd-deb` (needs outbound HTTPS to Fleet's update server) and sign it
-   offline with the custodians' copy of the agent release key.
+   offline with the custodians' backup copy of the agent release key.
 4. Upload and publish through the platform API as under *Releasing* (`<version>` is the release version, e.g.
    `0.1.0-alpha.1`, while `dpkg-deb -f` shows the Debian version `0.1.0~alpha.1`; the upload takes name, version and
    architecture from the URL, not from the file name), then attach the remaining `.minisig` files to the GitHub
    release and publish it. Tagging and publishing a release are the product owner's decision.
 
+The offline-signed `paddock-revoke_<version>_<arch>.deb` and its `.minisig` (and fleetd, if attached) are added after
+the workflow ran, so they are **not** in `SHA256SUMS` or its Sigstore signature. Verify them with minisign instead:
+`minisign -V -p paddock-revoke-release.pub -m paddock-revoke_<version>_<arch>.deb` against the revocation release
+public key (fleetd against the agent release public key).
+
 **Offline fallback.** If the sign job cannot run (environment or secrets unavailable, GitHub outage), sign on the
-offline machine with the custodians' copy as before: check the inputs against their `SHA256SUMS`, remove the suffix
+offline machine with the custodians' backup copy as before: check the inputs against their `SHA256SUMS`, remove the suffix
 (`paddockd_<version>_linux_amd64-unsigned` → `paddockd`, `paddock-agent_<version>_amd64-unsigned.deb` →
 `paddock-agent_<version>_amd64.deb`, …) of the files of the workflow artifact `release` or of a local
 `make release-artifacts`, and sign each as under *Keys*.

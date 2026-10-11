@@ -25,8 +25,8 @@ into supervisor and `paddock-revoke` respectively.
 
 ## Amendment 2026-10-11 — agent release key in a protected CI environment
 
-The agent release key (minisign, Ed25519) moves from offline signing to the release workflow. Its secret key and
-passphrase are secrets of the GitHub environment `release`; only tags `v*` may deploy to it, and every run waits for
+The agent release key (minisign, Ed25519) is used for signing in the release workflow; an offline backup copy stays
+with the custodians for rotation, the offline fallback and fleetd. Its secret key and passphrase are secrets of the GitHub environment `release`; only tags `v*` may deploy to it, and every run waits for
 the approval of a required reviewer (the maintainer, with two-factor authentication). The workflow signs `paddockd`
 for each architecture and the `paddock-agent` and `paddock-supervisor` packages with the trusted comment
 `paddock-agent version=<version> arch=<arch>`, verifies each signature against the public key in the repository
