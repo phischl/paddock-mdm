@@ -6,7 +6,11 @@
 /agent/cmd/paddock-revoke/  @phischl
 # The crypttab volume selection paddock-revoke erases (shared with the luks reconciler, PDK-009).
 /agent/internal/luks/crypttab.go  @phischl
-# The secret scan configuration (PDK-065): CI already reads it from a pull request's merge base; a code owner reviews
-# every change to it as well.
-/.gitleaks.toml     @phischl
-/.gitleaksignore    @phischl
+# The secret scan (PDK-065): CI reads its configuration from a pull request's merge base, but a pull request runs its
+# own workflows, Makefile and scripts, so the scan's integrity rests on the review of these paths. GitHub enforces
+# these owners only once branch protection requires code-owner review (docs/operations/secret-scan.md).
+/.gitleaks.toml           @phischl
+/.gitleaksignore          @phischl
+/Makefile                 @phischl
+/.github/                 @phischl
+/deploy/compose/scripts/  @phischl

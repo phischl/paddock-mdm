@@ -654,7 +654,14 @@ GITLEAKS_REPO ?= $(CURDIR)
 # takes effect only once merged, so it lands in its own pull request first. gitleaks always loads the .gitleaksignore
 # at the root of its source and of its working directory, whatever --gitleaks-ignore-path says, so the history scan
 # reads the git dir instead of the checkout, the file scan keeps a changed .gitleaksignore under another name, and
-# both always pass the chosen file (empty when there is none).
+# both always pass the chosen file (empty when there is none). An inline `gitleaks:allow` comment would let the scanned
+# content allow itself, so both scans pass --ignore-gitleaks-allow. gitleaks resolves an `[extend] path` from its
+# working directory, which the file scan fills with the pull request's files, so a configuration that extends another
+# file fails; `useDefault` alone is allowed.
+# What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
+# scanned. The scan's integrity therefore rests on code review of .github/ and the Makefile; CODEOWNERS names a
+# reviewer for them, but GitHub enforces that only once branch protection requires code-owner review, a setting of the
+# maintainer (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
 gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 	if [ -n "$$ref" ]; then \
@@ -668,6 +675,13 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		if [ -f "$$repo/.gitleaksignore" ]; then cp -- "$$repo/.gitleaksignore" "$$tmp/cfg/gitleaksignore" || exit 1; \
 		else : >"$$tmp/cfg/gitleaksignore"; fi; \
 	fi; \
+	if awk '{ l = $$0; sub(/\#.*/, "", l) } \
+		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t) } \
+		t == "[extend]" && l ~ /^[[:space:]]*["\047]?path["\047]?[[:space:]]*=/ { f = 1 } \
+		l ~ /^[[:space:]]*["\047]?extend["\047]?[[:space:]]*[.=]/ { f = 1 } \
+		END { exit !f }' "$$tmp/cfg/gitleaks.toml"; then \
+		echo "$@: .gitleaks.toml from $${ref:-the working tree} extends another file ([extend] path);" \
+			"only useDefault is allowed" >&2; exit 1; fi; \
 	echo "$@: configuration from $${ref:-the working tree}"
 
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
@@ -690,7 +704,7 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 		-v "$$tmp:$$tmp" -e GIT_OBJECT_DIRECTORY="$$tmp" -e GIT_ALTERNATE_OBJECT_DIRECTORIES="$$common/objects" \
 		-w "$$tmp/cfg" $(GITLEAKS_IMAGE) \
 		git "$$gitdir" --config "$$tmp/cfg/gitleaks.toml" --gitleaks-ignore-path "$$tmp/cfg/gitleaksignore" \
-		--no-banner --redact --log-opts='--remerge-diff $(GITLEAKS_LOG_OPTS)' 2>&1); rc=$$?; \
+		--ignore-gitleaks-allow --no-banner --redact --log-opts='--remerge-diff $(GITLEAKS_LOG_OPTS)' 2>&1); rc=$$?; \
 	printf '%s\n' "$$out"; \
 	plain=$$(printf '%s\n' "$$out" | sed -E 's/\x1b\[[0-9;]*m//g'); \
 	if printf '%s\n' "$$plain" | grep -qE '(^|[[:space:]])(ERR|FTL)[[:space:]]|^(fatal|error):'; then \
@@ -730,7 +744,8 @@ scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE (
 	echo "scan-secrets-diff: $$n file(s) changed in $$base..HEAD"; \
 	if [ "$$n" -eq 0 ]; then echo "scan-secrets-diff: nothing to scan"; exit 0; fi; \
 	docker run --rm -v "$$tmp/src:/scan:ro" -v "$$tmp/cfg:/cfg:ro" -w /scan $(GITLEAKS_IMAGE) \
-		dir . --config /cfg/gitleaks.toml --gitleaks-ignore-path /cfg/gitleaksignore --no-banner --redact
+		dir . --config /cfg/gitleaks.toml --gitleaks-ignore-path /cfg/gitleaksignore --ignore-gitleaks-allow \
+		--no-banner --redact
 
 scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tree
 	mkdir -p $(TRIVY_CACHE)
