@@ -45,13 +45,19 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: make scan-secrets GITLEAKS_LOG_OPTS="$(git merge-base "origin/$BASE_REF" HEAD)..HEAD"
+        # Both pull request scans take their configuration from the merge base: a pull request must not loosen the scan
+        # that checks it (PDK-065).
+        run: |
+          base="$(git merge-base "origin/$BASE_REF" HEAD)"
+          make scan-secrets GITLEAKS_LOG_OPTS="$base..HEAD" GITLEAKS_CONFIG_REF="$base"
       - name: Scan the files the pull request changes, merge commits included
         # gitleaks git sees no merge diff, so a secret added only in a merge resolution needs this scan (PDK-057).
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: make scan-secrets-diff GITLEAKS_DIFF_BASE="origin/$BASE_REF"
+        run: |
+          base="$(git merge-base "origin/$BASE_REF" HEAD)"
+          make scan-secrets-diff GITLEAKS_DIFF_BASE="origin/$BASE_REF" GITLEAKS_CONFIG_REF="$base"
       - name: Scan the full history of the branch
         if: github.event_name != 'pull_request'
         run: make scan-secrets

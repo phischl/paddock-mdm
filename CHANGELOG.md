@@ -123,6 +123,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `secrets` additionally scans the current content of every changed file (`make scan-secrets-diff`, base
   `GITLEAKS_DIFF_BASE`, default `origin/main`). The path allowlists in `.gitleaks.toml` accept the `b/` prefix that
   gitleaks reports for files of a merge conflict.
+- A pull request can no longer loosen the secret scan that checks it (PDK-065): `make scan-secrets` and
+  `make scan-secrets-diff` read `.gitleaks.toml` and `.gitleaksignore` from `GITLEAKS_CONFIG_REF` (default: the
+  working tree), and the CI job `secrets` sets it to the pull request's merge base. A pull request that changes either
+  file is scanned with the base's version, so an allowlist for a new false positive lands in its own pull request
+  first. A `.gitleaksignore` a pull request adds is no longer picked up on its own. Both files have a code owner.
 
 ### Fixed
 
