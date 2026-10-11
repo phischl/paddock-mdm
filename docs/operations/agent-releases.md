@@ -41,15 +41,18 @@ Then give the key to the release workflow (once, and again after a rotation):
 3. Set the repository variable `PADDOCK_RELEASE_PUBLIC_KEY` to the complete two-line `paddock-release.pub`.
 4. Restrict the release tags to the maintainer with a tag ruleset (*Settings → Rules → Rulesets → New tag ruleset*):
    enforcement *Active*, target tags `v*`, rules *Restrict creations*, *Restrict updates* and *Restrict deletions*,
-   bypass list only the *Repository admin* role, which only the maintainer holds. Otherwise anyone with write access
-   could push a `v*` tag on a commit with a changed workflow and ask for the approval. The same with the CLI:
+   bypass list only the maintainer (`gh api users/<login> --jq .id` gives the user id). Otherwise anyone with write
+   access could push a `v*` tag on a commit with a changed workflow and ask for the approval. Releases are tagged only
+   on `main`; check 2 below rejects a tag on any other branch. The same with the CLI:
 
    ```sh
    gh api --method POST repos/phischl/paddock-mdm/rulesets --input - <<'EOF'
    {"name": "release tags", "target": "tag", "enforcement": "active",
     "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
-    "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
-    "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]}
+    "rules": [{"type": "creation"},
+              {"type": "update", "parameters": {"update_allows_fetch_and_merge": false}},
+              {"type": "deletion"}],
+    "bypass_actors": [{"actor_id": 18677661, "actor_type": "User", "bypass_mode": "always"}]}
    EOF
    ```
 
@@ -195,12 +198,12 @@ published.
    `git rev-parse <tag>^{commit}` after `git fetch origin --tags`.
 2. The tag's commit is on `main`: `git merge-base --is-ancestor <tag> origin/main` succeeds.
 3. The signing code at the tag is unchanged from `main`:
-   `git diff --exit-code origin/main <tag> -- .github/workflows/release.yml packaging/sign-release.sh agent/go.mod agent/go.sum`
-   prints nothing (`agent/go.sum` pins the minisign the job builds).
+   `git diff --exit-code origin/main <tag> -- .github/workflows/release.yml packaging/sign-release.sh go.work go.work.sum ':(glob)**/go.mod' ':(glob)**/go.sum'`
+   prints nothing (the workspace files pin the minisign the job builds; it resolves through `go.work`).
 
 If any check fails, reject the deployment. The job:
 
-1. builds `minisign` from the module pinned in `agent/go.sum` (`aead.dev/minisign`, the library the server and the
+1. builds `minisign` from the module pinned in the Go workspace (`aead.dev/minisign`, the library the server and the
    supervisor verify with) before the key exists, without a build cache;
 2. writes `PADDOCK_RELEASE_KEY` with umask 077 to a file under `$RUNNER_TEMP` and runs `packaging/sign-release.sh`:
    `paddockd` for amd64 and arm64 and every `paddock-agent` and `paddock-supervisor` package, each with the trusted
