@@ -20,10 +20,12 @@ kv_pattern="bao (kv put|write) .* (current|previous|value|[a-z_]*(key|secret|sec
 # Positional arguments 3 and 4 of `alias set` are the access and the secret key; the third of `admin user add` is the
 # secret key. The only value allowed there is the throwaway `"$(head -c <n> /dev/urandom …)"`, which scan reduces to
 # `@` (review 1: a variable, a parameter, `$(cat …)`, `$(<file)` or a prefixed secret all slipped through a denylist).
-# A `#` before the command marks a comment, which mentions the command in prose.
-alias_pattern='(rc|mc) alias set( +-[^ ]*)*( +[^ -][^ ]*){3}'
-user_pattern='^[^#]*(rc|mc) admin user add( +-[^ ]*)*( +[^ -][^ ]*){2} +[^ @>|;&]'
-throwaway='\\?"\\?\$\(head -c [0-9]+ /dev/urandom[^)]*\)\\?"'
+# Only pipes into od or tr may follow head; a `;`, `&`, `$` or nested `$(` there could append a real secret (PDK-046).
+# A `#` that starts a word before the command marks a comment, which mentions the command in prose; `${#x}` or `$#`
+# does not. Any whitespace separates arguments, a tab included.
+alias_pattern='(rc|mc)[[:space:]]+alias[[:space:]]+set([[:space:]]+-[^[:space:]]*)*([[:space:]]+[^[:space:]-][^[:space:]]*){3}'
+user_pattern='^([^#]|[^[:space:]]#+)*(rc|mc)[[:space:]]+admin[[:space:]]+user[[:space:]]+add([[:space:]]+-[^[:space:]]*)*([[:space:]]+[^[:space:]-][^[:space:]]*){2}[[:space:]]+[^[:space:]@>|;&]'
+throwaway='\\?"\\?\$\(head -c [0-9]+ /dev/urandom( *\| *(od|tr)( [^|;&$()<>`]*)?)*\)\\?"'
 
 # scan <extended regular expression> <file…>: the matching lines, with backslash continuations joined so a command
 # split over several lines is seen as one, and the throwaway secret as `@`.
@@ -103,6 +105,14 @@ detects() {
   detects 'rc admin user add with a prefixed secret' "$user_pattern" "rc 'rc admin user add -- a \"\$AK\" \"pre\$SK\"'"
   detects 'rc admin user add with a secret appended to the throwaway' "$user_pattern" \
     "rc 'rc admin user add -- a \"\$AK\" \"\$(head -c 24 /dev/urandom)\$SK\"'"
+  detects 'rc admin user add with a command after the throwaway head' "$user_pattern" \
+    "rc 'rc admin user add -- a \"\$AK\" \"\$(head -c 24 /dev/urandom; cat /run/secrets/sk)\"'"
+  detects 'rc admin user add after a ${#x} on the same line' "$user_pattern" \
+    'x=${#AK}; rc admin user add -- a "$AK" "$SK"'
+  detects 'rc admin user add with tabs between the arguments' "$user_pattern" \
+    $'rc admin user add --\ta\t"$AK"\t"$SK"'
+  detects 'rc alias set with tabs between the arguments' "$alias_pattern" \
+    $'rc alias set\taudit\thttp://rustfs:9000\t"$AK"\t"$SK"'
 }
 
 # ignores <description> <pattern> <sample line…>: scan does not flag the sample, a form the scripts use.
