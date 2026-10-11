@@ -51,7 +51,7 @@ type Config struct {
 	Notify       func(state string)     // sd_notify
 	Now          func() time.Time       // clock of the probation; nil is time.Now (tests inject one)
 	Sleep        func(time.Duration)    // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
-	SyncDir      func(dir string) error // syncs the slot directory after a flip; nil is fsync (tests inject failures)
+	SyncDir      func(dir string) error // syncs slots after a flip, staging before a drop; nil is fsync (tests inject failures)
 	SyncFile     func(*os.File) error   // syncs a state file before its rename; nil is fsync (tests inject failures)
 }
 
@@ -458,29 +458,34 @@ func (s *Supervisor) conclude(p *probation, outcome string) {
 	s.report(p)
 }
 
-// report writes the recorded result of p and then removes the probation log. Writing the same result again is
-// harmless: the agent turns a result into an event once per "at" (agent.reportUpdate), and the server counts an
-// outcome once per device and release.
+// report writes the recorded result of p and removes the probation log once the result is written. If writing the
+// result fails, the log stays: when it holds the recorded outcome, the next start writes the result again (PDK-063).
+// The same result written twice is reported once: the agent turns a result into an event once per "at"
+// (agent.reportUpdate), and the server counts an outcome once per device and release.
 func (s *Supervisor) report(p *probation) {
-	s.finishAt(p.Version, p.FromVersion, p.Outcome, p.DecidedAt)
+	if s.finishAt(p.Version, p.FromVersion, p.Outcome, p.DecidedAt) != nil {
+		return
+	}
 	_ = os.Remove(s.cfg.ProbationLog)
 }
 
 // finish cleans the staging directory, writes the update result and asks the agent to check in (SIGHUP).
 func (s *Supervisor) finish(version, from, outcome string) {
-	s.finishAt(version, from, outcome, time.Now().UTC())
+	_ = s.finishAt(version, from, outcome, time.Now().UTC())
 }
 
-// finishAt is finish with the result time at.
-func (s *Supervisor) finishAt(version, from, outcome string, at time.Time) {
+// finishAt is finish with the result time at; it returns the error of writing the result.
+func (s *Supervisor) finishAt(version, from, outcome string, at time.Time) error {
 	s.cleanup(version)
 	res := map[string]any{"version": version, "from_version": from, "outcome": outcome, "at": at}
-	if err := writeJSON(s.cfg.Result, res, s.cfg.SyncFile); err != nil {
+	err := writeJSON(s.cfg.Result, res, s.cfg.SyncFile)
+	if err != nil {
 		slog.Error("writing the update result failed", "error", err)
 	}
 	if s.child != nil {
 		_ = s.child.Process.Signal(syscall.SIGHUP)
 	}
+	return err
 }
 
 func (s *Supervisor) cleanup(version string) {
@@ -536,11 +541,16 @@ func (s *Supervisor) resumeProbation() {
 	slog.Info("resuming probation", "version", p.Version)
 }
 
-// dropProbation gives up a probation that cannot be resumed. It removes the update request first: a request left
-// behind keeps update.Pending true, so the agent would never stage another release (PDK-060), and a power loss
-// between the two steps leaves the log, so the next start drops it again.
+// dropProbation gives up a probation that cannot be resumed. A request left behind keeps update.Pending true, so the
+// agent would never stage another release (PDK-060). The removal of the request is therefore synced before the log
+// is removed: a power loss can bring back the log with or without the request, never the request alone, and the next
+// start drops a log that came back again. If the sync fails, the log stays for that retry.
 func (s *Supervisor) dropProbation(version string) {
 	s.cleanup(version)
+	if err := s.cfg.SyncDir(s.cfg.Staging); err != nil {
+		slog.Error("syncing the staging directory failed; the probation log stays until the next start", "error", err)
+		return
+	}
 	_ = os.Remove(s.cfg.ProbationLog)
 }
 

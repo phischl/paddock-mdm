@@ -183,6 +183,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after a power failure during the switch). The supervisor dropped the record but left the update request behind, so
   the agent waited for it forever. It now removes the request as well and logs the drop; it reports no result, because
   it cannot tell which release or what happened, and the agent stages the offered release again.
+- `paddock-supervisor` no longer loses the result of an agent update when writing `update-result.json` fails, for
+  example on a full disk. It keeps the probation record with the decided outcome, and its next start writes the
+  result.
 
 ### Security
 

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1177,4 +1178,140 @@ func TestDroppedProbationCleansTheUpdateRequest(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDropKeepsTheLogUntilTheRequestRemovalIsSynced (PDK-060): the log of a dropped probation is removed only after
+// the removal of the update request was synced; otherwise a power loss could bring back the request without the log.
+// While the sync fails, the log stays, and the next start drops it.
+func TestDropKeepsTheLogUntilTheRequestRemovalIsSynced(t *testing.T) {
+	f := newFake(t)
+	layout := paths.Layout{Root: f.dir}
+	f.cfg.Staging = layout.Staging()
+	var broken atomic.Bool
+	broken.Store(true)
+	f.cfg.SyncDir = func(dir string) error {
+		if dir == f.cfg.Staging && broken.Load() {
+			return fmt.Errorf("syncing %s: %w", dir, syscall.EIO)
+		}
+		return syncDir(dir)
+	}
+	f.stage("1.1.0", script("1.1.0", 0, f.good()), nil)
+	<-f.usr1
+	if err := writeJSON(f.cfg.ProbationLog, probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}, syncFile); err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	f.waitReady()
+	if update.Pending(layout) {
+		t.Fatal("the update request is still pending")
+	}
+	if _, err := os.Stat(f.cfg.ProbationLog); err != nil {
+		t.Fatalf("the probation log was removed although the request's removal was not synced: %v", err)
+	}
+	f.expectNoResult()
+	f.stop()
+	broken.Store(false)
+	f.start()
+	f.waitReady()
+	f.expectNoProbationLog()
+	f.expectNoResult()
+}
+
+// recordBeforeResult is the supervisor's injected file sync: when it syncs the update result, it checks that the
+// probation log on disk already records that result's outcome and time (PDK-058). It counts the checks.
+func (f *fake) recordBeforeResult() *atomic.Int32 {
+	checked := &atomic.Int32{}
+	f.cfg.SyncFile = func(file *os.File) error {
+		if file.Name() == f.cfg.Result+".tmp" {
+			var p probation
+			var res struct {
+				Outcome string    `json:"outcome"`
+				At      time.Time `json:"at"`
+			}
+			logData, err := os.ReadFile(f.cfg.ProbationLog)
+			if err == nil {
+				err = json.Unmarshal(logData, &p)
+			}
+			resData, rerr := os.ReadFile(file.Name())
+			if rerr == nil {
+				rerr = json.Unmarshal(resData, &res)
+			}
+			if err != nil || rerr != nil || p.Outcome != res.Outcome || !p.DecidedAt.Equal(res.At) {
+				f.t.Errorf("result %s written before the probation log %s recorded it (errors %v, %v)", resData, logData, err, rerr)
+			}
+			checked.Add(1)
+		}
+		return file.Sync()
+	}
+	return checked
+}
+
+// TestOutcomeIsRecordedBeforeTheResult (PDK-058): the probation log records the outcome before the result is
+// written, so that a power loss between the two leaves a log that names the result instead of one that decides anew.
+func TestOutcomeIsRecordedBeforeTheResult(t *testing.T) {
+	for _, tc := range []struct {
+		name, run, outcome, slot string
+	}{
+		{"updated", "", outcomeUpdated, "B"},
+		{"rolled back", "trap '' HUP; exec sleep 300", outcomeRolledBack, "A"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake(t)
+			checked := f.recordBeforeResult()
+			run := tc.run
+			if run == "" {
+				run = f.good()
+			}
+			f.start()
+			f.stageAfterCheckin("1.1.0", script("1.1.0", 0, run))
+			if tc.outcome == outcomeUpdated {
+				f.waitFor("the new agent checked in", f.checkedIn)
+			}
+			if r := f.endProbation("B"); r.Outcome != tc.outcome || f.active() != tc.slot {
+				t.Fatalf("result %+v, current %s", r, f.active())
+			}
+			if n := checked.Load(); n != 1 {
+				t.Fatalf("%d result writes checked, want 1", n)
+			}
+		})
+	}
+}
+
+// TestFailedResultWriteKeepsTheRecordedOutcome (PDK-063): if the result cannot be written at the end of a probation,
+// the probation log with the recorded outcome stays, and the next start writes that result, exactly once.
+func TestFailedResultWriteKeepsTheRecordedOutcome(t *testing.T) {
+	f := newFake(t)
+	var broken atomic.Bool
+	broken.Store(true)
+	f.cfg.SyncFile = func(file *os.File) error {
+		if file.Name() == f.cfg.Result+".tmp" && broken.Load() {
+			return fmt.Errorf("syncing %s: %w", file.Name(), syscall.EIO)
+		}
+		return file.Sync()
+	}
+	f.start()
+	f.stageAfterCheckin("1.1.0", script("1.1.0", 0, f.good()))
+	f.waitFor("the new agent checked in", f.checkedIn)
+	f.waitFor("current → B", func() bool { return f.active() == "B" })
+	f.clock.set(testProbation + time.Minute)
+	var recorded probation
+	f.waitFor("the outcome was recorded", func() bool {
+		data, err := os.ReadFile(f.cfg.ProbationLog)
+		return err == nil && json.Unmarshal(data, &recorded) == nil && recorded.Outcome != ""
+	})
+	f.waitSent()
+	f.clock.set(0)
+	f.expectNoResult()
+	var kept probation
+	data, err := os.ReadFile(f.cfg.ProbationLog)
+	if err == nil {
+		err = json.Unmarshal(data, &kept)
+	}
+	if err != nil || kept.Outcome != outcomeUpdated || !kept.DecidedAt.Equal(recorded.DecidedAt) {
+		t.Fatalf("probation log after the failed result write %s, error %v", data, err)
+	}
+	f.stop()
+	broken.Store(false)
+	f.start()
+	f.expectSameResult(result{Version: "1.1.0", FromVersion: "1.0.0", Outcome: outcomeUpdated, At: kept.DecidedAt}, "B")
 }
