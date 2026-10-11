@@ -141,3 +141,72 @@ test('organization admin manages users, groups, profiles and device logins', asy
   expect(retired.status()).toBe(200)
   expect(csp).toEqual([])
 })
+
+// PDK-044 (the PDK-038 condition): on a phone the login chip fields wrap; while a field is focused its input keeps
+// a minimum width and can sit alone on a line below the chips. Leaving the field must not drop that line, or the
+// buttons below move away from the click that blurred it and Save does not save.
+test('login chip fields keep their height when a click on Save blurs them', async ({ page, cleanup }) => {
+  test.setTimeout(240_000)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await login(page, 'alice@acme.test', 'dev_alice_password')
+  const stamp = Date.now().toString(36)
+  const hostname = `e2e-chips-${stamp}`
+  cleanup.remove('/api/v1/enrollment-tokens', `E2E chips token ${stamp}`)
+  const token = await page.request.post('/api/v1/enrollment-tokens', {
+    headers: csrf,
+    data: { name: `E2E chips token ${stamp}`, max_uses: 1, auto_approve: true, expires_at: new Date(Date.now() + 3600_000).toISOString() },
+  })
+  expect(token.status()).toBe(201)
+  const config = JSON.stringify((await token.json()).enrollment_config)
+  const enrolled = JSON.parse(execFileSync(devicesim, ['enroll', '--hostname', hostname], { input: config, encoding: 'utf8', timeout: 90_000 }))
+  // Chips of varied widths, so that after some pick the focused input no longer fits next to the last chip.
+  cleanup.remove('/api/v1/users', `-${stamp}@`)
+  cleanup.remove('/api/v1/user-groups', `chips ${stamp}`)
+  const users: string[] = []
+  const groups: string[] = []
+  for (let i = 0; i < 14; i++) {
+    const pad = 'x'.repeat((i * 5) % 11)
+    const user = { username: `c${i}${pad}-${stamp}@acme.test`, display_name: `Chip ${i}` }
+    expect((await page.request.post('/api/v1/users', { headers: csrf, data: user })).status()).toBe(201)
+    users.push(user.username)
+    const group = { slug: `c${i}-${stamp}`, name: `G${i}${pad} chips ${stamp}` }
+    expect((await page.request.post('/api/v1/user-groups', { headers: csrf, data: group })).status()).toBe(201)
+    groups.push(group.name)
+  }
+  const fields = [
+    { testid: 'login-users', label: 'Users', options: users },
+    { testid: 'login-groups', label: 'Groups', options: groups },
+  ]
+  try {
+    for (const f of fields) {
+      await page.goto('/devices/' + enrolled.device_id + '/access')
+      await expect(page.getByRole('heading', { name: hostname })).toBeVisible()
+      const field = page.getByTestId(f.testid)
+      const input = field.getByRole('combobox', { name: f.label })
+      let reproduced = false
+      for (const option of f.options) {
+        await input.fill(option)
+        await page.getByRole('option', { name: option, exact: true }).click()
+        await page.keyboard.press('Escape')
+        await expect(input).toBeFocused()
+        const alone = await field.evaluate((el) => {
+          const chips = [...el.querySelectorAll('.v-chip')]
+          const own = el.querySelector('input[role="combobox"]')
+          return chips.length > 0 && own !== null && own.getBoundingClientRect().top >= chips[chips.length - 1].getBoundingClientRect().bottom - 1
+        })
+        if (!alone) continue
+        reproduced = true
+        const height = (await field.boundingBox())?.height
+        await page.getByTestId('save-login-assignment').click()
+        await expect(page.getByRole('main').getByRole('status')).toHaveText('Login assignment saved.')
+        await expect(input).not.toBeFocused()
+        expect((await field.boundingBox())?.height, `${f.label}: height after the click on Save`).toBe(height)
+        break
+      }
+      expect(reproduced, `${f.label}: the input never sat alone on a line below the chips`).toBe(true)
+    }
+  } finally {
+    const retired = await page.request.post(`/api/v1/devices/${enrolled.device_id}/retire`, { headers: csrf })
+    expect(retired.status()).toBe(200)
+  }
+})
