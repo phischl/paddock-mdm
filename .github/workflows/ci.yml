@@ -40,8 +40,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # gitleaks scans the full history
-      - run: make scan-secrets
+          fetch-depth: 0 # the merge base and the full history of main need every commit
+      - name: Scan the pull request's own commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: make scan-secrets GITLEAKS_LOG_OPTS="$(git merge-base "origin/$BASE_REF" HEAD)..HEAD"
+      - name: Scan the full history of the branch
+        if: github.event_name != 'pull_request'
+        run: make scan-secrets
 
   trivy:
     runs-on: ubuntu-24.04
