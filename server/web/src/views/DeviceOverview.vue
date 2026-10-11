@@ -221,6 +221,7 @@ async function copyId(): Promise<void> {
             :disabled="!session.canWrite"
             multiple
             chips
+            class="pd-chip-field"
             data-testid="device-groups"
           />
           <div

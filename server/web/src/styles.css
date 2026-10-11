@@ -367,3 +367,6 @@ a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary);
 .pd-identity dd { overflow-wrap: anywhere; min-width: 0; }
 .pd-identity-id { display: inline-flex; align-items: center; gap: 2px; }
 .pd-device-col .facts th { width: 45%; }
+/* Vuetify drops the input's minimum width on blur, so the chips reflow onto one line fewer and the button below
+   moves away from the click that blurred the field; the focused width is kept. */
+.pd-chip-field .v-field input { min-width: calc(2 * var(--pd-space-7)); }
