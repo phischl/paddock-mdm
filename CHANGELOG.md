@@ -131,7 +131,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rollback failed: current still points at the new agent` at error level, keeps the new agent running and reports
   the update as failed (`agent.update_failed` with outcome `self_test_failed`), which counts toward the rollout's
   failure rate as a rollback does.
-
+- After a rollback, `paddock-supervisor` no longer ends the agent it has just restarted: its check-in request
+  (SIGHUP) could arrive before the agent was ready for it, the agent exited with `signal: hangup` and only came back
+  after the restart back-off. The supervisor now ignores SIGHUP (and no longer exits on one itself), so the agent
+  starts with SIGHUP ignored until it handles check-in requests; it checks in at start anyway, so no update result
+  goes unreported.
 
 ### Security
 
