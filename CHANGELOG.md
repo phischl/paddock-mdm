@@ -115,6 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branch no longer fails other pull requests. Reviewed false positives are content-based allowlists in `.gitleaks.toml`
   (file plus exact value shape) instead of commit-bound fingerprints, and `.gitleaksignore` is removed. The scan works
   from git worktrees and fails when it scanned no commits.
+- The secret scan also catches a secret added only in a merge commit (PDK-057): gitleaks' history scan shows no diff
+  for merges, so the CI job `secrets` additionally scans the current content of every file a pull request changes
+  (`make scan-secrets-diff`, base `GITLEAKS_DIFF_BASE`, default `origin/main`). A range made only of merge commits no
+  longer fails `make scan-secrets` with "scanned 0 commits"; a range with any other commit that scans 0 still fails.
 
 ### Fixed
 
