@@ -497,8 +497,11 @@ func (s *Supervisor) resumeProbation() {
 	if err != nil {
 		return
 	}
-	if json.Unmarshal(data, &p) != nil {
-		_ = os.Remove(s.cfg.ProbationLog)
+	if err := json.Unmarshal(data, &p); err != nil {
+		// Without the log's content the release and the slots are unknown, so no result could be true; the staged
+		// release directory stays, because its version is unknown too.
+		slog.Error("dropping an unreadable probation log", "error", err)
+		s.dropProbation("")
 		return
 	}
 	if p.Outcome != "" {
@@ -513,8 +516,13 @@ func (s *Supervisor) resumeProbation() {
 	}
 	// A rollback flip lost with the power leaves current on ToSlot: the probation runs again and decides anew.
 	if s.activeSlot() != p.ToSlot {
-		// The flip never happened, or a rollback flip back survived whose log could not be marked rolling_back.
-		_ = os.Remove(s.cfg.ProbationLog)
+		// The flip never happened, or a rollback flip back survived whose log could not be marked rolling_back; on disk
+		// the two look the same. No result is reported: rolled_back for a switch lost with the power would count the
+		// release as failed in the rollout and block it on this device, while without a result the agent stages the
+		// release again and its next probation reports. A current on neither slot proves nothing either way.
+		slog.Warn("dropping the probation log: current points at neither the new nor a rolled-back slot", "version", p.Version,
+			"active_slot", s.activeSlot(), "to_slot", p.ToSlot)
+		s.dropProbation(p.Version)
 		return
 	}
 	p.RollingBack = false
@@ -526,6 +534,14 @@ func (s *Supervisor) resumeProbation() {
 	// Rolling back here would start the old agent before Run starts the current one; checkProbation does it.
 	p.markKept = s.forgetCheckin() != nil
 	slog.Info("resuming probation", "version", p.Version)
+}
+
+// dropProbation gives up a probation that cannot be resumed. It removes the update request first: a request left
+// behind keeps update.Pending true, so the agent would never stage another release (PDK-060), and a power loss
+// between the two steps leaves the log, so the next start drops it again.
+func (s *Supervisor) dropProbation(version string) {
+	s.cleanup(version)
+	_ = os.Remove(s.cfg.ProbationLog)
 }
 
 func (s *Supervisor) activeSlot() string {

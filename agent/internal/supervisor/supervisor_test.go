@@ -18,6 +18,8 @@ import (
 
 	"aead.dev/minisign"
 
+	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/agent/internal/update"
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
 )
 
@@ -1105,4 +1107,74 @@ func TestRestartAfterRolledBackDoesNotReportAgain(t *testing.T) {
 	}
 	f.restartAfterLostLogRemoval(d)
 	f.expectSameResult(first, "A")
+}
+
+// waitReady waits for the supervisor's READY notice, which it sends once it has resumed or dropped a probation log.
+func (f *fake) waitReady() {
+	f.t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case n := <-f.notices:
+			if n == "READY=1" {
+				return
+			}
+		case <-deadline:
+			f.t.Fatal("timed out waiting for READY")
+		}
+	}
+}
+
+// TestDroppedProbationCleansTheUpdateRequest (PDK-060): a probation log that a restarted supervisor cannot resume is
+// dropped together with the update request, so that the agent stages the next release (update.Pending is false). No
+// result is written: the log's release is unknown, or the switch may have been lost with the power.
+func TestDroppedProbationCleansTheUpdateRequest(t *testing.T) {
+	staged := probation{Version: "1.1.0", FromVersion: "1.0.0", FromSlot: "A", ToSlot: "B"}
+	rolling := staged
+	rolling.RollingBack = true
+	for _, tc := range []struct {
+		name string
+		log  []byte // the raw probation log; nil writes probation instead
+		probation
+		current string
+		// releaseKept: an unreadable log does not name the release, so its staged directory stays.
+		releaseKept bool
+	}{
+		{name: "unreadable log", log: []byte("{"), current: "A", releaseKept: true},
+		{name: "switch never happened", probation: staged, current: "A"},
+		{name: "current on neither slot", probation: rolling, current: "C"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake(t)
+			layout := paths.Layout{Root: f.dir}
+			f.cfg.Staging = layout.Staging()
+			bin := script("1.1.0", 0, f.good())
+			f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), bin)
+			f.stage("1.1.0", bin, nil)
+			<-f.usr1
+			if !update.Pending(layout) {
+				t.Fatal("the staged release is not pending")
+			}
+			if err := flip(f.cfg.Slots, tc.current, syncDir); err != nil {
+				t.Fatal(err)
+			}
+			if tc.log != nil {
+				if err := os.WriteFile(f.cfg.ProbationLog, tc.log, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := writeJSON(f.cfg.ProbationLog, tc.probation, syncFile); err != nil {
+				t.Fatal(err)
+			}
+			f.start()
+			f.waitReady()
+			if update.Pending(layout) {
+				t.Fatal("the update request is still pending after the probation log was dropped")
+			}
+			f.expectNoProbationLog()
+			f.expectNoResult()
+			if _, err := os.Stat(filepath.Join(f.cfg.Staging, "1.1.0")); os.IsNotExist(err) == tc.releaseKept {
+				t.Fatalf("staged release kept %t, want %t", !os.IsNotExist(err), tc.releaseKept)
+			}
+		})
+	}
 }

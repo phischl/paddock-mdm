@@ -178,6 +178,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supervisor then ran the probation again and could report `rolled_back` for a release it had already reported as
   `updated`, or report a rollback twice. The supervisor now writes the decided outcome into the probation record
   before the result, and a restart that finds it writes the same result again, which the agent does not report twice.
+- A device no longer stops accepting agent updates after `paddock-supervisor` restarts with a probation record it
+  cannot resume (unreadable, or `/opt/paddock/agent/current` on neither the new nor a rolled-back slot, for example
+  after a power failure during the switch). The supervisor dropped the record but left the update request behind, so
+  the agent waited for it forever. It now removes the request as well and logs the drop; it reports no result, because
+  it cannot tell which release or what happened, and the agent stages the offered release again.
 
 ### Security
 
