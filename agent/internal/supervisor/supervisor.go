@@ -52,6 +52,7 @@ type Config struct {
 	Now          func() time.Time       // clock of the probation; nil is time.Now (tests inject one)
 	Sleep        func(time.Duration)    // waits between rollback flip attempts; nil is time.Sleep (tests inject one)
 	SyncDir      func(dir string) error // syncs the slot directory after a flip; nil is fsync (tests inject failures)
+	SyncFile     func(*os.File) error   // syncs a state file before its rename; nil is fsync (tests inject failures)
 }
 
 // rollbackAttempts bounds the attempts to flip current back to the previous slot; the waits between them double from
@@ -75,6 +76,7 @@ type probation struct {
 	exits       int
 	markKept    bool // the check-in mark could not be removed, so it cannot prove a check-in of the new agent
 	unsynced    bool // the switch to ToSlot is not known to be durable, so it must be confirmed before "updated"
+	passed      bool // healthy at the deadline; only the confirmation of the switch is outstanding
 }
 
 type selfTest struct {
@@ -107,6 +109,9 @@ func New(cfg Config) *Supervisor {
 	}
 	if cfg.SyncDir == nil {
 		cfg.SyncDir = syncDir
+	}
+	if cfg.SyncFile == nil {
+		cfg.SyncFile = syncFile
 	}
 	return &Supervisor{cfg: cfg, exited: make(chan error, 1), tested: make(chan selfTest, 1), backoff: time.Second}
 }
@@ -179,7 +184,8 @@ func (s *Supervisor) stop() {
 func (s *Supervisor) onExit(err error) {
 	s.child = nil
 	slog.Warn("agent exited", "error", err)
-	if s.probation != nil {
+	// A passed probation only waits for its switch to become durable; the release proved healthy and stays.
+	if s.probation != nil && !s.probation.passed {
 		if s.probation.exits++; s.probation.exits >= 3 {
 			s.rollback("crash loop")
 			return
@@ -277,7 +283,7 @@ func (s *Supervisor) onSelfTest(r selfTest) {
 		return
 	}
 	p := &probation{Version: r.version, FromVersion: from, FromSlot: s.activeSlot(), ToSlot: r.slot, SwitchedAt: s.cfg.Now()}
-	err := writeJSON(s.cfg.ProbationLog, p)
+	err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile)
 	if err == nil {
 		err = flip(s.cfg.Slots, r.slot, s.cfg.SyncDir)
 	}
@@ -323,17 +329,20 @@ func (s *Supervisor) checkProbation() {
 	if p == nil {
 		return
 	}
-	// A mark that survived the switch would pass an agent that never checks in; without proof, fail safe at once.
-	if p.markKept {
-		s.rollback("check-in mark could not be cleared")
-		return
-	}
-	if s.cfg.Now().Before(p.deadline) {
-		return
-	}
-	if _, err := os.Stat(s.cfg.LastCheckin); s.child == nil || err != nil {
-		s.rollback("not healthy at the end of the probation")
-		return
+	if !p.passed {
+		// A mark that survived the switch would pass an agent that never checks in; without proof, fail safe at once.
+		if p.markKept {
+			s.rollback("check-in mark could not be cleared")
+			return
+		}
+		if s.cfg.Now().Before(p.deadline) {
+			return
+		}
+		if _, err := os.Stat(s.cfg.LastCheckin); s.child == nil || err != nil {
+			s.rollback("not healthy at the end of the probation")
+			return
+		}
+		p.passed = true
 	}
 	if p.unsynced && !s.confirmFlip(p.ToSlot) {
 		return
@@ -355,7 +364,7 @@ func (s *Supervisor) rollback(reason string) {
 	durable, err := s.flipBack(p.FromSlot)
 	if err == nil && !durable {
 		p.RollingBack = true
-		if werr := writeJSON(s.cfg.ProbationLog, p); werr != nil {
+		if werr := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); werr != nil {
 			// The log written at the switch still names ToSlot, so a restart resumes the probation or drops it, and
 			// reports nothing in either case.
 			slog.Error("marking the probation log as rolling back failed", "error", werr)
@@ -439,7 +448,7 @@ func (s *Supervisor) restartChild() {
 func (s *Supervisor) finish(version, from, outcome string) {
 	s.cleanup(version)
 	res := map[string]any{"version": version, "from_version": from, "outcome": outcome, "at": time.Now().UTC()}
-	if err := writeJSON(s.cfg.Result, res); err != nil {
+	if err := writeJSON(s.cfg.Result, res, s.cfg.SyncFile); err != nil {
 		slog.Error("writing the update result failed", "error", err)
 	}
 	if s.child != nil {
@@ -472,7 +481,8 @@ func (s *Supervisor) resumeProbation() {
 	}
 	// A rollback flip lost with the power leaves current on ToSlot: the probation runs again and decides anew.
 	if s.activeSlot() != p.ToSlot {
-		_ = os.Remove(s.cfg.ProbationLog) // the flip never happened
+		// The flip never happened, or a rollback flip back survived whose log could not be marked rolling_back.
+		_ = os.Remove(s.cfg.ProbationLog)
 		return
 	}
 	p.RollingBack = false
@@ -547,20 +557,31 @@ func install(bin []byte, path string) error {
 	return syncDir(filepath.Dir(path))
 }
 
-func writeJSON(path string, v any) error {
+// writeJSON replaces path with v atomically. It syncs the content with sync before the rename: a new file renamed into
+// place unsynced can come back empty after a power loss, and an empty probation log is dropped (PDK-059).
+func writeJSON(path string, v any, sync func(*os.File) error) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // our own state files
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	_, err = f.Write(data)
+	err = errors.Join(err, sync(f), f.Close())
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	return syncDir(filepath.Dir(path))
 }
+
+func syncFile(f *os.File) error { return f.Sync() }
 
 func syncDir(dir string) error {
 	d, err := os.Open(dir) //nolint:gosec // our own directories

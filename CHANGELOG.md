@@ -146,7 +146,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Such a switch now keeps the probation record on disk, and the result waits until a new switch to the same slot was
   synced; after a restart the supervisor checks `current` against the record and decides again. A failed sync of the
   forward switch no longer reports `self_test_failed` while `current` already points at the new agent; the new agent
-  starts and its probation runs as usual.
+  starts and its probation runs as usual. Once the new agent was healthy at the end of its probation, later exits
+  while the switch still waits are restarted, not rolled back.
+- `paddock-supervisor` now syncs the content of its probation record and update result to disk before it renames
+  them into place. A new probation record could otherwise come back empty after a power failure; the supervisor then
+  dropped it, and the new agent kept running without probation or automatic rollback. If the probation record cannot
+  be synced, the switch does not happen and the update is reported as failed (`self_test_failed`).
 - Portal confirmation dialogs no longer take focus away from a field that someone starts typing into while the dialog
   is still opening. The dialog moved focus back to Cancel when its opening animation ended, so text typed in that
   moment, such as the hostname of a Lock or Destroy, could be lost and the confirm button stayed disabled.
