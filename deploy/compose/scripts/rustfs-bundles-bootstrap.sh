@@ -74,7 +74,7 @@ policy() {
 # argument, so the user is created with a throwaway one and holds no policy until passwd has set the real secret from
 # the environment; passwd runs on every pass, so an interrupted earlier run cannot leave the throwaway secret in place.
 user() {
-  if ! rc "rc admin user info -- bundles \"\$$1\"" >/dev/null 2>&1; then
+  if rc_user_absent rc "rc admin user info -- bundles \"\$$1\""; then
     rc "rc admin user add -- bundles \"\$$1\" \"\$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')\" >/dev/null"
     echo "created bundles user for $2"
   fi

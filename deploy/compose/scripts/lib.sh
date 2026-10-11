@@ -90,6 +90,21 @@ percent_encode() {
   printf '%s' "$out"
 }
 
+# rc_user_absent <command…>: runs the command, an `rc admin user info` of one user, and succeeds when rc reports the
+# user as not found, fails when the user exists and aborts the script on every other error. `rc admin user add` on an
+# existing user replaces its secret and keeps its policy (PDK-036 review 1), so a timeout or an auth failure must not
+# be taken for a missing user. rc v0.1.36 exits 5 for any missing resource, an unknown alias included, hence the text.
+rc_user_absent() {
+  local out status=0
+  out="$("$@" 2>&1 >/dev/null)" || status=$?
+  case "$status" in
+    0) return 1 ;;
+    5) [[ "$out" == *"User '"*"' not found"* ]] && return 0 ;;
+  esac
+  printf 'rc admin user info failed (exit %s): %s\n' "$status" "$out" >&2
+  exit 1
+}
+
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-$(env_value PADDOCK_PROJECT)}"
 PADDOCK_PROJECT="${PADDOCK_PROJECT:-paddock}"
 

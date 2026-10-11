@@ -24,7 +24,41 @@ for pair in audit:rustfs-audit-bootstrap.sh bundles:rustfs-bundles-bootstrap.sh 
     echo "FAIL $script: rc admin user without --"
     failures=$((failures + 1))
   fi
+  if grep -q "rc admin user info" "$here/$script" &&
+    ! grep "rc admin user info" "$here/$script" | grep -qv "if rc_user_absent rc "; then
+    echo "ok   $script creates a user only when rc_user_absent confirms it is missing"
+  else
+    echo "FAIL $script: rc admin user info not checked through rc_user_absent"
+    failures=$((failures + 1))
+  fi
 done
+
+# A failed `user info` that is not "user not found" must abort before `user add`, which would replace the secret of an
+# existing user (PDK-036 review 1). The fake rc replays rc v0.1.36 output of a throwaway RustFS 1.0.1.
+fake_rc() {
+  printf '%s\n' "${2:-}" >&2
+  return "$1"
+}
+# absent <exit status> <stderr>: what the bootstrap does: "add", "keep", or "abort" when it exits before add.
+absent() {
+  (if rc_user_absent fake_rc "$@"; then echo add; else echo keep; fi) 2>/dev/null || echo abort
+}
+expect() {
+  if [[ "$1" == "$2" ]]; then
+    echo "ok   $3: $2"
+  else
+    echo "FAIL $3: $1, expected $2"
+    failures=$((failures + 1))
+  fi
+}
+expect "$(absent 5 "✗ User '-Okey' not found")" add "user not found"
+expect "$(absent 0)" keep "user exists"
+expect "$(absent 1 "✗ Failed to get user info: Authentication failed: <Code>SignatureDoesNotMatch</Code>")" abort \
+  "authentication failure"
+expect "$(absent 1 "✗ Failed to get user info: Network error: Request failed: error sending request")" abort \
+  "unreachable endpoint"
+expect "$(absent 5 "✗ Alias 'audit' not found")" abort "unknown alias (also exit 5)"
+expect "$(absent 2)" abort "any other exit status"
 
 # The alias reaches no endpoint here: rc must list it, i.e. accept the URL export_rc_host builds.
 KEY=-Oaccess SECRET='-s/e:c@r%e+t='
@@ -36,6 +70,10 @@ else
   echo "FAIL rc rejects the RC_HOST value of export_rc_host"
   failures=$((failures + 1))
 fi
+
+real_rc() { docker run --rm -e HOME=/tmp -e RC_HOST_t --entrypoint rc "$RC_IMAGE" admin user info -- t -Okey; }
+expect "$( (if rc_user_absent real_rc; then echo add; else echo keep; fi) 2>/dev/null || echo abort)" abort \
+  "rc against an unreachable endpoint"
 
 # passwd connects to the endpoint, which does not exist here: only a parse error counts as a failure.
 passwd() {

@@ -18,17 +18,21 @@ env_pattern="(-e|--env)[ =][\"']?[A-Z_][A-Z0-9_]*=[\"']?\\$"
 unseal_pattern="operator unseal( --)? [\"']?\\$"
 kv_pattern="bao (kv put|write) .* (current|previous|value|[a-z_]*(key|secret|secret_id|token|password))=[\"']?\\$"
 # Positional arguments 3 and 4 of `alias set` are the access and the secret key; the third of `admin user add` is the
-# secret key (a throwaway `$(…)` is allowed, a variable is not).
+# secret key. The only value allowed there is the throwaway `"$(head -c <n> /dev/urandom …)"`, which scan reduces to
+# `@` (review 1: a variable, a parameter, `$(cat …)`, `$(<file)` or a prefixed secret all slipped through a denylist).
+# A `#` before the command marks a comment, which mentions the command in prose.
 alias_pattern='(rc|mc) alias set( +-[^ ]*)*( +[^ -][^ ]*){3}'
-user_pattern='(rc|mc) admin user add( +-[^ ]*)*( +[^ -][^ ]*){2} +\\?["'"'"']?\\?\$[{A-Za-z_$]'
+user_pattern='^[^#]*(rc|mc) admin user add( +-[^ ]*)*( +[^ -][^ ]*){2} +[^ @>|;&]'
+throwaway='\\?"\\?\$\(head -c [0-9]+ /dev/urandom[^)]*\)\\?"'
 
 # scan <extended regular expression> <file…>: the matching lines, with backslash continuations joined so a command
-# split over several lines is seen as one.
+# split over several lines is seen as one, and the throwaway secret as `@`.
 scan() {
   local pattern="$1" f
   shift
   for f in "$@"; do
-    sed ':a;/\\$/N;s/\\\n//;ta' "$f" | grep -nE -e "$pattern" | sed "s|^|${f#"$root"/}:|" || true
+    sed ':a;/\\$/N;s/\\\n//;ta' "$f" | sed -E "s#$throwaway#@#g" | grep -nE -e "$pattern" |
+      sed "s|^|${f#"$root"/}:|" || true
   done
 }
 
@@ -91,6 +95,14 @@ detects() {
   detects 'rc admin user add with an escaped indirect secret' "$user_pattern" \
     '    rc "rc admin user add -- bundles \"\$$1\" \"\$${1/ACCESS/SECRET}\" >/dev/null"'
   detects 'mc admin user add with a bare $secret' "$user_pattern" 'mc admin user add local $AK $SK'
+  detects 'rc admin user add with a positional parameter' "$user_pattern" \
+    '  rc "rc admin user add -- a \"$1\" \"$2\""'
+  detects 'rc admin user add with $(cat …)' "$user_pattern" \
+    "rc 'rc admin user add -- a \"\$AK\" \"\$(cat /run/secrets/sk)\"'"
+  detects 'rc admin user add with $(<file)' "$user_pattern" "rc 'rc admin user add -- a \"\$AK\" \"\$(<sk)\"'"
+  detects 'rc admin user add with a prefixed secret' "$user_pattern" "rc 'rc admin user add -- a \"\$AK\" \"pre\$SK\"'"
+  detects 'rc admin user add with a secret appended to the throwaway' "$user_pattern" \
+    "rc 'rc admin user add -- a \"\$AK\" \"\$(head -c 24 /dev/urandom)\$SK\"'"
 }
 
 # ignores <description> <pattern> <sample line…>: scan does not flag the sample, a form the scripts use.
@@ -109,7 +121,11 @@ ignores() {
 # shellcheck disable=SC2016 # the samples are script text, not expansions
 {
   ignores 'rc admin user add with a throwaway $(…) secret' "$user_pattern" \
-    "  rc 'rc admin user add -- audit \"\$WRITER_ACCESS_KEY\" \"\$(head -c 24 /dev/urandom | od -An -tx1)\" >/dev/null'"
+    "  rc 'rc admin user add -- audit \"\$WRITER_ACCESS_KEY\" \"\$(head -c 24 /dev/urandom | od -An -tx1 | tr -d \" \\n\")\" >/dev/null'"
+  ignores 'rc admin user add with an escaped throwaway secret' "$user_pattern" \
+    "    rc \"rc admin user add -- bundles \\\"\\\$\$1\\\" \\\"\\\$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n')\\\" >/dev/null\""
+  ignores 'a comment that mentions rc admin user add' "$user_pattern" \
+    '  # Generated keys may start with "-". rc admin user add takes the secret only as an argument, so'
   ignores 'rc admin user passwd --password-from-env' "$user_pattern" \
     "rc 'rc admin user passwd --password-from-env WRITER_SECRET_KEY -- audit \"\$WRITER_ACCESS_KEY\"'"
 }
