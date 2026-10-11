@@ -80,8 +80,13 @@ func TOTP(user string) (*authflow.TOTP, error) {
 
 // StepUp runs a step-up authentication of the portal session as the dev user and returns the portal URL it returned
 // to; it contains stepup=failed when Paddock refused the step-up. For another user than the session's own, the login
-// hint is removed from the authorization request (authflow.StepUp).
+// hint is removed from the authorization request (authflow.StepUp). Step-ups of the same session run one after
+// another.
 func (p *Portal) StepUp(ctx context.Context, user, returnTo string) (string, error) {
+	// The session's cookie jar holds one pending step-up (Paddock's step-up state cookie, Authentik's flow state):
+	// parallel step-ups overwrite each other's and Paddock refuses all but one with stepup=failed.
+	p.stepUpMu.Lock()
+	defer p.stepUpMu.Unlock()
 	password, err := Password(user)
 	if err != nil {
 		return "", err
@@ -172,6 +177,7 @@ type Portal struct {
 	Final  string
 	// LoginRequestID is the correlation ID of the admin.login event of this sign-in.
 	LoginRequestID string
+	stepUpMu       sync.Mutex
 }
 
 // Response is an API answer.
