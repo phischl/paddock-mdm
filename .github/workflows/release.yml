@@ -59,10 +59,37 @@ jobs:
           path: dist/release/
           if-no-files-found: error
 
+  smoke:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read # no registry login: proves the images are publicly pullable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: "**/go.sum"
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist/release/
+      - name: Install the bundle on both hosts and check them
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          deploy/bundle/ci/smoke.sh "dist/release/$v/paddock-deploy-$v.tar.gz" \
+            --agent-artifacts "dist/release/$v" --work "$RUNNER_TEMP/smoke"
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: smoke-logs
+          path: ${{ runner.temp }}/smoke/logs/
+
   # The only job that sees the agent release key (ADR 0006 amendment 2026-10-11). The environment `release` admits only
   # v* tags and waits for the maintainer's approval; the key never reaches build, smoke or publish.
   sign:
-    needs: build
+    needs: smoke # sign only a build that passed the smoke test
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: release
@@ -114,35 +141,8 @@ jobs:
           path: ${{ runner.temp }}/signed/
           if-no-files-found: error
 
-  smoke:
-    needs: sign
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    permissions:
-      contents: read # no registry login: proves the images are publicly pullable
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "1.27.2"
-          cache-dependency-path: "**/go.sum"
-      - uses: actions/download-artifact@v8
-        with:
-          name: release
-          path: dist/release/
-      - name: Install the bundle on both hosts and check them
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          deploy/bundle/ci/smoke.sh "dist/release/$v/paddock-deploy-$v.tar.gz" \
-            --agent-artifacts "dist/release/$v" --work "$RUNNER_TEMP/smoke"
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: smoke-logs
-          path: ${{ runner.temp }}/smoke/logs/
-
   publish:
-    needs: [sign, smoke]
+    needs: sign
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

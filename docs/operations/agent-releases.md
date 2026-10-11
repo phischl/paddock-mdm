@@ -118,10 +118,10 @@ decision 23). Its build job calls, in this order:
    workflow's GitHub OIDC identity, Sigstore's public good instance; no key to keep), attaches each SBOM as a signed
    SPDX attestation to its platform manifest, and signs `SHA256SUMS` and the bundle (`*.sigstore.json`).
 
-A sign job then signs the agent files with the agent release key (*Signing in the release workflow*, below), a smoke
-job installs the bundle on one runner as two hosts (`deploy/bundle/ci/smoke.sh`: anonymous pull, `./paddock check` on
-both, start, probes, a backup, an agent release with throwaway keys, idempotence), and only after both pass does the
-publish job create the draft release.
+A smoke job then installs the bundle on one runner as two hosts (`deploy/bundle/ci/smoke.sh`: anonymous pull,
+`./paddock check` on both, start, probes, a backup, an agent release with throwaway keys, idempotence); only a build
+that passed it reaches the sign job, which signs the agent files with the agent release key (*Signing in the release
+workflow*, below), and only after signing does the publish job create the draft release.
 
 `<version>` is `x.y.z` or a pre-release `x.y.z-alpha.N`, `x.y.z-beta.N` or `x.y.z-rc.N` (`make release-check`
 refuses anything else). Image tags: a pre-release gets only `<version>`; a plain `x.y.z` gets `<version>`,
@@ -170,9 +170,10 @@ are unsupported and never for production. Verify them with the identity
 
 ### Signing in the release workflow
 
-The `sign` job runs after `build` in the GitHub environment `release` (ADR 0006 amendment 2026-10-11). GitHub admits
-it only for a `v*` tag and holds it until the maintainer approves the deployment (*Review deployments* on the run
-page); without approval the run stops there and nothing is published. The job:
+The `sign` job runs after `smoke` (only a build that passed the smoke test is signed) in the GitHub environment
+`release` (ADR 0006 amendment 2026-10-11). GitHub admits it only for a `v*` tag and holds it until the maintainer
+approves the deployment (*Review deployments* on the run page); without approval the run stops there and nothing is
+published. The job:
 
 1. builds `minisign` from the module pinned in `agent/go.sum` (`aead.dev/minisign`, the library the server and the
    supervisor verify with) before the key exists, without a build cache;

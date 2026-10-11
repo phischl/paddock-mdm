@@ -88,7 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Agent release signing moves into the release workflow (ADR 0006 amendment 2026-10-11): a new job `sign` in the
-  protected GitHub environment `release` (tags `v*` only, maintainer approval for every run) signs `paddockd` for
+  protected GitHub environment `release` (tags `v*` only, maintainer approval for every run), which runs only after the
+  smoke test passed, signs `paddockd` for
   amd64 and arm64 and the `paddock-agent` and `paddock-supervisor` packages with the agent release key (secrets
   `PADDOCK_RELEASE_KEY` and `PADDOCK_RELEASE_KEY_PASSPHRASE`) and verifies them against `PADDOCK_RELEASE_PUBLIC_KEY`.
   The draft release carries them without the `-unsigned` suffix, each with its `.minisig`; `SHA256SUMS` and its
