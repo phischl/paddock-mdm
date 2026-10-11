@@ -133,6 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rollback failed: current still points at the new agent` at error level, keeps the new agent running and reports
   the update as failed (`agent.update_failed` with outcome `self_test_failed`), which counts toward the rollout's
   failure rate as a rollback does.
+- Portal overview: while no agent rollout has completed, the "Updates and agent rollout" panel now says "No agent
+  rollout completed yet" instead of "No agent release published yet". The panel names the release of the most recent
+  completed rollout, so published releases without a completed rollout were wrongly reported as missing.
 - After a rollback, `paddock-supervisor` no longer ends the agent it has just restarted: its check-in request
   (SIGHUP) could arrive before the agent was ready for it, the agent exited with `signal: hangup` and only came back
   after the restart back-off. The supervisor now ignores SIGHUP (and no longer exits on one itself), so the agent
