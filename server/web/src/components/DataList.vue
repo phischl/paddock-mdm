@@ -505,6 +505,7 @@ defineExpose({ reload: load })
       :aria-busy="loading"
       :expanded="expanded"
       :row-props="rowProps"
+      :hide-no-data="empty"
       hide-default-footer
       class="table"
       @update:sort-by="onSort"
