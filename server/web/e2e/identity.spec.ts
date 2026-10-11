@@ -122,8 +122,12 @@ test('organization admin manages users, groups, profiles and device logins', asy
   await page.getByTestId('login-users').locator('input').fill(username)
   await page.getByRole('option', { name: username }).click()
   await page.keyboard.press('Escape')
+  const loginUsers = page.getByTestId('login-users')
+  const focusedHeight = (await loginUsers.boundingBox())?.height
   await page.getByTestId('save-login-assignment').click()
   await expect(page.getByRole('main').getByRole('status')).toHaveText('Login assignment saved.')
+  await expect(loginUsers.getByRole('combobox', { name: 'Users' })).not.toBeFocused()
+  expect((await loginUsers.boundingBox())?.height).toBe(focusedHeight)
   await expectAccessible(page)
   await page.getByTestId('toggle-suspension').click()
   const suspend = page.getByRole('dialog', { name: 'Suspend logins' })

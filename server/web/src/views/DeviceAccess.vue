@@ -63,6 +63,7 @@ const d = computed(() => device.value!)
             :disabled="!session.canWrite"
             multiple
             chips
+            class="pd-chip-field"
             data-testid="login-users"
           />
           <v-autocomplete
@@ -72,6 +73,7 @@ const d = computed(() => device.value!)
             :disabled="!session.canWrite"
             multiple
             chips
+            class="pd-chip-field"
             data-testid="login-groups"
           />
           <div

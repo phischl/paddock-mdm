@@ -133,6 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rollback failed: current still points at the new agent` at error level, keeps the new agent running and reports
   the update as failed (`agent.update_failed` with outcome `self_test_failed`), which counts toward the rollout's
   failure rate as a rollback does.
+- Portal device page, Login & sudo tab: the user and group fields of the login assignment no longer shrink by a line
+  when they lose focus, so a click on Save or Suspend logins right after picking an entry lands on the button.
 
 
 ### Security
