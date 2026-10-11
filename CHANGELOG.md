@@ -115,6 +115,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branch no longer fails other pull requests. Reviewed false positives are content-based allowlists in `.gitleaks.toml`
   (file plus exact value shape) instead of commit-bound fingerprints, and `.gitleaksignore` is removed. The scan works
   from git worktrees and fails when it scanned no commits.
+- The secret scan also catches a secret added only in a merge commit (PDK-057), even when a later commit removes it:
+  `make scan-secrets` reads the history with `--remerge-diff`, which shows what a merge resolution changed, and fails
+  when gitleaks or git reports an error instead of passing with 0 scanned commits. A range made only of clean merge
+  commits passes with 0 scanned commits; any other range that scans 0 commits fails. A range with an octopus merge
+  (more than two parents) fails, because its changes cannot be scanned. For pull requests the CI job
+  `secrets` additionally scans the current content of every changed file (`make scan-secrets-diff`, base
+  `GITLEAKS_DIFF_BASE`, default `origin/main`). The path allowlists in `.gitleaks.toml` accept the `b/` prefix that
+  gitleaks reports for files of a merge conflict.
 
 ### Fixed
 
@@ -212,6 +220,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every GitHub Action in the CI, release and image-prune workflows is pinned to a full commit SHA (PDK-050), not
   only those of the release signing and publishing jobs: a re-pointed tag can no longer change the release build that
   produces the agent and package bytes before they are signed. Dependabot keeps the pins up to date.
+- The release and edge image builds pull the QEMU emulator image (`BINFMT_IMAGE`) and the BuildKit daemon image
+  (`BUILDKIT_IMAGE`) by digest from `deploy/compose/versions.env` instead of by the mutable tags `latest` and
+  `buildx-stable-1` (PDK-055). The release build restores no Go module, build or BuildKit cache from earlier runs, so
+  only the tagged sources and pinned images feed the bytes that are signed; the CI builds keep their caches.
 
 ## [0.1.0-alpha.1] - 2026-10-09
 

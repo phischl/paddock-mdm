@@ -25,9 +25,25 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.2"
-          cache-dependency-path: "**/go.sum"
+          cache: false # release bytes are signed later: no module or build cache restored from other runs (PDK-055)
+      - name: Pinned binfmt and BuildKit images (deploy/compose/versions.env)
+        id: pins
+        run: |
+          for v in BINFMT_IMAGE BUILDKIT_IMAGE; do
+            n="$(grep -c "^$v=" deploy/compose/versions.env || true)"
+            [[ "$n" == 1 ]] || { echo "$v must be set exactly once in versions.env (found $n)"; exit 1; }
+            ref="$(sed -n "s/^$v=//p" deploy/compose/versions.env)"
+            [[ "$ref" =~ ^[a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] || { echo "$v in versions.env is not tag@sha256:<digest>"; exit 1; }
+            echo "$v=$ref" >> "$GITHUB_OUTPUT"
+          done
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: ${{ steps.pins.outputs.BINFMT_IMAGE }}
+          cache-image: false # the binfmt image is pulled by digest, not loaded from a cache of other runs
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=${{ steps.pins.outputs.BUILDKIT_IMAGE }}
+          cache-binary: false
       - name: Log in to ghcr.io
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -40,9 +56,9 @@ jobs:
           test -n "$RELEASE_PUBLIC_KEY" || { echo "repository variable PADDOCK_RELEASE_PUBLIC_KEY is not set"; exit 1; }
           printf '%s\n' "$RELEASE_PUBLIC_KEY" > "$RUNNER_TEMP/release.pub"
       - name: Images (multi-platform, pushed by digest)
+        # No --cache-from/--cache-to type=gha: cache content of other runs must not feed signed bytes (PDK-055).
         run: >-
           make release-images RELEASE_VERSION="${GITHUB_REF_NAME#v}" PUSH=1
-          RELEASE_BUILDX_FLAGS="--cache-from type=gha,scope=release --cache-to type=gha,mode=max,scope=release"
       - name: Agent packages (unsigned; signed in the sign job)
         run: make release-packages RELEASE_VERSION="${GITHUB_REF_NAME#v}" RELEASE_PUBLIC_KEY_FILE="$RUNNER_TEMP/release.pub"
       - name: SBOMs

@@ -150,6 +150,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
+	bash test/scan-secrets_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
@@ -638,23 +639,65 @@ TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-
 COMPILER_IMAGE  ?= paddock-compiler:dev
 PGBACKREST_IMAGE ?= paddock-pgbackrest:dev
 
-.PHONY: scan scan-secrets scan-fs scan-images image-compiler image-pgbackrest
+.PHONY: scan scan-secrets scan-secrets-diff scan-fs scan-images image-compiler image-pgbackrest
 scan: scan-secrets scan-fs scan-images ## Run gitleaks (branch history) and trivy (filesystem and images)
 
 # The current branch only, never --all: a finding on an unrelated stale branch must not fail this scan. CI narrows it
-# to a pull request's own commits with GITLEAKS_LOG_OPTS=<merge-base>..HEAD.
+# to a pull request's own commits with GITLEAKS_LOG_OPTS=<merge-base>..HEAD. GITLEAKS_REPO lets the regression test
+# (test/scan-secrets_test.sh) run this recipe against a scratch repository.
 GITLEAKS_LOG_OPTS ?= HEAD
+GITLEAKS_REPO ?= $(CURDIR)
 
-# A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path; a scan
-# that still sees no commits fails instead of reporting a green result.
+# A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
+# `--remerge-diff` shows what a merge commit changes beyond its automatic merge, so a secret added only in a merge
+# resolution is seen (PDK-057). It writes temporary objects, which go to a scratch object directory while the
+# repository stays read-only. gitleaks exits 0 when its git call fails, so an error line fails, and so does a scan of
+# 0 commits, unless the range resolves and holds merge commits only: a clean merge has an empty remerge diff.
+# `--remerge-diff` shows nothing for an octopus merge (more than two parents), so a range with one fails.
 scan-secrets: ## gitleaks over the current branch history (false positives: allowlists in .gitleaks.toml)
-	@common=$$(git rev-parse --path-format=absolute --git-common-dir) || exit 1; \
-	out=$$(docker run --rm -v $(CURDIR):$(CURDIR):ro -v "$$common:$$common:ro" -w $(CURDIR) $(GITLEAKS_IMAGE) \
-		git $(CURDIR) --no-banner --redact --log-opts='$(GITLEAKS_LOG_OPTS)' 2>&1); rc=$$?; \
+	@repo='$(GITLEAKS_REPO)'; \
+	common=$$(git -C "$$repo" rev-parse --path-format=absolute --git-common-dir) || exit 1; \
+	octopus=$$(git -C "$$repo" rev-list --min-parents=3 --max-count=1 $(GITLEAKS_LOG_OPTS)) || \
+		{ echo "scan-secrets: git cannot resolve $(GITLEAKS_LOG_OPTS)" >&2; exit 1; }; \
+	if [ -n "$$octopus" ]; then echo "scan-secrets: $$octopus is an octopus merge: its changes cannot be scanned" \
+		"(--remerge-diff shows none), and octopus merges are not allowed in Paddock's history" >&2; exit 1; fi; \
+	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	out=$$(docker run --rm --user "$$(id -u):$$(id -g)" -v "$$repo:$$repo:ro" -v "$$common:$$common:ro" \
+		-v "$$tmp:$$tmp" -e GIT_OBJECT_DIRECTORY="$$tmp" -e GIT_ALTERNATE_OBJECT_DIRECTORIES="$$common/objects" \
+		-w "$$repo" $(GITLEAKS_IMAGE) \
+		git "$$repo" --no-banner --redact --log-opts='--remerge-diff $(GITLEAKS_LOG_OPTS)' 2>&1); rc=$$?; \
 	printf '%s\n' "$$out"; \
-	commits=$$(printf '%s\n' "$$out" | sed -nE 's/.*[^0-9]([0-9]+) commits scanned.*/\1/p'); \
-	if [ "$${commits:-0}" -eq 0 ]; then echo "scan-secrets: gitleaks scanned 0 commits ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
+	plain=$$(printf '%s\n' "$$out" | sed -E 's/\x1b\[[0-9;]*m//g'); \
+	if printf '%s\n' "$$plain" | grep -qE '(^|[[:space:]])(ERR|FTL)[[:space:]]|^(fatal|error):'; then \
+		echo "scan-secrets: gitleaks or git reported an error ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
+	commits=$$(printf '%s\n' "$$plain" | sed -nE 's/.*[^0-9]([0-9]+) commits scanned.*/\1/p'); \
+	if [ "$${commits:-0}" -eq 0 ]; then \
+		nonmerge=$$(git -C "$$repo" rev-list --no-merges --max-count=1 $(GITLEAKS_LOG_OPTS)) && \
+		merges=$$(git -C "$$repo" rev-list --merges --max-count=1 $(GITLEAKS_LOG_OPTS)) || \
+			{ echo "scan-secrets: git cannot resolve $(GITLEAKS_LOG_OPTS)" >&2; exit 1; }; \
+		if [ -n "$$nonmerge" ] || [ -z "$$merges" ]; then \
+			echo "scan-secrets: gitleaks scanned 0 commits ($(GITLEAKS_LOG_OPTS))" >&2; exit 1; fi; \
+		echo "scan-secrets: $(GITLEAKS_LOG_OPTS) holds only merge commits whose remerge diff adds nothing;" \
+			"0 commits scanned is expected"; \
+	fi; \
 	exit $$rc
+
+# Second layer for pull requests: the current content of every file the pull request changes against its merge
+# base, merge commits included (PDK-057).
+GITLEAKS_DIFF_BASE ?= origin/main
+
+scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE (catches secrets added in merges)
+	@base=$$(git merge-base '$(GITLEAKS_DIFF_BASE)' HEAD) || exit 1; \
+	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	git diff -z --name-only --diff-filter=d "$$base"..HEAD >"$$tmp/files" || exit 1; \
+	n=0; mkdir "$$tmp/src"; \
+	while IFS= read -r -d '' f; do \
+		if [ -f "$$f" ] || [ -L "$$f" ]; then cp -P --parents -- "$$f" "$$tmp/src/" || exit 1; n=$$((n + 1)); fi; \
+	done <"$$tmp/files"; \
+	echo "scan-secrets-diff: $$n file(s) changed in $$base..HEAD"; \
+	if [ "$$n" -eq 0 ]; then echo "scan-secrets-diff: nothing to scan"; exit 0; fi; \
+	docker run --rm -v "$$tmp/src:/scan:ro" -v $(CURDIR)/.gitleaks.toml:/gitleaks.toml:ro -w /scan $(GITLEAKS_IMAGE) \
+		dir . --config /gitleaks.toml --no-banner --redact
 
 scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tree
 	mkdir -p $(TRIVY_CACHE)
