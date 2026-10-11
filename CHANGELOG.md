@@ -141,6 +141,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after the restart back-off. The supervisor now ignores SIGHUP (and no longer exits on one itself), so the agent
   starts with SIGHUP ignored until it handles check-in requests; it checks in at start anyway, so no update result
   goes unreported.
+- Portal device page, Login & sudo tab: the user and group fields of the login assignment no longer shrink by a line
+  when they lose focus, so a click on Save or Suspend logins right after picking an entry lands on the button.
 
 ### Security
 
