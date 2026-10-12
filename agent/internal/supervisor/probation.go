@@ -32,14 +32,17 @@ type probation struct {
 	markKept  bool // the check-in mark could not be removed, so it cannot prove a check-in of the new agent
 	unsynced  bool // the switch to ToSlot is not known to be durable, so it must be confirmed before "updated"
 	passed    bool // healthy at the deadline; only the confirmation of the switch is outstanding
-	retryAt   time.Time
-	retryWait time.Duration
-	retries   int
+	// unrecorded: the decided rollback_failed is not in the log on disk yet, which still is the switch's undecided
+	// log; recordPending rewrites it on every tick until the write succeeds.
+	unrecorded bool
+	retryAt    time.Time
+	retryWait  time.Duration
+	retries    int
 }
 
 // conclude ends the probation p with outcome. It records the outcome in the probation log before it reports it, so
 // that the probation ends in exactly one result even if a power loss brings the removed log back (PDK-058).
-func (s *Supervisor) conclude(p *probation, outcome string) {
+func (s *Supervisor) conclude(p *probation, outcome string) (recorded bool) {
 	p.Outcome, p.DecidedAt = outcome, time.Now().UTC()
 	err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile)
 	if err != nil {
@@ -48,10 +51,24 @@ func (s *Supervisor) conclude(p *probation, outcome string) {
 		slog.Error("recording the outcome in the probation log failed", "error", err)
 	}
 	s.report(p, err == nil)
+	return err == nil
+}
+
+// recordPending rewrites the probation log of a pending rollback whose outcome could not be recorded, so that the
+// log on disk names the decision: a restart must not decide the probation anew (PDK-058, ADR 0024 rules 4 and 5).
+func (s *Supervisor) recordPending(p *probation) {
+	if !p.unrecorded || !p.RollbackPending {
+		return
+	}
+	if err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); err == nil {
+		p.unrecorded = false
+		slog.Info("recorded the pending rollback in the probation log", "version", p.Version)
+	}
 }
 
 // report writes the result of p and removes the probation log once the result is written; the log of a pending
-// rollback stays, so a restart resumes its retries (ADR 0024). If writing the result
+// rollback stays, so a restart resumes its retries (ADR 0024); if its outcome could not be recorded, recordPending
+// rewrites it, and until then a restart recognises the decision by the result (resumeProbation). If writing the result
 // fails and the log holds the recorded outcome (recorded), the log stays, so the next start writes the same result
 // again (PDK-063). Without a recorded outcome the log is removed all the same: a failed write may still have put the
 // result in place (its last step, the directory sync, follows the rename), and a log without an outcome would let the
@@ -78,6 +95,18 @@ func (s *Supervisor) resumeProbation() {
 		slog.Error("dropping an unreadable probation log", "error", err)
 		s.dropProbation("")
 		return
+	}
+	// An undecided log on ToSlot whose release the result names as rollback_failed or rolled_back is a decision that
+	// the log could not record before the restart (recordPending): it is resumed, not decided anew (PDK-058). Once the
+	// agent has delivered and deleted that result, the decision is no longer visible.
+	var res struct {
+		Version, Outcome string
+		At               time.Time
+	}
+	if data, err := os.ReadFile(s.cfg.Result); p.Outcome == "" && s.activeSlot() == p.ToSlot && err == nil && json.Unmarshal(data, &res) == nil &&
+		res.Version == p.Version && (res.Outcome == outcomeRollbackFailed || res.Outcome == outcomeRolledBack) {
+		p.Outcome, p.DecidedAt, p.RollbackPending = res.Outcome, res.At, res.Outcome == outcomeRollbackFailed
+		p.unrecorded = writeJSON(s.cfg.ProbationLog, &p, s.cfg.SyncFile) != nil
 	}
 	// A pending rollback, or a rolled_back whose flip back was lost with the power, retries the flip back; with current
 	// on FromSlot (flipped by hand, or the rename landed before a crash) only its durability is outstanding.

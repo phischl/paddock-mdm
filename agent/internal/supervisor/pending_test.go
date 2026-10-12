@@ -2,11 +2,13 @@ package supervisor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -238,4 +240,90 @@ func TestDowngradeIsRefusedWhileARollbackIsPending(t *testing.T) {
 		t.Fatalf("result %+v, current %s; want the pending rollback's result %+v on B", r, f.active(), failed)
 	}
 	f.expectPendingLog()
+}
+
+// failLogWrites makes every write of the probation log fail at its content sync, before the rename, so the log on
+// disk stays as it was, until the returned flag is cleared.
+func (f *fake) failLogWrites() *atomic.Bool {
+	broken := &atomic.Bool{}
+	broken.Store(true)
+	f.cfg.SyncFile = func(file *os.File) error {
+		if broken.Load() && file.Name() == f.cfg.ProbationLog+".tmp" {
+			return errors.New("injected write failure")
+		}
+		return file.Sync()
+	}
+	return broken
+}
+
+// expectUndecidedLog checks that the probation log on disk is still the switch's log, without a decision.
+func (f *fake) expectUndecidedLog() {
+	f.t.Helper()
+	var p probation
+	data, err := os.ReadFile(f.cfg.ProbationLog)
+	if err == nil {
+		err = json.Unmarshal(data, &p)
+	}
+	if err != nil || p.Outcome != "" || p.RollbackPending || p.ToSlot != "B" {
+		f.t.Fatalf("probation log %s, error %v; want the undecided log of the switch to B", data, err)
+	}
+}
+
+// pendingOnDisk reports whether the probation log on disk records the pending rollback.
+func (f *fake) pendingOnDisk() bool {
+	var p probation
+	data, err := os.ReadFile(f.cfg.ProbationLog)
+	return err == nil && json.Unmarshal(data, &p) == nil && p.RollbackPending && p.Outcome == outcomeRollbackFailed
+}
+
+// TestUnrecordedPendingRollbackIsRecordedOnALaterTick (review 1 of PDK-043): if the probation log cannot record
+// rollback_failed, the result is reported all the same and the supervisor rewrites the log on a later tick, so the
+// log on disk never stays the undecided switch log from which a restart would decide the probation anew.
+func TestUnrecordedPendingRollbackIsRecordedOnALaterTick(t *testing.T) {
+	f := newFake(t)
+	f.resumeFailingProbation(func(time.Duration) {})
+	broken := f.failLogWrites()
+	f.blockFlip()
+	f.start()
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRollbackFailed {
+		t.Fatalf("result %+v", r)
+	}
+	f.waitTicks(3)
+	f.expectUndecidedLog()
+	broken.Store(false)
+	f.waitFor("the pending rollback was recorded in the probation log", f.pendingOnDisk)
+	f.expectPendingLog()
+}
+
+// TestRestartBeforeThePendingRollbackIsRecorded (review 1 of PDK-043): a restart while the log still is the undecided
+// switch log does not decide the probation anew, although the new agent now checks in and its probation would pass:
+// the result names the release as rollback_failed, so the supervisor resumes the pending rollback (ADR 0024 rule 5),
+// writes the same result again, records the decision in the log and goes on retrying.
+func TestRestartBeforeThePendingRollbackIsRecorded(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	f.resumeFailingProbation(func(time.Duration) {})
+	broken := f.failLogWrites()
+	f.blockFlip()
+	f.start()
+	failed := f.waitResult(10 * time.Second)
+	if failed.Outcome != outcomeRollbackFailed {
+		t.Fatalf("result %+v", failed)
+	}
+	f.stop()
+	f.expectUndecidedLog()
+	broken.Store(false)
+	if err := os.RemoveAll(f.cfg.LastCheckin); err != nil {
+		t.Fatal(err)
+	}
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+	f.start()
+	f.waitFor("a retry of the resumed rollback", func() bool { return retries(log) == 1 })
+	f.expectPendingLog()
+	f.clock.set(testProbation + time.Minute)
+	defer f.clock.set(0)
+	f.waitTicks(3)
+	if r := f.waitResult(time.Second); r != failed || f.active() != "B" {
+		t.Fatalf("result %+v, current %s; want the first result %+v on B", r, f.active(), failed)
+	}
 }

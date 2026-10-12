@@ -403,6 +403,7 @@ func (s *Supervisor) flipBack(slot string, attempts int) (durable bool, err erro
 // confirmRollback reports a rollback once its flip back is durable; a pending rollback first retries its flip back.
 func (s *Supervisor) confirmRollback() {
 	p := s.rolledBack
+	s.recordPending(p)
 	if p.RollbackPending && !s.retryFlipBack(p) {
 		return
 	}
@@ -441,7 +442,7 @@ func (s *Supervisor) keepRollbackPending(p *probation) {
 	p.retryAt = s.cfg.Now().Add(p.retryWait)
 	s.rolledBack = p
 	if p.Outcome != outcomeRollbackFailed {
-		s.conclude(p, outcomeRollbackFailed)
+		p.unrecorded = !s.conclude(p, outcomeRollbackFailed)
 	}
 }
 
