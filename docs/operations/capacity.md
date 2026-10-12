@@ -78,8 +78,8 @@ in that branch. Migration `00042` evaluates the key once per query (an InitPlan)
 
 **Before and after, database:** `EXPLAIN ANALYZE` medians of 5 runs as the API role in the organization's scope,
 read-only. These are query execution times, not HTTP latencies. The after figures come from the view of migration
-`00042` on the same data. The HTTP figures after the change are measured once the change is merged and deployed to
-the development stack.
+`00042` on the same data. The HTTP figures after the change (p50, p95 and p99 as in the table above) are still to be
+measured once the change is merged and deployed to the development stack (PDK-091).
 
 | Query (endpoint) | Before | After |
 | --- | --- | --- |
@@ -96,8 +96,11 @@ the development stack.
 | `OverviewUpdates` (`/overview`) | 2 226 ms | 151 ms |
 | `OverviewDevices` (`/overview`, unchanged) | 385 ms | 385 ms |
 
-After the change, the default list takes 118 ms with 2 542 shared buffer hits. An `/api/v1/attention` request,
-list plus count, takes about 125–135 ms of query time in every variant, so the target is met.
+After the change, the default list takes 118 ms with 2 542 shared buffer hits. The query time of an
+`/api/v1/attention` request is the sum of its list and count medians: 134 ms with the defaults (page size 25), 98 ms
+with page size 100, and 126 ms with `kind=agent_outdated` and page size 25. These are `EXPLAIN ANALYZE` medians of
+query execution time, not the HTTP p95 the target refers to. Whether the target is met is decided by the HTTP
+measurement after the change (PDK-091).
 
 **Remaining hot spots** (open follow-ups):
 
