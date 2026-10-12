@@ -15,15 +15,16 @@ SELECT * FROM device WHERE id = @id FOR UPDATE;
 -- name: ListDevices :many
 SELECT sqlc.embed(device), device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
-       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id)::text AS contact
+       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind)::text AS contact
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
+LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
 WHERE (sqlc.narg(q_pattern)::text IS NULL
        OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
        OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
   AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
   AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
   AND (sqlc.narg(contacts)::text[] IS NULL
-       OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY(sqlc.narg(contacts)::text[]))
+       OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind) = ANY(sqlc.narg(contacts)::text[]))
   -- security_updates=overdue (plan M7c amendment 2026-10-10): contacted, but no successful security run within the window.
   AND (sqlc.narg(security_overdue_window)::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
          device_status.login_state -> 'updates_security' IS NULL
@@ -41,19 +42,20 @@ ORDER BY
   CASE WHEN @sort::text = '-enrolled_at' THEN enrolled_at END DESC,
   CASE WHEN @sort::text = 'state' THEN state END ASC,
   CASE WHEN @sort::text = '-state' THEN state END DESC,
-  id
+  device.id
 LIMIT @max_rows OFFSET @skip_rows;
 
 -- name: CountDevices :one
 SELECT count(*) FROM (
   SELECT 1 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
+  LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
   WHERE (sqlc.narg(q_pattern)::text IS NULL
          OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
          OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
     AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
     AND (sqlc.narg(contacts)::text[] IS NULL
-         OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id) = ANY(sqlc.narg(contacts)::text[]))
+         OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind) = ANY(sqlc.narg(contacts)::text[]))
     AND (sqlc.narg(security_overdue_window)::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
            device_status.login_state -> 'updates_security' IS NULL
            OR device_status.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
@@ -65,8 +67,9 @@ SELECT count(*) FROM (
 ) matching;
 
 -- name: DeviceContact :one
-SELECT paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, device.id)::text AS contact
+SELECT paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind)::text AS contact
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
+LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
 WHERE device.id = @id;
 
 -- name: ListDeviceHostnames :many
