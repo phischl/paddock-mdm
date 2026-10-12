@@ -9,12 +9,16 @@
 # configuration passes. An inline `gitleaks:allow` on the secret does not hide it, and a configuration that extends
 # another file (`[extend] path`) fails. `make scan-secrets-diff` also scans every blob the range adds (PDK-068): a
 # binary file with a secret that the pull request adds and removes again fails it, in a later version of a path as
-# well. Files whose names gitleaks' default configuration allowlists by extension are scanned under a suffixed name
-# and archives are opened one level deep (ADR 0025): a text secret in `creds.bin`, `creds.png`, `creds.BIN`,
-# `creds.xdll` or under the directory `assets.png/`, and a secret inside a deflated `creds.zip`, `creds.docx` or
-# `creds.tgz` fail `make scan-secrets-diff`, a renamed copy that would overwrite another changed file fails it, and a
-# real binary PNG passes with the repository's own configuration. The secret is a generated fake GitHub token that is never printed (the scan runs
-# with --redact).
+# well. Both scans run a generated configuration, gitleaks' default without the paths of its global allowlist
+# (ADR 0026): a text secret in `src/bootstrap.js`, `d.png/creds.bin` or `javascript.json` fails both scans under its
+# own path, and so do `creds.bin`, `creds.png`, `creds.BIN`, `creds.xdll` and the directory `assets.png/` in
+# `make scan-secrets-diff`; a base configuration without an `[extend]` table still gets the default rules, one outside
+# the parsed whitelist fails both scans before gitleaks runs; a default configuration that does not match its pins
+# (sha256 off by one digit, header missing or not unique), whose strip leaves global paths or no rules, or whose
+# generated configuration misses the canary fails. Archives are opened one level deep (ADR 0025): a secret inside a
+# deflated `creds.zip`, `creds.docx` or `creds.tgz` fails `make scan-secrets-diff`, an archive copy that would
+# overwrite another changed file fails it, and a real binary PNG passes with the repository's own configuration. The
+# secret is a generated fake GitHub token that is never printed (the scan runs with --redact).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,11 +56,15 @@ expect() {
 
 # expect_pr <description> <want> <target> <merge base> [<config ref> [<reason>]]: runs <target> (scan-secrets or
 # scan-secrets-diff) over the checked-out branch as a pull request from <merge base>, with the configuration from
-# <config ref> (empty: the working tree); a fail must print <reason> when one is given.
+# <config ref> (empty: the working tree); a fail must print <reason> when one is given. Further make arguments come
+# from the array make_args; the output stays in last_out.
+make_args=()
+last_out=
 expect_pr() {
   local rc=0 out
   out="$(make --no-print-directory -C "$root" "$3" GITLEAKS_REPO="$r" GITLEAKS_LOG_OPTS="$4..HEAD" \
-    GITLEAKS_DIFF_BASE="$4" GITLEAKS_CONFIG_REF="${5:-}" 2>&1)" || rc=$?
+    GITLEAKS_DIFF_BASE="$4" GITLEAKS_CONFIG_REF="${5:-}" "${make_args[@]}" 2>&1)" || rc=$?
+  last_out="$out"
   verdict "$1 ($3)" "$2" "${6:-}" "$rc" "$out"
 }
 
@@ -245,8 +253,9 @@ g commit -q -m 'replace them with a directory'
 expect_pr "binary secrets under a newline path and a path that becomes a directory" leak scan-secrets-diff "$base" \
   "$base"
 
-# A text secret under an extension that gitleaks' default configuration allowlists (ADR 0025): added and removed
-# again, so only a blob layer holds it, and added and kept, so layer 0 holds it as well.
+# A text secret under an extension that gitleaks' default global allowlist skips, which the generated configuration
+# drops (ADR 0026): added and removed again, so only a blob layer holds it, and added and kept, so layer 0 holds it as
+# well.
 g switch -q -c pr-allowlisted-ext "$base"
 printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/creds.bin"
 g add creds.bin
@@ -260,8 +269,8 @@ g add creds.png
 g commit -q -m 'add credentials under .png'
 expect_pr "a text secret in creds.png added and kept" leak scan-secrets-diff "$base" "$base"
 
-# gitleaks skips whole directories whose name matches the default allowlist, so directory components are renamed
-# too; the match ignores case, and `?dll` mirrors the default regex's unescaped dot.
+# The default global allowlist also skips whole directories by extension, ignores case, and its `.dll` has an
+# unescaped dot.
 g switch -q -c pr-allowlisted-dir "$base"
 mkdir "$r/assets.png"
 printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/assets.png/creds.bin"
@@ -279,14 +288,66 @@ for name in creds.BIN creds.xdll; do
   expect_pr "a text secret in $name added and kept" leak scan-secrets-diff "$base" "$base"
 done
 
-# A changed file whose renamed copy would overwrite another changed file fails instead of hiding one of them.
-g switch -q -c pr-rename-collision "$base"
-printf 'harmless\n' >"$r/creds.bin"
-printf 'harmless too\n' >"$r/creds.bin.scan"
-g add creds.bin creds.bin.scan
-g commit -q -m 'add a file and its renamed name'
-expect_pr "creds.bin and creds.bin.scan in the final tree" fail scan-secrets-diff "$base" "$base" \
-  "cannot write a changed file"
+# Names the default global allowlist skips in every scan mode, which no rename could reach (PDK-074): each fails both
+# scans. A fingerprint on the file's own path then hides it, so the finding is reported under that path and the file
+# was not scanned under another name.
+for name in src/bootstrap.js d.png/creds.bin javascript.json; do
+  g switch -q -c "pr-default-path-${name//\//-}" "$base"
+  mkdir -p "$r/$(dirname "$name")"
+  printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/$name"
+  g add "$name"
+  g commit -q -m "add credentials in $name"
+  printf '%s:%s:github-pat:1\n%s:github-pat:1\n' "$(g rev-parse HEAD)" "$name" "$name" >"$r/.gitleaksignore"
+  for target in scan-secrets scan-secrets-diff; do
+    expect_pr "a text secret in $name added and kept" leak "$target" "$base" "$base"
+    expect_pr "the same with a fingerprint on $name" pass "$target" "$base"
+  done
+  rm -- "$r/.gitleaksignore"
+done
+
+# A base configuration without an [extend] table: the generated configuration still holds the default rules.
+g switch -q -c no-extend "$base"
+cat >"$r/.gitleaks.toml" <<'EOF'
+[[allowlists]]
+description = "an unrelated file"
+paths = ['''^unrelated\.txt$''']
+EOF
+g commit -q -am 'a configuration without [extend]'
+no_extend="$(g rev-parse HEAD)"
+printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/creds.env"
+g add creds.env
+g commit -q -m 'add credentials'
+for target in scan-secrets scan-secrets-diff; do
+  expect_pr "a secret with a base configuration without [extend]" leak "$target" "$no_extend" "$no_extend"
+done
+
+# The default configuration extracted from the image must match its pins in versions.env: a sha256 off by one hex
+# digit, a header line the binary does not hold, and one it holds many times each fail, naming the pins.
+g switch -q -c pr-pins "$base"
+printf 'harmless\n' >"$r/pins.txt"
+g add pins.txt
+g commit -q -m 'a harmless change'
+pin="$(sed -n 's/^GITLEAKS_DEFAULT_CONFIG_SHA256=//p' "$root/deploy/compose/versions.env")"
+last="${pin: -1}"
+if [[ "$last" == 0 ]]; then wrong="${pin%?}1"; else wrong="${pin%?}0"; fi
+pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256"
+for kind in sha header headers; do
+  case $kind in
+    sha) make_args=("GITLEAKS_DEFAULT_CONFIG_SHA256=$wrong") reason="does not match $pins" ;;
+    header) make_args=("GITLEAKS_DEFAULT_CONFIG_HEADER=This file has been auto-generated. Do not edit it manually.")
+      reason="occurs 0 times" ;;
+    headers) make_args=("GITLEAKS_DEFAULT_CONFIG_HEADER=[[rules]]") reason="not once; check $pins" ;;
+  esac
+  for target in scan-secrets scan-secrets-diff; do
+    expect_pr "a default configuration that does not match its pins ($kind)" fail "$target" "$base" "$base" \
+      "$reason"
+    if ! grep -qF -- "$pins" <<<"$last_out"; then
+      echo "FAIL a default configuration that does not match its pins ($kind, $target): the pins are not named"
+      failures=$((failures + 1))
+    fi
+  done
+done
+make_args=()
 
 # A secret in a deflated archive, added and removed again: a zip, and an office document that gitleaks only opens
 # under the suffix .zip. The token must not appear in clear text in the archive, or the test would prove nothing.
@@ -303,6 +364,15 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
   expect_pr "a secret inside a deflated $name added and removed" leak scan-secrets-diff "$base" "$base"
 done
 
+# A changed file whose archive copy would overwrite another changed file fails instead of hiding one of them.
+g switch -q -c pr-archive-collision "$base"
+printf 'harmless\n' >"$r/creds.docx"
+printf 'harmless too\n' >"$r/creds.docx.zip"
+g add creds.docx creds.docx.zip
+g commit -q -m 'add a file and its archive name'
+expect_pr "creds.docx and creds.docx.zip in the final tree" fail scan-secrets-diff "$base" "$base" \
+  "cannot write a changed file"
+
 # A gzipped tar under .tgz, which gitleaks opens only under the suffix .tar.gz.
 g switch -q -c pr-archive-tgz "$base"
 T="$(token)" python3 -c 'import io, os, sys, tarfile
@@ -318,8 +388,8 @@ g rm -q creds.tgz
 g commit -q -m 'remove creds.tgz'
 expect_pr "a secret inside creds.tgz added and removed" leak scan-secrets-diff "$base" "$base"
 
-# A real binary PNG (magic bytes and seeded random bytes) passes with the repository's own configuration: the renamed
-# scan adds no false positive.
+# A real binary PNG (magic bytes and seeded random bytes) passes with the repository's own configuration: scanning
+# it by content adds no false positive.
 g switch -q -c pr-real-png "$base"
 cp "$root/.gitleaks.toml" "$r/.gitleaks.toml"
 g commit -q -am 'the repository configuration'
@@ -341,24 +411,245 @@ out="$(make --no-print-directory -C "$root" scan-secrets-diff GITLEAKS_REPO="$r"
   GITLEAKS_CONFIG_REF="$base" GITLEAKS_MAX_MB=1 2>&1)" || rc=$?
 verdict "a file over GITLEAKS_MAX_MB (scan-secrets-diff)" fail "cannot be scanned" "$rc" "$out"
 
-# A base configuration that extends another file: gitleaks would read that file from the scanned pull request's
-# files, so the scan refuses it, in the [extend] table and as a dotted key alike.
-for form in table dotted; do
-  g switch -q -c "extend-$form" "$base"
-  if [[ "$form" == table ]]; then
-    printf '[extend] # the default rules and more\nuseDefault = true\n"path" = "extra.toml"\n' >"$r/.gitleaks.toml"
-  else
-    printf 'extend.path = "extra.toml"\n' >"$r/.gitleaks.toml"
-  fi
-  g commit -q -am "extend another file ($form)"
-  extending="$(g rev-parse HEAD)"
-  printf 'side\n' >"$r/extend.txt"
-  g add extend.txt
-  g commit -q -m 'a pull request on the extending base'
-  for target in scan-secrets scan-secrets-diff; do
-    expect_pr "a base configuration with [extend] path ($form)" fail "$target" "$extending" "$extending" \
-      "extends another file"
+# The generated child is written by a parser from a closed whitelist of the base configuration (ADR 0026, amendment
+# 2026-10-12): anything outside it fails before gitleaks reads pull request content. Each case's base configuration
+# guards a pull request that adds a token under gen/. Refused: an [extend] that extends another file or holds anything
+# but useDefault = true (path as a key and as a dotted key, disabledRules, url, a subtable), the same names in any
+# case, quoted or escaped ([Extend], Extend.disabledRules, "EXTEND".path, ["\u0065xtend"]), a byte-order mark, a
+# second [extend] header, an unknown top-level key (the second review's stopwords probe, rules), a wrong type, and
+# allowlists that act differently than they read (the third review): a pattern that is empty or matches the empty
+# string in Go's regexp (also \B and optional POSIX classes), alone or scoped by targetRules (a hidden disabledRules),
+# an empty pattern list, a pattern Go's regexp cannot compile (a lookahead), and stopwords, which gitleaks matches as
+# case-insensitive substrings of the secret.
+# The first review's probe now fails for its stopwords. Accepted: \pL, valid in RE2, and a multi-line basic string,
+# whose allowlists then apply exactly as written (neither covers the gen/ token), so the history scan finds the token.
+# They are not run through scan-secrets-diff: gitleaks v8.30.1's dir mode skips a file whose path an AND allowlist
+# matches without looking at the allowlist's regexes, with or without the generated configuration (a follow-up of
+# PDK-078).
+config_case() {
+  case $1 in
+    extend-path) printf '[extend] # the default rules and more\nuseDefault = true\n"path" = "extra.toml"\n' ;;
+    extend-path-dotted) printf 'extend.path = "extra.toml"\n' ;;
+    disabled-rules) printf '[extend]\nuseDefault = true\ndisabledRules = ["github-pat"]\n' ;;
+    url) printf '[extend]\nuseDefault = true\nurl = "https://example.invalid/gitleaks.toml"\n' ;;
+    subtable) printf '[extend]\nuseDefault = true\n\n[extend.more]\nx = 1\n' ;;
+    use-default-false) printf '[extend]\nuseDefault = false\n' ;;
+    upper-table) printf '[Extend]\ndisabledRules = ["github-pat"]\n' ;;
+    upper-dotted) printf 'Extend.disabledRules = ["github-pat"]\n' ;;
+    upper-quoted-path) printf '"EXTEND".path = "extra.toml"\n' ;;
+    all-caps) printf '[EXTEND]\nuseDefault = true\ndisabledRules = ["github-pat"]\n' ;;
+    escaped) printf '["\\u0065xtend"]\nuseDefault = true\ndisabledRules = ["github-pat"]\n' ;;
+    bom) printf '\xef\xbb\xbf[extend]\nuseDefault = true\ndisabledRules = ["github-pat"]\n' ;;
+    second-extend)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n\n  [ "extend" ]  # again\n' "'^nothing$'" ;;
+    stopwords-probe)
+      cat <<'EOF'
+stopwords = ["'''", '''
+[extend]
+[x]
+''', "'''"]
+EOF
+      ;;
+    unknown-key) printf '[extend]\nuseDefault = true\n\n[[rules]]\nid = "x"\nregex = %s\n' "'''x'''" ;;
+    wrong-type) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = %s\n' "'''^gen/'''" ;;
+    empty-path-scoped)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "scoped"\n'
+      printf 'targetRules = ["aws-access-token", "generic-api-key"]\npaths = [""]\n' ;;
+    empty-regex-scoped)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ntargetRules = ["generic-api-key"]\nregexes = [""]\n' ;;
+    match-empty-path) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^.*$'''" ;;
+    match-empty-regex) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\nregexes = ["x", "a*"]\n' ;;
+    empty-list) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "d"\npaths = []\n' ;;
+    unicode-class) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^gen/\\pL+$'''" ;;
+    lookahead) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^gen/(?=c)'''" ;;
+    not-word-boundary) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\nregexes = [%s]\n' "'''\\B'''" ;;
+    posix-class) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''[[:alpha:]]?'''" ;;
+    negated-posix-class)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''[[:^alpha:]]?'''" ;;
+    stopwords)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "Words that mark placeholder values"\n'
+      printf 'stopwords = ["example", "live", "kia"]\n' ;;
+    review-probe)
+      cat <<'EOF'
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "gen/: only sha256 digests"
+paths = ['''^gen/''']
+stopwords = ['''
+[extend]
+''']
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''', '''
+[x]''']
+EOF
+      ;;
+    multi-line-basic)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = """two\nlines"""\npaths = [%s]\n' \
+        "'^gen/'"
+      printf 'condition = "AND"\nregexTarget = "secret"\nregexes = [%s]\n' "'^[0-9a-f]{64}$'"
+      ;;
+  esac
+}
+for shape in extend-path extend-path-dotted disabled-rules url subtable use-default-false upper-table upper-dotted \
+  upper-quoted-path all-caps escaped bom second-extend stopwords-probe unknown-key wrong-type empty-path-scoped \
+  empty-regex-scoped match-empty-path match-empty-regex empty-list lookahead not-word-boundary \
+  posix-class negated-posix-class stopwords review-probe unicode-class \
+  multi-line-basic; do
+  g switch -q -c "config-$shape" "$base"
+  config_case "$shape" >"$r/.gitleaks.toml"
+  g commit -q -am "a base configuration ($shape)"
+  shaped="$(g rev-parse HEAD)"
+  mkdir -p "$r/gen"
+  printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/gen/creds.env"
+  g add gen/creds.env
+  g commit -q -m 'add credentials under gen/'
+  case $shape in
+    multi-line-basic | unicode-class) want=leak reason= ;;
+    review-probe) want=fail reason="allowlists[0] has the key 'stopwords'" ;;
+    extend-path* | disabled-rules | url | subtable | use-default-false | escaped) want=fail
+      reason="extend must be exactly {useDefault = true}" ;;
+    upper-* | all-caps) want=fail reason="is not allowed; allowed are title, extend and allowlists" ;;
+    stopwords-probe | unknown-key) want=fail reason="is not allowed; allowed are title, extend and allowlists" ;;
+    bom | second-extend) want=fail reason="cannot parse" ;;
+    wrong-type) want=fail reason="allowlists[0].paths is not a list of strings" ;;
+    empty-path-scoped | match-empty-path | empty-regex-scoped | match-empty-regex | not-word-boundary | *posix-class)
+      want=fail reason="is empty or matches the empty string, so it would match everything" ;;
+    lookahead) want=fail reason="does not compile in Go's regexp" ;;
+    empty-list) want=fail reason="allowlists[0].paths is an empty list" ;;
+    stopwords) want=fail reason="allowlists[0] has the key 'stopwords'" ;;
+  esac
+  targets=(scan-secrets scan-secrets-diff)
+  if [[ "$want" == leak ]]; then targets=(scan-secrets); fi
+  for target in "${targets[@]}"; do
+    expect_pr "a base configuration ($shape)" "$want" "$target" "$shaped" "$shaped" "$reason"
+    if [[ "$want" == fail ]]; then
+      if ! grep -qF -- "is outside what the generated configuration accepts" <<<"$last_out"; then
+        echo "FAIL a base configuration ($shape, $target): not refused by the whitelist"
+        failures=$((failures + 1))
+      fi
+      if grep -qE 'commits scanned|: layer |leaks found' <<<"$last_out"; then
+        echo "FAIL a base configuration ($shape, $target): gitleaks ran"
+        failures=$((failures + 1))
+      fi
+    fi
   done
+done
+
+# A base allowlist built around the fixed canary paths passes the whitelist and the pattern check, but the canary under
+# an ordinary path chosen per run is allowlisted by it, so both scans fail before gitleaks reads the pull request.
+g switch -q -c config-canary-tailored "$base"
+printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "d"\npaths = [%s]\n' "'''^[^nv./]'''" \
+  >"$r/.gitleaks.toml"
+g commit -q -am 'a base configuration built around the canary paths'
+tailored="$(g rev-parse HEAD)"
+printf 'harmless\n' >"$r/tailored.txt"
+g add tailored.txt
+g commit -q -m 'a harmless change'
+for target in scan-secrets scan-secrets-diff; do
+  rc=0
+  last_out="$(make --no-print-directory -C "$root" "$target" GITLEAKS_REPO="$r" GITLEAKS_LOG_OPTS="$tailored..HEAD" \
+    GITLEAKS_DIFF_BASE="$tailored" GITLEAKS_CONFIG_REF="$tailored" 2>&1)" || rc=$?
+  if ((rc != 0)) && grep -qF "the generated configuration lost its rules or path coverage" <<<"$last_out"; then
+    echo "ok   a base allowlist built around the canary paths ($target) (fail)"
+  else
+    echo "FAIL a base allowlist built around the canary paths ($target): exit $rc, want a failed canary"
+    failures=$((failures + 1))
+  fi
+  if grep -qE 'commits scanned|: layer ' <<<"$last_out"; then
+    echo "FAIL a base allowlist built around the canary paths ($target): gitleaks ran on the pull request"
+    failures=$((failures + 1))
+  fi
+done
+
+# The strip of the default's global paths, run on crafted defaults through its test seam: the multi-line array is
+# removed and the rest kept; a default whose global allowlist keeps paths in any key form (single-line, dotted, in an
+# inline table, in other case) or that has no rules fails.
+strip_case() {
+  case $1 in
+    multi-line) printf '[allowlist]\ndescription = "d"\npaths = [\n    %s,\n    %s,\n]\nregexes = [%s]\n' \
+      "'''a[b]'''" "'''c'''" "'''^r$'''" ;;
+    single-line) printf '[allowlist]\npaths = [%s]\n' "'''a'''" ;;
+    dotted) printf 'allowlist.paths = [%s]\n' "'''a'''" ;;
+    inline) printf 'allowlist = { description = "d", "paths" = [%s] }\n' "'''a'''" ;;
+    mixed-case) printf 'Allowlist.Paths = [%s]\n' "'''a'''" ;;
+    no-rules) printf '[allowlist]\ndescription = "d"\n'; return ;;
+  esac
+  printf '\n[[rules]]\nid = "x"\nregex = %s\npaths = [%s]\n' "'''x'''" "'''rule-path'''"
+}
+for kind in multi-line single-line dotted inline mixed-case no-rules; do
+  strip_case "$kind" >"$work/default-$kind.toml"
+  rc=0
+  out="$(make --no-print-directory -C "$root" scan-secrets-strip-default \
+    GITLEAKS_STRIP_FILE="$work/default-$kind.toml" 2>&1)" || rc=$?
+  if [[ "$kind" == multi-line ]]; then
+    if ((rc == 0)) && ! grep -qE "'''(a\\[b\\]|c)'''" <<<"$out" && grep -qF "regexes = ['''^r\$''']" <<<"$out" &&
+      grep -qF "paths = ['''rule-path''']" <<<"$out"; then
+      echo "ok   the strip removes the global paths and keeps the rest ($kind)"
+    else
+      echo "FAIL the strip of a default with $kind global paths: exit $rc"
+      failures=$((failures + 1))
+    fi
+  elif ((rc != 0)) && grep -qF "is not a default with rules and without global paths" <<<"$out"; then
+    echo "ok   a default with $kind global paths or rules fails the strip check (fail)"
+  else
+    echo "FAIL a default with $kind global paths or rules: exit $rc, want a failed strip check"
+    failures=$((failures + 1))
+  fi
+done
+
+# The canary through its test seam: a configuration whose default has no rules, or whose default still skips
+# node_modules/, fails; one with a GitHub token rule and no path allowlist passes.
+for kind in no-rules node-modules-skipped token-rule; do
+  dir="$work/canary-$kind"
+  mkdir -p "$dir"
+  printf '[extend]\npath = "%s/default.toml"\n' "$dir" >"$dir/gitleaks.toml"
+  rule="$(printf '[[rules]]\nid = "github-pat"\nregex = %s\n' "'''ghp_[0-9a-zA-Z]{36}'''")"
+  case $kind in
+    no-rules) printf 'title = "no rules"\n' >"$dir/default.toml" ;;
+    node-modules-skipped) printf '[allowlist]\npaths = [%s]\n\n%s\n' "'''node_modules'''" "$rule" >"$dir/default.toml" ;;
+    token-rule) printf '%s\n' "$rule" >"$dir/default.toml" ;;
+  esac
+  rc=0
+  out="$(make --no-print-directory -C "$root" scan-secrets-canary GITLEAKS_CANARY_DIR="$dir" 2>&1)" || rc=$?
+  if [[ "$kind" == token-rule ]] && ((rc == 0)) && grep -qF "the canary was reported" <<<"$out"; then
+    echo "ok   the canary with a default of kind $kind (pass)"
+  elif [[ "$kind" != token-rule ]] && ((rc != 0)) && grep -qF "lost its rules or path coverage" <<<"$out"; then
+    echo "ok   the canary with a default of kind $kind (fail)"
+  else
+    echo "FAIL the canary with a default of kind $kind: exit $rc"
+    failures=$((failures + 1))
+  fi
+  if grep -q 'ghp_' <<<"$out"; then
+    echo "FAIL the canary with a default of kind $kind printed its token"
+    failures=$((failures + 1))
+  fi
+done
+
+# A Go pattern check that cannot run (here: an image without go) fails the scan with its own message.
+gitleaks_image="$(sed -n 's/^GITLEAKS_IMAGE=//p' "$root/deploy/compose/versions.env")"
+g switch -q pr-pins
+rc=0
+out="$(make --no-print-directory -C "$root" scan-secrets-diff GITLEAKS_REPO="$r" GITLEAKS_DIFF_BASE="$base" \
+  GITLEAKS_CONFIG_REF="$base" GO_BUILD_IMAGE="$gitleaks_image" 2>&1)" || rc=$?
+verdict "a Go pattern check that cannot run (scan-secrets-diff)" fail "the Go pattern check could not run" "$rc" "$out"
+
+# The verdicts of the Go pattern check fail closed: none, too few, or one for another pattern refuse the
+# configuration.
+printf '["^a$", "^b$"]' >"$work/patterns.json"
+: >"$work/verdicts-none.jsonl"
+printf '{"index":0,"pattern":"^a$","ok":true}\n' >"$work/verdicts-short.jsonl"
+printf '{"index":0,"pattern":"^a$","ok":true}\n{"index":1,"pattern":"^c$","ok":true}\n' >"$work/verdicts-other.jsonl"
+for kind in none short other; do
+  if python3 "$root/deploy/compose/scripts/gitleaks-child-config.py" patterns "$work/patterns.json" \
+    "$work/verdicts-$kind.jsonl" 2>/dev/null; then
+    echo "FAIL the pattern verdicts ($kind) are accepted"
+    failures=$((failures + 1))
+  else
+    echo "ok   the pattern verdicts ($kind) refuse the configuration (fail)"
+  fi
 done
 
 if ((failures > 0)); then

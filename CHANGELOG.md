@@ -110,6 +110,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `server/web/package-lock.json` by path itself instead of relying on gitleaks' default path allowlist, which a later
   change drops. Today's scan results are unchanged.
 
+- Secret scan configuration (PDK-078, ADR 0026): `make scan-secrets` and `make scan-secrets-diff`, and with them the
+  CI job `secrets` on pull requests and on `main`, run gitleaks' default rules without the path entries of its global
+  allowlist, extended by the repository's `.gitleaks.toml`. Files such as `src/bootstrap.js`, `javascript.json`,
+  `node_modules/…` or anything under `d.png/` are now scanned by content in both scans. The default configuration is
+  read from the pinned gitleaks image and checked against two new pins in `deploy/compose/versions.env`
+  (`GITLEAKS_DEFAULT_CONFIG_BYTES`, `GITLEAKS_DEFAULT_CONFIG_SHA256`); a gitleaks image bump updates the image and both
+  pins together (`docs/operations/secret-scan.md`), and wrong pins fail the scan. Files under binary extensions are no
+  longer scanned under a `.scan` name: findings and `.gitleaksignore` fingerprints use the file's own path; archives
+  keep their `.zip` and `.tar.gz` suffixes. `.gitleaks.toml` is now parsed and checked against a closed list
+  of keys: the scan fails on anything but `title`, `[extend]` with exactly `useDefault = true` and `[[allowlists]]`
+  with the known allowlist keys (for example on `disabledRules`, `url`, `[Extend]`, `stopwords` or an unknown key),
+  and on a `paths` or `regexes` entry that matches the empty string or does not compile in Go's `regexp`. Each scan
+  first checks the generated configuration with a canary token (Python 3.11 or later is needed to run the scans).
+
 - Secret scan of pull requests (PDK-069, ADR 0025): `make scan-secrets-diff` also scans files under extensions that
   gitleaks' default configuration skips (images, fonts, office documents, `.pdf`, `.bin`, `.exe` and others), and
   files in directories named that way, under the suffix `.scan` on each such path component, and opens zip archives,

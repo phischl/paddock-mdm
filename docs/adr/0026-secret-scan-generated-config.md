@@ -101,3 +101,45 @@ Follow-ups: the implementation ticket of this ADR (allowlist pull request first,
 (blob layer search) builds on the shortened `scan_name` afterwards; PDK-070 closes with the dependency documented.
 Re-evaluate when gitleaks offers a way to drop entries of the default global allowlist (then the extraction goes) or
 identifies archives by content (then the archive renames go).
+
+## Amendment 2026-10-12
+Decision 4 wrote the child configuration from the repository's `.gitleaks.toml` line by line. Two external reviews of
+the implementation (PDK-078) bypassed every line-based check with the pinned v8.30.1 image: a line `[extend]` inside a
+multi-line string, `'''` inside a basic string, and names in another case (`[Extend]`, `Extend.disabledRules`), which
+gitleaks reads case-insensitively, loosened the reviewed configuration without an error. Pattern matching on TOML text
+cannot be made sound, so decision 4 and the check of decision 3 change as follows:
+
+1. **Parse, whitelist, re-emit.** `deploy/compose/scripts/gitleaks-child-config.py` reads the merge-base
+   `.gitleaks.toml` with Python's standard-library `tomllib` (Python 3.11 or later; an older Python fails the scan).
+   This is a new tool in the recipe but no new dependency: no package, module or image is added, and `python3` already
+   runs in the regression test and on the CI runner. The script refuses everything outside a closed whitelist, with
+   names compared exactly: at the top level only `title` (string), `extend` and `allowlists`; `extend` exactly
+   `{useDefault = true}` (so `path`, `url` and `disabledRules` fail, as PDK-065 required for `path`); each allowlist
+   only `description` (string), `condition` (`"AND"` or `"OR"`), `paths`, `regexes`, `commits`, `targetRules`
+   (lists of strings) and `regexTarget` (`"match"`, `"secret"` or `"line"`). It then writes the child
+   itself, `[extend] path` to the stripped default and each allowlist under its canonical key names, every string as a
+   TOML basic string, and checks that the result parses back to the same allowlists. Nothing of the input is copied
+   verbatim. Multi-line strings are therefore allowed again.
+2. **The strip is verified by a parser.** The awk strip of the sha-pinned default stays; afterwards `tomllib` must
+   read the result, find rules, and find no `paths` key in the global allowlist in any key form or case (`[allowlist]
+   paths`, `allowlist.paths`, an inline table, `Allowlist.Paths`).
+3. **Canary.** Before either scan reads pull request content, the pinned gitleaks runs the generated configuration
+   over a temporary directory holding a fake GitHub token, generated per run and never printed, in
+   `node_modules/canary.txt` and `vendor/github.com/canary/canary.txt`, paths the default's global allowlist skipped,
+   and in `src/<random>/canary.txt`, an ordinary path chosen per run so that an allowlist built around the fixed
+   paths fails as well. All must be reported, or the scan fails with "the generated configuration lost its rules or
+   path coverage".
+
+What a reviewed allowlist means stays the responsibility of its code owners (`.gitleaks.toml` is in CODEOWNERS): the
+tool only guarantees that the configuration acts as it reads. It therefore also refuses the constructs that act
+differently than they read: a `paths` or `regexes` entry that does not compile or matches the empty string (and so
+everything; `""`, `\B`, `[[:alpha:]]?`), an empty `paths` or `regexes` list, and `stopwords`, which gitleaks matches
+as case-insensitive substrings of the secret, so that a short word disables whole rules. The pattern check is not a
+stand-in: `deploy/compose/scripts/gitleaks-patterns.go` compiles every entry with Go's `regexp`, the engine gitleaks
+uses, and calls `MatchString("")`, run with `go run` in the pinned `GO_BUILD_IMAGE` without network (no new
+dependency; a few seconds per scan). Its JSON verdicts must cover every pattern in order, or the configuration is
+refused. Broad patterns that are visible as such, for example `\b`, `.` or `[\s\S]`, pass the check and are left to
+that review.
+
+The regression test reaches the strip check and the canary through two test seams (`make
+scan-secrets-strip-default`, `make scan-secrets-canary`) that do not change either scan.

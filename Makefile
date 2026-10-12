@@ -646,7 +646,8 @@ TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-
 COMPILER_IMAGE  ?= paddock-compiler:dev
 PGBACKREST_IMAGE ?= paddock-pgbackrest:dev
 
-.PHONY: scan scan-secrets scan-secrets-diff scan-fs scan-images image-compiler image-pgbackrest
+.PHONY: scan scan-secrets scan-secrets-diff scan-secrets-strip-default scan-secrets-canary scan-fs scan-images \
+	image-compiler image-pgbackrest
 scan: scan-secrets scan-fs scan-images ## Run gitleaks (branch history) and trivy (filesystem and images)
 
 # The current branch only, never --all: a finding on an unrelated stale branch must not fail this scan. CI narrows it
@@ -664,33 +665,101 @@ GITLEAKS_REPO ?= $(CURDIR)
 # both always pass the chosen file (empty when there is none). An inline `gitleaks:allow` comment would let the scanned
 # content allow itself, so both scans pass --ignore-gitleaks-allow. gitleaks resolves an `[extend] path` from its
 # working directory, which the file scan fills with the pull request's files, so a configuration that extends another
-# file fails; `useDefault` alone is allowed.
+# file fails; `useDefault = true` alone is allowed.
+# The configuration both scans run is generated (ADR 0026): the default configuration of GITLEAKS_IMAGE without the
+# paths of its global allowlist, extended by that .gitleaks.toml. Those paths skip whole files and directories in every
+# scan mode (src/bootstrap.js, d.png/creds.bin, javascript.json), and a repository configuration that extends the
+# default with useDefault cannot drop them. gitleaks cannot print its default, but embeds it uncompressed (go:embed):
+# the bytes from the single occurrence of GITLEAKS_DEFAULT_CONFIG_HEADER in /usr/bin/gitleaks are checked against the
+# size and sha256 pinned next to GITLEAKS_IMAGE, so an image bump without new pins, or a changed binary layout, fails
+# instead of scanning with an unknown default. A default whose global paths the strip does not recognise fails too.
+# $(1) is the directory the container mounts the configuration at: the child's `[extend] path` names the stripped
+# default by its absolute path there, a mount that holds none of the scanned files.
+# The child is not derived from .gitleaks.toml by text: GITLEAKS_CHILD_CONFIG parses it with Python's tomllib, refuses
+# everything outside a closed whitelist (top level title, extend = {useDefault = true} and allowlists with their known
+# keys and types; names compare exactly, so [Extend] or Extend.disabledRules fail) and writes the child itself (ADR
+# 0026, amendment 2026-10-12), because pattern matching on TOML text was bypassed by strings holding `[extend]` or
+# `'''` and by gitleaks' case-insensitive keys. GITLEAKS_PATTERNS_CHECK then compiles every allowlist pattern with
+# Go's regexp, the engine gitleaks uses, in GO_BUILD_IMAGE without network, and refuses one that does not compile or
+# matches the empty string (and so everything). Before either scan reads PR content, a canary run of the generated
+# configuration must report a fake token, generated per run and never printed, under node_modules/ and vendor/, paths
+# the default's global allowlist skipped, and under an ordinary path chosen per run: a configuration that lost its
+# rules or path coverage fails.
 # What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
 # scanned. The scan's integrity therefore rests on code review of .github/, the Makefile and
-# deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE); CODEOWNERS names a
-# reviewer for them, but GitHub enforces that only once branch protection requires code-owner review, a setting of the
-# maintainer (docs/operations/secret-scan.md).
+# deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE and its default configuration);
+# CODEOWNERS names a reviewer for them, and the branch ruleset on main requires that review
+# (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
+GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
+GITLEAKS_CHILD_CONFIG = python3 $(CURDIR)/deploy/compose/scripts/gitleaks-child-config.py
+GITLEAKS_PATTERNS_CHECK = $(CURDIR)/deploy/compose/scripts/gitleaks-patterns.go
+# gitleaks_strip_default,<in>,<out>,<label>: <in> without the multi-line `paths = [` array before the first
+# [[rules]]; the result must parse, hold rules and keep no paths in its global allowlist in any key form.
+gitleaks_strip_default = awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
+		!r && /^[[:space:]]*paths[[:space:]]*=[[:space:]]*\[[[:space:]]*$$/ { s = 1; next } \
+		s { if ($$0 ~ /^[[:space:]]*\][[:space:]]*$$/) s = 0; next } { print }' $(1) >$(2) || exit 1; \
+	$(GITLEAKS_CHILD_CONFIG) verify-default $(2) || { echo "$@: $(3) after the strip is not a default with rules and" \
+		"without global paths; its layout changed and must be looked at (ADR 0026)" >&2; exit 1; }
+# gitleaks_canary,<config dir>,<its path in the container>: the configuration in <config dir> must report a fake
+# GitHub token under node_modules/, vendor/github.com/ and an ordinary path chosen per run, so that an allowlist built
+# around the fixed canary paths (^[^nv./]) still fails it.
+GITLEAKS_CANARY = node_modules/canary.txt vendor/github.com/canary/canary.txt
+gitleaks_canary = rnd=$$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8); \
+	canaries="$(GITLEAKS_CANARY) src/$$rnd/canary.txt"; \
+	for f in $$canaries; do \
+		mkdir -p -- "$$tmp/canary/$${f%/*}" || exit 1; \
+		printf 'GITHUB_TOKEN=ghp_%s\n' "$$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)" \
+			>"$$tmp/canary/$$f" || exit 1; done; \
+	mkdir -p "$$tmp/canary-out" || exit 1; \
+	docker run --rm --user "$$(id -u):$$(id -g)" -v $(1):$(2):ro -v "$$tmp/canary:/canary:ro" \
+		-v "$$tmp/canary-out:/out" -w /canary $(GITLEAKS_IMAGE) dir . --config $(2)/gitleaks.toml --no-banner \
+		--redact --exit-code 0 --report-format json --report-path /out/report.json >"$$tmp/canary-out/log" 2>&1; \
+	if ! $(GITLEAKS_CHILD_CONFIG) canary "$$tmp/canary-out/report.json" $$canaries; then \
+		echo "$@: the generated configuration lost its rules or path coverage (ADR 0026); gitleaks said:" >&2; \
+		sed -E 's/\x1b\[[0-9;]*m//g' "$$tmp/canary-out/log" >&2; exit 1; fi; \
+	rm -rf -- "$$tmp/canary" "$$tmp/canary-out"
 gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 	if [ -n "$$ref" ]; then \
-		git -C "$$repo" show "$$ref:.gitleaks.toml" >"$$tmp/cfg/gitleaks.toml" || \
+		git -C "$$repo" show "$$ref:.gitleaks.toml" >"$$tmp/repo.toml" || \
 			{ echo "$@: no .gitleaks.toml at $$ref" >&2; exit 1; }; \
 		if git -C "$$repo" cat-file -e "$$ref:.gitleaksignore" 2>/dev/null; then \
 			git -C "$$repo" show "$$ref:.gitleaksignore" >"$$tmp/cfg/gitleaksignore" || exit 1; \
 		else : >"$$tmp/cfg/gitleaksignore"; fi; \
 	else \
-		cp -- "$$repo/.gitleaks.toml" "$$tmp/cfg/gitleaks.toml" || exit 1; \
+		cp -- "$$repo/.gitleaks.toml" "$$tmp/repo.toml" || exit 1; \
 		if [ -f "$$repo/.gitleaksignore" ]; then cp -- "$$repo/.gitleaksignore" "$$tmp/cfg/gitleaksignore" || exit 1; \
 		else : >"$$tmp/cfg/gitleaksignore"; fi; \
 	fi; \
-	if awk '{ l = $$0; sub(/\#.*/, "", l) } \
-		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t) } \
-		t == "[extend]" && l ~ /^[[:space:]]*["\047]?path["\047]?[[:space:]]*=/ { f = 1 } \
-		l ~ /^[[:space:]]*["\047]?extend["\047]?[[:space:]]*[.=]/ { f = 1 } \
-		END { exit !f }' "$$tmp/cfg/gitleaks.toml"; then \
-		echo "$@: .gitleaks.toml from $${ref:-the working tree} extends another file ([extend] path);" \
-			"only useDefault is allowed" >&2; exit 1; fi; \
-	echo "$@: configuration from $${ref:-the working tree}"
+	$(GITLEAKS_CHILD_CONFIG) child "$$tmp/repo.toml" "$(1)/default.toml" "$$tmp/child.toml" "$$tmp/patterns.json" || \
+		{ echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
+			"accepts (ADR 0026, amendment 2026-10-12)" >&2; exit 1; }; \
+	docker run --rm -i --network none -e GOFLAGS= -e GOTOOLCHAIN=local -v "$(GITLEAKS_PATTERNS_CHECK):/p.go:ro" \
+		$(GO_BUILD_IMAGE) go run /p.go <"$$tmp/patterns.json" >"$$tmp/verdicts.jsonl" 2>"$$tmp/patterns.err"; prc=$$?; \
+	if [ "$$prc" -ne 0 ]; then cat -- "$$tmp/patterns.err" >&2; \
+		echo "$@: the Go pattern check could not run (exit $$prc, $(GO_BUILD_IMAGE)); the scan fails closed" >&2; \
+		exit 1; fi; \
+	if ! $(GITLEAKS_CHILD_CONFIG) patterns "$$tmp/patterns.json" "$$tmp/verdicts.jsonl"; then \
+		echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
+			"accepts: Go's regexp refuses an allowlist pattern (ADR 0026, amendment 2026-10-12)" >&2; exit 1; fi; \
+	pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256 (deploy/compose/versions.env)"; \
+	docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
+		{ echo "$@: cannot copy /usr/bin/gitleaks out of $(GITLEAKS_IMAGE)" >&2; exit 1; }; \
+	off=$$(LC_ALL=C grep -obaF -- '$(GITLEAKS_DEFAULT_CONFIG_HEADER)' "$$tmp/gitleaks.bin" | cut -d: -f1); \
+	case $$off in ''|*[!0-9]*) echo "$@: the header of the default configuration occurs" \
+		"$$(printf '%s' "$$off" | grep -c .) times in /usr/bin/gitleaks of $(GITLEAKS_IMAGE), not once;" \
+		"check $$pins against the image (docs/operations/secret-scan.md)" >&2; exit 1 ;; esac; \
+	bytes='$(GITLEAKS_DEFAULT_CONFIG_BYTES)'; case $$bytes in ''|*[!0-9]*) bytes=0 ;; esac; \
+	tail -c +$$((off + 1)) "$$tmp/gitleaks.bin" | head -c "$$bytes" >"$$tmp/default.toml" || exit 1; \
+	rm -f -- "$$tmp/gitleaks.bin"; sum=$$(sha256sum <"$$tmp/default.toml") || exit 1; \
+	if [ "$$bytes" -eq 0 ] || [ "$$(wc -c <"$$tmp/default.toml")" -ne "$$bytes" ] || \
+		[ "$${sum%% *}" != '$(GITLEAKS_DEFAULT_CONFIG_SHA256)' ]; then \
+		echo "$@: the default configuration in $(GITLEAKS_IMAGE) does not match $$pins;" \
+			"an image bump updates the image and both pins together (docs/operations/secret-scan.md)" >&2; exit 1; fi; \
+	$(call gitleaks_strip_default,"$$tmp/default.toml","$$tmp/cfg/default.toml",the default of $(GITLEAKS_IMAGE)); \
+	mv -- "$$tmp/child.toml" "$$tmp/cfg/gitleaks.toml" || exit 1; \
+	$(call gitleaks_canary,"$$tmp/cfg",$(1)); \
+	echo "$@: configuration from $${ref:-the working tree} on the default of $(GITLEAKS_IMAGE) without its global paths"
 
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
 # `--remerge-diff` shows what a merge commit changes beyond its automatic merge, so a secret added only in a merge
@@ -707,7 +776,7 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 		"(--remerge-diff shows none), and octopus merges are not allowed in Paddock's history" >&2; exit 1; fi; \
 	gitdir=$$(git -C "$$repo" rev-parse --absolute-git-dir) || exit 1; \
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
-	$(gitleaks_config); \
+	$(call gitleaks_config,$$tmp/cfg); \
 	out=$$(docker run --rm --user "$$(id -u):$$(id -g)" -v "$$repo:$$repo:ro" -v "$$common:$$common:ro" \
 		-v "$$tmp:$$tmp" -e GIT_OBJECT_DIRECTORY="$$tmp" -e GIT_ALTERNATE_OBJECT_DIRECTORIES="$$common/objects" \
 		-w "$$tmp/cfg" $(GITLEAKS_IMAGE) \
@@ -738,38 +807,40 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 # path go into separate layers, each scanned from its own root. Only pull request ranges pay for this: the history
 # scan of main (scan-secrets) is unchanged. A file over GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over
 # 100 MiB) fails the scan instead of being skipped by --max-target-megabytes.
-# gitleaks' default configuration skips whole files and whole directories by extension, and a repository
-# configuration cannot drop those entries while it uses the default rules, so every path component, directories
-# included, whose name ends, case-insensitively, in one of GITLEAKS_RENAME_EXT gets the suffix .scan in the copy
-# (ADR 0025): creds.bin is scanned as creds.bin.scan and d.png/creds.bin as d.png.scan/creds.bin.scan. gitleaks
-# identifies archives by name only, so a last component in GITLEAKS_ZIP_EXT gets the suffix .zip instead (this rule
-# wins for docx and xlsx) and one ending in .tgz the suffix .tar.gz, and archives are opened one level deep
-# (--max-archive-depth 1; nested archives and other archive names are not opened, and the CI job's timeout bounds the
-# decompression). The collision checks, the choice of a free blob layer and .gitleaksignore fingerprints use the
-# renamed path. gitleaks still skips files whose magic bytes map to application/* (real PDFs, fonts, executables,
-# compressed data) in every mode. Re-check on image bump: both lists against the default allowlist and the archive
-# formats of the GITLEAKS_IMAGE in use. The entry ?dll mirrors the default regex's `.dll`, whose unescaped dot skips
-# any character before dll (creds.xdll is skipped, creds.dll is not).
+# gitleaks identifies archives by name only, so a changed file or blob whose name ends, case-insensitively, in one of
+# GITLEAKS_ZIP_EXT is written with the suffix .zip (creds.docx is scanned as creds.docx.zip) and one ending in .tgz
+# with the suffix .tar.gz, and archives are opened one level deep (--max-archive-depth 1; nested archives and other
+# archive names are not opened, and the CI job's timeout bounds the decompression). The collision checks, the choice of
+# a free blob layer and .gitleaksignore fingerprints use that name; every other file keeps its path, since the
+# generated configuration no longer skips names (ADR 0026). gitleaks still skips files whose magic bytes map to
+# application/* (real PDFs, fonts, executables, compressed data) in every mode. Re-check on image bump: the list
+# against the archive formats of the GITLEAKS_IMAGE in use.
 GITLEAKS_DIFF_BASE ?= origin/main
 GITLEAKS_MAX_MB = 100
-GITLEAKS_RENAME_EXT = bmp gif jpg jpeg png svg tif tiff eot otf ttf woff woff2 doc docx xls xlsx pdf bin socket vsidx \
-	v2 suo wsuo ?dll pdb exe gltf gem
 GITLEAKS_ZIP_EXT = jar war docx xlsx pptx odt ods odp
+
+# Test seam of test/scan-secrets_test.sh: the strip of the default configuration and its check, run on
+# GITLEAKS_STRIP_FILE instead of the pinned default, with the result on stdout.
+scan-secrets-strip-default:
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	$(call gitleaks_strip_default,'$(GITLEAKS_STRIP_FILE)',"$$tmp/out.toml",$(GITLEAKS_STRIP_FILE)); \
+	cat -- "$$tmp/out.toml"
+
+# Test seam of test/scan-secrets_test.sh: the canary on GITLEAKS_CANARY_DIR, a directory with a gitleaks.toml that is
+# mounted at its own path.
+scan-secrets-canary:
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	$(call gitleaks_canary,'$(GITLEAKS_CANARY_DIR)','$(GITLEAKS_CANARY_DIR)'); echo "$@: the canary was reported"
 
 scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE and every blob added since then
 	@repo='$(GITLEAKS_REPO)'; \
 	base=$$(git -C "$$repo" merge-base '$(GITLEAKS_DIFF_BASE)' HEAD) || exit 1; \
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
-	$(gitleaks_config); \
+	$(call gitleaks_config,/cfg); \
 	git -C "$$repo" diff -z --name-only --diff-filter=d "$$base"..HEAD >"$$tmp/files" || exit 1; \
-	renamed() { local e; for e in $(subst ?,\?,$(GITLEAKS_RENAME_EXT)); do \
-		case $${1,,} in *.$$e) return 0 ;; esac; done; return 1; }; \
-	scan_name() { local rest=$$1 c e; sn=; \
-		while [ "$${rest#*/}" != "$$rest" ]; do \
-			c=$${rest%%/*}; rest=$${rest#*/}; if renamed "$$c"; then c=$$c.scan; fi; sn=$$sn$$c/; done; \
-		for e in $(GITLEAKS_ZIP_EXT); do case $${rest,,} in *.$$e) sn=$$sn$$rest.zip; return ;; esac; done; \
-		case $${rest,,} in *.tgz) sn=$$sn$$rest.tar.gz; return ;; esac; \
-		if renamed "$$rest"; then sn=$$sn$$rest.scan; else sn=$$sn$$rest; fi; }; \
+	scan_name() { local e; sn=$$1; \
+		for e in $(GITLEAKS_ZIP_EXT); do case $${sn,,} in *.$$e) sn=$$sn.zip; return ;; esac; done; \
+		case $${sn,,} in *.tgz) sn=$$sn.tar.gz ;; esac; }; \
 	n=0; mkdir -p "$$tmp/scan/0" || exit 1; \
 	while IFS= read -r -d '' f; do \
 		if [ -f "$$repo/$$f" ] || [ -L "$$repo/$$f" ]; then \
