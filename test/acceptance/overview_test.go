@@ -90,7 +90,9 @@ func TestOverviewGate(t *testing.T) {
 	if _, _, err := d.Checkin(ctx); err != nil {
 		t.Fatal(err)
 	}
-	hostname := getDevice(t, alice, d.DeviceID).Hostname
+	// The worker records the check-in asynchronously; until it has, the device is "never contacted" in one read and
+	// may not be in the next, so the overview and the list totals would be compared across that change.
+	hostname := waitDevice(t, alice, d.DeviceID, time.Minute, func(s deviceState) bool { return s.LastContactAt != nil }).Hostname
 	o, _ := getOverview(t, alice)
 	size := url.Values{"page_size": {"10"}}
 	if want := listCount(t, alice, "/api/v1/devices", url.Values{"state": {"pending", "active", "quarantined"}, "page_size": {"10"}}); o.Devices.Total != want {
