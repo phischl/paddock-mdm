@@ -244,6 +244,8 @@ func TestPendingMarkerLivesUntilRolledBack(t *testing.T) {
 	log := captureLog(t)
 	f := newFake(t)
 	f.pendingRollback()
+	// recordPending creates the marker only after the rollback_failed result is written.
+	f.waitFor("the pending marker", f.marked)
 	if data, err := os.ReadFile(f.marker()); err != nil || string(data) != `"1.1.0"` {
 		t.Fatalf("pending marker %q, error %v; want the version 1.1.0", data, err)
 	}
