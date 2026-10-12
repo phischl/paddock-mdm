@@ -71,3 +71,19 @@ archives are opened and `.jar`, `.docx`, `.xlsx` and extension-less archives are
   never detectable by a regex scanner. − Decompression cost is bounded by the job timeout, not by gitleaks.
 Re-evaluate when gitleaks offers a way to drop entries of the default global allowlist or identifies archives by
 content; then the renaming goes away.
+
+## Amendment 2026-10-12
+Review 1 of PDK-069 found three gaps in decisions 1 and 2, measured with the pinned gitleaks v8.30.1:
+
+- **Directories.** gitleaks' directory scan skips a whole directory whose name matches the default global allowlist,
+  so `d.png/creds.bin` holding a token passed although the file itself was renamed. Decision 1 now applies to every
+  path component, directories included: each component whose name ends, case-insensitively, in an extension of the
+  list gets the suffix `.scan` (`d.png/creds.bin` is scanned as `d.png.scan/creds.bin.scan`). The `.zip` rule of
+  decision 2 and the `.tgz` rule below apply to the last component only. The collision checks, the choice of a free
+  blob layer and fingerprints use the fully renamed path.
+- **`.dll`.** The default allowlist's alternative `.dll` carries an unescaped dot, so it skips names ending in a
+  dot, any one character and `dll` (`creds.xdll` is skipped) and does not skip `creds.dll`. The list entry
+  `dll` becomes `?dll` (a shell pattern for one character and `dll`), which renames exactly what the default skips.
+- **`.tgz`.** gitleaks does not open `.tgz` by name. A last component ending, case-insensitively, in `.tgz` gets the
+  suffix `.tar.gz`; the `.zip` rule takes precedence, and the two never overlap. Archives under other names gitleaks
+  does not recognise stay unopened, which `docs/operations/secret-scan.md` states.
