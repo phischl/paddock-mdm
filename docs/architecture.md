@@ -65,6 +65,8 @@ needs a documented reason to deviate, **MAY** is a genuine degree of freedom.
 | Administrative perimeter | IP allow list at the edge and in the api, managed by platform admins; client address derived once by Caddy from configurable trusted proxies | [0021](adr/0021-ip-allowlist.md) |
 | Portal design system | Tokens for a light and a dark theme, self-hosted OFL fonts, vendored ISC icons, command palette without destructive shortcuts | [0023](adr/0023-portal-design-system.md) |
 | Backup (A11), Observability (A12), Deployment | pgBackRest + OpenBao snapshots; OpenTelemetry + Prometheus; Docker Compose in v1, Kubernetes-ready | [0016](adr/0016-operations-backup-observability-deployment.md) |
+| Agent update: failed rollback | A flip back that fails is the outcome `rollback_failed` (audit `device.agent_rollback_failed`, counted as a failure), stays pending and is retried with bounded back-off; no downgrade through the update channel; attention kind `agent_rollback_pending` | [0024](adr/0024-failed-rollback-outcome.md) |
+| Secret scan coverage | Pull request scans neutralise gitleaks' default extension allowlist by renaming the scanned copies and open archives one level deep; the history scan of `main` keeps its documented gaps | [0025](adr/0025-secret-scan-coverage.md) |
 | User lock on the device (F2) | Two paths: Authentik for online logins, agent blocks locally at the next check-in (event-triggered on network-up and resume) and locks active sessions | – (§9.5) |
 | Object storage product | RustFS (accepted), S3 API with Object Lock only; gated by the WORM acceptance test | [0017](adr/0017-object-storage-product.md) |
 | Device-group scope for profiles | Profile assignments may be limited to a device group | [0008](adr/0008-sudo-ownership.md) |
@@ -1136,6 +1138,13 @@ stateDiagram-v2
   or starts a new rollout. Rollouts are platform-wide (releases are platform objects); waves use `hash(device_id)`.
   A resume returns the rollout to `completed` or `running` (whichever it was) and restarts failure counting at the
   resume time, so failures from before the halt do not re-halt it. *(Decided 2026-10-04 after M2b / M2.1.)*
+- **Failed rollback** (ADR 0024, 2026-10-12): if the flip back fails, the new agent keeps running (fail safe), the
+  supervisor reports `rollback_failed` (`agent.update_failed` with that outcome → audit `device.agent_rollback_failed`,
+  counted like `rolled_back`), keeps the probation log as a pending rollback and retries the flip with bounded
+  back-off (10 s doubling to 5 min) until it succeeds, then reports `rolled_back`. The device appears on the attention
+  page as `agent_rollback_pending`. No downgrade through the update channel; the operator's way back is the retry or a
+  manual flip of `current`. An unreadable probation log is rebuilt from the slots (plan M2b decision 16, amendment
+  2026-10-12).
 - The supervisor's own update happens only through the distribution package (`apt`), never through the agent channel.
 
 ### 11.3 Reconcilers (apply engine)
