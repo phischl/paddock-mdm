@@ -9,7 +9,11 @@
 # configuration passes. An inline `gitleaks:allow` on the secret does not hide it, and a configuration that extends
 # another file (`[extend] path`) fails. `make scan-secrets-diff` also scans every blob the range adds (PDK-068): a
 # binary file with a secret that the pull request adds and removes again fails it, in a later version of a path as
-# well. The secret is a generated fake GitHub token that is never printed (the scan runs with --redact).
+# well. Files whose names gitleaks' default configuration allowlists by extension are scanned under a suffixed name
+# and archives are opened one level deep (ADR 0025): a text secret in `creds.bin` or `creds.png` and a secret inside a
+# deflated `creds.zip` or `creds.docx` fail `make scan-secrets-diff`, while a real binary PNG passes with the
+# repository's own configuration. The secret is a generated fake GitHub token that is never printed (the scan runs
+# with --redact).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -239,6 +243,49 @@ g add cfg
 g commit -q -m 'replace them with a directory'
 expect_pr "binary secrets under a newline path and a path that becomes a directory" leak scan-secrets-diff "$base" \
   "$base"
+
+# A text secret under an extension that gitleaks' default configuration allowlists (ADR 0025): added and removed
+# again, so only a blob layer holds it, and added and kept, so layer 0 holds it as well.
+g switch -q -c pr-allowlisted-ext "$base"
+printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/creds.bin"
+g add creds.bin
+g commit -q -m 'add credentials under .bin'
+g rm -q creds.bin
+g commit -q -m 'remove them'
+expect_pr "a text secret in creds.bin added and removed" leak scan-secrets-diff "$base" "$base"
+g switch -q -c pr-allowlisted-ext-kept "$base"
+printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/creds.png"
+g add creds.png
+g commit -q -m 'add credentials under .png'
+expect_pr "a text secret in creds.png added and kept" leak scan-secrets-diff "$base" "$base"
+
+# A secret in a deflated archive, added and removed again: a zip, and an office document that gitleaks only opens
+# under the suffix .zip. The token must not appear in clear text in the archive, or the test would prove nothing.
+for name in creds.zip creds.docx; do
+  g switch -q -c "pr-archive-$name" "$base"
+  T="$(token)" python3 -c 'import os, sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("inner.env", "GITHUB_TOKEN=" + os.environ["T"] + "\n")' "$r/$name"
+  if grep -qa ghp_ "$r/$name"; then echo "FAIL setup: $name holds the token in clear text"; exit 1; fi
+  g add "$name"
+  g commit -q -m "add credentials in $name"
+  g rm -q "$name"
+  g commit -q -m "remove $name"
+  expect_pr "a secret inside a deflated $name added and removed" leak scan-secrets-diff "$base" "$base"
+done
+
+# A real binary PNG (magic bytes and seeded random bytes) passes with the repository's own configuration: the renamed
+# scan adds no false positive.
+g switch -q -c pr-real-png "$base"
+cp "$root/.gitleaks.toml" "$r/.gitleaks.toml"
+g commit -q -am 'the repository configuration'
+repo_config="$(g rev-parse HEAD)"
+python3 -c 'import random, sys
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + random.Random(69).randbytes(65536))' "$r/icon.png"
+g add icon.png
+g commit -q -m 'add an image'
+expect_pr "a real binary PNG with the repository configuration" pass scan-secrets-diff "$repo_config" \
+  "$repo_config"
 
 # A file over GITLEAKS_MAX_MB fails the scan instead of being skipped (the limit is lowered to 1 MB here).
 g switch -q -c pr-large "$base"

@@ -10,14 +10,42 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
 - `make scan-secrets-diff` scans the final content of every file the pull request changes and every blob the pull
   request adds, also versions a later commit replaced or removed (PDK-068). The history scan skips binary content, so
   a binary file with a secret that the pull request adds and deletes again is caught here. A file over 100 MB fails
-  the scan instead of being skipped. Not covered in any scan mode: files gitleaks' default configuration allowlists
-  by path (for example `.bin`, `.zip`, `.pdf`, images, fonts, `node_modules`) and the content of archives.
+  the scan instead of being skipped. It also covers files under binary extensions and archives one level deep (see
+  [Coverage of binary extensions and archives](#coverage-of-binary-extensions-and-archives)).
 - Both read `.gitleaks.toml` and `.gitleaksignore` from the pull request's merge base (`GITLEAKS_CONFIG_REF`, PDK-065).
   A pull request that changes either file is scanned with the base's version. An allowlist for a new false positive
   therefore lands in its own pull request first, and the pull request with the flagged content follows once it is
   merged.
 - A `.gitleaksignore` in the scanned tree is never loaded, inline `gitleaks:allow` comments are ignored, and a
   `.gitleaks.toml` that extends another file (`[extend] path`) fails the scan; `useDefault` alone is allowed.
+
+## Coverage of binary extensions and archives
+
+gitleaks' default configuration (`useDefault`) skips whole files by extension, and a repository configuration cannot
+remove those entries (ADR 0025). `make scan-secrets-diff` therefore scans copies under other names:
+
+- A file whose name ends, case-insensitively, in `.bmp .gif .jpg .jpeg .png .svg .tif .tiff .eot .otf .ttf .woff
+  .woff2 .doc .docx .xls .xlsx .pdf .bin .socket .vsidx .v2 .suo .wsuo .dll .pdb .exe .gltf .gem` is scanned with the
+  suffix `.scan`, for example `creds.bin` as `creds.bin.scan`. A text secret under such a name is found.
+- gitleaks recognises archives by name only. A file ending in `.jar .war .docx .xlsx .pptx .odt .ods .odp` is scanned
+  with the suffix `.zip` instead, so that it is opened as an archive (for `.docx` and `.xlsx` the `.zip` rule wins).
+  Archives that gitleaks recognises by name, such as `.zip` and `.tar.gz`, keep their name.
+- Archives are opened one level deep (`--max-archive-depth 1`): a secret in a file inside a zip or an office document
+  is found, an archive inside an archive is not opened. The CI job `secrets` stops after 30 minutes, which bounds what
+  a huge archive or an archive bomb costs.
+- The directory and lock-file entries of the default configuration (`node_modules`, `vendor/`, `package-lock.json`,
+  `go.sum` and the like) stay skipped.
+- gitleaks skips every file whose magic bytes map to an `application/*` type, whatever its name and in every scan mode:
+  real PDFs, fonts, executables and compressed data are never scanned. Images are scanned; the repository's own icons
+  and fonts give no findings.
+- Findings, `.gitleaksignore` fingerprints and path allowlists name the scanned path with its suffix, and a file
+  inside an archive after a `!`, for example `creds.bin.scan:github-pat:1` or
+  `creds.docx.zip!word/document.xml:generic-api-key:1`.
+- The history scan `make scan-secrets` (git mode) renames nothing and opens no archives: binary content,
+  binary-extension files and archives are covered by `make scan-secrets-diff` only.
+
+The two extension lists live in the `Makefile` (`GITLEAKS_RENAME_EXT`, `GITLEAKS_ZIP_EXT`) and are re-checked against
+gitleaks' default configuration whenever the gitleaks image is bumped.
 
 ## What the scan relies on
 
