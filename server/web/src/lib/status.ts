@@ -87,6 +87,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'stale_warning':
     case 'disk_not_compliant':
     case 'agent_outdated':
+    case 'agent_rollback_pending':
     case 'login_apply_failed':
     case 'sudo_apply_failed':
       return { status: 'warn', label }

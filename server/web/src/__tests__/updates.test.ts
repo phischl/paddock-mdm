@@ -48,5 +48,6 @@ describe('updates', () => {
       expect(en.attention.kinds[k]).toBeTruthy()
       expect(en.attention.action[k]).toBeTruthy()
     }
+    expect(attentionKinds).toContain('agent_rollback_pending')
   })
 })

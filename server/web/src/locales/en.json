@@ -241,6 +241,7 @@
       "agent_updated": "The device {target} updated its agent to {version}",
       "agent_update_failed": "The device {target} refused agent {version} ({outcome})",
       "agent_rolled_back": "The device {target} rolled agent {version} back to {from_version}",
+      "agent_rollback_failed": "The device {target} could not roll agent {version} back to {from_version}; it keeps running {version} and retries",
       "agent_events_dropped": "The device {target} dropped {count, number} events while the server was unreachable",
       "login_assignment_changed": "{actor} changed who may log in on {hostname}",
       "logins_suspended": "{actor} suspended logins on {hostname}",
@@ -1383,7 +1384,8 @@
       "login_apply_failed": "Login configuration failed",
       "sudo_apply_failed": "Sudo configuration failed",
       "revocation_pending": "Lock or Destroy waiting",
-      "revocation_expired": "Lock or Destroy expired"
+      "revocation_expired": "Lock or Destroy expired",
+      "agent_rollback_pending": "Agent rollback pending"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1395,7 +1397,8 @@
       "login_apply_failed": "Open device",
       "sudo_apply_failed": "Open device",
       "revocation_pending": "Open device",
-      "revocation_expired": "Open device"
+      "revocation_expired": "Open device",
+      "agent_rollback_pending": "Open device"
     },
     "more": "+{count}",
     "empty": {
