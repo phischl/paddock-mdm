@@ -93,7 +93,10 @@ func TestLeftoverReleaseSweptAtStart(t *testing.T) {
 	if _, err := New(a.d); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _ = PlanCurrent(context.Background(), a.d.Layout)
+	// PlanCurrent must get past Load and New, or the check below proves nothing.
+	if _, _, err := PlanCurrent(context.Background(), a.d.Layout); err == nil || err.Error() != "no applied bundle" {
+		t.Fatalf("PlanCurrent = %v, want the no-applied-bundle error", err)
+	}
 	if _, err := os.Stat(release); err != nil {
 		t.Fatalf("New or PlanCurrent removed a staged release: %v", err)
 	}
