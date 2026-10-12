@@ -136,6 +136,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Secret scan of pull requests (PDK-068): `make scan-secrets-diff` also scans every blob the pull request adds, so a
+  binary file with a secret that the pull request adds and removes again, which gitleaks' history scan skips, fails
+  the CI job `secrets`. A file over 100 MB fails the scan instead of being skipped.
 - Agent versions compare by SemVer order, not as text or for equality (PDK-025): the attention list flags a device
   as `agent_outdated` only when its agent is older than the current release, and the server offers a device an agent
   update only when the release is newer than its agent, so a device that is ahead of the last completed rollout is

@@ -722,31 +722,72 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 	fi; \
 	exit $$rc
 
-# Second layer for pull requests: the current content of every file the pull request changes against its merge
-# base, merge commits included (PDK-057).
+# Second layer for pull requests, two views of <merge base>..HEAD with the same configuration and ignore handling:
+# layer 0 holds the current content of every file the pull request changes, merge commits included (PDK-057), and the
+# layers from 1 on every blob the range adds (PDK-068). gitleaks' git mode skips binary patches, so a binary file with
+# a secret that a later commit of the pull request removes again was seen by neither the history scan nor layer 0.
+# The blobs come from the raw diff of every commit in the range against each parent, so each new blob is written under
+# every path it was added at and the base's path allowlists and fingerprints apply as in layer 0; blobs that share a
+# path go into separate layers, each scanned from its own root. Only pull request ranges pay for this: the history
+# scan of main (scan-secrets) is unchanged. A file over GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over
+# 100 MiB) fails the scan instead of being skipped by --max-target-megabytes.
 GITLEAKS_DIFF_BASE ?= origin/main
+GITLEAKS_MAX_MB = 100
 
-scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE (catches secrets added in merges)
+scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE and every blob added since then
 	@repo='$(GITLEAKS_REPO)'; \
 	base=$$(git -C "$$repo" merge-base '$(GITLEAKS_DIFF_BASE)' HEAD) || exit 1; \
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
 	$(gitleaks_config); \
 	git -C "$$repo" diff -z --name-only --diff-filter=d "$$base"..HEAD >"$$tmp/files" || exit 1; \
-	n=0; mkdir "$$tmp/src"; \
+	n=0; mkdir -p "$$tmp/scan/0" || exit 1; \
 	while IFS= read -r -d '' f; do \
 		if [ -f "$$repo/$$f" ] || [ -L "$$repo/$$f" ]; then \
-			(cd "$$repo" && cp -P --parents -- "$$f" "$$tmp/src/") || exit 1; n=$$((n + 1)); fi; \
+			(cd "$$repo" && cp -P --parents -- "$$f" "$$tmp/scan/0/") || exit 1; n=$$((n + 1)); fi; \
 	done <"$$tmp/files"; \
-	ign="$$tmp/src/.gitleaksignore"; \
-	if [ -e "$$ign" ] || [ -L "$$ign" ]; then \
-		if [ -e "$$ign.changed" ] || [ -L "$$ign.changed" ]; then echo "scan-secrets-diff: .gitleaksignore.changed" \
-			"is reserved for scanning a changed .gitleaksignore" >&2; exit 1; fi; \
-		mv -- "$$ign" "$$ign.changed" || exit 1; fi; \
-	echo "scan-secrets-diff: $$n file(s) changed in $$base..HEAD"; \
-	if [ "$$n" -eq 0 ]; then echo "scan-secrets-diff: nothing to scan"; exit 0; fi; \
-	docker run --rm -v "$$tmp/src:/scan:ro" -v "$$tmp/cfg:/cfg:ro" -w /scan $(GITLEAKS_IMAGE) \
-		dir . --config /cfg/gitleaks.toml --gitleaks-ignore-path /cfg/gitleaksignore --ignore-gitleaks-allow \
-		--no-banner --redact
+	git -C "$$repo" rev-list --objects --no-object-names "$$base"..HEAD >"$$tmp/objects" || exit 1; \
+	git -C "$$repo" cat-file --batch-check='%(objectname) %(objecttype)' <"$$tmp/objects" >"$$tmp/types" || exit 1; \
+	if grep -qvE '^[0-9a-f]+ (blob|tree|commit|tag)$$' "$$tmp/types"; then \
+		echo "$@: git cannot read every object of $$base..HEAD" >&2; exit 1; fi; \
+	declare -A new=() seen=(); \
+	while read -r id type; do if [ "$$type" = blob ]; then new[$$id]=1; fi; done <"$$tmp/types"; \
+	git -C "$$repo" log -z -m --root --no-renames --no-abbrev --raw --format= --diff-filter=d "$$base"..HEAD \
+		>"$$tmp/raw" || exit 1; \
+	b=0; layers=0; \
+	while IFS= read -r -d '' tok; do \
+		while [ "$${tok#$$'\n'}" != "$$tok" ]; do tok=$${tok#$$'\n'}; done; \
+		case $$tok in :*) ;; *) continue ;; esac; \
+		read -r _ _ _ id _ <<<"$$tok"; \
+		IFS= read -r -d '' p || { echo "$@: truncated raw diff of $$base..HEAD" >&2; exit 1; }; \
+		if [ -z "$${new[$$id]:-}" ] || [ -n "$${seen["$$id $$p"]:-}" ]; then continue; fi; \
+		seen["$$id $$p"]=1; \
+		case "/$$p/" in *//*|*/./*|*/../*) echo "$@: unsafe path in $$base..HEAD" >&2; exit 1 ;; esac; \
+		dir=.; case $$p in */*) dir=$${p%/*} ;; esac; \
+		k=1; while :; do \
+			d="$$tmp/scan/$$k"; fresh=; [ -d "$$d" ] || fresh=1; \
+			if mkdir -p -- "$$d/$$dir" 2>/dev/null && [ ! -e "$$d/$$p" ] && [ ! -L "$$d/$$p" ]; then break; fi; \
+			if [ -n "$$fresh" ]; then echo "$@: cannot write blob $$id" >&2; exit 1; fi; \
+			k=$$((k + 1)); \
+		done; \
+		git -C "$$repo" cat-file blob "$$id" >"$$d/$$p" || exit 1; \
+		b=$$((b + 1)); if [ "$$k" -gt "$$layers" ]; then layers=$$k; fi; \
+	done <"$$tmp/raw"; \
+	for d in "$$tmp/scan"/*; do \
+		ign="$$d/.gitleaksignore"; \
+		if [ -e "$$ign" ] || [ -L "$$ign" ]; then \
+			if [ -e "$$ign.changed" ] || [ -L "$$ign.changed" ]; then echo "$@: .gitleaksignore.changed" \
+				"is reserved for scanning a changed .gitleaksignore" >&2; exit 1; fi; \
+			mv -- "$$ign" "$$ign.changed" || exit 1; fi; \
+	done; \
+	big=$$(find "$$tmp/scan" -type f -size +$(GITLEAKS_MAX_MB)000000c -printf '%P\n') || exit 1; \
+	if [ -n "$$big" ]; then echo "$@: files over $(GITLEAKS_MAX_MB) MB cannot be scanned:" >&2; \
+		printf '  %s\n' "$$big" >&2; exit 1; fi; \
+	echo "$@: $$n file(s) changed and $$b blob(s) added in $$base..HEAD ($$layers blob layer(s))"; \
+	if [ "$$n" -eq 0 ] && [ "$$b" -eq 0 ]; then echo "$@: nothing to scan"; exit 0; fi; \
+	docker run --rm -v "$$tmp/scan:/scan:ro" -v "$$tmp/cfg:/cfg:ro" --entrypoint /bin/sh $(GITLEAKS_IMAGE) -c \
+		'rc=0; for d in /scan/*; do cd "$$d" || exit 1; echo "$@: layer $${d#/scan/}"; \
+		gitleaks dir . --config /cfg/gitleaks.toml --gitleaks-ignore-path /cfg/gitleaksignore --ignore-gitleaks-allow \
+		--max-target-megabytes $(GITLEAKS_MAX_MB) --no-banner --redact || rc=1; done; exit $$rc'
 
 scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tree
 	mkdir -p $(TRIVY_CACHE)

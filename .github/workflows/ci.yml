@@ -51,7 +51,8 @@ jobs:
           base="$(git merge-base "origin/$BASE_REF" HEAD)"
           make scan-secrets GITLEAKS_LOG_OPTS="$base..HEAD" GITLEAKS_CONFIG_REF="$base"
       - name: Scan the files the pull request changes, merge commits included
-        # An independent second view (PDK-057): the final content of every changed file, merge resolutions included.
+        # An independent second view (PDK-057): the final content of every changed file, merge resolutions included,
+        # and every blob the pull request adds, binary content included (PDK-068).
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}

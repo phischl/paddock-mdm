@@ -1,12 +1,16 @@
 # Secret scan
 
 The CI job `secrets` runs gitleaks on every pull request and on every push to `main`. Locally, `make scan-secrets`
-scans the history of the current branch and `make scan-secrets-diff` the files changed since `origin/main`.
+scans the history of the current branch and `make scan-secrets-diff` the files changed and the blobs added since
+`origin/main`.
 
 ## What a pull request is scanned with
 
 - `make scan-secrets` scans the pull request's own commits, merge commits included (`--remerge-diff`, PDK-057).
-- `make scan-secrets-diff` scans the final content of every file the pull request changes.
+- `make scan-secrets-diff` scans the final content of every file the pull request changes and every blob the pull
+  request adds, also versions a later commit replaced or removed (PDK-068). The history scan skips binary content, so
+  a binary file with a secret that the pull request adds and deletes again is caught here. A file over 100 MB fails
+  the scan instead of being skipped.
 - Both read `.gitleaks.toml` and `.gitleaksignore` from the pull request's merge base (`GITLEAKS_CONFIG_REF`, PDK-065).
   A pull request that changes either file is scanned with the base's version. An allowlist for a new false positive
   therefore lands in its own pull request first, and the pull request with the flagged content follows once it is
