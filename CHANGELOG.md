@@ -148,6 +148,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Agent supervisor after a manual flip back (review of PDK-043): when the supervisor restarted before it could record
+  a failed rollback in `probation.json` and `current` already points at the previous version, it now confirms the
+  flip back and reports `rolled_back` instead of dropping the probation and leaving `rollback_failed` as the device's
+  last report.
 - Secret scan of pull requests (PDK-068): `make scan-secrets-diff` also scans every blob the pull request adds, so a
   binary file with a secret that the pull request adds and removes again, which gitleaks' history scan skips, fails
   the CI job `secrets`. A file over 100 MB fails the scan instead of being skipped. Files that

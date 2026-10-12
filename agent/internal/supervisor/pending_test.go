@@ -327,3 +327,33 @@ func TestRestartBeforeThePendingRollbackIsRecorded(t *testing.T) {
 		t.Fatalf("result %+v, current %s; want the first result %+v on B", r, f.active(), failed)
 	}
 }
+
+// TestRestartOnThePreviousSlotBeforeThePendingRollbackIsRecorded (review 2 of PDK-043): the same restart with current
+// already on the previous slot (an operator flipped by hand, or a retry's rename landed before a crash) does not drop
+// the undecided log: the result names the release as rollback_failed, so the supervisor confirms the flip back as
+// durable and concludes rolled_back (ADR 0024 rule 5).
+func TestRestartOnThePreviousSlotBeforeThePendingRollbackIsRecorded(t *testing.T) {
+	f := newFake(t)
+	f.resumeFailingProbation(func(time.Duration) {})
+	broken := f.failLogWrites()
+	f.blockFlip()
+	f.start()
+	failed := f.waitResult(10 * time.Second)
+	if failed.Outcome != outcomeRollbackFailed {
+		t.Fatalf("result %+v", failed)
+	}
+	f.stop()
+	f.expectUndecidedLog()
+	broken.Store(false)
+	f.unblockFlip()
+	if err := flip(f.cfg.Slots, "A", syncDir); err != nil {
+		t.Fatal(err)
+	}
+	f.runRecordingPID("A")
+	f.start()
+	if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || r.At.Equal(failed.At) || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.waitNoProbationLog()
+	f.waitAgentRuns("A")
+}

@@ -96,15 +96,16 @@ func (s *Supervisor) resumeProbation() {
 		s.dropProbation("")
 		return
 	}
-	// An undecided log on ToSlot whose release the result names as rollback_failed or rolled_back is a decision that
-	// the log could not record before the restart (recordPending): it is resumed, not decided anew (PDK-058). Once the
-	// agent has delivered and deleted that result, the decision is no longer visible.
+	// An undecided log whose release the result names as rollback_failed or rolled_back is a decision that the log
+	// could not record before the restart (recordPending): it is resumed, not decided anew (PDK-058), with current on
+	// ToSlot as on FromSlot, where a retry's flip or a manual one landed (ADR 0024 rule 5). Once the agent has
+	// delivered and deleted that result, the decision is no longer visible.
 	var res struct {
 		Version, Outcome string
 		At               time.Time
 	}
-	if data, err := os.ReadFile(s.cfg.Result); p.Outcome == "" && s.activeSlot() == p.ToSlot && err == nil && json.Unmarshal(data, &res) == nil &&
-		res.Version == p.Version && (res.Outcome == outcomeRollbackFailed || res.Outcome == outcomeRolledBack) {
+	if data, err := os.ReadFile(s.cfg.Result); p.Outcome == "" && (s.activeSlot() == p.ToSlot || s.activeSlot() == p.FromSlot) && err == nil &&
+		json.Unmarshal(data, &res) == nil && res.Version == p.Version && (res.Outcome == outcomeRollbackFailed || res.Outcome == outcomeRolledBack) {
 		p.Outcome, p.DecidedAt, p.RollbackPending = res.Outcome, res.At, res.Outcome == outcomeRollbackFailed
 		p.unrecorded = writeJSON(s.cfg.ProbationLog, &p, s.cfg.SyncFile) != nil
 	}
