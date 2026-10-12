@@ -3007,7 +3007,7 @@ export interface components {
         OverviewAgent: {
             /** @description The release of the most recently completed rollout. */
             current_version: string | null;
-            /** @description Active devices whose agent_version equals current_version. */
+            /** @description Active devices whose agent_version has the same semantic version precedence as current_version (build metadata ignored). */
             on_current: number;
             /**
              * @description Active devices whose agent_version is older than current_version by SemVer precedence, or is no semantic

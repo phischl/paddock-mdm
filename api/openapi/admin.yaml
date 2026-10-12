@@ -4730,7 +4730,7 @@ components:
       required: [current_version, on_current, outdated, ahead, unknown, latest_published, rollout]
       properties:
         current_version: { type: string, nullable: true, description: "The release of the most recently completed rollout." }
-        on_current: { type: integer, description: "Active devices whose agent_version equals current_version." }
+        on_current: { type: integer, description: "Active devices whose agent_version has the same semantic version precedence as current_version (build metadata ignored)." }
         outdated:
           type: integer
           description: |
