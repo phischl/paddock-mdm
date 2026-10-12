@@ -28,6 +28,7 @@ const (
 	CodeDeviceAgentUpdated         Code = "device.agent_updated"
 	CodeDeviceAgentUpdateFailed    Code = "device.agent_update_failed"
 	CodeDeviceAgentRolledBack      Code = "device.agent_rolled_back"
+	CodeDeviceAgentRollbackFailed  Code = "device.agent_rollback_failed"
 	CodeDeviceAgentEventsDropped   Code = "device.agent_events_dropped"
 	CodeManagedFileCreated         Code = "managed_file.created"
 	CodeManagedFileUpdated         Code = "managed_file.updated"
@@ -286,13 +287,20 @@ var registry = map[Code]Definition{
 		Description: "A device's supervisor refused an agent release before switching: invalid signature, not newer than the active version, or failed self-test (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "outcome is signature_invalid (also a signed comment that does not name the version and architecture), downgrade_refused or self_test_failed.",
+		Note:        "outcome is signature_invalid (also a signed comment that does not name the version and architecture), downgrade_refused or self_test_failed. The outcome rollback_failed is recorded as device.agent_rollback_failed instead (ADR 0024); servers older than that decision recorded it here.",
 	},
 	CodeDeviceAgentRolledBack: {
 		Code: CodeDeviceAgentRolledBack, Emitted: true,
 		Description: "A device's supervisor rolled a new agent version back because it crashed or did not report healthy within its probation (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
+	},
+	CodeDeviceAgentRollbackFailed: {
+		Code: CodeDeviceAgentRollbackFailed, Emitted: true,
+		Description: "A new agent version failed its probation on a device and the supervisor's flip back to the previous version failed; the device keeps running the new version and retries the rollback until it succeeds (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Reported as agent.update_failed with outcome rollback_failed (ADR 0024); device.agent_rolled_back follows once the rollback succeeds.",
 	},
 	CodeDeviceAgentEventsDropped: {
 		Code: CodeDeviceAgentEventsDropped, Emitted: true,
