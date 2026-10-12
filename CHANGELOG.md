@@ -101,6 +101,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names its renamed path (`creds.bin.scan`, `assets.png.scan/…`, `creds.docx.zip!…`). A pull request that changes both
   `creds.bin` and `creds.bin.scan` fails the scan. The CI job `secrets` now stops after 30 minutes.
 
+- Secret scan documentation (PDK-074): `docs/operations/secret-scan.md` lists the default gitleaks path entries that
+  still skip whole files and directories in `make scan-secrets-diff` (for example `gitleaks.toml`, `go.mod`,
+  `package-lock.json`, `node_modules`, `venv/lib`, `Database.refactorlog`), as probed with gitleaks v8.30.1. It covers
+  matches anywhere in a path, matches that span two directories, and which entries ignore case. It also states that
+  changes to `.gitleaks.toml` itself are not scanned and that review is the backstop for such paths. The scan itself
+  is unchanged.
+
 - Agent release signing moves into the release workflow (ADR 0006 amendment 2026-10-11): a new job `sign` in the
   protected GitHub environment `release` (tags `v*` only, maintainer approval for every run), which runs only after the
   smoke test passed, signs `paddockd` for
