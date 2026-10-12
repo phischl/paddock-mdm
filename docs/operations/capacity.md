@@ -102,15 +102,8 @@ with page size 100, and 126 ms with `kind=agent_outdated` and page size 25. Thes
 query execution time, not the HTTP p95 the target refers to. Whether the target is met is decided by the HTTP
 measurement after the change (PDK-091).
 
-**Remaining hot spots** (open follow-ups):
-
-- `/api/v1/attention/devices?kind=agent_outdated` takes about 290 ms (list plus count). `/api/v1/attention/devices`
-  takes about 195 ms. The remaining cost is the PL/pgSQL `paddock_version_key(agent_version)`, which runs per device
-  row, about 48 ms per 10 000 rows. The grouped list reads the view twice, and `OverviewUpdates` evaluates the key
-  three times per row. With a precomputed key per device, the `agent_outdated` branch measured about 6 ms instead of
-  53 ms. PDK-090: a stored key at check-in, or an inlinable SQL implementation.
-- `/api/v1/overview` still takes about 620 ms of query time. `OverviewDevices` takes 385 ms of it:
-  `paddock_device_contact()` probes `device_alert` twice per device. PDK-089.
+**Remaining hot spots:** none open. The per-device version key was closed by PDK-090 and the device contact state by
+PDK-089 (both below).
 
 **After PDK-089.** Measured on 2026-10-12 on the same machine and development stack with a new load organization of
 **10 000 active devices**, enrolled with `make load-identities` and checked in once each with
@@ -135,6 +128,36 @@ shows the inlined `CASE`). The buckets are identical before and after (10 000 ac
 the list (25 rows) and the count (10 000). On the same fleet before the devices went stale (no open alerts), the
 medians were 414 ms to 11 ms, 89 ms to 8 ms and 96 ms to 5 ms. The HTTP figures of `GET /api/v1/overview` after this
 change are measured with those of PDK-027 once both are merged and deployed (PDK-091).
+
+**After PDK-090.** Measured on 2026-10-12 on the same machine and development stack. The fleet had the PDK-027 shape
+against the current release `0.3.1791801809-probation`: **10 000 active devices**, 4 000 on it, 3 000 older (`0.2.0`,
+`0.1.9`, `0.0.0-load`), 2 000 newer (`9.0.0`, `10.1.0`) and 1 000 with no semantic version (`dev-build`), each with an
+open `stale_warning`, so the attention list had 14 000 conditions. Unlike the earlier runs, the fleet was not enrolled
+through the API: it was inserted into a new organization inside the measuring transaction, which was rolled back, so
+the shared database kept no devices and the unmerged migration never reached it. Before, `paddock_version_key()`
+(PL/pgSQL, migration 00039) ran once per device row in the `agent_outdated` branch of `attention_condition` and three
+times per row in `OverviewUpdates`. Migration `00044` (ADR 0028) stores the key per device as the generated column
+`device_status.agent_version_key`, computed when a device checks in, and both queries compare that column. The only
+remaining call computes the current release's key, once per query.
+
+`EXPLAIN (ANALYZE, BUFFERS)` medians of 5 runs as the API role in the organization's scope. Before is the view of
+migration `00042`. After is migration `00044`, applied in the same transaction on the same data. These are query
+execution times, not HTTP latencies:
+
+| Query (endpoint) | Before | After |
+| --- | --- | --- |
+| `ListAttentionDevices` `kind=agent_outdated`, 25 (`/attention/devices`) | 278 ms | 160 ms |
+| `CountAttentionDevices` `kind=agent_outdated` | 66 ms | 15 ms |
+| `OverviewUpdates` (`/overview`) | 151 ms | 7 ms |
+| `OverviewAttention` (`/overview`) | 68 ms | 23 ms |
+
+The query time of `/api/v1/attention/devices?page_size=25&kind=agent_outdated` (list plus count) drops from 344 ms to
+174 ms. The results are identical before and after: the same 25 devices on the first page, 4 000 matching devices,
+the buckets 4 000 on current, 4 000 outdated, 2 000 ahead and 0 unknown, and 14 000 conditions on 10 000 devices. After
+the migration, `agent_version_key` equals `paddock_version_key(agent_version)` for every device in the database (dev
+seed and fleet). Of the remaining list time, about 90 ms is spent in the view's alert branch (the 10 000 open
+`stale_warning` alerts) under the kind filter; no function runs per device row any more. The HTTP figures after this change are
+measured with those of PDK-027 and PDK-089 once all three are merged and deployed (PDK-091).
 
 ## Method
 
