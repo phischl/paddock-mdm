@@ -804,9 +804,13 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 # a secret that a later commit of the pull request removes again was seen by neither the history scan nor layer 0.
 # The blobs come from the raw diff of every commit in the range against each parent, so each new blob is written under
 # every path it was added at and the base's path allowlists and fingerprints apply as in layer 0; blobs that share a
-# path go into separate layers, each scanned from its own root. Only pull request ranges pay for this: the history
-# scan of main (scan-secrets) is unchanged. A file over GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over
-# 100 MiB) fails the scan instead of being skipped by --max-target-megabytes.
+# path go into separate layers, each scanned from its own root. A path's search for a free layer starts after the layer
+# its last blob went to: layers only gain files and directories, so one that could not take the path never can later
+# (PDK-072). Each placed blob reserves its path with an empty file, so the collision checks see it, and one
+# `git cat-file --batch` fills them all; its output must match the requested blobs one by one or the scan fails.
+# Only pull request ranges pay for this: the history scan of main (scan-secrets) is unchanged. A file over
+# GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over 100 MiB) fails the scan instead of being skipped by
+# --max-target-megabytes.
 # gitleaks identifies archives by name only, so a changed file or blob whose name ends, case-insensitively, in one of
 # GITLEAKS_ZIP_EXT is written with the suffix .zip (creds.docx is scanned as creds.docx.zip) and one ending in .tgz
 # with the suffix .tar.gz, and archives are opened one level deep (--max-archive-depth 1; nested archives and other
@@ -853,11 +857,11 @@ scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE a
 	git -C "$$repo" cat-file --batch-check='%(objectname) %(objecttype)' <"$$tmp/objects" >"$$tmp/types" || exit 1; \
 	if grep -qvE '^[0-9a-f]+ (blob|tree|commit|tag)$$' "$$tmp/types"; then \
 		echo "$@: git cannot read every object of $$base..HEAD" >&2; exit 1; fi; \
-	declare -A new=() seen=(); \
+	declare -A new=() seen=() free=(); \
 	while read -r id type; do if [ "$$type" = blob ]; then new[$$id]=1; fi; done <"$$tmp/types"; \
 	git -C "$$repo" log -z -m --root --no-renames --no-abbrev --raw --format= --diff-filter=d "$$base"..HEAD \
 		>"$$tmp/raw" || exit 1; \
-	b=0; layers=0; \
+	b=0; layers=0; ids=(); dests=(); \
 	while IFS= read -r -d '' tok; do \
 		while [ "$${tok#$$'\n'}" != "$$tok" ]; do tok=$${tok#$$'\n'}; done; \
 		case $$tok in :*) ;; *) continue ;; esac; \
@@ -868,15 +872,28 @@ scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE a
 		seen["$$id $$sn"]=1; \
 		case "/$$p/" in *//*|*/./*|*/../*) echo "$@: unsafe path in $$base..HEAD" >&2; exit 1 ;; esac; \
 		dir=.; case $$sn in */*) dir=$${sn%/*} ;; esac; \
-		k=1; while :; do \
+		k=$${free["$$sn"]:-1}; while :; do \
 			d="$$tmp/scan/$$k"; fresh=; [ -d "$$d" ] || fresh=1; \
-			if mkdir -p -- "$$d/$$dir" 2>/dev/null && [ ! -e "$$d/$$sn" ] && [ ! -L "$$d/$$sn" ]; then break; fi; \
+			if { [ -d "$$d/$$dir" ] || mkdir -p -- "$$d/$$dir" 2>/dev/null; } && [ ! -e "$$d/$$sn" ] && \
+				[ ! -L "$$d/$$sn" ]; then break; fi; \
 			if [ -n "$$fresh" ]; then echo "$@: cannot write blob $$id" >&2; exit 1; fi; \
 			k=$$((k + 1)); \
 		done; \
-		git -C "$$repo" cat-file blob "$$id" >"$$d/$$sn" || exit 1; \
+		free["$$sn"]=$$((k + 1)); \
+		: >"$$d/$$sn" || exit 1; ids+=("$$id"); dests+=("$$d/$$sn"); \
 		b=$$((b + 1)); if [ "$$k" -gt "$$layers" ]; then layers=$$k; fi; \
 	done <"$$tmp/raw"; \
+	if [ "$$b" -gt 0 ]; then \
+		printf '%s\n' "$${ids[@]}" | git -C "$$repo" cat-file --batch >"$$tmp/blobs" || exit 1; \
+		exec 3<"$$tmp/blobs" || exit 1; \
+		for i in "$${!ids[@]}"; do \
+			read -r oid type size <&3 && [ "$$oid $$type" = "$${ids[i]} blob" ] && \
+				case $$size in ''|*[!0-9]*) false ;; esac && head -c "$$size" <&3 >"$${dests[i]}" && \
+				IFS= read -r nl <&3 && [ -z "$$nl" ] || \
+				{ echo "$@: git cat-file --batch did not return blob $${ids[i]} as requested" >&2; exit 1; }; \
+		done; \
+		exec 3<&-; rm -f -- "$$tmp/blobs"; \
+	fi; \
 	for d in "$$tmp/scan"/*; do \
 		ign="$$d/.gitleaksignore"; \
 		if [ -e "$$ign" ] || [ -L "$$ign" ]; then \
