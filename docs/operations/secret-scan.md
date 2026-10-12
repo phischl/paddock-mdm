@@ -30,7 +30,10 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
   (`deploy/compose/scripts/gitleaks-patterns.go`, run in the pinned Go image without network; it adds a few seconds
   to each scan), so a pattern means there what it means to gitleaks; RE2 has no lookaround, so `(?=…)` is refused.
   What an allowlist means stays the code owners' review: broad patterns that do not match the empty string, such as
-  `\b`, `.` or `[\s\S]`, pass the check, and a reviewer reads them as "everything".
+  `\b`, `.` or `[\s\S]`, pass the check, and a reviewer reads them as "everything". The same holds for negated classes
+  such as `^[^…]` and for patterns built around the canary, for example the path `^[^nv./]` (which the canary's
+  path chosen per run still catches) or the regex `^(?:[^g]|g[^h])` (every secret that does not start with `gh`):
+  they are broad, and code-owner review has to read them that way.
 
 ## The scan configuration
 
@@ -54,7 +57,8 @@ entries. Both scans therefore run a configuration generated for each run (ADR 00
    points at the stripped default (`[extend] path`). The file in the repository keeps `useDefault = true`, so a
    plain `gitleaks` call and editor plugins behave as before.
 5. A canary run of the generated configuration must report a fake token, generated per run and never printed, under
-   `node_modules/` and `vendor/github.com/`, names the default skipped. Otherwise the scan fails with "the generated
+   `node_modules/` and `vendor/github.com/`, names the default skipped, and under an ordinary path chosen per run
+   (`src/<random>/canary.txt`). Otherwise the scan fails with "the generated
    configuration lost its rules or path coverage".
 
 Every file is therefore scanned by content, under its own path, apart from the magic-byte skip below and the
@@ -105,16 +109,11 @@ therefore change how it is scanned, or skip the scan, and no setting inside the 
 integrity rests on code review of `.github/`, the `Makefile`, `deploy/compose/versions.env` and
 `deploy/compose/scripts/`.
 
-`.github/CODEOWNERS` names a reviewer for these paths and for `.gitleaks.toml` and `.gitleaksignore`. GitHub enforces
-code owners only once branch protection (or a ruleset) on `main` requires a review from code owners; that is a setting
-of the maintainer. Recommended for `main`:
-
-- require a pull request with an approving review from code owners;
-- require the status checks `secrets` (and the other CI jobs) to pass before merging.
-
-Until those settings are on, a reviewer has to check every change to the paths above by hand.
+`.github/CODEOWNERS` names a reviewer for these paths and for `.gitleaks.toml` and `.gitleaksignore`. A branch ruleset
+on `main`, a setting of the maintainer, enforces this: every change to `main` needs a pull request with an approving
+code-owner review and the passing checks `lint`, `test`, `secrets`, `trivy`, `web` and `acceptance`. An admin bypass
+exists for the pull requests of the single maintainer. Tags `v*` can only be created by admins.
 
 A direct push to `main` bypasses the pull request scans: only the history scan sees it, and the history scan sees no
 binary content and opens no archives (git shows no binary patches). There is no periodic blob scan of `main` to make
-up for that (ADR 0026); the gap is closed by the branch protection above, which makes every change to `main` a pull
-request.
+up for that (ADR 0026); the gap is closed by the ruleset above, which makes every change to `main` a pull request.

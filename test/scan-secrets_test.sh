@@ -538,6 +538,32 @@ for shape in extend-path extend-path-dotted disabled-rules url subtable use-defa
   done
 done
 
+# A base allowlist built around the fixed canary paths passes the whitelist and the pattern check, but the canary under
+# an ordinary path chosen per run is allowlisted by it, so both scans fail before gitleaks reads the pull request.
+g switch -q -c config-canary-tailored "$base"
+printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "d"\npaths = [%s]\n' "'''^[^nv./]'''" \
+  >"$r/.gitleaks.toml"
+g commit -q -am 'a base configuration built around the canary paths'
+tailored="$(g rev-parse HEAD)"
+printf 'harmless\n' >"$r/tailored.txt"
+g add tailored.txt
+g commit -q -m 'a harmless change'
+for target in scan-secrets scan-secrets-diff; do
+  rc=0
+  last_out="$(make --no-print-directory -C "$root" "$target" GITLEAKS_REPO="$r" GITLEAKS_LOG_OPTS="$tailored..HEAD" \
+    GITLEAKS_DIFF_BASE="$tailored" GITLEAKS_CONFIG_REF="$tailored" 2>&1)" || rc=$?
+  if ((rc != 0)) && grep -qF "the generated configuration lost its rules or path coverage" <<<"$last_out"; then
+    echo "ok   a base allowlist built around the canary paths ($target) (fail)"
+  else
+    echo "FAIL a base allowlist built around the canary paths ($target): exit $rc, want a failed canary"
+    failures=$((failures + 1))
+  fi
+  if grep -qE 'commits scanned|: layer ' <<<"$last_out"; then
+    echo "FAIL a base allowlist built around the canary paths ($target): gitleaks ran on the pull request"
+    failures=$((failures + 1))
+  fi
+done
+
 # The strip of the default's global paths, run on crafted defaults through its test seam: the multi-line array is
 # removed and the rest kept; a default whose global allowlist keeps paths in any key form (single-line, dotted, in an
 # inline table, in other case) or that has no rules fails.
@@ -601,6 +627,14 @@ for kind in no-rules node-modules-skipped token-rule; do
     failures=$((failures + 1))
   fi
 done
+
+# A Go pattern check that cannot run (here: an image without go) fails the scan with its own message.
+gitleaks_image="$(sed -n 's/^GITLEAKS_IMAGE=//p' "$root/deploy/compose/versions.env")"
+g switch -q pr-pins
+rc=0
+out="$(make --no-print-directory -C "$root" scan-secrets-diff GITLEAKS_REPO="$r" GITLEAKS_DIFF_BASE="$base" \
+  GITLEAKS_CONFIG_REF="$base" GO_BUILD_IMAGE="$gitleaks_image" 2>&1)" || rc=$?
+verdict "a Go pattern check that cannot run (scan-secrets-diff)" fail "the Go pattern check could not run" "$rc" "$out"
 
 # The verdicts of the Go pattern check fail closed: none, too few, or one for another pattern refuse the
 # configuration.

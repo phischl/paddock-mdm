@@ -683,12 +683,13 @@ GITLEAKS_REPO ?= $(CURDIR)
 # Go's regexp, the engine gitleaks uses, in GO_BUILD_IMAGE without network, and refuses one that does not compile or
 # matches the empty string (and so everything). Before either scan reads PR content, a canary run of the generated
 # configuration must report a fake token, generated per run and never printed, under node_modules/ and vendor/, paths
-# the default's global allowlist skipped: a configuration that lost its rules or path coverage fails.
+# the default's global allowlist skipped, and under an ordinary path chosen per run: a configuration that lost its
+# rules or path coverage fails.
 # What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
 # scanned. The scan's integrity therefore rests on code review of .github/, the Makefile and
 # deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE and its default configuration);
-# CODEOWNERS names a reviewer for them, but GitHub enforces that only once branch protection requires code-owner
-# review, a setting of the maintainer (docs/operations/secret-scan.md).
+# CODEOWNERS names a reviewer for them, and the branch ruleset on main requires that review
+# (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
 GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
 GITLEAKS_CHILD_CONFIG = python3 $(CURDIR)/deploy/compose/scripts/gitleaks-child-config.py
@@ -701,17 +702,20 @@ gitleaks_strip_default = awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
 	$(GITLEAKS_CHILD_CONFIG) verify-default $(2) || { echo "$@: $(3) after the strip is not a default with rules and" \
 		"without global paths; its layout changed and must be looked at (ADR 0026)" >&2; exit 1; }
 # gitleaks_canary,<config dir>,<its path in the container>: the configuration in <config dir> must report a fake
-# GitHub token under node_modules/ and vendor/github.com/.
+# GitHub token under node_modules/, vendor/github.com/ and an ordinary path chosen per run, so that an allowlist built
+# around the fixed canary paths (^[^nv./]) still fails it.
 GITLEAKS_CANARY = node_modules/canary.txt vendor/github.com/canary/canary.txt
-gitleaks_canary = mkdir -p "$$tmp/canary/node_modules" "$$tmp/canary/vendor/github.com/canary" "$$tmp/canary-out" || \
-		exit 1; \
-	for f in $(GITLEAKS_CANARY); do \
+gitleaks_canary = rnd=$$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8); \
+	canaries="$(GITLEAKS_CANARY) src/$$rnd/canary.txt"; \
+	for f in $$canaries; do \
+		mkdir -p -- "$$tmp/canary/$${f%/*}" || exit 1; \
 		printf 'GITHUB_TOKEN=ghp_%s\n' "$$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)" \
 			>"$$tmp/canary/$$f" || exit 1; done; \
+	mkdir -p "$$tmp/canary-out" || exit 1; \
 	docker run --rm --user "$$(id -u):$$(id -g)" -v $(1):$(2):ro -v "$$tmp/canary:/canary:ro" \
 		-v "$$tmp/canary-out:/out" -w /canary $(GITLEAKS_IMAGE) dir . --config $(2)/gitleaks.toml --no-banner \
 		--redact --exit-code 0 --report-format json --report-path /out/report.json >"$$tmp/canary-out/log" 2>&1; \
-	if ! $(GITLEAKS_CHILD_CONFIG) canary "$$tmp/canary-out/report.json" $(GITLEAKS_CANARY); then \
+	if ! $(GITLEAKS_CHILD_CONFIG) canary "$$tmp/canary-out/report.json" $$canaries; then \
 		echo "$@: the generated configuration lost its rules or path coverage (ADR 0026); gitleaks said:" >&2; \
 		sed -E 's/\x1b\[[0-9;]*m//g' "$$tmp/canary-out/log" >&2; exit 1; fi; \
 	rm -rf -- "$$tmp/canary" "$$tmp/canary-out"
@@ -732,8 +736,10 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 			"accepts (ADR 0026, amendment 2026-10-12)" >&2; exit 1; }; \
 	docker run --rm -i --network none -e GOFLAGS= -e GOTOOLCHAIN=local -v "$(GITLEAKS_PATTERNS_CHECK):/p.go:ro" \
 		$(GO_BUILD_IMAGE) go run /p.go <"$$tmp/patterns.json" >"$$tmp/verdicts.jsonl" 2>"$$tmp/patterns.err"; prc=$$?; \
-	if [ "$$prc" -ne 0 ] || ! $(GITLEAKS_CHILD_CONFIG) patterns "$$tmp/patterns.json" "$$tmp/verdicts.jsonl"; then \
-		cat -- "$$tmp/patterns.err" >&2; \
+	if [ "$$prc" -ne 0 ]; then cat -- "$$tmp/patterns.err" >&2; \
+		echo "$@: the Go pattern check could not run (exit $$prc, $(GO_BUILD_IMAGE)); the scan fails closed" >&2; \
+		exit 1; fi; \
+	if ! $(GITLEAKS_CHILD_CONFIG) patterns "$$tmp/patterns.json" "$$tmp/verdicts.jsonl"; then \
 		echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
 			"accepts: Go's regexp refuses an allowlist pattern (ADR 0026, amendment 2026-10-12)" >&2; exit 1; fi; \
 	pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256 (deploy/compose/versions.env)"; \

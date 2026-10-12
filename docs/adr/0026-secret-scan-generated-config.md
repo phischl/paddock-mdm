@@ -125,8 +125,10 @@ cannot be made sound, so decision 4 and the check of decision 3 change as follow
    paths`, `allowlist.paths`, an inline table, `Allowlist.Paths`).
 3. **Canary.** Before either scan reads pull request content, the pinned gitleaks runs the generated configuration
    over a temporary directory holding a fake GitHub token, generated per run and never printed, in
-   `node_modules/canary.txt` and `vendor/github.com/canary/canary.txt`, paths the default's global allowlist skipped.
-   Both must be reported, or the scan fails with "the generated configuration lost its rules or path coverage".
+   `node_modules/canary.txt` and `vendor/github.com/canary/canary.txt`, paths the default's global allowlist skipped,
+   and in `src/<random>/canary.txt`, an ordinary path chosen per run so that an allowlist built around the fixed
+   paths fails as well. All must be reported, or the scan fails with "the generated configuration lost its rules or
+   path coverage".
 
 What a reviewed allowlist means stays the responsibility of its code owners (`.gitleaks.toml` is in CODEOWNERS): the
 tool only guarantees that the configuration acts as it reads. It therefore also refuses the constructs that act
