@@ -190,6 +190,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Secret scan of pull requests (PDK-085, ADR 0027): the scan refuses a `.gitleaks.toml` allowlist with
+  `condition = "AND"` and `paths` unless it names `targetRules`. gitleaks' directory scan skipped every file under such
+  a global allowlist's path without applying its `regexes`, so `make scan-secrets-diff` missed secrets there that the
+  history scan reports. The repository's own allowlists already name their rules and are unchanged.
 - Fleet's vulnerability data in development and CI stacks (PDK-054, ADR 0009 amendment 2026-10-12): the development
   overlay passes Fleet direct URLs for its CPE dictionary, CPE translations and NVD feeds, so a fresh stack on a shared
   CI runner no longer waits on GitHub's anonymous API rate limit before the inventory gates find vulnerabilities. The

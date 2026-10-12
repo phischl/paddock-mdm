@@ -420,12 +420,11 @@ verdict "a file over GITLEAKS_MAX_MB (scan-secrets-diff)" fail "cannot be scanne
 # allowlists that act differently than they read (the third review): a pattern that is empty or matches the empty
 # string in Go's regexp (also \B and optional POSIX classes), alone or scoped by targetRules (a hidden disabledRules),
 # an empty pattern list, a pattern Go's regexp cannot compile (a lookahead), and stopwords, which gitleaks matches as
-# case-insensitive substrings of the secret.
-# The first review's probe now fails for its stopwords. Accepted: \pL, valid in RE2, and a multi-line basic string,
-# whose allowlists then apply exactly as written (neither covers the gen/ token), so the history scan finds the token.
-# They are not run through scan-secrets-diff: gitleaks v8.30.1's dir mode skips a file whose path an AND allowlist
-# matches without looking at the allowlist's regexes, with or without the generated configuration (a follow-up of
-# PDK-078).
+# case-insensitive substrings of the secret, and an AND allowlist with paths but no or empty targetRules (with regexes,
+# paths only, with commits; ADR 0027), whose path alone makes gitleaks' directory scan skip the whole file.
+# The first review's probe now fails for its stopwords. Accepted: \pL, valid in RE2, a multi-line basic string and an
+# AND allowlist scoped to generic-api-key, whose allowlists then apply exactly as written (none covers the gen/
+# token), so both scans find the token.
 config_case() {
   case $1 in
     extend-path) printf '[extend] # the default rules and more\nuseDefault = true\n"path" = "extra.toml"\n' ;;
@@ -489,25 +488,41 @@ EOF
     multi-line-basic)
       printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = """two\nlines"""\npaths = [%s]\n' \
         "'^gen/'"
-      printf 'condition = "AND"\nregexTarget = "secret"\nregexes = [%s]\n' "'^[0-9a-f]{64}$'"
+      printf 'condition = "AND"\nregexTarget = "secret"\nregexes = [%s]\ntargetRules = ["generic-api-key"]\n' \
+        "'^[0-9a-f]{64}$'"
       ;;
+    and-global | and-global-empty-target | and-scoped)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ncondition = "AND"\npaths = [%s]\n' "'''^gen/'''"
+      printf 'regexTarget = "secret"\nregexes = [%s]\n' "'''^[0-9a-f]{64}$'''"
+      case $1 in
+        and-global-empty-target) printf 'targetRules = []\n' ;;
+        and-scoped) printf 'targetRules = ["generic-api-key"]\n' ;;
+      esac
+      ;;
+    and-global-paths-only)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ncondition = "AND"\npaths = [%s]\n' "'''^gen/'''" ;;
+    and-global-commits)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ncondition = "AND"\npaths = [%s]\n' "'''^gen/'''"
+      printf 'commits = ["0123456789abcdef0123456789abcdef01234567"]\n' ;;
   esac
 }
 for shape in extend-path extend-path-dotted disabled-rules url subtable use-default-false upper-table upper-dotted \
   upper-quoted-path all-caps escaped bom second-extend stopwords-probe unknown-key wrong-type empty-path-scoped \
   empty-regex-scoped match-empty-path match-empty-regex empty-list lookahead not-word-boundary \
   posix-class negated-posix-class stopwords review-probe unicode-class \
-  multi-line-basic; do
+  multi-line-basic and-global and-global-paths-only and-global-commits and-global-empty-target and-scoped; do
   g switch -q -c "config-$shape" "$base"
   config_case "$shape" >"$r/.gitleaks.toml"
   g commit -q -am "a base configuration ($shape)"
   shaped="$(g rev-parse HEAD)"
+  if [[ "$shape" == and-scoped ]]; then and_scoped="$shaped"; fi
   mkdir -p "$r/gen"
   printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/gen/creds.env"
   g add gen/creds.env
   g commit -q -m 'add credentials under gen/'
   case $shape in
-    multi-line-basic | unicode-class) want=leak reason= ;;
+    multi-line-basic | unicode-class | and-scoped) want=leak reason= ;;
+    and-global*) want=fail reason="with paths but no targetRules" ;;
     review-probe) want=fail reason="allowlists[0] has the key 'stopwords'" ;;
     extend-path* | disabled-rules | url | subtable | use-default-false | escaped) want=fail
       reason="extend must be exactly {useDefault = true}" ;;
@@ -521,9 +536,7 @@ for shape in extend-path extend-path-dotted disabled-rules url subtable use-defa
     empty-list) want=fail reason="allowlists[0].paths is an empty list" ;;
     stopwords) want=fail reason="allowlists[0] has the key 'stopwords'" ;;
   esac
-  targets=(scan-secrets scan-secrets-diff)
-  if [[ "$want" == leak ]]; then targets=(scan-secrets); fi
-  for target in "${targets[@]}"; do
+  for target in scan-secrets scan-secrets-diff; do
     expect_pr "a base configuration ($shape)" "$want" "$target" "$shaped" "$shaped" "$reason"
     if [[ "$want" == fail ]]; then
       if ! grep -qF -- "is outside what the generated configuration accepts" <<<"$last_out"; then
@@ -535,6 +548,26 @@ for shape in extend-path extend-path-dotted disabled-rules url subtable use-defa
         failures=$((failures + 1))
       fi
     fi
+  done
+done
+
+# The rule-targeted AND allowlist under gen/ applies its regexes in both scans (ADR 0027): a 64-hex api_key it allows
+# passes, an api_key of the targeted rule that its regexes do not match is reported. The second value alternates letters
+# and digits so that no generic-api-key stopword can occur in it.
+for kind in hex alnum; do
+  g switch -q -c "config-and-scoped-$kind" "$and_scoped"
+  mkdir -p "$r/gen"
+  case $kind in
+    hex) value="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" want=pass ;;
+    alnum)
+      value="$(python3 -c 'import secrets,string as s; print("".join(secrets.choice(s.ascii_letters)+secrets.choice(s.digits) for _ in range(16)))')"
+      want=leak ;;
+  esac
+  printf 'api_key=%s\n' "$value" >"$r/gen/creds.env"
+  g add gen/creds.env
+  g commit -q -m "add a $kind api_key under gen/"
+  for target in scan-secrets scan-secrets-diff; do
+    expect_pr "the $kind api_key under a rule-targeted AND allowlist" "$want" "$target" "$and_scoped" "$and_scoped"
   done
 done
 
