@@ -95,6 +95,30 @@ tests:
               summary: "No audit writer consumes audit.writer"
               description: "audit.writer has had no consumer for 5 minutes; audit events wait in RabbitMQ."
 
+  - name: slow audit writer transactions warn after 5 minutes and resolve when they are fast again
+    interval: 1m
+    input_series:
+      - series: 'paddock_audit_writer_transaction_seconds_bucket{job="paddock-audit", role="paddock-audit-writer", result="committed", le="0.64"}'
+        values: "0x15 0+60x15"
+      - series: 'paddock_audit_writer_transaction_seconds_bucket{job="paddock-audit", role="paddock-audit-writer", result="committed", le="10.24"}'
+        values: "0+60x15 900+60x15"
+      - series: 'paddock_audit_writer_transaction_seconds_bucket{job="paddock-audit", role="paddock-audit-writer", result="committed", le="+Inf"}'
+        values: "0+60x15 900+60x15"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PaddockAuditWriterTransactionSlow
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: PaddockAuditWriterTransactionSlow
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Audit writer transaction p95 above 5 s"
+              description: "The 95th percentile of the audit writer's transactions is 9.76s; compare paddock_audit_worm_put_seconds to tell the WORM store from the database."
+      - eval_time: 28m
+        alertname: PaddockAuditWriterTransactionSlow
+        exp_alerts: []
+
   - name: OpenBao sealed, OSV stale, backups and certificates
     interval: 1m
     input_series:

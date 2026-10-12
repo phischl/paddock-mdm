@@ -84,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guide is rewritten for the bundle (download and signature check, `./paddock secrets|bootstrap|check|up`, first
   agent release, installing from source with a local bundle); ADR 0022 records the distribution decision. M7b adds no
   database migration.
+- Audit writer latency metrics (PDK-067): the histograms `paddock_audit_writer_transaction_seconds{result}` and
+  `paddock_audit_worm_put_seconds{object,result}` tell a slow WORM store from a slow audit database, and the warning
+  `PaddockAuditWriterTransactionSlow` fires when the writer's transaction p95 stays above 5 s for 5 minutes
+  (`docs/operations/monitoring.md`).
 
 ### Changed
 
@@ -136,6 +140,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Secret scan of pull requests (PDK-068): `make scan-secrets-diff` also scans every blob the pull request adds, so a
+  binary file with a secret that the pull request adds and removes again, which gitleaks' history scan skips, fails
+  the CI job `secrets`. A file over 100 MB fails the scan instead of being skipped. Files that
+  gitleaks' default configuration allowlists by path (such as `.bin`, `.zip`, images) and archive contents are still
+  not scanned.
 - Agent versions compare by SemVer order, not as text or for equality (PDK-025): the attention list flags a device
   as `agent_outdated` only when its agent is older than the current release, and the server offers a device an agent
   update only when the release is newer than its agent, so a device that is ahead of the last completed rollout is
