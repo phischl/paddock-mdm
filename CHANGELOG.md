@@ -176,6 +176,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fleet's vulnerability data in development and CI stacks (PDK-054, ADR 0009 amendment 2026-10-12): the development
+  overlay passes Fleet direct URLs for its CPE dictionary, CPE translations and NVD feeds, so a fresh stack on a shared
+  CI runner no longer waits on GitHub's anonymous API rate limit before the inventory gates find vulnerabilities. The
+  CPE release is pinned in `deploy/compose/versions.env` (`FLEET_CPE_DATABASE_URL`, `FLEET_CPE_TRANSLATIONS_URL`);
+  no GitHub token is passed to Fleet. Production stacks are unchanged and keep Fleet's own lookup of the latest data.
+  Because Fleet then downloads the CPE database on every vulnerability run, the development stack runs that job
+  hourly like production (was every 5 minutes) and the inventory gates trigger the runs they need. A failed CI
+  acceptance run now also prints Fleet's full log.
 - `paddockd plan` changed the agent state (PDK-081): run next to the daemon, it reported the daemon's running
   `install_now` job as failed with reason `interrupted`, dropped it from the agent state and saved the state file
   from a second process. `paddockd plan` now writes nothing under the agent layout; the daemon still reports a job

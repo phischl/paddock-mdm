@@ -67,15 +67,17 @@ func triggerFleetVulnerabilities(t *testing.T) error {
 // a run takes well under a minute once Fleet has its data.
 const fleetRetrigger = 2 * time.Minute
 
-// fleetDataTimeout bounds the wait for Fleet's vulnerability data. GitHub's rate limit for requests without a token
-// resets within an hour; Fleet's first runs on a fresh stack (CI) are minutes after its start, and F3 runs about
-// 40 minutes later.
+// fleetDataTimeout bounds the wait for Fleet's vulnerability data. Fleet's first runs on a fresh stack (CI) are minutes
+// after its start and F3 runs about 40 minutes later, so the data is normally in place; the bound covers a slow
+// download, not a rate limit.
 const fleetDataTimeout = 20 * time.Minute
 
 // waitFleetVulnerabilityData waits until Fleet has the vulnerability data that matches the given CVEs, triggering its
 // vulnerability job again every fleetRetrigger. That data is a precondition of plan M5a AC1, not part of a device's
-// 10 minutes: Fleet downloads it from GitHub without a token, and a shared CI runner may be over GitHub's hourly rate
-// limit when Fleet's runs try (PDK-053); every run tries again.
+// 10 minutes. The development stack passes Fleet direct URLs for the CPE dictionary, its translations and the NVD
+// feeds (compose.dev.yaml, ADR 0009 amendment 2026-10-12), so their download makes no anonymous GitHub API call and
+// does not hit GitHub's hourly rate limit on shared CI runners (PDK-053, PDK-054); a failed download is retried by
+// every run.
 func waitFleetVulnerabilityData(t *testing.T, cves ...string) {
 	t.Helper()
 	begin := time.Now()
