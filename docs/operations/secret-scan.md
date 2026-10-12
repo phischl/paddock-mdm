@@ -11,8 +11,8 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
   request adds, also versions a later commit replaced or removed (PDK-068). The history scan skips binary content, so
   a binary file with a secret that the pull request adds and deletes again is caught here. A file over 100 MB fails
   the scan instead of being skipped. It also covers files under binary extensions and archives one level deep (see
-  [Coverage of binary extensions and archives](#coverage-of-binary-extensions-and-archives)). Files whose path
-  matches one of the default path entries listed in
+  [Coverage of binary extensions and archives](#coverage-of-binary-extensions-and-archives)). Files whose path, or a
+  directory above them, matches one of the default path entries listed in
   [Paths the scan still skips](#paths-the-scan-still-skips) are not scanned.
 - Both read `.gitleaks.toml` and `.gitleaksignore` from the pull request's merge base (`GITLEAKS_CONFIG_REF`, PDK-065).
   A pull request that changes either file is scanned with the base's version. An allowlist for a new false positive
@@ -72,7 +72,7 @@ directory of that name, at any depth:
 | `gitleaks\.toml` | `gitleaks.toml`, `.gitleaks.toml`, `agitleaks.toml`, `gitleaks.tomlx`, `gitleaks.toml.scan` | matches anywhere in the path; case-sensitive (`Gitleaks.toml` is scanned) |
 | `verification-metadata\.xml` | `verification-metadata.xml`, `xverification-metadata.xmlx`, `Verification-Metadata.xml` | matches anywhere in the path; case-insensitive |
 | `Database.refactorlog` | `Database.refactorlog`, `database.refactorlog`, `DatabaseXrefactorlog`, `Database/refactorlog` | matches anywhere in the path; case-insensitive; the unescaped dot matches any character, `/` included, so the match spans two components |
-| `(v?env\|virtualenv)/lib(64)?` | `venv/lib/`, `venv/lib64/`, `VENV/LIB/`, `env/lib/` | the first component must be exactly `env`, `venv` or `virtualenv` (`myvenv/lib/` is scanned) |
+| `(v?env\|virtualenv)/lib(64)?` | `venv/lib/`, `venv/lib64/`, `VENV/LIB/`, `env/lib/` | the component directly before `lib` must be exactly `env`, `venv` or `virtualenv` (`myvenv/lib/` is scanned) |
 | `go.mod`, `go.sum`, `go.work`, `go.work.sum` | `go.mod`, `xgo.mod`, `GO.MOD` | the name only has to end in the entry |
 | `vendor/modules.txt`, `vendor/` followed by `github.com`, `golang.org/x`, `google.golang.org`, `gopkg.in`, `istio.io`, `k8s.io`, `sigs.k8s.io`, `bundle` or `ruby` | `vendor/github.com/`, `Vendor/github.com/`, `vendor/ruby/` | |
 | `gradlew(.bat)`, `gradle.lockfile`, `mvnw(.cmd)`, `.mvn/wrapper/MavenWrapperDownloader.java` | `gradlew`, `GRADLEW`, `mvnw.cmd` | |
@@ -90,7 +90,14 @@ the extensions above, and git refuses a `.git` path component.
 The repository's own `.gitleaks.toml` is one of these paths: a pull request that changes it is not scanned for
 secrets in that file. Its changes need a code owner review anyway (see below).
 
-The backstop for every row of the table is review. A reviewer treats a new or changed file whose path matches one of
+The history scan (`make scan-secrets`, same CI job) matches the default path entries against each file's path in the
+commit, not against its directories. For text content it therefore still catches a secret below a directory named
+like a `$`-anchored file-name entry (`x/go.mod/creds.env`, `x/package-lock.json/c.env`). The gaps that neither scan
+covers are files whose own path matches an entry, and paths below the unanchored entries (`gitleaks.toml`,
+`verification-metadata.xml`, `Database.refactorlog`) and the directory entries (`node_modules`, `vendor/…`,
+`(v?env|virtualenv)/lib`, …).
+
+The backstop for these gaps is review. A reviewer treats a new or changed file whose path matches one of
 these entries as not scanned and reads it. The repository itself holds such files (`go.mod`, `go.sum`, `go.work`,
 `go.work.sum` and the portal's npm lock file), and an unusual path matching the table (for example a directory named
 like a lock file) is a reason to ask why.
