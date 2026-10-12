@@ -112,6 +112,30 @@ measurement after the change (PDK-091).
 - `/api/v1/overview` still takes about 620 ms of query time. `OverviewDevices` takes 385 ms of it:
   `paddock_device_contact()` probes `device_alert` twice per device. PDK-089.
 
+**After PDK-089.** Measured on 2026-10-12 on the same machine and development stack with a new load organization of
+**10 000 active devices**, enrolled with `make load-identities` and checked in once each with
+`make load-test SCENARIO=checkin`. Because the stack counts staleness in minutes, every device had an open
+`stale_warning` during the measurement. `paddock_device_contact()` (migration 00038) ran two `EXISTS` probes on
+`device_alert` per device. A SQL function with a subquery is never inlined, so every row started a sub-executor.
+Migration `00043` (ADR 0028) makes it an inlinable `CASE` over the device's columns and the kind of its open alert,
+which the queries join (`device_alert_open_idx` allows at most one open alert per device).
+
+`EXPLAIN (ANALYZE, BUFFERS)` medians of 5 runs as the API role in the organization's scope. Before and after ran in
+one rolled-back transaction with a single snapshot; the "after" function and queries were created inside that
+transaction. These are query execution times, not HTTP latencies:
+
+| Query (endpoint) | Before | After |
+| --- | --- | --- |
+| `OverviewDevices` (`/overview`) | 405 ms | 13 ms |
+| `ListDevices` `state=active&contact=stale_warning`, 25 (`/devices`) | 109 ms | 16 ms |
+| `CountDevices` with the same filter | 92 ms | 10 ms |
+
+`OverviewDevices` reads 1 225 shared buffers instead of 300 970. The plan has no function call (`EXPLAIN (VERBOSE)`
+shows the inlined `CASE`). The buckets are identical before and after (10 000 active, 10 000 `silent`), and so are
+the list (25 rows) and the count (10 000). On the same fleet before the devices went stale (no open alerts), the
+medians were 414 ms to 11 ms, 89 ms to 8 ms and 96 ms to 5 ms. The HTTP figures of `GET /api/v1/overview` after this
+change are measured with those of PDK-027 once both are merged and deployed (PDK-091).
+
 ## Method
 
 The load generator is k6 (`K6_IMAGE` in `deploy/compose/versions.env`, a tool only, never shipped). It runs as a

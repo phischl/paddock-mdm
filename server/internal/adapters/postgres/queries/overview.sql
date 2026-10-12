@@ -15,7 +15,8 @@ SELECT count(*) FILTER (WHERE d.state IN ('pending', 'active', 'quarantined'))::
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'presumed_lost')::int AS presumed_lost,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'never')::int AS never_contacted
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
-CROSS JOIN LATERAL (SELECT paddock_device_contact(d.state, s.last_contact_at, s.presumed_lost_at, d.id) AS contact) c;
+LEFT JOIN device_alert open_alert ON open_alert.device_id = d.id AND open_alert.cleared_at IS NULL
+CROSS JOIN LATERAL (SELECT paddock_device_contact(d.state, s.last_contact_at, s.presumed_lost_at, open_alert.kind) AS contact) c;
 
 -- name: OverviewEncryption :one
 SELECT count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' = 'compliant')::int AS encrypted,

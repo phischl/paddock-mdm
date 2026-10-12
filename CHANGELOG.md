@@ -106,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Device contact state at large fleets (PDK-089): the overview's contact counters, the device list's contact column and
+  filter, its count and the device detail read a device's open staleness alert together with the device instead of
+  looking it up once per device. The contact states and counters do not change. Database migration `00043` runs
+  automatically.
 - Attention list and overview at large fleets (PDK-027): the attention list, its counts and the overview look up the
   current agent release once per request instead of once per active device. At 10 000 devices the query execution
   time of the attention list queries drops from about 0.6 s to 0.06–0.12 s, and that of the overview's agent counters
