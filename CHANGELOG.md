@@ -111,7 +111,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`GITLEAKS_DEFAULT_CONFIG_BYTES`, `GITLEAKS_DEFAULT_CONFIG_SHA256`); a gitleaks image bump updates the image and both
   pins together (`docs/operations/secret-scan.md`), and wrong pins fail the scan. Files under binary extensions are no
   longer scanned under a `.scan` name: findings and `.gitleaksignore` fingerprints use the file's own path; archives
-  keep their `.zip` and `.tar.gz` suffixes.
+  keep their `.zip` and `.tar.gz` suffixes. The scan now fails when `.gitleaks.toml` holds a multi-line string, more
+  than one `[extend]` header, or a key in `[extend]` other than `useDefault` (such as `disabledRules` or `url`).
 
 - Secret scan of pull requests (PDK-069, ADR 0025): `make scan-secrets-diff` also scans files under extensions that
   gitleaks' default configuration skips (images, fonts, office documents, `.pdf`, `.bin`, `.exe` and others), and

@@ -18,6 +18,11 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
   merged.
 - A `.gitleaksignore` in the scanned tree is never loaded, inline `gitleaks:allow` comments are ignored, and a
   `.gitleaks.toml` that extends another file (`[extend] path`) fails the scan; `useDefault` alone is allowed.
+- `.gitleaks.toml` must have a simple shape, because the generated configuration is written from it line by line
+  (ADR 0026, amendment 2026-10-12). The scan fails, naming the rule and the line, when the file has a multi-line
+  string (a line with an odd count of `'''` or `"""`; single-line `'''…'''` is fine), more than one `[extend]`
+  header or `[extend]` as an array or with a subtable, or a key in `[extend]` other than `useDefault` (`disabledRules`
+  and `url` included). To silence a rule, write an allowlist.
 
 ## The scan configuration
 
@@ -33,8 +38,8 @@ entries. Both scans therefore run a configuration generated for each run (ADR 00
    `GITLEAKS_IMAGE` and are the size and sha256 of `config/gitleaks.toml` at the image's tag. A header that is missing
    or occurs more than once, or a mismatch, fails the scan with a message naming the two pins.
 3. The `paths` of the global `[allowlist]` are removed; its `regexes` and `stopwords` and every rule with its own
-   allowlists stay. If a `paths` key is still left before the first `[[rules]]`, the scan fails: the default's layout
-   changed and needs a look.
+   allowlists stay. If a `paths` key is still left before the first `[[rules]]`, also as a dotted key or in an inline
+   table, the scan fails: the default's layout changed and needs a look.
 4. The repository's `.gitleaks.toml` (from the merge base, see above) becomes a child configuration whose `[extend]`
    table points at the stripped default (`[extend] path`). The file in the repository keeps `useDefault = true`, so a
    plain `gitleaks` call and editor plugins behave as before.

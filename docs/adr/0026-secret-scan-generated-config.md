@@ -101,3 +101,24 @@ Follow-ups: the implementation ticket of this ADR (allowlist pull request first,
 (blob layer search) builds on the shortened `scan_name` afterwards; PDK-070 closes with the dependency documented.
 Re-evaluate when gitleaks offers a way to drop entries of the default global allowlist (then the extraction goes) or
 identifies archives by content (then the archive renames go).
+
+## Amendment 2026-10-12
+The child configuration of decision 4 is written from the repository's `.gitleaks.toml` line by line. An external
+review of the implementation (PDK-078) showed with the pinned v8.30.1 image that a line `[extend]` inside a multi-line
+string was read as the header and every line after it up to the next `[` was dropped: a hex-only allowlist for `gen/`
+lost its condition and its regexes, and the whole directory was skipped without an error. `[extend] disabledRules` was
+dropped silently as well. Instead of parsing TOML more completely, the repository configuration's shape is restricted,
+and the scan fails, with a message naming the rule, when the `.gitleaks.toml` from `GITLEAKS_CONFIG_REF`:
+
+1. has a line with an odd count of `'''` or of `"""`: multi-line strings are not allowed; single-line `'''…'''`
+   literals stay allowed;
+2. has more than one line that reads as an `[extend]` header (surrounding whitespace, quotes and a trailing comment
+   allowed), or defines `[extend]` as an array or with a subtable;
+3. sets any key in `[extend]` other than `useDefault` (this covers `disabledRules`, `url` and `path`; the PDK-065
+   refusal of `path` and of dotted `extend` keys stays).
+
+A rule that needs to be disabled is therefore handled by an allowlist, not by `disabledRules`.
+
+The check of decision 3 that no `paths` key remains before the first `[[rules]]` also covers a dotted key
+(`allowlist.paths = …`) and a key in an inline table (`allowlist = { paths = … }`); the strip and its check run as one
+step that the regression test calls on crafted default files.

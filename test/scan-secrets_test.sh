@@ -12,7 +12,8 @@
 # well. Both scans run a generated configuration, gitleaks' default without the paths of its global allowlist
 # (ADR 0026): a text secret in `src/bootstrap.js`, `d.png/creds.bin` or `javascript.json` fails both scans under its
 # own path, and so do `creds.bin`, `creds.png`, `creds.BIN`, `creds.xdll` and the directory `assets.png/` in
-# `make scan-secrets-diff`; a base configuration without an `[extend]` table still gets the default rules; a default
+# `make scan-secrets-diff`; a base configuration without an `[extend]` table still gets the default rules, one with a
+# multi-line string, a second `[extend]` header or an `[extend]` key other than useDefault fails both scans; a default
 # configuration that does not match its pins (sha256 off by one digit, header missing or not unique) fails both
 # scans. Archives are opened one level deep (ADR 0025): a secret inside a deflated `creds.zip`, `creds.docx` or
 # `creds.tgz` fails `make scan-secrets-diff`, an archive copy that would overwrite another changed file fails it, and
@@ -428,6 +429,103 @@ for form in table dotted; do
     expect_pr "a base configuration with [extend] path ($form)" fail "$target" "$extending" "$extending" \
       "extends another file"
   done
+done
+
+# A base configuration whose shape the generated child cannot be written from line by line fails before anything is
+# scanned (ADR 0026, amendment 2026-10-12): a multi-line string (the external review's probe, where an `[extend]` line
+# inside a string cost a hex-only allowlist its condition and its regexes), a second [extend] header, and a key in
+# [extend] other than useDefault.
+shape_case() {
+  case $1 in
+    review-probe)
+      cat <<'EOF'
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "gen/: only sha256 digests"
+paths = ['''^gen/''']
+stopwords = ['''
+[extend]
+''']
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''', '''
+[x]''']
+EOF
+      ;;
+    multi-line-basic)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = """two\nlines"""\n'
+      printf 'paths = [%s]\n' "'^nothing$'"
+      ;;
+    second-extend)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = ['\''^nothing$'\'']\n\n  [ "extend" ]  # again\n'
+      ;;
+    disabled-rules) printf '[extend]\nuseDefault = true\ndisabledRules = ["github-pat"]\n' ;;
+    url) printf '[extend]\nuseDefault = true\nurl = "https://example.invalid/gitleaks.toml"\n' ;;
+    subtable) printf '[extend]\nuseDefault = true\n\n[extend.more]\nx = 1\n' ;;
+  esac
+}
+for shape in review-probe multi-line-basic second-extend disabled-rules url subtable; do
+  g switch -q -c "shape-$shape" "$base"
+  shape_case "$shape" >"$r/.gitleaks.toml"
+  g commit -q -am "a configuration with a refused shape ($shape)"
+  shaped="$(g rev-parse HEAD)"
+  mkdir -p "$r/gen"
+  printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/gen/creds.env"
+  g add gen/creds.env
+  g commit -q -m 'add credentials under gen/'
+  case $shape in
+    review-probe | multi-line-basic) reason="multi-line string" ;;
+    second-extend) reason="second [extend] header" ;;
+    disabled-rules | url) reason="in [extend] other than useDefault" ;;
+    subtable) reason="with a subtable" ;;
+  esac
+  for target in scan-secrets scan-secrets-diff; do
+    expect_pr "a base configuration with a refused shape ($shape)" fail "$target" "$shaped" "$shaped" \
+      "does not have the shape the generated configuration needs: line"
+    if ! grep -qF -- "$reason" <<<"$last_out"; then
+      echo "FAIL a base configuration with a refused shape ($shape, $target): the rule '$reason' is not named"
+      failures=$((failures + 1))
+    fi
+    if grep -qE 'commits scanned|: layer |leaks found' <<<"$last_out"; then
+      echo "FAIL a base configuration with a refused shape ($shape, $target): gitleaks ran"
+      failures=$((failures + 1))
+    fi
+  done
+done
+
+# The strip of the default's global paths, run on crafted defaults through its test seam: the multi-line array is
+# removed and the rest kept; a paths key the strip does not recognise (single-line, dotted, in an inline table) fails.
+strip_case() {
+  case $1 in
+    multi-line) printf '[allowlist]\ndescription = "d"\npaths = [\n    %s,\n    %s,\n]\nregexes = [%s]\n' \
+      "'''a[b]'''" "'''c'''" "'''^r$'''" ;;
+    single-line) printf '[allowlist]\npaths = [%s]\n' "'''a'''" ;;
+    dotted) printf 'allowlist.paths = [%s]\n' "'''a'''" ;;
+    inline) printf 'allowlist = { description = "d", "paths" = [%s] }\n' "'''a'''" ;;
+  esac
+  printf '\n[[rules]]\nid = "x"\nregex = %s\npaths = [%s]\n' "'''x'''" "'''rule-path'''"
+}
+for kind in multi-line single-line dotted inline; do
+  strip_case "$kind" >"$work/default-$kind.toml"
+  rc=0
+  out="$(make --no-print-directory -C "$root" scan-secrets-strip-default \
+    GITLEAKS_STRIP_FILE="$work/default-$kind.toml" 2>&1)" || rc=$?
+  if [[ "$kind" == multi-line ]]; then
+    if ((rc == 0)) && ! grep -qE "'''(a\\[b\\]|c)'''" <<<"$out" && grep -qF "regexes = ['''^r\$''']" <<<"$out" &&
+      grep -qF "paths = ['''rule-path''']" <<<"$out"; then
+      echo "ok   the strip removes the global paths and keeps the rest ($kind)"
+    else
+      echo "FAIL the strip of a default with $kind global paths: exit $rc"
+      failures=$((failures + 1))
+    fi
+  elif ((rc != 0)) && grep -qF "keeps a paths key before its first [[rules]]" <<<"$out"; then
+    echo "ok   a default with $kind global paths fails the strip check (fail)"
+  else
+    echo "FAIL a default with $kind global paths: exit $rc, want a failed strip check"
+    failures=$((failures + 1))
+  fi
 done
 
 if ((failures > 0)); then

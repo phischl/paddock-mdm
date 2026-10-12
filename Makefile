@@ -646,7 +646,8 @@ TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-
 COMPILER_IMAGE  ?= paddock-compiler:dev
 PGBACKREST_IMAGE ?= paddock-pgbackrest:dev
 
-.PHONY: scan scan-secrets scan-secrets-diff scan-fs scan-images image-compiler image-pgbackrest
+.PHONY: scan scan-secrets scan-secrets-diff scan-secrets-strip-default scan-fs scan-images image-compiler \
+	image-pgbackrest
 scan: scan-secrets scan-fs scan-images ## Run gitleaks (branch history) and trivy (filesystem and images)
 
 # The current branch only, never --all: a finding on an unrelated stale branch must not fail this scan. CI narrows it
@@ -674,6 +675,10 @@ GITLEAKS_REPO ?= $(CURDIR)
 # instead of scanning with an unknown default. A default whose global paths the strip does not recognise fails too.
 # $(1) is the directory the container mounts the configuration at: the child's `[extend] path` names the stripped
 # default by its absolute path there, a mount that holds none of the scanned files.
+# The child is written line by line, so .gitleaks.toml must have a shape that reading it line by line cannot get wrong
+# (ADR 0026, amendment 2026-10-12): no multi-line strings (a line with an odd count of ''' or """), one [extend]
+# header at most, and no key in [extend] but useDefault. Anything else fails rather than being scanned with an
+# allowlist that lost its condition or with a dropped disabledRules.
 # What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
 # scanned. The scan's integrity therefore rests on code review of .github/, the Makefile and
 # deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE and its default configuration);
@@ -681,6 +686,15 @@ GITLEAKS_REPO ?= $(CURDIR)
 # review, a setting of the maintainer (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
 GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
+# gitleaks_strip_default,<in>,<out>,<label>: <in> without the multi-line `paths = [` array before the first
+# [[rules]]. Any paths key left there, also as a dotted key (allowlist.paths) or in an inline table, fails the scan.
+gitleaks_strip_default = awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
+		!r && /^[[:space:]]*paths[[:space:]]*=[[:space:]]*\[[[:space:]]*$$/ { s = 1; next } \
+		s { if ($$0 ~ /^[[:space:]]*\][[:space:]]*$$/) s = 0; next } { print }' $(1) >$(2) || exit 1; \
+	if awk '/^[[:space:]]*\[\[rules\]\]/ { exit } /(^|[^A-Za-z0-9_-])["\047]?paths["\047]?[[:space:]]*=/ { f = 1 } \
+		END { exit !f }' $(2); then \
+		echo "$@: $(3) keeps a paths key before its first [[rules]] after the strip;" \
+			"its layout changed and must be looked at (ADR 0026)" >&2; exit 1; fi
 gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 	if [ -n "$$ref" ]; then \
 		git -C "$$repo" show "$$ref:.gitleaks.toml" >"$$tmp/repo.toml" || \
@@ -700,6 +714,17 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		END { exit !f }' "$$tmp/repo.toml"; then \
 		echo "$@: .gitleaks.toml from $${ref:-the working tree} extends another file ([extend] path);" \
 			"only useDefault is allowed" >&2; exit 1; fi; \
+	if ! why=$$(awk '{ l = $$0; a = gsub(/\047\047\047/, "", l); l = $$0; b = gsub(/"""/, "", l) } \
+		a % 2 || b % 2 { print "line " NR " opens or closes a multi-line string, which is not allowed"; exit 1 } \
+		{ l = $$0; sub(/\#.*/, "", l) } \
+		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t); e = 0; \
+			if (t == "[extend]") { e = 1; if (++n > 1) { print "line " NR " is a second [extend] header"; exit 1 } } \
+			else if (t ~ /^\[+extend[].]/) { print "line " NR " defines [extend] as an array or with a subtable"; exit 1 } \
+			next } \
+		e && l ~ /[^[:space:]]/ && l !~ /^[[:space:]]*["\047]?useDefault["\047]?[[:space:]]*=/ { \
+			print "line " NR " sets a key in [extend] other than useDefault"; exit 1 }' "$$tmp/repo.toml"); then \
+		echo "$@: .gitleaks.toml from $${ref:-the working tree} does not have the shape the generated configuration" \
+			"needs: $${why:-awk failed} (ADR 0026, amendment 2026-10-12)" >&2; exit 1; fi; \
 	pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256 (deploy/compose/versions.env)"; \
 	docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
 		{ echo "$@: cannot copy /usr/bin/gitleaks out of $(GITLEAKS_IMAGE)" >&2; exit 1; }; \
@@ -714,14 +739,7 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		[ "$${sum%% *}" != '$(GITLEAKS_DEFAULT_CONFIG_SHA256)' ]; then \
 		echo "$@: the default configuration in $(GITLEAKS_IMAGE) does not match $$pins;" \
 			"an image bump updates the image and both pins together (docs/operations/secret-scan.md)" >&2; exit 1; fi; \
-	awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
-		!r && /^[[:space:]]*paths[[:space:]]*=[[:space:]]*\[[[:space:]]*$$/ { s = 1; next } \
-		s { if ($$0 ~ /^[[:space:]]*\][[:space:]]*$$/) s = 0; next } { print }' \
-		"$$tmp/default.toml" >"$$tmp/cfg/default.toml" || exit 1; \
-	if awk '/^[[:space:]]*\[\[rules\]\]/ { exit } /^[[:space:]]*["\047]?paths["\047]?[[:space:]]*[.=]/ { f = 1 } \
-		END { exit !f }' "$$tmp/cfg/default.toml"; then \
-		echo "$@: the default configuration in $(GITLEAKS_IMAGE) keeps a paths key before its first [[rules]]" \
-			"after the strip; its layout changed and must be looked at (ADR 0026)" >&2; exit 1; fi; \
+	$(call gitleaks_strip_default,"$$tmp/default.toml","$$tmp/cfg/default.toml",the default of $(GITLEAKS_IMAGE)); \
 	awk -v p="$(1)/default.toml" '{ l = $$0; sub(/\#.*/, "", l) } \
 		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t); s = 0; \
 			if (t == "[extend]") { print "[extend]"; print "path = \047" p "\047"; d = 1; s = 1; next } } \
@@ -786,6 +804,13 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 GITLEAKS_DIFF_BASE ?= origin/main
 GITLEAKS_MAX_MB = 100
 GITLEAKS_ZIP_EXT = jar war docx xlsx pptx odt ods odp
+
+# Test seam of test/scan-secrets_test.sh: the strip of the default configuration and its check, run on
+# GITLEAKS_STRIP_FILE instead of the pinned default, with the result on stdout.
+scan-secrets-strip-default:
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	$(call gitleaks_strip_default,'$(GITLEAKS_STRIP_FILE)',"$$tmp/out.toml",$(GITLEAKS_STRIP_FILE)); \
+	cat -- "$$tmp/out.toml"
 
 scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE and every blob added since then
 	@repo='$(GITLEAKS_REPO)'; \
