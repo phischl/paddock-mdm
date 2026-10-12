@@ -106,6 +106,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Secret scan of pull requests (PDK-072): `make scan-secrets-diff` places the blobs a pull request adds in their
+  layers without probing every earlier layer again and reads them from git in one batch, so a pull request with many
+  versions of one file is scanned much faster (300 versions of one file: 2 minutes before, 16 seconds now). What is
+  scanned, and every verdict, stays the same.
+
 - Secret scan lock files (PDK-077, ADR 0026): the repository's `.gitleaks.toml` now skips every `go.sum` and
   `server/web/package-lock.json` by path itself instead of relying on gitleaks' default path allowlist, which a later
   change drops. Today's scan results are unchanged.

@@ -691,6 +691,11 @@ GITLEAKS_REPO ?= $(CURDIR)
 # CODEOWNERS names a reviewer for them, and the branch ruleset on main requires that review
 # (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
+# Test seam of test/scan-secrets_test.sh, never set by the CI scan steps: a directory where the steps of the generated
+# configuration keep what they produced, keyed by their inputs, so the test's many cases on the same base configuration
+# run the Go pattern check, the copy of /usr/bin/gitleaks and the canary once each (PDK-072). Only a check that ran is
+# kept (the verdicts of a Go check that exited 0, a canary that was reported); everything else still runs on every call.
+GITLEAKS_TEST_CACHE ?=
 GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
 GITLEAKS_CHILD_CONFIG = python3 $(CURDIR)/deploy/compose/scripts/gitleaks-child-config.py
 GITLEAKS_PATTERNS_CHECK = $(CURDIR)/deploy/compose/scripts/gitleaks-patterns.go
@@ -734,8 +739,14 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 	$(GITLEAKS_CHILD_CONFIG) child "$$tmp/repo.toml" "$(1)/default.toml" "$$tmp/child.toml" "$$tmp/patterns.json" || \
 		{ echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
 			"accepts (ADR 0026, amendment 2026-10-12)" >&2; exit 1; }; \
-	docker run --rm -i --network none -e GOFLAGS= -e GOTOOLCHAIN=local -v "$(GITLEAKS_PATTERNS_CHECK):/p.go:ro" \
+	tc='$(GITLEAKS_TEST_CACHE)'; \
+	key=$$({ printf '%s\n' '$(GO_BUILD_IMAGE)'; cat -- "$(GITLEAKS_PATTERNS_CHECK)" "$$tmp/patterns.json"; } | \
+		sha256sum) || exit 1; key=$${key%% *}; \
+	if [ -n "$$tc" ] && [ -f "$$tc/patterns-$$key" ]; then cp -- "$$tc/patterns-$$key" "$$tmp/verdicts.jsonl"; prc=$$?; \
+	else docker run --rm -i --network none -e GOFLAGS= -e GOTOOLCHAIN=local -v "$(GITLEAKS_PATTERNS_CHECK):/p.go:ro" \
 		$(GO_BUILD_IMAGE) go run /p.go <"$$tmp/patterns.json" >"$$tmp/verdicts.jsonl" 2>"$$tmp/patterns.err"; prc=$$?; \
+		if [ -n "$$tc" ] && [ "$$prc" -eq 0 ]; then cp -- "$$tmp/verdicts.jsonl" "$$tc/patterns-$$key" || exit 1; fi; \
+	fi; \
 	if [ "$$prc" -ne 0 ]; then cat -- "$$tmp/patterns.err" >&2; \
 		echo "$@: the Go pattern check could not run (exit $$prc, $(GO_BUILD_IMAGE)); the scan fails closed" >&2; \
 		exit 1; fi; \
@@ -743,8 +754,12 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
 			"accepts: Go's regexp refuses an allowlist pattern (ADR 0026, amendment 2026-10-12)" >&2; exit 1; fi; \
 	pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256 (deploy/compose/versions.env)"; \
-	docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
+	key=$$(printf '%s\n' '$(GITLEAKS_IMAGE)' | sha256sum) || exit 1; key=$${key%% *}; \
+	if [ -n "$$tc" ] && [ -f "$$tc/gitleaks-$$key" ]; then cp -- "$$tc/gitleaks-$$key" "$$tmp/gitleaks.bin" || exit 1; \
+	else docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
 		{ echo "$@: cannot copy /usr/bin/gitleaks out of $(GITLEAKS_IMAGE)" >&2; exit 1; }; \
+		if [ -n "$$tc" ]; then cp -- "$$tmp/gitleaks.bin" "$$tc/gitleaks-$$key" || exit 1; fi; \
+	fi; \
 	off=$$(LC_ALL=C grep -obaF -- '$(GITLEAKS_DEFAULT_CONFIG_HEADER)' "$$tmp/gitleaks.bin" | cut -d: -f1); \
 	case $$off in ''|*[!0-9]*) echo "$@: the header of the default configuration occurs" \
 		"$$(printf '%s' "$$off" | grep -c .) times in /usr/bin/gitleaks of $(GITLEAKS_IMAGE), not once;" \
@@ -758,7 +773,13 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 			"an image bump updates the image and both pins together (docs/operations/secret-scan.md)" >&2; exit 1; fi; \
 	$(call gitleaks_strip_default,"$$tmp/default.toml","$$tmp/cfg/default.toml",the default of $(GITLEAKS_IMAGE)); \
 	mv -- "$$tmp/child.toml" "$$tmp/cfg/gitleaks.toml" || exit 1; \
-	$(call gitleaks_canary,"$$tmp/cfg",$(1)); \
+	key=$$({ printf '%s\n' '$(GITLEAKS_IMAGE)' '$(GITLEAKS_CANARY)' '$(1)'; \
+		cat -- $(lastword $(GITLEAKS_CHILD_CONFIG)) "$$tmp/repo.toml" "$$tmp/cfg/default.toml"; } | sha256sum) || exit 1; \
+	key=$${key%% *}; \
+	if [ -z "$$tc" ] || [ ! -f "$$tc/canary-$$key" ]; then \
+		$(call gitleaks_canary,"$$tmp/cfg",$(1)); \
+		if [ -n "$$tc" ]; then : >"$$tc/canary-$$key" || exit 1; fi; \
+	fi; \
 	echo "$@: configuration from $${ref:-the working tree} on the default of $(GITLEAKS_IMAGE) without its global paths"
 
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
@@ -804,9 +825,13 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 # a secret that a later commit of the pull request removes again was seen by neither the history scan nor layer 0.
 # The blobs come from the raw diff of every commit in the range against each parent, so each new blob is written under
 # every path it was added at and the base's path allowlists and fingerprints apply as in layer 0; blobs that share a
-# path go into separate layers, each scanned from its own root. Only pull request ranges pay for this: the history
-# scan of main (scan-secrets) is unchanged. A file over GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over
-# 100 MiB) fails the scan instead of being skipped by --max-target-megabytes.
+# path go into separate layers, each scanned from its own root. A path's search for a free layer starts after the layer
+# its last blob went to: layers only gain files and directories, so one that could not take the path never can later
+# (PDK-072). Each placed blob reserves its path with an empty file, so the collision checks see it, and one
+# `git cat-file --batch` fills them all; its output must match the requested blobs one by one or the scan fails.
+# Only pull request ranges pay for this: the history scan of main (scan-secrets) is unchanged. A file over
+# GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over 100 MiB) fails the scan instead of being skipped by
+# --max-target-megabytes.
 # gitleaks identifies archives by name only, so a changed file or blob whose name ends, case-insensitively, in one of
 # GITLEAKS_ZIP_EXT is written with the suffix .zip (creds.docx is scanned as creds.docx.zip) and one ending in .tgz
 # with the suffix .tar.gz, and archives are opened one level deep (--max-archive-depth 1; nested archives and other
@@ -853,11 +878,11 @@ scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE a
 	git -C "$$repo" cat-file --batch-check='%(objectname) %(objecttype)' <"$$tmp/objects" >"$$tmp/types" || exit 1; \
 	if grep -qvE '^[0-9a-f]+ (blob|tree|commit|tag)$$' "$$tmp/types"; then \
 		echo "$@: git cannot read every object of $$base..HEAD" >&2; exit 1; fi; \
-	declare -A new=() seen=(); \
+	declare -A new=() seen=() free=(); \
 	while read -r id type; do if [ "$$type" = blob ]; then new[$$id]=1; fi; done <"$$tmp/types"; \
 	git -C "$$repo" log -z -m --root --no-renames --no-abbrev --raw --format= --diff-filter=d "$$base"..HEAD \
 		>"$$tmp/raw" || exit 1; \
-	b=0; layers=0; \
+	b=0; layers=0; ids=(); dests=(); \
 	while IFS= read -r -d '' tok; do \
 		while [ "$${tok#$$'\n'}" != "$$tok" ]; do tok=$${tok#$$'\n'}; done; \
 		case $$tok in :*) ;; *) continue ;; esac; \
@@ -868,15 +893,28 @@ scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE a
 		seen["$$id $$sn"]=1; \
 		case "/$$p/" in *//*|*/./*|*/../*) echo "$@: unsafe path in $$base..HEAD" >&2; exit 1 ;; esac; \
 		dir=.; case $$sn in */*) dir=$${sn%/*} ;; esac; \
-		k=1; while :; do \
+		k=$${free["$$sn"]:-1}; while :; do \
 			d="$$tmp/scan/$$k"; fresh=; [ -d "$$d" ] || fresh=1; \
-			if mkdir -p -- "$$d/$$dir" 2>/dev/null && [ ! -e "$$d/$$sn" ] && [ ! -L "$$d/$$sn" ]; then break; fi; \
+			if { [ -d "$$d/$$dir" ] || mkdir -p -- "$$d/$$dir" 2>/dev/null; } && [ ! -e "$$d/$$sn" ] && \
+				[ ! -L "$$d/$$sn" ]; then break; fi; \
 			if [ -n "$$fresh" ]; then echo "$@: cannot write blob $$id" >&2; exit 1; fi; \
 			k=$$((k + 1)); \
 		done; \
-		git -C "$$repo" cat-file blob "$$id" >"$$d/$$sn" || exit 1; \
+		free["$$sn"]=$$((k + 1)); \
+		: >"$$d/$$sn" || exit 1; ids+=("$$id"); dests+=("$$d/$$sn"); \
 		b=$$((b + 1)); if [ "$$k" -gt "$$layers" ]; then layers=$$k; fi; \
 	done <"$$tmp/raw"; \
+	if [ "$$b" -gt 0 ]; then \
+		printf '%s\n' "$${ids[@]}" | git -C "$$repo" cat-file --batch >"$$tmp/blobs" || exit 1; \
+		exec 3<"$$tmp/blobs" || exit 1; \
+		for i in "$${!ids[@]}"; do \
+			read -r oid type size <&3 && [ "$$oid $$type" = "$${ids[i]} blob" ] && \
+				case $$size in ''|*[!0-9]*) false ;; esac && head -c "$$size" <&3 >"$${dests[i]}" && \
+				IFS= read -r nl <&3 && [ -z "$$nl" ] || \
+				{ echo "$@: git cat-file --batch did not return blob $${ids[i]} as requested" >&2; exit 1; }; \
+		done; \
+		exec 3<&-; rm -f -- "$$tmp/blobs"; \
+	fi; \
 	for d in "$$tmp/scan"/*; do \
 		ign="$$d/.gitleaksignore"; \
 		if [ -e "$$ign" ] || [ -L "$$ign" ]; then \
