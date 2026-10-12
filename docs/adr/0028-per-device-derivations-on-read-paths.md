@@ -94,3 +94,21 @@ work is repeated for every filter that names the key.
   unique partial index prevents it, and a test pins it.
 Follow-ups: PDK-089 (migration 00043) and then PDK-090 (migration 00044) after PDK-027 is merged, each re-measured on
 the 10 000-device load fleet and recorded in `docs/operations/capacity.md`.
+
+## Amendment 2026-10-12
+Review 1 of PDK-090 found that PostgreSQL does not recompute a stored generated column when the function it calls is
+replaced (`CREATE OR REPLACE FUNCTION`). Rows written before the change keep the old key: `agent_release` rows
+practically forever, `device_status` rows until the device's next check-in. Mixed key formats silently mis-order
+"agent outdated", the overview's agent buckets and the newest-release tie-breakers.
+
+Rule: any migration that changes `paddock_version_key`, or any other function a stored generated column calls, must
+in the same migration recompute every dependent stored column. Today these are `agent_release.version_key` (00039)
+and `device_status.agent_version_key` (00044). Methods: drop and re-add the column (rewrites the table under
+`ACCESS EXCLUSIVE`; a view that reads the column, today `attention_condition`, must be dropped before and recreated
+after), or a full-table no-op `UPDATE` (`UPDATE agent_release SET version = version`,
+`UPDATE device_status SET agent_version = agent_version`), which recomputes the stored value of every row. The
+columns are bound to the function's OID, not its name: the change is a `CREATE OR REPLACE` of the same function
+(dropping it needs `CASCADE`, which drops the columns, and a new function under a renamed old one is never called by
+them). The integration test `TestStoredVersionKeysAreCurrent` (PDK-092) asserts
+`version_key = paddock_version_key(version)` and `agent_version_key IS NOT DISTINCT FROM
+paddock_version_key(agent_version)` for every row after all migrations.
