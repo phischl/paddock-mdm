@@ -829,6 +829,9 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 # its last blob went to: layers only gain files and directories, so one that could not take the path never can later
 # (PDK-072). Each placed blob reserves its path with an empty file, so the collision checks see it, and one
 # `git cat-file --batch` fills them all; its output must match the requested blobs one by one or the scan fails.
+# The layers run in parallel, as many as the container has CPUs, because a long range has hundreds of them and one
+# gitleaks run after the other dominated the scan (PDK-087). Each layer keeps its own output and exit status; the
+# output is printed in layer order afterwards, and a layer whose status is missing or not 0 fails the scan.
 # Only pull request ranges pay for this: the history scan of main (scan-secrets) is unchanged. A file over
 # GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over 100 MiB) fails the scan instead of being skipped by
 # --max-target-megabytes.
@@ -928,9 +931,13 @@ scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE a
 	echo "$@: $$n file(s) changed and $$b blob(s) added in $$base..HEAD ($$layers blob layer(s))"; \
 	if [ "$$n" -eq 0 ] && [ "$$b" -eq 0 ]; then echo "$@: nothing to scan"; exit 0; fi; \
 	docker run --rm -v "$$tmp/scan:/scan:ro" -v "$$tmp/cfg:/cfg:ro" --entrypoint /bin/sh $(GITLEAKS_IMAGE) -c \
-		'rc=0; for d in /scan/*; do cd "$$d" || exit 1; echo "$@: layer $${d#/scan/}"; \
-		gitleaks dir . --config /cfg/gitleaks.toml --gitleaks-ignore-path /cfg/gitleaksignore --ignore-gitleaks-allow \
-		--max-target-megabytes $(GITLEAKS_MAX_MB) --max-archive-depth 1 --no-banner --redact || rc=1; done; exit $$rc'
+		'o=$$(mktemp -d) || exit 1; rc=0; \
+		for d in /scan/*; do echo "$${d#/scan/}"; done | xargs -P "$$(nproc)" -I{} sh -c "$$1" sh {} "$$o" || rc=1; \
+		for d in /scan/*; do l=$${d#/scan/}; echo "$@: layer $$l"; cat -- "$$o/$$l.log"; \
+			[ "$$(cat -- "$$o/$$l.rc" 2>/dev/null)" = 0 ] || rc=1; done; exit $$rc' sh \
+		'cd "/scan/$$1" && gitleaks dir . --config /cfg/gitleaks.toml --gitleaks-ignore-path /cfg/gitleaksignore \
+		--ignore-gitleaks-allow --max-target-megabytes $(GITLEAKS_MAX_MB) --max-archive-depth 1 --no-banner --redact \
+		>"$$2/$$1.log" 2>&1; echo "$$?" >"$$2/$$1.rc"'
 
 scan-fs: ## trivy: dependencies, misconfiguration and secrets in the working tree
 	mkdir -p $(TRIVY_CACHE)
