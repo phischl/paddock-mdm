@@ -97,6 +97,12 @@ rolled out in waves with an automatic stop. Proven on both test VMs.
     (`-ldflags -X main.releasePublicKey=<minisign pubkey>`); it is the only component that verifies release
     signatures and flips the symlink. ≤ 600 lines of non-test Go code (design contract: simple enough to need no
     updates).
+    Amendment 2026-10-12 (architect, PDK-043 Review 2) — **how the budget is measured**: the limit applies to the
+    supervisor as a whole, not per file: all non-test Go files of `agent/internal/supervisor/` and
+    `agent/cmd/paddock-supervisor/`, counting lines that are neither blank nor comment-only. Until PDK-043 the count
+    was applied to `supervisor.go` alone; with the outcome `rollback_failed` and its retry the supervisor is at 693 such
+    lines. The ceiling is **800**. Code that pushes past it is moved out of the supervisor (into the agent or `pkg/`),
+    not split into more files. PDK-062 adds a check to `make lint` that enforces the ceiling.
 16. **Update protocol (agent ↔ supervisor):** the check-in response may contain
     `agent_update: {version, url, sha256, size, minisig}` (device API change, §6.1). The agent downloads to
     `/var/lib/paddock/staging/<version>/paddockd` + `paddockd.minisig`, checks size and SHA-256, then writes
