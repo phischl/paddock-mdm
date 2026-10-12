@@ -52,7 +52,13 @@ gen: ## Generate sqlc, oapi-codegen, TypeScript API types and the audit code doc
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) npm run gen; fi
 
 .PHONY: lint
-lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses ## Run all linters, govulncheck, the license gate and the server image build
+lint: lint-go lint-vuln lint-image lint-web lint-prometheus lint-caddy lint-licenses lint-supervisor-budget ## Run all linters, govulncheck, the license gate and the server image build
+
+# The supervisor's line budget (plan M2b decision 15, amendment 2026-10-12): at most 800 non-blank, non-comment lines of
+# non-test Go code across agent/internal/supervisor/ and agent/cmd/paddock-supervisor/.
+.PHONY: lint-supervisor-budget
+lint-supervisor-budget:
+	bash test/supervisor-budget.sh
 
 # License gate (plan M6b decision 3, C8): every Go dependency of every workspace module (go-licenses, pinned, run with
 # go run in the pinned Go image) and every npm production dependency of the portal (license-checker-rseidelsohn,
@@ -151,6 +157,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
 	bash test/scan-secrets_test.sh
+	bash test/supervisor-budget_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest
 	PADDOCK_PGBACKREST_IMAGE=$(PGBACKREST_IMAGE) bash $(COMPOSE_DIR)/pgbackrest/pgbackrest_test.sh
 	@if [ -f $(WEB_DIR)/package.json ]; then $(NODE_RUN) sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run test'; fi
