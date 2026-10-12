@@ -103,7 +103,8 @@ query execution time, not the HTTP p95 the target refers to. Whether the target 
 measurement after the change (PDK-091).
 
 **Remaining hot spots:** none known at the query level. The per-device version key was closed by PDK-090 and the
-device contact state by PDK-089 (both below); the HTTP p95 against the 200 ms target is still to be measured (PDK-091).
+device contact state by PDK-089 (both below). Over HTTP, `/api/v1/attention/devices` stays above the 200 ms target
+once the fleet is stale (see "After PDK-027/089/090, HTTP" below, PDK-094).
 
 **After PDK-089.** Measured on 2026-10-12 on the same machine and development stack with a new load organization of
 **10 000 active devices**, enrolled with `make load-identities` and checked in once each with
@@ -158,6 +159,30 @@ migration, `agent_version_key` equals `paddock_version_key(agent_version)` for e
 and fleet). Of the remaining list time, about 90 ms is spent in the view's alert branch (the 10 000 open `stale_warning`
 alerts) under the kind filter; no function runs per device row any more. The HTTP figures after this change are measured
 with those of PDK-027 and PDK-089 once all three are merged and deployed (PDK-091).
+
+**After PDK-027/089/090, HTTP.** Measured on 2026-10-13 on the same machine with the development stack on Paddock
+`c0aff7e` (migrations up to `00044`). A new load organization of **10 000 active devices**, enrolled with
+`make load-identities`, checked in once each with the PDK-027 version mix against the current release
+`0.3.1791801809-probation`: 4 000 on it, 3 000 older, 2 000 newer and 1 000 with no semantic version. 50 sequential
+requests per row after 3 warm-up requests, with a portal session of an organization administrator through the edge
+(Caddy). "Fresh" was measured right after the check-ins: no open alerts, 4 000 `agent_outdated` conditions. "Stale"
+was measured 25 minutes later, when the development stack's minute-based staleness had opened a `stale_warning` for
+every device: 14 000 conditions on 10 000 devices.
+
+| Request | Fresh p50 | Fresh p95 | Fresh p99 | Stale p50 | Stale p95 | Stale p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `GET /api/v1/attention` (defaults) | 104 ms | 131 ms | 136 ms | 89 ms | 98 ms | 105 ms |
+| `GET /api/v1/attention?page_size=100` | 90 ms | 101 ms | 104 ms | 91 ms | 101 ms | 104 ms |
+| `GET /api/v1/attention?kind=agent_outdated` | 67 ms | 74 ms | 75 ms | 88 ms | 108 ms | 138 ms |
+| `GET /api/v1/attention/devices?page_size=25` | 114 ms | 151 ms | 170 ms | 158 ms | **202 ms** | 224 ms |
+| `GET /api/v1/attention/devices?page_size=25&kind=agent_outdated` | 118 ms | 162 ms | 176 ms | 203 ms | **236 ms** | 312 ms |
+| `GET /api/v1/overview` | 46 ms | 56 ms | 58 ms | 57 ms | 64 ms | 73 ms |
+
+The attention list meets the target (p95 ≤ 200 ms at 10 000 devices) in every variant, and so does the overview,
+which drops from 3.4 s to 64 ms p95. Two requests miss it once the fleet is stale: the device view of the attention
+list, `/api/v1/attention/devices`, at 202 ms p95 without and 236 ms p95 with `kind=agent_outdated`. A repeated stale
+run confirmed both (209 ms and 243 ms p95). Its query time is dominated by the view's alert branch over the 10 000
+open alerts (PDK-090 above). The miss is tracked in PDK-094.
 
 ## Method
 
