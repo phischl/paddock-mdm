@@ -33,6 +33,9 @@ const (
 	OutcomeRolledBack       = "rolled_back"
 	OutcomeSignatureInvalid = "signature_invalid"
 	OutcomeDowngradeRefused = "downgrade_refused"
+	// OutcomeRollbackFailed: the release failed its probation and the flip back failed; the supervisor keeps
+	// retrying the rollback (ADR 0024). It is reported as agent.update_failed.
+	OutcomeRollbackFailed = "rollback_failed"
 )
 
 // MaxBinary bounds an agent release download.

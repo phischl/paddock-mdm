@@ -156,6 +156,7 @@ func TestUpdateResultEventTypes(t *testing.T) {
 	for outcome, want := range map[string]string{
 		update.OutcomeUpdated: protocol.EventAgentUpdated, update.OutcomeRolledBack: protocol.EventAgentRolledBack,
 		update.OutcomeSelfTestFailed: protocol.EventAgentUpdateFailed, update.OutcomeSignatureInvalid: protocol.EventAgentUpdateFailed,
+		update.OutcomeRollbackFailed: protocol.EventAgentUpdateFailed,
 	} {
 		if got := (update.Result{Outcome: outcome}).EventType(); got != want {
 			t.Errorf("%s → %s", outcome, got)
