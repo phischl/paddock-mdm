@@ -27,7 +27,8 @@ type Identity struct {
 	KeyID    string `json:"key_id"`
 	// KeyPKCS8 is the standard base64 PKCS#8 DER of the device's ECDSA P-256 key (WebCrypto importKey "pkcs8").
 	KeyPKCS8 string `json:"key_pkcs8"`
-	// IP is the X-Forwarded-For address the device uses when the scripts talk to the gateway directly; empty otherwise.
+	// IP is the X-Paddock-Client-IP address the device uses when the scripts talk to the gateway directly; empty
+	// otherwise.
 	IP string `json:"ip,omitempty"`
 }
 
@@ -52,9 +53,9 @@ func readConfigs(files []string, server string) ([]protocol.EnrollmentConfig, er
 }
 
 type enroller struct {
-	client       *http.Client
-	forwardedFor bool
-	poll         time.Duration
+	client   *http.Client
+	clientIP bool
+	poll     time.Duration
 }
 
 // syntheticIP is a distinct address per device index in 10.0.0.0/8, so that the gateway's per-IP rate limit sees a
@@ -111,7 +112,7 @@ func (e enroller) enroll(ctx context.Context, cfg protocol.EnrollmentConfig, hos
 		return Identity{}, err
 	}
 	id := Identity{KeyID: protocol.KeyID(spki), KeyPKCS8: base64.StdEncoding.EncodeToString(pkcs8)}
-	if e.forwardedFor {
+	if e.clientIP {
 		id.IP = syntheticIP(i)
 	}
 	var acc protocol.EnrollAccepted
@@ -163,7 +164,7 @@ func (e enroller) do(ctx context.Context, cfg protocol.EnrollmentConfig, key *ec
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if id.IP != "" {
-		req.Header.Set("X-Forwarded-For", id.IP)
+		req.Header.Set("X-Paddock-Client-IP", id.IP)
 	}
 	res, err := e.client.Do(req)
 	if err != nil {

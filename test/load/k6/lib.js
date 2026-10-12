@@ -77,8 +77,9 @@ export async function signedRequest(dev, method, path, body, tags) {
     'Paddock-Signature': b64encode(p1363ToDER(sig), 'rawurl'),
   }
   if (payload !== '') headers['Content-Type'] = 'application/json'
-  // Only honoured when the scenario talks to the gateway directly (no edge in front): a fleet has many addresses,
-  // the gateway's per-IP limit would otherwise throttle the single load generator.
-  if (dev.ip) headers['X-Forwarded-For'] = dev.ip
+  // Only honoured when the scenario talks to the gateway directly (no edge in front) from an address in
+  // PADDOCK_TRUSTED_PROXY_CIDRS (the development stack trusts the private ranges): a fleet has many addresses, the
+  // gateway's per-IP limit would otherwise throttle the single load generator.
+  if (dev.ip) headers['X-Paddock-Client-IP'] = dev.ip
   return http.asyncRequest(method, baseURL + path, payload === '' ? null : payload, { headers, tags })
 }

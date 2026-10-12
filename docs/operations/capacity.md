@@ -51,8 +51,9 @@ The load generator is k6 (`K6_IMAGE` in `deploy/compose/versions.env`, a tool on
 container on the Compose network `paddock_cp` and talks to one gateway replica directly
 (`http://paddock-gateway:8081`), without the edge (Caddy) in front: N1 is the cost of the gateway node. Each device
 signs its requests exactly like the agent (architecture §6.3, ECDSA P-256 with k6's WebCrypto; the P1363 signature
-is converted to ASN.1 DER) and sends its own `X-Forwarded-For` address, so the per-IP limit of the gateway (300 per
-minute) sees a fleet instead of one load generator. The per-key limit (30 per minute) is respected by spreading the
+is converted to ASN.1 DER) and sends its own address in `X-Paddock-Client-IP`, so the per-IP limit of the gateway (300
+per minute) sees a fleet instead of one load generator. The gateway honours that header only from the addresses in
+`PADDOCK_TRUSTED_PROXY_CIDRS`; the development stack trusts the private ranges, which include the Compose network. The per-key limit (30 per minute) is respected by spreading the
 rate over enough devices: 10 000 devices check in every 10 s at 1 000/s.
 
 1. **Identities.** Create auto-approving enrollment tokens in a dedicated organization (at most 1 000 devices per

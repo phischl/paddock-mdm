@@ -364,7 +364,7 @@ e2e: ## Run Playwright end-to-end tests against the running stack (PADDOCK_E2E_S
 		$(PLAYWRIGHT_IMAGE) sh -c 'npm ci --no-audit --no-fund >/dev/null && npx playwright test'
 
 # Load test (plan M6b decision 1, docs/operations/capacity.md). Both run on the Compose network paddock_cp and talk to
-# one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Forwarded-For address.
+# one gateway replica directly (http://paddock-gateway:8081), each device with its own X-Paddock-Client-IP address.
 LOAD_DIR := bin/load
 COUNT    ?= 10000
 SCENARIO ?= checkin
@@ -385,7 +385,7 @@ load-identities: ## Enroll COUNT load test devices with the enrollment configura
 	CGO_ENABLED=0 go build -trimpath -o $(LOAD_DIR)/identities ./test/load/cmd/identities
 	docker run --rm --network paddock_cp -u $(UID):$(GID) -v $(CURDIR):/src -w /src $(RUNTIME_IMAGE) \
 		/src/$(LOAD_DIR)/identities $(foreach c,$(CONFIGS),--config $(c)) --count $(COUNT) \
-		--server http://paddock-gateway:8081 --forwarded-for --out $(LOAD_DIR)/identities.json
+		--server http://paddock-gateway:8081 --client-ip --out $(LOAD_DIR)/identities.json
 
 .PHONY: load-test
 load-test: ## Run the k6 scenario SCENARIO=checkin|ingest against the running stack (RATE, VUS, WARMUP, DURATION, EVENTS_PER_S, BATCH, DRAIN, SCRAPE_INTERVAL_S)

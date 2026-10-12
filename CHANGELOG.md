@@ -199,6 +199,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Load test (PDK-088): `make load-identities` and the k6 scenarios send each load device's address in
+  `X-Paddock-Client-IP`, the header the gateway reads since the client address is derived through trusted proxies
+  (plan M7a decision 3). With `X-Forwarded-For` every load device counted as the load generator's one address, so
+  enrolling a fleet stopped after about 100 devices with HTTP 429. The identities tool's flag `--forwarded-for` is now
+  `--client-ip`.
 - Secret scan of pull requests (PDK-085, ADR 0027): the scan refuses a `.gitleaks.toml` allowlist with
   `condition = "AND"` and `paths` unless it names `targetRules`. gitleaks' directory scan skipped every file under such
   a global allowlist's path without applying its `regexes`, so `make scan-secrets-diff` missed secrets there that the
