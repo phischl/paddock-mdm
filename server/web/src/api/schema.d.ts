@@ -3005,10 +3005,31 @@ export interface components {
             os_releases: components["schemas"]["OverviewOSRelease"][];
         };
         OverviewAgent: {
+            /** @description The release of the most recently completed rollout. */
             current_version: string | null;
+            /** @description Active devices whose agent_version equals current_version. */
             on_current: number;
+            /**
+             * @description Active devices whose agent_version is older than current_version by SemVer precedence, or is no semantic
+             *     version (the attention kind agent_outdated); 0 while current_version is null.
+             */
             outdated: number;
+            /** @description Active devices whose agent_version is newer than current_version. */
+            ahead: number;
+            /** @description Active devices without agent_version. */
             unknown: number;
+            /** @description The newest release with status published, by SemVer precedence. */
+            latest_published: string | null;
+            /** @description The rollout with status running, else null (at most one runs). */
+            rollout: {
+                version: string;
+                /** @description 1-based: current_wave_index + 1 */
+                wave: number;
+                /** @description cardinality(waves) */
+                waves: number;
+                /** @description waves[current_wave_index] */
+                percent: number;
+            } | null;
         };
         OverviewOSRelease: {
             release: string;

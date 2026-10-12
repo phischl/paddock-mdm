@@ -4727,12 +4727,28 @@ components:
           items: { $ref: "#/components/schemas/OverviewOSRelease" }
     OverviewAgent:
       type: object
-      required: [current_version, on_current, outdated, unknown]
+      required: [current_version, on_current, outdated, ahead, unknown, latest_published, rollout]
       properties:
-        current_version: { type: string, nullable: true }
-        on_current: { type: integer }
-        outdated: { type: integer }
-        unknown: { type: integer }
+        current_version: { type: string, nullable: true, description: "The release of the most recently completed rollout." }
+        on_current: { type: integer, description: "Active devices whose agent_version equals current_version." }
+        outdated:
+          type: integer
+          description: |
+            Active devices whose agent_version is older than current_version by SemVer precedence, or is no semantic
+            version (the attention kind agent_outdated); 0 while current_version is null.
+        ahead: { type: integer, description: "Active devices whose agent_version is newer than current_version." }
+        unknown: { type: integer, description: "Active devices without agent_version." }
+        latest_published: { type: string, nullable: true, description: "The newest release with status published, by SemVer precedence." }
+        rollout:
+          nullable: true
+          type: object
+          description: The rollout with status running, else null (at most one runs).
+          required: [version, wave, waves, percent]
+          properties:
+            version: { type: string }
+            wave: { type: integer, description: "1-based: current_wave_index + 1" }
+            waves: { type: integer, description: "cardinality(waves)" }
+            percent: { type: integer, description: "waves[current_wave_index]" }
     OverviewOSRelease:
       type: object
       required: [release, devices]
