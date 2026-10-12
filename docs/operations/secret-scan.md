@@ -20,9 +20,15 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
   `.gitleaks.toml` that extends another file (`[extend] path`) fails the scan; `useDefault` alone is allowed.
 - `.gitleaks.toml` is parsed, not copied (ADR 0026, amendment 2026-10-12). The scan fails before gitleaks reads any
   pull request content when the file holds anything but `title`, `[extend]` with exactly `useDefault = true`, and
-  `[[allowlists]]` with `description`, `condition` (`"AND"`/`"OR"`), `paths`, `regexes`, `stopwords`, `commits`,
-  `targetRules` and `regexTarget` (`"match"`/`"secret"`/`"line"`). Names compare exactly, so `[Extend]`,
-  `disabledRules` or an unknown key fail. To silence a rule, write an allowlist.
+  `[[allowlists]]` with `description`, `condition` (`"AND"`/`"OR"`), `paths`, `regexes`, `commits`, `targetRules`
+  and `regexTarget` (`"match"`/`"secret"`/`"line"`). Names compare exactly, so `[Extend]`, `disabledRules` or an
+  unknown key fail. To silence a rule, write an allowlist.
+- The scan also refuses allowlists that act differently than they read: a `paths` or `regexes` entry that is empty,
+  matches the empty string (`""`, `^.*$`, `a*`) or that Python's `re` cannot compile (RE2-only constructs such as
+  `\pL`; write the pattern without them), an empty `paths` or `regexes` list, and `stopwords`, which gitleaks matches
+  as case-insensitive substrings of the secret (`"kia"` silences AWS access keys). What an allowlist means stays the
+  code owners' review: broad patterns that do not match the empty string, such as `.` or `[\s\S]`, pass the tool,
+  and a reviewer reads them as "everything".
 
 ## The scan configuration
 

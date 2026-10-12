@@ -113,7 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer scanned under a `.scan` name: findings and `.gitleaksignore` fingerprints use the file's own path; archives
   keep their `.zip` and `.tar.gz` suffixes. `.gitleaks.toml` is now parsed and checked against a closed list
   of keys: the scan fails on anything but `title`, `[extend]` with exactly `useDefault = true` and `[[allowlists]]`
-  with the known allowlist keys (for example on `disabledRules`, `url`, `[Extend]` or an unknown key). Each scan
+  with the known allowlist keys (for example on `disabledRules`, `url`, `[Extend]`, `stopwords` or an unknown key),
+  and on a `paths` or `regexes` entry that is empty, matches the empty string or does not compile in Python. Each scan
   first checks the generated configuration with a canary token (Python 3.11 or later is needed to run the scans).
 
 - Secret scan of pull requests (PDK-069, ADR 0025): `make scan-secrets-diff` also scans files under extensions that

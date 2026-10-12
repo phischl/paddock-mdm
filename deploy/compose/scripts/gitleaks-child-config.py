@@ -11,6 +11,7 @@ canary <report.json> <path>...
 """
 
 import json
+import re
 import sys
 
 if sys.version_info < (3, 11):
@@ -18,7 +19,10 @@ if sys.version_info < (3, 11):
 
 import tomllib  # noqa: E402 - the version check above must run first
 
-STRING_LISTS = ("paths", "regexes", "stopwords", "commits", "targetRules")
+# stopwords are left out on purpose: gitleaks matches them as case-insensitive substrings of the secret, so a short
+# word such as "kia" or "live" silently disables whole rules (ADR 0026, amendment 2026-10-12).
+STRING_LISTS = ("paths", "regexes", "commits", "targetRules")
+PATTERNS = ("paths", "regexes")
 CHOICES = {"condition": ("AND", "OR"), "regexTarget": ("match", "secret", "line")}
 ALLOWLIST_KEYS = ("description", "condition", *STRING_LISTS, "regexTarget")
 
@@ -39,6 +43,19 @@ def is_string_list(value):
     return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
 
+def check_pattern(where, pattern):
+    # Python's re is close enough to Go's RE2 to tell whether a pattern can match the empty string; a pattern Python
+    # cannot compile (an RE2-only construct such as \pL) is refused rather than guessed.
+    try:
+        compiled = re.compile(pattern)
+    except (re.error, RecursionError, OverflowError) as e:
+        raise Refused(f"{where} holds {pattern!r}, which Python's re cannot compile ({e}); write it without "
+                      "RE2-only constructs") from e
+    if compiled.search("") is not None:
+        raise Refused(f"{where} holds {pattern!r}, which is empty or matches the empty string, so it would match "
+                      "everything")
+
+
 def check_allowlist(i, table):
     if not isinstance(table, dict):
         raise Refused(f"allowlists[{i}] is not a table")
@@ -49,6 +66,11 @@ def check_allowlist(i, table):
             raise Refused(f"allowlists[{i}].description is not a string")
         if key in STRING_LISTS and not is_string_list(value):
             raise Refused(f"allowlists[{i}].{key} is not a list of strings")
+        if key in PATTERNS and not value:
+            raise Refused(f"allowlists[{i}].{key} is an empty list")
+        if key in PATTERNS:
+            for pattern in value:
+                check_pattern(f"allowlists[{i}].{key}", pattern)
         if key in CHOICES and value not in CHOICES[key]:
             raise Refused(f"allowlists[{i}].{key} is not one of {', '.join(CHOICES[key])}")
 

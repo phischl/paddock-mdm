@@ -16,8 +16,8 @@
 # the parsed whitelist fails both scans before gitleaks runs; a default configuration that does not match its pins
 # (sha256 off by one digit, header missing or not unique), whose strip leaves global paths or no rules, or whose
 # generated configuration misses the canary fails. Archives are opened one level deep (ADR 0025): a secret inside a
-# deflated `creds.zip`, `creds.docx` or `creds.tgz` fails `make scan-secrets-diff`, an archive copy that would overwrite another changed file fails it, and
-# a real binary PNG passes with the repository's own configuration. The secret is a generated fake GitHub token that
+# deflated `creds.zip`, `creds.docx` or `creds.tgz` fails `make scan-secrets-diff`, an archive copy that would
+# overwrite another changed file fails it, and a real binary PNG passes with the repository's own configuration. The secret is a generated fake GitHub token that
 # is never printed (the scan runs with --redact).
 set -euo pipefail
 
@@ -416,11 +416,14 @@ verdict "a file over GITLEAKS_MAX_MB (scan-secrets-diff)" fail "cannot be scanne
 # guards a pull request that adds a token under gen/. Refused: an [extend] that extends another file or holds anything
 # but useDefault = true (path as a key and as a dotted key, disabledRules, url, a subtable), the same names in any
 # case, quoted or escaped ([Extend], Extend.disabledRules, "EXTEND".path, ["\u0065xtend"]), a byte-order mark, a
-# second [extend] header, an unknown top-level key (the second review's stopwords probe, rules), and a wrong type.
-# Accepted: the first review's probe and a multi-line basic string, whose allowlists then apply exactly as written (the
-# gen/ token is not a sha256 digest), so the history scan finds the token. They are not run through
-# scan-secrets-diff: gitleaks v8.30.1's dir mode skips a file whose path an AND allowlist matches without looking at
-# the allowlist's regexes, with or without the generated configuration (a follow-up of PDK-078).
+# second [extend] header, an unknown top-level key (the second review's stopwords probe, rules), a wrong type, and
+# allowlists that act differently than they read (the third review): a pattern that is empty or matches the empty
+# string, alone or scoped by targetRules (a hidden disabledRules), an empty pattern list, a pattern Python cannot
+# compile (the RE2-only \pL), and stopwords, which gitleaks matches as case-insensitive substrings of the secret.
+# The first review's probe now fails for its stopwords. Accepted: a multi-line basic string, whose allowlist then
+# applies exactly as written (the gen/ token is not a sha256 digest), so the history scan finds the token. It is not
+# run through scan-secrets-diff: gitleaks v8.30.1's dir mode skips a file whose path an AND allowlist matches without
+# looking at the allowlist's regexes, with or without the generated configuration (a follow-up of PDK-078).
 config_case() {
   case $1 in
     extend-path) printf '[extend] # the default rules and more\nuseDefault = true\n"path" = "extra.toml"\n' ;;
@@ -447,6 +450,18 @@ EOF
       ;;
     unknown-key) printf '[extend]\nuseDefault = true\n\n[[rules]]\nid = "x"\nregex = %s\n' "'''x'''" ;;
     wrong-type) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = %s\n' "'''^gen/'''" ;;
+    empty-path-scoped)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "scoped"\n'
+      printf 'targetRules = ["aws-access-token", "generic-api-key"]\npaths = [""]\n' ;;
+    empty-regex-scoped)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ntargetRules = ["generic-api-key"]\nregexes = [""]\n' ;;
+    match-empty-path) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^.*$'''" ;;
+    match-empty-regex) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\nregexes = ["x", "a*"]\n' ;;
+    empty-list) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "d"\npaths = []\n' ;;
+    re2-only) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^gen/\\pL+$'''" ;;
+    stopwords)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "Words that mark placeholder values"\n'
+      printf 'stopwords = ["example", "live", "kia"]\n' ;;
     review-probe)
       cat <<'EOF'
 [extend]
@@ -472,7 +487,8 @@ EOF
   esac
 }
 for shape in extend-path extend-path-dotted disabled-rules url subtable use-default-false upper-table upper-dotted \
-  upper-quoted-path all-caps escaped bom second-extend stopwords-probe unknown-key wrong-type review-probe \
+  upper-quoted-path all-caps escaped bom second-extend stopwords-probe unknown-key wrong-type empty-path-scoped \
+  empty-regex-scoped match-empty-path match-empty-regex empty-list re2-only stopwords review-probe \
   multi-line-basic; do
   g switch -q -c "config-$shape" "$base"
   config_case "$shape" >"$r/.gitleaks.toml"
@@ -483,13 +499,19 @@ for shape in extend-path extend-path-dotted disabled-rules url subtable use-defa
   g add gen/creds.env
   g commit -q -m 'add credentials under gen/'
   case $shape in
-    review-probe | multi-line-basic) want=leak reason= ;;
+    multi-line-basic) want=leak reason= ;;
+    review-probe) want=fail reason="allowlists[0] has the key 'stopwords'" ;;
     extend-path* | disabled-rules | url | subtable | use-default-false | escaped) want=fail
       reason="extend must be exactly {useDefault = true}" ;;
     upper-* | all-caps) want=fail reason="is not allowed; allowed are title, extend and allowlists" ;;
     stopwords-probe | unknown-key) want=fail reason="is not allowed; allowed are title, extend and allowlists" ;;
     bom | second-extend) want=fail reason="cannot parse" ;;
     wrong-type) want=fail reason="allowlists[0].paths is not a list of strings" ;;
+    empty-path-scoped | match-empty-path) want=fail reason="allowlists[0].paths holds" ;;
+    empty-regex-scoped | match-empty-regex) want=fail reason="allowlists[0].regexes holds" ;;
+    empty-list) want=fail reason="allowlists[0].paths is an empty list" ;;
+    re2-only) want=fail reason="which Python's re cannot compile" ;;
+    stopwords) want=fail reason="allowlists[0] has the key 'stopwords'" ;;
   esac
   targets=(scan-secrets scan-secrets-diff)
   if [[ "$want" == leak ]]; then targets=(scan-secrets); fi

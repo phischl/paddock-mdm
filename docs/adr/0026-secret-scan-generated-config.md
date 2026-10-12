@@ -115,8 +115,8 @@ cannot be made sound, so decision 4 and the check of decision 3 change as follow
    runs in the regression test and on the CI runner. The script refuses everything outside a closed whitelist, with
    names compared exactly: at the top level only `title` (string), `extend` and `allowlists`; `extend` exactly
    `{useDefault = true}` (so `path`, `url` and `disabledRules` fail, as PDK-065 required for `path`); each allowlist
-   only `description` (string), `condition` (`"AND"` or `"OR"`), `paths`, `regexes`, `stopwords`, `commits`,
-   `targetRules` (lists of strings) and `regexTarget` (`"match"`, `"secret"` or `"line"`). It then writes the child
+   only `description` (string), `condition` (`"AND"` or `"OR"`), `paths`, `regexes`, `commits`, `targetRules`
+   (lists of strings) and `regexTarget` (`"match"`, `"secret"` or `"line"`). It then writes the child
    itself, `[extend] path` to the stripped default and each allowlist under its canonical key names, every string as a
    TOML basic string, and checks that the result parses back to the same allowlists. Nothing of the input is copied
    verbatim. Multi-line strings are therefore allowed again.
@@ -127,6 +127,14 @@ cannot be made sound, so decision 4 and the check of decision 3 change as follow
    over a temporary directory holding a fake GitHub token, generated per run and never printed, in
    `node_modules/canary.txt` and `vendor/github.com/canary/canary.txt`, paths the default's global allowlist skipped.
    Both must be reported, or the scan fails with "the generated configuration lost its rules or path coverage".
+
+What a reviewed allowlist means stays the responsibility of its code owners (`.gitleaks.toml` is in CODEOWNERS): the
+tool only guarantees that the configuration acts as it reads. It therefore also refuses the constructs that act
+differently than they read: a `paths` or `regexes` entry that is empty, matches the empty string (Python's `re`
+decides; it is close enough to RE2 for this) or does not compile in Python (RE2-only constructs such as `\pL`), an
+empty `paths` or `regexes` list, and `stopwords`, which gitleaks matches as case-insensitive substrings of the secret,
+so that a short word disables whole rules. A broad pattern that is visible as such, such as `.` or `[\s\S]`, is left
+to that review.
 
 The regression test reaches the strip check and the canary through two test seams (`make
 scan-secrets-strip-default`, `make scan-secrets-canary`) that do not change either scan.
