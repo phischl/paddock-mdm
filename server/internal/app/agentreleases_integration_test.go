@@ -319,6 +319,126 @@ func TestRolloutIgnoresRefusedDowngrades(t *testing.T) {
 	}
 }
 
+// TestRollbackFailedCountsOnceAndRaisesAttention (ADR 0024): a device whose flip back failed reports rollback_failed,
+// audited as device.agent_rollback_failed and counted by every failure count of the release; when the retried rollback
+// succeeds the same device reports rolled_back and still counts once. While the device runs the release without a
+// rolled_back, the attention list shows agent_rollback_pending to its own organization only.
+func TestRollbackFailedCountsOnceAndRaisesAttention(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	v := h.published(t)
+	ctx := context.Background()
+	org, dev := h.device(t)
+	other, _ := h.device(t)
+	if _, err := h.super.Exec(ctx, "INSERT INTO device_status (device_id, organization_id, agent_version) VALUES ($1, $2, $3)", dev, org, v); err != nil {
+		t.Fatal(err)
+	}
+	report := func(seq int64, eventType, outcome string) {
+		t.Helper()
+		data, _ := json.Marshal(map[string]string{"version": v, "from_version": "0.9.0", "outcome": outcome})
+		if _, err := h.reports.RecordEvent(systemCtx(org), dev, protocol.Event{EventSeq: seq, Type: eventType, OccurredAt: time.Now(), Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failed := func() [3]int64 {
+		t.Helper()
+		var n [3]int64
+		if err := h.super.QueryRow(ctx, `SELECT (SELECT failed FROM paddock_agent_rollout_stats($1, 100)),
+			(SELECT failed FROM paddock_agent_rollout_evaluation_stats($1, 100, '-infinity')),
+			(SELECT failed FROM paddock_agent_current_release_stats($1, '-infinity'))`, v).Scan(&n[0], &n[1], &n[2]); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	// attention lists the pending rollbacks of dev as the API role of the organization asking.
+	attention := func(asking uuid.UUID) []string {
+		t.Helper()
+		tx, err := h.super.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE paddock_api"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", asking.String()); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := tx.Query(ctx, "SELECT detail FROM attention_condition WHERE device_id = $1 AND kind = 'agent_rollback_pending'", dev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		details, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return details
+	}
+
+	report(1, protocol.EventAgentUpdateFailed, "rollback_failed")
+	report(1, protocol.EventAgentUpdateFailed, "rollback_failed")
+	if n := failed(); n != [3]int64{1, 1, 1} {
+		t.Fatalf("failed counts %v after rollback_failed, want 1 each", n)
+	}
+	var audited, outcomes int
+	if err := h.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE code = 'device.agent_rollback_failed' AND target->>'id' = $1", dev.String()).Scan(&audited); err != nil || audited != 1 {
+		t.Fatalf("%d device.agent_rollback_failed events (%v), want 1", audited, err)
+	}
+	if err := h.super.QueryRow(ctx, "SELECT count(*) FROM action WHERE code = 'device.agent_update_failed' AND target->>'id' = $1", dev.String()).Scan(&audited); err != nil || audited != 0 {
+		t.Fatalf("%d device.agent_update_failed events (%v), want 0", audited, err)
+	}
+	if got := attention(org); len(got) != 1 || got[0] != v {
+		t.Fatalf("agent_rollback_pending details %v, want [%s]", got, v)
+	}
+	if got := attention(other); len(got) != 0 {
+		t.Fatalf("another organization sees agent_rollback_pending %v", got)
+	}
+
+	report(2, protocol.EventAgentRolledBack, "rolled_back")
+	if n := failed(); n != [3]int64{1, 1, 1} {
+		t.Fatalf("failed counts %v after a later rolled_back, want 1 each", n)
+	}
+	if err := h.super.QueryRow(ctx, "SELECT count(*) FROM agent_update_report WHERE device_id = $1 AND outcome IN ('rollback_failed', 'rolled_back')", dev).Scan(&outcomes); err != nil || outcomes != 2 {
+		t.Fatalf("%d update reports (%v), want rollback_failed and rolled_back", outcomes, err)
+	}
+	if got := attention(org); len(got) != 0 {
+		t.Fatalf("agent_rollback_pending %v after rolled_back", got)
+	}
+}
+
+// TestRollbackPendingEndsWhenTheDeviceLeavesTheVersion (ADR 0024): the attention row is gone once the device reports
+// another agent version, also without a rolled_back report (an operator flipped current by hand).
+func TestRollbackPendingEndsWhenTheDeviceLeavesTheVersion(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	v := h.published(t)
+	ctx := context.Background()
+	org, dev := h.device(t)
+	if _, err := h.super.Exec(ctx, "INSERT INTO device_status (device_id, organization_id, agent_version) VALUES ($1, $2, $3)", dev, org, v); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]string{"version": v, "from_version": "0.9.0", "outcome": "rollback_failed"})
+	if _, err := h.reports.RecordEvent(systemCtx(org), dev, protocol.Event{EventSeq: 1, Type: protocol.EventAgentUpdateFailed, OccurredAt: time.Now(), Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() bool {
+		t.Helper()
+		var ok bool
+		if err := h.super.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM attention_condition WHERE device_id = $1 AND kind = 'agent_rollback_pending')", dev).Scan(&ok); err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if !pending() {
+		t.Fatal("no agent_rollback_pending while the device runs the release")
+	}
+	if _, err := h.super.Exec(ctx, "UPDATE device_status SET agent_version = '0.9.0' WHERE device_id = $1", dev); err != nil {
+		t.Fatal(err)
+	}
+	if pending() {
+		t.Fatal("agent_rollback_pending after the device left the release")
+	}
+}
+
 func TestRolloutRoundAdvancesAndCompletes(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	h.haltAll(t)

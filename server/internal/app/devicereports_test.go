@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 )
 
 func TestEventParams(t *testing.T) {
@@ -46,6 +49,37 @@ func TestEventParams(t *testing.T) {
 			tt.want["occurred_at"] = "2026-10-04T12:00:00Z"
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("got %#v\nwant %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAgentUpdateEventsAreClassifiedByOutcome (ADR 0024): agent.update_failed with outcome rollback_failed is audited as
+// device.agent_rollback_failed and counted as rollback_failed; every other update event keeps its code and count.
+func TestAgentUpdateEventsAreClassifiedByOutcome(t *testing.T) {
+	tests := []struct {
+		eventType, outcome string
+		code               audit.Code
+		counted            string
+	}{
+		{protocol.EventAgentUpdateFailed, "rollback_failed", audit.CodeDeviceAgentRollbackFailed, "rollback_failed"},
+		{protocol.EventAgentUpdateFailed, "self_test_failed", audit.CodeDeviceAgentUpdateFailed, "update_failed"},
+		{protocol.EventAgentUpdateFailed, "signature_invalid", audit.CodeDeviceAgentUpdateFailed, "update_failed"},
+		{protocol.EventAgentUpdateFailed, "downgrade_refused", audit.CodeDeviceAgentUpdateFailed, ""},
+		{protocol.EventAgentRolledBack, "rolled_back", audit.CodeDeviceAgentRolledBack, "rolled_back"},
+		{protocol.EventAgentRolledBack, "rollback_failed", audit.CodeDeviceAgentRolledBack, "rolled_back"},
+		{protocol.EventAgentUpdated, "updated", audit.CodeDeviceAgentUpdated, "updated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.eventType+"/"+tt.outcome, func(t *testing.T) {
+			data, _ := json.Marshal(map[string]string{"version": "1.1.0", "from_version": "1.0.0", "outcome": tt.outcome})
+			entry, ok := eventEntry(uuid.New(), protocol.Event{EventSeq: 1, Type: tt.eventType, OccurredAt: time.Now(), Data: data})
+			if !ok || entry.Spec.Code != tt.code {
+				t.Fatalf("audit code %q (audited %t), want %q", entry.Spec.Code, ok, tt.code)
+			}
+			counted, ok := updateOutcome(tt.eventType, entry.Spec.Params)
+			if counted != tt.counted || ok != (tt.counted != "") {
+				t.Fatalf("counted as %q (%t), want %q", counted, ok, tt.counted)
 			}
 		})
 	}

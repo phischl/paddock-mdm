@@ -170,11 +170,16 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 	if !ok {
 		return OnceEntry{}, false
 	}
+	params := eventParams(ev)
+	// The agent carries a failed rollback in agent.update_failed so that older servers accept it (ADR 0024).
+	if ev.Type == protocol.EventAgentUpdateFailed && params["outcome"] == outcomeRollbackFailed {
+		code = audit.CodeDeviceAgentRollbackFailed
+	}
 	spec := ActionSpec{
 		Code:   code,
 		Actor:  &audit.Actor{Type: audit.ActorDevice, ID: deviceID.String()},
 		Target: &audit.Target{Type: "device", ID: deviceID.String()},
-		Params: eventParams(ev),
+		Params: params,
 	}
 	return OnceEntry{Spec: spec, Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
 		org, err := orgOf(ctx)
@@ -286,13 +291,21 @@ var updateOutcomes = map[string]string{
 // (agent/internal/update.OutcomeDowngradeRefused).
 const outcomeDowngradeRefused = "downgrade_refused"
 
+// outcomeRollbackFailed is the supervisor's outcome for a release that failed its probation and whose flip back failed
+// (agent/internal/update.OutcomeRollbackFailed, ADR 0024); it is also the agent_update_report outcome.
+const outcomeRollbackFailed = "rollback_failed"
+
 // updateOutcome returns the agent_update_report outcome of an agent update event, if the rollout evaluation counts
 // it. A refused downgrade never counts toward the failure rate (PDK-025): the device keeps its newer agent, so the
-// release did not fail on it.
+// release did not fail on it. A failed rollback is recorded as such, so the counts take it once with a later
+// rolled_back of the same device.
 func updateOutcome(eventType string, params map[string]any) (string, bool) {
 	outcome, ok := updateOutcomes[eventType]
 	if !ok || params["outcome"] == outcomeDowngradeRefused {
 		return "", false
+	}
+	if eventType == protocol.EventAgentUpdateFailed && params["outcome"] == outcomeRollbackFailed {
+		return outcomeRollbackFailed, true
 	}
 	return outcome, true
 }

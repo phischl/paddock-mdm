@@ -1778,8 +1778,8 @@ paths:
         Roles: org_admin, org_operator, org_auditor. The conditions that need an administrator, one row per open
         condition of a device (plan M5b decision 11): staleness warning and critical (the organization's thresholds),
         presumed lost, quarantined (clone suspected), disk encryption not compliant, agent not the current release,
-        the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days.
-        Read-only; the actions are the device's own (retire, release quarantine, lock).
+        the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days,
+        an agent release whose rollback failed and is still pending on the device (ADR 0024). Read-only; the actions are the device's own (retire, release quarantine, lock).
       x-paddock-list:
         sort: [since, kind, hostname]
         default_sort: -since
@@ -3838,7 +3838,7 @@ components:
       properties:
         eligible: { type: integer, format: int64, description: Active devices inside the current wave. }
         updated: { type: integer, format: int64, description: Devices that reported agent.updated for this version. }
-        failed: { type: integer, format: int64, description: "Devices that reported agent.update_failed or agent.rolled_back for this version." }
+        failed: { type: integer, format: int64, description: "Devices that reported agent.update_failed (also with outcome rollback_failed) or agent.rolled_back for this version, each once." }
     AgentReleaseDetail:
       type: object
       required: [release, artifacts, packages]
@@ -4585,7 +4585,7 @@ components:
     AttentionKind:
       type: string
       enum: [stale_warning, stale_critical, presumed_lost, quarantined, disk_not_compliant, agent_outdated,
-             login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired]
+             login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired, agent_rollback_pending]
     Attention:
       type: object
       required: [id, kind, device_id, hostname, since, detail]
@@ -4594,10 +4594,10 @@ components:
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
         hostname: { type: string }
-        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact). }
+        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report). }
         detail:
           type: string
-          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; *_apply_failed: the stage; revocation_*: action:status; otherwise empty."
+          description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; otherwise empty."
     AttentionPage:
       type: object
       required: [items, page, page_size, total, total_capped, sort]
