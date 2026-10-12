@@ -129,8 +129,8 @@ func TestAttentionCurrentKeyOnce(t *testing.T) {
 	small := measure()
 	addDevices(32)
 	for name, got := range measure() {
-		if got != small[name] || got >= 8 {
-			t.Errorf("%s: paddock_current_agent_version called %d times for 8 devices, %d times for %d devices; want a constant below 8",
+		if small[name] < 1 || got != small[name] || got >= 8 {
+			t.Errorf("%s: paddock_current_agent_version called %d times for 8 devices, %d times for %d devices; want a constant from 1 to 7",
 				name, small[name], got, devices)
 		}
 	}
