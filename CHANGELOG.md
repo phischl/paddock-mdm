@@ -84,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guide is rewritten for the bundle (download and signature check, `./paddock secrets|bootstrap|check|up`, first
   agent release, installing from source with a local bundle); ADR 0022 records the distribution decision. M7b adds no
   database migration.
+- Audit writer latency metrics (PDK-067): the histograms `paddock_audit_writer_transaction_seconds{result}` and
+  `paddock_audit_worm_put_seconds{object,result}` tell a slow WORM store from a slow audit database, and the warning
+  `PaddockAuditWriterTransactionSlow` fires when the writer's transaction p95 stays above 5 s for 5 minutes
+  (`docs/operations/monitoring.md`).
 
 ### Changed
 

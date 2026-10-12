@@ -28,9 +28,30 @@ import (
 // retention is rejected at startup.
 const MinRetentionDays = 400
 
-var metricWritten = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "paddock_audit_events_written_total", Help: "Audit events written to the index and the WORM store.",
-})
+// latencyBuckets span 5 ms to 41 s: a healthy transaction takes milliseconds, the stalls of PDK-028 took 5–20 s.
+var latencyBuckets = prometheus.ExponentialBuckets(0.005, 2, 14)
+
+var (
+	metricWritten = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "paddock_audit_events_written_total", Help: "Audit events written to the index and the WORM store.",
+	})
+	metricTransaction = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "paddock_audit_writer_transaction_seconds",
+		Help:    "Duration of one audit writer transaction (one organization of a batch), WORM put included, by result.",
+		Buckets: latencyBuckets,
+	}, []string{"result"})
+	metricPut = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "paddock_audit_worm_put_seconds",
+		Help:    "Duration of a WORM put (PutLocked) to the audit bucket, by object kind and result.",
+		Buckets: latencyBuckets,
+	}, []string{"object", "result"})
+)
+
+// Values of the object label of paddock_audit_worm_put_seconds.
+const (
+	putObjectEvents   = "events"
+	putObjectManifest = "manifest"
+)
 
 // ObjectStore is the subset of objectstore.Store the writer needs.
 type ObjectStore interface {
@@ -113,6 +134,7 @@ func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.E
 	events = dedupe(events)
 	written := 0
 	var recordedAt time.Time
+	start := time.Now()
 	err := w.pool.InWriterWithTimeout(ctx, w.txTimeout, func(ctx context.Context, q *auditstore.Queries) error {
 		written = 0
 		var err error
@@ -155,7 +177,7 @@ func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.E
 		}
 		sum := sha256.Sum256(body)
 		day := dayOf(recordedAt)
-		if err := w.store.PutLocked(ctx, key, "application/zstd", body, w.RetainUntil(day)); err != nil {
+		if err := putLocked(ctx, w.store, putObjectEvents, key, "application/zstd", body, w.RetainUntil(day)); err != nil {
 			return fmt.Errorf("auditwriter: put %s: %w", key, err)
 		}
 		if err := q.InsertAuditObject(ctx, auditstore.InsertAuditObjectParams{
@@ -166,6 +188,11 @@ func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.E
 		written = len(inserted)
 		return nil
 	})
+	result := "committed"
+	if err != nil {
+		result = "rolled_back"
+	}
+	metricTransaction.WithLabelValues(result).Observe(time.Since(start).Seconds())
 	if err != nil {
 		return 0, err
 	}
@@ -174,6 +201,19 @@ func (w *Writer) writeGroup(ctx context.Context, org uuid.UUID, events []audit.E
 		slog.InfoContext(ctx, "audit object written", "organization_id", org, "recorded_at", recordedAt, "events", written)
 	}
 	return written, nil
+}
+
+// putLocked is store.PutLocked, timed in paddock_audit_worm_put_seconds, so a slow transaction can be attributed to
+// the WORM store or to the database (PDK-067).
+func putLocked(ctx context.Context, store ObjectStore, object, key, contentType string, body []byte, retainUntil time.Time) error {
+	start := time.Now()
+	err := store.PutLocked(ctx, key, contentType, body, retainUntil)
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	metricPut.WithLabelValues(object, result).Observe(time.Since(start).Seconds())
+	return err
 }
 
 // ensurePartitions creates the monthly index partitions of the events' occurred_at (the index stays partitioned by

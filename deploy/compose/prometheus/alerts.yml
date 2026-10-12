@@ -47,6 +47,19 @@ groups:
           summary: "No audit writer consumes audit.writer"
           description: "audit.writer has had no consumer for 5 minutes; audit events wait in RabbitMQ."
 
+  - name: paddock-audit
+    rules:
+      # A healthy writer transaction takes milliseconds; the stalls of PDK-028 took 5-20 s while messages sat unacked.
+      # paddock_audit_worm_put_seconds attributes a slow transaction to the WORM store or the database.
+      - alert: PaddockAuditWriterTransactionSlow
+        expr: histogram_quantile(0.95, sum by (le) (rate(paddock_audit_writer_transaction_seconds_bucket[5m]))) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit writer transaction p95 above 5 s"
+          description: "The 95th percentile of the audit writer's transactions is {{ $value | humanizeDuration }}; compare paddock_audit_worm_put_seconds to tell the WORM store from the database."
+
   - name: paddock-control-plane
     rules:
       - alert: PaddockCompileLatencyHigh
