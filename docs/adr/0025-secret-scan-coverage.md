@@ -87,3 +87,11 @@ Review 1 of PDK-069 found three gaps in decisions 1 and 2, measured with the pin
 - **`.tgz`.** gitleaks does not open `.tgz` by name. A last component ending, case-insensitively, in `.tgz` gets the
   suffix `.tar.gz`; the `.zip` rule takes precedence, and the two never overlap. Archives under other names gitleaks
   does not recognise stay unopened, which `docs/operations/secret-scan.md` states.
+
+## Amendment 2026-10-12 (b) — renaming replaced by a generated configuration
+
+ADR 0026 replaces decision 1 and the directory and `?dll` rules of the first amendment: both scans run with the default
+rules of the pinned image without the global path allowlist, so no copy is renamed with `.scan` any more. Decision 4
+is replaced as well: the history scan uses the same generated configuration; its remaining gaps (binary content,
+archives, the magic-byte skip) are closed by branch protection, not by a periodic blob scan. Decisions 2, 3, 5 and 6
+stay: archives are still identified by name, so the `.zip` and `.tar.gz` renames and `--max-archive-depth 1` remain.

@@ -1149,3 +1149,52 @@ The agent row of the *Updates and agent rollout* panel names the release of the 
 (`paddock_current_agent_version()`). Its empty text is "No agent rollout completed yet" instead of "No agent release
 published yet": a release can be published while no rollout has completed. Showing the latest published release is a
 separate decision (overview contract change).
+
+## Amendment 2026-10-12 (architect, PDK-051)
+
+Decision 26, `updates.agent`: the organization overview gains the latest published release and the running rollout,
+and its `outdated` count follows the attention kind. Releases and rollouts are platform objects (plan M2b decision 19);
+the overview reads them in organization scope through `SECURITY DEFINER` functions granted to `paddock_api`, as
+`paddock_current_agent_version()` already does (migration 00026), never through the platform pool. Not a list
+endpoint; ADR 0018 is not engaged. The change is additive (new required properties, `nullable` where empty).
+
+`OverviewAgent` (`api/openapi/admin.yaml`):
+
+```yaml
+OverviewAgent:
+  type: object
+  required: [current_version, on_current, outdated, ahead, unknown, latest_published, rollout]
+  properties:
+    current_version: { type: string, nullable: true }   # unchanged: the most recently completed rollout
+    on_current: { type: integer }        # active devices whose agent_version equals current_version
+    outdated: { type: integer }          # active devices whose agent_version is older than current_version by
+                                         # paddock_version_key, or does not parse as a version (the predicate of
+                                         # the attention kind agent_outdated, migration 00039); 0 while
+                                         # current_version is null
+    ahead: { type: integer }             # active devices whose agent_version is newer than current_version
+    unknown: { type: integer }           # active devices without agent_version
+    latest_published: { type: string, nullable: true }  # newest release with status published, by version_key
+    rollout:                             # the rollout with status running, else null (at most one runs)
+      nullable: true
+      type: object
+      required: [version, wave, waves, percent]
+      properties:
+        version: { type: string }
+        wave: { type: integer, description: "1-based: current_wave_index + 1" }
+        waves: { type: integer, description: "cardinality(waves)" }
+        percent: { type: integer, description: "waves[current_wave_index]" }
+```
+
+- New functions in a forward migration, pattern of 00026/00039 (`SECURITY DEFINER`, `SET search_path = public,
+  pg_temp`, `REVOKE ALL FROM PUBLIC`, `GRANT EXECUTE TO paddock_api`): `paddock_latest_published_agent_version()
+  RETURNS text` and `paddock_running_agent_rollout() RETURNS TABLE (version text, wave int, waves int, percent int)`.
+  `OverviewUpdates` in `queries/overview.sql` counts `on_current`, `outdated`, `ahead`, `unknown` with
+  `paddock_version_key` so that, while `current_version` is set, the four add up to the active devices (without a
+  current version `on_current`, `outdated` and `ahead` are 0, as today).
+- Portal, *Updates and agent rollout* panel (`server/web/src/views/Overview.vue`): after the agent line, one line
+  "Rollout {version}: wave {wave} of {waves} ({percent} %)" while `rollout` is set, and one line "Latest published:
+  {version}" while `latest_published` is set and differs from `current_version`; both from the i18n catalog. The empty
+  text "No agent rollout completed yet" stays for a null `current_version`.
+- Gate `TestOverviewGate` (`test/acceptance/overview_test.go`): `latest_published` equals the newest published release
+  of `GET /api/platform/v1/agent-releases` (null without one); `rollout` matches the running rollout of that list or is
+  null; `on_current + outdated + ahead + unknown = devices.active` while `current_version` is set.

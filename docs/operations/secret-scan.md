@@ -71,3 +71,8 @@ of the maintainer. Recommended for `main`:
 - require the status checks `secrets` (and the other CI jobs) to pass before merging.
 
 Until those settings are on, a reviewer has to check every change to the paths above by hand.
+
+A direct push to `main` bypasses the pull request scans: only the history scan sees it, and the history scan sees no
+binary content and opens no archives (git shows no binary patches). There is no periodic blob scan of `main` to make
+up for that (ADR 0026); the gap is closed by the branch protection above, which makes every change to `main` a pull
+request.
