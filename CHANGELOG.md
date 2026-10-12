@@ -99,6 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Secret scan lock files (PDK-077, ADR 0026): the repository's `.gitleaks.toml` now skips every `go.sum` and
+  `server/web/package-lock.json` by path itself instead of relying on gitleaks' default path allowlist, which a later
+  change drops. Today's scan results are unchanged.
+
 - Secret scan of pull requests (PDK-069, ADR 0025): `make scan-secrets-diff` also scans files under extensions that
   gitleaks' default configuration skips (images, fonts, office documents, `.pdf`, `.bin`, `.exe` and others), and
   files in directories named that way, under the suffix `.scan` on each such path component, and opens zip archives,
