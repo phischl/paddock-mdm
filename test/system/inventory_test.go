@@ -192,6 +192,11 @@ func gateF4(t *testing.T, d *Device) {
 // a stopped agent is reported through fleetd's policy once the device has not checked in for 15 minutes
 // (device.tamper_agent_not_running).
 func gateF2(t *testing.T, d *Device) {
+	// F4's apt downgrade restarts orbit; a stop issued while that restart job is queued fails with "Job canceled"
+	// (PDK-041).
+	Until(t, d.Name+": orbit.service settled", 2*time.Minute, 2*time.Second, nil, func() bool {
+		return d.Must("{ systemctl is-active orbit.service; systemctl list-jobs --no-legend orbit.service; } || true") == "active"
+	})
 	d.Must("sudo systemctl stop orbit.service")
 	d.WaitEvent(t, "device.tamper_service_stopped", 3*time.Minute, func(p map[string]any) bool { return p["unit"] == "orbit.service" })
 	Until(t, d.Name+": orbit.service running again", time.Minute, 5*time.Second, nil, func() bool {
