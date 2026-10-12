@@ -69,7 +69,7 @@ services:
       FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL: ${FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL:-2m}
       FLEET_VULNERABILITIES_PERIODICITY: ${FLEET_VULNERABILITIES_PERIODICITY:-5m}
       # Direct URLs instead of Fleet's anonymous GitHub API lookup, whose hourly limit shared CI runners exhaust
-      # (ADR 0009 amendment 2026-10-12); the pinned release is in versions.env. Production keeps Fleet's lookup.
+      # (ADR 0009 amendment 2026-10-12); the pinned release is in the development section of versions.env. Production keeps Fleet's lookup.
       FLEET_VULNERABILITIES_CPE_DATABASE_URL: ${FLEET_CPE_DATABASE_URL:?versions.env}
       FLEET_VULNERABILITIES_CPE_TRANSLATIONS_URL: ${FLEET_CPE_TRANSLATIONS_URL:?versions.env}
       FLEET_VULNERABILITIES_CVE_FEED_PREFIX_URL: https://github.com/fleetdm/vulnerabilities/releases/latest/download/

@@ -17,7 +17,8 @@ In production Fleet finds the latest CPE dictionary, CPE translations and NVD fe
 token (60 requests per hour and address). Development and CI stacks skip that lookup (ADR 0009 amendment
 2026-10-12): `compose.dev.yaml` sets `FLEET_VULNERABILITIES_CPE_DATABASE_URL` and
 `FLEET_VULNERABILITIES_CPE_TRANSLATIONS_URL` to one pinned `fleetdm/nvd` release (`FLEET_CPE_DATABASE_URL`,
-`FLEET_CPE_TRANSLATIONS_URL` in `deploy/compose/versions.env`) and `FLEET_VULNERABILITIES_CVE_FEED_PREFIX_URL` to the
+`FLEET_CPE_TRANSLATIONS_URL` in the development and CI section at the end of `deploy/compose/versions.env`, which
+the operator bundle does not ship) and `FLEET_VULNERABILITIES_CVE_FEED_PREFIX_URL` to the
 latest `fleetdm/vulnerabilities` release, so a shared CI runner over GitHub's limit still gets the data the
 inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, OVAL and OSV syncs still use the
 API; their failures are logged and do not affect the gates. When upgrading `FLEET_IMAGE`, check that the three
