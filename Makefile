@@ -678,8 +678,10 @@ GITLEAKS_REPO ?= $(CURDIR)
 # The child is not derived from .gitleaks.toml by text: GITLEAKS_CHILD_CONFIG parses it with Python's tomllib, refuses
 # everything outside a closed whitelist (top level title, extend = {useDefault = true} and allowlists with their known
 # keys and types; names compare exactly, so [Extend] or Extend.disabledRules fail) and writes the child itself (ADR
-# 0026, amendment 2026-10-12): pattern matching on TOML text was bypassed by strings holding `[extend]` or `'''` and
-# by gitleaks' case-insensitive keys. Before either scan reads PR content, a canary run of the generated
+# 0026, amendment 2026-10-12), because pattern matching on TOML text was bypassed by strings holding `[extend]` or
+# `'''` and by gitleaks' case-insensitive keys. GITLEAKS_PATTERNS_CHECK then compiles every allowlist pattern with
+# Go's regexp, the engine gitleaks uses, in GO_BUILD_IMAGE without network, and refuses one that does not compile or
+# matches the empty string (and so everything). Before either scan reads PR content, a canary run of the generated
 # configuration must report a fake token, generated per run and never printed, under node_modules/ and vendor/, paths
 # the default's global allowlist skipped: a configuration that lost its rules or path coverage fails.
 # What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
@@ -690,6 +692,7 @@ GITLEAKS_REPO ?= $(CURDIR)
 GITLEAKS_CONFIG_REF ?=
 GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
 GITLEAKS_CHILD_CONFIG = python3 $(CURDIR)/deploy/compose/scripts/gitleaks-child-config.py
+GITLEAKS_PATTERNS_CHECK = $(CURDIR)/deploy/compose/scripts/gitleaks-patterns.go
 # gitleaks_strip_default,<in>,<out>,<label>: <in> without the multi-line `paths = [` array before the first
 # [[rules]]; the result must parse, hold rules and keep no paths in its global allowlist in any key form.
 gitleaks_strip_default = awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
@@ -724,9 +727,15 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		if [ -f "$$repo/.gitleaksignore" ]; then cp -- "$$repo/.gitleaksignore" "$$tmp/cfg/gitleaksignore" || exit 1; \
 		else : >"$$tmp/cfg/gitleaksignore"; fi; \
 	fi; \
-	$(GITLEAKS_CHILD_CONFIG) child "$$tmp/repo.toml" "$(1)/default.toml" "$$tmp/child.toml" || \
+	$(GITLEAKS_CHILD_CONFIG) child "$$tmp/repo.toml" "$(1)/default.toml" "$$tmp/child.toml" "$$tmp/patterns.json" || \
 		{ echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
 			"accepts (ADR 0026, amendment 2026-10-12)" >&2; exit 1; }; \
+	docker run --rm -i --network none -e GOFLAGS= -e GOTOOLCHAIN=local -v "$(GITLEAKS_PATTERNS_CHECK):/p.go:ro" \
+		$(GO_BUILD_IMAGE) go run /p.go <"$$tmp/patterns.json" >"$$tmp/verdicts.jsonl" 2>"$$tmp/patterns.err"; prc=$$?; \
+	if [ "$$prc" -ne 0 ] || ! $(GITLEAKS_CHILD_CONFIG) patterns "$$tmp/patterns.json" "$$tmp/verdicts.jsonl"; then \
+		cat -- "$$tmp/patterns.err" >&2; \
+		echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
+			"accepts: Go's regexp refuses an allowlist pattern (ADR 0026, amendment 2026-10-12)" >&2; exit 1; fi; \
 	pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256 (deploy/compose/versions.env)"; \
 	docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
 		{ echo "$@: cannot copy /usr/bin/gitleaks out of $(GITLEAKS_IMAGE)" >&2; exit 1; }; \

@@ -130,11 +130,14 @@ cannot be made sound, so decision 4 and the check of decision 3 change as follow
 
 What a reviewed allowlist means stays the responsibility of its code owners (`.gitleaks.toml` is in CODEOWNERS): the
 tool only guarantees that the configuration acts as it reads. It therefore also refuses the constructs that act
-differently than they read: a `paths` or `regexes` entry that is empty, matches the empty string (Python's `re`
-decides; it is close enough to RE2 for this) or does not compile in Python (RE2-only constructs such as `\pL`), an
-empty `paths` or `regexes` list, and `stopwords`, which gitleaks matches as case-insensitive substrings of the secret,
-so that a short word disables whole rules. A broad pattern that is visible as such, such as `.` or `[\s\S]`, is left
-to that review.
+differently than they read: a `paths` or `regexes` entry that does not compile or matches the empty string (and so
+everything; `""`, `\B`, `[[:alpha:]]?`), an empty `paths` or `regexes` list, and `stopwords`, which gitleaks matches
+as case-insensitive substrings of the secret, so that a short word disables whole rules. The pattern check is not a
+stand-in: `deploy/compose/scripts/gitleaks-patterns.go` compiles every entry with Go's `regexp`, the engine gitleaks
+uses, and calls `MatchString("")`, run with `go run` in the pinned `GO_BUILD_IMAGE` without network (no new
+dependency; a few seconds per scan). Its JSON verdicts must cover every pattern in order, or the configuration is
+refused. Broad patterns that are visible as such, for example `\b`, `.` or `[\s\S]`, pass the check and are left to
+that review.
 
 The regression test reaches the strip check and the canary through two test seams (`make
 scan-secrets-strip-default`, `make scan-secrets-canary`) that do not change either scan.

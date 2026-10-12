@@ -1,9 +1,12 @@
 """Builds and checks the gitleaks configuration of `make scan-secrets` and `make scan-secrets-diff` (ADR 0026).
 
-child <repository config> <default path> <out>
+child <repository config> <default path> <out> <patterns out>
     Parses the repository's .gitleaks.toml, refuses everything outside a closed whitelist and writes the child
     configuration: `[extend] path = <default path>` and the repository's allowlists. Nothing of the input is copied
-    verbatim, so case folding or string tricks in the input cannot change what gitleaks reads.
+    verbatim, so case folding or string tricks in the input cannot change what gitleaks reads. Every `paths` and
+    `regexes` entry goes to <patterns out> as a JSON array for gitleaks-patterns.go, which checks it with Go's regexp.
+patterns <patterns> <verdicts>
+    gitleaks-patterns.go gave one passing verdict per pattern, in order; anything else refuses the configuration.
 verify-default <stripped default>
     The stripped default parses, has rules and keeps no paths in its global allowlist.
 canary <report.json> <path>...
@@ -11,7 +14,6 @@ canary <report.json> <path>...
 """
 
 import json
-import re
 import sys
 
 if sys.version_info < (3, 11):
@@ -43,19 +45,6 @@ def is_string_list(value):
     return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
 
-def check_pattern(where, pattern):
-    # Python's re is close enough to Go's RE2 to tell whether a pattern can match the empty string; a pattern Python
-    # cannot compile (an RE2-only construct such as \pL) is refused rather than guessed.
-    try:
-        compiled = re.compile(pattern)
-    except (re.error, RecursionError, OverflowError) as e:
-        raise Refused(f"{where} holds {pattern!r}, which Python's re cannot compile ({e}); write it without "
-                      "RE2-only constructs") from e
-    if compiled.search("") is not None:
-        raise Refused(f"{where} holds {pattern!r}, which is empty or matches the empty string, so it would match "
-                      "everything")
-
-
 def check_allowlist(i, table):
     if not isinstance(table, dict):
         raise Refused(f"allowlists[{i}] is not a table")
@@ -68,9 +57,6 @@ def check_allowlist(i, table):
             raise Refused(f"allowlists[{i}].{key} is not a list of strings")
         if key in PATTERNS and not value:
             raise Refused(f"allowlists[{i}].{key} is an empty list")
-        if key in PATTERNS:
-            for pattern in value:
-                check_pattern(f"allowlists[{i}].{key}", pattern)
         if key in CHOICES and value not in CHOICES[key]:
             raise Refused(f"allowlists[{i}].{key} is not one of {', '.join(CHOICES[key])}")
 
@@ -114,7 +100,11 @@ def emit(config, default_path):
     return "\n".join(lines) + "\n"
 
 
-def child(repo_path, default_path, out_path):
+def patterns_of(config):
+    return [p for table in config.get("allowlists", []) for key in PATTERNS for p in table.get(key, [])]
+
+
+def child(repo_path, default_path, out_path, patterns_path):
     config = load(repo_path)
     check(config)
     text = emit(config, default_path)
@@ -124,6 +114,27 @@ def child(repo_path, default_path, out_path):
         raise Refused("the written child configuration does not read back as the repository configuration")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(text)
+    with open(patterns_path, "w", encoding="utf-8") as f:
+        json.dump(patterns_of(config), f)
+
+
+def patterns(patterns_path, verdicts_path):
+    # The check fails closed: a missing, short, reordered or unreadable verdict list refuses the configuration just
+    # like a refused pattern.
+    try:
+        with open(patterns_path, encoding="utf-8") as f:
+            wanted = json.load(f)
+        with open(verdicts_path, encoding="utf-8") as f:
+            verdicts = [json.loads(line) for line in f if line.strip()]
+    except (OSError, ValueError) as e:
+        raise Refused(f"cannot read the pattern check: {e}") from e
+    if len(verdicts) != len(wanted):
+        raise Refused(f"the pattern check returned {len(verdicts)} verdicts for {len(wanted)} patterns")
+    for i, (pattern, v) in enumerate(zip(wanted, verdicts)):
+        if not isinstance(v, dict) or v.get("index") != i or v.get("pattern") != pattern:
+            raise Refused(f"the pattern check returned a verdict that does not belong to pattern {i}")
+        if v.get("ok") is not True:
+            raise Refused(f"the pattern {pattern!r} {v.get('why') or 'was refused'}")
 
 
 def verify_default(path):
@@ -154,8 +165,10 @@ def canary(report_path, paths):
 
 def main(argv):
     try:
-        if len(argv) == 4 and argv[0] == "child":
+        if len(argv) == 5 and argv[0] == "child":
             child(*argv[1:])
+        elif len(argv) == 3 and argv[0] == "patterns":
+            patterns(argv[1], argv[2])
         elif len(argv) == 2 and argv[0] == "verify-default":
             verify_default(argv[1])
         elif len(argv) >= 3 and argv[0] == "canary":

@@ -17,8 +17,8 @@
 # (sha256 off by one digit, header missing or not unique), whose strip leaves global paths or no rules, or whose
 # generated configuration misses the canary fails. Archives are opened one level deep (ADR 0025): a secret inside a
 # deflated `creds.zip`, `creds.docx` or `creds.tgz` fails `make scan-secrets-diff`, an archive copy that would
-# overwrite another changed file fails it, and a real binary PNG passes with the repository's own configuration. The secret is a generated fake GitHub token that
-# is never printed (the scan runs with --redact).
+# overwrite another changed file fails it, and a real binary PNG passes with the repository's own configuration. The
+# secret is a generated fake GitHub token that is never printed (the scan runs with --redact).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -418,12 +418,14 @@ verdict "a file over GITLEAKS_MAX_MB (scan-secrets-diff)" fail "cannot be scanne
 # case, quoted or escaped ([Extend], Extend.disabledRules, "EXTEND".path, ["\u0065xtend"]), a byte-order mark, a
 # second [extend] header, an unknown top-level key (the second review's stopwords probe, rules), a wrong type, and
 # allowlists that act differently than they read (the third review): a pattern that is empty or matches the empty
-# string, alone or scoped by targetRules (a hidden disabledRules), an empty pattern list, a pattern Python cannot
-# compile (the RE2-only \pL), and stopwords, which gitleaks matches as case-insensitive substrings of the secret.
-# The first review's probe now fails for its stopwords. Accepted: a multi-line basic string, whose allowlist then
-# applies exactly as written (the gen/ token is not a sha256 digest), so the history scan finds the token. It is not
-# run through scan-secrets-diff: gitleaks v8.30.1's dir mode skips a file whose path an AND allowlist matches without
-# looking at the allowlist's regexes, with or without the generated configuration (a follow-up of PDK-078).
+# string in Go's regexp (also \B and optional POSIX classes), alone or scoped by targetRules (a hidden disabledRules),
+# an empty pattern list, a pattern Go's regexp cannot compile (a lookahead), and stopwords, which gitleaks matches as
+# case-insensitive substrings of the secret.
+# The first review's probe now fails for its stopwords. Accepted: \pL, valid in RE2, and a multi-line basic string,
+# whose allowlists then apply exactly as written (neither covers the gen/ token), so the history scan finds the token.
+# They are not run through scan-secrets-diff: gitleaks v8.30.1's dir mode skips a file whose path an AND allowlist
+# matches without looking at the allowlist's regexes, with or without the generated configuration (a follow-up of
+# PDK-078).
 config_case() {
   case $1 in
     extend-path) printf '[extend] # the default rules and more\nuseDefault = true\n"path" = "extra.toml"\n' ;;
@@ -458,7 +460,12 @@ EOF
     match-empty-path) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^.*$'''" ;;
     match-empty-regex) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\nregexes = ["x", "a*"]\n' ;;
     empty-list) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "d"\npaths = []\n' ;;
-    re2-only) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^gen/\\pL+$'''" ;;
+    unicode-class) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^gen/\\pL+$'''" ;;
+    lookahead) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^gen/(?=c)'''" ;;
+    not-word-boundary) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\nregexes = [%s]\n' "'''\\B'''" ;;
+    posix-class) printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''[[:alpha:]]?'''" ;;
+    negated-posix-class)
+      printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''[[:^alpha:]]?'''" ;;
     stopwords)
       printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "Words that mark placeholder values"\n'
       printf 'stopwords = ["example", "live", "kia"]\n' ;;
@@ -488,7 +495,8 @@ EOF
 }
 for shape in extend-path extend-path-dotted disabled-rules url subtable use-default-false upper-table upper-dotted \
   upper-quoted-path all-caps escaped bom second-extend stopwords-probe unknown-key wrong-type empty-path-scoped \
-  empty-regex-scoped match-empty-path match-empty-regex empty-list re2-only stopwords review-probe \
+  empty-regex-scoped match-empty-path match-empty-regex empty-list lookahead not-word-boundary \
+  posix-class negated-posix-class stopwords review-probe unicode-class \
   multi-line-basic; do
   g switch -q -c "config-$shape" "$base"
   config_case "$shape" >"$r/.gitleaks.toml"
@@ -499,7 +507,7 @@ for shape in extend-path extend-path-dotted disabled-rules url subtable use-defa
   g add gen/creds.env
   g commit -q -m 'add credentials under gen/'
   case $shape in
-    multi-line-basic) want=leak reason= ;;
+    multi-line-basic | unicode-class) want=leak reason= ;;
     review-probe) want=fail reason="allowlists[0] has the key 'stopwords'" ;;
     extend-path* | disabled-rules | url | subtable | use-default-false | escaped) want=fail
       reason="extend must be exactly {useDefault = true}" ;;
@@ -507,10 +515,10 @@ for shape in extend-path extend-path-dotted disabled-rules url subtable use-defa
     stopwords-probe | unknown-key) want=fail reason="is not allowed; allowed are title, extend and allowlists" ;;
     bom | second-extend) want=fail reason="cannot parse" ;;
     wrong-type) want=fail reason="allowlists[0].paths is not a list of strings" ;;
-    empty-path-scoped | match-empty-path) want=fail reason="allowlists[0].paths holds" ;;
-    empty-regex-scoped | match-empty-regex) want=fail reason="allowlists[0].regexes holds" ;;
+    empty-path-scoped | match-empty-path | empty-regex-scoped | match-empty-regex | not-word-boundary | *posix-class)
+      want=fail reason="is empty or matches the empty string, so it would match everything" ;;
+    lookahead) want=fail reason="does not compile in Go's regexp" ;;
     empty-list) want=fail reason="allowlists[0].paths is an empty list" ;;
-    re2-only) want=fail reason="which Python's re cannot compile" ;;
     stopwords) want=fail reason="allowlists[0] has the key 'stopwords'" ;;
   esac
   targets=(scan-secrets scan-secrets-diff)
@@ -591,6 +599,22 @@ for kind in no-rules node-modules-skipped token-rule; do
   if grep -q 'ghp_' <<<"$out"; then
     echo "FAIL the canary with a default of kind $kind printed its token"
     failures=$((failures + 1))
+  fi
+done
+
+# The verdicts of the Go pattern check fail closed: none, too few, or one for another pattern refuse the
+# configuration.
+printf '["^a$", "^b$"]' >"$work/patterns.json"
+: >"$work/verdicts-none.jsonl"
+printf '{"index":0,"pattern":"^a$","ok":true}\n' >"$work/verdicts-short.jsonl"
+printf '{"index":0,"pattern":"^a$","ok":true}\n{"index":1,"pattern":"^c$","ok":true}\n' >"$work/verdicts-other.jsonl"
+for kind in none short other; do
+  if python3 "$root/deploy/compose/scripts/gitleaks-child-config.py" patterns "$work/patterns.json" \
+    "$work/verdicts-$kind.jsonl" 2>/dev/null; then
+    echo "FAIL the pattern verdicts ($kind) are accepted"
+    failures=$((failures + 1))
+  else
+    echo "ok   the pattern verdicts ($kind) refuse the configuration (fail)"
   fi
 done
 
