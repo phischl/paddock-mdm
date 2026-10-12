@@ -166,7 +166,14 @@ func (v *VM) fresh(disk bool) {
 		v.t.Fatal(err)
 	}
 	v.Must("sudo systemctl mask --now " + aptUnits)
+	// Masking a timer does not stop the run it already started: base-installed is days old, so the persistent timers
+	// catch up at boot, and that run (unattended-upgrade, python) holds the dpkg lock for up to a minute (PDK-080). It
+	// is waited for, not stopped: apt-daily-upgrade.service may be inside dpkg.
+	v.Must("timeout 240 sh -c 'while systemctl is-active " + aptServices + " | grep -qx \"active\\|activating\"; do sleep 2; done'")
 }
+
+// aptServices are the services aptUnits' timers start.
+const aptServices = "apt-daily.service apt-daily-upgrade.service"
 
 func (v *VM) sshArgs() []string {
 	return []string{
