@@ -26,6 +26,7 @@ type fakeGateway struct {
 	final     string
 	keys      map[string]*ecdsa.PublicKey // enrollment ID → key
 	polled    map[string]int
+	clientIPs []string
 	forwarded []string
 	tokens    []string
 }
@@ -43,6 +44,7 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "headers", http.StatusUnauthorized)
 		return
 	}
+	g.clientIPs = append(g.clientIPs, r.Header.Get("X-Paddock-Client-IP"))
 	g.forwarded = append(g.forwarded, r.Header.Get("X-Forwarded-For"))
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/enroll":
@@ -98,7 +100,7 @@ func TestEnrollsDevicesWithUsableKeys(t *testing.T) {
 	out := filepath.Join(dir, "ids.json")
 	err := run(context.Background(), []string{
 		"--config", writeConfig(t, dir, "a.json", "tok-a"), "--config", writeConfig(t, dir, "b.json", "tok-b"),
-		"--count", "5", "--per-config", "3", "--server", srv.URL, "--forwarded-for", "--concurrency", "2", "--out", out,
+		"--count", "5", "--per-config", "3", "--server", srv.URL, "--client-ip", "--concurrency", "2", "--out", out,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -140,9 +142,10 @@ func TestEnrollsDevicesWithUsableKeys(t *testing.T) {
 	if tokens["tok-a"] != 3 || tokens["tok-b"] != 2 {
 		t.Fatalf("tokens used %v, want 3 × tok-a and 2 × tok-b", tokens)
 	}
-	for _, f := range g.forwarded {
-		if f == "" {
-			t.Fatal("a request without X-Forwarded-For")
+	// The gateway reads the client address only from X-Paddock-Client-IP (plan M7a decision 3).
+	for i, ip := range g.clientIPs {
+		if ip == "" || g.forwarded[i] != "" {
+			t.Fatalf("request %d: X-Paddock-Client-IP %q, X-Forwarded-For %q", i, ip, g.forwarded[i])
 		}
 	}
 }

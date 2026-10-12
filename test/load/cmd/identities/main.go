@@ -37,7 +37,7 @@ func run(ctx context.Context, args []string) error {
 	perConfig := fs.Int("per-config", 1000, "devices per enrollment configuration (at most the token's maximum uses)")
 	server := fs.String("server", "", "device API base URL of the test stack, required (never the configurations' server_url), e.g. http://paddock-gateway:8081")
 	caFile := fs.String("ca-file", "", "PEM file with the CA that signed the device API's certificate (https only)")
-	forwardedFor := fs.Bool("forwarded-for", false, "send a distinct X-Forwarded-For address per device (only when talking to the gateway directly)")
+	clientIP := fs.Bool("client-ip", false, "send a distinct X-Paddock-Client-IP address per device (only when talking to the gateway directly from a trusted proxy address)")
 	concurrency := fs.Int("concurrency", 32, "parallel enrollments")
 	prefix := fs.String("hostname-prefix", "load", "hostname prefix of the devices")
 	out := fs.String("out", "identities.json", "output file")
@@ -60,7 +60,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	e := enroller{client: client, forwardedFor: *forwardedFor, poll: 500 * time.Millisecond}
+	e := enroller{client: client, clientIP: *clientIP, poll: 500 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
 	ids, err := e.enrollAll(ctx, cfgs, *count, *perConfig, *concurrency, *prefix)
