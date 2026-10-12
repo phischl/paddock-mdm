@@ -14,8 +14,11 @@ import (
 // TestAttentionCurrentKeyOnce (PDK-027, migration 00042): the attention list, its counts and the overview evaluate
 // the current release (paddock_current_agent_version, a SECURITY DEFINER lookup) a fixed number of times per query,
 // not once per active device; at 10 000 devices the per-device lookup cost about 0.5 s per query
-// (docs/operations/capacity.md). The calls are counted with the transaction's function statistics, so the test pins
-// the behaviour, not a plan's text. Everything runs in one transaction that is rolled back.
+// (docs/operations/capacity.md). Since migration 00044 (PDK-090, ADR 0028) the same holds for the version key
+// (paddock_version_key): the devices' keys are the stored column device_status.agent_version_key, computed at insert,
+// so a query only computes the current release's key. The calls are counted with the transaction's function
+// statistics, so the test pins the behaviour, not a plan's text. Everything runs in one transaction that is rolled
+// back.
 func TestAttentionCurrentKeyOnce(t *testing.T) {
 	env := pgtest.SharedPaddock(t)
 	ctx := context.Background()
@@ -86,18 +89,21 @@ func TestAttentionCurrentKeyOnce(t *testing.T) {
 			return int64(r.AgentOutdated), err
 		},
 	}
-	calls := func() int64 {
+	functions := []string{"paddock_current_agent_version()", "paddock_version_key(text)"}
+	calls := func() [2]int64 {
 		t.Helper()
-		var n int64
-		if err := tx.QueryRow(ctx, "SELECT coalesce(pg_stat_get_xact_function_calls('paddock_current_agent_version()'::regprocedure), 0)").Scan(&n); err != nil {
-			t.Fatal(err)
+		var n [2]int64
+		for i, fn := range functions {
+			if err := tx.QueryRow(ctx, "SELECT coalesce(pg_stat_get_xact_function_calls($1::text::regprocedure), 0)", fn).Scan(&n[i]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return n
 	}
-	// measure runs every query as the API role and returns how often each called paddock_current_agent_version.
-	measure := func() map[string]int64 {
+	// measure runs every query as the API role and returns how often each called the functions.
+	measure := func() map[string][2]int64 {
 		t.Helper()
-		out := map[string]int64{}
+		out := map[string][2]int64{}
 		for name, run := range queries {
 			before := calls()
 			sp, err := tx.Begin(ctx)
@@ -119,7 +125,8 @@ func TestAttentionCurrentKeyOnce(t *testing.T) {
 			if n < int64(devices/2) {
 				t.Errorf("%s: %d rows or conditions, want at least %d", name, n, devices/2)
 			}
-			out[name] = calls() - before
+			after := calls()
+			out[name] = [2]int64{after[0] - before[0], after[1] - before[1]}
 		}
 		return out
 	}
@@ -129,9 +136,11 @@ func TestAttentionCurrentKeyOnce(t *testing.T) {
 	small := measure()
 	addDevices(32)
 	for name, got := range measure() {
-		if small[name] < 1 || got != small[name] || got >= 8 {
-			t.Errorf("%s: paddock_current_agent_version called %d times for 8 devices, %d times for %d devices; want a constant from 1 to 7",
-				name, small[name], got, devices)
+		for i, fn := range functions {
+			if small[name][i] < 1 || got[i] != small[name][i] || got[i] >= 8 {
+				t.Errorf("%s: %s called %d times for 8 devices, %d times for %d devices; want a constant from 1 to 7",
+					name, fn, small[name][i], got[i], devices)
+			}
 		}
 	}
 }

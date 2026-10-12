@@ -275,6 +275,7 @@ type DeviceStatus struct {
 	LoginState           json.RawMessage
 	PresumedSelfLockedAt *time.Time
 	PresumedLostAt       *time.Time
+	AgentVersionKey      *string
 }
 
 type DeviceUserSeen struct {
