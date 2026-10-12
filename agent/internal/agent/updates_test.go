@@ -80,9 +80,11 @@ func TestIgnoredReleaseSwept(t *testing.T) {
 	}
 }
 
-// TestLeftoverReleaseSweptAtStart (PDK-075): a release directory without request.json is removed when the agent starts.
+// TestLeftoverReleaseSweptAtStart (PDK-075): a release directory without request.json is removed when the daemon
+// starts, before its first check-in; New alone (also used by `paddockd plan`) and PlanCurrent leave it untouched.
 func TestLeftoverReleaseSweptAtStart(t *testing.T) {
 	g := testgw.New(t)
+	g.CheckinFail = 503 // a failed check-in does not reach handleUpdate, so only the start sweep can remove the release
 	a := newAgent(t, g)
 	release := filepath.Join(a.d.Layout.Staging(), "9.1.0", "paddockd")
 	if err := fsutil.WriteFile(release, []byte("x"), 0o700, 0o700); err != nil {
@@ -90,6 +92,18 @@ func TestLeftoverReleaseSweptAtStart(t *testing.T) {
 	}
 	if _, err := New(a.d); err != nil {
 		t.Fatal(err)
+	}
+	_, _, _ = PlanCurrent(context.Background(), a.d.Layout)
+	if _, err := os.Stat(release); err != nil {
+		t.Fatalf("New or PlanCurrent removed a staged release: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	waitFor(t, func() bool { return checkins(g) >= 1 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Dir(release)); !os.IsNotExist(err) {
 		t.Fatalf("leftover release not removed at start: %v", err)

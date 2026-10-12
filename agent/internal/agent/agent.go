@@ -196,12 +196,14 @@ func New(d Deps) (*Agent, error) {
 	a.refreshHealth()
 	a.loadCurrent()
 	a.reportInterruptedInstalls()
-	a.sweepStaging()
 	return a, nil
 }
 
 // Run serves the health socket and runs the check-in loop until ctx ends.
 func (a *Agent) Run(ctx context.Context) error {
+	// Here and not in New: New also serves `paddockd plan`, a second process that could remove a release the daemon
+	// is staging before its request.json exists (PDK-075).
+	a.sweepStaging()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
