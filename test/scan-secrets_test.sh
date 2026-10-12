@@ -7,8 +7,9 @@
 # loosens .gitleaks.toml or .gitleaksignore in the same range still fails `make scan-secrets` and
 # `make scan-secrets-diff` with the merge base's configuration, while a pull request that only changes the
 # configuration passes. An inline `gitleaks:allow` on the secret does not hide it, and a configuration that extends
-# another file (`[extend] path`) fails. The secret is a generated fake GitHub token that is never printed (the scan runs with
-# --redact).
+# another file (`[extend] path`) fails. `make scan-secrets-diff` also scans every blob the range adds (PDK-068): a
+# binary file with a secret that the pull request adds and removes again fails it, in a later version of a path as
+# well. The secret is a generated fake GitHub token that is never printed (the scan runs with --redact).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -202,6 +203,52 @@ g commit -q -m 'add allowed credentials'
 for target in scan-secrets scan-secrets-diff; do
   expect_pr "a secret with an inline gitleaks:allow" leak "$target" "$base" "$base"
 done
+
+# A binary file with a secret that the pull request adds and removes again, then an unrelated edit (PDK-068): the
+# history scan skips binary patches and the final tree no longer holds the file, so only the scan of every added blob
+# sees it. Two versions of one path land in separate blob layers, and both are scanned.
+g switch -q -c pr-binary "$base"
+{ printf 'GITHUB_TOKEN=%s\n' "$(token)"; printf '\0\1\2'; } >"$r/creds.env"
+g add creds.env
+g commit -q -m 'add binary credentials'
+g rm -q creds.env
+g commit -q -m 'remove the binary credentials'
+printf 'four\n' >>"$r/notes.txt"
+g commit -q -am 'an unrelated edit'
+expect_pr "a binary secret added and removed in the pull request" leak scan-secrets-diff "$base" "$base"
+g switch -q -c pr-binary-versions "$base"
+{ printf 'harmless\n'; printf '\0'; } >"$r/key.dat"
+g add key.dat
+g commit -q -m 'add a binary file'
+{ printf 'GITHUB_TOKEN=%s\n' "$(token)"; printf '\0'; } >"$r/key.dat"
+g commit -q -am 'put credentials into the binary file'
+{ printf 'harmless again\n'; printf '\0'; } >"$r/key.dat"
+g commit -q -am 'remove the credentials'
+expect_pr "a binary secret in an intermediate version of a path" leak scan-secrets-diff "$base" "$base"
+
+# The same under a path with a newline and a space, and under a path that a later commit turns into a directory.
+g switch -q -c pr-binary-paths "$base"
+{ printf 'GITHUB_TOKEN=%s\n' "$(token)"; printf '\0'; } >"$r/odd"$'\n'"name .env"
+{ printf 'GITHUB_TOKEN=%s\n' "$(token)"; printf '\0'; } >"$r/cfg"
+g add -A
+g commit -q -m 'add binary credentials under odd paths'
+g rm -q cfg "odd"$'\n'"name .env"
+mkdir "$r/cfg"
+printf 'harmless\n' >"$r/cfg/a.env"
+g add cfg
+g commit -q -m 'replace them with a directory'
+expect_pr "binary secrets under a newline path and a path that becomes a directory" leak scan-secrets-diff "$base" \
+  "$base"
+
+# A file over GITLEAKS_MAX_MB fails the scan instead of being skipped (the limit is lowered to 1 MB here).
+g switch -q -c pr-large "$base"
+head -c 1000001 /dev/zero | tr '\0' a >"$r/large.txt"
+g add large.txt
+g commit -q -m 'add a large file'
+rc=0
+out="$(make --no-print-directory -C "$root" scan-secrets-diff GITLEAKS_REPO="$r" GITLEAKS_DIFF_BASE="$base" \
+  GITLEAKS_CONFIG_REF="$base" GITLEAKS_MAX_MB=1 2>&1)" || rc=$?
+verdict "a file over GITLEAKS_MAX_MB (scan-secrets-diff)" fail "cannot be scanned" "$rc" "$out"
 
 # A base configuration that extends another file: gitleaks would read that file from the scanned pull request's
 # files, so the scan refuses it, in the [extend] table and as a dotted key alike.
