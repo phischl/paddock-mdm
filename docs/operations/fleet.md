@@ -23,7 +23,9 @@ latest `fleetdm/vulnerabilities` release, so a shared CI runner over GitHub's li
 inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, OVAL and OSV syncs still use the
 API; their failures are logged and do not affect the gates. When upgrading `FLEET_IMAGE`, check that the three
 variables still exist and move the pin to a current `fleetdm/nvd` release (its asset `cpe-<sha256>.sqlite.gz` and
-`cpe_translations.json`); if the pinned release is ever pruned, the inventory gates fail with Fleet's download error
+`cpe_translations.json`). Fleet skips its once-a-day check when the CPE URL is set and downloads the database on
+every vulnerability run, which is why the development period stays at 1 hour (see the round intervals below); if the
+pinned release is ever pruned, the inventory gates fail with Fleet's download error
 and the pin is moved the same way.
 
 ## What is published
@@ -146,7 +148,11 @@ settings at start and every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, 
 
 Fleet's round intervals are environment variables of the `fleet` service: `FLEET_OSQUERY_POLICY_UPDATE_INTERVAL`
 (default 10 minutes), `FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL` (1 hour) and `FLEET_VULNERABILITIES_PERIODICITY`
-(1 hour); the development stack uses 30 seconds, 2 minutes and 5 minutes.
+(1 hour); the development stack uses 30 seconds, 2 minutes and 1 hour. Keep the development vulnerability period at
+1 hour or longer: with `FLEET_VULNERABILITIES_CPE_DATABASE_URL` set, Fleet downloads the 146 MB CPE database on every
+run. The inventory gates trigger the runs they need (`fleetctl trigger --name vulnerabilities` or Fleet's
+`POST /api/latest/fleet/trigger`), at most every 2 minutes while they wait; Fleet refuses a trigger while a run is
+pending.
 
 ## Backups
 

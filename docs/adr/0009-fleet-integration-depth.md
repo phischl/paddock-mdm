@@ -53,3 +53,12 @@ Consequences: + gate F3 no longer waits on GitHub's anonymous limit, in CI and o
 no new container. − A Fleet upgrade re-checks the three variables and the pinned release (the inventory gates F0–F4
 guard it, as for the image); − a pruned `fleetdm/nvd` release would fail the data wait with a clear message, and the
 pin is then moved.
+
+## Amendment 2026-10-12 (b) — CPE download on every run (PDK-054)
+
+With `cpe_database_url` set, Fleet v4.92.3 skips its once-a-day freshness check (`server/vulnerabilities/nvd/cpe.go`,
+`DownloadCPEDBFromGithub`) and downloads the CPE database (146 MB) on every run of its vulnerability job. At the
+former development period of 5 minutes that is about 40 GB a day per stack. Decision: the development and CI
+`FLEET_VULNERABILITIES_PERIODICITY` stays at 1 hour or longer (the default of `compose.yaml`), and the gates that need
+a run trigger it themselves, at most every 2 minutes while they wait, which Fleet refuses while a run is pending; a
+gate run therefore causes a bounded number of downloads.

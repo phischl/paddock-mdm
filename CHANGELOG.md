@@ -163,7 +163,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CI runner no longer waits on GitHub's anonymous API rate limit before the inventory gates find vulnerabilities. The
   CPE release is pinned in `deploy/compose/versions.env` (`FLEET_CPE_DATABASE_URL`, `FLEET_CPE_TRANSLATIONS_URL`);
   no GitHub token is passed to Fleet. Production stacks are unchanged and keep Fleet's own lookup of the latest data.
-  A failed CI acceptance run now also prints Fleet's full log.
+  Because Fleet then downloads the CPE database on every vulnerability run, the development stack runs that job
+  hourly like production (was every 5 minutes) and the inventory gates trigger the runs they need. A failed CI
+  acceptance run now also prints Fleet's full log.
 - Device API contract (PDK-073): the `Event.type` enum in `api/openapi/device.yaml` lists every event type the
   gateway accepts, adding `revocation.trust_pinned_tofu`, `revocation.refused`, `tamper.service_stopped` and
   `updates.run`. The gateway's behaviour is unchanged; a test keeps the contract and the accepted list in sync.
