@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,11 +12,13 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/apply"
+	"github.com/phischl/paddock-mdm/agent/internal/commands"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -304,5 +307,78 @@ func TestCheckinReportsSudoFlavor(t *testing.T) {
 	}
 	if !slices.Equal(flavors, []string{"classic", "sudo-rs"}) {
 		t.Fatalf("sudo flavors %v", flavors)
+	}
+}
+
+// snapshotTree records the mode, mtime and content of every entry under root.
+func snapshotTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		entry := info.Mode().String() + " " + info.ModTime().Format(time.RFC3339Nano)
+		if info.Mode().IsRegular() {
+			data, err := os.ReadFile(path) //nolint:gosec // test temp dir
+			if err != nil {
+				return err
+			}
+			entry += " " + string(data)
+		}
+		out[path] = entry
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestPlanCurrentWritesNothing (PDK-081): `paddockd plan` runs next to the daemon, so it must not report the daemon's
+// running install_now as interrupted or write any file under the layout.
+func TestPlanCurrentWritesNothing(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	withSystem(t, a)
+	g.OfferBundle(testgw.SignedBundleOffer(t, testBundle(t, 4, testgw.DeviceID, "hello\n")))
+	a.Cycle(context.Background())
+	params, _ := json.Marshal(command.InstallNowParams{Packages: []string{"htop"}})
+	if status, _ := a.installNowCommand(context.Background(), &command.Command{CommandID: "c-running", Params: params}); status != commands.Deferred {
+		t.Fatalf("status %q", status)
+	}
+	stateBefore, err := os.ReadFile(a.d.Layout.State())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, a.d.Layout.Root)
+
+	plan, version, err := PlanCurrent(context.Background(), a.d.Layout)
+	if err != nil || version != 4 || len(plan) == 0 {
+		t.Fatalf("PlanCurrent = %+v, %d, %v", plan, version, err)
+	}
+
+	stateAfter, err := os.ReadFile(a.d.Layout.State())
+	if err != nil || string(stateAfter) != string(stateBefore) {
+		t.Fatalf("state file changed:\n%s\nwant\n%s (%v)", stateAfter, stateBefore, err)
+	}
+	after := snapshotTree(t, a.d.Layout.Root)
+	for path, entry := range before {
+		if after[path] != entry {
+			t.Errorf("%s changed: %q -> %q", path, entry, after[path])
+		}
+	}
+	for path := range after {
+		if _, ok := before[path]; !ok {
+			t.Errorf("%s created", path)
+		}
+	}
+	st, err := state.Load(a.d.Layout.State())
+	if err != nil || len(st.PendingInstalls) != 1 || st.PendingInstalls[0].CommandID != "c-running" || len(st.CommandResults) != 0 {
+		t.Fatalf("pending install_now lost: %+v %v", st, err)
 	}
 }
