@@ -26,7 +26,7 @@ function overviewOf(over: Partial<Overview> = {}): Overview {
     },
     updates: {
       security_overdue: 4, reboot_required: 2, os_releases: [{ release: '24.04', devices: 10 }],
-      agent: { current_version: null, on_current: 0, outdated: 0, unknown: 10 },
+      agent: { current_version: null, on_current: 0, outdated: 0, ahead: 0, unknown: 10, latest_published: null, rollout: null },
     },
     attention: { conditions: 5, devices: 3 },
     ...over,
@@ -178,7 +178,7 @@ describe('overview page (plan M7c decision 28)', () => {
     overview = overviewOf({
       updates: {
         security_overdue: 0, reboot_required: 0, os_releases: [],
-        agent: { current_version: '1.9.1', on_current: 3, outdated: 6, unknown: 1 },
+        agent: { current_version: '1.9.1', on_current: 3, outdated: 6, ahead: 0, unknown: 1, latest_published: '1.9.1', rollout: null },
       },
     })
     const w = await mountOverview()
@@ -187,6 +187,39 @@ describe('overview page (plan M7c decision 28)', () => {
     expect(terms).toContain('Agent 1.9.1')
     expect(panel.text()).toContain('3 / 10 on the current release')
     expect(panel.text()).not.toContain('No agent rollout completed yet')
+    expect(panel.text()).not.toContain('Latest published')
+    expect(panel.text()).not.toContain('Rollout')
+  })
+
+  it('names the latest published release while no rollout has completed', async () => {
+    overview = overviewOf({
+      updates: {
+        security_overdue: 0, reboot_required: 0, os_releases: [],
+        agent: { current_version: null, on_current: 0, outdated: 0, ahead: 0, unknown: 10, latest_published: '1.10.0', rollout: null },
+      },
+    })
+    const w = await mountOverview()
+    const panel = w.get('section[aria-labelledby="overview-updates-title"]')
+    const rows = panel.findAll('dl > div').map((d) => d.findAll('dt, dd').map((x) => x.text()).join(' '))
+    expect(panel.findAll('dt').map((d) => d.text())).toContain('No agent rollout completed yet')
+    expect(rows).toContain('Latest published 1.10.0')
+    expect(panel.text()).not.toContain('Rollout')
+  })
+
+  it('shows the running rollout with its wave and the newer published release', async () => {
+    overview = overviewOf({
+      updates: {
+        security_overdue: 0, reboot_required: 0, os_releases: [],
+        agent: {
+          current_version: '1.9.1', on_current: 3, outdated: 4, ahead: 2, unknown: 1, latest_published: '1.10.0',
+          rollout: { version: '1.10.0', wave: 2, waves: 4, percent: 10 },
+        },
+      },
+    })
+    const w = await mountOverview()
+    const rows = w.get('section[aria-labelledby="overview-updates-title"]').findAll('dl > div').map((d) => d.findAll('dt, dd').map((x) => x.text()).join(' '))
+    expect(rows).toContain('Rollout 1.10.0 wave 2 of 4 (10 %)')
+    expect(rows).toContain('Latest published 1.10.0')
   })
 
   it('says that no rollout has completed while no agent release is current', async () => {
