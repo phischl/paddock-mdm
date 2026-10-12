@@ -24,6 +24,11 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+# Most cases share a base configuration, and the Go pattern check, the copy of gitleaks and the canary each took
+# seconds per case; their results depend only on their inputs, so this run keeps them in its own cache (PDK-072).
+# A case with other inputs still runs them, and a failing check is never kept.
+export GITLEAKS_TEST_CACHE="$work/cache"
+mkdir "$GITLEAKS_TEST_CACHE"
 failures=0
 r="$work/repo"
 

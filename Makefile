@@ -691,6 +691,11 @@ GITLEAKS_REPO ?= $(CURDIR)
 # CODEOWNERS names a reviewer for them, and the branch ruleset on main requires that review
 # (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
+# Test seam of test/scan-secrets_test.sh, never set by CI: a directory where the steps of the generated configuration
+# keep what they produced, keyed by their inputs, so the test's many cases on the same base configuration run the Go
+# pattern check, the copy of /usr/bin/gitleaks and the canary once each (PDK-072). Only a check that ran is kept (the
+# verdicts of a Go check that exited 0, a canary that was reported); everything else still runs on every call.
+GITLEAKS_TEST_CACHE ?=
 GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
 GITLEAKS_CHILD_CONFIG = python3 $(CURDIR)/deploy/compose/scripts/gitleaks-child-config.py
 GITLEAKS_PATTERNS_CHECK = $(CURDIR)/deploy/compose/scripts/gitleaks-patterns.go
@@ -734,8 +739,14 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 	$(GITLEAKS_CHILD_CONFIG) child "$$tmp/repo.toml" "$(1)/default.toml" "$$tmp/child.toml" "$$tmp/patterns.json" || \
 		{ echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
 			"accepts (ADR 0026, amendment 2026-10-12)" >&2; exit 1; }; \
-	docker run --rm -i --network none -e GOFLAGS= -e GOTOOLCHAIN=local -v "$(GITLEAKS_PATTERNS_CHECK):/p.go:ro" \
+	tc='$(GITLEAKS_TEST_CACHE)'; \
+	key=$$({ printf '%s\n' '$(GO_BUILD_IMAGE)'; cat -- "$(GITLEAKS_PATTERNS_CHECK)" "$$tmp/patterns.json"; } | \
+		sha256sum) || exit 1; key=$${key%% *}; \
+	if [ -n "$$tc" ] && [ -f "$$tc/patterns-$$key" ]; then cp -- "$$tc/patterns-$$key" "$$tmp/verdicts.jsonl"; prc=$$?; \
+	else docker run --rm -i --network none -e GOFLAGS= -e GOTOOLCHAIN=local -v "$(GITLEAKS_PATTERNS_CHECK):/p.go:ro" \
 		$(GO_BUILD_IMAGE) go run /p.go <"$$tmp/patterns.json" >"$$tmp/verdicts.jsonl" 2>"$$tmp/patterns.err"; prc=$$?; \
+		if [ -n "$$tc" ] && [ "$$prc" -eq 0 ]; then cp -- "$$tmp/verdicts.jsonl" "$$tc/patterns-$$key" || exit 1; fi; \
+	fi; \
 	if [ "$$prc" -ne 0 ]; then cat -- "$$tmp/patterns.err" >&2; \
 		echo "$@: the Go pattern check could not run (exit $$prc, $(GO_BUILD_IMAGE)); the scan fails closed" >&2; \
 		exit 1; fi; \
@@ -743,8 +754,12 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
 			"accepts: Go's regexp refuses an allowlist pattern (ADR 0026, amendment 2026-10-12)" >&2; exit 1; fi; \
 	pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256 (deploy/compose/versions.env)"; \
-	docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
+	key=$$(printf '%s\n' '$(GITLEAKS_IMAGE)' | sha256sum) || exit 1; key=$${key%% *}; \
+	if [ -n "$$tc" ] && [ -f "$$tc/gitleaks-$$key" ]; then cp -- "$$tc/gitleaks-$$key" "$$tmp/gitleaks.bin" || exit 1; \
+	else docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
 		{ echo "$@: cannot copy /usr/bin/gitleaks out of $(GITLEAKS_IMAGE)" >&2; exit 1; }; \
+		if [ -n "$$tc" ]; then cp -- "$$tmp/gitleaks.bin" "$$tc/gitleaks-$$key" || exit 1; fi; \
+	fi; \
 	off=$$(LC_ALL=C grep -obaF -- '$(GITLEAKS_DEFAULT_CONFIG_HEADER)' "$$tmp/gitleaks.bin" | cut -d: -f1); \
 	case $$off in ''|*[!0-9]*) echo "$@: the header of the default configuration occurs" \
 		"$$(printf '%s' "$$off" | grep -c .) times in /usr/bin/gitleaks of $(GITLEAKS_IMAGE), not once;" \
@@ -758,7 +773,13 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 			"an image bump updates the image and both pins together (docs/operations/secret-scan.md)" >&2; exit 1; fi; \
 	$(call gitleaks_strip_default,"$$tmp/default.toml","$$tmp/cfg/default.toml",the default of $(GITLEAKS_IMAGE)); \
 	mv -- "$$tmp/child.toml" "$$tmp/cfg/gitleaks.toml" || exit 1; \
-	$(call gitleaks_canary,"$$tmp/cfg",$(1)); \
+	key=$$({ printf '%s\n' '$(GITLEAKS_IMAGE)' '$(GITLEAKS_CANARY)' '$(1)'; \
+		cat -- $(lastword $(GITLEAKS_CHILD_CONFIG)) "$$tmp/repo.toml" "$$tmp/cfg/default.toml"; } | sha256sum) || exit 1; \
+	key=$${key%% *}; \
+	if [ -z "$$tc" ] || [ ! -f "$$tc/canary-$$key" ]; then \
+		$(call gitleaks_canary,"$$tmp/cfg",$(1)); \
+		if [ -n "$$tc" ]; then : >"$$tc/canary-$$key" || exit 1; fi; \
+	fi; \
 	echo "$@: configuration from $${ref:-the working tree} on the default of $(GITLEAKS_IMAGE) without its global paths"
 
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
