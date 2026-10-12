@@ -241,6 +241,7 @@
       "agent_updated": "Das Gerät {target} hat seinen Agent auf {version} aktualisiert",
       "agent_update_failed": "Das Gerät {target} hat Agent {version} abgelehnt ({outcome})",
       "agent_rolled_back": "Das Gerät {target} hat Agent {version} auf {from_version} zurückgesetzt",
+      "agent_rollback_failed": "Das Gerät {target} konnte Agent {version} nicht auf {from_version} zurücksetzen; es läuft weiter mit {version} und versucht es erneut",
       "agent_events_dropped": "Das Gerät {target} hat {count, number} Ereignisse verworfen, während der Server nicht erreichbar war",
       "login_assignment_changed": "{actor} hat geändert, wer sich an {hostname} anmelden darf",
       "logins_suspended": "{actor} hat die Anmeldungen an {hostname} ausgesetzt",
@@ -1383,7 +1384,8 @@
       "login_apply_failed": "Anmeldekonfiguration fehlgeschlagen",
       "sudo_apply_failed": "sudo-Konfiguration fehlgeschlagen",
       "revocation_pending": "Sperre oder Vernichtung wartet",
-      "revocation_expired": "Sperre oder Vernichtung abgelaufen"
+      "revocation_expired": "Sperre oder Vernichtung abgelaufen",
+      "agent_rollback_pending": "Agent-Rücksetzung ausstehend"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1395,7 +1397,8 @@
       "login_apply_failed": "Gerät öffnen",
       "sudo_apply_failed": "Gerät öffnen",
       "revocation_pending": "Gerät öffnen",
-      "revocation_expired": "Gerät öffnen"
+      "revocation_expired": "Gerät öffnen",
+      "agent_rollback_pending": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

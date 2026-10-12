@@ -605,16 +605,18 @@ func (w *waits) String() string {
 	return fmt.Sprint(w.list)
 }
 
-// TestRollbackReportsAFailedFlipBack (PDK-037): if current cannot be flipped back, the supervisor retries with
-// bounded back-off, then reports the release as failed instead of rolled_back, while the new agent keeps running.
+// TestRollbackReportsAFailedFlipBack (PDK-037, ADR 0024): if current cannot be flipped back, the supervisor retries
+// with bounded back-off, then reports rollback_failed instead of rolled_back, while the new agent keeps running; the
+// probation log stays, marked as a pending rollback.
 func TestRollbackReportsAFailedFlipBack(t *testing.T) {
 	log := captureLog(t)
 	f := newFake(t)
 	w := &waits{}
 	f.resumeFailingProbation(w.add)
+	f.runRecordingPID("B")
 	f.blockFlip()
 	f.start()
-	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeSelfTestFailed || r.Version != "1.1.0" || r.FromVersion != "1.0.0" {
+	if r := f.waitResult(10 * time.Second); r.Outcome != outcomeRollbackFailed || r.Version != "1.1.0" || r.FromVersion != "1.0.0" {
 		t.Fatalf("result %+v", r)
 	}
 	if f.active() != "B" {
@@ -626,6 +628,8 @@ func TestRollbackReportsAFailedFlipBack(t *testing.T) {
 	if !strings.Contains(log.String(), "rollback failed: current still points at the new agent") {
 		t.Fatalf("failed rollback missing from the log:\n%s", log.String())
 	}
+	f.expectPendingLog()
+	f.waitAgentRuns("B")
 }
 
 // TestRollbackRetriesTheFlipBack (PDK-037): a flip back that fails once and then succeeds is a rollback.

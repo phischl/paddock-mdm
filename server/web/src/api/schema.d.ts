@@ -1007,8 +1007,8 @@ export interface paths {
          * @description Roles: org_admin, org_operator, org_auditor. The conditions that need an administrator, one row per open
          *     condition of a device (plan M5b decision 11): staleness warning and critical (the organization's thresholds),
          *     presumed lost, quarantined (clone suspected), disk encryption not compliant, agent not the current release,
-         *     the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days.
-         *     Read-only; the actions are the device's own (retire, release quarantine, lock).
+         *     the latest login or sudo configuration failed, a Lock or Destroy waiting, or expired within the last 30 days,
+         *     an agent release whose rollback failed and is still pending on the device (ADR 0024). Read-only; the actions are the device's own (retire, release quarantine, lock).
          */
         get: operations["listAttention"];
         put?: never;
@@ -2216,7 +2216,7 @@ export interface components {
             updated: number;
             /**
              * Format: int64
-             * @description Devices that reported agent.update_failed or agent.rolled_back for this version.
+             * @description Devices that reported agent.update_failed (also with outcome rollback_failed) or agent.rolled_back for this version, each once.
              */
             failed: number;
         };
@@ -2875,7 +2875,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending";
         Attention: {
             /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
             id: string;
@@ -2885,10 +2885,10 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; *_apply_failed: the stage; revocation_*: action:status; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; otherwise empty. */
             detail: string;
         };
         AttentionPage: {
