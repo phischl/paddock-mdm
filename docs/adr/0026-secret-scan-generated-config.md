@@ -103,22 +103,30 @@ Re-evaluate when gitleaks offers a way to drop entries of the default global all
 identifies archives by content (then the archive renames go).
 
 ## Amendment 2026-10-12
-The child configuration of decision 4 is written from the repository's `.gitleaks.toml` line by line. An external
-review of the implementation (PDK-078) showed with the pinned v8.30.1 image that a line `[extend]` inside a multi-line
-string was read as the header and every line after it up to the next `[` was dropped: a hex-only allowlist for `gen/`
-lost its condition and its regexes, and the whole directory was skipped without an error. `[extend] disabledRules` was
-dropped silently as well. Instead of parsing TOML more completely, the repository configuration's shape is restricted,
-and the scan fails, with a message naming the rule, when the `.gitleaks.toml` from `GITLEAKS_CONFIG_REF`:
+Decision 4 wrote the child configuration from the repository's `.gitleaks.toml` line by line. Two external reviews of
+the implementation (PDK-078) bypassed every line-based check with the pinned v8.30.1 image: a line `[extend]` inside a
+multi-line string, `'''` inside a basic string, and names in another case (`[Extend]`, `Extend.disabledRules`), which
+gitleaks reads case-insensitively, loosened the reviewed configuration without an error. Pattern matching on TOML text
+cannot be made sound, so decision 4 and the check of decision 3 change as follows:
 
-1. has a line with an odd count of `'''` or of `"""`: multi-line strings are not allowed; single-line `'''…'''`
-   literals stay allowed;
-2. has more than one line that reads as an `[extend]` header (surrounding whitespace, quotes and a trailing comment
-   allowed), or defines `[extend]` as an array or with a subtable;
-3. sets any key in `[extend]` other than `useDefault` (this covers `disabledRules`, `url` and `path`; the PDK-065
-   refusal of `path` and of dotted `extend` keys stays).
+1. **Parse, whitelist, re-emit.** `deploy/compose/scripts/gitleaks-child-config.py` reads the merge-base
+   `.gitleaks.toml` with Python's standard-library `tomllib` (Python 3.11 or later; an older Python fails the scan).
+   This is a new tool in the recipe but no new dependency: no package, module or image is added, and `python3` already
+   runs in the regression test and on the CI runner. The script refuses everything outside a closed whitelist, with
+   names compared exactly: at the top level only `title` (string), `extend` and `allowlists`; `extend` exactly
+   `{useDefault = true}` (so `path`, `url` and `disabledRules` fail, as PDK-065 required for `path`); each allowlist
+   only `description` (string), `condition` (`"AND"` or `"OR"`), `paths`, `regexes`, `stopwords`, `commits`,
+   `targetRules` (lists of strings) and `regexTarget` (`"match"`, `"secret"` or `"line"`). It then writes the child
+   itself, `[extend] path` to the stripped default and each allowlist under its canonical key names, every string as a
+   TOML basic string, and checks that the result parses back to the same allowlists. Nothing of the input is copied
+   verbatim. Multi-line strings are therefore allowed again.
+2. **The strip is verified by a parser.** The awk strip of the sha-pinned default stays; afterwards `tomllib` must
+   read the result, find rules, and find no `paths` key in the global allowlist in any key form or case (`[allowlist]
+   paths`, `allowlist.paths`, an inline table, `Allowlist.Paths`).
+3. **Canary.** Before either scan reads pull request content, the pinned gitleaks runs the generated configuration
+   over a temporary directory holding a fake GitHub token, generated per run and never printed, in
+   `node_modules/canary.txt` and `vendor/github.com/canary/canary.txt`, paths the default's global allowlist skipped.
+   Both must be reported, or the scan fails with "the generated configuration lost its rules or path coverage".
 
-A rule that needs to be disabled is therefore handled by an allowlist, not by `disabledRules`.
-
-The check of decision 3 that no `paths` key remains before the first `[[rules]]` also covers a dotted key
-(`allowlist.paths = …`) and a key in an inline table (`allowlist = { paths = … }`); the strip and its check run as one
-step that the regression test calls on crafted default files.
+The regression test reaches the strip check and the canary through two test seams (`make
+scan-secrets-strip-default`, `make scan-secrets-canary`) that do not change either scan.

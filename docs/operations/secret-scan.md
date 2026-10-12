@@ -18,11 +18,11 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
   merged.
 - A `.gitleaksignore` in the scanned tree is never loaded, inline `gitleaks:allow` comments are ignored, and a
   `.gitleaks.toml` that extends another file (`[extend] path`) fails the scan; `useDefault` alone is allowed.
-- `.gitleaks.toml` must have a simple shape, because the generated configuration is written from it line by line
-  (ADR 0026, amendment 2026-10-12). The scan fails, naming the rule and the line, when the file has a multi-line
-  string (a line with an odd count of `'''` or `"""`; single-line `'''…'''` is fine), more than one `[extend]`
-  header or `[extend]` as an array or with a subtable, or a key in `[extend]` other than `useDefault` (`disabledRules`
-  and `url` included). To silence a rule, write an allowlist.
+- `.gitleaks.toml` is parsed, not copied (ADR 0026, amendment 2026-10-12). The scan fails before gitleaks reads any
+  pull request content when the file holds anything but `title`, `[extend]` with exactly `useDefault = true`, and
+  `[[allowlists]]` with `description`, `condition` (`"AND"`/`"OR"`), `paths`, `regexes`, `stopwords`, `commits`,
+  `targetRules` and `regexTarget` (`"match"`/`"secret"`/`"line"`). Names compare exactly, so `[Extend]`,
+  `disabledRules` or an unknown key fail. To silence a rule, write an allowlist.
 
 ## The scan configuration
 
@@ -39,10 +39,15 @@ entries. Both scans therefore run a configuration generated for each run (ADR 00
    or occurs more than once, or a mismatch, fails the scan with a message naming the two pins.
 3. The `paths` of the global `[allowlist]` are removed; its `regexes` and `stopwords` and every rule with its own
    allowlists stay. If a `paths` key is still left before the first `[[rules]]`, also as a dotted key or in an inline
-   table, the scan fails: the default's layout changed and needs a look.
-4. The repository's `.gitleaks.toml` (from the merge base, see above) becomes a child configuration whose `[extend]`
-   table points at the stripped default (`[extend] path`). The file in the repository keeps `useDefault = true`, so a
+   table, the scan fails: the default's layout changed and needs a look. A parser checks this, and that the
+   stripped default still has rules.
+4. The repository's `.gitleaks.toml` (from the merge base, see above) is parsed with Python's `tomllib` (Python 3.11
+   or later), checked against the whitelist above and written out as a child configuration whose `[extend]` table
+   points at the stripped default (`[extend] path`). The file in the repository keeps `useDefault = true`, so a
    plain `gitleaks` call and editor plugins behave as before.
+5. A canary run of the generated configuration must report a fake token, generated per run and never printed, under
+   `node_modules/` and `vendor/github.com/`, names the default skipped. Otherwise the scan fails with "the generated
+   configuration lost its rules or path coverage".
 
 Every file is therefore scanned by content, under its own path, apart from the magic-byte skip below and the
 repository's own allowlists. Among those, `.gitleaks.toml` skips two kinds of generated lock files by exact path:

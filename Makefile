@@ -646,8 +646,8 @@ TRIVY_ARGS      := --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --no-
 COMPILER_IMAGE  ?= paddock-compiler:dev
 PGBACKREST_IMAGE ?= paddock-pgbackrest:dev
 
-.PHONY: scan scan-secrets scan-secrets-diff scan-secrets-strip-default scan-fs scan-images image-compiler \
-	image-pgbackrest
+.PHONY: scan scan-secrets scan-secrets-diff scan-secrets-strip-default scan-secrets-canary scan-fs scan-images \
+	image-compiler image-pgbackrest
 scan: scan-secrets scan-fs scan-images ## Run gitleaks (branch history) and trivy (filesystem and images)
 
 # The current branch only, never --all: a finding on an unrelated stale branch must not fail this scan. CI narrows it
@@ -665,7 +665,7 @@ GITLEAKS_REPO ?= $(CURDIR)
 # both always pass the chosen file (empty when there is none). An inline `gitleaks:allow` comment would let the scanned
 # content allow itself, so both scans pass --ignore-gitleaks-allow. gitleaks resolves an `[extend] path` from its
 # working directory, which the file scan fills with the pull request's files, so a configuration that extends another
-# file fails; `useDefault` alone is allowed.
+# file fails; `useDefault = true` alone is allowed.
 # The configuration both scans run is generated (ADR 0026): the default configuration of GITLEAKS_IMAGE without the
 # paths of its global allowlist, extended by that .gitleaks.toml. Those paths skip whole files and directories in every
 # scan mode (src/bootstrap.js, d.png/creds.bin, javascript.json), and a repository configuration that extends the
@@ -675,10 +675,13 @@ GITLEAKS_REPO ?= $(CURDIR)
 # instead of scanning with an unknown default. A default whose global paths the strip does not recognise fails too.
 # $(1) is the directory the container mounts the configuration at: the child's `[extend] path` names the stripped
 # default by its absolute path there, a mount that holds none of the scanned files.
-# The child is written line by line, so .gitleaks.toml must have a shape that reading it line by line cannot get wrong
-# (ADR 0026, amendment 2026-10-12): no multi-line strings (a line with an odd count of ''' or """), one [extend]
-# header at most, and no key in [extend] but useDefault. Anything else fails rather than being scanned with an
-# allowlist that lost its condition or with a dropped disabledRules.
+# The child is not derived from .gitleaks.toml by text: GITLEAKS_CHILD_CONFIG parses it with Python's tomllib, refuses
+# everything outside a closed whitelist (top level title, extend = {useDefault = true} and allowlists with their known
+# keys and types; names compare exactly, so [Extend] or Extend.disabledRules fail) and writes the child itself (ADR
+# 0026, amendment 2026-10-12): pattern matching on TOML text was bypassed by strings holding `[extend]` or `'''` and
+# by gitleaks' case-insensitive keys. Before either scan reads PR content, a canary run of the generated
+# configuration must report a fake token, generated per run and never printed, under node_modules/ and vendor/, paths
+# the default's global allowlist skipped: a configuration that lost its rules or path coverage fails.
 # What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
 # scanned. The scan's integrity therefore rests on code review of .github/, the Makefile and
 # deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE and its default configuration);
@@ -686,15 +689,29 @@ GITLEAKS_REPO ?= $(CURDIR)
 # review, a setting of the maintainer (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
 GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
+GITLEAKS_CHILD_CONFIG = python3 $(CURDIR)/deploy/compose/scripts/gitleaks-child-config.py
 # gitleaks_strip_default,<in>,<out>,<label>: <in> without the multi-line `paths = [` array before the first
-# [[rules]]. Any paths key left there, also as a dotted key (allowlist.paths) or in an inline table, fails the scan.
+# [[rules]]; the result must parse, hold rules and keep no paths in its global allowlist in any key form.
 gitleaks_strip_default = awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
 		!r && /^[[:space:]]*paths[[:space:]]*=[[:space:]]*\[[[:space:]]*$$/ { s = 1; next } \
 		s { if ($$0 ~ /^[[:space:]]*\][[:space:]]*$$/) s = 0; next } { print }' $(1) >$(2) || exit 1; \
-	if awk '/^[[:space:]]*\[\[rules\]\]/ { exit } /(^|[^A-Za-z0-9_-])["\047]?paths["\047]?[[:space:]]*=/ { f = 1 } \
-		END { exit !f }' $(2); then \
-		echo "$@: $(3) keeps a paths key before its first [[rules]] after the strip;" \
-			"its layout changed and must be looked at (ADR 0026)" >&2; exit 1; fi
+	$(GITLEAKS_CHILD_CONFIG) verify-default $(2) || { echo "$@: $(3) after the strip is not a default with rules and" \
+		"without global paths; its layout changed and must be looked at (ADR 0026)" >&2; exit 1; }
+# gitleaks_canary,<config dir>,<its path in the container>: the configuration in <config dir> must report a fake
+# GitHub token under node_modules/ and vendor/github.com/.
+GITLEAKS_CANARY = node_modules/canary.txt vendor/github.com/canary/canary.txt
+gitleaks_canary = mkdir -p "$$tmp/canary/node_modules" "$$tmp/canary/vendor/github.com/canary" "$$tmp/canary-out" || \
+		exit 1; \
+	for f in $(GITLEAKS_CANARY); do \
+		printf 'GITHUB_TOKEN=ghp_%s\n' "$$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)" \
+			>"$$tmp/canary/$$f" || exit 1; done; \
+	docker run --rm --user "$$(id -u):$$(id -g)" -v $(1):$(2):ro -v "$$tmp/canary:/canary:ro" \
+		-v "$$tmp/canary-out:/out" -w /canary $(GITLEAKS_IMAGE) dir . --config $(2)/gitleaks.toml --no-banner \
+		--redact --exit-code 0 --report-format json --report-path /out/report.json >"$$tmp/canary-out/log" 2>&1; \
+	if ! $(GITLEAKS_CHILD_CONFIG) canary "$$tmp/canary-out/report.json" $(GITLEAKS_CANARY); then \
+		echo "$@: the generated configuration lost its rules or path coverage (ADR 0026); gitleaks said:" >&2; \
+		sed -E 's/\x1b\[[0-9;]*m//g' "$$tmp/canary-out/log" >&2; exit 1; fi; \
+	rm -rf -- "$$tmp/canary" "$$tmp/canary-out"
 gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 	if [ -n "$$ref" ]; then \
 		git -C "$$repo" show "$$ref:.gitleaks.toml" >"$$tmp/repo.toml" || \
@@ -707,24 +724,9 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		if [ -f "$$repo/.gitleaksignore" ]; then cp -- "$$repo/.gitleaksignore" "$$tmp/cfg/gitleaksignore" || exit 1; \
 		else : >"$$tmp/cfg/gitleaksignore"; fi; \
 	fi; \
-	if awk '{ l = $$0; sub(/\#.*/, "", l) } \
-		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t) } \
-		t == "[extend]" && l ~ /^[[:space:]]*["\047]?path["\047]?[[:space:]]*=/ { f = 1 } \
-		l ~ /^[[:space:]]*["\047]?extend["\047]?[[:space:]]*[.=]/ { f = 1 } \
-		END { exit !f }' "$$tmp/repo.toml"; then \
-		echo "$@: .gitleaks.toml from $${ref:-the working tree} extends another file ([extend] path);" \
-			"only useDefault is allowed" >&2; exit 1; fi; \
-	if ! why=$$(awk '{ l = $$0; a = gsub(/\047\047\047/, "", l); l = $$0; b = gsub(/"""/, "", l) } \
-		a % 2 || b % 2 { print "line " NR " opens or closes a multi-line string, which is not allowed"; exit 1 } \
-		{ l = $$0; sub(/\#.*/, "", l) } \
-		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t); e = 0; \
-			if (t == "[extend]") { e = 1; if (++n > 1) { print "line " NR " is a second [extend] header"; exit 1 } } \
-			else if (t ~ /^\[+extend[].]/) { print "line " NR " defines [extend] as an array or with a subtable"; exit 1 } \
-			next } \
-		e && l ~ /[^[:space:]]/ && l !~ /^[[:space:]]*["\047]?useDefault["\047]?[[:space:]]*=/ { \
-			print "line " NR " sets a key in [extend] other than useDefault"; exit 1 }' "$$tmp/repo.toml"); then \
-		echo "$@: .gitleaks.toml from $${ref:-the working tree} does not have the shape the generated configuration" \
-			"needs: $${why:-awk failed} (ADR 0026, amendment 2026-10-12)" >&2; exit 1; fi; \
+	$(GITLEAKS_CHILD_CONFIG) child "$$tmp/repo.toml" "$(1)/default.toml" "$$tmp/child.toml" || \
+		{ echo "$@: .gitleaks.toml from $${ref:-the working tree} is outside what the generated configuration" \
+			"accepts (ADR 0026, amendment 2026-10-12)" >&2; exit 1; }; \
 	pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256 (deploy/compose/versions.env)"; \
 	docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
 		{ echo "$@: cannot copy /usr/bin/gitleaks out of $(GITLEAKS_IMAGE)" >&2; exit 1; }; \
@@ -740,11 +742,8 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		echo "$@: the default configuration in $(GITLEAKS_IMAGE) does not match $$pins;" \
 			"an image bump updates the image and both pins together (docs/operations/secret-scan.md)" >&2; exit 1; fi; \
 	$(call gitleaks_strip_default,"$$tmp/default.toml","$$tmp/cfg/default.toml",the default of $(GITLEAKS_IMAGE)); \
-	awk -v p="$(1)/default.toml" '{ l = $$0; sub(/\#.*/, "", l) } \
-		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t); s = 0; \
-			if (t == "[extend]") { print "[extend]"; print "path = \047" p "\047"; d = 1; s = 1; next } } \
-		!s { print } END { if (!d) { print ""; print "[extend]"; print "path = \047" p "\047" } }' \
-		"$$tmp/repo.toml" >"$$tmp/cfg/gitleaks.toml" || exit 1; \
+	mv -- "$$tmp/child.toml" "$$tmp/cfg/gitleaks.toml" || exit 1; \
+	$(call gitleaks_canary,"$$tmp/cfg",$(1)); \
 	echo "$@: configuration from $${ref:-the working tree} on the default of $(GITLEAKS_IMAGE) without its global paths"
 
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
@@ -811,6 +810,12 @@ scan-secrets-strip-default:
 	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
 	$(call gitleaks_strip_default,'$(GITLEAKS_STRIP_FILE)',"$$tmp/out.toml",$(GITLEAKS_STRIP_FILE)); \
 	cat -- "$$tmp/out.toml"
+
+# Test seam of test/scan-secrets_test.sh: the canary on GITLEAKS_CANARY_DIR, a directory with a gitleaks.toml that is
+# mounted at its own path.
+scan-secrets-canary:
+	@tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
+	$(call gitleaks_canary,'$(GITLEAKS_CANARY_DIR)','$(GITLEAKS_CANARY_DIR)'); echo "$@: the canary was reported"
 
 scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE and every blob added since then
 	@repo='$(GITLEAKS_REPO)'; \
