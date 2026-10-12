@@ -285,6 +285,19 @@ Troubleshooting on a device: `journalctl -u paddock-supervisor`, `readlink /opt/
 `/var/lib/paddock/state/update-result.json` (until the event is delivered), `/var/lib/paddock/state/probation.json`
 (during a probation, and while a rollback is pending).
 
+If `probation.json` is unreadable when the supervisor starts (disk corruption), the supervisor rebuilds the probation
+from the slots while they still describe an update: `current` points at `A` or `B`, the other slot holds an agent
+with a valid version, the active agent is newer, and `update-result.json` does not already name it `updated`. The
+rebuilt log carries `"rebuilt": true` and a full probation runs again. If `update-result.json` names the active
+version `rolled_back` or `rollback_failed`, or the marker `/var/lib/paddock/state/rollback-pending` exists (the
+supervisor keeps it from a failed rollback until the rollback is made; do not remove it by hand), the supervisor
+resumes the pending rollback instead. Otherwise it drops the log; both cases are logged at error level with the
+reason:
+
+```sh
+journalctl -u paddock-supervisor -p err | grep 'probation log'
+```
+
 ### A rollback that failed
 
 The portal lists the device on the attention page as *Agent rollback pending* (kind `agent_rollback_pending`, detail:

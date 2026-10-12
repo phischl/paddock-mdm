@@ -158,6 +158,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Agent supervisor with an unreadable `probation.json` (PDK-062, plan M2b decision 16): instead of dropping the log
+  and leaving the new release running without a probation, the supervisor rebuilds the probation from the slots when
+  `current` points at `A` or `B`, the other slot holds an agent with a valid version, the active agent is newer by
+  semantic version and no `update-result.json` names it `updated`; the rebuilt log carries `"rebuilt": true` and a
+  full probation runs again. A result `rolled_back` or `rollback_failed` for the active version, or the new marker
+  `/var/lib/paddock/state/rollback-pending`, which the supervisor keeps from a failed rollback until it is made,
+  resumes the pending rollback instead. In every other case the log is dropped as before, with the reason logged at
+  error level.
+- Agent supervisor after a manual flip back (review of PDK-043): when the supervisor restarted before it could record
+  a failed rollback in `probation.json` and `current` already points at the previous version, it now confirms the
+  flip back and reports `rolled_back` instead of dropping the probation and leaving `rollback_failed` as the device's
+  last report.
 - Device API contract (PDK-073): the `Event.type` enum in `api/openapi/device.yaml` lists every event type the
   gateway accepts, adding `revocation.trust_pinned_tofu`, `revocation.refused`, `tamper.service_stopped` and
   `updates.run`. The gateway's behaviour is unchanged; a test keeps the contract and the accepted list in sync.
