@@ -158,6 +158,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `paddockd plan` changed the agent state (PDK-081): run next to the daemon, it reported the daemon's running
+  `install_now` job as failed with reason `interrupted`, dropped it from the agent state and saved the state file
+  from a second process. `paddockd plan` now writes nothing under the agent layout; the daemon still reports a job
+  that a restart interrupted, when it starts.
 - Agent release staged during a probation or a pending rollback (PDK-075, plan M2b decision 16): the supervisor
   ignores such a release and later removes only its request, which left the release under
   `/var/lib/paddock/staging/<version>/` on disk. The agent now removes every staged release without a

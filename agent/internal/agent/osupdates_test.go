@@ -143,8 +143,9 @@ func TestReportUpdateRuns(t *testing.T) {
 	}
 }
 
-// TestInstallNowInterruptedByARestart (review 2): an accepted install_now is kept in the agent state until it
-// finished; a new agent on the same state reports it as failed with reason interrupted, runs nothing and forgets it.
+// TestInstallNowInterruptedByARestart (review 2, PDK-081): an accepted install_now is kept in the agent state until
+// it finished; a new agent on the same state reports it as failed with reason interrupted when the daemon starts
+// (Run, not New), runs nothing and forgets it.
 func TestInstallNowInterruptedByARestart(t *testing.T) {
 	g := testgw.New(t)
 	a := newAgent(t, g)
@@ -158,27 +159,38 @@ func TestInstallNowInterruptedByARestart(t *testing.T) {
 	if err != nil || len(st.PendingInstalls) != 1 || st.PendingInstalls[0].CommandID != "c-restart" {
 		t.Fatalf("persisted %+v %v", st.PendingInstalls, err)
 	}
-	b := newAgent(t, g)
-	b.d.Layout = a.d.Layout
-	b.st = st
+	b, err := New(a.d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err = state.Load(b.d.Layout.State()); err != nil || len(st.PendingInstalls) != 1 || len(st.CommandResults) != 0 {
+		t.Fatalf("New reported the pending job: %+v %v", st, err)
+	}
 	sys := withSystem(t, b)
-	b.reportInterruptedInstalls()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	waitFor(t, func() bool {
+		g.Mu.Lock()
+		defer g.Mu.Unlock()
+		_, ok := g.Results["c-restart"]
+		return ok
+	})
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
 	if len(b.installJobs) != 0 || sys.Packages["htop"] || len(sys.TakeCalls()) != 0 {
 		t.Fatal("an interrupted job was run")
 	}
-	st, err = state.Load(b.d.Layout.State())
-	if err != nil || len(st.PendingInstalls) != 0 || len(st.CommandResults) != 1 {
+	if st, err = state.Load(b.d.Layout.State()); err != nil || len(st.PendingInstalls) != 0 {
 		t.Fatalf("state %+v %v", st, err)
 	}
-	r := st.CommandResults[0]
+	r := g.Results["c-restart"]
 	var res command.InstallNowResult
-	if err := json.Unmarshal(r.Result, &res); err != nil || r.CommandID != "c-restart" || r.Status != protocol.CommandFailed ||
+	if err := json.Unmarshal(r.Result, &res); err != nil || r.Status != protocol.CommandFailed ||
 		res.Reason != "interrupted" || !slices.Equal(res.Failed, []string{"htop"}) {
 		t.Fatalf("result %+v %s %v", r, r.Result, err)
-	}
-	b.Cycle(context.Background())
-	if got, ok := g.Results["c-restart"]; !ok || got.Status != protocol.CommandFailed {
-		t.Fatalf("results %+v", g.Results)
 	}
 }
 
