@@ -396,6 +396,19 @@ func TestPendingMarkerVersionNamesTheFailedRelease(t *testing.T) {
 			t.Fatalf("result %+v, current %s", r, f.active())
 		}
 	})
+	for _, current := range []string{"A", "B"} {
+		t.Run("unreadable marker, valid slots, current on "+current, func(t *testing.T) {
+			f := newFake(t)
+			f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+			f.markedCorruptLog(current, "garbled")
+			f.start()
+			if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || r.FromVersion != "1.0.0" || f.active() != "A" {
+				t.Fatalf("result %+v, current %s", r, f.active())
+			}
+			f.waitNoProbationLog()
+			f.waitFor("the pending marker was removed", func() bool { return !f.marked() })
+		})
+	}
 	t.Run("unreadable marker, slot without a valid version", func(t *testing.T) {
 		f := newFake(t)
 		f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("garbage", 0, f.good()))
