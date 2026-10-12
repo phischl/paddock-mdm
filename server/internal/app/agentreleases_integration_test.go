@@ -17,6 +17,7 @@ import (
 	"aead.dev/minisign"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/pkg/releasesig"
@@ -350,8 +351,8 @@ func TestRollbackFailedCountsOnceAndRaisesAttention(t *testing.T) {
 		}
 		return n
 	}
-	// attention lists the pending rollbacks of dev as the API role of the organization asking.
-	attention := func(asking uuid.UUID) []string {
+	// asAPI runs fn in a transaction as the API role of the organization asking, and rolls it back.
+	asAPI := func(asking uuid.UUID, fn func(tx pgx.Tx)) {
 		t.Helper()
 		tx, err := h.super.Begin(ctx)
 		if err != nil {
@@ -364,14 +365,30 @@ func TestRollbackFailedCountsOnceAndRaisesAttention(t *testing.T) {
 		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", asking.String()); err != nil {
 			t.Fatal(err)
 		}
-		rows, err := tx.Query(ctx, "SELECT detail FROM attention_condition WHERE device_id = $1 AND kind = 'agent_rollback_pending'", dev)
-		if err != nil {
-			t.Fatal(err)
-		}
-		details, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			t.Fatal(err)
-		}
+		fn(tx)
+	}
+	// reports counts the update reports of dev that the API role of the organization asking can read.
+	reports := func(asking uuid.UUID) (n int) {
+		t.Helper()
+		asAPI(asking, func(tx pgx.Tx) {
+			if err := tx.QueryRow(ctx, "SELECT count(*) FROM agent_update_report WHERE device_id = $1", dev).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+		})
+		return n
+	}
+	// attention lists the pending rollbacks of dev as the API role of the organization asking.
+	attention := func(asking uuid.UUID) (details []string) {
+		t.Helper()
+		asAPI(asking, func(tx pgx.Tx) {
+			rows, err := tx.Query(ctx, "SELECT detail FROM attention_condition WHERE device_id = $1 AND kind = 'agent_rollback_pending'", dev)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if details, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+				t.Fatal(err)
+			}
+		})
 		return details
 	}
 
@@ -393,6 +410,17 @@ func TestRollbackFailedCountsOnceAndRaisesAttention(t *testing.T) {
 	if got := attention(other); len(got) != 0 {
 		t.Fatalf("another organization sees agent_rollback_pending %v", got)
 	}
+	// The API role reads the reports of its own organization through the tenant policy, and only reads them.
+	if own, foreign := reports(org), reports(other); own != 1 || foreign != 0 {
+		t.Fatalf("the API role reads %d reports of its own organization and %d of another, want 1 and 0", own, foreign)
+	}
+	asAPI(org, func(tx pgx.Tx) {
+		_, err := tx.Exec(ctx, "INSERT INTO agent_update_report (device_id, organization_id, version, outcome) VALUES ($1, $2, '9.9.9', 'updated')", dev, org)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Fatalf("insert as the API role: %v, want insufficient_privilege", err)
+		}
+	})
 
 	report(2, protocol.EventAgentRolledBack, "rolled_back")
 	if n := failed(); n != [3]int64{1, 1, 1} {
