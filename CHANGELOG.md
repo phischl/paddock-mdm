@@ -158,6 +158,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fleet's vulnerability data in development and CI stacks (PDK-054, ADR 0009 amendment 2026-10-12): the development
+  overlay passes Fleet direct URLs for its CPE dictionary, CPE translations and NVD feeds, so a fresh stack on a shared
+  CI runner no longer waits on GitHub's anonymous API rate limit before the inventory gates find vulnerabilities. The
+  CPE release is pinned in `deploy/compose/versions.env` (`FLEET_CPE_DATABASE_URL`, `FLEET_CPE_TRANSLATIONS_URL`);
+  no GitHub token is passed to Fleet. Production stacks are unchanged and keep Fleet's own lookup of the latest data.
+  A failed CI acceptance run now also prints Fleet's full log.
 - Device API contract (PDK-073): the `Event.type` enum in `api/openapi/device.yaml` lists every event type the
   gateway accepts, adding `revocation.trust_pinned_tofu`, `revocation.refused`, `tamper.service_stopped` and
   `updates.run`. The gateway's behaviour is unchanged; a test keeps the contract and the accepted list in sync.

@@ -108,6 +108,13 @@ jobs:
       - name: compose logs
         if: failure()
         run: make logs
+      # make logs keeps the last 300 lines per container, which loses Fleet's vulnerability downloads of the first
+      # minutes that the inventory gates depend on (PDK-054).
+      - name: Fleet log
+        if: failure()
+        run: |
+          docker ps -aq --filter label=com.docker.compose.project=paddock --filter label=com.docker.compose.service=fleet \
+            | xargs -r -n1 docker logs 2>&1
 
   edge:
     needs: [acceptance]

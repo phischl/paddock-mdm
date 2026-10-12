@@ -13,6 +13,18 @@ the portal shows its data from Paddock's own tables, isolated per organization.
 Vulnerability feeds (NVD, OSV) are downloaded by Fleet into the volume `fleet-vulndb`, mounted on the home directory
 of the image's `fleet` user, which Fleet runs as; Fleet needs outbound HTTPS for them.
 
+In production Fleet finds the latest CPE dictionary, CPE translations and NVD feeds through GitHub's API without a
+token (60 requests per hour and address). Development and CI stacks skip that lookup (ADR 0009 amendment
+2026-10-12): `compose.dev.yaml` sets `FLEET_VULNERABILITIES_CPE_DATABASE_URL` and
+`FLEET_VULNERABILITIES_CPE_TRANSLATIONS_URL` to one pinned `fleetdm/nvd` release (`FLEET_CPE_DATABASE_URL`,
+`FLEET_CPE_TRANSLATIONS_URL` in `deploy/compose/versions.env`) and `FLEET_VULNERABILITIES_CVE_FEED_PREFIX_URL` to the
+latest `fleetdm/vulnerabilities` release, so a shared CI runner over GitHub's limit still gets the data the
+inventory gates need. No GitHub token is passed to Fleet. Fleet's MSRC, Mac Office, OVAL and OSV syncs still use the
+API; their failures are logged and do not affect the gates. When upgrading `FLEET_IMAGE`, check that the three
+variables still exist and move the pin to a current `fleetdm/nvd` release (its asset `cpe-<sha256>.sqlite.gz` and
+`cpe_translations.json`); if the pinned release is ever pruned, the inventory gates fail with Fleet's download error
+and the pin is moved the same way.
+
 ## What is published
 
 Caddy publishes `fleet.<domain>` with the device endpoints only:
