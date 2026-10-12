@@ -10,7 +10,8 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
 - `make scan-secrets-diff` scans the final content of every file the pull request changes and every blob the pull
   request adds, also versions a later commit replaced or removed (PDK-068). The history scan skips binary content, so
   a binary file with a secret that the pull request adds and deletes again is caught here. A file over 100 MB fails
-  the scan instead of being skipped.
+  the scan instead of being skipped. Not covered in any scan mode: files gitleaks' default configuration allowlists
+  by path (for example `.bin`, `.zip`, `.pdf`, images, fonts, `node_modules`) and the content of archives.
 - Both read `.gitleaks.toml` and `.gitleaksignore` from the pull request's merge base (`GITLEAKS_CONFIG_REF`, PDK-065).
   A pull request that changes either file is scanned with the base's version. An allowlist for a new false positive
   therefore lands in its own pull request first, and the pull request with the flagged content follows once it is
