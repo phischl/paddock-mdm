@@ -45,6 +45,70 @@ The first runs missed both targets and found two hot spots, fixed before the fig
   events/s with three workers, a backlog of 2 500 messages and a lag of about 75 s. A worker now handles 8 messages at a
   time and records the events of one message in one transaction.
 
+## Attention list and overview
+
+Measured on 2026-10-12 on the same reference machine and development stack, with one organization of **10 103 active
+devices** enrolled with `make load-identities` (10 000 load devices and 103 that never checked in). The load
+devices checked in once each, with agent versions mixed against the current release `0.3.1791801809-probation`:
+4 000 on it, 3 000 older (`0.2.0`, `0.1.9`, `0.0.0-load`), 2 000 newer (`9.0.0`, `10.1.0`) and 1 000 with no
+semantic version (`dev-build`). The development stack counts staleness in minutes, so the 10 000 devices were also
+`stale_warning` during the measurement. The attention list had 14 000 conditions: 10 000 `stale_warning` and 4 000
+`agent_outdated`. Target: attention list p95 ≤ 200 ms at 10 000 devices.
+
+**Before (Paddock `2db58c9`), HTTP:** 50 sequential requests per row with a portal session through the edge (Caddy).
+A request runs the list query and its count.
+
+| Request | p50 | p95 | p99 |
+| --- | --- | --- | --- |
+| `GET /api/v1/attention` (defaults) | 635 ms | 765 ms | 797 ms |
+| `GET /api/v1/attention?page_size=25` | 662 ms | 771 ms | 776 ms |
+| `GET /api/v1/attention?page_size=100` | 658 ms | 764 ms | 819 ms |
+| `GET /api/v1/attention?page_size=25&kind=agent_outdated` | 1 247 ms | 1 492 ms | 1 507 ms |
+| `GET /api/v1/attention?page_size=100&kind=agent_outdated` | 1 265 ms | 1 442 ms | 1 469 ms |
+| `GET /api/v1/attention/devices?page_size=25` | 1 406 ms | 1 654 ms | 1 692 ms |
+| `GET /api/v1/attention/devices?page_size=100` | 1 383 ms | 1 558 ms | 1 618 ms |
+| `GET /api/v1/attention/devices?page_size=25&kind=agent_outdated` | 2 647 ms | 2 989 ms | 3 047 ms |
+| `GET /api/v1/overview` | 3 129 ms | 3 419 ms | 3 456 ms |
+
+**Cause.** The `agent_outdated` branch of the view `attention_condition` and the overview's agent counters joined a
+derived table with the current release's version key. The planner flattened it, so the SECURITY DEFINER lookup
+`paddock_current_agent_version()` ran once per active device. That cost 358 ms per 10 000 calls, against 1 ms for a
+single call. `EXPLAIN (ANALYZE, BUFFERS)` of the default list: 507 ms and 171 818 shared buffer hits, 490 ms of them
+in that branch. Migration `00042` evaluates the key once per query (an InitPlan).
+
+**Before and after, database:** `EXPLAIN ANALYZE` medians of 5 runs as the API role in the organization's scope,
+read-only. These are query execution times, not HTTP latencies. The after figures come from the view of migration
+`00042` on the same data. The HTTP figures after the change are measured once the change is merged and deployed to
+the development stack.
+
+| Query (endpoint) | Before | After |
+| --- | --- | --- |
+| `ListAttention` defaults, 25 (`/attention`) | 614 ms | 119 ms |
+| `CountAttention` defaults | 14 ms | 15 ms |
+| `ListAttention`, 100 | 604 ms | 83 ms |
+| `ListAttention` `kind=agent_outdated`, 25 | 609 ms | 65 ms |
+| `CountAttention` `kind=agent_outdated` | 592 ms | 61 ms |
+| `ListAttentionDevices`, 25 (`/attention/devices`) | 617 ms | 119 ms |
+| `CountAttentionDevices` | 686 ms | 75 ms |
+| `ListAttentionDevices` `kind=agent_outdated`, 25 | 1 813 ms | 225 ms |
+| `CountAttentionDevices` `kind=agent_outdated` | 666 ms | 63 ms |
+| `OverviewAttention` (`/overview`) | 615 ms | 74 ms |
+| `OverviewUpdates` (`/overview`) | 2 226 ms | 151 ms |
+| `OverviewDevices` (`/overview`, unchanged) | 385 ms | 385 ms |
+
+After the change, the default list takes 118 ms with 2 542 shared buffer hits. An `/api/v1/attention` request,
+list plus count, takes about 125–135 ms of query time in every variant, so the target is met.
+
+**Remaining hot spots** (open follow-ups):
+
+- `/api/v1/attention/devices?kind=agent_outdated` takes about 290 ms (list plus count). `/api/v1/attention/devices`
+  takes about 195 ms. The remaining cost is the PL/pgSQL `paddock_version_key(agent_version)`, which runs per device
+  row, about 48 ms per 10 000 rows. The grouped list reads the view twice, and `OverviewUpdates` evaluates the key
+  three times per row. With a precomputed key per device, the `agent_outdated` branch measured about 6 ms instead of
+  53 ms. PDK-090: a stored key at check-in, or an inlinable SQL implementation.
+- `/api/v1/overview` still takes about 620 ms of query time. `OverviewDevices` takes 385 ms of it:
+  `paddock_device_contact()` probes `device_alert` twice per device. PDK-089.
+
 ## Method
 
 The load generator is k6 (`K6_IMAGE` in `deploy/compose/versions.env`, a tool only, never shipped). It runs as a
