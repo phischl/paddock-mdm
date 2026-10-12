@@ -91,6 +91,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Secret scan of pull requests (PDK-069, ADR 0025): `make scan-secrets-diff` also scans files under extensions that
+  gitleaks' default configuration skips (images, fonts, office documents, `.pdf`, `.bin`, `.exe` and others), and
+  files in directories named that way, under the suffix `.scan` on each such path component, and opens zip archives,
+  office documents, `.jar` files and gzipped tars (`.tar.gz`, `.tgz`) one level deep, so a text secret in `creds.bin`
+  or `assets.png/creds.bin` or a credential inside a zip or a `.docx` fails the CI job `secrets`. Archives under other
+  names gitleaks does not recognise are not opened. Real PDFs, fonts, executables and compressed data stay unscanned
+  in every mode (gitleaks skips them by content). A `.gitleaksignore` fingerprint or path allowlist for such a file
+  names its renamed path (`creds.bin.scan`, `assets.png.scan/…`, `creds.docx.zip!…`). A pull request that changes both
+  `creds.bin` and `creds.bin.scan` fails the scan. The CI job `secrets` now stops after 30 minutes.
+
 - Agent release signing moves into the release workflow (ADR 0006 amendment 2026-10-11): a new job `sign` in the
   protected GitHub environment `release` (tags `v*` only, maintainer approval for every run), which runs only after the
   smoke test passed, signs `paddockd` for
@@ -143,8 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Secret scan of pull requests (PDK-068): `make scan-secrets-diff` also scans every blob the pull request adds, so a
   binary file with a secret that the pull request adds and removes again, which gitleaks' history scan skips, fails
   the CI job `secrets`. A file over 100 MB fails the scan instead of being skipped. Files that
-  gitleaks' default configuration allowlists by path (such as `.bin`, `.zip`, images) and archive contents are still
-  not scanned.
+  gitleaks' default configuration allowlists by extension (such as `.bin` and images) and archive contents are covered
+  by PDK-069 (see Changed).
 - Agent versions compare by SemVer order, not as text or for equality (PDK-025): the attention list flags a device
   as `agent_outdated` only when its agent is older than the current release, and the server offers a device an agent
   update only when the release is newer than its agent, so a device that is ahead of the last completed rollout is
