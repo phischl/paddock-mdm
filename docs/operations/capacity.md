@@ -102,8 +102,8 @@ with page size 100, and 126 ms with `kind=agent_outdated` and page size 25. Thes
 query execution time, not the HTTP p95 the target refers to. Whether the target is met is decided by the HTTP
 measurement after the change (PDK-091).
 
-**Remaining hot spots:** none open. The per-device version key was closed by PDK-090 and the device contact state by
-PDK-089 (both below).
+**Remaining hot spots:** none known at the query level. The per-device version key was closed by PDK-090 and the
+device contact state by PDK-089 (both below); the HTTP p95 against the 200 ms target is still to be measured (PDK-091).
 
 **After PDK-089.** Measured on 2026-10-12 on the same machine and development stack with a new load organization of
 **10 000 active devices**, enrolled with `make load-identities` and checked in once each with
@@ -152,12 +152,12 @@ execution times, not HTTP latencies:
 | `OverviewAttention` (`/overview`) | 68 ms | 23 ms |
 
 The query time of `/api/v1/attention/devices?page_size=25&kind=agent_outdated` (list plus count) drops from 344 ms to
-174 ms. The results are identical before and after: the same 25 devices on the first page, 4 000 matching devices,
-the buckets 4 000 on current, 4 000 outdated, 2 000 ahead and 0 unknown, and 14 000 conditions on 10 000 devices. After
-the migration, `agent_version_key` equals `paddock_version_key(agent_version)` for every device in the database (dev
-seed and fleet). Of the remaining list time, about 90 ms is spent in the view's alert branch (the 10 000 open
-`stale_warning` alerts) under the kind filter; no function runs per device row any more. The HTTP figures after this change are
-measured with those of PDK-027 and PDK-089 once all three are merged and deployed (PDK-091).
+174 ms. The results are identical before and after: the same 25 devices on the first page, 4 000 matching devices, the
+buckets 4 000 on current, 4 000 outdated, 2 000 ahead and 0 unknown, and 14 000 conditions on 10 000 devices. After the
+migration, `agent_version_key` equals `paddock_version_key(agent_version)` for every device in the database (dev seed
+and fleet). Of the remaining list time, about 90 ms is spent in the view's alert branch (the 10 000 open `stale_warning`
+alerts) under the kind filter; no function runs per device row any more. The HTTP figures after this change are measured
+with those of PDK-027 and PDK-089 once all three are merged and deployed (PDK-091).
 
 ## Method
 
