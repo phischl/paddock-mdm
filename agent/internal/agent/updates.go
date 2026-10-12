@@ -43,8 +43,16 @@ func (a *Agent) clearUpdateResult() {
 	}
 }
 
+// sweepStaging removes release directories left without a request (update.Sweep); a failure does not stop the agent.
+func (a *Agent) sweepStaging() {
+	if err := update.Sweep(a.d.Layout); err != nil {
+		slog.Warn("removing leftover staged releases failed", "error", err)
+	}
+}
+
 // handleUpdate stages an offered release and asks the supervisor to install it. The agent never replaces itself.
 func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
+	a.sweepStaging()
 	if offer == nil || offer.Version == buildinfo.Version || offer.Version == a.st.FailedUpdateVersion || update.Pending(a.d.Layout) {
 		return
 	}

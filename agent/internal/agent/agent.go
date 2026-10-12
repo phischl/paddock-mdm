@@ -196,6 +196,7 @@ func New(d Deps) (*Agent, error) {
 	a.refreshHealth()
 	a.loadCurrent()
 	a.reportInterruptedInstalls()
+	a.sweepStaging()
 	return a, nil
 }
 

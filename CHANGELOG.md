@@ -158,6 +158,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Agent release staged during a probation or a pending rollback (PDK-075, plan M2b decision 16): the supervisor
+  ignores such a release and later removes only its request, which left the release under
+  `/var/lib/paddock/staging/<version>/` on disk. The agent now removes every staged release without a
+  `request.json` at start and at every check-in before it stages a release; while a request exists nothing is
+  removed. A release the server still offers is downloaded and staged again as before. The supervisor is unchanged.
 - Agent supervisor with an unreadable `probation.json` (PDK-062, plan M2b decision 16): instead of dropping the log
   and leaving the new release running without a probation, the supervisor rebuilds the probation from the slots when
   `current` points at `A` or `B`, the other slot holds an agent with a valid version, the active agent is newer by

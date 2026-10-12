@@ -50,6 +50,52 @@ func TestUpdateStagedAndSupervisorAsked(t *testing.T) {
 	}
 }
 
+// TestIgnoredReleaseSwept (PDK-075): the supervisor ignores a request that arrives during a probation or a pending
+// rollback and later removes only request.json; the next check-in removes the release left without a request.
+func TestIgnoredReleaseSwept(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	a.d.Supervisor = func() (int, error) { return 1, nil }
+	a.d.Signal = func(int) error { return nil }
+	offer(g, "9.1.0", []byte("new agent"))
+	a.Cycle(context.Background())
+	release := filepath.Join(a.d.Layout.Staging(), "9.1.0")
+	if _, err := os.Stat(release); err != nil || !update.Pending(a.d.Layout) {
+		t.Fatalf("not staged: %v, pending %v", err, update.Pending(a.d.Layout))
+	}
+	// While the request waits for the supervisor, nothing under staging is removed.
+	a.Cycle(context.Background())
+	if _, err := os.Stat(filepath.Join(release, "paddockd")); err != nil {
+		t.Fatalf("staged release removed while requested: %v", err)
+	}
+	if err := os.Remove(a.d.Layout.UpdateRequest()); err != nil {
+		t.Fatal(err)
+	}
+	g.Mu.Lock()
+	g.Checkin.AgentUpdate = nil
+	g.Mu.Unlock()
+	a.Cycle(context.Background())
+	if _, err := os.Stat(release); !os.IsNotExist(err) {
+		t.Fatalf("ignored release left in staging: %v", err)
+	}
+}
+
+// TestLeftoverReleaseSweptAtStart (PDK-075): a release directory without request.json is removed when the agent starts.
+func TestLeftoverReleaseSweptAtStart(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	release := filepath.Join(a.d.Layout.Staging(), "9.1.0", "paddockd")
+	if err := fsutil.WriteFile(release, []byte("x"), 0o700, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(a.d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(release)); !os.IsNotExist(err) {
+		t.Fatalf("leftover release not removed at start: %v", err)
+	}
+}
+
 func TestUpdateNotStaged(t *testing.T) {
 	tests := []struct {
 		name  string
