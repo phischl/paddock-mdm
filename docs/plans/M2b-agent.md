@@ -315,3 +315,24 @@ a check-in right after the switch could be dated before it and a healthy update 
 - If the mark cannot be removed (any error other than "does not exist"), the probation ends in a rollback with the
   reason "check-in mark could not be cleared", without waiting for the deadline. A resumed probation rolls back from
   the supervisor's loop, after the child has started, never before it.
+
+## Amendment 2026-10-12 (architect, PDK-075) — the staging directory belongs to the agent
+
+Decision 16: a release staged while a probation or a pending rollback runs is ignored by the supervisor (`onRequest`);
+when the probation concludes, `finishAt` removes `staging/request.json` and the directory of the release it processed,
+and the ignored release's `staging/<version>/` stays behind (PDK-043 Review 1). The supervisor is at 786 of its 800
+counted lines (decision 15), and a supervisor change ships only through the distribution package (contract 1), so the
+cleanup is the agent's:
+
+- The agent owns `/var/lib/paddock/staging/`. At start and at every check-in before it stages a release, while
+  `staging/request.json` does not exist, the agent removes every other entry of the staging directory: a release
+  directory without a request is garbage, whether the supervisor dropped its request at the end of a probation or a
+  pending rollback, refused it as invalid (`cleanup("")`), or the download was interrupted before `request.json` was
+  written. While `request.json` exists nothing is removed: the supervisor may be reading the request.
+- The supervisor is not changed. It keeps removing `request.json` and the directory of the release it processed
+  (`cleanup`), and `resumeRequest` keeps its rules; both tolerate a directory the agent removed first (`os.RemoveAll`
+  of a missing path is no error), and the agent tolerates the supervisor removing it concurrently (an error of the
+  sweep is logged at warning level and does not stop the check-in).
+- A release the supervisor ignored is staged again when the server still offers it (the agent treats "no request, no
+  result" as not staged), as before; the sweep costs no additional download, because `Stage` wrote the files again
+  anyway.

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Overview: latest published agent release and running rollout (plan M7c decision 26, amendment 2026-10-12). The
+  *Updates and agent rollout* panel shows "Latest published" while the newest published release differs from the
+  release of the last completed rollout, and the running rollout with its wave, e.g. "Rollout 1.10.0: wave 2 of 4
+  (10 %)". `GET /api/v1/overview` gains `updates.agent.latest_published`, `updates.agent.rollout` (`version`, `wave`,
+  `waves`, `percent`, null while no rollout runs) and `updates.agent.ahead`, the active devices on an agent newer than
+  the current release; `outdated` now counts only older agents and agents without a semantic version, as the attention
+  kind `agent_outdated` does. Organization roles read these platform values through two functions of migration 00041.
 - Failed agent rollback (ADR 0024): when a new agent release fails its probation and the supervisor cannot flip back
   to the previous version, the device reports the new outcome `rollback_failed` (event `agent.update_failed`, audit
   code `device.agent_rollback_failed`) instead of `self_test_failed`. The new version keeps running, the supervisor
@@ -99,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Secret scan lock files (PDK-077, ADR 0026): the repository's `.gitleaks.toml` now skips every `go.sum` and
+  `server/web/package-lock.json` by path itself instead of relying on gitleaks' default path allowlist, which a later
+  change drops. Today's scan results are unchanged.
+
 - Secret scan of pull requests (PDK-069, ADR 0025): `make scan-secrets-diff` also scans files under extensions that
   gitleaks' default configuration skips (images, fonts, office documents, `.pdf`, `.bin`, `.exe` and others), and
   files in directories named that way, under the suffix `.scan` on each such path component, and opens zip archives,
@@ -108,6 +119,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in every mode (gitleaks skips them by content). A `.gitleaksignore` fingerprint or path allowlist for such a file
   names its renamed path (`creds.bin.scan`, `assets.png.scan/…`, `creds.docx.zip!…`). A pull request that changes both
   `creds.bin` and `creds.bin.scan` fails the scan. The CI job `secrets` now stops after 30 minutes.
+
+- Secret scan documentation (PDK-074): `docs/operations/secret-scan.md` lists the default gitleaks path entries that
+  still skip whole files and directories in `make scan-secrets-diff` (for example `gitleaks.toml`, `go.mod`,
+  `package-lock.json`, `node_modules`, `venv/lib`, `Database.refactorlog`), as probed with gitleaks v8.30.1. It covers
+  matches anywhere in a path, matches that span two directories, and which entries ignore case. It also states that
+  changes to `.gitleaks.toml` itself are not scanned and that review is the backstop for such paths. The scan itself
+  is unchanged.
 
 - Agent release signing moves into the release workflow (ADR 0006 amendment 2026-10-11): a new job `sign` in the
   protected GitHub environment `release` (tags `v*` only, maintainer approval for every run), which runs only after the
