@@ -109,8 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Attention list and overview at large fleets (PDK-027): the attention list, its counts and the overview look up the
   current agent release once per request instead of once per active device. At 10 000 devices the query execution
   time of the attention list queries drops from about 0.6 s to 0.06–0.12 s, and that of the overview's agent counters
-  from 2.2 s to 0.15 s (`EXPLAIN ANALYZE` medians, `docs/operations/capacity.md`). The lists and counters do not change. Database migration `00042` runs
-  automatically.
+  from 2.2 s to 0.15 s (`EXPLAIN ANALYZE` medians, `docs/operations/capacity.md`). The lists and counters do not
+  change. Database migration `00042` runs automatically.
 - Secret scan of pull requests (PDK-087): `make scan-secrets-diff` scans its blob layers in parallel, as many at once
   as the machine has CPUs, and prints each layer's result in layer order afterwards (the whole history of this
   repository as one pull request: 60 seconds before, 31 seconds now on 22 CPUs). What is scanned, and every verdict,
