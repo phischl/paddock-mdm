@@ -253,8 +253,8 @@ Only one rollout runs at a time.
 - A device belongs to a wave by its rollout bucket, `FNV-1a(device ID) mod 100`; the gateway offers the release at
   check-in to active devices whose bucket is below the current wave's percentage and that report another agent
   version and an architecture with an artifact.
-- The worker evaluates every 60 seconds: devices that reported `agent.update_failed` or `agent.rolled_back` for the
-  version count as failed. Reaching the threshold halts the rollout (audit `agent_rollout.halted`, actor system) and
+- The worker evaluates every 60 seconds: devices that reported `agent.update_failed` (except `downgrade_refused`;
+  including `rollback_failed`) or `agent.rolled_back` for the version count as failed, each device once. Reaching the threshold halts the rollout (audit `agent_rollout.halted`, actor system) and
   stops the offer immediately. Otherwise the rollout advances after `min_wave_minutes` (`agent_rollout.advanced`)
   and completes after the last wave (`agent_rollout.completed`). A completed rollout keeps offering its release to
   devices that enroll later.
@@ -269,14 +269,53 @@ and its own architecture), refuses a version that is not newer than the active o
 any version may replace an active agent that cannot report its version), installs into the inactive slot
 (`/opt/paddock/agent/A` or `B`), runs `paddockd self-test`, flips `/opt/paddock/agent/current`, and watches a
 probation of 10 minutes: the new agent must keep running and check in. Three crashes or no check-in by the end of
-the probation flip back. The outcome is reported as `device.agent_updated`, `device.agent_update_failed`
-(`signature_invalid`, `downgrade_refused`, `self_test_failed`) or `device.agent_rolled_back`; a version that failed is
-not tried again on
-that device.
+the probation flip back. A version that failed is not tried again on that device. The outcomes in
+`update-result.json` and their audit codes:
+
+| Outcome | Event | Audit code | Meaning |
+|---|---|---|---|
+| `updated` | `agent.updated` | `device.agent_updated` | Self-test and probation passed; the new version runs. |
+| `signature_invalid` | `agent.update_failed` | `device.agent_update_failed` | Signature, version or architecture of the release did not verify; nothing installed. |
+| `downgrade_refused` | `agent.update_failed` | `device.agent_update_failed` | The release is not newer than the active agent; not counted as a rollout failure. |
+| `self_test_failed` | `agent.update_failed` | `device.agent_update_failed` | Installing or the self-test failed, or the switch failed; the previous version runs. |
+| `rolled_back` | `agent.rolled_back` | `device.agent_rolled_back` | The probation failed and the supervisor flipped back; the previous version runs. |
+| `rollback_failed` | `agent.update_failed` | `device.agent_rollback_failed` | The probation failed and the flip back failed; the new version keeps running and the supervisor retries the rollback (ADR 0024). |
 
 Troubleshooting on a device: `journalctl -u paddock-supervisor`, `readlink /opt/paddock/agent/current`,
 `/var/lib/paddock/state/update-result.json` (until the event is delivered), `/var/lib/paddock/state/probation.json`
-(during a probation).
+(during a probation, and while a rollback is pending).
+
+### A rollback that failed
+
+The portal lists the device on the attention page as *Agent rollback pending* (kind `agent_rollback_pending`, detail:
+the version), and the audit log shows `device.agent_rollback_failed`. The device keeps working on the new version.
+The supervisor keeps `probation.json` with `"rollback_pending": true` and retries the flip back on its own: the first
+retry 10 seconds after the failure, then with a doubling wait up to every 5 minutes, also after a restart of the
+supervisor or the device. Every failed retry is logged at error level with the attempt, the active slot, the target
+slot and the error:
+
+```sh
+journalctl -u paddock-supervisor -p err | grep 'retrying the rollback failed'
+```
+
+There is no way back through the update channel: a release that is not newer than the active agent, also the
+previous version, is refused as `downgrade_refused`, and update offers are ignored while the rollback is pending.
+The way back is on the device:
+
+1. Remove the cause that the error names, typically a read-only or full file system under `/opt/paddock/agent`, or
+   a stray directory `/opt/paddock/agent/.current.tmp` (`rm -r /opt/paddock/agent/.current.tmp`). The next retry
+   flips back.
+2. If the flip still fails, point `current` at the previous slot by hand; the next retry recognises it, restarts the
+   previous agent and reports the rollback:
+
+   ```sh
+   cat /var/lib/paddock/state/probation.json      # from_slot is the previous slot, here A
+   ln -sfn A /opt/paddock/agent/.current.new && mv -T /opt/paddock/agent/.current.new /opt/paddock/agent/current
+   ```
+
+Once the rollback is made, the device reports `device.agent_rolled_back` and the attention entry disappears. It also
+disappears when the device reports another agent version. The rollout counts the device once as failed, whether it
+reported `rollback_failed`, `rolled_back` or both.
 
 ## GitHub release workflow
 

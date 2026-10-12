@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Failed agent rollback (ADR 0024): when a new agent release fails its probation and the supervisor cannot flip back
+  to the previous version, the device reports the new outcome `rollback_failed` (event `agent.update_failed`, audit
+  code `device.agent_rollback_failed`) instead of `self_test_failed`. The new version keeps running, the supervisor
+  keeps the rollback pending in `probation.json` and retries it every 10 seconds, doubling up to every 5 minutes, also
+  after a restart, until it succeeds and reports `rolled_back`. The rollout failure counts take `rollback_failed` like
+  `rolled_back`, once per device; the attention list shows the new kind `agent_rollback_pending` while the device
+  runs the release (migration 00040). There is still no downgrade through the update channel; the way back is
+  documented in `docs/operations/agent-releases.md`.
 - Client address behind proxies and CDNs (M7a step 1, ADR 0021): Caddy reads the client address from
   `PADDOCK_EDGE_CLIENT_IP_HEADER` (`none`, `X-Forwarded-For` right to left, or `CF-Connecting-IP`) only when the peer
   is in `PADDOCK_EDGE_TRUSTED_PROXIES`, validated by the new Caddy entrypoint `caddy/entrypoint.sh` (no `/0`, header
