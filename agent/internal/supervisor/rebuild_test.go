@@ -189,9 +189,12 @@ func TestUnreadableLogWithARollbackResultResumesTheRollback(t *testing.T) {
 		lost := f.writeResult(outcomeRolledBack)
 		f.runRecordingPID("A")
 		f.start()
-		f.waitFor("the flip back", func() bool { return f.active() == "A" })
-		if r := f.waitOutcome(outcomeRolledBack); r.At.Equal(lost.At) {
-			t.Fatalf("result %+v, want a new rolled_back after the retried flip back", r)
+		f.waitFor("a new rolled_back after the retried flip back", func() bool {
+			r := f.waitResult(10 * time.Second)
+			return r.Outcome == outcomeRolledBack && !r.At.Equal(lost.At)
+		})
+		if f.active() != "A" {
+			t.Fatalf("current → %s, want A", f.active())
 		}
 		f.waitNoProbationLog()
 		f.waitAgentRuns("A")
