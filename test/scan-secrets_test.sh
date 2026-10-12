@@ -9,12 +9,15 @@
 # configuration passes. An inline `gitleaks:allow` on the secret does not hide it, and a configuration that extends
 # another file (`[extend] path`) fails. `make scan-secrets-diff` also scans every blob the range adds (PDK-068): a
 # binary file with a secret that the pull request adds and removes again fails it, in a later version of a path as
-# well. Files whose names gitleaks' default configuration allowlists by extension are scanned under a suffixed name
-# and archives are opened one level deep (ADR 0025): a text secret in `creds.bin`, `creds.png`, `creds.BIN`,
-# `creds.xdll` or under the directory `assets.png/`, and a secret inside a deflated `creds.zip`, `creds.docx` or
-# `creds.tgz` fail `make scan-secrets-diff`, a renamed copy that would overwrite another changed file fails it, and a
-# real binary PNG passes with the repository's own configuration. The secret is a generated fake GitHub token that is never printed (the scan runs
-# with --redact).
+# well. Both scans run a generated configuration, gitleaks' default without the paths of its global allowlist
+# (ADR 0026): a text secret in `src/bootstrap.js`, `d.png/creds.bin` or `javascript.json` fails both scans under its
+# own path, and so do `creds.bin`, `creds.png`, `creds.BIN`, `creds.xdll` and the directory `assets.png/` in
+# `make scan-secrets-diff`; a base configuration without an `[extend]` table still gets the default rules; a default
+# configuration that does not match its pins (sha256 off by one digit, header missing or not unique) fails both
+# scans. Archives are opened one level deep (ADR 0025): a secret inside a deflated `creds.zip`, `creds.docx` or
+# `creds.tgz` fails `make scan-secrets-diff`, an archive copy that would overwrite another changed file fails it, and
+# a real binary PNG passes with the repository's own configuration. The secret is a generated fake GitHub token that
+# is never printed (the scan runs with --redact).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,11 +55,15 @@ expect() {
 
 # expect_pr <description> <want> <target> <merge base> [<config ref> [<reason>]]: runs <target> (scan-secrets or
 # scan-secrets-diff) over the checked-out branch as a pull request from <merge base>, with the configuration from
-# <config ref> (empty: the working tree); a fail must print <reason> when one is given.
+# <config ref> (empty: the working tree); a fail must print <reason> when one is given. Further make arguments come
+# from the array make_args; the output stays in last_out.
+make_args=()
+last_out=
 expect_pr() {
   local rc=0 out
   out="$(make --no-print-directory -C "$root" "$3" GITLEAKS_REPO="$r" GITLEAKS_LOG_OPTS="$4..HEAD" \
-    GITLEAKS_DIFF_BASE="$4" GITLEAKS_CONFIG_REF="${5:-}" 2>&1)" || rc=$?
+    GITLEAKS_DIFF_BASE="$4" GITLEAKS_CONFIG_REF="${5:-}" "${make_args[@]}" 2>&1)" || rc=$?
+  last_out="$out"
   verdict "$1 ($3)" "$2" "${6:-}" "$rc" "$out"
 }
 
@@ -245,8 +252,9 @@ g commit -q -m 'replace them with a directory'
 expect_pr "binary secrets under a newline path and a path that becomes a directory" leak scan-secrets-diff "$base" \
   "$base"
 
-# A text secret under an extension that gitleaks' default configuration allowlists (ADR 0025): added and removed
-# again, so only a blob layer holds it, and added and kept, so layer 0 holds it as well.
+# A text secret under an extension that gitleaks' default global allowlist skips, which the generated configuration
+# drops (ADR 0026): added and removed again, so only a blob layer holds it, and added and kept, so layer 0 holds it as
+# well.
 g switch -q -c pr-allowlisted-ext "$base"
 printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/creds.bin"
 g add creds.bin
@@ -260,8 +268,8 @@ g add creds.png
 g commit -q -m 'add credentials under .png'
 expect_pr "a text secret in creds.png added and kept" leak scan-secrets-diff "$base" "$base"
 
-# gitleaks skips whole directories whose name matches the default allowlist, so directory components are renamed
-# too; the match ignores case, and `?dll` mirrors the default regex's unescaped dot.
+# The default global allowlist also skips whole directories by extension, ignores case, and its `.dll` has an
+# unescaped dot.
 g switch -q -c pr-allowlisted-dir "$base"
 mkdir "$r/assets.png"
 printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/assets.png/creds.bin"
@@ -279,14 +287,66 @@ for name in creds.BIN creds.xdll; do
   expect_pr "a text secret in $name added and kept" leak scan-secrets-diff "$base" "$base"
 done
 
-# A changed file whose renamed copy would overwrite another changed file fails instead of hiding one of them.
-g switch -q -c pr-rename-collision "$base"
-printf 'harmless\n' >"$r/creds.bin"
-printf 'harmless too\n' >"$r/creds.bin.scan"
-g add creds.bin creds.bin.scan
-g commit -q -m 'add a file and its renamed name'
-expect_pr "creds.bin and creds.bin.scan in the final tree" fail scan-secrets-diff "$base" "$base" \
-  "cannot write a changed file"
+# Names the default global allowlist skips in every scan mode, which no rename could reach (PDK-074): each fails both
+# scans. A fingerprint on the file's own path then hides it, so the finding is reported under that path and the file
+# was not scanned under another name.
+for name in src/bootstrap.js d.png/creds.bin javascript.json; do
+  g switch -q -c "pr-default-path-${name//\//-}" "$base"
+  mkdir -p "$r/$(dirname "$name")"
+  printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/$name"
+  g add "$name"
+  g commit -q -m "add credentials in $name"
+  printf '%s:%s:github-pat:1\n%s:github-pat:1\n' "$(g rev-parse HEAD)" "$name" "$name" >"$r/.gitleaksignore"
+  for target in scan-secrets scan-secrets-diff; do
+    expect_pr "a text secret in $name added and kept" leak "$target" "$base" "$base"
+    expect_pr "the same with a fingerprint on $name" pass "$target" "$base"
+  done
+  rm -- "$r/.gitleaksignore"
+done
+
+# A base configuration without an [extend] table: the generated configuration still holds the default rules.
+g switch -q -c no-extend "$base"
+cat >"$r/.gitleaks.toml" <<'EOF'
+[[allowlists]]
+description = "an unrelated file"
+paths = ['''^unrelated\.txt$''']
+EOF
+g commit -q -am 'a configuration without [extend]'
+no_extend="$(g rev-parse HEAD)"
+printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/creds.env"
+g add creds.env
+g commit -q -m 'add credentials'
+for target in scan-secrets scan-secrets-diff; do
+  expect_pr "a secret with a base configuration without [extend]" leak "$target" "$no_extend" "$no_extend"
+done
+
+# The default configuration extracted from the image must match its pins in versions.env: a sha256 off by one hex
+# digit, a header line the binary does not hold, and one it holds many times each fail, naming the pins.
+g switch -q -c pr-pins "$base"
+printf 'harmless\n' >"$r/pins.txt"
+g add pins.txt
+g commit -q -m 'a harmless change'
+pin="$(sed -n 's/^GITLEAKS_DEFAULT_CONFIG_SHA256=//p' "$root/deploy/compose/versions.env")"
+last="${pin: -1}"
+if [[ "$last" == 0 ]]; then wrong="${pin%?}1"; else wrong="${pin%?}0"; fi
+pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256"
+for kind in sha header headers; do
+  case $kind in
+    sha) make_args=("GITLEAKS_DEFAULT_CONFIG_SHA256=$wrong") reason="does not match $pins" ;;
+    header) make_args=("GITLEAKS_DEFAULT_CONFIG_HEADER=This file has been auto-generated. Do not edit it manually.")
+      reason="occurs 0 times" ;;
+    headers) make_args=("GITLEAKS_DEFAULT_CONFIG_HEADER=[[rules]]") reason="not once; check $pins" ;;
+  esac
+  for target in scan-secrets scan-secrets-diff; do
+    expect_pr "a default configuration that does not match its pins ($kind)" fail "$target" "$base" "$base" \
+      "$reason"
+    if ! grep -qF -- "$pins" <<<"$last_out"; then
+      echo "FAIL a default configuration that does not match its pins ($kind, $target): the pins are not named"
+      failures=$((failures + 1))
+    fi
+  done
+done
+make_args=()
 
 # A secret in a deflated archive, added and removed again: a zip, and an office document that gitleaks only opens
 # under the suffix .zip. The token must not appear in clear text in the archive, or the test would prove nothing.
@@ -303,6 +363,15 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
   expect_pr "a secret inside a deflated $name added and removed" leak scan-secrets-diff "$base" "$base"
 done
 
+# A changed file whose archive copy would overwrite another changed file fails instead of hiding one of them.
+g switch -q -c pr-archive-collision "$base"
+printf 'harmless\n' >"$r/creds.docx"
+printf 'harmless too\n' >"$r/creds.docx.zip"
+g add creds.docx creds.docx.zip
+g commit -q -m 'add a file and its archive name'
+expect_pr "creds.docx and creds.docx.zip in the final tree" fail scan-secrets-diff "$base" "$base" \
+  "cannot write a changed file"
+
 # A gzipped tar under .tgz, which gitleaks opens only under the suffix .tar.gz.
 g switch -q -c pr-archive-tgz "$base"
 T="$(token)" python3 -c 'import io, os, sys, tarfile
@@ -318,8 +387,8 @@ g rm -q creds.tgz
 g commit -q -m 'remove creds.tgz'
 expect_pr "a secret inside creds.tgz added and removed" leak scan-secrets-diff "$base" "$base"
 
-# A real binary PNG (magic bytes and seeded random bytes) passes with the repository's own configuration: the renamed
-# scan adds no false positive.
+# A real binary PNG (magic bytes and seeded random bytes) passes with the repository's own configuration: scanning
+# it by content adds no false positive.
 g switch -q -c pr-real-png "$base"
 cp "$root/.gitleaks.toml" "$r/.gitleaks.toml"
 g commit -q -am 'the repository configuration'

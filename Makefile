@@ -665,21 +665,31 @@ GITLEAKS_REPO ?= $(CURDIR)
 # content allow itself, so both scans pass --ignore-gitleaks-allow. gitleaks resolves an `[extend] path` from its
 # working directory, which the file scan fills with the pull request's files, so a configuration that extends another
 # file fails; `useDefault` alone is allowed.
+# The configuration both scans run is generated (ADR 0026): the default configuration of GITLEAKS_IMAGE without the
+# paths of its global allowlist, extended by that .gitleaks.toml. Those paths skip whole files and directories in every
+# scan mode (src/bootstrap.js, d.png/creds.bin, javascript.json), and a repository configuration that extends the
+# default with useDefault cannot drop them. gitleaks cannot print its default, but embeds it uncompressed (go:embed):
+# the bytes from the single occurrence of GITLEAKS_DEFAULT_CONFIG_HEADER in /usr/bin/gitleaks are checked against the
+# size and sha256 pinned next to GITLEAKS_IMAGE, so an image bump without new pins, or a changed binary layout, fails
+# instead of scanning with an unknown default. A default whose global paths the strip does not recognise fails too.
+# $(1) is the directory the container mounts the configuration at: the child's `[extend] path` names the stripped
+# default by its absolute path there, a mount that holds none of the scanned files.
 # What this cannot cover: a pull request runs its own ci.yml and this Makefile, so it can also change how it is
 # scanned. The scan's integrity therefore rests on code review of .github/, the Makefile and
-# deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE); CODEOWNERS names a
-# reviewer for them, but GitHub enforces that only once branch protection requires code-owner review, a setting of the
-# maintainer (docs/operations/secret-scan.md).
+# deploy/compose/versions.env (included above as make syntax; it pins GITLEAKS_IMAGE and its default configuration);
+# CODEOWNERS names a reviewer for them, but GitHub enforces that only once branch protection requires code-owner
+# review, a setting of the maintainer (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
+GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
 gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 	if [ -n "$$ref" ]; then \
-		git -C "$$repo" show "$$ref:.gitleaks.toml" >"$$tmp/cfg/gitleaks.toml" || \
+		git -C "$$repo" show "$$ref:.gitleaks.toml" >"$$tmp/repo.toml" || \
 			{ echo "$@: no .gitleaks.toml at $$ref" >&2; exit 1; }; \
 		if git -C "$$repo" cat-file -e "$$ref:.gitleaksignore" 2>/dev/null; then \
 			git -C "$$repo" show "$$ref:.gitleaksignore" >"$$tmp/cfg/gitleaksignore" || exit 1; \
 		else : >"$$tmp/cfg/gitleaksignore"; fi; \
 	else \
-		cp -- "$$repo/.gitleaks.toml" "$$tmp/cfg/gitleaks.toml" || exit 1; \
+		cp -- "$$repo/.gitleaks.toml" "$$tmp/repo.toml" || exit 1; \
 		if [ -f "$$repo/.gitleaksignore" ]; then cp -- "$$repo/.gitleaksignore" "$$tmp/cfg/gitleaksignore" || exit 1; \
 		else : >"$$tmp/cfg/gitleaksignore"; fi; \
 	fi; \
@@ -687,10 +697,37 @@ gitleaks_config = mkdir "$$tmp/cfg" || exit 1; ref='$(GITLEAKS_CONFIG_REF)'; \
 		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t) } \
 		t == "[extend]" && l ~ /^[[:space:]]*["\047]?path["\047]?[[:space:]]*=/ { f = 1 } \
 		l ~ /^[[:space:]]*["\047]?extend["\047]?[[:space:]]*[.=]/ { f = 1 } \
-		END { exit !f }' "$$tmp/cfg/gitleaks.toml"; then \
+		END { exit !f }' "$$tmp/repo.toml"; then \
 		echo "$@: .gitleaks.toml from $${ref:-the working tree} extends another file ([extend] path);" \
 			"only useDefault is allowed" >&2; exit 1; fi; \
-	echo "$@: configuration from $${ref:-the working tree}"
+	pins="GITLEAKS_DEFAULT_CONFIG_BYTES and GITLEAKS_DEFAULT_CONFIG_SHA256 (deploy/compose/versions.env)"; \
+	docker run --rm --entrypoint /bin/cat $(GITLEAKS_IMAGE) /usr/bin/gitleaks >"$$tmp/gitleaks.bin" || \
+		{ echo "$@: cannot copy /usr/bin/gitleaks out of $(GITLEAKS_IMAGE)" >&2; exit 1; }; \
+	off=$$(LC_ALL=C grep -obaF -- '$(GITLEAKS_DEFAULT_CONFIG_HEADER)' "$$tmp/gitleaks.bin" | cut -d: -f1); \
+	case $$off in ''|*[!0-9]*) echo "$@: the header of the default configuration occurs" \
+		"$$(printf '%s' "$$off" | grep -c .) times in /usr/bin/gitleaks of $(GITLEAKS_IMAGE), not once;" \
+		"check $$pins against the image (docs/operations/secret-scan.md)" >&2; exit 1 ;; esac; \
+	bytes='$(GITLEAKS_DEFAULT_CONFIG_BYTES)'; case $$bytes in ''|*[!0-9]*) bytes=0 ;; esac; \
+	tail -c +$$((off + 1)) "$$tmp/gitleaks.bin" | head -c "$$bytes" >"$$tmp/default.toml" || exit 1; \
+	rm -f -- "$$tmp/gitleaks.bin"; sum=$$(sha256sum <"$$tmp/default.toml") || exit 1; \
+	if [ "$$bytes" -eq 0 ] || [ "$$(wc -c <"$$tmp/default.toml")" -ne "$$bytes" ] || \
+		[ "$${sum%% *}" != '$(GITLEAKS_DEFAULT_CONFIG_SHA256)' ]; then \
+		echo "$@: the default configuration in $(GITLEAKS_IMAGE) does not match $$pins;" \
+			"an image bump updates the image and both pins together (docs/operations/secret-scan.md)" >&2; exit 1; fi; \
+	awk '/^[[:space:]]*\[\[rules\]\]/ { r = 1 } \
+		!r && /^[[:space:]]*paths[[:space:]]*=[[:space:]]*\[[[:space:]]*$$/ { s = 1; next } \
+		s { if ($$0 ~ /^[[:space:]]*\][[:space:]]*$$/) s = 0; next } { print }' \
+		"$$tmp/default.toml" >"$$tmp/cfg/default.toml" || exit 1; \
+	if awk '/^[[:space:]]*\[\[rules\]\]/ { exit } /^[[:space:]]*["\047]?paths["\047]?[[:space:]]*[.=]/ { f = 1 } \
+		END { exit !f }' "$$tmp/cfg/default.toml"; then \
+		echo "$@: the default configuration in $(GITLEAKS_IMAGE) keeps a paths key before its first [[rules]]" \
+			"after the strip; its layout changed and must be looked at (ADR 0026)" >&2; exit 1; fi; \
+	awk -v p="$(1)/default.toml" '{ l = $$0; sub(/\#.*/, "", l) } \
+		l ~ /^[[:space:]]*\[/ { t = l; gsub(/[[:space:]"\047]/, "", t); s = 0; \
+			if (t == "[extend]") { print "[extend]"; print "path = \047" p "\047"; d = 1; s = 1; next } } \
+		!s { print } END { if (!d) { print ""; print "[extend]"; print "path = \047" p "\047" } }' \
+		"$$tmp/repo.toml" >"$$tmp/cfg/gitleaks.toml" || exit 1; \
+	echo "$@: configuration from $${ref:-the working tree} on the default of $(GITLEAKS_IMAGE) without its global paths"
 
 # A git worktree's .git file points into the main checkout's git dir, so that dir is mounted at its own path.
 # `--remerge-diff` shows what a merge commit changes beyond its automatic merge, so a secret added only in a merge
@@ -707,7 +744,7 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 		"(--remerge-diff shows none), and octopus merges are not allowed in Paddock's history" >&2; exit 1; fi; \
 	gitdir=$$(git -C "$$repo" rev-parse --absolute-git-dir) || exit 1; \
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
-	$(gitleaks_config); \
+	$(call gitleaks_config,$$tmp/cfg); \
 	out=$$(docker run --rm --user "$$(id -u):$$(id -g)" -v "$$repo:$$repo:ro" -v "$$common:$$common:ro" \
 		-v "$$tmp:$$tmp" -e GIT_OBJECT_DIRECTORY="$$tmp" -e GIT_ALTERNATE_OBJECT_DIRECTORIES="$$common/objects" \
 		-w "$$tmp/cfg" $(GITLEAKS_IMAGE) \
@@ -738,38 +775,27 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 # path go into separate layers, each scanned from its own root. Only pull request ranges pay for this: the history
 # scan of main (scan-secrets) is unchanged. A file over GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over
 # 100 MiB) fails the scan instead of being skipped by --max-target-megabytes.
-# gitleaks' default configuration skips whole files and whole directories by extension, and a repository
-# configuration cannot drop those entries while it uses the default rules, so every path component, directories
-# included, whose name ends, case-insensitively, in one of GITLEAKS_RENAME_EXT gets the suffix .scan in the copy
-# (ADR 0025): creds.bin is scanned as creds.bin.scan and d.png/creds.bin as d.png.scan/creds.bin.scan. gitleaks
-# identifies archives by name only, so a last component in GITLEAKS_ZIP_EXT gets the suffix .zip instead (this rule
-# wins for docx and xlsx) and one ending in .tgz the suffix .tar.gz, and archives are opened one level deep
-# (--max-archive-depth 1; nested archives and other archive names are not opened, and the CI job's timeout bounds the
-# decompression). The collision checks, the choice of a free blob layer and .gitleaksignore fingerprints use the
-# renamed path. gitleaks still skips files whose magic bytes map to application/* (real PDFs, fonts, executables,
-# compressed data) in every mode. Re-check on image bump: both lists against the default allowlist and the archive
-# formats of the GITLEAKS_IMAGE in use. The entry ?dll mirrors the default regex's `.dll`, whose unescaped dot skips
-# any character before dll (creds.xdll is skipped, creds.dll is not).
+# gitleaks identifies archives by name only, so a changed file or blob whose name ends, case-insensitively, in one of
+# GITLEAKS_ZIP_EXT is written with the suffix .zip (creds.docx is scanned as creds.docx.zip) and one ending in .tgz
+# with the suffix .tar.gz, and archives are opened one level deep (--max-archive-depth 1; nested archives and other
+# archive names are not opened, and the CI job's timeout bounds the decompression). The collision checks, the choice of
+# a free blob layer and .gitleaksignore fingerprints use that name; every other file keeps its path, since the
+# generated configuration no longer skips names (ADR 0026). gitleaks still skips files whose magic bytes map to
+# application/* (real PDFs, fonts, executables, compressed data) in every mode. Re-check on image bump: the list
+# against the archive formats of the GITLEAKS_IMAGE in use.
 GITLEAKS_DIFF_BASE ?= origin/main
 GITLEAKS_MAX_MB = 100
-GITLEAKS_RENAME_EXT = bmp gif jpg jpeg png svg tif tiff eot otf ttf woff woff2 doc docx xls xlsx pdf bin socket vsidx \
-	v2 suo wsuo ?dll pdb exe gltf gem
 GITLEAKS_ZIP_EXT = jar war docx xlsx pptx odt ods odp
 
 scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE and every blob added since then
 	@repo='$(GITLEAKS_REPO)'; \
 	base=$$(git -C "$$repo" merge-base '$(GITLEAKS_DIFF_BASE)' HEAD) || exit 1; \
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
-	$(gitleaks_config); \
+	$(call gitleaks_config,/cfg); \
 	git -C "$$repo" diff -z --name-only --diff-filter=d "$$base"..HEAD >"$$tmp/files" || exit 1; \
-	renamed() { local e; for e in $(subst ?,\?,$(GITLEAKS_RENAME_EXT)); do \
-		case $${1,,} in *.$$e) return 0 ;; esac; done; return 1; }; \
-	scan_name() { local rest=$$1 c e; sn=; \
-		while [ "$${rest#*/}" != "$$rest" ]; do \
-			c=$${rest%%/*}; rest=$${rest#*/}; if renamed "$$c"; then c=$$c.scan; fi; sn=$$sn$$c/; done; \
-		for e in $(GITLEAKS_ZIP_EXT); do case $${rest,,} in *.$$e) sn=$$sn$$rest.zip; return ;; esac; done; \
-		case $${rest,,} in *.tgz) sn=$$sn$$rest.tar.gz; return ;; esac; \
-		if renamed "$$rest"; then sn=$$sn$$rest.scan; else sn=$$sn$$rest; fi; }; \
+	scan_name() { local e; sn=$$1; \
+		for e in $(GITLEAKS_ZIP_EXT); do case $${sn,,} in *.$$e) sn=$$sn.zip; return ;; esac; done; \
+		case $${sn,,} in *.tgz) sn=$$sn.tar.gz ;; esac; }; \
 	n=0; mkdir -p "$$tmp/scan/0" || exit 1; \
 	while IFS= read -r -d '' f; do \
 		if [ -f "$$repo/$$f" ] || [ -L "$$repo/$$f" ]; then \
