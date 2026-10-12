@@ -199,4 +199,144 @@ func TestUnreadableLogWithARollbackResultResumesTheRollback(t *testing.T) {
 		f.waitNoProbationLog()
 		f.waitAgentRuns("A")
 	})
+	t.Run("rollback_failed, other slot without a valid version", func(t *testing.T) {
+		log := captureLog(t)
+		f := newFake(t)
+		f.corruptSwitch("1.1.0", f.good())
+		if err := os.Remove(filepath.Join(f.cfg.Slots, "A", "paddockd")); err != nil {
+			t.Fatal(err)
+		}
+		failed := f.writeResult(outcomeRollbackFailed)
+		f.blockFlip()
+		f.start()
+		f.waitFor("the first retry", func() bool { return retries(log) == 1 })
+		f.expectPendingLog()
+		if r := f.waitResult(time.Second); r != failed || f.active() != "B" {
+			t.Fatalf("result %+v, current %s; want the recorded %+v on B", r, f.active(), failed)
+		}
+	})
+}
+
+func (f *fake) marker() string { return filepath.Join(f.dir, "rollback-pending") }
+
+func (f *fake) marked() bool {
+	_, err := os.Stat(f.marker())
+	return err == nil
+}
+
+// pendingRollback runs a supervisor into a pending rollback of 1.1.0 (B) over 1.0.0 (A) whose flip back stays blocked,
+// and returns its rollback_failed result.
+func (f *fake) pendingRollback() result {
+	f.t.Helper()
+	f.resumeFailingProbation(func(time.Duration) {})
+	f.blockFlip()
+	f.start()
+	failed := f.waitResult(10 * time.Second)
+	if failed.Outcome != outcomeRollbackFailed {
+		f.t.Fatalf("result %+v", failed)
+	}
+	return failed
+}
+
+// TestPendingMarkerLivesUntilRolledBack (PDK-062): a recorded pending rollback creates the marker
+// state/rollback-pending with its version; a restart keeps it, and only the concluded rolled_back removes it.
+func TestPendingMarkerLivesUntilRolledBack(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	f.pendingRollback()
+	if data, err := os.ReadFile(f.marker()); err != nil || string(data) != `"1.1.0"` {
+		t.Fatalf("pending marker %q, error %v; want the version 1.1.0", data, err)
+	}
+	f.stop()
+	base := retries(log)
+	f.start()
+	f.waitFor("a retry after the restart", func() bool { return retries(log) > base })
+	if !f.marked() {
+		t.Fatal("the restart removed the pending marker")
+	}
+	f.unblockFlip()
+	f.clock.set(time.Hour)
+	defer f.clock.set(0)
+	f.waitOutcome(outcomeRolledBack)
+	f.waitNoProbationLog()
+	if f.marked() {
+		t.Fatal("the pending marker outlived the concluded rolled_back")
+	}
+}
+
+// TestUnreadablePendingLogWithTheMarkerResumesTheRollback (PDK-062): a pending rollback whose rollback_failed the agent
+// already delivered and deleted, and whose log is then corrupted, meets every precondition of a probation forward;
+// the marker keeps it a pending rollback. The retries resume without a new result, a healthy new agent is not
+// concluded updated, and the rollback ends in rolled_back once the flip back succeeds.
+func TestUnreadablePendingLogWithTheMarkerResumesTheRollback(t *testing.T) {
+	log := captureLog(t)
+	f := newFake(t)
+	f.pendingRollback()
+	f.waitFor("the pending marker", f.marked)
+	f.stop()
+	for _, path := range []string{f.cfg.Result, f.cfg.LastCheckin} {
+		if err := os.RemoveAll(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(f.cfg.ProbationLog, []byte(`{"version":"1.1`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+	base := retries(log)
+	f.start()
+	f.waitFor("a retry of the rebuilt pending rollback", func() bool { return retries(log) > base })
+	f.expectPendingLog()
+	f.clock.set(testProbation + time.Minute)
+	f.waitTicks(3)
+	f.expectNoResult()
+	if f.active() != "B" {
+		t.Fatalf("current → %s, want B", f.active())
+	}
+	f.unblockFlip()
+	f.clock.set(testProbation + pendingRetryMax + time.Hour)
+	defer f.clock.set(0)
+	if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.waitNoProbationLog()
+	f.waitFor("the pending marker was removed", func() bool { return !f.marked() })
+}
+
+// TestUnreadablePendingLogAfterTheFlipBackLanded (PDK-062): with the marker present and current already on the older
+// release (flipped by hand, or a retry's rename landed before a crash), the newer slot holds the failed release; the
+// supervisor confirms the flip back and concludes rolled_back for it instead of flipping to the failed release.
+func TestUnreadablePendingLogAfterTheFlipBackLanded(t *testing.T) {
+	f := newFake(t)
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+	f.runRecordingPID("A")
+	if err := writeJSON(f.marker(), "1.1.0", syncFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.cfg.ProbationLog, []byte(`{"version":"1.1`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.start()
+	if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || r.FromVersion != "1.0.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.waitNoProbationLog()
+	f.waitFor("the pending marker was removed", func() bool { return !f.marked() })
+	f.waitAgentRuns("A")
+}
+
+// TestRestartAfterTheRecordedRolledBackWasLost (review 1 of PDK-062): the log of a rollback that waited for a durable
+// flip back could not record rolled_back, and its removal was lost with the power. With current on the previous slot
+// the restart writes the result that names the release rolled_back again unchanged, instead of concluding a second
+// rolled_back.
+func TestRestartAfterTheRecordedRolledBackWasLost(t *testing.T) {
+	f := newFake(t)
+	f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+	f.writeRollingBack()
+	written := f.writeResult(outcomeRolledBack)
+	f.start()
+	f.waitNoProbationLog()
+	if r := f.waitResult(time.Second); r != written || f.active() != "A" {
+		t.Fatalf("result %+v, current %s; want the written %+v on A", r, f.active(), written)
+	}
 }

@@ -39,6 +39,7 @@ type probation struct {
 	// unrecorded: the decided rollback_failed is not in the log on disk yet, which still is the switch's undecided
 	// log; recordPending rewrites it on every tick until the write succeeds.
 	unrecorded bool
+	marked     bool // the pending marker exists (recordPending)
 	retryAt    time.Time
 	retryWait  time.Duration
 	retries    int
@@ -58,16 +59,41 @@ func (s *Supervisor) conclude(p *probation, outcome string) (recorded bool) {
 	return err == nil
 }
 
-// recordPending rewrites the probation log of a pending rollback whose outcome could not be recorded, so that the
-// log on disk names the decision: a restart must not decide the probation anew (PDK-058, ADR 0024 rules 4 and 5).
+// recordPending records a pending rollback on disk, retried on every tick until it holds. It rewrites the probation
+// log while the outcome could not be recorded, so that a restart does not decide the probation anew (PDK-058, ADR 0024
+// rules 4 and 5), and then creates the pending marker. The marker outlives the result, which the agent deletes once
+// delivered, and the log's readability: its presence alone keeps an unreadable log from being rebuilt into a probation
+// forward (rebuildProbation). It is created only after the log records the rollback, so it never names a probation
+// that a restart may still decide as updated.
 func (s *Supervisor) recordPending(p *probation) {
-	if !p.unrecorded || !p.RollbackPending {
+	if !p.RollbackPending {
 		return
 	}
-	if err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); err == nil {
+	if p.unrecorded && writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile) == nil {
 		p.unrecorded = false
 		slog.Info("recorded the pending rollback in the probation log", "version", p.Version)
 	}
+	if !p.unrecorded && !p.marked {
+		p.marked = writeJSON(s.pendingMarker(), p.Version, s.cfg.SyncFile) == nil
+	}
+}
+
+// pendingMarker is state/rollback-pending, next to the probation log.
+func (s *Supervisor) pendingMarker() string {
+	return filepath.Join(filepath.Dir(s.cfg.ProbationLog), "rollback-pending")
+}
+
+// clearPendingMarker removes the pending marker once its rollback is concluded as rolled_back and syncs the removal:
+// a marker that a power loss brings back would turn a later unreadable log into a rollback.
+func (s *Supervisor) clearPendingMarker() error {
+	err := os.Remove(s.pendingMarker())
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		err = syncDirWith(filepath.Dir(s.cfg.ProbationLog), s.cfg.SyncFile)
+	}
+	if err != nil {
+		slog.Error("removing the pending marker failed", "error", err)
+	}
+	return err
 }
 
 // report writes the result of p and removes the probation log once the result is written; the log of a pending
@@ -78,9 +104,13 @@ func (s *Supervisor) recordPending(p *probation) {
 // result in place (its last step, the directory sync, follows the rename), and a log without an outcome would let the
 // next start run the probation again and contradict that result; a lost result is the lesser evil. The same result
 // written twice is reported once: the agent turns a result into an event once per "at" (agent.reportUpdate), and the
-// server counts an outcome once per device and release.
+// server counts an outcome once per device and release. A rolled_back removes the pending marker first; if that
+// fails, a log that records the outcome stays, so the next start reports it again and retries the removal.
 func (s *Supervisor) report(p *probation, recorded bool) {
 	if s.finishAt(p.Version, p.FromVersion, p.Outcome, p.DecidedAt) != nil && recorded || p.RollbackPending {
+		return
+	}
+	if p.Outcome == outcomeRolledBack && s.clearPendingMarker() != nil && recorded {
 		return
 	}
 	_ = os.Remove(s.cfg.ProbationLog)
@@ -103,7 +133,7 @@ func (s *Supervisor) resumeProbation() {
 			return
 		}
 		slog.Error("the probation log was unreadable; rebuilt the probation from the slots", "error", err,
-			"version", rebuilt.Version, "from_version", rebuilt.FromVersion, "slot", rebuilt.ToSlot)
+			"version", rebuilt.Version, "from_version", rebuilt.FromVersion, "slot", rebuilt.ToSlot, "rollback_pending", rebuilt.RollbackPending)
 		p = *rebuilt
 	}
 	// An undecided log whose release the result names as rollback_failed or rolled_back is a decision that the log
@@ -120,9 +150,10 @@ func (s *Supervisor) resumeProbation() {
 		p.unrecorded = writeJSON(s.cfg.ProbationLog, &p, s.cfg.SyncFile) != nil
 	}
 	// A pending rollback, or a rolled_back whose flip back was lost with the power, retries the flip back; with current
-	// on FromSlot (flipped by hand, or the rename landed before a crash) only its durability is outstanding.
+	// on FromSlot (flipped by hand, or the rename landed before a crash) only its durability is outstanding. A rollback
+	// rebuilt from the pending marker has no decision time: its result was delivered, so none is written again.
 	if p.RollbackPending || p.Outcome == outcomeRolledBack && s.activeSlot() == p.ToSlot {
-		if p.RollbackPending = s.activeSlot() != p.FromSlot; p.RollbackPending && p.Outcome == outcomeRollbackFailed {
+		if p.RollbackPending = s.activeSlot() != p.FromSlot; p.RollbackPending && p.Outcome == outcomeRollbackFailed && !p.DecidedAt.IsZero() {
 			s.report(&p, true)
 		}
 		s.rolledBack = &p
@@ -161,11 +192,13 @@ func (s *Supervisor) resumeProbation() {
 	slog.Info("resuming probation", "version", p.Version)
 }
 
-// rebuildProbation rebuilds the probation of an unreadable log while the slots still describe a forward switch: current
-// on a slot whose release is newer than the other slot's, and no result names that release as updated (plan M2b
-// decision 16, amendment 2026-10-12). Otherwise it returns why not. A release left without its probation would break
-// design contract 4; flipping back instead could roll back a release that already passed. If the rebuilt log cannot
-// be written, the probation runs in memory and the next start rebuilds it again.
+// rebuildProbation rebuilds the probation of an unreadable log from the slots, with current on A or B (plan M2b
+// decision 16, amendment 2026-10-12). With the pending marker present it rebuilds the pending rollback; with a result
+// that names the active release rolled_back or rollback_failed, the probation whose decision resumeProbation takes from
+// that result; otherwise a probation forward, if the active release is newer than the other slot's and no result
+// names it updated. Otherwise it returns why not. A release left without its probation would break design contract 4;
+// flipping back instead could roll back a release that already passed. If the rebuilt log cannot be written, it runs
+// in memory and the next start rebuilds it again.
 func (s *Supervisor) rebuildProbation() (*probation, string) {
 	to := s.activeSlot()
 	if to != "A" && to != "B" {
@@ -173,19 +206,35 @@ func (s *Supervisor) rebuildProbation() (*probation, string) {
 	}
 	from := s.inactiveSlot()
 	version, fromVersion := s.version(s.current()), s.version(filepath.Join(s.cfg.Slots, from))
-	var res struct{ Version, Outcome string }
-	data, err := os.ReadFile(s.cfg.Result)
-	switch {
+	p := &probation{Version: version, FromVersion: fromVersion, FromSlot: from, ToSlot: to, SwitchedAt: s.cfg.Now(), Rebuilt: true}
+	var res probation
+	if data, err := os.ReadFile(s.cfg.Result); err != nil || json.Unmarshal(data, &res) != nil || res.Version != version {
+		res = probation{}
+	}
+	_, marker := os.Stat(s.pendingMarker())
+	// A pending rollback and its result are checked before the slots' versions: a rollback stays pending whatever the
+	// other slot reports, and is never turned into a probation forward.
+	switch valid := versionPattern.MatchString(version) && versionPattern.MatchString(fromVersion); {
+	case marker == nil:
+		// A current already on the older release is a flip back that landed: the newer slot holds the failed release.
+		if valid && semver.Compare(version, fromVersion) < 0 {
+			p.Version, p.FromVersion, p.FromSlot, p.ToSlot = fromVersion, version, to, from
+		}
+		p.Outcome, p.RollbackPending, p.marked = outcomeRollbackFailed, true, true
+	case res.Outcome == outcomeRollbackFailed || res.Outcome == outcomeRolledBack:
+		// resumeProbation takes the decision from the result and resumes the pending rollback; the result names the
+		// previous release even if the other slot no longer reports it.
+		p.FromVersion = res.FromVersion
 	case !versionPattern.MatchString(fromVersion):
 		return nil, "the other slot holds no agent with a valid version"
-	case !versionPattern.MatchString(version) || semver.Compare(version, fromVersion) <= 0:
+	case !valid || semver.Compare(version, fromVersion) <= 0:
 		return nil, "the active agent is not newer than the other slot's"
-	case err == nil && json.Unmarshal(data, &res) == nil && res.Version == version && res.Outcome == outcomeUpdated:
+	case res.Outcome == outcomeUpdated:
 		return nil, "the update result names the active agent as updated"
 	}
-	p := &probation{Version: version, FromVersion: fromVersion, FromSlot: from, ToSlot: to, SwitchedAt: s.cfg.Now(), Rebuilt: true}
 	if err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); err != nil {
-		slog.Error("writing the rebuilt probation log failed; the probation runs in memory", "error", err)
+		slog.Error("writing the rebuilt probation log failed; it runs in memory", "error", err)
+		p.unrecorded = true
 	}
 	return p, ""
 }

@@ -444,6 +444,7 @@ func (s *Supervisor) keepRollbackPending(p *probation) {
 	if p.Outcome != outcomeRollbackFailed {
 		p.unrecorded = !s.conclude(p, outcomeRollbackFailed)
 	}
+	s.recordPending(p)
 }
 
 // confirmFlip makes current -> slot durable while current already points at slot: it renames a new symlink over
