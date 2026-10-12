@@ -57,15 +57,16 @@ LIMIT 5;
 
 -- name: OverviewUpdates :one
 -- Security updates overdue are counted with CountDevices (the device list's filter), so the number equals its total.
--- The agent buckets compare by SemVer precedence (paddock_version_key): outdated is the predicate of the attention
--- kind agent_outdated (older, or no semantic version), ahead is newer, on_current the same precedence. While a current
+-- The agent buckets compare by SemVer precedence, each device by its precomputed key (device_status.agent_version_key,
+-- ADR 0028), the current release by paddock_version_key: outdated is the predicate of the attention kind
+-- agent_outdated (older, or no semantic version), ahead is newer, on_current the same precedence. While a current
 -- release exists the four buckets partition the active devices; without one only unknown counts. The current key is a
 -- scalar subquery so that it is evaluated once, not once per device (PDK-027, migration 00042).
 SELECT count(*) FILTER (WHERE s.health ->> 'reboot_required' = 'true')::int AS reboot_required,
-       count(*) FILTER (WHERE s.agent_version IS NOT NULL AND paddock_version_key(s.agent_version) COLLATE "C" = r.version_key)::int AS agent_on_current,
+       count(*) FILTER (WHERE s.agent_version IS NOT NULL AND s.agent_version_key = r.version_key)::int AS agent_on_current,
        count(*) FILTER (WHERE s.agent_version IS NOT NULL AND r.version_key IS NOT NULL
-                          AND coalesce(paddock_version_key(s.agent_version) COLLATE "C" < r.version_key, true))::int AS agent_outdated,
-       count(*) FILTER (WHERE s.agent_version IS NOT NULL AND paddock_version_key(s.agent_version) COLLATE "C" > r.version_key)::int AS agent_ahead,
+                          AND coalesce(s.agent_version_key < r.version_key, true))::int AS agent_outdated,
+       count(*) FILTER (WHERE s.agent_version IS NOT NULL AND s.agent_version_key > r.version_key)::int AS agent_ahead,
        count(*) FILTER (WHERE s.agent_version IS NULL)::int AS agent_unknown
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 CROSS JOIN (SELECT (SELECT paddock_version_key(paddock_current_agent_version())) COLLATE "C" AS version_key) r

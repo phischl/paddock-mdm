@@ -106,6 +106,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Agent version comparisons at large fleets (PDK-090): every device stores the sort key of its agent version, computed
+  when it checks in, so the attention list's "agent outdated" filter and the overview's agent counters no longer
+  compute it once per device. At 10 000 devices the query time of the overview's agent counters drops from 151 ms to
+  7 ms and that of `GET /api/v1/attention/devices?kind=agent_outdated` from 344 ms to 174 ms (`EXPLAIN ANALYZE`
+  medians, `docs/operations/capacity.md`). The lists and counters do not change. Database migration `00044` runs
+  automatically and rewrites the device status table once (one row per device).
 - Device contact state at large fleets (PDK-089): the overview's contact counters, the device list's contact column and
   filter, its count and the device detail read a device's open staleness alert together with the device instead of
   looking it up once per device. The contact states and counters do not change. Database migration `00043` runs
