@@ -211,16 +211,13 @@ func (s *Supervisor) rebuildProbation() (*probation, string) {
 	if data, err := os.ReadFile(s.cfg.Result); err != nil || json.Unmarshal(data, &res) != nil || res.Version != version {
 		res = probation{}
 	}
-	_, marker := os.Stat(s.pendingMarker())
+	marked, reason := s.markedRollback(p)
 	// A pending rollback and its result are checked before the slots' versions: a rollback stays pending whatever the
 	// other slot reports, and is never turned into a probation forward.
 	switch valid := versionPattern.MatchString(version) && versionPattern.MatchString(fromVersion); {
-	case marker == nil:
-		// A current already on the older release is a flip back that landed: the newer slot holds the failed release.
-		if valid && semver.Compare(version, fromVersion) < 0 {
-			p.Version, p.FromVersion, p.FromSlot, p.ToSlot = fromVersion, version, to, from
-		}
-		p.Outcome, p.RollbackPending, p.marked = outcomeRollbackFailed, true, true
+	case reason != "":
+		return nil, reason
+	case marked:
 	case res.Outcome == outcomeRollbackFailed || res.Outcome == outcomeRolledBack:
 		// resumeProbation takes the decision from the result and resumes the pending rollback; the result names the
 		// previous release even if the other slot no longer reports it.
@@ -237,6 +234,46 @@ func (s *Supervisor) rebuildProbation() (*probation, string) {
 		p.unrecorded = true
 	}
 	return p, ""
+}
+
+// markedRollback rebuilds p, the slots' probation forward, into the pending rollback that the pending marker names, and
+// reports whether it did; reason says why the log must be dropped instead, without a flip. The marker's version
+// names the failed release, and so its slot: the slot that reports it, or else the slot that reports no valid version
+// next to one that reports another valid version. With current on the other slot the flip back already landed, so the
+// rollback only waits for its durability. A marker whose version neither of two valid slots reports is stale and is
+// removed; the normal rebuild applies. A marker without a readable version identifies the failed release only by the
+// newer of two valid versions.
+func (s *Supervisor) markedRollback(p *probation) (marked bool, reason string) {
+	data, err := os.ReadFile(s.pendingMarker())
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, ""
+	}
+	var version string
+	active, other := versionPattern.MatchString(p.Version), versionPattern.MatchString(p.FromVersion)
+	failedActive := true
+	switch {
+	case err != nil || json.Unmarshal(data, &version) != nil || !versionPattern.MatchString(version):
+		if !active || !other {
+			return false, "the pending marker is unreadable and a slot reports no valid version"
+		}
+		if failedActive, version = semver.Compare(p.Version, p.FromVersion) >= 0, p.Version; !failedActive {
+			version = p.FromVersion
+		}
+	case p.Version == version || !active && other && p.FromVersion != version:
+	case p.FromVersion == version || active && !other:
+		failedActive = false
+	case active && other:
+		slog.Warn("removing a stale pending marker: neither slot reports its version", "version", version)
+		_ = s.clearPendingMarker()
+		return false, ""
+	default:
+		return false, "no slot can be identified as the failed release of the pending marker"
+	}
+	if !failedActive {
+		p.FromSlot, p.ToSlot, p.FromVersion = p.ToSlot, p.FromSlot, p.Version
+	}
+	p.Version, p.Outcome, p.RollbackPending, p.marked = version, outcomeRollbackFailed, true, true
+	return true, ""
 }
 
 // dropProbation gives up a probation that cannot be resumed. A request left behind keeps update.Pending true, so the

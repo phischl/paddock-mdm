@@ -340,3 +340,74 @@ func TestRestartAfterTheRecordedRolledBackWasLost(t *testing.T) {
 		t.Fatalf("result %+v, current %s; want the written %+v on A", r, f.active(), written)
 	}
 }
+
+// markedCorruptLog points current at slot, writes the pending marker with the raw content marker and leaves an
+// unreadable probation log.
+func (f *fake) markedCorruptLog(slot, marker string) {
+	f.t.Helper()
+	if err := flip(f.cfg.Slots, slot, syncDir); err != nil {
+		f.t.Fatal(err)
+	}
+	for path, data := range map[string]string{f.marker(): marker, f.cfg.ProbationLog: `{"version":"1.1`} {
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+}
+
+// TestPendingMarkerVersionNamesTheFailedRelease (review 2 of PDK-062): the marker's version, not the slots' version
+// order, identifies the failed release and names the result. A stale marker is removed; a marker without a readable
+// version next to a slot without one drops the log without a flip.
+func TestPendingMarkerVersionNamesTheFailedRelease(t *testing.T) {
+	t.Run("flip back landed, previous agent without a valid version", func(t *testing.T) {
+		f := newFake(t)
+		f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("garbage", 0, f.good()))
+		f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+		f.markedCorruptLog("A", `"1.1.0"`)
+		f.start()
+		if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || f.active() != "A" {
+			t.Fatalf("result %+v, current %s", r, f.active())
+		}
+		f.waitNoProbationLog()
+		f.waitFor("the pending marker was removed", func() bool { return !f.marked() })
+	})
+	t.Run("failed release does not answer version", func(t *testing.T) {
+		f := newFake(t)
+		f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), []byte("#!/bin/sh\ncase \"$1\" in\nversion) exit 1 ;;\nrun) "+f.good()+" ;;\nesac\n"))
+		f.markedCorruptLog("B", `"1.1.0"`)
+		f.start()
+		if r := f.waitOutcome(outcomeRolledBack); r.Version != "1.1.0" || r.FromVersion != "1.0.0" || f.active() != "A" {
+			t.Fatalf("result %+v, current %s", r, f.active())
+		}
+		f.waitFor("the pending marker was removed", func() bool { return !f.marked() })
+	})
+	t.Run("stale marker", func(t *testing.T) {
+		f := newFake(t)
+		f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+		f.markedCorruptLog("B", `"0.9.0"`)
+		f.start()
+		f.waitReady()
+		if f.marked() {
+			t.Fatal("the stale pending marker was kept")
+		}
+		f.expectRebuiltLog()
+		f.waitFor("the new agent checked in", f.checkedIn)
+		if r := f.endProbation("B"); r.Outcome != outcomeUpdated || r.Version != "1.1.0" || f.active() != "B" {
+			t.Fatalf("result %+v, current %s", r, f.active())
+		}
+	})
+	t.Run("unreadable marker, slot without a valid version", func(t *testing.T) {
+		f := newFake(t)
+		f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("garbage", 0, f.good()))
+		f.writeExec(filepath.Join(f.cfg.Slots, "B", "paddockd"), script("1.1.0", 0, f.good()))
+		f.markedCorruptLog("B", "{")
+		f.start()
+		f.waitReady()
+		f.expectNoProbationLog()
+		f.waitTicks(3)
+		f.expectNoResult()
+		if f.active() != "B" {
+			t.Fatalf("current → %s, want B", f.active())
+		}
+	})
+}
