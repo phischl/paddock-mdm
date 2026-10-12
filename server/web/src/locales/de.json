@@ -1518,6 +1518,9 @@
       "agent": "Agent {version}",
       "agentOnCurrent": "{on} / {active} auf dem aktuellen Release",
       "agentNone": "Noch kein Agent-Rollout abgeschlossen",
+      "rollout": "Rollout {version}",
+      "rolloutWave": "Welle {wave} von {waves} ({percent} %)",
+      "latestPublished": "Zuletzt veröffentlicht",
       "osReleases": "Ubuntu-Versionen",
       "osRelease": "{release}: {count}",
       "unknownRelease": "unbekannt"

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/pkg/semver"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -17,10 +18,8 @@ type overview struct {
 		NotEncrypted int `json:"not_encrypted"`
 	} `json:"encryption"`
 	Updates struct {
-		SecurityOverdue int `json:"security_overdue"`
-		Agent           struct {
-			CurrentVersion *string `json:"current_version"`
-		} `json:"agent"`
+		SecurityOverdue int           `json:"security_overdue"`
+		Agent           overviewAgent `json:"agent"`
 	} `json:"updates"`
 	Devices struct {
 		Total, Active, Pending, Quarantined, Online, Silent int
@@ -37,6 +36,20 @@ type overview struct {
 		} `json:"top"`
 	} `json:"vulnerabilities"`
 	Attention struct{ Conditions, Devices int } `json:"attention"`
+}
+
+// overviewAgent is updates.agent (plan M7c decision 26, amendment 2026-10-12).
+type overviewAgent struct {
+	CurrentVersion  *string `json:"current_version"`
+	OnCurrent       int     `json:"on_current"`
+	Outdated        int     `json:"outdated"`
+	Ahead           int     `json:"ahead"`
+	Unknown         int     `json:"unknown"`
+	LatestPublished *string `json:"latest_published"`
+	Rollout         *struct {
+		Version              string
+		Wave, Waves, Percent int
+	} `json:"rollout"`
 }
 
 func getOverview(t *testing.T, p *env.Portal) (overview, time.Duration) {
@@ -142,7 +155,16 @@ func TestOverviewGate(t *testing.T) {
 	}
 	root := login(t, env.PlatformAdmin)
 	expectStatus(t, call(t, root, http.MethodGet, "/api/v1/overview", nil), http.StatusForbidden, "no_organization")
-	expectCurrentAgentRelease(t, root, o.Updates.Agent.CurrentVersion)
+	releases := agentReleases(t, root)
+	expectCurrentAgentRelease(t, releases, o.Updates.Agent.CurrentVersion)
+	expectLatestPublishedAndRollout(t, root, releases, o.Updates.Agent)
+	if a := o.Updates.Agent; a.CurrentVersion != nil {
+		if sum := a.OnCurrent + a.Outdated + a.Ahead + a.Unknown; sum != o.Devices.Active {
+			t.Fatalf("agent buckets %d (on %d, outdated %d, ahead %d, unknown %d), active %d", sum, a.OnCurrent, a.Outdated, a.Ahead, a.Unknown, o.Devices.Active)
+		}
+	} else if a.OnCurrent != 0 || a.Outdated != 0 || a.Ahead != 0 {
+		t.Fatalf("no current release, but agent buckets on %d, outdated %d, ahead %d", a.OnCurrent, a.Outdated, a.Ahead)
+	}
 
 	var worst time.Duration
 	for range 5 {
@@ -153,31 +175,43 @@ func TestOverviewGate(t *testing.T) {
 	t.Logf("GET /api/v1/overview: slowest of 5 calls %s (plan M7c §12: 300 ms budget)", worst)
 }
 
-// expectCurrentAgentRelease (PDK-040): the agent release the overview names is one whose rollout completed, and there
-// is one exactly when a rollout completed; a release that is only published is not current (plan M7c step 5,
-// paddock_current_agent_version), so the overview shows "No agent rollout completed yet" for it.
-func expectCurrentAgentRelease(t *testing.T, root *env.Portal, current *string) {
+// agentRelease is one row of the platform release list.
+type agentRelease struct {
+	Version       string `json:"version"`
+	Status        string `json:"status"`
+	RolloutStatus string `json:"rollout_status"`
+}
+
+// agentReleases reads every agent release through the platform API.
+func agentReleases(t *testing.T, root *env.Portal) []agentRelease {
 	t.Helper()
-	completed := map[string]bool{}
+	var all []agentRelease
 	for page := 1; page <= 100; page++ {
 		res := call(t, root, http.MethodGet, "/api/platform/v1/agent-releases?page_size=100&page="+strconv.Itoa(page), nil)
 		expectStatus(t, res, http.StatusOK, "")
 		var p struct {
-			Items []struct {
-				Version       string `json:"version"`
-				RolloutStatus string `json:"rollout_status"`
-			} `json:"items"`
+			Items []agentRelease `json:"items"`
 		}
 		if err := res.JSON(&p); err != nil {
 			t.Fatal(err)
 		}
-		for _, r := range p.Items {
-			if r.RolloutStatus == "completed" {
-				completed[r.Version] = true
-			}
-		}
+		all = append(all, p.Items...)
 		if len(p.Items) < 100 {
 			break
+		}
+	}
+	return all
+}
+
+// expectCurrentAgentRelease (PDK-040): the agent release the overview names is one whose rollout completed, and there
+// is one exactly when a rollout completed; a release that is only published is not current (plan M7c step 5,
+// paddock_current_agent_version), so the overview shows "No agent rollout completed yet" for it.
+func expectCurrentAgentRelease(t *testing.T, releases []agentRelease, current *string) {
+	t.Helper()
+	completed := map[string]bool{}
+	for _, r := range releases {
+		if r.RolloutStatus == "completed" {
+			completed[r.Version] = true
 		}
 	}
 	switch {
@@ -185,6 +219,53 @@ func expectCurrentAgentRelease(t *testing.T, root *env.Portal, current *string) 
 		t.Fatalf("updates.agent.current_version is null, but %d rollouts completed", len(completed))
 	case current != nil && !completed[*current]:
 		t.Fatalf("updates.agent.current_version %q is not a release whose rollout completed", *current)
+	}
+}
+
+// expectLatestPublishedAndRollout (PDK-051): latest_published is the newest published release of the platform list
+// by SemVer precedence (null without one); rollout is the release whose rollout runs, with the wave, the number of
+// waves and the percentage of its rollout, or null while none runs.
+func expectLatestPublishedAndRollout(t *testing.T, root *env.Portal, releases []agentRelease, agent overviewAgent) {
+	t.Helper()
+	newest, running := "", ""
+	for _, r := range releases {
+		if r.Status == "published" && (newest == "" || semver.Compare(r.Version, newest) > 0) {
+			newest = r.Version
+		}
+		if r.RolloutStatus == "running" {
+			running = r.Version
+		}
+	}
+	switch {
+	case newest == "" && agent.LatestPublished != nil:
+		t.Fatalf("updates.agent.latest_published %q, but no release is published", *agent.LatestPublished)
+	case newest != "" && (agent.LatestPublished == nil || semver.Compare(*agent.LatestPublished, newest) != 0):
+		t.Fatalf("updates.agent.latest_published %v, want %s", agent.LatestPublished, newest)
+	}
+	if running == "" {
+		if agent.Rollout != nil {
+			t.Fatalf("updates.agent.rollout %+v, but no rollout runs", *agent.Rollout)
+		}
+		return
+	}
+	if agent.Rollout == nil || agent.Rollout.Version != running {
+		t.Fatalf("updates.agent.rollout %+v, want the running rollout of %s", agent.Rollout, running)
+	}
+	res := call(t, root, http.MethodGet, "/api/platform/v1/agent-releases/"+url.PathEscape(running), nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var detail struct {
+		Rollout struct {
+			Waves            []int `json:"waves"`
+			CurrentWaveIndex int   `json:"current_wave_index"`
+		} `json:"rollout"`
+	}
+	if err := res.JSON(&detail); err != nil {
+		t.Fatal(err)
+	}
+	ro := detail.Rollout
+	if ro.CurrentWaveIndex >= len(ro.Waves) || agent.Rollout.Wave != ro.CurrentWaveIndex+1 || agent.Rollout.Waves != len(ro.Waves) ||
+		agent.Rollout.Percent != ro.Waves[ro.CurrentWaveIndex] {
+		t.Fatalf("updates.agent.rollout %+v, rollout of %s has waves %v at index %d", *agent.Rollout, running, ro.Waves, ro.CurrentWaveIndex)
 	}
 }
 

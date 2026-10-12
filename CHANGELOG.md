@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Overview: latest published agent release and running rollout (plan M7c decision 26, amendment 2026-10-12). The
+  *Updates and agent rollout* panel shows "Latest published" while the newest published release differs from the
+  release of the last completed rollout, and the running rollout with its wave, e.g. "Rollout 1.10.0: wave 2 of 4
+  (10 %)". `GET /api/v1/overview` gains `updates.agent.latest_published`, `updates.agent.rollout` (`version`, `wave`,
+  `waves`, `percent`, null while no rollout runs) and `updates.agent.ahead`, the active devices on an agent newer than
+  the current release; `outdated` now counts only older agents and agents without a semantic version, as the attention
+  kind `agent_outdated` does. Organization roles read these platform values through two functions of migration 00041.
 - Failed agent rollback (ADR 0024): when a new agent release fails its probation and the supervisor cannot flip back
   to the previous version, the device reports the new outcome `rollback_failed` (event `agent.update_failed`, audit
   code `device.agent_rollback_failed`) instead of `self_test_failed`. The new version keeps running, the supervisor
@@ -183,6 +190,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fleet's vulnerability data in development and CI stacks (PDK-054, ADR 0009 amendment 2026-10-12): the development
+  overlay passes Fleet direct URLs for its CPE dictionary, CPE translations and NVD feeds, so a fresh stack on a shared
+  CI runner no longer waits on GitHub's anonymous API rate limit before the inventory gates find vulnerabilities. The
+  CPE release is pinned in `deploy/compose/versions.env` (`FLEET_CPE_DATABASE_URL`, `FLEET_CPE_TRANSLATIONS_URL`);
+  no GitHub token is passed to Fleet. Production stacks are unchanged and keep Fleet's own lookup of the latest data.
+  Because Fleet then downloads the CPE database on every vulnerability run, the development stack runs that job
+  hourly like production (was every 5 minutes) and the inventory gates trigger the runs they need. A failed CI
+  acceptance run now also prints Fleet's full log.
+- `paddockd plan` changed the agent state (PDK-081): run next to the daemon, it reported the daemon's running
+  `install_now` job as failed with reason `interrupted`, dropped it from the agent state and saved the state file
+  from a second process. `paddockd plan` now writes nothing under the agent layout; the daemon still reports a job
+  that a restart interrupted, when it starts.
+- Agent release staged during a probation or a pending rollback (PDK-075, plan M2b decision 16): the supervisor
+  ignores such a release and later removes only its request, which left the release under
+  `/var/lib/paddock/staging/<version>/` on disk. The agent now removes every staged release without a
+  `request.json` at start and at every check-in before it stages a release; while a request exists nothing is
+  removed. A release the server still offers is downloaded and staged again as before. The supervisor is unchanged.
 - Agent supervisor with an unreadable `probation.json` (PDK-062, plan M2b decision 16): instead of dropping the log
   and leaving the new release running without a probation, the supervisor rebuilds the probation from the slots when
   `current` points at `A` or `B`, the other slot holds an agent with a valid version, the active agent is newer by

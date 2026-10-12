@@ -106,6 +106,35 @@ func Pending(l paths.Layout) bool {
 	return err == nil
 }
 
+// Sweep removes every entry of the staging directory except request.json, and only while request.json does not
+// exist (plan M2b decision 16, amendment PDK-075): a release directory without a request is garbage, because the
+// supervisor dropped or refused its request or the download stopped before the request was written. While a request
+// exists the supervisor may be reading its release, so nothing is removed. A missing staging directory is no error.
+func Sweep(l paths.Layout) error {
+	if _, err := os.Lstat(l.UpdateRequest()); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check %s: %w", l.UpdateRequest(), err)
+	}
+	entries, err := os.ReadDir(l.Staging())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", l.Staging(), err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if e.Name() == filepath.Base(l.UpdateRequest()) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(l.Staging(), e.Name())); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // supervisorComm is the process name of paddock-supervisor as /proc/<pid>/comm shows it (15 characters).
 const supervisorComm = "paddock-supervi"
 

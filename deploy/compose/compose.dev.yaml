@@ -67,7 +67,15 @@ services:
     environment:
       FLEET_OSQUERY_POLICY_UPDATE_INTERVAL: ${FLEET_OSQUERY_POLICY_UPDATE_INTERVAL:-30s}
       FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL: ${FLEET_OSQUERY_DETAIL_UPDATE_INTERVAL:-2m}
-      FLEET_VULNERABILITIES_PERIODICITY: ${FLEET_VULNERABILITIES_PERIODICITY:-5m}
+      # Not shorter than 1h: with a CPE database URL set, every run downloads the 146 MB CPE database again; the gates
+      # trigger the runs they need (ADR 0009 amendment 2026-10-12 (b)).
+      FLEET_VULNERABILITIES_PERIODICITY: ${FLEET_VULNERABILITIES_PERIODICITY:-1h}
+      # Direct URLs instead of Fleet's anonymous GitHub API lookup, whose hourly limit shared CI runners exhaust
+      # (ADR 0009 amendment 2026-10-12); the pinned release is in the development section of versions.env.
+      # Production keeps Fleet's lookup.
+      FLEET_VULNERABILITIES_CPE_DATABASE_URL: ${FLEET_CPE_DATABASE_URL:?versions.env}
+      FLEET_VULNERABILITIES_CPE_TRANSLATIONS_URL: ${FLEET_CPE_TRANSLATIONS_URL:?versions.env}
+      FLEET_VULNERABILITIES_CVE_FEED_PREFIX_URL: https://github.com/fleetdm/vulnerabilities/releases/latest/download/
     ports:
       # Fleet's UI for platform operators on the development host only (docs/operations/fleet.md).
       - "127.0.0.1:8412:8080"

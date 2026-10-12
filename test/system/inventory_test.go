@@ -115,8 +115,8 @@ func retireTwins(t *testing.T, d *Device, hardwareUUID string) {
 
 // gateF4: an intentionally old package version shows its CVEs (plan M5a step 4, AC1). The device downgrades wget to
 // the oldest version apt offers (the release pocket); after fleetd's next software report (refetched through Fleet's
-// API) and Fleet's next vulnerability round, Paddock lists the old version among the device's packages and the CVEs
-// Fleet matched to it among its vulnerabilities, within 10 minutes.
+// API) and a vulnerability round the gate triggers, Paddock lists the old version among the device's packages and the
+// CVEs Fleet matched to it among its vulnerabilities, within 10 minutes.
 func gateF4(t *testing.T, d *Device) {
 	const pkg = "wget"
 	installed := d.Must("dpkg-query -W -f '${Version}' " + pkg)
@@ -149,8 +149,25 @@ func gateF4(t *testing.T, d *Device) {
 		}
 		return p
 	}
+	// The development stack runs Fleet's vulnerability job only hourly, because every run downloads the CPE database
+	// again (ADR 0009 amendment 2026-10-12 (b)). A run matches only the software Fleet had stored when it started, so
+	// the gate triggers again every 2 minutes; Fleet refuses a trigger while a run is pending.
+	var triggered time.Time
+	trigger := func() {
+		if time.Since(triggered) < 2*time.Minute {
+			return
+		}
+		triggered = time.Now()
+		resp, err := fleetAPI(t, http.MethodPost, "/api/latest/fleet/trigger?name=vulnerabilities", nil)
+		if err != nil {
+			t.Logf("%s: Fleet vulnerability trigger: %v", d.Name, err)
+			return
+		}
+		_ = resp.Body.Close()
+		t.Logf("%s: Fleet vulnerability trigger: HTTP %d", d.Name, resp.StatusCode)
+	}
 	var cves []string
-	Until(t, d.Name+": CVEs of "+pkg+" "+old+" in Paddock", 10*time.Minute, 15*time.Second, nil, func() bool {
+	Until(t, d.Name+": CVEs of "+pkg+" "+old+" in Paddock", 10*time.Minute, 15*time.Second, trigger, func() bool {
 		cves = nil
 		for _, f := range list("/api/v1/devices/" + d.ID + "/vulnerabilities?page_size=100&q=" + pkg).Items {
 			if f["software_name"] == pkg && f["software_version"] == old {
