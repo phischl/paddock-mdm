@@ -58,12 +58,25 @@ type OverviewCVE struct {
 type OverviewUpdates struct {
 	SecurityOverdue int
 	RebootRequired  int
-	// CurrentVersion is nil while no agent release is published.
+	// CurrentVersion is nil while no agent rollout has completed.
 	CurrentVersion *string
 	OnCurrent      int
 	Outdated       int
+	Ahead          int
 	Unknown        int
-	OSReleases     []pgstore.OverviewOSReleasesRow
+	// LatestPublished is nil while no agent release is published.
+	LatestPublished *string
+	// Rollout is nil while no rollout runs.
+	Rollout    *OverviewRollout
+	OSReleases []pgstore.OverviewOSReleasesRow
+}
+
+// OverviewRollout is the running agent rollout: its release, the 1-based wave of the waves and that wave's percentage.
+type OverviewRollout struct {
+	Version string
+	Wave    int
+	Waves   int
+	Percent int
 }
 
 // severityRanks maps the rank of the overview queries back to the severity name (unknown = not rated by Ubuntu).
@@ -124,7 +137,8 @@ func (o *Overview) Get(ctx context.Context) (OverviewResult, error) {
 		}
 		out.Updates = OverviewUpdates{
 			SecurityOverdue: int(overdue), RebootRequired: int(updates.RebootRequired),
-			OnCurrent: int(updates.AgentOnCurrent), Outdated: int(updates.AgentOutdated), Unknown: int(updates.AgentUnknown),
+			OnCurrent: int(updates.AgentOnCurrent), Outdated: int(updates.AgentOutdated), Ahead: int(updates.AgentAhead),
+			Unknown: int(updates.AgentUnknown),
 		}
 		version, err := q.CurrentAgentVersion(ctx)
 		if err != nil {
@@ -132,6 +146,21 @@ func (o *Overview) Get(ctx context.Context) (OverviewResult, error) {
 		}
 		if version != "" {
 			out.Updates.CurrentVersion = &version
+		}
+		latest, err := q.LatestPublishedAgentVersion(ctx)
+		if err != nil {
+			return fmt.Errorf("latest published agent version: %w", err)
+		}
+		if latest != "" {
+			out.Updates.LatestPublished = &latest
+		}
+		rollouts, err := q.RunningAgentRollout(ctx)
+		if err != nil {
+			return fmt.Errorf("running agent rollout: %w", err)
+		}
+		if len(rollouts) > 0 {
+			r := rollouts[0]
+			out.Updates.Rollout = &OverviewRollout{Version: r.Version, Wave: int(r.Wave), Waves: int(r.Waves), Percent: int(r.Percent)}
 		}
 		if out.Updates.OSReleases, err = q.OverviewOSReleases(ctx); err != nil {
 			return fmt.Errorf("overview OS releases: %w", err)

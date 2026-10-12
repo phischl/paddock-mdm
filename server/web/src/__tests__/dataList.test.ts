@@ -47,6 +47,7 @@ function navigated(router: Router): Promise<void> {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   wrapper?.unmount()
   wrapper = null
   resize(1280)
@@ -99,16 +100,22 @@ describe('DataList', () => {
     const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 95)))
     const { router, w } = await mountList('/list?page=3&page_size=10', fetch)
     const input = w.find('[data-testid="list-search"] input')
-    const done = navigated(router)
+    const replace = vi.spyOn(router, 'replace')
+    // Only the timeout clock is faked: Vue, the router and flushPromises keep their real microtask and setImmediate
+    // scheduling, so the test advances exactly the clock the debounce uses and does not depend on wall-clock precision.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     await input.setValue('la')
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await vi.advanceTimersByTimeAsync(100)
     await input.setValue('lap')
-    const typed = performance.now()
-    await new Promise((resolve) => setTimeout(resolve, 150))
-    expect(router.currentRoute.value.query).toEqual({ page: '3', page_size: '10' })
-    await done
-    // A timer never fires early: the search waited 300 ms after the last keystroke, and "la" was never searched.
-    expect(performance.now() - typed).toBeGreaterThanOrEqual(299)
+    // At 299 ms after the last keystroke nothing has been searched, and the timer for "la" (due at 200 ms) was cancelled.
+    await vi.advanceTimersByTimeAsync(299)
+    expect(replace).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(replace.mock.calls[0][0]).toEqual({ query: { page_size: '10', q: 'lap' } })
+    // Vuetify's back-button guard holds the navigation on a 0 ms timeout, which fake timers schedule 1 ms later when it
+    // is created inside a tick.
+    await vi.advanceTimersByTimeAsync(1)
     await flushPromises()
     expect(router.currentRoute.value.query).toEqual({ page_size: '10', q: 'lap' })
     expect(fetch).toHaveBeenCalledTimes(2)

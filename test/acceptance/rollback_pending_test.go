@@ -52,6 +52,17 @@ func rollbackPending(t *testing.T, p *env.Portal, deviceID, hostname string) []s
 	return details
 }
 
+// waitRollbackPending polls the attention list until want holds: the gateway accepts events before the worker has
+// stored the update report, so the entry appears and disappears asynchronously.
+func waitRollbackPending(t *testing.T, p *env.Portal, deviceID, hostname string, want func([]string) bool) []string {
+	t.Helper()
+	got := rollbackPending(t, p, deviceID, hostname)
+	for deadline := time.Now().Add(time.Minute); !want(got) && time.Now().Before(deadline); time.Sleep(time.Second) {
+		got = rollbackPending(t, p, deviceID, hostname)
+	}
+	return got
+}
+
 // TestRollbackPendingAttention is AC6 of PDK-043 (ADR 0024): a device that reports agent.update_failed with outcome
 // rollback_failed for the version it runs is audited as device.agent_rollback_failed and listed on the attention page
 // as agent_rollback_pending with the version; its later agent.rolled_back for that version removes the entry.
@@ -65,7 +76,8 @@ func TestRollbackPendingAttention(t *testing.T) {
 	}
 
 	reportAgentUpdate(t, d, 1, protocol.EventAgentUpdateFailed, "rollback_failed")
-	if got := rollbackPending(t, alice, d.DeviceID, hostname); len(got) != 1 || got[0] != devicesimVersion {
+	listed := func(got []string) bool { return len(got) == 1 && got[0] == devicesimVersion }
+	if got := waitRollbackPending(t, alice, d.DeviceID, hostname, listed); !listed(got) {
 		t.Fatalf("agent_rollback_pending %v after rollback_failed, want [%s]", got, devicesimVersion)
 	}
 	org := uuid.MustParse(d.Config.OrganizationID)
@@ -73,7 +85,8 @@ func TestRollbackPendingAttention(t *testing.T) {
 		"device.agent_rollback_failed", "success", auditPollTimeout)
 
 	reportAgentUpdate(t, d, 2, protocol.EventAgentRolledBack, "rolled_back")
-	if got := rollbackPending(t, alice, d.DeviceID, hostname); len(got) != 0 {
+	cleared := func(got []string) bool { return len(got) == 0 }
+	if got := waitRollbackPending(t, alice, d.DeviceID, hostname, cleared); !cleared(got) {
 		t.Fatalf("agent_rollback_pending %v after rolled_back", got)
 	}
 }

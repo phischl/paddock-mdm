@@ -35,7 +35,8 @@ func (h *handlers) GetOverview(ctx context.Context, _ adminapi.GetOverviewReques
 		Updates: adminapi.OverviewUpdates{
 			SecurityOverdue: o.Updates.SecurityOverdue, RebootRequired: o.Updates.RebootRequired,
 			Agent: adminapi.OverviewAgent{
-				CurrentVersion: o.Updates.CurrentVersion, OnCurrent: o.Updates.OnCurrent, Outdated: o.Updates.Outdated, Unknown: o.Updates.Unknown,
+				CurrentVersion: o.Updates.CurrentVersion, OnCurrent: o.Updates.OnCurrent, Outdated: o.Updates.Outdated, Ahead: o.Updates.Ahead,
+				Unknown: o.Updates.Unknown, LatestPublished: o.Updates.LatestPublished,
 			},
 			OsReleases: make([]adminapi.OverviewOSRelease, len(o.Updates.OSReleases)),
 		},
@@ -43,6 +44,14 @@ func (h *handlers) GetOverview(ctx context.Context, _ adminapi.GetOverviewReques
 	}
 	for i, c := range o.Vulnerabilities.Top {
 		out.Vulnerabilities.Top[i] = adminapi.OverviewTopCVE{Cve: c.CVE, Severity: adminapi.Severity(c.Severity), Devices: c.Devices, Packages: c.Packages}
+	}
+	if r := o.Updates.Rollout; r != nil {
+		out.Updates.Agent.Rollout = &struct {
+			Percent int    `json:"percent"`
+			Version string `json:"version"`
+			Wave    int    `json:"wave"`
+			Waves   int    `json:"waves"`
+		}{Percent: r.Percent, Version: r.Version, Wave: r.Wave, Waves: r.Waves}
 	}
 	for i, r := range o.Updates.OSReleases {
 		out.Updates.OsReleases[i] = adminapi.OverviewOSRelease{Release: r.Release, Devices: int(r.Devices)}

@@ -60,6 +60,11 @@ const agentLine = computed(() => {
   if (!u?.agent.current_version) return null
   return { version: u.agent.current_version, on: u.agent.on_current, active: overview.value?.devices.active ?? 0 }
 })
+const agentRollout = computed(() => overview.value?.updates.agent.rollout ?? null)
+const latestPublished = computed(() => {
+  const a = overview.value?.updates.agent
+  return a?.latest_published && a.latest_published !== a.current_version ? a.latest_published : null
+})
 </script>
 
 <template>
@@ -282,6 +287,18 @@ const agentLine = computed(() => {
                 class="pd-muted"
               >
                 –
+              </dd>
+            </div>
+            <div v-if="agentRollout">
+              <dt>{{ t('overview.updates.rollout', { version: agentRollout.version }) }}</dt>
+              <dd class="mono pd-tabular">
+                {{ t('overview.updates.rolloutWave', { wave: agentRollout.wave, waves: agentRollout.waves, percent: agentRollout.percent }) }}
+              </dd>
+            </div>
+            <div v-if="latestPublished">
+              <dt>{{ t('overview.updates.latestPublished') }}</dt>
+              <dd class="mono pd-tabular">
+                {{ latestPublished }}
               </dd>
             </div>
             <div>
