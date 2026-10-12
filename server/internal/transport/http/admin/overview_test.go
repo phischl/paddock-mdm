@@ -3,6 +3,7 @@ package admin_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,7 +100,7 @@ func TestOverview(t *testing.T) {
 	if o.Updates.SecurityOverdue != 4 || o.Updates.RebootRequired != 1 {
 		t.Fatalf("updates %+v", o.Updates)
 	}
-	if o.Updates.Agent.CurrentVersion != nil || o.Updates.Agent.OnCurrent != 0 || o.Updates.Agent.Outdated != 0 || o.Updates.Agent.Unknown != 2 {
+	if o.Updates.Agent.CurrentVersion != nil || o.Updates.Agent.OnCurrent != 0 || o.Updates.Agent.Outdated != 0 || o.Updates.Agent.Ahead != 0 || o.Updates.Agent.Unknown != 2 {
 		t.Fatalf("agent %+v", o.Updates.Agent)
 	}
 	if len(o.Updates.OsReleases) != 1 || o.Updates.OsReleases[0].Release != "unknown" || o.Updates.OsReleases[0].Devices != 6 {
@@ -366,5 +367,55 @@ func TestAttentionDevicesByID(t *testing.T) {
 	e.do(call{method: "GET", path: "/api/v1/attention/devices?device_id=" + f.online.String(), cookie: alice}).decode(t, &page)
 	if page.Total != 0 {
 		t.Fatalf("device without conditions: %+v", page)
+	}
+}
+
+// TestOverviewAgentRollout (PDK-051, plan M7c decision 26 amendment 2026-10-12): updates.agent names the latest
+// published release and the running rollout to every organization role, counts newer agents in ahead instead of
+// outdated, and partitions the active devices; rollout is null once no rollout runs. The releases are platform data
+// shared by every test of the binary, so the test removes its own again.
+func TestOverviewAgentRollout(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := e.super.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = e.super.Exec(ctx, "DELETE FROM agent_rollout WHERE version LIKE '700.%'")
+		_, _ = e.super.Exec(ctx, "DELETE FROM agent_release WHERE version LIKE '700.%'")
+	})
+	exec("UPDATE agent_rollout SET status = 'halted' WHERE status = 'running'")
+	for _, version := range []string{"700.0.0", "700.2.0", "700.10.0"} {
+		exec("INSERT INTO agent_release (version, status, created_by, published_at) VALUES ($1, 'published', 't', now())", version)
+	}
+	exec("INSERT INTO agent_rollout (version, status, started_by, updated_at) VALUES ('700.0.0', 'completed', 't', '2300-01-01T00:00:00Z')")
+	exec("INSERT INTO agent_rollout (version, status, started_by, waves, current_wave_index) VALUES ('700.2.0', 'running', 't', '{1,10,50,100}', 2)")
+	current, ahead, old := "700.0.0", "700.10.0", "1.9.1"
+	for host, version := range map[string]*string{"ov-current": &current, "ov-ahead": &ahead, "ov-old": &old, "ov-none": nil} {
+		id := e.insertDevice(e.acme, host, "active")
+		exec("INSERT INTO device_status (device_id, organization_id, agent_version) VALUES ($1, $2, $3)", id, e.acme, version)
+	}
+	for _, role := range []principal.Role{principal.RoleOrgAdmin, principal.RoleOrgOperator, principal.RoleOrgAuditor} {
+		var o adminapi.Overview
+		r := e.do(call{method: "GET", path: "/api/v1/overview", cookie: e.session(e.acme, role)})
+		r.decode(t, &o)
+		a := o.Updates.Agent
+		if r.status != http.StatusOK || a.CurrentVersion == nil || *a.CurrentVersion != current || a.LatestPublished == nil || *a.LatestPublished != ahead {
+			t.Fatalf("%s: %d %s", role, r.status, r.body)
+		}
+		if a.Rollout == nil || a.Rollout.Version != "700.2.0" || a.Rollout.Wave != 3 || a.Rollout.Waves != 4 || a.Rollout.Percent != 50 {
+			t.Fatalf("%s: rollout %+v", role, a.Rollout)
+		}
+		if a.OnCurrent != 1 || a.Outdated != 1 || a.Ahead != 1 || a.Unknown != 1 || a.OnCurrent+a.Outdated+a.Ahead+a.Unknown != o.Devices.Active {
+			t.Fatalf("%s: agent %+v, active %d", role, a, o.Devices.Active)
+		}
+	}
+	exec("UPDATE agent_rollout SET status = 'halted' WHERE version = '700.2.0'")
+	r := e.do(call{method: "GET", path: "/api/v1/overview", cookie: e.session(e.acme, principal.RoleOrgAdmin)})
+	if !strings.Contains(string(r.body), `"rollout":null`) {
+		t.Fatalf("rollout after halt: %s", r.body)
 	}
 }

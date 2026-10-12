@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Overview: latest published agent release and running rollout (plan M7c decision 26, amendment 2026-10-12). The
+  *Updates and agent rollout* panel shows "Latest published" while the newest published release differs from the
+  release of the last completed rollout, and the running rollout with its wave, e.g. "Rollout 1.10.0: wave 2 of 4
+  (10 %)". `GET /api/v1/overview` gains `updates.agent.latest_published`, `updates.agent.rollout` (`version`, `wave`,
+  `waves`, `percent`, null while no rollout runs) and `updates.agent.ahead`, the active devices on an agent newer than
+  the current release; `outdated` now counts only older agents and agents without a semantic version, as the attention
+  kind `agent_outdated` does. Organization roles read these platform values through two functions of migration 00041.
 - Failed agent rollback (ADR 0024): when a new agent release fails its probation and the supervisor cannot flip back
   to the previous version, the device reports the new outcome `rollback_failed` (event `agent.update_failed`, audit
   code `device.agent_rollback_failed`) instead of `self_test_failed`. The new version keeps running, the supervisor
