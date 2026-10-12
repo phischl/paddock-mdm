@@ -150,6 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Device API contract (PDK-073): the `Event.type` enum in `api/openapi/device.yaml` lists every event type the
+  gateway accepts, adding `revocation.trust_pinned_tofu`, `revocation.refused`, `tamper.service_stopped` and
+  `updates.run`. The gateway's behaviour is unchanged; a test keeps the contract and the accepted list in sync.
 - Secret scan of pull requests (PDK-068): `make scan-secrets-diff` also scans every blob the pull request adds, so a
   binary file with a secret that the pull request adds and removes again, which gitleaks' history scan skips, fails
   the CI job `secrets`. A file over 100 MB fails the scan instead of being skipped. Files that
