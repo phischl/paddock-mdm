@@ -10,9 +10,10 @@
 # another file (`[extend] path`) fails. `make scan-secrets-diff` also scans every blob the range adds (PDK-068): a
 # binary file with a secret that the pull request adds and removes again fails it, in a later version of a path as
 # well. Files whose names gitleaks' default configuration allowlists by extension are scanned under a suffixed name
-# and archives are opened one level deep (ADR 0025): a text secret in `creds.bin` or `creds.png` and a secret inside a
-# deflated `creds.zip` or `creds.docx` fail `make scan-secrets-diff`, while a real binary PNG passes with the
-# repository's own configuration. The secret is a generated fake GitHub token that is never printed (the scan runs
+# and archives are opened one level deep (ADR 0025): a text secret in `creds.bin`, `creds.png`, `creds.BIN`,
+# `creds.xdll` or under the directory `assets.png/`, and a secret inside a deflated `creds.zip`, `creds.docx` or
+# `creds.tgz` fail `make scan-secrets-diff`, a renamed copy that would overwrite another changed file fails it, and a
+# real binary PNG passes with the repository's own configuration. The secret is a generated fake GitHub token that is never printed (the scan runs
 # with --redact).
 set -euo pipefail
 
@@ -259,6 +260,34 @@ g add creds.png
 g commit -q -m 'add credentials under .png'
 expect_pr "a text secret in creds.png added and kept" leak scan-secrets-diff "$base" "$base"
 
+# gitleaks skips whole directories whose name matches the default allowlist, so directory components are renamed
+# too; the match ignores case, and `?dll` mirrors the default regex's unescaped dot.
+g switch -q -c pr-allowlisted-dir "$base"
+mkdir "$r/assets.png"
+printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/assets.png/creds.bin"
+g add assets.png
+g commit -q -m 'add credentials under an allowlisted directory'
+expect_pr "a text secret in assets.png/creds.bin added and kept" leak scan-secrets-diff "$base" "$base"
+g rm -q assets.png/creds.bin
+g commit -q -m 'remove them'
+expect_pr "a text secret in assets.png/creds.bin added and removed" leak scan-secrets-diff "$base" "$base"
+for name in creds.BIN creds.xdll; do
+  g switch -q -c "pr-ext-$name" "$base"
+  printf 'GITHUB_TOKEN=%s\n' "$(token)" >"$r/$name"
+  g add "$name"
+  g commit -q -m "add credentials in $name"
+  expect_pr "a text secret in $name added and kept" leak scan-secrets-diff "$base" "$base"
+done
+
+# A changed file whose renamed copy would overwrite another changed file fails instead of hiding one of them.
+g switch -q -c pr-rename-collision "$base"
+printf 'harmless\n' >"$r/creds.bin"
+printf 'harmless too\n' >"$r/creds.bin.scan"
+g add creds.bin creds.bin.scan
+g commit -q -m 'add a file and its renamed name'
+expect_pr "creds.bin and creds.bin.scan in the final tree" fail scan-secrets-diff "$base" "$base" \
+  "cannot write a changed file"
+
 # A secret in a deflated archive, added and removed again: a zip, and an office document that gitleaks only opens
 # under the suffix .zip. The token must not appear in clear text in the archive, or the test would prove nothing.
 for name in creds.zip creds.docx; do
@@ -273,6 +302,21 @@ with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
   g commit -q -m "remove $name"
   expect_pr "a secret inside a deflated $name added and removed" leak scan-secrets-diff "$base" "$base"
 done
+
+# A gzipped tar under .tgz, which gitleaks opens only under the suffix .tar.gz.
+g switch -q -c pr-archive-tgz "$base"
+T="$(token)" python3 -c 'import io, os, sys, tarfile
+data = ("GITHUB_TOKEN=" + os.environ["T"] + "\n").encode()
+info = tarfile.TarInfo("inner.env")
+info.size = len(data)
+with tarfile.open(sys.argv[1], "w:gz") as t:
+    t.addfile(info, io.BytesIO(data))' "$r/creds.tgz"
+if grep -qa ghp_ "$r/creds.tgz"; then echo "FAIL setup: creds.tgz holds the token in clear text"; exit 1; fi
+g add creds.tgz
+g commit -q -m 'add credentials in creds.tgz'
+g rm -q creds.tgz
+g commit -q -m 'remove creds.tgz'
+expect_pr "a secret inside creds.tgz added and removed" leak scan-secrets-diff "$base" "$base"
 
 # A real binary PNG (magic bytes and seeded random bytes) passes with the repository's own configuration: the renamed
 # scan adds no false positive.

@@ -731,19 +731,22 @@ scan-secrets: ## gitleaks over the current branch history (false positives: allo
 # path go into separate layers, each scanned from its own root. Only pull request ranges pay for this: the history
 # scan of main (scan-secrets) is unchanged. A file over GITLEAKS_MAX_MB (decimal megabytes; GitHub refuses files over
 # 100 MiB) fails the scan instead of being skipped by --max-target-megabytes.
-# gitleaks' default configuration skips whole files by extension, and a repository configuration cannot drop those
-# entries while it uses the default rules, so every copy whose name ends, case-insensitively, in one of
-# GITLEAKS_RENAME_EXT is written with the suffix .scan (ADR 0025): a text secret in creds.bin is scanned as
-# creds.bin.scan. gitleaks identifies archives by name only, so names in GITLEAKS_ZIP_EXT get the suffix .zip instead
-# (this rule wins for docx and xlsx), and archives are opened one level deep (--max-archive-depth 1; nested archives
-# are not opened, and the CI job's timeout bounds the decompression). The collision checks, the choice of a free blob
-# layer and .gitleaksignore fingerprints use the suffixed name. gitleaks still skips files whose magic bytes map to
-# application/* (real PDFs, fonts, executables, compressed data) in every mode. Re-check on image bump: both lists
-# against the default allowlist and the archive formats of the GITLEAKS_IMAGE in use.
+# gitleaks' default configuration skips whole files and whole directories by extension, and a repository
+# configuration cannot drop those entries while it uses the default rules, so every path component, directories
+# included, whose name ends, case-insensitively, in one of GITLEAKS_RENAME_EXT gets the suffix .scan in the copy
+# (ADR 0025): creds.bin is scanned as creds.bin.scan and d.png/creds.bin as d.png.scan/creds.bin.scan. gitleaks
+# identifies archives by name only, so a last component in GITLEAKS_ZIP_EXT gets the suffix .zip instead (this rule
+# wins for docx and xlsx) and one ending in .tgz the suffix .tar.gz, and archives are opened one level deep
+# (--max-archive-depth 1; nested archives and other archive names are not opened, and the CI job's timeout bounds the
+# decompression). The collision checks, the choice of a free blob layer and .gitleaksignore fingerprints use the
+# renamed path. gitleaks still skips files whose magic bytes map to application/* (real PDFs, fonts, executables,
+# compressed data) in every mode. Re-check on image bump: both lists against the default allowlist and the archive
+# formats of the GITLEAKS_IMAGE in use. The entry ?dll mirrors the default regex's `.dll`, whose unescaped dot skips
+# any character before dll (creds.xdll is skipped, creds.dll is not).
 GITLEAKS_DIFF_BASE ?= origin/main
 GITLEAKS_MAX_MB = 100
 GITLEAKS_RENAME_EXT = bmp gif jpg jpeg png svg tif tiff eot otf ttf woff woff2 doc docx xls xlsx pdf bin socket vsidx \
-	v2 suo wsuo dll pdb exe gltf gem
+	v2 suo wsuo ?dll pdb exe gltf gem
 GITLEAKS_ZIP_EXT = jar war docx xlsx pptx odt ods odp
 
 scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE and every blob added since then
@@ -752,13 +755,18 @@ scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE a
 	tmp=$$(mktemp -d) || exit 1; trap 'rm -rf "$$tmp"' EXIT; \
 	$(gitleaks_config); \
 	git -C "$$repo" diff -z --name-only --diff-filter=d "$$base"..HEAD >"$$tmp/files" || exit 1; \
-	scan_name() { local l=$${1,,} e; sn=$$1; \
-		for e in $(GITLEAKS_ZIP_EXT); do case $$l in *.$$e) sn=$$1.zip; return ;; esac; done; \
-		for e in $(GITLEAKS_RENAME_EXT); do case $$l in *.$$e) sn=$$1.scan; return ;; esac; done; }; \
+	renamed() { local e; for e in $(subst ?,\?,$(GITLEAKS_RENAME_EXT)); do \
+		case $${1,,} in *.$$e) return 0 ;; esac; done; return 1; }; \
+	scan_name() { local rest=$$1 c e; sn=; \
+		while [ "$${rest#*/}" != "$$rest" ]; do \
+			c=$${rest%%/*}; rest=$${rest#*/}; if renamed "$$c"; then c=$$c.scan; fi; sn=$$sn$$c/; done; \
+		for e in $(GITLEAKS_ZIP_EXT); do case $${rest,,} in *.$$e) sn=$$sn$$rest.zip; return ;; esac; done; \
+		case $${rest,,} in *.tgz) sn=$$sn$$rest.tar.gz; return ;; esac; \
+		if renamed "$$rest"; then sn=$$sn$$rest.scan; else sn=$$sn$$rest; fi; }; \
 	n=0; mkdir -p "$$tmp/scan/0" || exit 1; \
 	while IFS= read -r -d '' f; do \
 		if [ -f "$$repo/$$f" ] || [ -L "$$repo/$$f" ]; then \
-			scan_name "$$f"; dir=.; case $$f in */*) dir=$${f%/*} ;; esac; \
+			scan_name "$$f"; dir=.; case $$sn in */*) dir=$${sn%/*} ;; esac; \
 			if ! mkdir -p -- "$$tmp/scan/0/$$dir" 2>/dev/null || [ -e "$$tmp/scan/0/$$sn" ] || \
 				[ -L "$$tmp/scan/0/$$sn" ]; then echo "$@: cannot write a changed file as $$sn" >&2; exit 1; fi; \
 			cp -P -- "$$repo/$$f" "$$tmp/scan/0/$$sn" || exit 1; n=$$((n + 1)); fi; \
@@ -781,7 +789,7 @@ scan-secrets-diff: ## gitleaks over the files changed since GITLEAKS_DIFF_BASE a
 		if [ -z "$${new[$$id]:-}" ] || [ -n "$${seen["$$id $$sn"]:-}" ]; then continue; fi; \
 		seen["$$id $$sn"]=1; \
 		case "/$$p/" in *//*|*/./*|*/../*) echo "$@: unsafe path in $$base..HEAD" >&2; exit 1 ;; esac; \
-		dir=.; case $$p in */*) dir=$${p%/*} ;; esac; \
+		dir=.; case $$sn in */*) dir=$${sn%/*} ;; esac; \
 		k=1; while :; do \
 			d="$$tmp/scan/$$k"; fresh=; [ -d "$$d" ] || fresh=1; \
 			if mkdir -p -- "$$d/$$dir" 2>/dev/null && [ ! -e "$$d/$$sn" ] && [ ! -L "$$d/$$sn" ]; then break; fi; \

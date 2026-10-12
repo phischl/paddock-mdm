@@ -21,25 +21,34 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
 
 ## Coverage of binary extensions and archives
 
-gitleaks' default configuration (`useDefault`) skips whole files by extension, and a repository configuration cannot
-remove those entries (ADR 0025). `make scan-secrets-diff` therefore scans copies under other names:
+gitleaks' default configuration (`useDefault`) skips whole files and whole directories by extension, and a repository
+configuration cannot remove those entries (ADR 0025). `make scan-secrets-diff` therefore scans copies under other
+names:
 
-- A file whose name ends, case-insensitively, in `.bmp .gif .jpg .jpeg .png .svg .tif .tiff .eot .otf .ttf .woff
-  .woff2 .doc .docx .xls .xlsx .pdf .bin .socket .vsidx .v2 .suo .wsuo .dll .pdb .exe .gltf .gem` is scanned with the
-  suffix `.scan`, for example `creds.bin` as `creds.bin.scan`. A text secret under such a name is found.
+- Every path component, directories included, whose name ends, case-insensitively, in `.bmp .gif .jpg .jpeg .png .svg
+  .tif .tiff .eot .otf .ttf .woff .woff2 .doc .docx .xls .xlsx .pdf .bin .socket .vsidx .v2 .suo .wsuo .pdb .exe
+  .gltf .gem`, or in any one character followed by `dll`, gets the suffix `.scan`: `creds.bin` is scanned as
+  `creds.bin.scan` and `assets.png/creds.bin` as `assets.png.scan/creds.bin.scan`. (The default configuration's
+  `.dll` entry has an unescaped dot, so it skips `creds.xdll` but not `creds.dll`; the rename mirrors that.) The
+  file is then scanned like any other text file, subject to the magic-byte skip below.
 - gitleaks recognises archives by name only. A file ending in `.jar .war .docx .xlsx .pptx .odt .ods .odp` is scanned
-  with the suffix `.zip` instead, so that it is opened as an archive (for `.docx` and `.xlsx` the `.zip` rule wins).
-  Archives that gitleaks recognises by name, such as `.zip` and `.tar.gz`, keep their name.
-- Archives are opened one level deep (`--max-archive-depth 1`): a secret in a file inside a zip or an office document
-  is found, an archive inside an archive is not opened. The CI job `secrets` stops after 30 minutes, which bounds what
-  a huge archive or an archive bomb costs.
+  with the suffix `.zip` instead, so that it is opened as an archive (for `.docx` and `.xlsx` the `.zip` rule wins),
+  and a file ending in `.tgz` with the suffix `.tar.gz`. These two rules apply to the file name only, not to
+  directories. Archives that gitleaks recognises by name, such as `.zip` and `.tar.gz`, keep their name; archives
+  under any other name (for example `.7z` renamed to `.dat`, or without an extension) are not opened.
+- Archives are opened one level deep (`--max-archive-depth 1`): a secret in a file inside a zip, an office document
+  or a gzipped tar is found, an archive inside an archive is not opened. The CI job `secrets` stops after 30 minutes,
+  which bounds what a huge archive or an archive bomb costs.
+- A changed file whose renamed copy would overwrite another changed file (for example `creds.bin` and
+  `creds.bin.scan` in one pull request) fails the scan with `cannot write a changed file`.
 - The directory and lock-file entries of the default configuration (`node_modules`, `vendor/`, `package-lock.json`,
   `go.sum` and the like) stay skipped.
 - gitleaks skips every file whose magic bytes map to an `application/*` type, whatever its name and in every scan mode:
   real PDFs, fonts, executables and compressed data are never scanned. Images are scanned; the repository's own icons
   and fonts give no findings.
-- Findings, `.gitleaksignore` fingerprints and path allowlists name the scanned path with its suffix, and a file
-  inside an archive after a `!`, for example `creds.bin.scan:github-pat:1` or
+- Findings, `.gitleaksignore` fingerprints and path allowlists name the renamed path, with the suffix on every renamed
+  component, and a file inside an archive after a `!`, for example `creds.bin.scan:github-pat:1`,
+  `assets.png.scan/creds.bin.scan:github-pat:1` or
   `creds.docx.zip!word/document.xml:generic-api-key:1`.
 - The history scan `make scan-secrets` (git mode) renames nothing and opens no archives: binary content,
   binary-extension files and archives are covered by `make scan-secrets-diff` only.
