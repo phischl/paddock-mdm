@@ -59,6 +59,15 @@ mkdir "$work/synthetic"
 pad "$work/synthetic/x_test.go" 900
 expect "comments, blanks and tests do not count" pass "3 of 800 counted lines in 1 files" "$work/synthetic"
 
+mkdir -p "$work/outside/sub" "$work/linked"
+pad "$work/outside/big.go" 801
+pad "$work/outside/sub/more.go" 2
+ln -s "$work/outside/big.go" "$work/linked/big.go"
+expect "a symlinked file counts" fail "exceeded: 801 counted lines in 1 files" "$work/linked"
+rm "$work/linked/big.go"
+ln -s "$work/outside/sub" "$work/linked/sub"
+expect "a symlinked directory counts" pass "2 of 800 counted lines in 1 files" "$work/linked"
+
 mkdir "$work/empty"
 echo "not go" >"$work/empty/README"
 expect "no Go files" fail "no Go files found" "$work/empty"

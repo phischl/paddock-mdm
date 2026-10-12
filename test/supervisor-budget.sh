@@ -13,13 +13,16 @@ if (($# == 0)); then
 fi
 
 files=()
-while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$@" -type f -name '*.go' ! -name '*_test.go' -print0 | sort -z)
+# -L follows symlinks, so a file or directory linked into the supervisor counts like one copied there.
+while IFS= read -r -d '' f; do files+=("$f"); done < <(find -L "$@" -type f -name '*.go' ! -name '*_test.go' -print0 | sort -z)
 if ((${#files[@]} == 0)); then
   echo "supervisor line budget: no Go files found in $*" >&2
   exit 1
 fi
 
 # A line counts unless it is blank, a // comment, or inside or a whole /* */ comment; code after a closing */ counts.
+# The counter does not parse Go: a line inside a raw string literal that starts with // or /* is taken for a comment
+# and not counted. The count is a review backstop for the design contract, not a security boundary.
 count="$(awk '
   inblock {
     if (!index($0, "*/")) next
