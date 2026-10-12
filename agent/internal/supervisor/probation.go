@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/phischl/paddock-mdm/pkg/semver"
 )
 
 // probation is a switch under observation; it is persisted so that a restarted supervisor resumes it.
@@ -22,6 +24,8 @@ type probation struct {
 	// RollbackPending marks a rollback whose flip back failed; the outcome is rollback_failed, the log stays and the
 	// flip is retried until it succeeds (ADR 0024).
 	RollbackPending bool `json:"rollback_pending,omitempty"`
+	// Rebuilt marks a probation rebuilt from the slots after its log was unreadable (PDK-062).
+	Rebuilt bool `json:"rebuilt,omitempty"`
 	// Outcome and DecidedAt are the decided result, recorded and synced before update-result.json is written. The
 	// removal of the log that follows is not synced, so a log that comes back after a power loss carries the result
 	// already written, and a restart writes it again unchanged instead of deciding anew (PDK-058).
@@ -90,11 +94,17 @@ func (s *Supervisor) resumeProbation() {
 		return
 	}
 	if err := json.Unmarshal(data, &p); err != nil {
-		// Without the log's content the release and the slots are unknown, so no result could be true; the staged
-		// release directory stays, because its version is unknown too.
-		slog.Error("dropping an unreadable probation log", "error", err)
-		s.dropProbation("")
-		return
+		rebuilt, reason := s.rebuildProbation()
+		if rebuilt == nil {
+			// Without the log's content the release is unknown, so no result could be true; the staged release
+			// directory stays, because its version is unknown too.
+			slog.Error("dropping an unreadable probation log", "error", err, "reason", reason)
+			s.dropProbation("")
+			return
+		}
+		slog.Error("the probation log was unreadable; rebuilt the probation from the slots", "error", err,
+			"version", rebuilt.Version, "from_version", rebuilt.FromVersion, "slot", rebuilt.ToSlot)
+		p = *rebuilt
 	}
 	// An undecided log whose release the result names as rollback_failed or rolled_back is a decision that the log
 	// could not record before the restart (recordPending): it is resumed, not decided anew (PDK-058), with current on
@@ -149,6 +159,35 @@ func (s *Supervisor) resumeProbation() {
 	// Rolling back here would start the old agent before Run starts the current one; checkProbation does it.
 	p.markKept = s.forgetCheckin() != nil
 	slog.Info("resuming probation", "version", p.Version)
+}
+
+// rebuildProbation rebuilds the probation of an unreadable log while the slots still describe a forward switch: current
+// on a slot whose release is newer than the other slot's, and no result names that release as updated (plan M2b
+// decision 16, amendment 2026-10-12). Otherwise it returns why not. A release left without its probation would break
+// design contract 4; flipping back instead could roll back a release that already passed. If the rebuilt log cannot
+// be written, the probation runs in memory and the next start rebuilds it again.
+func (s *Supervisor) rebuildProbation() (*probation, string) {
+	to := s.activeSlot()
+	if to != "A" && to != "B" {
+		return nil, "current points at neither slot"
+	}
+	from := s.inactiveSlot()
+	version, fromVersion := s.version(s.current()), s.version(filepath.Join(s.cfg.Slots, from))
+	var res struct{ Version, Outcome string }
+	data, err := os.ReadFile(s.cfg.Result)
+	switch {
+	case !versionPattern.MatchString(fromVersion):
+		return nil, "the other slot holds no agent with a valid version"
+	case !versionPattern.MatchString(version) || semver.Compare(version, fromVersion) <= 0:
+		return nil, "the active agent is not newer than the other slot's"
+	case err == nil && json.Unmarshal(data, &res) == nil && res.Version == version && res.Outcome == outcomeUpdated:
+		return nil, "the update result names the active agent as updated"
+	}
+	p := &probation{Version: version, FromVersion: fromVersion, FromSlot: from, ToSlot: to, SwitchedAt: s.cfg.Now(), Rebuilt: true}
+	if err := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); err != nil {
+		slog.Error("writing the rebuilt probation log failed; the probation runs in memory", "error", err)
+	}
+	return p, ""
 }
 
 // dropProbation gives up a probation that cannot be resumed. A request left behind keeps update.Pending true, so the
