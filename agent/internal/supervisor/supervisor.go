@@ -34,6 +34,7 @@ const (
 	outcomeRolledBack       = "rolled_back"
 	outcomeSignatureInvalid = "signature_invalid"
 	outcomeDowngradeRefused = "downgrade_refused"
+	outcomeRollbackFailed   = "rollback_failed"
 )
 
 // Config are the paths and timings of a supervisor.
@@ -61,6 +62,10 @@ type Config struct {
 const (
 	rollbackAttempts  = 5
 	rollbackRetryWait = 250 * time.Millisecond
+	// A rollback whose immediate attempts failed stays pending and is retried on the tick; the wait between the
+	// retries starts at the production tick and doubles up to a bound (ADR 0024).
+	pendingRetryStart = 10 * time.Second
+	pendingRetryMax   = 5 * time.Minute
 )
 
 // probation is a switch under observation; it is persisted so that a restarted supervisor resumes it.
@@ -72,6 +77,9 @@ type probation struct {
 	SwitchedAt  time.Time `json:"switched_at"`
 	// RollingBack marks a rollback whose flip to FromSlot happened but is not known to be durable; its result waits.
 	RollingBack bool `json:"rolling_back,omitempty"`
+	// RollbackPending marks a rollback whose flip back failed; the outcome is rollback_failed, the log stays and the
+	// flip is retried until it succeeds (ADR 0024).
+	RollbackPending bool `json:"rollback_pending,omitempty"`
 	// Outcome and DecidedAt are the decided result, recorded and synced before update-result.json is written. The
 	// removal of the log that follows is not synced, so a log that comes back after a power loss carries the result
 	// already written, and a restart writes it again unchanged instead of deciding anew (PDK-058).
@@ -82,6 +90,9 @@ type probation struct {
 	markKept  bool // the check-in mark could not be removed, so it cannot prove a check-in of the new agent
 	unsynced  bool // the switch to ToSlot is not known to be durable, so it must be confirmed before "updated"
 	passed    bool // healthy at the deadline; only the confirmation of the switch is outstanding
+	retryAt   time.Time
+	retryWait time.Duration
+	retries   int
 }
 
 type selfTest struct {
@@ -98,7 +109,8 @@ type Supervisor struct {
 	backoff   time.Duration
 	restart   <-chan time.Time
 	probation *probation
-	// rolledBack is a rollback that waits for a durable flip back before it reports rolled_back (PDK-045).
+	// rolledBack is a rollback that waits for a durable flip back before it reports rolled_back (PDK-045), or whose
+	// flip back is still pending (RollbackPending, ADR 0024).
 	rolledBack *probation
 	testing    bool
 	tested     chan selfTest
@@ -359,14 +371,14 @@ func (s *Supervisor) checkProbation() {
 }
 
 // rollback flips back to the previous slot and restarts the old agent. It reports rolled_back only if current then
-// points at the previous slot; otherwise the new agent keeps running and the release counts as failed on this device.
+// points at the previous slot; otherwise the new agent keeps running and the rollback stays pending (ADR 0024).
 // A flip back whose directory sync failed reports nothing yet: the probation log, marked RollingBack and synced, stays
 // until confirmRollback has made the flip durable, so a restart after a lost flip still finds the probation.
 func (s *Supervisor) rollback(reason string) {
 	p := s.probation
 	s.probation = nil
 	slog.Error("rolling back", "version", p.Version, "to_version", p.FromVersion, "reason", reason)
-	durable, err := s.flipBack(p.FromSlot)
+	durable, err := s.flipBack(p.FromSlot, rollbackAttempts)
 	if err == nil && !durable {
 		p.RollingBack = true
 		if werr := writeJSON(s.cfg.ProbationLog, p, s.cfg.SyncFile); werr != nil {
@@ -381,19 +393,19 @@ func (s *Supervisor) rollback(reason string) {
 	}
 	s.restartChild()
 	if err != nil {
-		slog.Error("rollback failed: current still points at the new agent", "version", p.Version, "active_slot", s.activeSlot(),
+		slog.Error("rollback failed: current still points at the new agent; retrying", "version", p.Version, "active_slot", s.activeSlot(),
 			"previous_slot", p.FromSlot, "attempts", rollbackAttempts, "error", err)
-		s.conclude(p, outcomeSelfTestFailed)
+		s.keepRollbackPending(p)
 		return
 	}
 	s.conclude(p, outcomeRolledBack)
 }
 
-// flipBack points current at slot, retrying with back-off. It succeeds exactly when current then points at slot: a
+// flipBack points current at slot in up to attempts attempts, retrying with back-off. It succeeds exactly when current then points at slot: a
 // failed directory sync after the rename leaves the flip done but not durable (durable false), a rename that failed
 // leaves it undone. It does not retry a failed sync: on Linux an fsync after an I/O error can succeed although the
 // change was lost, so only confirmFlip, a new rename followed by a successful sync, makes the flip durable.
-func (s *Supervisor) flipBack(slot string) (durable bool, err error) {
+func (s *Supervisor) flipBack(slot string, attempts int) (durable bool, err error) {
 	wait := rollbackRetryWait
 	for attempt := 1; ; attempt++ {
 		err := flip(s.cfg.Slots, slot, s.cfg.SyncDir)
@@ -406,7 +418,7 @@ func (s *Supervisor) flipBack(slot string) (durable bool, err error) {
 		if err == nil {
 			err = fmt.Errorf("current does not point at slot %s after the flip", slot)
 		}
-		if attempt == rollbackAttempts {
+		if attempt == attempts {
 			return false, err
 		}
 		slog.Warn("flipping back failed; retrying", "slot", slot, "attempt", attempt, "in", wait, "error", err)
@@ -415,14 +427,49 @@ func (s *Supervisor) flipBack(slot string) (durable bool, err error) {
 	}
 }
 
-// confirmRollback reports a rollback once its flip back is durable.
+// confirmRollback reports a rollback once its flip back is durable; a pending rollback first retries its flip back.
 func (s *Supervisor) confirmRollback() {
 	p := s.rolledBack
+	if p.RollbackPending && !s.retryFlipBack(p) {
+		return
+	}
 	if !s.confirmFlip(p.FromSlot) {
 		return
 	}
 	s.rolledBack = nil
 	s.conclude(p, outcomeRolledBack)
+}
+
+// retryFlipBack makes one attempt per retry slot to flip current back to FromSlot. A current that already points there
+// (an operator flipped it by hand) succeeds as well; the old agent is restarted and the flip must still become durable.
+func (s *Supervisor) retryFlipBack(p *probation) bool {
+	if s.cfg.Now().Before(p.retryAt) {
+		return false
+	}
+	p.retries++
+	// Durability is confirmed by confirmRollback either way.
+	if _, err := s.flipBack(p.FromSlot, 1); err != nil {
+		slog.Error("retrying the rollback failed: current still points at the new agent", "version", p.Version,
+			"attempt", p.retries, "active_slot", s.activeSlot(), "target_slot", p.FromSlot, "error", err)
+		s.keepRollbackPending(p)
+		return false
+	}
+	slog.Info("rolled back on a retry", "version", p.Version, "attempt", p.retries, "slot", p.FromSlot)
+	p.RollbackPending = false
+	s.restartChild()
+	return true
+}
+
+// keepRollbackPending keeps a rollback whose flip back failed pending while the new agent keeps running (contract 8):
+// it records and reports rollback_failed once, keeps the probation log, and doubles the wait to the next retry.
+func (s *Supervisor) keepRollbackPending(p *probation) {
+	p.RollbackPending = true
+	p.retryWait = min(max(2*p.retryWait, pendingRetryStart), pendingRetryMax)
+	p.retryAt = s.cfg.Now().Add(p.retryWait)
+	s.rolledBack = p
+	if p.Outcome != outcomeRollbackFailed {
+		s.conclude(p, outcomeRollbackFailed)
+	}
 }
 
 // confirmFlip makes current -> slot durable while current already points at slot: it renames a new symlink over
@@ -460,7 +507,8 @@ func (s *Supervisor) conclude(p *probation, outcome string) {
 	s.report(p, err == nil)
 }
 
-// report writes the result of p and removes the probation log once the result is written. If writing the result
+// report writes the result of p and removes the probation log once the result is written; the log of a pending
+// rollback stays, so a restart resumes its retries (ADR 0024). If writing the result
 // fails and the log holds the recorded outcome (recorded), the log stays, so the next start writes the same result
 // again (PDK-063). Without a recorded outcome the log is removed all the same: a failed write may still have put the
 // result in place (its last step, the directory sync, follows the rename), and a log without an outcome would let the
@@ -468,7 +516,7 @@ func (s *Supervisor) conclude(p *probation, outcome string) {
 // written twice is reported once: the agent turns a result into an event once per "at" (agent.reportUpdate), and the
 // server counts an outcome once per device and release.
 func (s *Supervisor) report(p *probation, recorded bool) {
-	if s.finishAt(p.Version, p.FromVersion, p.Outcome, p.DecidedAt) != nil && recorded {
+	if s.finishAt(p.Version, p.FromVersion, p.Outcome, p.DecidedAt) != nil && recorded || p.RollbackPending {
 		return
 	}
 	_ = os.Remove(s.cfg.ProbationLog)
@@ -518,6 +566,16 @@ func (s *Supervisor) resumeProbation() {
 		// release directory stays, because its version is unknown too.
 		slog.Error("dropping an unreadable probation log", "error", err)
 		s.dropProbation("")
+		return
+	}
+	// A pending rollback, or a rolled_back whose flip back was lost with the power, retries the flip back; with current
+	// on FromSlot (flipped by hand, or the rename landed before a crash) only its durability is outstanding.
+	if p.RollbackPending || p.Outcome == outcomeRolledBack && s.activeSlot() == p.ToSlot {
+		if p.RollbackPending = s.activeSlot() != p.FromSlot; p.RollbackPending && p.Outcome == outcomeRollbackFailed {
+			s.report(&p, true)
+		}
+		s.rolledBack = &p
+		slog.Warn("resuming a pending rollback", "version", p.Version, "active_slot", s.activeSlot(), "target_slot", p.FromSlot)
 		return
 	}
 	if p.Outcome != "" {
