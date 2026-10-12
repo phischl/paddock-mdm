@@ -691,10 +691,10 @@ GITLEAKS_REPO ?= $(CURDIR)
 # CODEOWNERS names a reviewer for them, and the branch ruleset on main requires that review
 # (docs/operations/secret-scan.md).
 GITLEAKS_CONFIG_REF ?=
-# Test seam of test/scan-secrets_test.sh, never set by CI: a directory where the steps of the generated configuration
-# keep what they produced, keyed by their inputs, so the test's many cases on the same base configuration run the Go
-# pattern check, the copy of /usr/bin/gitleaks and the canary once each (PDK-072). Only a check that ran is kept (the
-# verdicts of a Go check that exited 0, a canary that was reported); everything else still runs on every call.
+# Test seam of test/scan-secrets_test.sh, never set by the CI scan steps: a directory where the steps of the generated
+# configuration keep what they produced, keyed by their inputs, so the test's many cases on the same base configuration
+# run the Go pattern check, the copy of /usr/bin/gitleaks and the canary once each (PDK-072). Only a check that ran is
+# kept (the verdicts of a Go check that exited 0, a canary that was reported); everything else still runs on every call.
 GITLEAKS_TEST_CACHE ?=
 GITLEAKS_DEFAULT_CONFIG_HEADER = \# This file has been auto-generated. Do not edit manually.
 GITLEAKS_CHILD_CONFIG = python3 $(CURDIR)/deploy/compose/scripts/gitleaks-child-config.py
