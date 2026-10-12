@@ -26,7 +26,11 @@ scans the history of the current branch and `make scan-secrets-diff` the files c
 - The scan also refuses allowlists that act differently than they read: a `paths` or `regexes` entry that does not
   compile or matches the empty string (`""`, `^.*$`, `a*`, `\B`, `[[:alpha:]]?`), an empty `paths` or `regexes` list,
   and `stopwords`, which gitleaks matches as case-insensitive substrings of the secret (`"kia"` silences AWS access
-  keys). The patterns are checked with Go's `regexp`, the engine gitleaks uses
+  keys), and an allowlist with `condition = "AND"` and `paths` but no or an empty `targetRules` (ADR 0027): gitleaks'
+  directory scan, which `make scan-secrets-diff` uses, skips a whole file once the path of such a global allowlist
+  matches, without looking at its `regexes` or `commits` (upstream gitleaks/gitleaks#2227). Name the rules the
+  allowlist is meant for in `targetRules`; rule-scoped allowlists apply their condition in both scans. The patterns
+  are checked with Go's `regexp`, the engine gitleaks uses
   (`deploy/compose/scripts/gitleaks-patterns.go`, run in the pinned Go image without network; it adds a few seconds
   to each scan), so a pattern means there what it means to gitleaks; RE2 has no lookaround, so `(?=…)` is refused.
   What an allowlist means stays the code owners' review: broad patterns that do not match the empty string, such as

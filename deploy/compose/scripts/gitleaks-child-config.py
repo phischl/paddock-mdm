@@ -5,6 +5,7 @@ child <repository config> <default path> <out> <patterns out>
     configuration: `[extend] path = <default path>` and the repository's allowlists. Nothing of the input is copied
     verbatim, so case folding or string tricks in the input cannot change what gitleaks reads. Every `paths` and
     `regexes` entry goes to <patterns out> as a JSON array for gitleaks-patterns.go, which checks it with Go's regexp.
+    An allowlist with condition = "AND" and paths must name targetRules (ADR 0027).
 patterns <patterns> <verdicts>
     gitleaks-patterns.go gave one passing verdict per pattern, in order; anything else refuses the configuration.
 verify-default <stripped default>
@@ -59,6 +60,13 @@ def check_allowlist(i, table):
             raise Refused(f"allowlists[{i}].{key} is an empty list")
         if key in CHOICES and value not in CHOICES[key]:
             raise Refused(f"allowlists[{i}].{key} is not one of {', '.join(CHOICES[key])}")
+    # gitleaks' directory scan skips a file as soon as the path of a global allowlist matches, ignoring the AND
+    # condition (gitleaks/gitleaks#2227); targetRules makes the allowlist rule-scoped, which that pre-filter leaves out.
+    if table.get("condition") == "AND" and "paths" in table and not table.get("targetRules"):
+        raise Refused(
+            f'allowlists[{i}] has condition = "AND" with paths but no targetRules; gitleaks\' directory scan would skip'
+            " the whole file by path alone, without its regexes (ADR 0027)"
+        )
 
 
 def check(config):
