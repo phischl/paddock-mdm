@@ -106,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Secret scan of pull requests (PDK-087): `make scan-secrets-diff` scans its blob layers in parallel, as many at once
+  as the machine has CPUs, and prints each layer's result in layer order afterwards (the whole history of this
+  repository as one pull request: 60 seconds before, 31 seconds now on 22 CPUs). What is scanned, and every verdict,
+  stays the same; a layer whose scan fails or reports no result fails the scan.
 - Secret scan of pull requests (PDK-072): `make scan-secrets-diff` places the blobs a pull request adds in their
   layers without probing every earlier layer again and reads them from git in one batch, so a pull request with many
   versions of one file is scanned much faster (300 versions of one file: 2 minutes before, 16 seconds now). What is
