@@ -270,7 +270,8 @@ func TestDiskEscrowVolumes(t *testing.T) {
 		if err := call(t, alice, http.MethodGet, path, nil).JSON(&disk); err != nil {
 			t.Fatal(err)
 		}
-		if len(disk.Headers) == 2 && disk.Headers[1].Volume == root {
+		// The volumes and the header-to-volume mapping are materialized separately; a run saw the mapping before the volumes.
+		if len(disk.Volumes) == 2 && len(disk.Headers) == 2 && disk.Headers[1].Volume == root {
 			break
 		}
 		if time.Now().After(deadline) {
