@@ -15,6 +15,9 @@ development stack (`make up`, `docs/operations/local-dev.md`) is a different thi
 duties). The control plane holds only RabbitMQ's publish credential for audit events and the read-only audit database
 role; it holds nothing for the audit bucket.
 
+A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST=lab`):
+`docs/operations/lab-install.md` (not for production).
+
 ## 1. Host requirements
 
 - Two Linux hosts with Docker Engine and the Compose plugin ≥ 2.24 (`!override`/`!reset` tags), `openssl`, `curl` and

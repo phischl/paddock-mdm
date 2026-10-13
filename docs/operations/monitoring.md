@@ -62,6 +62,9 @@ are visible in Prometheus' UI and API (`/api/v1/alerts`) only.
 | `PaddockOpenBaoHealthMissing` | the worker is up but exports no `paddock_openbao_reachable` for an hour | critical |
 | `PaddockCertificateExpiryMissing` | fewer certificate expiries than `paddock_tls_probe_hosts` for an hour | warning |
 
+On a lab host (`docs/operations/lab-install.md`) the probe dials your TLS proxy (`PADDOCK_LAB_PROXY_ADDR:443`), so
+`PaddockCertificateExpiry` and `PaddockCertificateProbeFailing` watch the proxy's certificate.
+
 `make lint-prometheus` checks the configuration and the rules with `promtool` and runs the rule tests of
 `prometheus/alerts_test.yml`.
 
