@@ -685,6 +685,10 @@ func TestLabFindings(t *testing.T) {
 			resolver, "paddock-revocation-issuer: extra_hosts maps auth.paddock.example.org to 192.0.2.99, not to the proxy 192.0.2.5"},
 		"conflicting extra host": {setHosts("paddock-api", append([]string{"admin." + labDomain + "=10.9.9.9"}, labHosts()...)),
 			resolver, "paddock-api: extra_hosts maps admin.paddock.example.org to 10.9.9.9, not to the proxy 192.0.2.5"},
+		"conflicting extra host in upper case": {setHosts("paddock-api", append([]string{"ADMIN." + labDomain + "=10.9.9.9"}, labHosts()...)),
+			resolver, "paddock-api: extra_hosts maps admin.paddock.example.org to 10.9.9.9, not to the proxy 192.0.2.5"},
+		"conflicting extra host with a trailing dot": {setHosts("paddock-api", append([]string{"admin." + labDomain + ".=10.9.9.9"}, labHosts()...)),
+			resolver, "paddock-api: extra_hosts maps admin.paddock.example.org to 10.9.9.9, not to the proxy 192.0.2.5"},
 		"lab network_mode host": {func(_ *testing.T, f *fixture) {
 			s := f.service("paddock-worker")
 			s.NetworkMode = "host"

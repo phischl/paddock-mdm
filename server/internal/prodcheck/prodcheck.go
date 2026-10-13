@@ -568,7 +568,10 @@ func checkCaddy(c Config) Result {
 }
 
 // checkLabCaddy replaces checkCaddy on a lab host: the proxy terminates TLS, so Caddy serves http:// sites with
-// auto_https off and needs no ACME e-mail (plan M8a decision 12).
+// auto_https off and needs no ACME e-mail (plan M8a decision 12). The site-address scan is a heuristic over the
+// Caddyfile's tokens, not Caddy's own parser (an address with its brace on the next line, a quoted brace or a site in
+// an imported snippet can slip past it); the guarantee that nothing but plain HTTP is reachable comes from the ports
+// item, which allows exactly one published port with target 80.
 func checkLabCaddy(c Config) Result {
 	f, content := caddyMounts(c.Services["caddy"])
 	autoHTTPSOff := false
@@ -812,10 +815,11 @@ func checkLabProxyResolution(c Config) Result {
 			name := n + "." + domain
 			found := false
 			// Every entry for the name counts: Compose sorts extra_hosts, so a second entry from another overlay may be
-			// the one the role resolves.
+			// the one the role resolves. Host names match like the resolver matches them: case-insensitively and
+			// with or without the trailing dot.
 			for _, h := range hosts {
 				host, ip, ok := strings.Cut(h, "=")
-				if !ok || host != name {
+				if !ok || !strings.EqualFold(strings.TrimSuffix(host, "."), name) {
 					continue
 				}
 				found = true
