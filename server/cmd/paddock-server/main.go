@@ -34,7 +34,7 @@ commands:
   admin agent-release --version <x.y.z> --dir <dir>
   backup openbao
   backup decrypt <in> <out|->
-  prod-check [--host controlplane|audit] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
+  prod-check [--host controlplane|audit|lab] [--compose-files a,b] [--dev-release-key FILE]... [--online] < config.json
   healthcheck
 
 Commands separated by a lone "+" run one after another; the first failure stops the chain.
