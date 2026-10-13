@@ -25,8 +25,10 @@ SELECT count(*) FROM (
 ) matching;
 
 -- The attention list grouped by device (plan M7c decision 27): one row per device with an open condition, its
--- conditions most severe first (critical 2, warn 1, info 0; see the portal's attentionStatus). A kind filter selects
--- the devices with at least one matching condition; every condition of the device is listed.
+-- conditions most severe first (critical 2, warn 1, info 0; see the portal's attentionStatus), then newest, then by
+-- kind: several kinds share a rank and a since (the device's last contact), and without the last key their order
+-- depended on the plan (PDK-103). A kind filter selects the devices with at least one matching condition; every
+-- condition of the device is listed.
 --
 -- Both queries read attention_condition exactly once, as a MATERIALIZED CTE, and apply the optional filters to its
 -- rows (PDK-094). Inlined, PostgreSQL pushes the "narg IS NULL OR …" filters into every branch of the view; pgx
@@ -44,7 +46,7 @@ WITH ranked AS MATERIALIZED (
   FROM attention_condition c
 ), grouped AS (
   SELECT r.device_id, r.hostname, max(r.rank)::int AS severity, max(r.since)::timestamptz AS since,
-         json_agg(json_build_object('kind', r.kind, 'since', r.since, 'detail', r.detail) ORDER BY r.rank DESC, r.since DESC) AS conditions
+         json_agg(json_build_object('kind', r.kind, 'since', r.since, 'detail', r.detail) ORDER BY r.rank DESC, r.since DESC, r.kind) AS conditions
   FROM ranked r
   WHERE (sqlc.narg(q_pattern)::text IS NULL OR r.hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
     AND (sqlc.narg(device_id)::uuid IS NULL OR r.device_id = sqlc.narg(device_id)::uuid)

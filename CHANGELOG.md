@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   medians of the plan PostgreSQL uses for a reused statement, `docs/operations/capacity.md`). A device's own conditions
   (`device_id`) take about 50 ms instead of 15 ms at that fleet size. The results do not change. No migration.
 
+### Fixed
+
+- Attention list by device (PDK-103): a device's conditions in `GET /api/v1/attention/devices` come back in the same
+  order on every request. Conditions of the same severity and the same time, such as `agent_outdated` and
+  `disk_not_compliant`, are ordered by kind; before, their order could change between reloads. No migration.
+
 ## [0.1.0-alpha.2] - 2026-10-13
 
 The first published pre-release. 0.1.0-alpha.1 was prepared but never published, and its tag was removed; its changes
