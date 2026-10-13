@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SECURITY.md`: supported versions, how to report a vulnerability privately, response targets, scope and how to
   verify releases.
 
+### Changed
+
+- Attention list by device with a stale fleet (PDK-094): `GET /api/v1/attention/devices` reads the attention
+  conditions once per query and applies its search, `kind` and device filters afterwards, and it reads device details
+  only for the requested page. With 10 000 devices that each have an open staleness alert, the query time of a request
+  (list and count) drops from 271 ms to 87 ms, and with `kind=agent_outdated` from 337 ms to 79 ms (`EXPLAIN ANALYZE`
+  medians of the plan PostgreSQL uses for a reused statement, `docs/operations/capacity.md`). A device's own conditions
+  (`device_id`) take about 50 ms instead of 15 ms at that fleet size. The results do not change. No migration.
+
 ## [0.1.0-alpha.2] - 2026-10-13
 
 The first published pre-release. 0.1.0-alpha.1 was prepared but never published, and its tag was removed; its changes
