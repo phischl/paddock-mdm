@@ -103,8 +103,9 @@ query execution time, not the HTTP p95 the target refers to. Whether the target 
 measurement after the change (PDK-091).
 
 **Remaining hot spots:** none known at the query level. The per-device version key was closed by PDK-090 and the
-device contact state by PDK-089 (both below). Over HTTP, `/api/v1/attention/devices` stays above the 200 ms target
-once the fleet is stale (see "After PDK-027/089/090, HTTP" below, PDK-094).
+device contact state by PDK-089 (both below). Over HTTP, `/api/v1/attention/devices` stayed above the 200 ms target
+once the fleet was stale (see "After PDK-027/089/090, HTTP" below); PDK-094 cut its query time to a third ("After
+PDK-094" below). Its HTTP figures after that change are still to be measured.
 
 **After PDK-089.** Measured on 2026-10-12 on the same machine and development stack with a new load organization of
 **10 000 active devices**, enrolled with `make load-identities` and checked in once each with
@@ -183,6 +184,43 @@ which drops from 3.4 s to 64 ms p95. Two requests miss it once the fleet is stal
 list, `/api/v1/attention/devices`, at 202 ms p95 without and 236 ms p95 with `kind=agent_outdated`. A repeated stale
 run confirmed both (209 ms and 243 ms p95). Its query time is dominated by the view's alert branch over the 10 000
 open alerts (PDK-090 above). The miss is tracked in PDK-094.
+
+**After PDK-094.** Measured on 2026-10-13 on the same machine and development stack (migrations up to `00044`). The
+fleet had the PDK-090 shape and was inserted the same way, into a new organization inside the measuring transaction,
+which was rolled back: **10 000 active devices** in the PDK-027 version mix, each with an open `stale_warning`, 14 000
+conditions. Cause: pgx reuses prepared statements, and after five executions of a statement PostgreSQL runs its
+generic plan, which it did for both queries of the device view (checked with `EXPLAIN EXECUTE` after six executions).
+Both queries filtered the view `attention_condition` with optional filters (`$1 IS NULL OR hostname ILIKE $1`, the
+same for `kind` and `device_id`), which PostgreSQL pushes into every branch of the view. In a generic plan it cannot
+drop them and estimates almost no matching rows, so it probes the view's tables once per device instead of joining
+them. The list also read the view a second time, once per condition row, for the `kind` filter (a correlated
+`EXISTS`), and joined `device` and `device_status` for all 10 000 groups before cutting the page. The rewrite (no
+migration) reads the view once as a `MATERIALIZED` CTE, applies the filters to its rows (`kind` as
+`bool_or(kind = ANY(kinds))` per device), and joins `device` and `device_status` after the page is cut.
+
+`EXPLAIN (ANALYZE, BUFFERS)` medians of 5 runs (after a warm-up run) as the API role in the organization's scope.
+Before is the query text of `c0aff7e`, after the rewritten one, both on the same data in the same transaction. These
+are query execution times, not HTTP latencies:
+
+| Query (endpoint) | Before, generic plan | After, generic plan | Before, custom plan | After, custom plan |
+| --- | --- | --- | --- | --- |
+| `ListAttentionDevices`, 25 (`/attention/devices`) | 178 ms | 57 ms | 94 ms | 59 ms |
+| `CountAttentionDevices` | 93 ms | 30 ms | 31 ms | 28 ms |
+| `ListAttentionDevices` `kind=agent_outdated`, 25 | 273 ms | 53 ms | 181 ms | 54 ms |
+| `CountAttentionDevices` `kind=agent_outdated` | 64 ms | 26 ms | 13 ms | 26 ms |
+| `ListAttentionDevices` `device_id` (device page) | 7 ms | 28 ms | 1 ms | 34 ms |
+| `CountAttentionDevices` `device_id` | 7 ms | 21 ms | 1 ms | 28 ms |
+
+With the generic plan, which a reused statement runs, the query time of `/api/v1/attention/devices?page_size=25`
+(list plus count) drops from 271 ms to 87 ms, and with `kind=agent_outdated` from 337 ms to 79 ms. The plan no longer
+depends on the plan cache mode. Timed without `EXPLAIN` (40 executions per query after 5 warm-ups, `psql` `\timing`;
+the sums of the list's and the count's p50 and p95), list plus count take 81 ms p50 and 97 ms p95 instead of 231 ms
+and 266 ms, and with `kind=agent_outdated` 72 ms p50 and 79 ms p95 instead of 276 ms and 342 ms. The device page's conditions (`device_id`) now read the whole view as well, about
+50 ms instead of 15 ms at this fleet size. Results are identical before and after for ten parameter sets (sorts, pages
+including the last, `q`, one and two kinds, a kind without matches, `device_id`). The test
+`TestAttentionDevicesGenericPlan` pins the plan property: in the generic plan, `device_alert` is scanned by one node and
+no table scan refers to a query parameter. The HTTP figures after this change are still to be measured once it is
+merged and deployed.
 
 ## Method
 
