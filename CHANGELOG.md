@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SECURITY.md`: supported versions, how to report a vulnerability privately, response targets, scope and how to
+  verify releases.
+
 ### Changed
 
 - Attention list by device with a stale fleet (PDK-094): `GET /api/v1/attention/devices` reads the attention
@@ -18,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0-alpha.2] - 2026-10-13
 
-The first published pre-release. 0.1.0-alpha.1 was tagged but never published; its changes are listed in its own
-section below and are part of this release.
+The first published pre-release. 0.1.0-alpha.1 was prepared but never published, and its tag was removed; its changes
+are listed in its own section below and are part of this release.
 
 ### Added
 
@@ -673,5 +678,5 @@ acceptance.
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
 [Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.2...HEAD
-[0.1.0-alpha.2]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
-[0.1.0-alpha.1]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.1
+[0.1.0-alpha.2]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.2
+[0.1.0-alpha.1]: https://github.com/phischl/paddock-mdm/tree/1ab53f4499a354981a06240627ea97a15d9bdc54
