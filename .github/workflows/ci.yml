@@ -177,3 +177,10 @@ jobs:
         with:
           name: edge-smoke-logs
           path: ${{ runner.temp }}/smoke/logs/
+      - name: Smoke test of the lab profile of the edge bundle
+        run: deploy/bundle/ci/smoke-lab.sh "dist/release/$EDGE_VERSION/paddock-deploy-$EDGE_VERSION.tar.gz" --work "$RUNNER_TEMP/smoke-lab"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: edge-smoke-lab-logs
+          path: ${{ runner.temp }}/smoke-lab/logs/
