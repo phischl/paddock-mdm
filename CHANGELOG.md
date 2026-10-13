@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SECURITY.md`: supported versions, how to report a vulnerability privately, response targets, scope and how to
+  verify releases.
+
 ## [0.1.0-alpha.2] - 2026-10-13
 
 The first published pre-release. 0.1.0-alpha.1 was tagged but never published; its changes are listed in its own
