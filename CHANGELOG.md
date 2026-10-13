@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Caddy refuses to start.
 - `./paddock check` fails the published-ports item on every host when a service runs with `network_mode: host`,
   `container:…` or `service:` of an unknown service, which would expose ports the check cannot see.
+- Attention list by device with a stale fleet (PDK-094): `GET /api/v1/attention/devices` reads the attention
+  conditions once per query and applies its search, `kind` and device filters afterwards, and it reads device details
+  only for the requested page. With 10 000 devices that each have an open staleness alert, the query time of a request
+  (list and count) drops from 271 ms to 87 ms, and with `kind=agent_outdated` from 337 ms to 79 ms (`EXPLAIN ANALYZE`
+  medians of the plan PostgreSQL uses for a reused statement, `docs/operations/capacity.md`). A device's own conditions
+  (`device_id`) take about 50 ms instead of 15 ms at that fleet size. The results do not change. No migration.
 
 ## [0.1.0-alpha.2] - 2026-10-13
 
