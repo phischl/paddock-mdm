@@ -184,7 +184,7 @@ Bind Caddy to loopback and let the proxy forward there:
   ```sh
   docker network inspect paddock_cp -f '{{(index .IPAM.Config 0).Gateway}}'
   ```
-- `PADDOCK_INTERNAL_CIDRS`: the subnets of `paddock_cp` and of `paddock_audit-index`, separated by a comma
+- `PADDOCK_INTERNAL_CIDRS`: the subnets of `paddock_cp` and of `paddock_audit-index`, separated by a space
   (`{{(index .IPAM.Config 0).Subnet}}` of each): the roles' calls reach the proxy on this host from their container
   addresses, and the api leaves through `audit-index`, its first network. Without that subnet the api's calls to
   Authentik's API are refused with 403.
@@ -220,7 +220,8 @@ be chosen.
 | 15 | backups (optional) | `PADDOCK_LAB_BACKUP`, `PADDOCK_BACKUP_S3_*` | `no` (section 7) |
 
 With the proxy on the Paddock host (section 4), rows 7, 9, 10 and 12 change: `127.0.0.1`, the host's LAN address,
-the gateway of `paddock_cp`, and the subnet of `paddock_cp`; the proxy's `upstream` is `127.0.0.1:8080`.
+the gateway of `paddock_cp`, and the subnets of `paddock_cp` and `paddock_audit-index` separated by a space; the
+proxy's `upstream` is `127.0.0.1:8080`.
 
 Run every command inside the bundle directory, as the user who runs Docker.
 

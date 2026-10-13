@@ -48,7 +48,9 @@ fail() {
   echo "smoke-lab: $*" >&2
   exit 1
 }
-lab_paddock() { (cd "$W/lab" && PADDOCK_COMPOSE_EXTRA="$ci_overlay" ./paddock "$@"); }
+# The project is pinned here, not only in .env: an exported PADDOCK_PROJECT, or a call before .env names it, must never
+# reach (and in the trap tear down) the default project, which may be a development stack on the same host.
+lab_paddock() { (cd "$W/lab" && PADDOCK_PROJECT=paddock-lab PADDOCK_COMPOSE_EXTRA="$ci_overlay" ./paddock "$@"); }
 
 # Logs of the project and of Nginx, then Nginx and the project with its volumes removed; also after a failure.
 finish() {
@@ -258,8 +260,9 @@ expect 200 "GET https://auth.$domain/api/v3/core/brands/ as the api, through Ngi
 
 step "10 certificate probe of the worker"
 sleep 90
-if lab_paddock logs paddock-worker | grep -q 'TLS probe failed'; then
-  lab_paddock logs paddock-worker | grep 'TLS probe failed' | tail -5 >&2
+# The full log, not ./paddock logs' last 300 lines, so an early probe failure cannot scroll out of view.
+if lab_paddock compose logs --no-color paddock-worker | grep -q 'TLS probe failed'; then
+  lab_paddock compose logs --no-color paddock-worker | grep 'TLS probe failed' | tail -5 >&2
   fail "the worker's certificate probe failed"
 fi
 echo "no TLS probe failure in the worker's log"
