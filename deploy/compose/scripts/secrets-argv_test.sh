@@ -165,6 +165,46 @@ ignores() {
     '  # The "#" sign: rc admin user add -- a "$AK" "$SK" would put the secret on the command line'
 }
 
+# The lab mode of gen-prod-secrets.sh (plan M8a decision 7): one run in a copy of the Compose directory writes both
+# parts with a local audit reader link and names files only, never a value.
+lab="$(mktemp -d)"
+trap 'rm -f "$sample"; rm -rf "$lab"' EXIT
+mkdir -p "$lab/scripts" "$lab/rabbitmq"
+cp "$root"/deploy/compose/scripts/{lib.sh,gen-prod-secrets.sh} "$lab/scripts/"
+cp "$root/deploy/compose/rabbitmq/definitions.json.tmpl" "$lab/rabbitmq/"
+cp "$root/deploy/compose/versions.env" "$lab/"
+cp "$root/deploy/compose/lab.env.example" "$lab/.env"
+# lab_check <description> <command…>: the command succeeds.
+lab_check() {
+  local desc="$1"
+  shift
+  if "$@"; then echo "ok   lab secrets: $desc"; else
+    echo "FAIL lab secrets: $desc"
+    failures=$((failures + 1))
+  fi
+}
+if lab_out="$(env -u SECRETS_DIR -u PADDOCK_HOST -u PADDOCK_ENV -u PADDOCK_INTERCONNECT_ADDR \
+  "$lab/scripts/gen-prod-secrets.sh" lab 2>&1)"; then
+  echo "ok   lab secrets: gen-prod-secrets.sh lab exits 0"
+else
+  echo "FAIL lab secrets: gen-prod-secrets.sh lab failed: $lab_out"
+  failures=$((failures + 1))
+fi
+reader_url="$(cat "$lab/.secrets/db_paddock_audit_reader_url" 2>/dev/null || true)"
+lab_check "the audit reader URL names audit-postgres without TLS" \
+  grep -qE '@audit-postgres:5432/paddock_audit\?sslmode=disable$' <<<"$reader_url"
+lab_check "openbao and rabbitmq certificates exist" test -s "$lab/.secrets/tls/openbao.crt" -a -s "$lab/.secrets/tls/rabbitmq.crt"
+lab_check "no audit-postgres certificate" test ! -e "$lab/.secrets/tls/audit-postgres.crt"
+no_copy_message() { ! grep -qiE "the (audit|control-plane|other) host|peer-ca" <<<"$lab_out"; }
+lab_check "nothing is to be copied to or from another host" no_copy_message
+leaked=()
+while IFS= read -r -d '' f; do
+  value="$(cat "$f")"
+  [[ ${#value} -ge 8 && "$lab_out" == *"$value"* ]] && leaked+=("${f#"$lab"/}")
+done < <(find "$lab/.secrets" -type f -print0)
+lab_check "no secret value in the output" test "${#leaked[@]}" -eq 0
+((${#leaked[@]} == 0)) || printf '       value of %s printed\n' "${leaked[@]}"
+
 if ((failures > 0)); then
   echo "secrets-argv: $failures failure(s)"
   exit 1

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Generates the production secrets of one host into .secrets/ next to the Compose files (plan M6a decision 3, M7b
 # decision 15):
-#   gen-prod-secrets.sh [controlplane|audit]     (default: PADDOCK_HOST of .env; ./paddock secrets)
+#   gen-prod-secrets.sh [controlplane|audit|lab]     (default: PADDOCK_HOST of .env; ./paddock secrets)
 # Idempotent: existing files are never overwritten. Prints file names only, never a secret. Two values cross the hosts
 # and are copied by the operator (docs/operations/install.md): the audit reader's database password (audit host →
 # control plane) and the audit writer's RabbitMQ password (control plane → audit host); the internal CA certificates
 # (public) travel both ways. AppRole credentials, the Fleet API token and the release public keys are written during
-# the installation; `./paddock check` fails until they are there.
+# the installation; `./paddock check` fails until they are there. A lab host (ADR 0029) holds both parts and copies
+# nothing.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,12 +19,12 @@ if [[ ! -f "$COMPOSE_DIR/.env" ]]; then
   template="$COMPOSE_DIR/prod.env.example"
   [[ -f "$template" ]] || template="$COMPOSE_DIR/.env.example"
   cp "$template" "$COMPOSE_DIR/.env"
-  echo "created .env from $(basename "$template"): set the host, the domain, the e-mail and the interconnect addresses, then run again"
+  echo "created .env from $(basename "$template"): set the host, the domain, the e-mail and the interconnect addresses, then run again (for a lab host copy .env.lab.example to .env instead)"
   exit 1
 fi
 HOST="${1:-$(env_value PADDOCK_HOST)}"
-if [[ "$HOST" != controlplane && "$HOST" != audit ]]; then
-  echo "usage: $0 [controlplane|audit] (default: PADDOCK_HOST of .env)" >&2
+if [[ "$HOST" != controlplane && "$HOST" != audit && "$HOST" != lab ]]; then
+  echo "usage: $0 [controlplane|audit|lab] (default: PADDOCK_HOST of .env)" >&2
   exit 2
 fi
 if [[ "$(env_value PADDOCK_ENV)" != production ]]; then
@@ -70,7 +71,11 @@ if [[ ! -s "$CA_DIR/ca.key" ]]; then
     -subj "/CN=Paddock internal CA ($HOST)" -keyout "$CA_DIR/ca.key" -out "$CA_DIR/ca.crt" 2>/dev/null
   chmod 600 "$CA_DIR/ca.key"
   chmod 644 "$CA_DIR/ca.crt"
-  echo "created .secrets/internal-ca/ca.crt (copy it to the other host as .secrets/internal-ca/peer-ca.crt)"
+  if [[ "$HOST" == lab ]]; then
+    echo "created .secrets/internal-ca/ca.crt"
+  else
+    echo "created .secrets/internal-ca/ca.crt (copy it to the other host as .secrets/internal-ca/peer-ca.crt)"
+  fi
 fi
 
 # cert <name> <SAN list> issues a server certificate of the internal CA.
@@ -86,7 +91,7 @@ cert() {
   echo "created .secrets/tls/$name.crt"
 }
 
-if [[ "$HOST" == controlplane ]]; then
+controlplane_secrets() {
   cert openbao "DNS:openbao,IP:127.0.0.1,IP:$INTERCONNECT"
   cert rabbitmq "DNS:rabbitmq,IP:$INTERCONNECT"
 
@@ -97,7 +102,11 @@ if [[ "$HOST" == controlplane ]]; then
     # Local to this host's internal network.
     secret "db_${role}_url" "postgres://${role}:$(read_secret "db_${role}_password")@postgres:5432/paddock?sslmode=disable"
   done
-  if [[ -s "$SECRETS_DIR/db_paddock_audit_reader_password" ]]; then
+  if [[ "$HOST" == lab ]]; then
+    # The audit domain runs on this host: a local link on the audit-index network, as the roles use PostgreSQL.
+    secret db_paddock_audit_reader_url \
+      "postgres://paddock_audit_reader:$(read_secret db_paddock_audit_reader_password)@audit-postgres:5432/paddock_audit?sslmode=disable"
+  elif [[ -s "$SECRETS_DIR/db_paddock_audit_reader_password" ]]; then
     audit_addr="$(env_value PADDOCK_AUDIT_ADDR)"
     [[ -n "$audit_addr" ]] || { echo "set PADDOCK_AUDIT_ADDR in .env" >&2; exit 1; }
     secret db_paddock_audit_reader_url \
@@ -172,9 +181,12 @@ if [[ "$HOST" == controlplane ]]; then
   mkdir -p "$SECRETS_DIR/release-production"
   [[ -s "$SECRETS_DIR/release-production/minisign.pub" ]] ||
     echo "copy the production release public keys to .secrets/release-production/{minisign,revoke-minisign}.pub"
-  echo "copy .secrets/rabbitmq_audit_writer_password to the audit host"
-else
-  cert audit-postgres "DNS:audit-postgres,IP:$INTERCONNECT"
+  [[ "$HOST" == lab ]] || echo "copy .secrets/rabbitmq_audit_writer_password to the audit host"
+}
+
+audit_secrets() {
+  # On a lab host audit-postgres has neither TLS nor a published port; its only client is the api on audit-index.
+  [[ "$HOST" == lab ]] || cert audit-postgres "DNS:audit-postgres,IP:$INTERCONNECT"
 
   secret audit_postgres_superuser_password
   for role in audit_owner paddock_audit_writer paddock_audit_reader; do
@@ -190,19 +202,30 @@ else
   secret rustfs_audit_writer_secret_key
   placeholder approle/paddock-audit-writer/role_id
   placeholder approle/paddock-audit-writer/secret_id
+  [[ "$HOST" == lab ]] && return
   [[ -s "$SECRETS_DIR/rabbitmq_audit_writer_password" ]] ||
     echo "missing .secrets/rabbitmq_audit_writer_password: copy it from the control-plane host"
   echo "copy .secrets/db_paddock_audit_reader_password to the control-plane host"
-fi
+}
 
-# Both internal CAs: this host's and, once copied, the peer host's.
+case "$HOST" in
+  controlplane) controlplane_secrets ;;
+  audit) audit_secrets ;;
+  # The audit part first: the control plane's reader URL needs the reader's password.
+  lab)
+    audit_secrets
+    controlplane_secrets
+    ;;
+esac
+
+# Both internal CAs: this host's and, once copied, the peer host's; a lab host has no peer.
 bundle="$(cat "$CA_DIR/ca.crt")"
-[[ -s "$CA_DIR/peer-ca.crt" ]] && bundle="$bundle"$'\n'"$(cat "$CA_DIR/peer-ca.crt")"
+[[ "$HOST" != lab && -s "$CA_DIR/peer-ca.crt" ]] && bundle="$bundle"$'\n'"$(cat "$CA_DIR/peer-ca.crt")"
 if [[ "$bundle" != "$(cat "$CA_DIR/bundle.crt" 2>/dev/null)" ]]; then
   printf '%s\n' "$bundle" >"$CA_DIR/bundle.crt"
   chmod 644 "$CA_DIR/bundle.crt"
   echo "wrote .secrets/internal-ca/bundle.crt"
 fi
-[[ -s "$CA_DIR/peer-ca.crt" ]] || echo "missing .secrets/internal-ca/peer-ca.crt: copy ca.crt of the other host and run again"
+[[ "$HOST" == lab || -s "$CA_DIR/peer-ca.crt" ]] || echo "missing .secrets/internal-ca/peer-ca.crt: copy ca.crt of the other host and run again"
 
 echo "production secrets of the $HOST host ready in .secrets/"

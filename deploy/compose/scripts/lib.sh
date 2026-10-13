@@ -10,6 +10,8 @@ DEV_FILES="compose.yaml compose.audit.yaml compose.dev.yaml"
 DEV_BACKUP_FILES="compose.backup.yaml compose.backup.dev.yaml"
 PROD_FILES_controlplane="compose.yaml compose.prod.yaml compose.backup.yaml"
 PROD_FILES_audit="compose.audit.yaml compose.audit.prod.yaml"
+PROD_FILES_lab="compose.yaml compose.prod.yaml compose.audit.yaml compose.lab.yaml"
+LAB_BACKUP_FILES="compose.backup.yaml"
 
 # env_value <name>: value from the process environment, else from .env, else from .env.example.
 env_value() {
@@ -38,9 +40,9 @@ require_development() {
 }
 
 # compose_files prints the Compose files of this host, one per line: the development set (plus the backup files when
-# BACKUP is set) or the production set of PADDOCK_HOST, then every path of PADDOCK_COMPOSE_EXTRA (space-separated
-# absolute paths; the CI smoke test's overlay, empty otherwise). Returns 2 when a production host has no valid
-# PADDOCK_HOST.
+# BACKUP is set) or the production set of PADDOCK_HOST (on a lab host plus the backup file when PADDOCK_LAB_BACKUP is
+# yes), then every path of PADDOCK_COMPOSE_EXTRA (space-separated absolute paths; the CI smoke test's overlay, empty
+# otherwise). Returns 2 when a production host has no valid PADDOCK_HOST.
 compose_files() {
   local files f host
   if [[ "$(env_value PADDOCK_ENV)" == development ]]; then
@@ -50,8 +52,13 @@ compose_files() {
     case "$host" in
       controlplane) files="$PROD_FILES_controlplane" ;;
       audit) files="$PROD_FILES_audit" ;;
+      # compose.backup.yaml last: its worker secrets add to the !override list of compose.prod.yaml (plan M8a).
+      lab)
+        files="$PROD_FILES_lab"
+        if [[ "$(env_value PADDOCK_LAB_BACKUP)" == yes ]]; then files+=" $LAB_BACKUP_FILES"; fi
+        ;;
       *)
-        echo "set PADDOCK_HOST to controlplane or audit in .env (is '${host:-unset}')" >&2
+        echo "set PADDOCK_HOST to controlplane, audit or lab in .env (is '${host:-unset}')" >&2
         return 2
         ;;
     esac

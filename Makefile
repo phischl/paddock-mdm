@@ -217,6 +217,10 @@ bundle: ## Build a local operator bundle of the local images (IMAGE, COMPILER_IM
 bundle-test: ## Drift test of the operator bundle against deploy/compose/ (part of make test)
 	bash deploy/bundle/bundle_test.sh
 
+.PHONY: bundle-smoke-lab
+bundle-smoke-lab: ## Smoke test of the lab profile of the local bundle behind Nginx (plan M8a decision 18; binds 80, 443, 8080)
+	deploy/bundle/ci/smoke-lab.sh dist/bundle/paddock-deploy-0.0.0-local.tar.gz
+
 # Agent builds (plan M2b decisions 5, 17, 18, 25). VERSION is the agent version; TAGS adds build tags, e.g.
 # TAGS=paddock_dev for the development probation and drift interval (system tests). The supervisor gets the release
 # public key compiled in (default: the development key). paddock-revoke gets TAGS too (it reads agent.yml as paddockd

@@ -26,23 +26,34 @@ pass() { echo "ok: $*"; }
 build() { "$1/build.sh" --version 0.0.0-test --channel local --images local --out "$2" >/dev/null; }
 lib_files() { sed -n "s/^$2=\"\\(.*\\)\"\$/\\1/p" "$1/scripts/lib.sh"; }
 
+# host_files <dir> <host>: the Compose files of host per the lib.sh of dir; lab-backup is the lab with
+# LAB_BACKUP_FILES.
+host_files() {
+  case "$2" in
+    lab-backup) echo "$(lib_files "$1" PROD_FILES_lab) $(lib_files "$1" LAB_BACKUP_FILES)" ;;
+    *) lib_files "$1" "PROD_FILES_$2" ;;
+  esac
+}
+
 # render <compose dir> <settings file> <host>: the production configuration of host, normalized: the project
 # directory as <dir>, the three Paddock images as <image>.
 render() {
   local dir="$1" settings="$2" host="$3" f args=()
-  for f in $(lib_files "$compose_src" "PROD_FILES_$host"); do args+=(-f "$dir/$f"); done
+  for f in $(host_files "$compose_src" "$host"); do args+=(-f "$dir/$f"); done
   docker compose --project-directory "$dir" -p paddock-bundle-test --env-file "$dir/versions.env" \
     --env-file "$dir/$settings" "${args[@]}" --profile '*' config |
     sed -E -e "s#$dir#<dir>#g" -e 's#(image: ).*paddock-(server|compiler|pgbackrest)[^ ]*$#\1<image>#'
 }
 
-# check_mounts <bundle dir>: every bind-mount source of both configurations exists inside the bundle; prints the
-# missing paths relative to the bundle.
+# check_mounts <bundle dir>: every bind-mount source of the configurations of the three hosts exists inside the
+# bundle; prints the missing paths relative to the bundle.
 check_mounts() {
-  local dir="$1" host src missing=0 f args
-  for host in controlplane audit; do
+  local dir="$1" host src missing=0 f args settings
+  for host in controlplane audit lab-backup; do
     args=()
-    for f in $(lib_files "$dir" "PROD_FILES_$host"); do args+=(-f "$dir/$f"); done
+    settings=.env.example
+    [[ "$host" != lab-backup ]] || settings=.env.lab.example
+    for f in $(host_files "$dir" "$host"); do args+=(-f "$dir/$f"); done
     while read -r src; do
       [[ "$src" == "$dir"/.secrets/* ]] && continue
       if [[ "$src" != "$dir"/* || ! -e "$src" ]]; then
@@ -50,7 +61,7 @@ check_mounts() {
         missing=1
       fi
     done < <(docker compose --project-directory "$dir" -p paddock-bundle-test --env-file "$dir/versions.env" \
-      --env-file "$dir/.env.example" "${args[@]}" --profile '*' config |
+      --env-file "$dir/$settings" "${args[@]}" --profile '*' config |
       sed -n -E 's#^[[:space:]]+source: (/.*)$#\1#p')
   done
   return "$missing"
@@ -60,9 +71,14 @@ build "$here" "$work/a"
 bundle="$work/a/paddock-deploy-0.0.0-test"
 
 # (a) Same configuration as the repository.
-for host in controlplane audit; do
-  render "$compose_src" prod.env.example "$host" >"$work/repo.yaml"
-  render "$bundle" .env.example "$host" >"$work/bundle.yaml"
+for host in controlplane audit lab lab-backup; do
+  if [[ "$host" == lab* ]]; then
+    render "$compose_src" lab.env.example "$host" >"$work/repo.yaml"
+    render "$bundle" .env.lab.example "$host" >"$work/bundle.yaml"
+  else
+    render "$compose_src" prod.env.example "$host" >"$work/repo.yaml"
+    render "$bundle" .env.example "$host" >"$work/bundle.yaml"
+  fi
   if ! grep -q '^services:' "$work/repo.yaml"; then
     fail "(a) the repository's $host configuration does not render"
   elif diff -u "$work/repo.yaml" "$work/bundle.yaml" >"$work/diff"; then
@@ -152,6 +168,24 @@ expect 0 "migrate-from into a fresh directory" "$work/q" migrate-from "$work/p"
   fail "migrate-from did not copy .secrets/"
 rm "$work/q/.env"
 expect 1 "migrate-from onto an existing .secrets/" "$work/q" migrate-from "$work/p"
+
+# The lab host (plan M8a decision 8): accepted with its own settings; the backup file only with PADDOCK_LAB_BACKUP=yes.
+cp -a "$bundle" "$work/l"
+sed 's/^PADDOCK_HOST=.*/PADDOCK_HOST=frobnicate/' "$work/l/.env.lab.example" >"$work/l/.env"
+expect 2 "ps with PADDOCK_HOST=frobnicate" "$work/l" ps
+if [[ "$out" == *"controlplane, audit or lab"* ]]; then pass "the host refusal names lab"; else fail "the host refusal: $out"; fi
+cp "$work/l/.env.lab.example" "$work/l/.env"
+expect 0 "compose on a lab host" "$work/l" compose --profile '*' config --services
+if [[ $'\n'"$out"$'\n' == *$'\n'paddock-audit-writer$'\n'* && $'\n'"$out"$'\n' != *$'\n'pgbackrest$'\n'* ]]; then
+  pass "the lab runs the audit domain and, with PADDOCK_LAB_BACKUP=no, no backup"
+else
+  fail "the lab services with PADDOCK_LAB_BACKUP=no: $out"
+fi
+sed -i 's/^PADDOCK_LAB_BACKUP=.*/PADDOCK_LAB_BACKUP=yes/' "$work/l/.env"
+expect 0 "compose on a lab host with backups" "$work/l" compose --profile '*' config --services
+if [[ $'\n'"$out"$'\n' == *$'\n'pgbackrest$'\n'* ]]; then pass "PADDOCK_LAB_BACKUP=yes adds the backup services"; else
+  fail "the lab services with PADDOCK_LAB_BACKUP=yes: $out"
+fi
 
 if ((failures > 0)); then
   echo "bundle: $failures check(s) failed" >&2

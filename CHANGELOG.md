@@ -9,11 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Lab installation profile (plan M8a, ADR 0029; not for production): `PADDOCK_HOST=lab` runs control plane and audit
+  domain in one Compose project on one amd64 host behind the operator's own TLS-terminating reverse proxy. The
+  bundle ships `compose.lab.yaml`, `caddy/Caddyfile.lab` (plain-HTTP sites, `auto_https off`), the settings template
+  `.env.lab.example` and the Nginx reference configuration `nginx/paddock.conf.example`. Caddy publishes one port,
+  `PADDOCK_LAB_HTTP_PORT` (default 8080) on `PADDOCK_INTERCONNECT_ADDR`, and nothing else is published; the proxy
+  `PADDOCK_EDGE_TRUSTED_PROXIES` is the only peer whose `X-Forwarded-For` counts; the roles reach the public names
+  through the proxy at `PADDOCK_LAB_PROXY_ADDR`, and the certificate probe watches the proxy's certificate. Backups
+  are optional (`PADDOCK_LAB_BACKUP=yes` adds `compose.backup.yaml`). `./paddock secrets` writes the secrets of both
+  halves and one internal CA; every `bootstrap` subcommand and `agent-release` run on a lab host; `./paddock check`
+  and `./paddock up` print `lab profile (PADDOCK_HOST=lab): not for production` as their first line. `prod-check
+  --host lab` replaces the host-shape items with `only Caddy's HTTP port published, on the bind address`,
+  `Caddy: plain HTTP behind the TLS proxy`, `lab: edge admin allow list`, `lab: caddy has no hostname aliases` and
+  `lab: roles resolve the public names to the proxy`, and makes `edge client address` stricter (`X-Forwarded-For`,
+  specific proxies, never `private_ranges`); every other production item applies unchanged. Guide:
+  `docs/operations/lab-install.md`.
+
 - `SECURITY.md`: supported versions, how to report a vulnerability privately, response targets, scope and how to
   verify releases.
 
 ### Changed
 
+- `PADDOCK_ACME_EMAIL` no longer stops `compose.prod.yaml` from rendering when it is unset, because the lab profile
+  has no ACME. A production control plane still refuses to run without it: `./paddock check` fails the Caddy item
+  and Caddy refuses to start.
+- `./paddock check` fails the published-ports item on every host when a service runs with `network_mode: host`,
+  `container:…` or `service:` of an unknown service, which would expose ports the check cannot see.
 - Attention list by device with a stale fleet (PDK-094): `GET /api/v1/attention/devices` reads the attention
   conditions once per query and applies its search, `kind` and device filters afterwards, and it reads device details
   only for the requested page. With 10 000 devices that each have an open staleness alert, the query time of a request

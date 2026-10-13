@@ -1,7 +1,8 @@
 // Package prodcheck checks the effective Compose configuration of a production host before Paddock starts on it
 // (plan M6a decision 2): no development overrides or variables, secret files present and private, production release
 // keys, public certificates, no published port beyond 80/443 except on the interconnect address, TLS on every link
-// between the two hosts and, online, the audit bucket's Object Lock.
+// between the two hosts and, online, the audit bucket's Object Lock. A lab host (ADR 0029) runs both halves behind an
+// external TLS proxy: its host-shape items are replaced, every other item applies unchanged.
 package prodcheck
 
 import (
@@ -19,10 +20,11 @@ import (
 	"strings"
 )
 
-// Hosts of the two-host topology (architecture §4.1).
+// Hosts of the two-host topology (architecture §4.1) and the single lab host (ADR 0029).
 const (
 	HostControlPlane = "controlplane"
 	HostAudit        = "audit"
+	HostLab          = "lab"
 )
 
 // Config is the part of `docker compose config --format json` the checks read.
@@ -36,6 +38,8 @@ type Config struct {
 type Prod struct {
 	InterconnectAddr   string `json:"interconnect_addr"`
 	RevocationAccepted string `json:"revocation_accepted"`
+	// LabProxyAddr is the TLS proxy's address as the lab host reaches it (compose.lab.yaml).
+	LabProxyAddr string `json:"lab_proxy_addr"`
 }
 
 // Service is one Compose service.
@@ -45,6 +49,15 @@ type Service struct {
 	Secrets     []ServiceSecret    `json:"secrets"`
 	Volumes     []Volume           `json:"volumes"`
 	Command     []string           `json:"command"`
+	// ExtraHosts are rendered as "<host>=<ip>" entries.
+	ExtraHosts  []string                  `json:"extra_hosts"`
+	Networks    map[string]ServiceNetwork `json:"networks"`
+	NetworkMode string                    `json:"network_mode"`
+}
+
+// ServiceNetwork is a service's attachment to one network.
+type ServiceNetwork struct {
+	Aliases []string `json:"aliases"`
 }
 
 // Port is a published port.
@@ -127,11 +140,16 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		checkRevocation(c),
 		checkSecretFiles(c),
 		checkMountedReferences(c),
-		checkPorts(c),
-		checkTLSLinks(c),
 	}
-	if _, ok := c.Services["caddy"]; ok {
-		results = append(results, checkCaddy(c), checkEdgeClientAddress(c))
+	lab := o.Host == HostLab
+	if lab {
+		results = append(results, checkLabPorts(c), checkTLSLinks(c), checkLabCaddy(c), checkEdgeClientAddress(c, true),
+			checkLabAdminAllowlist(c), checkLabAliases(c), checkLabProxyResolution(c))
+	} else {
+		results = append(results, checkPorts(c), checkTLSLinks(c))
+		if _, ok := c.Services["caddy"]; ok {
+			results = append(results, checkCaddy(c), checkEdgeClientAddress(c, false))
+		}
 	}
 	if usesAny(c, []string{"PADDOCK_TRUSTED_PROXY_CIDRS"}) {
 		results = append(results, checkRoleTrustedProxies(c))
@@ -142,7 +160,8 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	if usesAny(c, releaseKeyVars) {
 		results = append(results, checkReleaseKeys(c, o))
 	}
-	if o.Host == HostAudit {
+	// The lab's offline check has to pass on its own (plan M8a step PDK-100): there the item exists only with --online.
+	if o.Host == HostAudit || (lab && o.ObjectLock != nil) {
 		results = append(results, checkObjectLock(ctx, o))
 	}
 	return results
@@ -382,6 +401,7 @@ func checkPorts(c Config) Result {
 		f = append(f, fmt.Sprintf("PADDOCK_INTERCONNECT_ADDR %q is not a specific IP address", addr))
 		addr = ""
 	}
+	f = append(f, networkModeFindings(c)...)
 	for _, name := range sortedServices(c) {
 		for _, p := range c.Services[name].Ports {
 			// 80 and 443 are public, and only Caddy may hold them.
@@ -394,6 +414,65 @@ func checkPorts(c Config) Result {
 		}
 	}
 	return result("only 80/443 published, other ports on the interconnect address only", f)
+}
+
+// checkLabPorts replaces checkPorts on a lab host: Caddy's plain-HTTP port on the bind address is the only published
+// port (plan M8a decision 12).
+func checkLabPorts(c Config) Result {
+	var f []string
+	addr := strings.TrimSpace(c.Prod.InterconnectAddr)
+	if !specificIP(addr) {
+		f = append(f, fmt.Sprintf("PADDOCK_INTERCONNECT_ADDR %q is not a specific IP address", addr))
+	}
+	f = append(f, networkModeFindings(c)...)
+	for _, name := range sortedServices(c) {
+		ports := c.Services[name].Ports
+		if name != "caddy" {
+			for _, p := range ports {
+				f = append(f, fmt.Sprintf("%s: port %s published; the lab publishes nothing but Caddy", name, p.Published))
+			}
+			continue
+		}
+		for _, p := range ports {
+			if p.HostIP != addr {
+				f = append(f, fmt.Sprintf("caddy: port %s published on %q, not on the bind address", p.Published, hostIP(p)))
+			}
+			if p.Target != 80 {
+				f = append(f, fmt.Sprintf("caddy: port %s forwards to %d, not to Caddy's plain-HTTP port 80", p.Published, p.Target))
+			}
+		}
+	}
+	if n := len(c.Services["caddy"].Ports); n != 1 {
+		f = append(f, fmt.Sprintf("caddy: publishes %d ports, want exactly one", n))
+	}
+	return result("only Caddy's HTTP port published, on the bind address", f)
+}
+
+// networkModeFindings reports network namespaces the port items cannot see: the host's own (every port the service
+// listens on is reachable) and another container's. Sharing the namespace of a service of this configuration is
+// accepted, because that service's ports are checked (PDK-104).
+func networkModeFindings(c Config) []string {
+	var f []string
+	for _, name := range sortedServices(c) {
+		mode := strings.TrimSpace(c.Services[name].NetworkMode)
+		if target, ok := strings.CutPrefix(mode, "service:"); ok {
+			if _, checked := c.Services[target]; checked {
+				continue
+			}
+		}
+		switch {
+		case mode == "host":
+			f = append(f, name+": network_mode host exposes every port of the service on the host")
+		case strings.HasPrefix(mode, "service:"), strings.HasPrefix(mode, "container:"):
+			f = append(f, fmt.Sprintf("%s: network_mode %s shares a network namespace this check does not see", name, mode))
+		}
+	}
+	return f
+}
+
+func specificIP(s string) bool {
+	ip := net.ParseIP(s)
+	return ip != nil && !ip.IsUnspecified()
 }
 
 func hostIP(p Port) string {
@@ -483,6 +562,98 @@ func checkCaddy(c Config) Result {
 	if env(s, "PADDOCK_ACME_EMAIL") == "" {
 		f = append(f, "PADDOCK_ACME_EMAIL is not set")
 	}
+	mountFindings, _ := caddyMounts(s)
+	f = append(f, mountFindings...)
+	return result("Caddy: public ACME certificates, edge guards and entrypoint mounted", f)
+}
+
+// checkLabCaddy replaces checkCaddy on a lab host: the proxy terminates TLS, so Caddy serves http:// sites with
+// auto_https off and needs no ACME e-mail (plan M8a decision 12). The site-address scan is a heuristic over the
+// Caddyfile's tokens, not Caddy's own parser (an address with its brace on the next line, a quoted brace or a site in
+// an imported snippet can slip past it); the guarantee that nothing but plain HTTP is reachable comes from the ports
+// item, which allows exactly one published port with target 80.
+func checkLabCaddy(c Config) Result {
+	f, content := caddyMounts(c.Services["caddy"])
+	autoHTTPSOff := false
+	for _, line := range strings.Split(content, "\n") {
+		if fields := caddyTokens(line); len(fields) == 2 && fields[0] == "auto_https" && fields[1] == "off" {
+			autoHTTPSOff = true
+		}
+	}
+	for _, addr := range caddySiteAddresses(content) {
+		if !strings.HasPrefix(addr, "http://") {
+			f = append(f, fmt.Sprintf("Caddyfile site %q is not an http:// site", addr))
+		}
+	}
+	if content != "" && !autoHTTPSOff {
+		f = append(f, "Caddyfile does not set auto_https off")
+	}
+	return result("Caddy: plain HTTP behind the TLS proxy", f)
+}
+
+// caddyTokens splits a Caddyfile line into tokens and drops a comment: a token that starts with #.
+func caddyTokens(line string) []string {
+	fields := strings.Fields(line)
+	for i, t := range fields {
+		if strings.HasPrefix(t, "#") {
+			return fields[:i]
+		}
+	}
+	return fields
+}
+
+// caddySiteAddresses returns the addresses of every top-level block of a Caddyfile that is neither the global options
+// block nor a snippet: the tokens before a "{" at nesting depth 0, including the lines of a comma-continued address
+// list, regardless of indentation. Lines at depth 0 that open no block (import) are not addresses.
+func caddySiteAddresses(content string) []string {
+	var addrs, pending []string
+	depth := 0
+	for _, line := range strings.Split(content, "\n") {
+		tokens := caddyTokens(line)
+		if len(tokens) == 0 {
+			continue
+		}
+		if depth == 0 {
+			opens := tokens[len(tokens)-1] == "{"
+			words := tokens
+			if opens {
+				words = tokens[:len(tokens)-1]
+			}
+			var lineAddrs []string
+			for _, w := range words {
+				lineAddrs = append(lineAddrs, strings.FieldsFunc(w, func(r rune) bool { return r == ',' })...)
+			}
+			switch {
+			case opens:
+				block := slices.Concat(pending, lineAddrs)
+				pending = nil
+				if len(block) > 0 && !strings.HasPrefix(block[0], "(") && !strings.HasPrefix(block[0], "&(") {
+					addrs = append(addrs, block...)
+				}
+			case strings.HasSuffix(words[len(words)-1], ","):
+				pending = append(pending, lineAddrs...)
+				continue
+			default:
+				pending = nil
+			}
+		}
+		for _, t := range tokens {
+			switch t {
+			case "{":
+				depth++
+			case "}":
+				depth--
+			}
+		}
+	}
+	return addrs
+}
+
+// caddyMounts checks the Caddyfile and the edge files mounted next to it and returns the Caddyfile's content ("" when
+// it is missing or unreadable, which is a finding).
+func caddyMounts(s Service) ([]string, string) {
+	var f []string
+	var content string
 	mounts := map[string]string{}
 	for _, v := range s.Volumes {
 		mounts[v.Target] = v.Source
@@ -493,7 +664,8 @@ func checkCaddy(c Config) Result {
 	} else if b, err := os.ReadFile(caddyfile); err != nil { //nolint:gosec // operator configuration
 		f = append(f, "Caddyfile unreadable: "+caddyfile)
 	} else {
-		f = append(f, caddyfileFindings(caddyfile, string(b))...)
+		content = string(b)
+		f = append(f, caddyfileFindings(caddyfile, content)...)
 	}
 	// The edge guards and the entrypoint belong next to the Caddyfile (plan M7a decisions 2 and 6; an operator
 	// bundle ships them in the same directory).
@@ -506,7 +678,7 @@ func checkCaddy(c Config) Result {
 			f = append(f, fmt.Sprintf("%s is mounted from %s, not from %s next to the Caddyfile", target, src, name))
 		}
 	}
-	return result("Caddy: public ACME certificates, edge guards and entrypoint mounted", f)
+	return f, content
 }
 
 // caddyfileFindings reports tls internal and the client address options the Caddyfile sets itself: trusted_proxies
@@ -532,8 +704,10 @@ func caddyfileFindings(path, content string) []string {
 var edgeHeaders = []string{"none", "X-Forwarded-For", "CF-Connecting-IP"}
 
 // checkEdgeClientAddress checks the trusted proxies and the client address header of the edge (plan M7a decisions 1
-// and 24): one known header, proxies exactly when a header is read, no /0, the servers block on every listener.
-func checkEdgeClientAddress(c Config) Result {
+// and 24): one known header, proxies exactly when a header is read, no /0, the servers block on every listener. Behind
+// the lab proxy (plan M8a decision 12) the header is X-Forwarded-For and the proxy list is not empty and does not hold
+// private_ranges.
+func checkEdgeClientAddress(c Config, lab bool) Result {
 	var f []string
 	s := c.Services["caddy"]
 	header := env(s, "PADDOCK_EDGE_CLIENT_IP_HEADER")
@@ -561,7 +735,107 @@ func checkEdgeClientAddress(c Config) Result {
 	if v := env(s, "PADDOCK_EDGE_SERVERS_LISTENER"); v != "" {
 		f = append(f, fmt.Sprintf("PADDOCK_EDGE_SERVERS_LISTENER is %q: production applies the servers block to every listener", v))
 	}
+	if lab {
+		if header != "X-Forwarded-For" {
+			f = append(f, "PADDOCK_EDGE_CLIENT_IP_HEADER must be X-Forwarded-For behind the lab proxy")
+		}
+		if len(proxies) == 0 {
+			f = append(f, "PADDOCK_EDGE_TRUSTED_PROXIES is empty: name the lab proxy's address")
+		}
+		if slices.Contains(proxies, "private_ranges") {
+			f = append(f, "PADDOCK_EDGE_TRUSTED_PROXIES: private_ranges trusts every LAN peer; name the proxy's address")
+		}
+	}
 	return result("edge client address", f)
+}
+
+// checkLabAdminAllowlist requires a real edge admin allow list on a lab host, where the compose.prod.yaml default of
+// every address would open the administrative surfaces to everybody who reaches the proxy (plan M8a decision 12).
+func checkLabAdminAllowlist(c Config) Result {
+	var f []string
+	ranges := strings.Fields(env(c.Services["caddy"], "PADDOCK_ADMIN_ALLOWED_CIDRS"))
+	if len(ranges) == 0 {
+		f = append(f, "PADDOCK_ADMIN_ALLOWED_CIDRS is empty: name the networks that may open the portal")
+	}
+	for _, p := range ranges {
+		if p == "private_ranges" {
+			continue
+		}
+		if problem := rangeProblem(p, true); problem != "" {
+			f = append(f, "PADDOCK_ADMIN_ALLOWED_CIDRS: "+problem)
+		}
+	}
+	return result("lab: edge admin allow list", f)
+}
+
+// checkLabAliases fails Caddy's network aliases on a lab host: a role resolving a public name to Caddy would bypass
+// the TLS proxy and reach a plain-HTTP listener (ADR 0029).
+func checkLabAliases(c Config) Result {
+	var f []string
+	nets := c.Services["caddy"].Networks
+	names := make([]string, 0, len(nets))
+	for n := range nets {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		for _, a := range nets[n].Aliases {
+			f = append(f, fmt.Sprintf("caddy: alias %s on network %s would short-circuit the proxy", a, n))
+		}
+	}
+	return result("lab: caddy has no hostname aliases", f)
+}
+
+// labRoles are the roles that call the public names (Authentik, the OIDC issuers, the certificate probe).
+var labRoles = []string{"paddock-api", "paddock-escrow-reader", "paddock-revocation-issuer", "paddock-worker"}
+
+// labNames are the public host names below the domain.
+var labNames = []string{"admin", "auth", "device", "bundles", "fleet"}
+
+// checkLabProxyResolution requires the roles to resolve every public name to the TLS proxy and the worker's
+// certificate probe to dial it (plan M8a decisions 4 and 12).
+func checkLabProxyResolution(c Config) Result {
+	const item = "lab: roles resolve the public names to the proxy"
+	proxy := strings.TrimSpace(c.Prod.LabProxyAddr)
+	if !specificIP(proxy) {
+		return result(item, []string{fmt.Sprintf("PADDOCK_LAB_PROXY_ADDR %q is not a specific IP address", proxy)})
+	}
+	adminURL := env(c.Services["paddock-api"], "PADDOCK_PUBLIC_ADMIN_URL")
+	domain, hasPrefix := "", false
+	if u, err := url.Parse(adminURL); err == nil && u.Scheme == "https" {
+		domain, hasPrefix = strings.CutPrefix(u.Hostname(), "admin.")
+	}
+	if !hasPrefix || domain == "" {
+		return result(item, []string{fmt.Sprintf("paddock-api: PADDOCK_PUBLIC_ADMIN_URL %q is not https://admin.<domain>", adminURL)})
+	}
+	var f []string
+	for _, role := range labRoles {
+		hosts := c.Services[role].ExtraHosts
+		for _, n := range labNames {
+			name := n + "." + domain
+			found := false
+			// Every entry for the name counts: Compose sorts extra_hosts, so a second entry from another overlay may be
+			// the one the role resolves. Host names match like the resolver matches them: case-insensitively and
+			// with or without the trailing dot.
+			for _, h := range hosts {
+				host, ip, ok := strings.Cut(h, "=")
+				if !ok || !strings.EqualFold(strings.TrimSuffix(host, "."), name) {
+					continue
+				}
+				found = true
+				if ip != proxy {
+					f = append(f, fmt.Sprintf("%s: extra_hosts maps %s to %s, not to the proxy %s", role, name, ip, proxy))
+				}
+			}
+			if !found {
+				f = append(f, fmt.Sprintf("%s: extra_hosts lacks %s=%s", role, name, proxy))
+			}
+		}
+	}
+	if v, want := env(c.Services["paddock-worker"], "PADDOCK_TLS_PROBE_ADDR"), proxy+":443"; v != want {
+		f = append(f, fmt.Sprintf("paddock-worker: PADDOCK_TLS_PROBE_ADDR is %q, not %s", v, want))
+	}
+	return result(item, f)
 }
 
 // rangeProblem describes why s is not an acceptable trusted range: unparsable, or a /0 that trusts every address.

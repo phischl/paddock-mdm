@@ -64,11 +64,11 @@ esac
 
 # dotenv <name>: the value in .env only; the process environment does not count for the host settings.
 dotenv() { grep "^$1=" "$BUNDLE_DIR/.env" | tail -1 | cut -d= -f2- || true; }
-[[ -f "$BUNDLE_DIR/.env" ]] || die "missing .env: cp .env.example .env, then set PADDOCK_HOST and the settings of this host" 2
+[[ -f "$BUNDLE_DIR/.env" ]] || die "missing .env: cp .env.example .env (a lab host: cp .env.lab.example .env), then set PADDOCK_HOST and the settings of this host" 2
 [[ "$(dotenv PADDOCK_ENV)" == production ]] || die "PADDOCK_ENV in .env must be production (the bundle is for production hosts)" 2
 PADDOCK_HOST="$(dotenv PADDOCK_HOST)"
-[[ "$PADDOCK_HOST" == controlplane || "$PADDOCK_HOST" == audit ]] ||
-  die "PADDOCK_HOST in .env must be controlplane or audit (is '${PADDOCK_HOST}')" 2
+[[ "$PADDOCK_HOST" == controlplane || "$PADDOCK_HOST" == audit || "$PADDOCK_HOST" == lab ]] ||
+  die "set PADDOCK_HOST to controlplane, audit or lab in .env (is '${PADDOCK_HOST}')" 2
 PADDOCK_ENV=production
 export PADDOCK_ENV PADDOCK_HOST
 
@@ -78,8 +78,15 @@ export PADDOCK_ENV PADDOCK_HOST
 # tty_flag prints -T unless stdin and stdout are terminals, so that piped and redirected output stays plain.
 tty_flag() { [[ -t 0 && -t 1 ]] || printf -- '-T'; }
 
+# require_host <host> lab <command>: the command runs on that host, or on a lab host, which holds both (ADR 0029).
 require_host() {
-  [[ "$PADDOCK_HOST" == "$1" ]] || die "$2 runs on the $1 host (PADDOCK_HOST is $PADDOCK_HOST)" 2
+  [[ "$PADDOCK_HOST" == "$1" || "$PADDOCK_HOST" == "$2" ]] || die "$3 runs on the $1 host (PADDOCK_HOST is $PADDOCK_HOST)" 2
+}
+
+# lab_warning prints the lab profile's warning as the command's first output line.
+lab_warning() {
+  [[ "$PADDOCK_HOST" != lab ]] ||
+    echo "lab profile (PADDOCK_HOST=lab): not for production — see docs/operations/lab-install.md" >&2
 }
 
 case "$cmd" in
@@ -96,6 +103,7 @@ case "$cmd" in
       --online) online=1 ;;
       *) die "usage: ./paddock check [--online]" 2 ;;
     esac
+    lab_warning
     # The check reads the production configuration exactly as shipped: no extra Compose files (the CI overlay).
     files="$(PADDOCK_COMPOSE_EXTRA='' compose_files)"
     names="$(xargs -n1 basename <<<"$files" | paste -sd, -)"
@@ -113,7 +121,8 @@ case "$cmd" in
       --infra) profiles=() ;;
       *) die "usage: ./paddock up [--infra]" 2 ;;
     esac
-    if [[ "$PADDOCK_HOST" == controlplane && "$(uname -m)" != x86_64 ]]; then
+    lab_warning
+    if [[ "$PADDOCK_HOST" != audit && "$(uname -m)" != x86_64 ]]; then
       die "the control plane needs an amd64 host: the Fleet image (fleetdm/fleet) is published for linux/amd64 only"
     fi
     compose "${profiles[@]}" up -d
@@ -143,19 +152,19 @@ case "$cmd" in
   bootstrap)
     case "${1:-}" in
       openbao)
-        require_host controlplane "bootstrap openbao"
+        require_host controlplane lab "bootstrap openbao"
         "$BUNDLE_DIR/scripts/openbao-configure.sh"
         ;;
       buckets)
-        require_host controlplane "bootstrap buckets"
+        require_host controlplane lab "bootstrap buckets"
         "$BUNDLE_DIR/scripts/rustfs-bundles-bootstrap.sh"
         ;;
       audit-bucket)
-        require_host audit "bootstrap audit-bucket"
+        require_host audit lab "bootstrap audit-bucket"
         "$BUNDLE_DIR/scripts/rustfs-audit-bootstrap.sh"
         ;;
       fleet)
-        require_host controlplane "bootstrap fleet"
+        require_host controlplane lab "bootstrap fleet"
         "$BUNDLE_DIR/scripts/fleet-bootstrap.sh"
         ;;
       *) die "usage: ./paddock bootstrap openbao|buckets|audit-bucket|fleet" 2 ;;
@@ -163,7 +172,7 @@ case "$cmd" in
     ;;
   agent-release)
     [[ $# -eq 2 && -d "$2" ]] || die "usage: ./paddock agent-release <version> <dir>" 2
-    require_host controlplane "agent-release"
+    require_host controlplane lab "agent-release"
     release_dir="$(cd "$2" && pwd)"
     # shellcheck disable=SC2046
     compose run --rm --no-deps $(tty_flag) -v "$release_dir:/release:ro" paddock-api \

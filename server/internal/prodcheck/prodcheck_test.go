@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -450,6 +451,322 @@ func TestParse(t *testing.T) {
 	s := cfg.Services["api"]
 	if *s.Environment["A"] != "1" || s.Environment["B"] != nil || s.Ports[0].Published != "5671" ||
 		cfg.Secrets["s"].File != "/x" || cfg.Prod.InterconnectAddr != "10.0.0.1" {
+		t.Fatalf("unexpected parse result: %+v", cfg)
+	}
+}
+
+const (
+	labProxy     = "192.0.2.5"
+	labDomain    = "paddock.example.org"
+	labCaddyfile = "{\n\tauto_https off\n\thttp_port 80\n\t{$CADDY_SERVERS_BLOCK}\n}\n\nimport /etc/caddy/guards.caddy\n\n" +
+		"(lab_snippet) {\n}\n\nhttp://admin.{$PADDOCK_DOMAIN} {\n\timport admin_site\n}\n\n" +
+		"http://auth.{$PADDOCK_DOMAIN}, http://fleet.{$PADDOCK_DOMAIN} {\n\timport authentik_site\n}\n"
+)
+
+// labItems are the items of a lab host's offline checklist (plan M8a §6.2).
+var labItems = []string{
+	"compose.dev.yaml is not in the effective configuration",
+	"PADDOCK_ENV=production in every service",
+	"no development-only variables",
+	"revocation path enabled only after its acceptance",
+	"secret files present, not empty and not world-readable",
+	"secrets the services reference are mounted",
+	"only Caddy's HTTP port published, on the bind address",
+	"links between the hosts use TLS",
+	"Caddy: plain HTTP behind the TLS proxy",
+	"edge client address",
+	"lab: edge admin allow list",
+	"lab: caddy has no hostname aliases",
+	"lab: roles resolve the public names to the proxy",
+	"role trusted proxies",
+	"ip allow list bypass is off",
+	"release public keys are production keys",
+}
+
+func labHosts() []string {
+	var hosts []string
+	for _, n := range []string{"admin", "auth", "device", "bundles", "fleet"} {
+		hosts = append(hosts, n+"."+labDomain+"="+labProxy)
+	}
+	return hosts
+}
+
+// newLabFixture is a passing lab configuration (plan M8a decision 13): the production fixture with Caddy's one
+// plain-HTTP port on the bind address, an http:// Caddyfile, no ACME e-mail, no aliases and the roles' extra hosts.
+func newLabFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := newFixture(t)
+	f.cfg.Prod.LabProxyAddr = labProxy
+	caddyfile := filepath.Join(f.dir, "Caddyfile.lab")
+	if err := os.WriteFile(caddyfile, []byte(labCaddyfile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	caddy := f.service("caddy")
+	caddy.Volumes[0].Source = caddyfile
+	caddy.Environment = map[string]*string{
+		"PADDOCK_ACME_EMAIL":            ptr(""),
+		"PADDOCK_EDGE_CLIENT_IP_HEADER": ptr("X-Forwarded-For"),
+		"PADDOCK_EDGE_TRUSTED_PROXIES":  ptr(labProxy),
+		"PADDOCK_ADMIN_ALLOWED_CIDRS":   ptr("192.0.2.0/24 private_ranges"),
+	}
+	caddy.Ports = []prodcheck.Port{{HostIP: interconnect, Target: 80, Published: "8080"}}
+	caddy.Networks = map[string]prodcheck.ServiceNetwork{"cp": {}}
+	f.cfg.Services["caddy"] = caddy
+	f.cfg.Services["rabbitmq"] = prodcheck.Service{}
+	api := f.service("paddock-api")
+	api.Environment["PADDOCK_PUBLIC_ADMIN_URL"] = ptr("https://admin." + labDomain)
+	api.ExtraHosts = labHosts()
+	f.cfg.Services["paddock-api"] = api
+	f.cfg.Services["paddock-escrow-reader"] = prodcheck.Service{ExtraHosts: labHosts()}
+	f.cfg.Services["paddock-revocation-issuer"] = prodcheck.Service{ExtraHosts: labHosts()}
+	f.cfg.Services["paddock-worker"] = prodcheck.Service{
+		ExtraHosts:  labHosts(),
+		Environment: map[string]*string{"PADDOCK_TLS_PROBE_ADDR": ptr(labProxy + ":443")},
+	}
+	return f
+}
+
+func runLab(t *testing.T, cfg prodcheck.Config, reader prodcheck.ObjectLockReader) (bool, string) {
+	t.Helper()
+	return run(t, cfg, prodcheck.Options{Host: prodcheck.HostLab, ObjectLock: reader})
+}
+
+// failItem asserts that the item fails with a finding containing want.
+func failItem(t *testing.T, out, item, want string) {
+	t.Helper()
+	in := false
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "PASS") || strings.HasPrefix(line, "FAIL") {
+			in = line == "FAIL  "+item
+			continue
+		}
+		if in && strings.Contains(line, want) {
+			return
+		}
+	}
+	t.Fatalf("item %q has no FAIL finding containing %q in\n%s", item, want, out)
+}
+
+func items(out string) []string {
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "PASS  ") || strings.HasPrefix(line, "FAIL  ") {
+			names = append(names, line[6:])
+		}
+	}
+	return names
+}
+
+// TestLabConfigurationPasses: the lab fixture passes exactly the items of plan M8a §6.2; the Object Lock item joins
+// only online.
+func TestLabConfigurationPasses(t *testing.T) {
+	f := newLabFixture(t)
+	ok, out := runLab(t, f.cfg, nil)
+	if !ok {
+		t.Fatalf("expected all PASS:\n%s", out)
+	}
+	if got := strings.Join(items(out), "\n"); got != strings.Join(labItems, "\n") {
+		t.Fatalf("items:\n%s\nwant:\n%s", got, strings.Join(labItems, "\n"))
+	}
+	ok, out = runLab(t, f.cfg, lockReader{enabled: true, mode: "COMPLIANCE", days: 400})
+	want := append(slices.Clone(labItems), "audit bucket has Object Lock COMPLIANCE")
+	if !ok || strings.Join(items(out), "\n") != strings.Join(want, "\n") {
+		t.Fatalf("online: expected every item of the lab and the Object Lock item to PASS:\n%s", out)
+	}
+	_, out = runLab(t, f.cfg, lockReader{enabled: true, mode: "COMPLIANCE", days: 30})
+	failItem(t, out, "audit bucket has Object Lock COMPLIANCE", "less than 400")
+}
+
+// TestACMEEmailOnlyInProduction: an empty ACME e-mail passes in the lab and still fails in production.
+func TestACMEEmailOnlyInProduction(t *testing.T) {
+	f := newFixture(t)
+	f.setEnv("caddy", "PADDOCK_ACME_EMAIL", "")
+	_, out := run(t, f.cfg, prodcheck.Options{Host: prodcheck.HostControlPlane})
+	failItem(t, out, "Caddy: public ACME certificates, edge guards and entrypoint mounted", "PADDOCK_ACME_EMAIL is not set")
+
+	lab := newLabFixture(t)
+	if v := lab.service("caddy").Environment["PADDOCK_ACME_EMAIL"]; v == nil || *v != "" {
+		t.Fatal("the lab fixture must carry an empty ACME e-mail")
+	}
+	if ok, out := runLab(t, lab.cfg, nil); !ok || strings.Contains(out, "ACME") {
+		t.Fatalf("expected the lab to pass without an ACME item:\n%s", out)
+	}
+}
+
+// TestLabFindings: every new finding of plan M8a decision 12 fails its item.
+func TestLabFindings(t *testing.T) {
+	const (
+		ports    = "only Caddy's HTTP port published, on the bind address"
+		caddy    = "Caddy: plain HTTP behind the TLS proxy"
+		edge     = "edge client address"
+		admin    = "lab: edge admin allow list"
+		aliases  = "lab: caddy has no hostname aliases"
+		resolver = "lab: roles resolve the public names to the proxy"
+	)
+	writeCaddyfile := func(content string) func(*testing.T, *fixture) {
+		return func(t *testing.T, f *fixture) {
+			if err := os.WriteFile(f.service("caddy").Volumes[0].Source, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	setCaddyPorts := func(p ...prodcheck.Port) func(*testing.T, *fixture) {
+		return func(_ *testing.T, f *fixture) {
+			s := f.service("caddy")
+			s.Ports = p
+			f.cfg.Services["caddy"] = s
+		}
+	}
+	setHosts := func(service string, hosts []string) func(*testing.T, *fixture) {
+		return func(_ *testing.T, f *fixture) {
+			s := f.service(service)
+			s.ExtraHosts = hosts
+			f.cfg.Services[service] = s
+		}
+	}
+	setEnv := func(service, name, value string) func(*testing.T, *fixture) {
+		return func(_ *testing.T, f *fixture) { f.setEnv(service, name, value) }
+	}
+	cases := map[string]struct {
+		mutate     func(*testing.T, *fixture)
+		item, want string
+	}{
+		"second caddy port": {setCaddyPorts(
+			prodcheck.Port{HostIP: interconnect, Target: 80, Published: "8080"},
+			prodcheck.Port{HostIP: interconnect, Target: 80, Published: "8081"},
+		), ports, "caddy: publishes 2 ports, want exactly one"},
+		"no caddy port": {setCaddyPorts(), ports, "caddy: publishes 0 ports, want exactly one"},
+		"other service publishes": {func(_ *testing.T, f *fixture) {
+			f.cfg.Services["rabbitmq"] = prodcheck.Service{Ports: []prodcheck.Port{{HostIP: interconnect, Target: 5671, Published: "5671"}}}
+		}, ports, "rabbitmq: port 5671 published; the lab publishes nothing but Caddy"},
+		"caddy on every address": {setCaddyPorts(prodcheck.Port{Target: 80, Published: "8080"}),
+			ports, `caddy: port 8080 published on "0.0.0.0", not on the bind address`},
+		"caddy to the TLS port": {setCaddyPorts(prodcheck.Port{HostIP: interconnect, Target: 443, Published: "8080"}),
+			ports, "caddy: port 8080 forwards to 443"},
+		"no bind address": {func(_ *testing.T, f *fixture) { f.cfg.Prod.InterconnectAddr = "" },
+			ports, `PADDOCK_INTERCONNECT_ADDR "" is not a specific IP address`},
+		"https site": {writeCaddyfile("{\n\tauto_https off\n}\nhttps://admin.{$PADDOCK_DOMAIN} {\n}\n"),
+			caddy, `Caddyfile site "https://admin.{$PADDOCK_DOMAIN}" is not an http:// site`},
+		"bare site": {writeCaddyfile("{\n\tauto_https off\n}\nhttp://auth.{$PADDOCK_DOMAIN}, admin.{$PADDOCK_DOMAIN} {\n}\n"),
+			caddy, `Caddyfile site "admin.{$PADDOCK_DOMAIN}" is not an http:// site`},
+		"https in a multi-line address list": {writeCaddyfile("{\n\tauto_https off\n}\nhttp://admin.{$PADDOCK_DOMAIN},\n\thttps://auth.{$PADDOCK_DOMAIN} {\n}\n"),
+			caddy, `Caddyfile site "https://auth.{$PADDOCK_DOMAIN}" is not an http:// site`},
+		"https site with a comment after the brace": {writeCaddyfile("{\n\tauto_https off\n}\nhttps://admin.{$PADDOCK_DOMAIN} { # portal\n}\n"),
+			caddy, `Caddyfile site "https://admin.{$PADDOCK_DOMAIN}" is not an http:// site`},
+		"indented https site": {writeCaddyfile("{\n\tauto_https off\n}\n  https://admin.{$PADDOCK_DOMAIN} {\n}\n"),
+			caddy, `Caddyfile site "https://admin.{$PADDOCK_DOMAIN}" is not an http:// site`},
+		"no auto_https off": {writeCaddyfile("{\n\tauto_https disable_redirects\n}\nhttp://admin.{$PADDOCK_DOMAIN} {\n}\n"),
+			caddy, "Caddyfile does not set auto_https off"},
+		"tls internal": {writeCaddyfile(labCaddyfile + "http://bundles.{$PADDOCK_DOMAIN} {\n\ttls internal\n}\n"),
+			caddy, "Caddyfile uses tls internal"},
+		"guards elsewhere": {func(_ *testing.T, f *fixture) {
+			s := f.service("caddy")
+			s.Volumes[1].Source = "/elsewhere/guards.caddy"
+			f.cfg.Services["caddy"] = s
+		}, caddy, "/etc/caddy/guards.caddy is mounted from /elsewhere/guards.caddy"},
+		"CF-Connecting-IP": {setEnv("caddy", "PADDOCK_EDGE_CLIENT_IP_HEADER", "CF-Connecting-IP"),
+			edge, "PADDOCK_EDGE_CLIENT_IP_HEADER must be X-Forwarded-For behind the lab proxy"},
+		"private_ranges": {setEnv("caddy", "PADDOCK_EDGE_TRUSTED_PROXIES", "private_ranges"),
+			edge, "PADDOCK_EDGE_TRUSTED_PROXIES: private_ranges trusts every LAN peer; name the proxy's address"},
+		"no trusted proxies": {setEnv("caddy", "PADDOCK_EDGE_TRUSTED_PROXIES", ""),
+			edge, "PADDOCK_EDGE_TRUSTED_PROXIES is empty: name the lab proxy's address"},
+		"admin /0": {setEnv("caddy", "PADDOCK_ADMIN_ALLOWED_CIDRS", "192.0.2.0/24 ::/0"),
+			admin, "PADDOCK_ADMIN_ALLOWED_CIDRS: ::/0 trusts every address"},
+		"admin empty": {setEnv("caddy", "PADDOCK_ADMIN_ALLOWED_CIDRS", ""),
+			admin, "PADDOCK_ADMIN_ALLOWED_CIDRS is empty"},
+		"alias": {func(_ *testing.T, f *fixture) {
+			s := f.service("caddy")
+			s.Networks = map[string]prodcheck.ServiceNetwork{"cp": {Aliases: []string{"admin." + labDomain}}}
+			f.cfg.Services["caddy"] = s
+		}, aliases, "caddy: alias admin.paddock.example.org on network cp would short-circuit the proxy"},
+		"missing extra host": {setHosts("paddock-escrow-reader", labHosts()[:4]),
+			resolver, "paddock-escrow-reader: extra_hosts lacks fleet.paddock.example.org=192.0.2.5"},
+		"extra host to another address": {setHosts("paddock-revocation-issuer", []string{"auth." + labDomain + "=192.0.2.99"}),
+			resolver, "paddock-revocation-issuer: extra_hosts maps auth.paddock.example.org to 192.0.2.99, not to the proxy 192.0.2.5"},
+		"conflicting extra host": {setHosts("paddock-api", append([]string{"admin." + labDomain + "=10.9.9.9"}, labHosts()...)),
+			resolver, "paddock-api: extra_hosts maps admin.paddock.example.org to 10.9.9.9, not to the proxy 192.0.2.5"},
+		"conflicting extra host in upper case": {setHosts("paddock-api", append([]string{"ADMIN." + labDomain + "=10.9.9.9"}, labHosts()...)),
+			resolver, "paddock-api: extra_hosts maps admin.paddock.example.org to 10.9.9.9, not to the proxy 192.0.2.5"},
+		"conflicting extra host with a trailing dot": {setHosts("paddock-api", append([]string{"admin." + labDomain + ".=10.9.9.9"}, labHosts()...)),
+			resolver, "paddock-api: extra_hosts maps admin.paddock.example.org to 10.9.9.9, not to the proxy 192.0.2.5"},
+		"lab network_mode host": {func(_ *testing.T, f *fixture) {
+			s := f.service("paddock-worker")
+			s.NetworkMode = "host"
+			f.cfg.Services["paddock-worker"] = s
+		}, ports, "paddock-worker: network_mode host exposes every port of the service on the host"},
+		"wrong probe address": {setEnv("paddock-worker", "PADDOCK_TLS_PROBE_ADDR", "caddy:443"),
+			resolver, `paddock-worker: PADDOCK_TLS_PROBE_ADDR is "caddy:443", not 192.0.2.5:443`},
+		"unspecific proxy address": {func(_ *testing.T, f *fixture) { f.cfg.Prod.LabProxyAddr = "0.0.0.0" },
+			resolver, `PADDOCK_LAB_PROXY_ADDR "0.0.0.0" is not a specific IP address`},
+		"no proxy address": {func(_ *testing.T, f *fixture) { f.cfg.Prod.LabProxyAddr = "" },
+			resolver, `PADDOCK_LAB_PROXY_ADDR "" is not a specific IP address`},
+		"admin URL without admin.": {setEnv("paddock-api", "PADDOCK_PUBLIC_ADMIN_URL", "https://portal."+labDomain),
+			resolver, `PADDOCK_PUBLIC_ADMIN_URL "https://portal.paddock.example.org" is not https://admin.<domain>`},
+		"admin URL over http": {setEnv("paddock-api", "PADDOCK_PUBLIC_ADMIN_URL", "http://admin."+labDomain),
+			resolver, `PADDOCK_PUBLIC_ADMIN_URL "http://admin.paddock.example.org" is not https://admin.<domain>`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newLabFixture(t)
+			tc.mutate(t, f)
+			ok, out := runLab(t, f.cfg, nil)
+			if ok {
+				t.Fatalf("expected FAIL:\n%s", out)
+			}
+			failItem(t, out, tc.item, tc.want)
+		})
+	}
+}
+
+// TestNetworkModeOnEveryHost: a service in the host's network namespace, or in a namespace the configuration does not
+// describe, fails the ports item on every host; sharing a checked service's namespace and network_mode none pass
+// (PDK-104).
+func TestNetworkModeOnEveryHost(t *testing.T) {
+	portItems := map[string]string{
+		prodcheck.HostControlPlane: "only 80/443 published, other ports on the interconnect address only",
+		prodcheck.HostAudit:        "only 80/443 published, other ports on the interconnect address only",
+		prodcheck.HostLab:          "only Caddy's HTTP port published, on the bind address",
+	}
+	for host, item := range portItems {
+		t.Run(host, func(t *testing.T) {
+			for mode, want := range map[string]string{
+				"host":            "postgres: network_mode host exposes every port of the service on the host",
+				"container:other": "postgres: network_mode container:other shares a network namespace this check does not see",
+				"service:missing": "postgres: network_mode service:missing shares a network namespace this check does not see",
+				"service:caddy":   "",
+				"none":            "",
+			} {
+				f := newLabFixture(t)
+				f.cfg.Services["postgres"] = prodcheck.Service{NetworkMode: mode}
+				_, out := run(t, f.cfg, prodcheck.Options{Host: host})
+				if want == "" {
+					if strings.Contains(out, "network_mode") {
+						t.Errorf("network_mode %s: unexpected finding:\n%s", mode, out)
+					}
+					continue
+				}
+				failItem(t, out, item, want)
+			}
+		})
+	}
+}
+
+// TestParseLabShapes:extra_hosts and service networks in the shape `docker compose config --format json` renders
+// (plan M8a §2), including a network without options.
+func TestParseLabShapes(t *testing.T) {
+	cfg, err := prodcheck.Parse(strings.NewReader(`{"services":{
+		"caddy":{"networks":{"cp":{"aliases":["admin.example.org","auth.example.org"]},"edge":null}},
+		"paddock-api":{"extra_hosts":["admin.example.org=192.0.2.5","auth.example.org=192.0.2.5"],"networks":{"cp":{}}},
+		"proxy":{"network_mode":"host"}},
+		"x-paddock-prod":{"interconnect_addr":"192.0.2.10","revocation_accepted":"no","lab_proxy_addr":"192.0.2.5"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caddy, api := cfg.Services["caddy"], cfg.Services["paddock-api"]
+	if !slices.Equal(caddy.Networks["cp"].Aliases, []string{"admin.example.org", "auth.example.org"}) ||
+		len(caddy.Networks["edge"].Aliases) != 0 || len(caddy.Networks) != 2 ||
+		!slices.Equal(api.ExtraHosts, []string{"admin.example.org=192.0.2.5", "auth.example.org=192.0.2.5"}) ||
+		cfg.Prod.LabProxyAddr != "192.0.2.5" || cfg.Services["proxy"].NetworkMode != "host" {
 		t.Fatalf("unexpected parse result: %+v", cfg)
 	}
 }

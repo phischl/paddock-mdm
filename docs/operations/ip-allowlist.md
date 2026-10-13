@@ -45,7 +45,7 @@ A header is read **only** from peers in the list; anybody else's `X-Forwarded-Fo
 header, any `/0` range, an unknown header name or an unparsable range stop Caddy from starting (`caddy/entrypoint.sh`
 prints the reason) and fail `./paddock check` (item `edge client address`).
 
-Three configurations:
+Four configurations:
 
 1. **Caddy is the first proxy** (default): leave both variables at their defaults.
 2. **A load balancer that appends `X-Forwarded-For`:**
@@ -63,6 +63,13 @@ Three configurations:
    recurring operator task: a new Cloudflare address that is not in the list counts as an untrusted peer, so requests
    through it are treated as coming from that address (fail closed, never spoofable) and allow-listed administrators
    behind it are denied until the list is updated.
+4. **A LAN proxy (lab profile):** the proxy that terminates TLS in front of a lab host; its address only, never
+   `private_ranges` (`./paddock check` refuses it on a lab host):
+   ```sh
+   PADDOCK_EDGE_TRUSTED_PROXIES=<proxy address>
+   PADDOCK_EDGE_CLIENT_IP_HEADER=X-Forwarded-For
+   ```
+   Details and the same-host variant: `docs/operations/lab-install.md`.
 
 Behind Caddy there is exactly one hop: Caddy replaces the header `X-Paddock-Client-IP` on every request to the
 Paddock roles with the address it resolved, and the roles read that header only from peers in

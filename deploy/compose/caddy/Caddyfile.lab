@@ -1,0 +1,74 @@
+{
+	# Lab (compose.lab.yaml, ADR 0029): the operator's reverse proxy terminates TLS and forwards plain HTTP to
+	# port 80 of this container, which compose.lab.yaml publishes on PADDOCK_INTERCONNECT_ADDR only. The sites
+	# are explicit http:// addresses: no certificates, no redirects.
+	auto_https off
+	http_port 80
+	admin 127.0.0.1:2019
+	# Trusted proxies and the client address header, rendered by /paddock/entrypoint.sh from
+	# PADDOCK_EDGE_TRUSTED_PROXIES and PADDOCK_EDGE_CLIENT_IP_HEADER (plan M7a decision 2).
+	{$CADDY_SERVERS_BLOCK}
+}
+
+import /etc/caddy/guards.caddy
+
+http://admin.{$PADDOCK_DOMAIN} {
+	import admin_site
+}
+
+http://auth.{$PADDOCK_DOMAIN} {
+	import authentik_site
+}
+
+http://device.{$PADDOCK_DOMAIN} {
+	reverse_proxy paddock-gateway:8081 {
+		header_up X-Paddock-Client-IP {client_ip}
+	}
+}
+
+# Bundles are served only through presigned GET URLs (architecture §7.3); everything else is refused at the edge.
+# Agent packages are public (plan M4b decision 1): /packages/… maps to the anonymously readable packages/ prefix of
+# paddock-agent-artifacts.
+http://bundles.{$PADDOCK_DOMAIN} {
+	@packages {
+		method GET HEAD
+		path /packages/*
+	}
+	handle @packages {
+		rewrite * /paddock-agent-artifacts{path}
+		reverse_proxy rustfs:9000
+	}
+	@read {
+		method GET HEAD
+		path /paddock-bundles/* /paddock-agent-artifacts/*
+	}
+	handle @read {
+		reverse_proxy rustfs:9000
+	}
+	# Devices upload escrowed LUKS headers with presigned PUTs (plan M4b decision 10); the signature fixes the key.
+	@escrow {
+		method PUT
+		path /paddock-escrow/org/*
+	}
+	handle @escrow {
+		reverse_proxy rustfs:9000
+	}
+	handle {
+		respond 403
+	}
+}
+
+# Fleet (plan M5a decision 1, architecture §4.1): only the device endpoints of osquery and fleetd are published.
+http://fleet.{$PADDOCK_DOMAIN} {
+	@carve path /api/osquery/carve/* /api/v1/osquery/carve/*
+	handle @carve {
+		respond 404
+	}
+	@device path /api/osquery/* /api/v1/osquery/* /api/fleet/orbit/*
+	handle @device {
+		reverse_proxy fleet:8080
+	}
+	handle {
+		respond 404
+	}
+}

@@ -21,15 +21,15 @@ var errProdCheckFailed = errors.New("prod-check: at least one item failed")
 func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	fs := flag.NewFlagSet("prod-check", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	host := fs.String("host", prodcheck.HostControlPlane, "controlplane or audit")
+	host := fs.String("host", prodcheck.HostControlPlane, "controlplane, audit or lab")
 	files := fs.String("compose-files", "", "comma-separated Compose files of the configuration")
-	online := fs.Bool("online", false, "also read the audit bucket's Object Lock configuration (audit host)")
+	online := fs.Bool("online", false, "also read the audit bucket's Object Lock configuration (audit or lab host)")
 	var devKeys multiFlag
 	fs.Var(&devKeys, "dev-release-key", "public key written by make dev-release-key (repeatable)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return errUsage
 	}
-	if *host != prodcheck.HostControlPlane && *host != prodcheck.HostAudit {
+	if *host != prodcheck.HostControlPlane && *host != prodcheck.HostAudit && *host != prodcheck.HostLab {
 		return errUsage
 	}
 	cfg, err := prodcheck.Parse(stdin)
@@ -40,7 +40,7 @@ func runProdCheck(ctx context.Context, args []string, stdin io.Reader, stdout io
 	if *files != "" {
 		opts.ComposeFiles = strings.Split(*files, ",")
 	}
-	if *online && *host == prodcheck.HostAudit {
+	if *online && (*host == prodcheck.HostAudit || *host == prodcheck.HostLab) {
 		store, err := auditBucket(cfg)
 		if err != nil {
 			return err

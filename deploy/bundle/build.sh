@@ -3,7 +3,7 @@
 # subset of deploy/compose/ plus the files of deploy/bundle/, never a transformation of the Compose files.
 #   build.sh --version <v> --channel stable|edge|local --images <images.txt | local> --out <dir>
 # Writes <dir>/paddock-deploy-<v>/ and the reproducible tarball <dir>/paddock-deploy-<v>.tar.gz, after checking that
-# both production configurations render and carry no build section. Exit 1: validation failed; exit 2: usage.
+# the production and lab configurations render and carry no build section. Exit 1: validation failed; exit 2: usage.
 # Environment: SOURCE_DATE_EPOCH (default: the commit's author time), GIT_COMMIT (default: HEAD); for --images local
 # LOCAL_SERVER_IMAGE, LOCAL_COMPILER_IMAGE, LOCAL_PGBACKREST_IMAGE (default paddock-{server,compiler,pgbackrest}:dev).
 set -euo pipefail
@@ -67,8 +67,9 @@ mkdir -p "$dir"
 # The production subset of deploy/compose/ (decision 11). Development files, image sources, tests and the
 # development-only scripts stay out.
 shipped=(
-  compose.yaml compose.prod.yaml compose.backup.yaml compose.audit.yaml compose.audit.prod.yaml
-  caddy/Caddyfile.prod caddy/guards.caddy caddy/entrypoint.sh
+  compose.yaml compose.prod.yaml compose.backup.yaml compose.audit.yaml compose.audit.prod.yaml compose.lab.yaml
+  caddy/Caddyfile.prod caddy/Caddyfile.lab caddy/guards.caddy caddy/entrypoint.sh
+  nginx/paddock.conf.example
   openbao/config.hcl openbao/prod.hcl
   rabbitmq/rabbitmq.conf rabbitmq/enabled_plugins rabbitmq/tls.conf rabbitmq/definitions.json.tmpl
   valkey/valkey.conf
@@ -95,6 +96,7 @@ done
 copy "$here/paddock" "$dir/paddock"
 chmod 0755 "$dir/paddock"
 copy "$src/prod.env.example" "$dir/.env.example"
+copy "$src/lab.env.example" "$dir/.env.lab.example"
 
 # versions.env: the third-party images of the stack (everything above the build and tooling images) and the three
 # Paddock images of this version (decision 12).
@@ -137,20 +139,26 @@ readme="${readme//@CHANNEL_NOTICE@/$notice}"
 printf '%s\n' "$readme" >"$dir/README.md"
 chmod 0644 "$dir/README.md"
 
-# Validation (decision 21): no shipped Compose file has a build section, and both production configurations render.
+# Validation (decision 21): no shipped Compose file has a build section, and the configurations of the three hosts
+# render; the lab's with its own settings and the backup file (plan M8a decision 9).
 for f in "$dir"/compose*.yaml; do
   if grep -qE '^[[:space:]]*build:' "$f"; then fail "$(basename "$f") contains a build section"; fi
 done
 lib_files() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$dir/scripts/lib.sh"; }
-for host in controlplane audit; do
+for host in controlplane audit lab; do
   files="$(lib_files "PROD_FILES_$host")"
   [[ -n "$files" ]] || fail "scripts/lib.sh: no PROD_FILES_$host"
+  settings=.env.example
+  if [[ "$host" == lab ]]; then
+    settings=.env.lab.example
+    files+=" $(lib_files LAB_BACKUP_FILES)"
+  fi
   args=()
   for f in $files; do args+=(-f "$dir/$f"); done
   if ! rendered="$(env -u PADDOCK_IMAGE -u PADDOCK_COMPILER_IMAGE -u PADDOCK_PGBACKREST_IMAGE \
     PADDOCK_BACKUP_S3_ENDPOINT=https://backup-s3.example.org \
     docker compose --project-directory "$dir" -p paddock-bundle-check --env-file "$dir/versions.env" \
-    --env-file "$dir/.env.example" "${args[@]}" --profile '*' config 2>&1)"; then
+    --env-file "$dir/$settings" "${args[@]}" --profile '*' config 2>&1)"; then
     printf '%s\n' "$rendered" >&2
     fail "the $host configuration ($files) does not render"
   fi
