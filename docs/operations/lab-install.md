@@ -191,6 +191,8 @@ Bind Caddy to loopback and let the proxy forward there:
   ```sh
   docker network inspect paddock_cp paddock_audit-index -f '{{(index .IPAM.Config 0).Subnet}}'
   ```
+- In this variant every local process on the host reaches Caddy from the same gateway address as the proxy, so Caddy
+  trusts its `X-Forwarded-For` like the proxy's. Prefer the proxy on another machine when the host runs anything else.
 - Docker assigns these addresses when it creates the networks. After `./paddock down` (which removes them) read the
   gateway and both subnets again and update `.env` before the next `./paddock up`.
 
