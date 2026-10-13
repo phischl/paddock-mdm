@@ -176,7 +176,8 @@ every device: 14 000 conditions on 10 000 devices.
 | `GET /api/v1/attention?page_size=100` | 90 ms | 101 ms | 104 ms | 91 ms | 101 ms | 104 ms |
 | `GET /api/v1/attention?kind=agent_outdated` | 67 ms | 74 ms | 75 ms | 88 ms | 108 ms | 138 ms |
 | `GET /api/v1/attention/devices?page_size=25` | 114 ms | 151 ms | 170 ms | 158 ms | **202 ms** | 224 ms |
-| `GET /api/v1/attention/devices?page_size=25&kind=agent_outdated` | 118 ms | 162 ms | 176 ms | 203 ms | **236 ms** | 312 ms |
+| `GET /api/v1/attention/devices?page_size=25&kind=agent_outdated` | 118 ms | 162 ms | 176 ms | 203 ms | **236 ms** |
+312 ms |
 | `GET /api/v1/overview` | 46 ms | 56 ms | 58 ms | 57 ms | 64 ms | 73 ms |
 
 The attention list meets the target (p95 ≤ 200 ms at 10 000 devices) in every variant, and so does the overview,
