@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-10-13
+
+The first published pre-release. 0.1.0-alpha.1 was tagged but never published; its changes are listed in its own
+section below and are part of this release.
+
 ### Added
 
 - Overview: latest published agent release and running rollout (plan M7c decision 26, amendment 2026-10-12). The
@@ -658,5 +663,6 @@ acceptance.
   in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
-[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.1...v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.1
