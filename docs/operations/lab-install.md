@@ -162,8 +162,14 @@ Restrict the port to the proxy's address on the Paddock host anyway. Docker publ
 belongs in the `DOCKER-USER` chain (persist it with your firewall tooling):
 
 ```sh
-sudo iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport 8080 --ctdir ORIGINAL ! -s 192.0.2.5 -j DROP
+sudo iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdst 192.0.2.10 --ctorigdstport 8080 --ctdir ORIGINAL \
+  ! -s 192.0.2.5 -j DROP
 ```
+
+Replace `192.0.2.10` with `PADDOCK_INTERCONNECT_ADDR`, `8080` with `PADDOCK_LAB_HTTP_PORT` and `192.0.2.5` with the
+proxy's address. Keep `--ctorigdst`: without it the rule matches every forwarded connection to port 8080, including
+the containers' own calls to each other (Caddy to Fleet and the api, the api to the escrow reader) and breaks the
+stack.
 
 ### Proxy on the Paddock host itself
 
@@ -178,8 +184,15 @@ Bind Caddy to loopback and let the proxy forward there:
   ```sh
   docker network inspect paddock_cp -f '{{(index .IPAM.Config 0).Gateway}}'
   ```
-- `PADDOCK_INTERNAL_CIDRS`: the subnet of the same network (`{{(index .IPAM.Config 0).Subnet}}`): the roles' calls
-  reach the proxy on this host from their container addresses.
+- `PADDOCK_INTERNAL_CIDRS`: the subnets of `paddock_cp` and of `paddock_audit-index`, separated by a comma
+  (`{{(index .IPAM.Config 0).Subnet}}` of each): the roles' calls reach the proxy on this host from their container
+  addresses, and the api leaves through `audit-index`, its first network. Without that subnet the api's calls to
+  Authentik's API are refused with 403.
+  ```sh
+  docker network inspect paddock_cp paddock_audit-index -f '{{(index .IPAM.Config 0).Subnet}}'
+  ```
+- Docker assigns these addresses when it creates the networks. After `./paddock down` (which removes them) read the
+  gateway and both subnets again and update `.env` before the next `./paddock up`.
 
 ## 5. Install
 
