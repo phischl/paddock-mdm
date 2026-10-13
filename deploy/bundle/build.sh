@@ -69,6 +69,7 @@ mkdir -p "$dir"
 shipped=(
   compose.yaml compose.prod.yaml compose.backup.yaml compose.audit.yaml compose.audit.prod.yaml compose.lab.yaml
   caddy/Caddyfile.prod caddy/Caddyfile.lab caddy/guards.caddy caddy/entrypoint.sh
+  nginx/paddock.conf.example
   openbao/config.hcl openbao/prod.hcl
   rabbitmq/rabbitmq.conf rabbitmq/enabled_plugins rabbitmq/tls.conf rabbitmq/definitions.json.tmpl
   valkey/valkey.conf
