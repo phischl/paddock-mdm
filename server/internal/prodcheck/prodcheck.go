@@ -50,8 +50,9 @@ type Service struct {
 	Volumes     []Volume           `json:"volumes"`
 	Command     []string           `json:"command"`
 	// ExtraHosts are rendered as "<host>=<ip>" entries.
-	ExtraHosts []string                  `json:"extra_hosts"`
-	Networks   map[string]ServiceNetwork `json:"networks"`
+	ExtraHosts  []string                  `json:"extra_hosts"`
+	Networks    map[string]ServiceNetwork `json:"networks"`
+	NetworkMode string                    `json:"network_mode"`
 }
 
 // ServiceNetwork is a service's attachment to one network.
@@ -400,6 +401,7 @@ func checkPorts(c Config) Result {
 		f = append(f, fmt.Sprintf("PADDOCK_INTERCONNECT_ADDR %q is not a specific IP address", addr))
 		addr = ""
 	}
+	f = append(f, networkModeFindings(c)...)
 	for _, name := range sortedServices(c) {
 		for _, p := range c.Services[name].Ports {
 			// 80 and 443 are public, and only Caddy may hold them.
@@ -422,6 +424,7 @@ func checkLabPorts(c Config) Result {
 	if !specificIP(addr) {
 		f = append(f, fmt.Sprintf("PADDOCK_INTERCONNECT_ADDR %q is not a specific IP address", addr))
 	}
+	f = append(f, networkModeFindings(c)...)
 	for _, name := range sortedServices(c) {
 		ports := c.Services[name].Ports
 		if name != "caddy" {
@@ -443,6 +446,28 @@ func checkLabPorts(c Config) Result {
 		f = append(f, fmt.Sprintf("caddy: publishes %d ports, want exactly one", n))
 	}
 	return result("only Caddy's HTTP port published, on the bind address", f)
+}
+
+// networkModeFindings reports network namespaces the port items cannot see: the host's own (every port the service
+// listens on is reachable) and another container's. Sharing the namespace of a service of this configuration is
+// accepted, because that service's ports are checked (PDK-104).
+func networkModeFindings(c Config) []string {
+	var f []string
+	for _, name := range sortedServices(c) {
+		mode := strings.TrimSpace(c.Services[name].NetworkMode)
+		if target, ok := strings.CutPrefix(mode, "service:"); ok {
+			if _, checked := c.Services[target]; checked {
+				continue
+			}
+		}
+		switch {
+		case mode == "host":
+			f = append(f, name+": network_mode host exposes every port of the service on the host")
+		case strings.HasPrefix(mode, "service:"), strings.HasPrefix(mode, "container:"):
+			f = append(f, fmt.Sprintf("%s: network_mode %s shares a network namespace this check does not see", name, mode))
+		}
+	}
+	return f
 }
 
 func specificIP(s string) bool {
@@ -548,17 +573,13 @@ func checkLabCaddy(c Config) Result {
 	f, content := caddyMounts(c.Services["caddy"])
 	autoHTTPSOff := false
 	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimRight(line, " \t\r")
-		if fields := strings.Fields(line); len(fields) == 2 && fields[0] == "auto_https" && fields[1] == "off" {
+		if fields := caddyTokens(line); len(fields) == 2 && fields[0] == "auto_https" && fields[1] == "off" {
 			autoHTTPSOff = true
 		}
-		if !isSiteLine(line) {
-			continue
-		}
-		for _, addr := range strings.FieldsFunc(strings.TrimSuffix(line, " {"), isSiteSeparator) {
-			if !strings.HasPrefix(addr, "http://") {
-				f = append(f, fmt.Sprintf("Caddyfile site %q is not an http:// site", addr))
-			}
+	}
+	for _, addr := range caddySiteAddresses(content) {
+		if !strings.HasPrefix(addr, "http://") {
+			f = append(f, fmt.Sprintf("Caddyfile site %q is not an http:// site", addr))
 		}
 	}
 	if content != "" && !autoHTTPSOff {
@@ -567,16 +588,63 @@ func checkLabCaddy(c Config) Result {
 	return result("Caddy: plain HTTP behind the TLS proxy", f)
 }
 
-// isSiteLine reports whether a Caddyfile line opens a site block: not indented, ending in " {", and neither the global
-// options block nor a snippet or import.
-func isSiteLine(line string) bool {
-	if line == "" || line[0] == ' ' || line[0] == '\t' || line == "{" || !strings.HasSuffix(line, " {") {
-		return false
+// caddyTokens splits a Caddyfile line into tokens and drops a comment: a token that starts with #.
+func caddyTokens(line string) []string {
+	fields := strings.Fields(line)
+	for i, t := range fields {
+		if strings.HasPrefix(t, "#") {
+			return fields[:i]
+		}
 	}
-	return !strings.HasPrefix(line, "(") && !strings.HasPrefix(line, "import")
+	return fields
 }
 
-func isSiteSeparator(r rune) bool { return r == ',' || r == ' ' || r == '\t' }
+// caddySiteAddresses returns the addresses of every top-level block of a Caddyfile that is neither the global options
+// block nor a snippet: the tokens before a "{" at nesting depth 0, including the lines of a comma-continued address
+// list, regardless of indentation. Lines at depth 0 that open no block (import) are not addresses.
+func caddySiteAddresses(content string) []string {
+	var addrs, pending []string
+	depth := 0
+	for _, line := range strings.Split(content, "\n") {
+		tokens := caddyTokens(line)
+		if len(tokens) == 0 {
+			continue
+		}
+		if depth == 0 {
+			opens := tokens[len(tokens)-1] == "{"
+			words := tokens
+			if opens {
+				words = tokens[:len(tokens)-1]
+			}
+			var lineAddrs []string
+			for _, w := range words {
+				lineAddrs = append(lineAddrs, strings.FieldsFunc(w, func(r rune) bool { return r == ',' })...)
+			}
+			switch {
+			case opens:
+				block := slices.Concat(pending, lineAddrs)
+				pending = nil
+				if len(block) > 0 && !strings.HasPrefix(block[0], "(") && !strings.HasPrefix(block[0], "&(") {
+					addrs = append(addrs, block...)
+				}
+			case strings.HasSuffix(words[len(words)-1], ","):
+				pending = append(pending, lineAddrs...)
+				continue
+			default:
+				pending = nil
+			}
+		}
+		for _, t := range tokens {
+			switch t {
+			case "{":
+				depth++
+			case "}":
+				depth--
+			}
+		}
+	}
+	return addrs
+}
 
 // caddyMounts checks the Caddyfile and the edge files mounted next to it and returns the Caddyfile's content ("" when
 // it is missing or unreadable, which is a finding).
@@ -634,8 +702,8 @@ var edgeHeaders = []string{"none", "X-Forwarded-For", "CF-Connecting-IP"}
 
 // checkEdgeClientAddress checks the trusted proxies and the client address header of the edge (plan M7a decisions 1
 // and 24): one known header, proxies exactly when a header is read, no /0, the servers block on every listener. Behind
-// the lab proxy (plan M8a decision 12) the header is X-Forwarded-For and the proxies are named addresses, so that no
-// other LAN peer can name the client.
+// the lab proxy (plan M8a decision 12) the header is X-Forwarded-For and the proxy list is not empty and does not hold
+// private_ranges.
 func checkEdgeClientAddress(c Config, lab bool) Result {
 	var f []string
 	s := c.Services["caddy"]
@@ -731,7 +799,7 @@ func checkLabProxyResolution(c Config) Result {
 	}
 	adminURL := env(c.Services["paddock-api"], "PADDOCK_PUBLIC_ADMIN_URL")
 	domain, hasPrefix := "", false
-	if u, err := url.Parse(adminURL); err == nil {
+	if u, err := url.Parse(adminURL); err == nil && u.Scheme == "https" {
 		domain, hasPrefix = strings.CutPrefix(u.Hostname(), "admin.")
 	}
 	if !hasPrefix || domain == "" {
@@ -741,8 +809,22 @@ func checkLabProxyResolution(c Config) Result {
 	for _, role := range labRoles {
 		hosts := c.Services[role].ExtraHosts
 		for _, n := range labNames {
-			if want := n + "." + domain + "=" + proxy; !slices.Contains(hosts, want) {
-				f = append(f, fmt.Sprintf("%s: extra_hosts lacks %s", role, want))
+			name := n + "." + domain
+			found := false
+			// Every entry for the name counts: Compose sorts extra_hosts, so a second entry from another overlay may be
+			// the one the role resolves.
+			for _, h := range hosts {
+				host, ip, ok := strings.Cut(h, "=")
+				if !ok || host != name {
+					continue
+				}
+				found = true
+				if ip != proxy {
+					f = append(f, fmt.Sprintf("%s: extra_hosts maps %s to %s, not to the proxy %s", role, name, ip, proxy))
+				}
+			}
+			if !found {
+				f = append(f, fmt.Sprintf("%s: extra_hosts lacks %s=%s", role, name, proxy))
 			}
 		}
 	}

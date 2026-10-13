@@ -649,6 +649,12 @@ func TestLabFindings(t *testing.T) {
 			caddy, `Caddyfile site "https://admin.{$PADDOCK_DOMAIN}" is not an http:// site`},
 		"bare site": {writeCaddyfile("{\n\tauto_https off\n}\nhttp://auth.{$PADDOCK_DOMAIN}, admin.{$PADDOCK_DOMAIN} {\n}\n"),
 			caddy, `Caddyfile site "admin.{$PADDOCK_DOMAIN}" is not an http:// site`},
+		"https in a multi-line address list": {writeCaddyfile("{\n\tauto_https off\n}\nhttp://admin.{$PADDOCK_DOMAIN},\n\thttps://auth.{$PADDOCK_DOMAIN} {\n}\n"),
+			caddy, `Caddyfile site "https://auth.{$PADDOCK_DOMAIN}" is not an http:// site`},
+		"https site with a comment after the brace": {writeCaddyfile("{\n\tauto_https off\n}\nhttps://admin.{$PADDOCK_DOMAIN} { # portal\n}\n"),
+			caddy, `Caddyfile site "https://admin.{$PADDOCK_DOMAIN}" is not an http:// site`},
+		"indented https site": {writeCaddyfile("{\n\tauto_https off\n}\n  https://admin.{$PADDOCK_DOMAIN} {\n}\n"),
+			caddy, `Caddyfile site "https://admin.{$PADDOCK_DOMAIN}" is not an http:// site`},
 		"no auto_https off": {writeCaddyfile("{\n\tauto_https disable_redirects\n}\nhttp://admin.{$PADDOCK_DOMAIN} {\n}\n"),
 			caddy, "Caddyfile does not set auto_https off"},
 		"tls internal": {writeCaddyfile(labCaddyfile + "http://bundles.{$PADDOCK_DOMAIN} {\n\ttls internal\n}\n"),
@@ -676,7 +682,14 @@ func TestLabFindings(t *testing.T) {
 		"missing extra host": {setHosts("paddock-escrow-reader", labHosts()[:4]),
 			resolver, "paddock-escrow-reader: extra_hosts lacks fleet.paddock.example.org=192.0.2.5"},
 		"extra host to another address": {setHosts("paddock-revocation-issuer", []string{"auth." + labDomain + "=192.0.2.99"}),
-			resolver, "paddock-revocation-issuer: extra_hosts lacks auth.paddock.example.org=192.0.2.5"},
+			resolver, "paddock-revocation-issuer: extra_hosts maps auth.paddock.example.org to 192.0.2.99, not to the proxy 192.0.2.5"},
+		"conflicting extra host": {setHosts("paddock-api", append([]string{"admin." + labDomain + "=10.9.9.9"}, labHosts()...)),
+			resolver, "paddock-api: extra_hosts maps admin.paddock.example.org to 10.9.9.9, not to the proxy 192.0.2.5"},
+		"lab network_mode host": {func(_ *testing.T, f *fixture) {
+			s := f.service("paddock-worker")
+			s.NetworkMode = "host"
+			f.cfg.Services["paddock-worker"] = s
+		}, ports, "paddock-worker: network_mode host exposes every port of the service on the host"},
 		"wrong probe address": {setEnv("paddock-worker", "PADDOCK_TLS_PROBE_ADDR", "caddy:443"),
 			resolver, `paddock-worker: PADDOCK_TLS_PROBE_ADDR is "caddy:443", not 192.0.2.5:443`},
 		"unspecific proxy address": {func(_ *testing.T, f *fixture) { f.cfg.Prod.LabProxyAddr = "0.0.0.0" },
@@ -685,6 +698,8 @@ func TestLabFindings(t *testing.T) {
 			resolver, `PADDOCK_LAB_PROXY_ADDR "" is not a specific IP address`},
 		"admin URL without admin.": {setEnv("paddock-api", "PADDOCK_PUBLIC_ADMIN_URL", "https://portal."+labDomain),
 			resolver, `PADDOCK_PUBLIC_ADMIN_URL "https://portal.paddock.example.org" is not https://admin.<domain>`},
+		"admin URL over http": {setEnv("paddock-api", "PADDOCK_PUBLIC_ADMIN_URL", "http://admin."+labDomain),
+			resolver, `PADDOCK_PUBLIC_ADMIN_URL "http://admin.paddock.example.org" is not https://admin.<domain>`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -699,12 +714,46 @@ func TestLabFindings(t *testing.T) {
 	}
 }
 
-// TestParseLabShapes: extra_hosts and service networks in the shape `docker compose config --format json` renders
+// TestNetworkModeOnEveryHost: a service in the host's network namespace, or in a namespace the configuration does not
+// describe, fails the ports item on every host; sharing a checked service's namespace and network_mode none pass
+// (PDK-104).
+func TestNetworkModeOnEveryHost(t *testing.T) {
+	portItems := map[string]string{
+		prodcheck.HostControlPlane: "only 80/443 published, other ports on the interconnect address only",
+		prodcheck.HostAudit:        "only 80/443 published, other ports on the interconnect address only",
+		prodcheck.HostLab:          "only Caddy's HTTP port published, on the bind address",
+	}
+	for host, item := range portItems {
+		t.Run(host, func(t *testing.T) {
+			for mode, want := range map[string]string{
+				"host":            "postgres: network_mode host exposes every port of the service on the host",
+				"container:other": "postgres: network_mode container:other shares a network namespace this check does not see",
+				"service:missing": "postgres: network_mode service:missing shares a network namespace this check does not see",
+				"service:caddy":   "",
+				"none":            "",
+			} {
+				f := newLabFixture(t)
+				f.cfg.Services["postgres"] = prodcheck.Service{NetworkMode: mode}
+				_, out := run(t, f.cfg, prodcheck.Options{Host: host})
+				if want == "" {
+					if strings.Contains(out, "network_mode") {
+						t.Errorf("network_mode %s: unexpected finding:\n%s", mode, out)
+					}
+					continue
+				}
+				failItem(t, out, item, want)
+			}
+		})
+	}
+}
+
+// TestParseLabShapes:extra_hosts and service networks in the shape `docker compose config --format json` renders
 // (plan M8a §2), including a network without options.
 func TestParseLabShapes(t *testing.T) {
 	cfg, err := prodcheck.Parse(strings.NewReader(`{"services":{
 		"caddy":{"networks":{"cp":{"aliases":["admin.example.org","auth.example.org"]},"edge":null}},
-		"paddock-api":{"extra_hosts":["admin.example.org=192.0.2.5","auth.example.org=192.0.2.5"],"networks":{"cp":{}}}},
+		"paddock-api":{"extra_hosts":["admin.example.org=192.0.2.5","auth.example.org=192.0.2.5"],"networks":{"cp":{}}},
+		"proxy":{"network_mode":"host"}},
 		"x-paddock-prod":{"interconnect_addr":"192.0.2.10","revocation_accepted":"no","lab_proxy_addr":"192.0.2.5"}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -713,7 +762,7 @@ func TestParseLabShapes(t *testing.T) {
 	if !slices.Equal(caddy.Networks["cp"].Aliases, []string{"admin.example.org", "auth.example.org"}) ||
 		len(caddy.Networks["edge"].Aliases) != 0 || len(caddy.Networks) != 2 ||
 		!slices.Equal(api.ExtraHosts, []string{"admin.example.org=192.0.2.5", "auth.example.org=192.0.2.5"}) ||
-		cfg.Prod.LabProxyAddr != "192.0.2.5" {
+		cfg.Prod.LabProxyAddr != "192.0.2.5" || cfg.Services["proxy"].NetworkMode != "host" {
 		t.Fatalf("unexpected parse result: %+v", cfg)
 	}
 }
