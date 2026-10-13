@@ -657,3 +657,26 @@ PDK-102 MAY run in parallel with PDK-101 once PDK-100 is merged.
   S3 but disappears with `./paddock down --volumes`. Stated in the guide; not relaxed.
 - **Fleet's feeds:** the lab keeps Fleet's anonymous GitHub lookup; a rate-limited runner shows up as a Fleet
   warning, not as a Paddock failure.
+
+## Amendment 2026-10-13
+
+Decision 18 as implemented (`deploy/bundle/ci/smoke-lab.sh`, `deploy/bundle/ci/compose.ci-lab.yaml`) differs in three
+points; the rest of decision 18 holds.
+
+- **Internal CIDRs.** The CI overlay also pins network `audit-index` to `172.30.1.0/24` (gateway `172.30.1.1`):
+  it is the api's default route and therefore the source of its calls through Nginx. `PADDOCK_INTERNAL_CIDRS` is
+  `172.30.0.0/24 172.30.1.0/24 <primary address>/32`, entries separated by a space. The smoke test adds one probe:
+  the api's call to Authentik's API through Nginx, sent from the api's network namespace, answers 200 (a 403 means
+  the internal CIDRs miss the subnet of the api's route).
+- **Untrusted peer probe.** The forged `X-Forwarded-For` is not sent to `127.0.0.1:8080`: in the same-host topology
+  Docker presents every loopback client of the published port as the gateway of network `cp`, which is the trusted
+  proxy, so the loopback client is indistinguishable from Nginx. The probe instead runs from a container on network
+  `cp` (`http://caddy:80/`, `Host: admin.<domain>`, header `X-Forwarded-For: 203.0.113.9`) and expects 200: that peer
+  is admitted by the edge allow list but is not a trusted proxy, so honouring its header would yield 403. The plain
+  `GET http://127.0.0.1:8080/` → 200 stays.
+- **Worker certificate probe.** The check reads the worker's full compose log, not `./paddock logs` (its last 300
+  lines), so an early `TLS probe failed` cannot scroll out of view. The smoke test's `./paddock` calls pin
+  `PADDOCK_PROJECT=paddock-lab`, so its trap's `down --volumes` never reaches another project on the host.
+
+The first run of the smoke test in its real form is the CI edge job on `main` after the merge of M8a; the edge job
+does not run on pull requests.
