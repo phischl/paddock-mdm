@@ -18,7 +18,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      PADDOCK_ACME_EMAIL: ${PADDOCK_ACME_EMAIL:?set PADDOCK_ACME_EMAIL in .env}
+      PADDOCK_ACME_EMAIL: ${PADDOCK_ACME_EMAIL:-}
       PADDOCK_ADMIN_ALLOWED_CIDRS: ${PADDOCK_ADMIN_ALLOWED_CIDRS:-0.0.0.0/0 ::/0}
       # Edge allow list and client address (plan M7a decisions 1 and 8; docs/operations/ip-allowlist.md).
       PADDOCK_INTERNAL_CIDRS: ${PADDOCK_INTERNAL_CIDRS:-private_ranges}

@@ -1,0 +1,68 @@
+# Lab overrides (ADR 0029, plan M8a decision 4): control plane and audit domain on one host behind the operator's
+# TLS-terminating proxy. `docker compose -f compose.yaml -f compose.prod.yaml -f compose.audit.yaml -f
+# compose.lab.yaml` (PROD_FILES_lab of scripts/lib.sh). NOT FOR PRODUCTION: docs/operations/lab-install.md.
+#
+# Caddy serves plain HTTP on PADDOCK_INTERCONNECT_ADDR only and nothing else is published; the roles reach the five
+# public names through the proxy (extra_hosts) instead of Caddy's network aliases.
+
+# Values of .env that `./paddock check` needs; Compose keeps x- extensions in `docker compose config`.
+x-paddock-prod:
+  lab_proxy_addr: ${PADDOCK_LAB_PROXY_ADDR:?set PADDOCK_LAB_PROXY_ADDR in .env}
+
+x-lab-hosts: &lab-hosts
+  - "admin.${PADDOCK_DOMAIN}:${PADDOCK_LAB_PROXY_ADDR}"
+  - "auth.${PADDOCK_DOMAIN}:${PADDOCK_LAB_PROXY_ADDR}"
+  - "device.${PADDOCK_DOMAIN}:${PADDOCK_LAB_PROXY_ADDR}"
+  - "bundles.${PADDOCK_DOMAIN}:${PADDOCK_LAB_PROXY_ADDR}"
+  - "fleet.${PADDOCK_DOMAIN}:${PADDOCK_LAB_PROXY_ADDR}"
+
+services:
+  caddy:
+    ports: !override
+      - "${PADDOCK_INTERCONNECT_ADDR}:${PADDOCK_LAB_HTTP_PORT:-8080}:80"
+    environment:
+      PADDOCK_ADMIN_ALLOWED_CIDRS: ${PADDOCK_ADMIN_ALLOWED_CIDRS:?set PADDOCK_ADMIN_ALLOWED_CIDRS in .env}
+      PADDOCK_EDGE_TRUSTED_PROXIES: ${PADDOCK_EDGE_TRUSTED_PROXIES:?set PADDOCK_EDGE_TRUSTED_PROXIES in .env}
+      PADDOCK_EDGE_CLIENT_IP_HEADER: ${PADDOCK_EDGE_CLIENT_IP_HEADER:-X-Forwarded-For}
+    volumes:
+      - ./caddy/Caddyfile.lab:/etc/caddy/Caddyfile:ro
+    # No hostname aliases: a role resolving a public name to Caddy would bypass the proxy's TLS.
+    networks: !override [cp]
+
+  # The audit writer runs on this host and reaches both on the internal networks.
+  openbao:
+    ports: !override []
+
+  rabbitmq:
+    ports: !override []
+
+  paddock-api:
+    extra_hosts: *lab-hosts
+
+  paddock-escrow-reader:
+    extra_hosts: *lab-hosts
+
+  paddock-revocation-issuer:
+    extra_hosts: *lab-hosts
+
+  paddock-worker:
+    extra_hosts: *lab-hosts
+    environment:
+      # The certificate the devices see is the proxy's.
+      PADDOCK_TLS_PROBE_ADDR: ${PADDOCK_LAB_PROXY_ADDR}:443
+
+  paddock-audit-migrate:
+    environment:
+      PADDOCK_ENV: production
+
+  paddock-audit-writer:
+    environment:
+      PADDOCK_ENV: production
+      PADDOCK_OPENBAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/secrets/internal_ca_bundle
+    secrets:
+      - internal_ca_bundle
+
+  prometheus:
+    volumes:
+      - ./prometheus/scrape/audit.yml:/etc/prometheus/scrape/audit.yml:ro

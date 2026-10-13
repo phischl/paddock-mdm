@@ -31,13 +31,19 @@ func composeDir(t *testing.T) string {
 // bundle and its ./paddock check use (plan M7b decision 18).
 func prodFiles(t *testing.T, host string) []string {
 	t.Helper()
+	return libFiles(t, "PROD_FILES_"+host)
+}
+
+// libFiles reads one file list of scripts/lib.sh.
+func libFiles(t *testing.T, name string) []string {
+	t.Helper()
 	b, err := os.ReadFile(filepath.Join(composeDir(t), "scripts", "lib.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?m)^PROD_FILES_` + host + `="(.+)"$`).FindSubmatch(b)
+	m := regexp.MustCompile(`(?m)^` + name + `="(.+)"$`).FindSubmatch(b)
 	if m == nil {
-		t.Fatalf("no PROD_FILES_%s in scripts/lib.sh", host)
+		t.Fatalf("no %s in scripts/lib.sh", name)
 	}
 	return strings.Fields(string(m[1]))
 }
@@ -90,8 +96,8 @@ func mountedResult(t *testing.T, cfg prodcheck.Config) prodcheck.Result {
 	return prodcheck.Result{}
 }
 
-// TestComposeConfigsMountEverySecretTheyName renders the real Compose configurations (both production hosts and the
-// development stack with and without backups) and requires that every /run/secrets/ path a service names is mounted
+// TestComposeConfigsMountEverySecretTheyName renders the real Compose configurations (both production hosts, the lab
+// with and without backups and the development stack with and without backups) and requires that every /run/secrets/ path a service names is mounted
 // (regression of review 1 finding 1: the worker's backup secrets dropped by `secrets: !override`).
 func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 	cases := map[string]struct {
@@ -100,6 +106,8 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 	}{
 		"production control plane": {prodFiles(t, "controlplane"), []string{"prod.env.example"}},
 		"production audit host":    {prodFiles(t, "audit"), []string{"prod.env.example"}},
+		"lab":                      {prodFiles(t, "lab"), []string{"lab.env.example"}},
+		"lab with backups":         {append(prodFiles(t, "lab"), libFiles(t, "LAB_BACKUP_FILES")...), []string{"lab.env.example"}},
 		"development":              {[]string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml"}, []string{".env.example"}},
 		"development with backups": {[]string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml", "compose.backup.yaml",
 			"compose.backup.dev.yaml"}, []string{".env.example"}},
@@ -130,7 +138,7 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 // roleProxy matches a reverse_proxy to a Paddock role and the rest of its block up to the closing brace.
 var roleProxy = regexp.MustCompile(`reverse_proxy (paddock-api:8080|paddock-gateway:8081)([^}]*}?)`)
 
-// TestCaddyfilesEdge: both Caddyfiles carry the rendered servers block and import the shared guards, and every proxy
+// TestCaddyfilesEdge: the three Caddyfiles carry the rendered servers block and import the shared guards, and every proxy
 // to a Paddock role replaces X-Paddock-Client-IP with the resolved client address (plan M7a decisions 2, 3, 6).
 func TestCaddyfilesEdge(t *testing.T) {
 	read := func(name string) string {
@@ -140,7 +148,7 @@ func TestCaddyfilesEdge(t *testing.T) {
 		}
 		return string(b)
 	}
-	for _, name := range []string{"Caddyfile", "Caddyfile.prod"} {
+	for _, name := range []string{"Caddyfile", "Caddyfile.prod", "Caddyfile.lab"} {
 		s := read(name)
 		if !strings.Contains(s, "\t{$CADDY_SERVERS_BLOCK}\n}") {
 			t.Errorf("%s: {$CADDY_SERVERS_BLOCK} is not the last line of the global options", name)
@@ -159,7 +167,7 @@ func TestCaddyfilesEdge(t *testing.T) {
 		}
 	}
 	proxies := 0
-	for _, name := range []string{"Caddyfile", "Caddyfile.prod", "guards.caddy"} {
+	for _, name := range []string{"Caddyfile", "Caddyfile.prod", "Caddyfile.lab", "guards.caddy"} {
 		for _, m := range roleProxy.FindAllStringSubmatch(read(name), -1) {
 			proxies++
 			if !strings.HasPrefix(strings.TrimLeft(m[2], " "), "{") || !strings.Contains(m[2], "header_up X-Paddock-Client-IP {client_ip}") {
@@ -167,8 +175,8 @@ func TestCaddyfilesEdge(t *testing.T) {
 			}
 		}
 	}
-	if proxies != 3 {
-		t.Errorf("found %d proxies to Paddock roles, want 3 (admin_site, device. in both Caddyfiles)", proxies)
+	if proxies != 4 {
+		t.Errorf("found %d proxies to Paddock roles, want 4 (admin_site, device. in the three Caddyfiles)", proxies)
 	}
 }
 
@@ -194,6 +202,49 @@ func TestProductionEdge(t *testing.T) {
 			if !r.OK {
 				t.Errorf("%s:\n%s", r.Item, r.Detail)
 			}
+		}
+	}
+}
+
+// TestLabEdge renders the lab (plan M8a decision 10): Caddy publishes one port, on the bind address, and has no
+// hostname aliases, nothing else is published, and the edge and lab items pass with the values of lab.env.example.
+func TestLabEdge(t *testing.T) {
+	cfg := renderConfig(t, prodFiles(t, "lab"), "lab.env.example")
+	caddy := cfg.Services["caddy"]
+	if len(caddy.Ports) != 1 || caddy.Ports[0].HostIP != "192.0.2.10" || caddy.Ports[0].Target != 80 {
+		t.Errorf("caddy publishes %+v, want exactly 192.0.2.10:<port>:80", caddy.Ports)
+	}
+	for _, name := range []string{"openbao", "rabbitmq", "audit-postgres"} {
+		if p := cfg.Services[name].Ports; len(p) != 0 {
+			t.Errorf("%s publishes %+v, want nothing", name, p)
+		}
+	}
+	for network, n := range caddy.Networks {
+		if len(n.Aliases) != 0 {
+			t.Errorf("caddy has aliases %v on network %s", n.Aliases, network)
+		}
+	}
+	want := map[string]bool{
+		"edge client address":                                   false,
+		"role trusted proxies":                                  false,
+		"Caddy: plain HTTP behind the TLS proxy":                false,
+		"lab: edge admin allow list":                            false,
+		"lab: caddy has no hostname aliases":                    false,
+		"lab: roles resolve the public names to the proxy":      false,
+		"only Caddy's HTTP port published, on the bind address": false,
+	}
+	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: prodcheck.HostLab}) {
+		if _, ok := want[r.Item]; !ok {
+			continue
+		}
+		want[r.Item] = true
+		if !r.OK {
+			t.Errorf("%s:\n%s", r.Item, r.Detail)
+		}
+	}
+	for item, seen := range want {
+		if !seen {
+			t.Errorf("no item %q", item)
 		}
 	}
 }
