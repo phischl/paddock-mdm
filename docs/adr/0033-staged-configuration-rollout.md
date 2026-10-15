@@ -1,5 +1,5 @@
 # 0033 — Staged configuration rollout, change-set revert and report-only adoption
-Status: Proposed (architect, 2026-10-15; plan `docs/plans/M11-safe-config.md`)
+Status: Accepted (2026-10-16; plan `docs/plans/M11-safe-config.md`)
 
 ## Context
 
