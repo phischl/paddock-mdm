@@ -16,3 +16,11 @@ applied; portal shows `agent_outdated`. Server upgrade tooling refuses to drop a
 
 ## Consequences
 + No silent degradation. − Renderers for old schema versions must be maintained within the window.
+
+## Amendment 2026-10-16 (ADR 0034)
+Tightening `pkg/policy` (the agent's defence-in-depth path check) is not a bundle format change: the server enforces
+the policy before it signs a bundle, so an agent inside the support window that still carries the older, looser
+check accepts every bundle a newer server produces. During a staged agent rollout the only difference is on the
+device: an older agent deletes an unchanged managed file that left the bundle, a newer agent keeps a file on a
+denied path and stops tracking it. Operators roll the agent out before deleting denied definitions (residual risk
+RR-36).

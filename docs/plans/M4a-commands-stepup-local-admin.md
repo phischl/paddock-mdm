@@ -203,3 +203,14 @@ S2/S6/S7/S8.
 | R1 | Agent-driven rotation timer and offline devices | Rotation only when the server is reachable; overdue state shown in the portal |
 | R2 | `useradd -G sudo` gives full sudo to the local admin | Intended (break-glass); documented; all its logins are audited |
 | R3 | dconf banner differs between GNOME versions | N1 runs on both releases |
+
+## Amendment 2026-10-16 (ADR 0034, plan M8s)
+
+Decision 7 keys the step-up on the *effective* class, not on the class label: a profile needs a step-up when
+`privilege.RequiresStepUp(p)` is true (class `full`, or class `restricted` with a root-equivalent command of the
+catalog in `domain/privilege/rootequiv.go`). The check applies when such a profile is created, when a profile becomes
+one or already is one and its class or command list changes, when it is assigned, and when the scope of such an
+assignment changes; the declarative path applies the same rule. A request authenticated with an API token never
+satisfies a step-up (403 `step_up_required`, token-specific detail). Decision 6's flow `paddock-stepup` validates
+with WebAuthn only; the development stack adds a TOTP stage through the development blueprint. Decision 8 (dev users
+with TOTP) therefore holds in development only.

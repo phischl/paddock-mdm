@@ -37,3 +37,9 @@ PostgreSQL. The product owner requires that a later move to the cloud can use **
 − Idempotency is entirely the consumers' responsibility; every consumer needs a duplicate-delivery test.
 − Two stateful components to operate (3-node RabbitMQ cluster, Valkey primary + replica with Sentinel).
 − Plugin restrictions must be checked against Amazon MQ's supported feature list on every RabbitMQ upgrade.
+
+## Amendment 2026-10-16 (ADR 0034)
+Valkey additionally holds the server-side half of portal sessions (`sess:<sid>`, `acct-sess:<account_id>`,
+`sess-gen`), written and read by the `api` role and revoked by the `worker`. These keys are state the portal
+depends on (503 `session_store_unavailable` while Valkey is unreachable), not a cache: `appendonly yes` and no
+`maxmemory` stay mandatory, and `paddock-server admin rebuild-cache` does not touch them. Devices are unaffected.
