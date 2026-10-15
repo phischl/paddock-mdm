@@ -59,3 +59,11 @@ Response envelope:
 − Breaking change of the M0 list endpoints (`cursor`/`limit` → `page`/`page_size`) — acceptable before the first release.
 − Offset cost on deep pages is bounded by the 10 000 limit; very large audit exports go through a separate export
   function (later milestone), not through paging.
+
+## Amendment 2026-10-15 — cursor feeds
+
+A cursor feed (`GET /api/v1/audit-events/feed`, ADR 0031 decision 3) is not a collection list: an exact-once
+consumer cannot work with offset pages, the 10 000-row depth cap or the 92-day window. Feeds carry the extension
+`x-paddock-feed: { cursor: "after", limit: { default, max } }` instead of `x-paddock-list`, answer
+`{schema, events, next_after, latest}` (never `items`), and the contract test checks them against that rule. The
+portal does not render feeds; every portal list stays a `DataList` over a collection endpoint.
