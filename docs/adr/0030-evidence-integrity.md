@@ -1,5 +1,5 @@
 # 0030 — Evidence integrity: self-verification of the audit chain, device event gaps, audited portal roles
-Status: Proposed (2026-10-15, with plan M8b)
+Status: Accepted (2026-10-16, with plan M8b)
 
 ## Context
 The compliance pack and the architecture promised six controls the code did not have (roadmap 2026-10-15, auditor
