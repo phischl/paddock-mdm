@@ -10,6 +10,15 @@ RETURNING *;
 -- name: GetPermissionProfile :one
 SELECT * FROM permission_profile WHERE id = @id;
 
+-- Gated changes decide on the row they write, so a concurrent demotion is never overwritten by a stale read (plan M8s
+-- decision 7j): FOR UPDATE for a change of the profile, FOR SHARE for a change that only depends on it.
+
+-- name: GetPermissionProfileForUpdate :one
+SELECT * FROM permission_profile WHERE id = @id FOR UPDATE;
+
+-- name: GetPermissionProfileForShare :one
+SELECT * FROM permission_profile WHERE id = @id FOR SHARE;
+
 -- List queries (ADR 0018): see device_group.sql.
 
 -- name: ListPermissionProfiles :many
@@ -66,6 +75,9 @@ RETURNING *;
 
 -- name: GetProfileAssignment :one
 SELECT * FROM profile_assignment WHERE id = @id;
+
+-- name: GetProfileAssignmentForUpdate :one
+SELECT * FROM profile_assignment WHERE id = @id FOR UPDATE;
 
 -- The search matches the profile's name.
 -- name: ListProfileAssignments :many

@@ -179,7 +179,7 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
 	var out pgstore.PermissionProfile
 	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		cur, err := q.GetPermissionProfile(ctx, id)
+		cur, err := q.GetPermissionProfileForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
@@ -231,7 +231,7 @@ func (p *Privileges) ConfirmRootGrant(ctx context.Context, id uuid.UUID) (pgstor
 	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
 	var out pgstore.PermissionProfile
 	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		cur, err := q.GetPermissionProfile(ctx, id)
+		cur, err := q.GetPermissionProfileForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
@@ -343,7 +343,7 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 		rec.SetParam("subject_type", string(in.SubjectType))
 		rec.SetParam("subject_id", idParam(in.SubjectID))
 		rec.SetParam("device_group_id", idParam(in.DeviceGroupID))
-		profile, err := q.GetPermissionProfile(ctx, in.ProfileID)
+		profile, err := q.GetPermissionProfileForShare(ctx, in.ProfileID)
 		if err != nil {
 			return problem.InvalidRequest.WithDetail("unknown permission profile")
 		}
@@ -461,11 +461,11 @@ func (p *Privileges) DeleteAssignment(ctx context.Context, id uuid.UUID) error {
 }
 
 func loadAssignment(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID) (pgstore.ProfileAssignment, pgstore.PermissionProfile, error) {
-	cur, err := q.GetProfileAssignment(ctx, id)
+	cur, err := q.GetProfileAssignmentForUpdate(ctx, id)
 	if err != nil {
 		return cur, pgstore.PermissionProfile{}, notFound(err)
 	}
-	profile, err := q.GetPermissionProfile(ctx, cur.ProfileID)
+	profile, err := q.GetPermissionProfileForShare(ctx, cur.ProfileID)
 	if err != nil {
 		return cur, profile, err
 	}

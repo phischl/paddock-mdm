@@ -203,12 +203,82 @@ func (q *Queries) GetPermissionProfile(ctx context.Context, id uuid.UUID) (Permi
 	return i, err
 }
 
+const getPermissionProfileForShare = `-- name: GetPermissionProfileForShare :one
+SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by FROM permission_profile WHERE id = $1 FOR SHARE
+`
+
+func (q *Queries) GetPermissionProfileForShare(ctx context.Context, id uuid.UUID) (PermissionProfile, error) {
+	row := q.db.QueryRow(ctx, getPermissionProfileForShare, id)
+	var i PermissionProfile
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Name,
+		&i.Class,
+		&i.Commands,
+		&i.RequirePassword,
+		&i.TimestampTimeoutMin,
+		&i.Lecture,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RootGrantConfirmedAt,
+		&i.RootGrantConfirmedBy,
+	)
+	return i, err
+}
+
+const getPermissionProfileForUpdate = `-- name: GetPermissionProfileForUpdate :one
+
+SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by FROM permission_profile WHERE id = $1 FOR UPDATE
+`
+
+// Gated changes decide on the row they write, so a concurrent demotion is never overwritten by a stale read (plan M8s
+// decision 7j): FOR UPDATE for a change of the profile, FOR SHARE for a change that only depends on it.
+func (q *Queries) GetPermissionProfileForUpdate(ctx context.Context, id uuid.UUID) (PermissionProfile, error) {
+	row := q.db.QueryRow(ctx, getPermissionProfileForUpdate, id)
+	var i PermissionProfile
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Name,
+		&i.Class,
+		&i.Commands,
+		&i.RequirePassword,
+		&i.TimestampTimeoutMin,
+		&i.Lecture,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RootGrantConfirmedAt,
+		&i.RootGrantConfirmedBy,
+	)
+	return i, err
+}
+
 const getProfileAssignment = `-- name: GetProfileAssignment :one
 SELECT id, organization_id, profile_id, subject_type, subject_id, device_group_id, created_at FROM profile_assignment WHERE id = $1
 `
 
 func (q *Queries) GetProfileAssignment(ctx context.Context, id uuid.UUID) (ProfileAssignment, error) {
 	row := q.db.QueryRow(ctx, getProfileAssignment, id)
+	var i ProfileAssignment
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.ProfileID,
+		&i.SubjectType,
+		&i.SubjectID,
+		&i.DeviceGroupID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getProfileAssignmentForUpdate = `-- name: GetProfileAssignmentForUpdate :one
+SELECT id, organization_id, profile_id, subject_type, subject_id, device_group_id, created_at FROM profile_assignment WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetProfileAssignmentForUpdate(ctx context.Context, id uuid.UUID) (ProfileAssignment, error) {
+	row := q.db.QueryRow(ctx, getProfileAssignmentForUpdate, id)
 	var i ProfileAssignment
 	err := row.Scan(
 		&i.ID,

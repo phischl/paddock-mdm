@@ -202,7 +202,12 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 			Lecture:             string(in.Lecture), RootGrantConfirmedAt: at, RootGrantConfirmedBy: by,
 		})
 	} else {
-		steppedUp := profileChangeNeedsStepUp(ex.st.profiles[ex.st.names[c.Key]], in)
+		// The state was read before the plan; the decision needs the row as it is now (plan M8s decision 7j).
+		cur, lockErr := ex.q.GetPermissionProfileForUpdate(ctx, ex.id(c))
+		if lockErr != nil {
+			return lockErr
+		}
+		steppedUp := profileChangeNeedsStepUp(cur, in)
 		if steppedUp {
 			if err := ex.requireStepUp(); err != nil {
 				return err
@@ -336,9 +341,13 @@ func (ex *configExec) assignment(ctx context.Context, c declarative.Change) erro
 		return err
 	}
 	a := (*ex.desired.ProfileAssignments)[ex.item(c)]
-	profile, ok := ex.st.profiles[a.Profile]
+	known, ok := ex.st.profiles[a.Profile]
 	if !ok {
 		return problem.InvalidRequest.WithDetail("unknown permission profile " + strconv.Quote(a.Profile))
+	}
+	profile, err := ex.q.GetPermissionProfileForShare(ctx, known.ID)
+	if err != nil {
+		return err
 	}
 	if privilege.RequiresStepUp(profileOf(profile)) {
 		if err := ex.requireStepUp(); err != nil {

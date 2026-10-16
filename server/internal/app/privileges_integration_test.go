@@ -5,8 +5,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -137,5 +139,67 @@ func TestEffectiveClassStepUp(t *testing.T) {
 	}
 	if ev := h.lastEvent(t); ev.Params["effective_class"] != "restricted" {
 		t.Fatalf("ordinary event %+v", ev)
+	}
+}
+
+// TestProfileUpdateSeesConcurrentDemotion: a change that waits for a concurrent demotion of an effectively Full
+// profile decides on the demoted row and never writes the root-equivalent command back (plan M8s decision 7j).
+func TestProfileUpdateSeesConcurrentDemotion(t *testing.T) {
+	h := newPrivilegesHarness(t)
+	steppedUp := h.account(t, principal.RoleOrgAdmin, true)
+	operator := h.account(t, principal.RoleOrgOperator, false)
+	created, err := h.privileges.CreateProfile(principal.With(context.Background(), steppedUp), privilege.Profile{
+		Name: "shell", Class: privilege.ClassRestricted, Commands: []string{"/usr/bin/bash"}, Lecture: privilege.LectureOnce})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The demotion holds the row lock while the operator's lecture change starts.
+	ctx := context.Background()
+	demote, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = demote.Rollback(ctx) }()
+	if _, err := demote.Exec(ctx, "UPDATE permission_profile SET commands = '{/usr/bin/systemctl restart nginx.service}' WHERE id = $1", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		lecture := privilege.LectureAlways
+		_, err := h.privileges.UpdateProfile(principal.With(context.Background(), operator), created.ID, app.ProfilePatch{Lecture: &lecture})
+		done <- err
+	}()
+	watch, err := pgx.Connect(ctx, pgtest.SharedPaddock(t).Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = watch.Close(ctx) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := watch.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%permission_profile%'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the operator's change did not wait for the demotion")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := demote.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("lecture change after the demotion = %v", err)
+	}
+	var commands []string
+	if err := h.super.QueryRow(ctx, "SELECT commands FROM permission_profile WHERE id = $1", created.ID).Scan(&commands); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 1 || commands[0] != "/usr/bin/systemctl restart nginx.service" {
+		t.Fatalf("commands after the concurrent change: %v", commands)
 	}
 }
