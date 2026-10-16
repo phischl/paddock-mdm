@@ -73,6 +73,13 @@ func TestEffectiveStepUp(t *testing.T) {
 		other := namedGroup(t, admin.Portal, "s3 other")
 		res = call(t, noStepUp, http.MethodPatch, "/api/v1/profile-assignments/"+assignment, map[string]any{"device_group_id": other})
 		expectRefusal(t, admin.Portal, res, http.StatusForbidden, "step_up_required", "profile_assignment.updated")
+
+		admin.stepUp(t)
+		res = call(t, admin.Portal, http.MethodPatch, "/api/v1/profile-assignments/"+assignment, map[string]any{"device_group_id": other})
+		expectStatus(t, res, http.StatusOK, "")
+		if ev := expectOneEvent(t, admin.Portal, res.RequestID, "profile_assignment.updated", "success"); ev.Params["effective_class"] != "full" || !ev.Actor.StepUp {
+			t.Fatalf("scope update event %+v", ev)
+		}
 	})
 
 	// A declarative document replaces everything of its organization, so S4 runs in an organization of its own.
