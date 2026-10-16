@@ -65,7 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root-equivalent pair, adding a user to a Paddock group that carries such a grant, or adding a device to the device group of one.
   Operators receive 403 `forbidden`, API tokens 403 `step_up_required`; the portal runs the step-up for group
   members and device groups. Creating an enrollment token into such a device group, and approving or releasing a
-  device in one, follow the same rule. Membership synchronized from the upstream directory is not affected. Creating or
+  device in one, follow the same rule, as does creating a user who would receive root through grants to everyone. A
+  device that an auto-approve token would activate into such a grant is enrolled pending and waits for an approval. Membership synchronized from the upstream directory is not affected. Creating or
   changing an effectively Full profile is now reserved to organization administrators as well.
 
 - Managed files on sensitive paths (cron, systemd, login scripts, SSH, network hooks, logrotate, files directly in

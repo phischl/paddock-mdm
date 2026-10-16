@@ -277,6 +277,12 @@ Supersedes the per-profile reading of decisions 1–3.
     7g-quater and (b) with a synthetic new device in the token's device groups against every real user. Spreading to
     a group that is still empty passes both; a later membership change in Paddock is caught by (b), a later directory
     sync is the accepted residual risk RR-39.
+7g-sexies. (Architect decision 2026-10-16.) Check (b) also judges the future subjects: one synthetic user with no
+    groups and no assignments of its own, and one synthetic device per device group that a usable auto-approve
+    enrollment token enrolls into. An auto-approve enrolment runs the per-subject check for the new device and enrolls
+    it **pending** instead of active when it would gain a witness (fail safe; an administrator approves it with a
+    step-up), audited as usual. Creating a user runs the per-subject check for the new user, who had no witness
+    before: an organization administrator with a step-up when root grows.
 
 ### 3.3 Server-side sessions (SEC-2, part 2 and 4)
 

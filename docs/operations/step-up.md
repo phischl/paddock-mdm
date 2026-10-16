@@ -14,6 +14,7 @@ Security-relevant portal actions require a fresh MFA authentication of the admin
 | `POST /api/v1/user-groups/{id}/members` | the new member gains root on a device through the group's assignments |
 | `POST /api/v1/enrollment-tokens` | a device enrolled into the token's device group would give a user root |
 | `POST /api/v1/devices/{id}/approve`, `…/release-quarantine` | the device's device groups give a user root once it is active |
+| `POST /api/v1/users` | the new user receives root through grants to everyone |
 | `PUT /api/v1/devices/{id}/groups` | a user gains root on the device through the assignments of its new device groups |
 | `PUT /api/v1/config` (`paddockctl apply`) | the document creates or changes a profile, an assignment or a managed file as above |
 
@@ -23,7 +24,8 @@ Full. A change to a profile, an assignment or an enrollment token's device group
 with a fresh step-up (operators get 403 `forbidden`) when the profiles assigned anywhere in the organization together
 gain a witness, whoever they are assigned to, or when a real user gains one (giving an approved combination to more
 users); a change of Paddock group membership, device groups, approval or
-quarantine release needs it when a real user gains a witness on a device, also a user who already has Full. Membership
+quarantine release needs it when a real user gains a witness on a device, also a user who already has Full. A device that an auto-approve enrollment token
+would activate into such a grant is enrolled pending instead and waits for an approval with a step-up. Membership
 that arrives from the upstream directory is not gated. Changes that can grant root take a per-organization lock, so
 two of them never complete a combination unseen.
 
