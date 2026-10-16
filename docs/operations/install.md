@@ -254,7 +254,8 @@ restore drill are in the same document.
 ## 12. Upgrade
 
 Upgrades extract the new bundle next to the running one and take over its `.env` and `.secrets/`:
-`docs/operations/upgrade.md`. Agent releases are separate: `docs/operations/agent-releases.md`.
+`docs/operations/upgrade.md`. Before upgrading to a version whose step-up accepts WebAuthn only, every administrator
+enrols a WebAuthn authenticator (`docs/operations/step-up.md`, "Before upgrading to WebAuthn-only step-up"). Agent releases are separate: `docs/operations/agent-releases.md`.
 
 ## 13. Residual risks you must record in your ISMS
 

@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The step-up accepts WebAuthn authenticators only; TOTP codes no longer complete a step-up (the portal login still
+  accepts them). Before upgrading, every administrator enrols a WebAuthn authenticator in Authentik's user settings
+  (`https://auth.<domain>/if/user/`, MFA devices); an administrator with TOTP only cannot reveal keys, lock or destroy
+  devices, create API tokens or grant root-equivalent rights until then. The development stack keeps a TOTP step-up
+  through its development blueprint.
 - The upload URL of an escrowed LUKS header now binds the announced size: the object store refuses a body of another
   size, and the worker checks the stored object's size before reading it, deletes an object of another size and
   records `device.header_object_rejected`.

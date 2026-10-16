@@ -15,8 +15,8 @@ step-up and repeats the action once.
 ## How it works
 
 - The Authentik blueprint `paddock-stepup.yaml` (applied automatically) creates the flow `paddock-stepup`
-  (identification, password, authenticator validation with WebAuthn or TOTP — an administrator without an
-  authenticator is refused —, login) and the OIDC application `paddock-portal-stepup`, which uses that flow, the
+  (identification, password, authenticator validation with WebAuthn only — an administrator without a WebAuthn
+  authenticator is refused, a TOTP authenticator does not count —, login) and the OIDC application `paddock-portal-stepup`, which uses that flow, the
   portal's client secret and the portal's access policy. Authentik has no per-request flow override, hence the
   second application.
 - `GET /api/auth/stepup?return_to=` sends the administrator to `paddock-portal-stepup` with `prompt=login`,
@@ -37,6 +37,19 @@ next step-up asks for credentials again once it is older than 60 s.
 (`https://auth.<domain>/application/o/paddock-portal-stepup/`); `PADDOCK_OIDC_STEPUP_CLIENT_ID` defaults to
 `paddock-portal-stepup`. The api is not ready until both OIDC providers are discovered.
 
+## Before upgrading to WebAuthn-only step-up
+
+Earlier versions also accepted a TOTP code at the step-up. Before the upgrade, every administrator enrols a WebAuthn
+authenticator (security key or platform authenticator) in Authentik's user settings,
+`https://auth.<domain>/if/user/` → MFA devices. After the upgrade an administrator with a TOTP authenticator only
+cannot complete a step-up, and so cannot reveal keys, lock or destroy devices, create API tokens or grant
+root-equivalent rights, until a WebAuthn authenticator exists. The portal login keeps accepting TOTP.
+
+## Development stack
+
 In the development stack `make dev-seed` gives the test users TOTP authenticators whose keys are in
 `deploy/compose/.secrets/dev_<user>_totp_key` (hex), so the acceptance gates can complete step-ups. Authentik's
-blueprint format cannot set an authenticator's key, so the seeder writes them through Authentik's shell.
+blueprint format cannot set an authenticator's key, so the seeder writes them through Authentik's shell. Because the
+shipped flow validates WebAuthn only, the development blueprint `authentik/dev/paddock-dev.yaml` (mounted by
+`compose.dev.yaml` only) skips the WebAuthn stage at order 30 with the policy `paddock-dev-skip-stepup-webauthn` and
+binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. Production carries neither.

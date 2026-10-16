@@ -349,3 +349,25 @@ func TestContainerHardening(t *testing.T) {
 		}
 	})
 }
+
+// TestStepUpBlueprintWebAuthnOnly (plan M8s decision 40): the shipped step-up flow validates with WebAuthn only; only
+// the development blueprint adds a stage that accepts TOTP.
+func TestStepUpBlueprintWebAuthnOnly(t *testing.T) {
+	read := func(path string) string {
+		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	stepup := read(filepath.Join("blueprints", "paddock-stepup.yaml"))
+	if !strings.Contains(stepup, "\n      device_classes: [webauthn]\n") {
+		t.Error("paddock-stepup.yaml does not validate with device_classes: [webauthn]")
+	}
+	if strings.Contains(stepup, "totp") {
+		t.Error("paddock-stepup.yaml mentions totp")
+	}
+	if !strings.Contains(read(filepath.Join("dev", "paddock-dev.yaml")), "paddock-dev-stepup-mfa") {
+		t.Error("the development blueprint has no stage paddock-dev-stepup-mfa")
+	}
+}
