@@ -331,8 +331,15 @@ func TestGroupsProfilesAndEffectiveProfile(t *testing.T) {
 		}
 		e.expectEvent(bad, "permission_profile.created:failure:invalid_command")
 	}
-	root := e.profile(alice, map[string]any{"name": "editor", "class": "restricted", "commands": []string{"/usr/bin/vim /etc/hosts"}})
-	if !root.RootEquivalent || len(root.RootEquivalentCommands) != 1 {
+	// A restricted profile with a root-equivalent command is Full in effect and needs a step-up (ADR 0034).
+	editor := map[string]any{"name": "editor", "class": "restricted", "commands": []string{"/usr/bin/vim /etc/hosts"}}
+	noStepUp := e.do(call{method: "POST", path: "/api/v1/permission-profiles", cookie: alice, body: editor})
+	if noStepUp.status != http.StatusForbidden || noStepUp.problemCode(t) != "step_up_required" {
+		t.Fatalf("root-equivalent profile without step-up: %d %s", noStepUp.status, noStepUp.body)
+	}
+	e.expectEvent(noStepUp, "permission_profile.created:denied:step_up_required")
+	root := e.profile(e.steppedUp(alice, time.Now()), editor)
+	if !root.RootEquivalent || len(root.RootEquivalentCommands) != 1 || root.EffectiveClass != "full" {
 		t.Fatalf("vim profile %+v", root)
 	}
 

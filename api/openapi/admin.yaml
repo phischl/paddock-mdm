@@ -2585,7 +2585,9 @@ paths:
       description: |
         Roles: org_admin, org_operator. A restricted profile lists absolute command paths with optional arguments;
         commands with ALL, "!", "#", the sudoers separators ,:=\ or the pattern characters ^$*?[] are refused with 422
-        invalid_command; the detail names a refused pattern character.
+        invalid_command; the detail names a refused pattern character. A profile that is effectively Full (class full,
+        or restricted with a root-equivalent command) needs a step-up within the last 300 s (403 step_up_required);
+        API tokens cannot satisfy it.
       x-paddock-audit: permission_profile.created
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -2630,7 +2632,9 @@ paths:
       tags: [privileges]
       description: |
         Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given.
-        Changing the class to full needs a step-up within the last 300 s (403 step_up_required).
+        A change after which the profile is effectively Full needs a step-up within the last 300 s (403
+        step_up_required) when the profile was not effectively Full before or its class or commands change; a rename
+        or a change of require_password, timestamp_timeout_min or lecture does not. API tokens cannot satisfy it.
       x-paddock-audit: permission_profile.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -2710,8 +2714,8 @@ paths:
       tags: [privileges]
       description: |
         Roles: org_admin, org_operator. Assigns a profile globally, to a group or to a user, optionally only on the
-        devices of one device group. Assigning a full profile needs a step-up within the last 300 s (403
-        step_up_required).
+        devices of one device group. Assigning a profile that is effectively Full needs a step-up within the last 300 s
+        (403 step_up_required); API tokens cannot satisfy it.
       x-paddock-audit: profile_assignment.created
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -2752,7 +2756,10 @@ paths:
     patch:
       operationId: updateProfileAssignment
       tags: [privileges]
-      description: "Roles: org_admin, org_operator. Changes the device group scope (null = every device)."
+      description: |
+        Roles: org_admin, org_operator. Changes the device group scope (null = every device). The assignment of a
+        profile that is effectively Full needs a step-up within the last 300 s (403 step_up_required); API tokens
+        cannot satisfy it.
       x-paddock-audit: profile_assignment.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -5354,7 +5361,7 @@ components:
     PermissionProfile:
       type: object
       required: [id, name, class, commands, require_password, timestamp_timeout_min, lecture, root_equivalent,
-                 root_equivalent_commands, invalid_commands, created_at, updated_at]
+                 effective_class, root_equivalent_commands, invalid_commands, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -5366,6 +5373,7 @@ components:
         timestamp_timeout_min: { type: integer }
         lecture: { $ref: "#/components/schemas/Lecture" }
         root_equivalent: { type: boolean, description: A command hands out root on its own or in combination. }
+        effective_class: { $ref: "#/components/schemas/PrivilegeClass" }
         root_equivalent_commands:
           type: array
           items: { type: string }
@@ -5380,6 +5388,9 @@ components:
         updated_at: { type: string, format: date-time }
     PermissionProfileCreate:
       type: object
+      description: |
+        A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
+        step_up_required); API tokens cannot satisfy it.
       required: [name, class]
       additionalProperties: false
       properties:
@@ -5394,6 +5405,9 @@ components:
         lecture: { $ref: "#/components/schemas/Lecture" }
     PermissionProfileUpdate:
       type: object
+      description: |
+        A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
+        step_up_required); API tokens cannot satisfy it.
       additionalProperties: false
       properties:
         name: { type: string, minLength: 1, maxLength: 100 }
@@ -5429,6 +5443,9 @@ components:
         created_at: { type: string, format: date-time }
     ProfileAssignmentCreate:
       type: object
+      description: |
+        A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
+        step_up_required); API tokens cannot satisfy it.
       required: [profile_id, subject_type]
       additionalProperties: false
       properties:
@@ -5438,6 +5455,9 @@ components:
         device_group_id: { type: string, format: uuid }
     ProfileAssignmentUpdate:
       type: object
+      description: |
+        A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
+        step_up_required); API tokens cannot satisfy it.
       required: [device_group_id]
       additionalProperties: false
       properties:

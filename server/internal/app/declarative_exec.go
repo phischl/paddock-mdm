@@ -178,6 +178,11 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 	}
 	var row pgstore.PermissionProfile
 	if c.Action == declarative.ActionCreate {
+		if privilege.RequiresStepUp(in) {
+			if err := ex.requireStepUp(); err != nil {
+				return err
+			}
+		}
 		row, err = ex.q.InsertPermissionProfile(ctx, pgstore.InsertPermissionProfileParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: ex.p.OrganizationID, Name: in.Name, Class: string(in.Class),
 			Commands: in.Commands, RequirePassword: in.RequirePassword,
@@ -185,7 +190,7 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 			Lecture:             string(in.Lecture),
 		})
 	} else {
-		if in.Class == privilege.ClassFull && ex.st.profiles[ex.st.names[c.Key]].Class != string(privilege.ClassFull) {
+		if profileChangeNeedsStepUp(ex.st.profiles[ex.st.names[c.Key]], in) {
 			if err := ex.requireStepUp(); err != nil {
 				return err
 			}
@@ -302,7 +307,7 @@ func (ex *configExec) assignment(ctx context.Context, c declarative.Change) erro
 	if !ok {
 		return problem.InvalidRequest.WithDetail("unknown permission profile " + strconv.Quote(a.Profile))
 	}
-	if profile.Class == string(privilege.ClassFull) {
+	if privilege.RequiresStepUp(profileOf(profile)) {
 		if err := ex.requireStepUp(); err != nil {
 			return err
 		}

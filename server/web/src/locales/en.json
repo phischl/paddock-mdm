@@ -1126,6 +1126,15 @@
     "empty": {
       "title": "No permission profiles yet",
       "description": "Profiles grant sudo rights to users or groups on their devices."
+    },
+    "effectiveClass": "Effective class",
+    "rootGrantConfirm": "{name} hands out root through its commands. Everyone it is assigned to becomes root on their devices. Continue?"
+  },
+  "privileges": {
+    "effectiveClass": {
+      "none": "None (effective)",
+      "restricted": "Restricted (effective)",
+      "full": "Full (effective)"
     }
   },
   "loginSettings": {

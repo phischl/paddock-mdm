@@ -74,7 +74,7 @@ onMounted(async () => {
 })
 
 /**
- * Full rights need a step-up (plan M4a decision 7): a change or an assignment the server refused with
+ * Effectively Full rights need a step-up (ADR 0034 decision 1): a change or an assignment the server refused with
  * step_up_required is repeated once after the step-up, with the input the administrator confirmed before.
  */
 async function resumeFull(): Promise<void> {
@@ -113,12 +113,13 @@ async function confirmFull(message: string, label: string): Promise<boolean> {
 
 async function onEdit(input: ProfileInput): Promise<void> {
   if (!profile.value) return
-  if (input.class === 'full' && profile.value.class !== 'full' &&
-    !(await confirmFull(t('profiles.toFullConfirm', { name: profile.value.name }), t('common.save')))) {
+  const toFull = input.class === 'full' && profile.value.class !== 'full'
+  if (toFull && !(await confirmFull(t('profiles.toFullConfirm', { name: profile.value.name }), t('common.save')))) {
     return
   }
   editProblem.value = (await updateProfile(id.value, input)) ?? ''
   if (editProblem.value === stepUpRequired) {
+    if (!toFull && !(await confirmFull(t('profiles.rootGrantConfirm', { name: input.name }), t('common.save')))) return
     startStepUp('profile-edit', id.value, input)
     return
   }
@@ -146,7 +147,7 @@ async function assign(): Promise<void> {
     assignProblem.value = 'invalid_request'
     return
   }
-  if (profile.value.class === 'full' &&
+  if (profile.value.effective_class === 'full' &&
     !(await confirmFull(t('profiles.assignFullConfirm', { name: profile.value.name }), t('profiles.assign')))) {
     return
   }
@@ -235,6 +236,14 @@ async function unassign(a: ProfileAssignment): Promise<void> {
               {{ t('profiles.class') }}
             </th>
             <td>{{ t('profiles.classes.' + profile.class) }}</td>
+          </tr>
+          <tr>
+            <th scope="row">
+              {{ t('profiles.effectiveClass') }}
+            </th>
+            <td data-testid="profile-effective-class">
+              {{ t('privileges.effectiveClass.' + profile.effective_class) }}
+            </td>
           </tr>
           <tr v-if="profile.class === 'restricted'">
             <th scope="row">

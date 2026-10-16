@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
-import { login } from './auth'
+import { login, stepUp } from './auth'
 import { expectAccessible, mainNav, watchCSP } from './checks'
 import { test } from './cleanup'
 
@@ -8,7 +8,8 @@ const devicesim = process.env.PADDOCK_E2E_DEVICESIM ?? '../../bin/devicesim'
 const csrf = { 'X-Paddock-CSRF': '1' }
 
 // Gate E3 (plan M3a §6): create a local user (recovery link shown once), create a group and add the member, create
-// a restricted profile with a root-equivalent command (warning shown), assign it to the group, view the user's
+// a restricted profile with a root-equivalent command (typed confirmation and step-up, ADR 0034; warning shown),
+// assign it to the group, view the user's
 // effective profile with its derivation, lock the user in a modal, set the device login assignment and suspend
 // logins in a modal; accessible and without CSP violations.
 test('organization admin manages users, groups, profiles and device logins', async ({ page, cleanup }) => {
@@ -65,21 +66,30 @@ test('organization admin manages users, groups, profiles and device logins', asy
   await expect(page.getByTestId('member-list')).toContainText(username)
   await expectAccessible(page)
 
-  // A restricted profile with a root-equivalent command: inline warning, no dialog.
+  // A restricted profile with a root-equivalent command is Full in effect: typed name, step-up, inline warning.
   await mainNav(page).getByRole('link', { name: 'Permission profiles' }).click()
   await page.getByTestId('create-profile').click()
   const profileDialog = page.getByRole('dialog', { name: 'New permission profile' })
   await profileDialog.getByLabel('Name').fill(profileName)
   await profileDialog.getByLabel('Commands').fill('/usr/bin/vim /etc/hosts')
   await expectAccessible(page)
-  await profileDialog.getByRole('button', { name: 'Create' }).click()
+  await stepUp(page, async () => {
+    await profileDialog.getByRole('button', { name: 'Create' }).click()
+    const grant = page.getByRole('dialog', { name: 'Grant full rights' })
+    await grant.getByTestId('confirm-typed').locator('input').fill(profileName)
+    await grant.getByRole('button', { name: 'Create' }).click()
+  }, 'alice@acme.test', 'dev_alice_password', 'dev_alice_totp_key')
   await expect(page.getByRole('heading', { name: profileName })).toBeVisible()
   await expect(page.getByTestId('root-equivalent-warning')).toContainText('/usr/bin/vim /etc/hosts')
+  await expect(page.getByTestId('profile-effective-class')).toHaveText('Full (effective)')
 
-  // Assigned to the group.
+  // Assigned to the group within the step-up window, after the typed name.
   await page.getByTestId('assign-subject').locator('input').fill(groupName)
   await page.getByRole('option', { name: groupName }).click()
   await page.getByTestId('assign-submit').click()
+  const assignGrant = page.getByRole('dialog', { name: 'Grant full rights' })
+  await assignGrant.getByTestId('confirm-typed').locator('input').fill(profileName)
+  await assignGrant.getByRole('button', { name: 'Assign' }).click()
   await expect(page.getByTestId('assignment-list')).toContainText(groupName)
   await expectAccessible(page)
 

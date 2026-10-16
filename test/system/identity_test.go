@@ -157,6 +157,7 @@ func newIdentityWorld(t *testing.T, s *Stack, d *Device) *identityWorld {
 
 	// Profiles scoped to this run's device group, so no other device and no other test sees them.
 	w.restrictedCommands = []string{"/usr/bin/journalctl -u systest.service", "/usr/bin/systemctl restart systest.service"}
+	s.StepUp() // creating and assigning a full profile (ADR 0034 decision 1)
 	w.restrictedID = s.ID(s.Call(http.MethodPost, "/api/v1/permission-profiles", map[string]any{
 		"name": "systest restricted " + d.run, "class": "restricted", "commands": w.restrictedCommands,
 	}, http.StatusCreated))
@@ -165,7 +166,6 @@ func newIdentityWorld(t *testing.T, s *Stack, d *Device) *identityWorld {
 		"name": "systest full " + d.run, "class": "full",
 	}, http.StatusCreated))
 	s.DeleteOnCleanup("/api/v1/permission-profiles/" + w.fullID)
-	s.StepUp() // assigning a full profile (plan M4a decision 7)
 	for _, a := range []struct{ profile, user string }{{w.restrictedID, w.dave.id}, {w.fullID, w.fred.id}} {
 		id := s.ID(s.Call(http.MethodPost, "/api/v1/profile-assignments", map[string]any{
 			"profile_id": a.profile, "subject_type": "user", "subject_id": a.user, "device_group_id": d.Group,

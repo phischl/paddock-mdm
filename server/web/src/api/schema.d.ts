@@ -1614,7 +1614,9 @@ export interface paths {
         /**
          * @description Roles: org_admin, org_operator. A restricted profile lists absolute command paths with optional arguments;
          *     commands with ALL, "!", "#", the sudoers separators ,:=\ or the pattern characters ^$*?[] are refused with 422
-         *     invalid_command; the detail names a refused pattern character.
+         *     invalid_command; the detail names a refused pattern character. A profile that is effectively Full (class full,
+         *     or restricted with a root-equivalent command) needs a step-up within the last 300 s (403 step_up_required);
+         *     API tokens cannot satisfy it.
          */
         post: operations["createPermissionProfile"];
         delete?: never;
@@ -1642,7 +1644,9 @@ export interface paths {
         head?: never;
         /**
          * @description Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given.
-         *     Changing the class to full needs a step-up within the last 300 s (403 step_up_required).
+         *     A change after which the profile is effectively Full needs a step-up within the last 300 s (403
+         *     step_up_required) when the profile was not effectively Full before or its class or commands change; a rename
+         *     or a change of require_password, timestamp_timeout_min or lecture does not. API tokens cannot satisfy it.
          */
         patch: operations["updatePermissionProfile"];
         trace?: never;
@@ -1659,8 +1663,8 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, org_operator. Assigns a profile globally, to a group or to a user, optionally only on the
-         *     devices of one device group. Assigning a full profile needs a step-up within the last 300 s (403
-         *     step_up_required).
+         *     devices of one device group. Assigning a profile that is effectively Full needs a step-up within the last 300 s
+         *     (403 step_up_required); API tokens cannot satisfy it.
          */
         post: operations["createProfileAssignment"];
         delete?: never;
@@ -1686,7 +1690,11 @@ export interface paths {
         delete: operations["deleteProfileAssignment"];
         options?: never;
         head?: never;
-        /** @description Roles: org_admin, org_operator. Changes the device group scope (null = every device). */
+        /**
+         * @description Roles: org_admin, org_operator. Changes the device group scope (null = every device). The assignment of a
+         *     profile that is effectively Full needs a step-up within the last 300 s (403 step_up_required); API tokens
+         *     cannot satisfy it.
+         */
         patch: operations["updateProfileAssignment"];
         trace?: never;
     };
@@ -3567,6 +3575,7 @@ export interface components {
             lecture: components["schemas"]["Lecture"];
             /** @description A command hands out root on its own or in combination. */
             root_equivalent: boolean;
+            effective_class: components["schemas"]["PrivilegeClass"];
             root_equivalent_commands: string[];
             /**
              * @description Commands stored before the command check was tightened that it now refuses. A profile with invalid commands
@@ -3579,6 +3588,10 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /**
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
+         *     step_up_required); API tokens cannot satisfy it.
+         */
         PermissionProfileCreate: {
             name: string;
             class: components["schemas"]["PrivilegeClass"];
@@ -3589,6 +3602,10 @@ export interface components {
             timestamp_timeout_min: number;
             lecture?: components["schemas"]["Lecture"];
         };
+        /**
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
+         *     step_up_required); API tokens cannot satisfy it.
+         */
         PermissionProfileUpdate: {
             name?: string;
             class?: components["schemas"]["PrivilegeClass"];
@@ -3627,6 +3644,10 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        /**
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
+         *     step_up_required); API tokens cannot satisfy it.
+         */
         ProfileAssignmentCreate: {
             /** Format: uuid */
             profile_id: string;
@@ -3636,6 +3657,10 @@ export interface components {
             /** Format: uuid */
             device_group_id?: string;
         };
+        /**
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
+         *     step_up_required); API tokens cannot satisfy it.
+         */
         ProfileAssignmentUpdate: {
             /** Format: uuid */
             device_group_id: string | null;

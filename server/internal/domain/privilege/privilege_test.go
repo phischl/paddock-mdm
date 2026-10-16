@@ -154,6 +154,27 @@ func TestIsRootEquivalent(t *testing.T) {
 	}
 }
 
+// TestEffectiveClassAndStepUp: the step-up follows the effective class, not the label (ADR 0034 decision 1).
+func TestEffectiveClassAndStepUp(t *testing.T) {
+	for _, tc := range []struct {
+		p    Profile
+		want Class
+	}{
+		{Profile{Class: ClassRestricted, Commands: []string{"/usr/bin/bash"}}, ClassFull},
+		{Profile{Class: ClassRestricted, Commands: []string{"/usr/bin/systemctl restart nginx.service"}}, ClassRestricted},
+		{Profile{Class: ClassRestricted, Commands: []string{"/usr/bin/tee /opt/x/run.sh", "/opt/x/run.sh"}}, ClassFull},
+		{Profile{Class: ClassFull}, ClassFull},
+		{Profile{Class: ClassNone}, ClassNone},
+	} {
+		if got := EffectiveClass(tc.p); got != tc.want {
+			t.Errorf("EffectiveClass(%+v) = %s, want %s", tc.p, got, tc.want)
+		}
+		if got := RequiresStepUp(tc.p); got != (tc.want == ClassFull) {
+			t.Errorf("RequiresStepUp(%+v) = %v", tc.p, got)
+		}
+	}
+}
+
 func TestValidateProfile(t *testing.T) {
 	ok := NormalizeProfile(Profile{Name: " nginx ", Class: ClassRestricted, Lecture: LectureOnce, TimestampTimeoutMin: 5,
 		Commands: []string{" /usr/bin/systemctl restart nginx.service", "/usr/bin/systemctl restart nginx.service"}})

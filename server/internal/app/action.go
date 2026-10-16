@@ -224,10 +224,13 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 }
 
 // checkStepUp reports problem.StepUpRequired unless an administrator's step-up is at most the step-up window old.
-// System principals never step up.
+// System principals never step up; an API token never can (ADR 0034 decision 3).
 func (r *ActionRunner) checkStepUp(p principal.Principal) error {
 	if p.Kind == principal.KindSystem {
 		return nil
+	}
+	if p.APITokenID != uuid.Nil {
+		return problem.StepUpRequired.WithDetail("this change needs an interactive administrator: API tokens cannot complete a step-up")
 	}
 	age := r.now().Sub(p.StepUpAt)
 	if p.StepUpAt.IsZero() || age > r.stepUpWindow || age < -time.Minute {

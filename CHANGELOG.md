@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Creating, changing the commands or class of, assigning or re-scoping a permission profile that grants
+  root-equivalent sudo rights (class `full`, or restricted with a root-equivalent command) now requires a step-up, in
+  the portal, the admin API and `PUT /api/v1/config`; API tokens cannot make such changes and receive 403
+  `step_up_required` with an explanatory detail. Permission profiles carry `effective_class`, and the portal shows
+  it ("Full (effective)") and asks for the typed name before the step-up.
+
 - Managed-file paths fall into three tiers (ADR 0034): denied paths (sudo, PAM, NSS and the other protected areas, the
   loader, boot, initramfs, kernel module, sysctl, AppArmor, udev and polkit configuration, and the units of Paddock,
   fleetd, Himmelblau, SSH, GDM, sudo and systemd) are refused by server and agent; sensitive paths (cron, systemd,

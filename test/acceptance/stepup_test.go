@@ -66,8 +66,11 @@ func TestStepUp(t *testing.T) {
 		return res
 	}
 	group := namedGroup(t, alice, "u1 empty")
+	// Creating a full profile needs a step-up too (ADR 0034); another administrator creates it so that alice's
+	// session starts without one.
+	creator := steppedUpTempUser(t, "u1", env.RoleGroup("acme", "admins"))
 	full := createdID(t, alice, "/api/v1/permission-profiles",
-		expectCreated(t, call(t, alice, http.MethodPost, "/api/v1/permission-profiles", map[string]any{"name": uniqueName("u1 full"), "class": "full"})))
+		expectCreated(t, call(t, creator.Portal, http.MethodPost, "/api/v1/permission-profiles", map[string]any{"name": uniqueName("u1 full"), "class": "full"})))
 	restricted := createdID(t, alice, "/api/v1/permission-profiles", expectCreated(t, call(t, alice, http.MethodPost,
 		"/api/v1/permission-profiles", map[string]any{"name": uniqueName("u1 restricted"), "class": "restricted", "commands": []string{"/usr/bin/true"}})))
 	// Global within an empty device group: the assignment reaches no device.

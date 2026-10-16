@@ -251,10 +251,10 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 		t.Fatalf("invalid schedule = %v", err)
 	}
 
-	// A full profile and its assignment need a step-up; an API token never has one.
+	// A profile that is effectively Full and its assignment need a step-up; an API token never has one (ADR 0034).
 	full := h.export(t, admin)
-	*full.PermissionProfiles = append(*full.PermissionProfiles, declarative.PermissionProfile{Name: "root", Class: "full",
-		Commands: []string{}, RequirePassword: true, TimestampTimeoutMin: 5, Lecture: "once"})
+	*full.PermissionProfiles = append(*full.PermissionProfiles, declarative.PermissionProfile{Name: "root", Class: "restricted",
+		Commands: []string{"/usr/bin/bash"}, RequirePassword: true, TimestampTimeoutMin: 5, Lecture: "once"})
 	*full.ProfileAssignments = append(*full.ProfileAssignments, declarative.ProfileAssignment{Profile: "root",
 		Subject: declarative.Subject{Type: "global"}, DeviceGroup: strPtr("kept")})
 	token := h.create(t, steppedUp, "ci", principal.RoleOrgAdmin)
@@ -262,9 +262,13 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := h.config.Apply(ctx(admin), raw(t, full), ""); !errors.Is(err, problem.StepUpRequired) {
+		t.Fatalf("admin without step-up granting root = %v", err)
+	}
 	got := h.during(t, func() {
-		if _, _, err := h.config.Apply(ctx(tp), raw(t, full), ""); !errors.Is(err, problem.StepUpRequired) {
-			t.Errorf("token assigning a full profile = %v", err)
+		if _, _, err := h.config.Apply(ctx(tp), raw(t, full), ""); !errors.Is(err, problem.StepUpRequired) ||
+			!strings.Contains(problem.From(err).Detail, "API tokens") {
+			t.Errorf("token granting root = %v", err)
 		}
 	})
 	if len(got) != 1 || got[0] != "config.applied:denied:step_up_required" {

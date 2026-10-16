@@ -1126,6 +1126,15 @@
     "empty": {
       "title": "Noch keine Berechtigungsprofile",
       "description": "Profile vergeben sudo-Rechte an Benutzer oder Gruppen auf ihren Geräten."
+    },
+    "effectiveClass": "Effektive Klasse",
+    "rootGrantConfirm": "{name} gibt über seine Befehle root-Rechte. Alle, denen es zugewiesen ist, werden auf ihren Geräten root. Fortfahren?"
+  },
+  "privileges": {
+    "effectiveClass": {
+      "none": "Keine (effektiv)",
+      "restricted": "Eingeschränkt (effektiv)",
+      "full": "Voll (effektiv)"
     }
   },
   "loginSettings": {
