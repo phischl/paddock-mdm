@@ -55,6 +55,14 @@ func (u *mfaUser) stepUp(t *testing.T) {
 // one the way `make dev-seed` does for the dev users; the key travels on stdin.
 func steppedUpTempUser(t *testing.T, prefix string, groups ...string) *mfaUser {
 	t.Helper()
+	u := mfaTempUser(t, prefix, groups...)
+	u.stepUp(t)
+	return u
+}
+
+// mfaTempUser is steppedUpTempUser without the step-up.
+func mfaTempUser(t *testing.T, prefix string, groups ...string) *mfaUser {
+	t.Helper()
 	user, password := tempUser(t, prefix, groups...)
 	key := make([]byte, 20)
 	if _, err := rand.Read(key); err != nil {
@@ -73,10 +81,8 @@ func steppedUpTempUser(t *testing.T, prefix string, groups ...string) *mfaUser {
 	if err != nil {
 		t.Fatalf("login %s: %v", user, err)
 	}
-	u := &mfaUser{Portal: p, username: user, password: password,
+	return &mfaUser{Portal: p, username: user, password: password,
 		totp: &authflow.TOTP{Secret: base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)}}
-	u.stepUp(t)
-	return u
 }
 
 // TestAPITokens is gate T1 of plan M6c: token creation needs a fresh step-up and is audited without the secret, the

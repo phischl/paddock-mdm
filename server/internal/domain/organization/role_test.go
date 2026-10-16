@@ -1,20 +1,19 @@
-package admin
+package organization
 
 import (
 	"reflect"
 	"testing"
 
-	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
 var (
-	acme          = organization.RootGroup("acme")
-	acmeAdmins    = organization.RoleGroup("acme", organization.GroupAdmins)
-	acmeOperators = organization.RoleGroup("acme", organization.GroupOperators)
-	acmeAuditors  = organization.RoleGroup("acme", organization.GroupAuditors)
-	globexAdmins  = organization.RoleGroup("globex", organization.GroupAdmins)
-	platformAdmin = organization.PlatformAdminsGroup()
+	acme          = RootGroup("acme")
+	acmeAdmins    = RoleGroup("acme", GroupAdmins)
+	acmeOperators = RoleGroup("acme", GroupOperators)
+	acmeAuditors  = RoleGroup("acme", GroupAuditors)
+	globexAdmins  = RoleGroup("globex", GroupAdmins)
+	platformAdmin = PlatformAdminsGroup()
 )
 
 func TestResolveRole(t *testing.T) {

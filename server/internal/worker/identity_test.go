@@ -3,46 +3,46 @@ package worker
 import (
 	"context"
 	"errors"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
-// failingBrand fails its first calls, then succeeds.
-type failingBrand struct {
-	failures int32
-	calls    atomic.Int32
-}
-
-func (b *failingBrand) EnsureBrandFlows(context.Context) error {
-	if b.calls.Add(1) <= b.failures {
-		return errors.New("flow paddock-recovery missing")
-	}
-	return nil
-}
-
-// TestBrandFlowsRetryUntilSet: a failure (blueprints not applied yet at the first start) is retried soon; once the
-// flows are set, the next round waits for the reconcile interval (plan M3.1 decision 5).
-func TestBrandFlowsRetryUntilSet(t *testing.T) {
-	brand := &failingBrand{failures: 2}
-	i := &Identity{brand: brand, brandRetry: time.Millisecond, reconcile: time.Hour}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- i.RunBrandFlows(ctx) }()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for brand.calls.Load() < 3 {
-		if time.Now().After(deadline) {
-			t.Fatalf("%d calls after 5 s, want 3", brand.calls.Load())
-		}
-		time.Sleep(time.Millisecond)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if n := brand.calls.Load(); n != 3 {
-		t.Fatalf("%d calls, want 3 (no retry after success)", n)
-	}
-	cancel()
-	if err := <-done; err != nil {
+// TestIdentityRoundContinuesAfterAFailingOrganization: a round of admin-accounts runs every organization in its own
+// system context under the leader lock; a failing organization is logged and does not stop the others.
+func TestIdentityRoundContinuesAfterAFailingOrganization(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	other := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'W2', 'active')",
+		other, "w"+other.String()[24:]); err != nil {
+		t.Fatal(err)
+	}
+	i := NewIdentity(nil, nil, nil, f.pool, platform, time.Minute, time.Minute)
+	var mu sync.Mutex
+	seen := map[uuid.UUID]bool{}
+	err = i.Round(ctx, identityAdminAccountsLockKey, "admin-accounts", func(ctx context.Context) error {
+		p, _ := principal.From(ctx)
+		mu.Lock()
+		seen[p.OrganizationID] = p.Kind == principal.KindSystem
+		mu.Unlock()
+		if p.OrganizationID == f.org {
+			return errors.New("directory down")
+		}
+		return nil
+	})
+	if err != nil || !seen[f.org] || !seen[other] {
+		t.Fatalf("round: %v, organizations %v", err, seen)
 	}
 }

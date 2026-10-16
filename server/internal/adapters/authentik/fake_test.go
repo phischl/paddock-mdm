@@ -404,6 +404,10 @@ func intOf(v any) int {
 }
 
 func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
+	// Authentik validates groups_by_name against the existing groups.
+	if name := first(q["groups_by_name"]); name != "" && f.groupByName(name) == nil {
+		return http.StatusBadRequest, map[string]any{"groups_by_name": []string{"Select a valid choice. " + name + " is not one of the available choices."}}
+	}
 	var match []*fakeUser
 	for _, u := range f.users {
 		if name := first(q["groups_by_name"]); name != "" && !slices.ContainsFunc(u.groups, func(pk string) bool { return f.groups[pk] != nil && f.groups[pk].name == name }) {

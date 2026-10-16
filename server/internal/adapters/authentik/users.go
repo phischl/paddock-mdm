@@ -28,13 +28,15 @@ type user struct {
 	Name       string         `json:"name"`
 	Email      string         `json:"email"`
 	Attributes map[string]any `json:"attributes"`
+	IsActive   bool           `json:"is_active"`
 	// GroupsObj are the direct groups of the user (only with include_groups=true).
 	GroupsObj []group `json:"groups_obj"`
 }
 
 func (u user) identity() ports.IdentityUser {
 	managed, _ := u.Attributes[attrManaged].(bool)
-	return ports.IdentityUser{PK: strconv.Itoa(u.PK), Username: u.Username, Name: u.Name, Email: u.Email, Managed: managed}
+	return ports.IdentityUser{PK: strconv.Itoa(u.PK), Username: u.Username, Name: u.Name, Email: u.Email, Managed: managed,
+		Active: u.IsActive}
 }
 
 // CreateUser creates a Paddock-managed internal user without password in the organization's root group (path
@@ -152,6 +154,19 @@ func (c *Client) OrganizationUsers(ctx context.Context, slug string) ([]ports.Id
 	q := url.Values{"groups_by_name": {organization.RootGroup(slug)}, "include_groups": {"false"}}
 	var out []ports.IdentityUser
 	err := pages(ctx, c, "/api/v3/core/users/", q, func(u user) { out = append(out, u.identity()) })
+	return out, err
+}
+
+// RoleGroupUsers lists the direct members of the role group groupName. Authentik refuses a filter on a group name it
+// does not know with 400 on groups_by_name: ports.ErrGroupNotFound.
+func (c *Client) RoleGroupUsers(ctx context.Context, groupName string) ([]ports.IdentityUser, error) {
+	q := url.Values{"groups_by_name": {groupName}, "include_groups": {"false"}}
+	var out []ports.IdentityUser
+	err := pages(ctx, c, "/api/v3/core/users/", q, func(u user) { out = append(out, u.identity()) })
+	var st *errStatus
+	if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
+		return nil, fmt.Errorf("%s: %w", groupName, ports.ErrGroupNotFound)
+	}
 	return out, err
 }
 

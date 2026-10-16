@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once after the upgrade; it prints the counts per organization and records them in the audit log. Existing grants and
   files keep working while they await review.
 
+- End all sessions: a platform administrator ends every portal session of the installation under *Platform* →
+  *Sessions* (`POST /api/platform/v1/sessions/end-all`, with a step-up, audited as `platform.sessions_ended`), or with
+  `paddock-server admin end-sessions` when the portal is not usable.
+
 - Lab installation profile (plan M8a, ADR 0029; not for production): `PADDOCK_HOST=lab` runs control plane and audit
   domain in one Compose project on one amd64 host behind the operator's own TLS-terminating reverse proxy. The
   bundle ships `compose.lab.yaml`, `caddy/Caddyfile.lab` (plain-HTTP sites, `auto_https off`), the settings template
@@ -86,6 +90,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remain manageable. The agent no longer deletes a managed file on a now-denied path when its definition leaves the
   bundle: it keeps the file unchanged, stops tracking it and reports `left_denied_file`.
 
+- API tokens stop working once their creator's account is disabled or no longer has a role that may create the
+  token's role; such a use is refused with 401 and recorded as `api_token.use_denied` with reason `creator_inactive`.
+  A token that must outlive its creator needs a creator who keeps the role.
+- The worker follows administrator accounts to the identity provider every identity sync interval
+  (`PADDOCK_IDENTITY_SYNC_INTERVAL`, default 5 minutes): an administrator moved to another role group takes the new
+  role, one removed from every role group or deactivated is disabled, and every portal session of the account ends
+  (`admin.sessions_revoked` with reason `role_changed`, `removed` or `deactivated`). A platform administrator removed
+  from `paddock.platform.admins` or deactivated loses every portal session the same way. When the role groups cannot
+  be read, or list no members at all while accounts exist, nothing changes and the round reports the failure.
+- A step-up now also checks the administrator's role groups in the identity provider. When they no longer grant the
+  session's role in its organization, the step-up is refused, the account takes the current role (or is disabled when
+  it has none), every portal session of the account ends and `admin.sessions_revoked` is recorded. A disabled account
+  can no longer decrypt escrowed secrets; the next successful login enables it again.
+- Portal sessions are now also kept on the server, in Valkey. Signing out ends the session on the server, so a copied
+  session cookie no longer works afterwards. While Valkey is unreachable the portal answers 503
+  `session_store_unavailable`; devices and API tokens are not affected. Administrators sign in again after the
+  upgrade.
+- The step-up accepts WebAuthn authenticators only; TOTP codes no longer complete a step-up (the portal login still
+  accepts them). Before upgrading, every administrator enrols a WebAuthn authenticator in Authentik's user settings
+  (`https://auth.<domain>/if/user/`, MFA devices); an administrator with TOTP only cannot reveal keys, lock or destroy
+  devices, create API tokens or grant root-equivalent rights until then. The development stack keeps a TOTP step-up
+  through its development blueprint.
+- The upload URL of an escrowed LUKS header now binds the announced size: the object store refuses a body of another
+  size, and the worker checks the stored object's size before reading it. An object of another size fails the escrow
+  without being read and is recorded as `device.header_object_rejected`; it stays in the bucket for the operator
+  (`docs/operations/disk-recovery.md`). A header the worker cannot check no longer holds up the others.
+- Caddy bounds the request bodies it forwards on every site: admin 2 MiB (agent release uploads 130 MiB), auth
+  16 MiB, device 2 MiB, bundles 1 MiB (escrow uploads 33 MiB), Fleet's device paths 64 MiB. A larger body is refused
+  with 413.
+- Containers run with tighter defaults: the Paddock roles drop every Linux capability and may not gain privileges,
+  Caddy keeps only the capability to bind 80 and 443, and every service of every Compose file set has a process limit
+  (`pids_limit`). `./paddock check` adds the item `container hardening`, which fails when an edit removes one of these
+  settings. Keep Docker's default seccomp and AppArmor profiles enabled on the hosts.
+- The admin API accepts request bodies of at most 256 KiB; a larger body is refused with 400 `invalid_request`. The
+  declarative configuration (`PUT /api/v1/config`, 1 MiB) and the agent release uploads (128 MiB) keep their own
+  limits. The api, gateway and escrow-reader roles now close a connection that takes longer than 60 seconds to send
+  its request or 120 seconds to receive its answer; agent release uploads may take up to 10 minutes.
 - `PADDOCK_ACME_EMAIL` no longer stops `compose.prod.yaml` from rendering when it is unset, because the lab profile
   has no ACME. A production control plane still refuses to run without it: `./paddock check` fails the Caddy item
   and Caddy refuses to start.

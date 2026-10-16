@@ -30,6 +30,9 @@ type directory struct {
 	groups  map[string]string   // pk → name
 	members map[string][]string // group pk → user pks
 	fail    error
+	// roleGroups are the members of role groups by group name; roleGroupCalls counts their listings.
+	roleGroups     map[string][]ports.IdentityUser
+	roleGroupCalls int
 }
 
 func newDirectory() *directory {
@@ -52,6 +55,12 @@ func (d *directory) OrganizationUsers(context.Context, string) ([]ports.Identity
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return slices.Clone(d.users), d.fail
+}
+func (d *directory) RoleGroupUsers(_ context.Context, name string) ([]ports.IdentityUser, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.roleGroupCalls++
+	return slices.Clone(d.roleGroups[name]), d.fail
 }
 func (d *directory) EnsureGroup(_ context.Context, _, name string) (string, error) {
 	d.mu.Lock()

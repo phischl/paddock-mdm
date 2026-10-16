@@ -16,7 +16,7 @@ import (
 
 var metricAPITokenAuth = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "paddock_api_token_auth_total",
-	Help: "API token authentications of the admin API by result (ok, unknown, revoked, expired).",
+	Help: "API token authentications of the admin API by result (ok, unknown, revoked, expired, creator_inactive).",
 }, []string{"result"})
 
 // bearerSecret returns the secret of an Authorization: Bearer header.

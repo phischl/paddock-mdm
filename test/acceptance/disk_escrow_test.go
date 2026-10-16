@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,15 +51,15 @@ func waitEscrow(t *testing.T, d *devicesim.Device, id string, timeout time.Durat
 	}
 }
 
-// escrowHeader seals header for generation, announces it and uploads object (nil: the sealed object) to the
+// escrowHeader seals header for generation, announces it and uploads the sealed object, changed by tamper if set, to the
 // presigned URL; it returns the escrow ID, the upload URL and the HTTP status of the upload.
-func escrowHeader(t *testing.T, d *devicesim.Device, b *bundle.Bundle, generation int64, header, object []byte) (string, string, int) {
+func escrowHeader(t *testing.T, d *devicesim.Device, b *bundle.Bundle, generation int64, header []byte, tamper func([]byte) []byte) (string, string, int) {
 	t.Helper()
-	return escrowVolumeHeader(t, d, b, "", generation, header, object)
+	return escrowVolumeHeader(t, d, b, "", generation, header, tamper)
 }
 
 // escrowVolumeHeader is escrowHeader for the LUKS volume with UUID volume ("": none, as before PDK-009).
-func escrowVolumeHeader(t *testing.T, d *devicesim.Device, b *bundle.Bundle, volume string, generation int64, header, object []byte) (string, string, int) {
+func escrowVolumeHeader(t *testing.T, d *devicesim.Device, b *bundle.Bundle, volume string, generation int64, header []byte, tamper func([]byte) []byte) (string, string, int) {
 	t.Helper()
 	pub, version := escrowWrap(t, b)
 	id := uuid.Must(uuid.NewV7()).String()
@@ -66,8 +67,9 @@ func escrowVolumeHeader(t *testing.T, d *devicesim.Device, b *bundle.Bundle, vol
 	if err != nil {
 		t.Fatal(err)
 	}
-	if object == nil {
-		object = sealed.Object
+	object := sealed.Object
+	if tamper != nil {
+		object = tamper(slices.Clone(sealed.Object))
 	}
 	ctx := testContext(t, 2*time.Minute)
 	res, err := d.Escrow(ctx, escrow.Request{EscrowID: id, Kind: escrow.KindLUKSHeader, Generation: generation, KeyVersion: version,
@@ -129,8 +131,9 @@ func TestDiskEscrow(t *testing.T) {
 	if status, err := d.Upload(testContext(t, time.Minute), other, []byte("x")); err != nil || status != http.StatusForbidden {
 		t.Fatalf("upload to another key: %v HTTP %d", err, status)
 	}
-	// An object that is not the announced one fails, and generations must increase.
-	id, _, status = escrowHeader(t, d, b, 2, header, []byte("something else"))
+	// An object of the announced size that is not the announced one fails, and generations must increase. An object of
+	// another size is refused by the presigned URL (TestEscrowUploadBound).
+	id, _, status = escrowHeader(t, d, b, 2, header, func(o []byte) []byte { o[len(o)-1] ^= 0xff; return o })
 	if status != http.StatusOK {
 		t.Fatalf("upload: HTTP %d", status)
 	}

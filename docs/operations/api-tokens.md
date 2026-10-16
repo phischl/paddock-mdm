@@ -57,9 +57,12 @@ without the secret.
 
 ## Residual risks
 
-- **A token outlives its creator's access.** It keeps working when the administrator who created it loses the role or
-  is locked in Authentik. Mitigation: the mandatory expiry, revocation by an organization administrator, and the
-  *Created by* column. Review the tokens when an administrator leaves.
+- **A token follows its creator's access with a delay.** A token stops working (401, `api_token.use_denied` with
+  reason `creator_inactive`) once its creator's account is disabled or no longer has a role that may create the
+  token's role. Paddock learns this at the creator's next step-up, or from the worker within the identity sync
+  interval (5 minutes by default), so a token keeps working until then. Mitigation: the mandatory expiry, revocation
+  by an organization administrator, and the *Created by* column. Review the tokens when an administrator leaves; a
+  token meant to outlive its creator must be created by an account that keeps the role.
 - **Unknown secrets are not rate-limited.** Guessing a 256-bit secret is not practical; the metric above shows
   attempts.
 - **A token in a CI system is only as safe as that system.** Give CI the narrowest role it needs. A pipeline that only

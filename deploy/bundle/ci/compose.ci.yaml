@@ -42,6 +42,7 @@ services:
   backup-s3-tls:
     image: ${CADDY_IMAGE}
     restart: unless-stopped
+    pids_limit: 256
     command:
       - sh
       - -c

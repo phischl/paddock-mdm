@@ -15,8 +15,10 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/sessions"
 )
 
 // OIDCConfig configures the portal's OIDC client (Authentik application paddock-portal).
@@ -123,6 +125,8 @@ type bff struct {
 	// tokens keeps the raw step-up ID token for tokenTTL, the step-up window.
 	tokens   StepUpTokenStore
 	tokenTTL time.Duration
+	sessions SessionStore
+	roles    StepUpAccounts
 }
 
 func randomToken() string {
@@ -233,7 +237,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = claims.Email
 	}
-	res := ResolveRole(claims.Groups)
+	res := organization.ResolveRole(claims.Groups)
 	result, err := b.accounts.Login(ctx,
 		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip},
 		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs})
@@ -246,7 +250,24 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
-	value, err := b.keys.Seal(SessionCookie, NewSession(result.Principal, result.Locale, b.now()))
+	now := b.now()
+	sid := sessions.NewID()
+	p := result.Principal
+	if _, err := b.sessions.Create(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
+		Org: p.OrganizationID, CreatedAt: now.Unix()}, SessionAbsolute); err != nil {
+		slog.ErrorContext(ctx, "session record", "error", err)
+		denied(w, r, app.ReasonLoginFailed)
+		return
+	}
+	if valid, err := b.accounts.LoginStillValid(ctx, p); err != nil || !valid {
+		slog.WarnContext(ctx, "login of an account that changed meanwhile", "account_id", p.ID, "error", err)
+		if err := b.sessions.Delete(ctx, sid, p.ID); err != nil {
+			slog.WarnContext(ctx, "session record not deleted", "error", err)
+		}
+		denied(w, r, app.ReasonLoginFailed)
+		return
+	}
+	value, err := b.keys.Seal(SessionCookie, NewSession(p, sid, result.Locale, now))
 	if err != nil {
 		slog.ErrorContext(ctx, "session cookie", "error", err)
 		denied(w, r, app.ReasonLoginFailed)
@@ -257,9 +278,17 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, st.ReturnTo, http.StatusFound)
 }
 
-// logout clears the session and returns the Authentik end-session URL.
+// logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. It reads the
+// cookie itself, so it also signs the browser out while the session store is unreachable; the record then expires on
+// its own (plan M8s decision 15).
 func (b *bff) logout(publicURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var sess Session
+		if c, err := r.Cookie(SessionCookie); err == nil && b.keys.Open(SessionCookie, c.Value, &sess) == nil && sess.SID != "" {
+			if err := b.sessions.Delete(r.Context(), sess.SID, sess.PID); err != nil {
+				slog.WarnContext(r.Context(), "session record not deleted at logout", "error", err)
+			}
+		}
 		http.SetCookie(w, sessionCookie("", -1))
 		_, _, endSession := b.oidc.snapshot()
 		target := publicURL + "/"
@@ -268,4 +297,28 @@ func (b *bff) logout(publicURL string) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": target})
 	}
+}
+
+// sessionLive requires the server-side record of sess, of the current generation and with the cookie's account, role
+// and organization (plan M8s decision 14). Otherwise it answers: 503 session_store_unavailable while the store is
+// unreachable, keeping the cookie (the session is valid again once the store answers), or 401 with the cookie cleared.
+func (b *bff) sessionLive(w http.ResponseWriter, r *http.Request, sess Session) bool {
+	rec, gen, found, err := b.sessions.Get(r.Context(), sess.SID)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "session store", "error", err)
+		httpx.WriteProblem(w, r, problem.SessionStoreUnavailable)
+		return false
+	}
+	if !recordMatches(rec, gen, found, sess) {
+		http.SetCookie(w, sessionCookie("", -1))
+		httpx.WriteProblem(w, r, problem.Unauthenticated)
+		return false
+	}
+	return true
+}
+
+// recordMatches reports whether the record of a session exists, is of the current generation and belongs to the
+// cookie's account, role and organization.
+func recordMatches(rec sessions.Record, gen int64, found bool, sess Session) bool {
+	return found && rec.Gen >= gen && rec.AccountID == sess.PID && rec.Role == sess.Role && rec.Org == sess.Org
 }

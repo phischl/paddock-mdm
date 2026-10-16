@@ -210,6 +210,29 @@ func TestOrganizationUsersPaginates(t *testing.T) {
 	}
 }
 
+// TestRoleGroupUsers (plan M8s decision 22): the direct members of a role group with their active flag; a group that
+// does not exist is ErrGroupNotFound, never an empty listing.
+func TestRoleGroupUsers(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	admins := f.groupByName("paddock.acme.admins").pk
+	f.users[910] = &fakeUser{pk: 910, username: "alice@acme.test", groups: []string{admins}}
+	f.users[911] = &fakeUser{pk: 911, username: "dave@acme.test", groups: []string{admins}, inactive: true}
+	f.users[912] = &fakeUser{pk: 912, username: "bob@acme.test", groups: []string{f.groupByName("paddock.acme.auditors").pk}}
+	users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins")
+	if err != nil || len(users) != 2 || users[0].Username != "alice@acme.test" || !users[0].Active ||
+		users[1].Username != "dave@acme.test" || users[1].Active {
+		t.Fatalf("role group users %+v %v", users, err)
+	}
+	if users, err := c.RoleGroupUsers(ctx, "paddock.globex.admins"); !errors.Is(err, ports.ErrGroupNotFound) || len(users) != 0 {
+		t.Fatalf("missing group: %+v %v", users, err)
+	}
+}
+
 // TestLockRevokesTokensAndSessions: a lock is the group membership AND the revocation (PoC M1 C2).
 func TestLockRevokesTokensAndSessions(t *testing.T) {
 	f, srv := newFake(t)

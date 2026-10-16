@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -72,6 +73,17 @@ func TestEscrowStore(t *testing.T) {
 type fakeObjects struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+	failing map[string]bool // keys whose HEAD fails
+}
+
+func (f *fakeObjects) Size(_ context.Context, key string) (int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failing[key] {
+		return 0, false, errors.New("object store unavailable")
+	}
+	data, ok := f.objects[key]
+	return int64(len(data)), ok, nil
 }
 
 func (f *fakeObjects) GetIfExists(_ context.Context, key string) ([]byte, bool, error) {
@@ -165,6 +177,25 @@ func TestEscrowLUKS(t *testing.T) {
 		if got := status(id); got != want {
 			t.Errorf("header %s: %s, want %s", id, got, want)
 		}
+	}
+	// Plan M8s decision 30: the object of another size than announced fails the header unread and is audited once; the
+	// read-only worker leaves it for the operator.
+	if _, found, _ := objects.Size(ctx, escrow.HeaderObjectKey(f.org.String(), device.String(), "", 2)); !found {
+		t.Error("the object of another size is gone")
+	}
+	rejected := func() (n int, params string) {
+		t.Helper()
+		if err := f.super.QueryRow(ctx, `SELECT count(*), coalesce(max(outcome || ' ' || coalesce(error_code, '') || ' ' ||
+			(params ->> 'generation') || ' [' || (params ->> 'volume') || '] ' || (params ->> 'declared_size') || ' ' ||
+			(params ->> 'object_size') || ' ' || (actor ->> 'type')), '') FROM action
+			WHERE organization_id = $1 AND code = 'device.header_object_rejected'`, f.org).Scan(&n, &params); err != nil {
+			t.Fatal(err)
+		}
+		return n, params
+	}
+	want := fmt.Sprintf("failure invalid_request 2 [] %d %d device", len(object)+1, len(object))
+	if n, params := rejected(); n != 1 || params != want {
+		t.Fatalf("%d events %q, want 1 %q", n, params, want)
 	}
 	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), "", 4), object)
 	if err := e.Round(ctx); err != nil || status(waiting) != escrow.StatusStored {
@@ -281,5 +312,64 @@ func TestEscrowVolumeCapConcurrent(t *testing.T) {
 	if err := f.super.QueryRow(ctx, `SELECT count(DISTINCT volume) FROM escrow_secret WHERE device_id = $1 AND kind = 'luks_header'
 		AND status <> 'failed'`, device).Scan(&volumes); err != nil || volumes != app.MaxHeaderVolumes {
 		t.Fatalf("%d volumes escrowed (%v), want %d", volumes, err, app.MaxHeaderVolumes)
+	}
+}
+
+// TestEscrowRoundIsolatesFailures: a header whose object cannot be checked in one organization does not stop the
+// round for the next header or another organization; the round reports the failure.
+func TestEscrowRoundIsolatesFailures(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	platform, err := db.NewPlatformPool(ctx, pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	other := uuid.Must(uuid.NewV7())
+	if _, err := f.super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'W2', 'active')",
+		other, "w"+other.String()[24:]); err != nil {
+		t.Fatal(err)
+	}
+	object := []byte("sealed header")
+	sum := sha256.Sum256(object)
+	objects := &fakeObjects{objects: map[string][]byte{}, failing: map[string]bool{}}
+	pending := func(org uuid.UUID, generation int) (uuid.UUID, string) {
+		device, id := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+		if _, err := f.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $2, 'lt-iso', 'active')", device, org); err != nil {
+			t.Fatal(err)
+		}
+		key := escrow.HeaderObjectKey(org.String(), device.String(), "", int64(generation))
+		if _, err := f.super.Exec(ctx, `INSERT INTO escrow_secret (id, organization_id, device_id, kind, generation, status, key_version,
+			object_key, wrapped_dek, nonce, sha256, size) VALUES ($1, $2, $3, 'luks_header', $4, 'pending', 1, $5, '\x01',
+			'\x000000000000000000000000', $6, $7)`, id, org, device, generation, key, hex.EncodeToString(sum[:]), len(object)); err != nil {
+			t.Fatal(err)
+		}
+		objects.put(key, object)
+		return id, key
+	}
+	broken, brokenKey := pending(f.org, 1)
+	sameOrg, _ := pending(f.org, 1)
+	otherOrg, _ := pending(other, 1)
+	objects.mu.Lock()
+	objects.failing[brokenKey] = true
+	objects.mu.Unlock()
+	e := NewEscrow(app.NewEscrow(app.NewActionRunner(f.pool, nil, httpx.RequestID), f.pool, objects), f.cache, f.pool, platform)
+	if err := e.Round(ctx); err == nil {
+		t.Fatal("the round did not report the failing header")
+	}
+	status := func(id uuid.UUID) string {
+		var s string
+		if err := f.super.QueryRow(ctx, "SELECT status FROM escrow_secret WHERE id = $1", id).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	for name, c := range map[string]struct {
+		id   uuid.UUID
+		want string
+	}{"failing header": {broken, "pending"}, "next header": {sameOrg, "stored"}, "other organization": {otherOrg, "stored"}} {
+		if got := status(c.id); got != c.want {
+			t.Errorf("%s: %s, want %s", name, got, c.want)
+		}
 	}
 }

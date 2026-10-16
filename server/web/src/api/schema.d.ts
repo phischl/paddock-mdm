@@ -2073,6 +2073,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/sessions/end-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal session of the installation, the caller's own with its next request; every administrator signs in again. API tokens are not affected. 503 session_store_unavailable while the session store is unreachable. */
+        post: operations["endAllSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases/{version}/rollout/resume": {
         parameters: {
             query?: never;
@@ -2304,6 +2321,13 @@ export interface components {
             failure_threshold_percent?: number;
             /** @description Default 3. */
             failure_threshold_min?: number;
+        };
+        SessionsEnded: {
+            /**
+             * Format: int64
+             * @description The new session generation; every session of an older generation is invalid.
+             */
+            generation: number;
         };
         AgentRollout: {
             version: string;
@@ -8050,6 +8074,31 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    endAllSessions: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every session of an older generation is ended. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsEnded"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     resumeAgentRollout: {

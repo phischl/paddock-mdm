@@ -49,7 +49,9 @@ entries:
     identifiers:
       name: paddock-stepup-mfa
     attrs:
-      device_classes: [webauthn, totp]
+      # WebAuthn only (ADR 0034 decision 6): the step-up gates reveals, Lock and Destroy, tokens and root grants. The
+      # development blueprint adds a stage for the scripted authenticators of its test users.
+      device_classes: [webauthn]
       not_configured_action: deny
 
   - model: authentik_stages_user_login.userloginstage
@@ -105,6 +107,8 @@ entries:
       property_mappings:
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+        # The role at the step-up is checked against the session's (plan M8s decision 19); paddock-portal.yaml defines it.
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, io.paddock/scope-groups]]
 
   - model: authentik_core.application
     id: application

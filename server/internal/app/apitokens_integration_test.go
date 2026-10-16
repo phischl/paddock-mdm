@@ -238,6 +238,42 @@ func TestAPITokenAuthenticateRefusals(t *testing.T) {
 			t.Fatalf("Get = %+v, %v", tok, err)
 		}
 	})
+	// PDK-184: a token stops working once its creator is disabled or no longer has a role that may create it, and works
+	// again when the creator does.
+	t.Run("creator disabled or demoted", func(t *testing.T) {
+		creator := h.account(t, principal.RoleOrgOperator, true)
+		created := h.create(t, creator, "creator "+uuid.NewString()[:8], principal.RoleOrgOperator)
+		for _, c := range []struct {
+			change string
+			want   app.APITokenAuthResult
+		}{
+			{"", app.APITokenOK},
+			{"UPDATE admin_account SET disabled_at = now() WHERE id = $1", app.APITokenCreatorInactive},
+			{"UPDATE admin_account SET disabled_at = NULL, role = 'org_auditor' WHERE id = $1", app.APITokenCreatorInactive},
+			{"UPDATE admin_account SET role = 'org_admin' WHERE id = $1", app.APITokenOK},
+		} {
+			if c.change != "" {
+				if _, err := h.super.Exec(context.Background(), c.change, creator.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := h.during(t, func() {
+				_, result, err := h.tokens.Authenticate(context.Background(), created.Secret, "")
+				if result != c.want || (c.want == app.APITokenOK) != (err == nil) {
+					t.Fatalf("after %q: %v, %v; want %v", c.change, result, err, c.want)
+				}
+			})
+			if c.want == app.APITokenCreatorInactive {
+				if len(got) != 1 || got[0] != "api_token.use_denied:denied:forbidden" {
+					t.Fatalf("after %q: actions %v", c.change, got)
+				}
+				_, events := h.recorded(t, h.corr)
+				if ev := events[len(events)-1]; ev.Params["reason"] != "creator_inactive" {
+					t.Fatalf("event %+v", ev)
+				}
+			}
+		}
+	})
 	t.Run("inactive organization", func(t *testing.T) {
 		created := h.create(t, admin, "suspended "+uuid.NewString()[:8], principal.RoleOrgAuditor)
 		if _, err := h.super.Exec(context.Background(), "UPDATE organization SET status = 'provisioning' WHERE id = $1", h.org); err != nil {

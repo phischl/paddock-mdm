@@ -51,6 +51,7 @@
     "managedUnits": "Managed units",
     "agentReleases": "Agent releases",
     "ipAllowlist": "IP allow list",
+    "sessions": "Sessions",
     "users": "Users",
     "userGroups": "Groups",
     "permissionProfiles": "Permission profiles",
@@ -230,7 +231,7 @@
     "api_token": {
       "created": "{actor} created the API token {name} ({role})",
       "revoked": "{actor} revoked the API token {name}",
-      "use_denied": "A request with the {reason} API token {name} was refused"
+      "use_denied": "A request with the API token {name} was refused: {reason, select, revoked {the token is revoked} expired {the token expired} creator_inactive {its creator is disabled or lost the required role} other {{reason}}}"
     },
     "device": {
       "enrolled": "The device {hostname} enrolled",
@@ -904,6 +905,13 @@
     "cidrHostBits": "The host bits must be zero.",
     "cidrMapped": "IPv4-mapped IPv6 ranges are not allowed; use the IPv4 form.",
     "labelInvalid": "The label must have 1 to 64 characters without control characters."
+  },
+  "sessions": {
+    "title": "Portal sessions",
+    "summary": "Ends every portal session of the installation, including your own. Every administrator signs in again; API tokens keep working.",
+    "endAll": "End all sessions",
+    "confirmTitle": "End all sessions?",
+    "confirmMessage": "Every administrator, you included, is signed out at the next request. Type END to confirm."
   },
   "changeSets": {
     "title": "Change sets",

@@ -104,6 +104,9 @@ jobs:
       - run: make up
       - run: make dev-seed
       - run: make acceptance
+      # Ends every portal session of the stack, so it runs alone after the main run (plan M8s gate S13).
+      - name: Disruptive acceptance gates
+        run: PADDOCK_ACCEPTANCE_DISRUPTIVE=1 make acceptance T=TestSessionsEndAll
       - run: make e2e
       - name: compose logs
         if: failure()

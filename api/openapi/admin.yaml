@@ -11,6 +11,9 @@ info:
     - Requests authenticate with the portal session cookie or with an API token (`Authorization: Bearer pdk_…`,
       plan M6c decision 9). A token acts in its organization with the role it carries; API token requests send
       `X-Paddock-CSRF: 1` on mutating requests, too.
+    - A session cookie is valid only while its server-side record exists (plan M8s decision 14): every session
+      request answers 503 `session_store_unavailable` while the session store is unreachable, and 401
+      `unauthenticated` once the session was signed out or ended. API tokens are not affected.
     - The organization is never part of a path: it comes from the session only. Resources of other organizations
       answer 404 `not_found`, exactly like missing resources.
     - Operations that are privileged actions carry `x-paddock-audit: <code>`; each attempt produces exactly one
@@ -3392,6 +3395,26 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/sessions/end-all:
+    post:
+      operationId: endAllSessions
+      tags: [platform]
+      description: >-
+        Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal
+        session of the installation, the caller's own with its next request; every administrator signs in again. API
+        tokens are not affected. 503 session_store_unavailable while the session store is unreachable.
+      x-paddock-audit: platform.sessions_ended
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Every session of an older generation is ended.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionsEnded" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases/{version}/rollout/resume:
     parameters:
       - $ref: "#/components/parameters/Version"
@@ -3940,6 +3963,14 @@ components:
         min_wave_minutes: { type: integer, minimum: 1, description: "Default 1440; at least 60 outside development." }
         failure_threshold_percent: { type: integer, minimum: 0, maximum: 100, description: Default 2. }
         failure_threshold_min: { type: integer, minimum: 0, description: Default 3. }
+    SessionsEnded:
+      type: object
+      required: [generation]
+      properties:
+        generation:
+          type: integer
+          format: int64
+          description: The new session generation; every session of an older generation is invalid.
     AgentRollout:
       type: object
       required: [version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent,

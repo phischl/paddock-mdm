@@ -52,7 +52,7 @@ func serveGateway(ctx context.Context, l *config.Loader, common config.Common) e
 		Escrow:         objectstore.NewPresigner(bundlesURL, accessKey, secretKey, escrowBucket),
 		TrustedProxies: common.TrustedProxies,
 	})
-	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	srv := newHTTPServer(httpAddr, handler)
 	slog.InfoContext(ctx, "gateway starting", "addr", httpAddr, "bundles_url", bundlesURL)
 
 	return runAll(ctx,

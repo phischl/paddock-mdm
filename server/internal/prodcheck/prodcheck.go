@@ -53,6 +53,10 @@ type Service struct {
 	ExtraHosts  []string                  `json:"extra_hosts"`
 	Networks    map[string]ServiceNetwork `json:"networks"`
 	NetworkMode string                    `json:"network_mode"`
+	CapAdd      []string                  `json:"cap_add"`
+	CapDrop     []string                  `json:"cap_drop"`
+	SecurityOpt []string                  `json:"security_opt"`
+	PidsLimit   int64                     `json:"pids_limit"`
 }
 
 // ServiceNetwork is a service's attachment to one network.
@@ -143,10 +147,10 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 	}
 	lab := o.Host == HostLab
 	if lab {
-		results = append(results, checkLabPorts(c), checkTLSLinks(c), checkLabCaddy(c), checkEdgeClientAddress(c, true),
+		results = append(results, checkLabPorts(c), checkTLSLinks(c), checkContainerHardening(c), checkLabCaddy(c), checkEdgeClientAddress(c, true),
 			checkLabAdminAllowlist(c), checkLabAliases(c), checkLabProxyResolution(c))
 	} else {
-		results = append(results, checkPorts(c), checkTLSLinks(c))
+		results = append(results, checkPorts(c), checkTLSLinks(c), checkContainerHardening(c))
 		if _, ok := c.Services["caddy"]; ok {
 			results = append(results, checkCaddy(c), checkEdgeClientAddress(c, false))
 		}
@@ -515,6 +519,34 @@ func checkTLSLinks(c Config) Result {
 		}
 	}
 	return result("links between the hosts use TLS", f)
+}
+
+// checkContainerHardening requires that the Paddock roles and Caddy run without capabilities beyond Caddy's bind to
+// 80 and 443 and without privilege gain, and that every service bounds its number of processes (plan M8s decision 36).
+func checkContainerHardening(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		s := c.Services[name]
+		paddock := strings.HasPrefix(name, "paddock-")
+		if paddock || name == "caddy" || name == "caddy-ca-export" {
+			if !slices.Equal(s.CapDrop, []string{"ALL"}) {
+				f = append(f, name+": cap_drop is not [ALL]")
+			}
+			if !slices.Contains(s.SecurityOpt, "no-new-privileges:true") {
+				f = append(f, name+": security_opt lacks no-new-privileges:true")
+			}
+		}
+		if paddock && len(s.CapAdd) > 0 {
+			f = append(f, fmt.Sprintf("%s: cap_add %v", name, s.CapAdd))
+		}
+		if name == "caddy" && !slices.Equal(s.CapAdd, []string{"NET_BIND_SERVICE"}) {
+			f = append(f, fmt.Sprintf("caddy: cap_add %v, want [NET_BIND_SERVICE]", s.CapAdd))
+		}
+		if s.PidsLimit <= 0 {
+			f = append(f, name+": no pids_limit")
+		}
+	}
+	return result("container hardening", f)
 }
 
 // dsnProblem reads the DSN file a *_URL_FILE variable names (inside the container: /run/secrets/<target>) and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -19,10 +20,11 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
-// HeaderObjects reads sealed LUKS headers from the escrow bucket paddock-escrow (objectstore.Store); found is false
-// when the object does not exist.
+// HeaderObjects reads and sizes sealed LUKS headers in the escrow bucket paddock-escrow (objectstore.Store); found is
+// false when the object does not exist. The worker's credential is read-only: it never deletes.
 type HeaderObjects interface {
 	GetIfExists(ctx context.Context, key string) (data []byte, found bool, err error)
+	Size(ctx context.Context, key string) (size int64, found bool, err error)
 }
 
 // HeaderUploadWindow is how long a header may stay pending: the device has the 10 minutes of its presigned PUT, and
@@ -197,7 +199,8 @@ type HeaderOutcome struct {
 
 // VerifyHeaders checks the pending headers of the caller's organization: a header whose object exists with the
 // announced size and SHA-256 is stored, a mismatching object or one that did not arrive within HeaderUploadWindow
-// fails; the others stay pending. It returns the finished headers.
+// fails; the others stay pending. It returns the finished headers. A header that cannot be checked is logged and
+// skipped until the next round, so that it never holds up the others; the error then names how many failed.
 func (e *Escrow) VerifyHeaders(ctx context.Context) ([]HeaderOutcome, error) {
 	var pending []pgstore.EscrowSecret
 	if err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -208,46 +211,100 @@ func (e *Escrow) VerifyHeaders(ctx context.Context) ([]HeaderOutcome, error) {
 		return nil, err
 	}
 	var out []HeaderOutcome
+	var errs []error
 	for _, h := range pending {
-		status, err := e.check(ctx, h)
+		o, finished, err := e.verifyHeader(ctx, h)
 		if err != nil {
-			return out, fmt.Errorf("header %s: %w", h.ID, err)
-		}
-		if status == statusPending {
+			slog.WarnContext(ctx, "escrowed LUKS header not checked; retrying next round", "escrow_id", h.ID, "error", err)
+			errs = append(errs, fmt.Errorf("header %s: %w", h.ID, err))
 			continue
 		}
-		var n int64
-		if err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-			n, err = q.FinishEscrowHeader(ctx, pgstore.FinishEscrowHeaderParams{ID: h.ID, Status: status})
-			return err
-		}); err != nil {
-			return out, err
+		if finished {
+			slog.InfoContext(ctx, "escrowed LUKS header verified", "device_id", h.DeviceID, "escrow_id", h.ID, "generation", h.Generation, "status", o.Status)
+			out = append(out, o)
 		}
-		if n == 1 {
-			slog.InfoContext(ctx, "escrowed LUKS header verified", "device_id", h.DeviceID, "escrow_id", h.ID, "generation", h.Generation, "status", status)
-			out = append(out, HeaderOutcome{EscrowID: h.ID, DeviceID: h.DeviceID, Status: status})
-		}
+	}
+	if len(errs) > 0 {
+		return out, fmt.Errorf("%d of %d pending headers not checked: %w", len(errs), len(pending), errors.Join(errs...))
 	}
 	return out, nil
 }
 
-// check returns the status of one pending header.
-func (e *Escrow) check(ctx context.Context, h pgstore.EscrowSecret) (string, error) {
-	if h.ObjectKey == nil || h.Sha256 == nil || h.Size == nil {
-		return escrow.StatusFailed, nil
+// verifyHeader checks one pending header and records its final status; finished is false while it stays pending or
+// when another round finished it first.
+func (e *Escrow) verifyHeader(ctx context.Context, h pgstore.EscrowSecret) (HeaderOutcome, bool, error) {
+	status, objectSize, err := e.check(ctx, h)
+	if err != nil || status == statusPending {
+		return HeaderOutcome{}, false, err
 	}
-	data, found, err := e.headers.GetIfExists(ctx, *h.ObjectKey)
+	var finished bool
+	if objectSize >= 0 {
+		finished, err = e.rejectObject(ctx, h, objectSize)
+	} else {
+		finished, err = e.finish(ctx, h.ID, status)
+	}
+	return HeaderOutcome{EscrowID: h.ID, DeviceID: h.DeviceID, Status: status}, finished, err
+}
+
+// check returns the status of one pending header. The object's size is checked before it is read (plan M8s decision
+// 30): an object of another size than announced is never read and fails the header, and its size is returned for the
+// audit event; objectSize is -1 otherwise. The object stays: the presigned PUT binds the size, so it came from outside
+// the device path and is the operator's to examine and remove (docs/operations/disk-recovery.md).
+func (e *Escrow) check(ctx context.Context, h pgstore.EscrowSecret) (status string, objectSize int64, err error) {
+	if h.ObjectKey == nil || h.Sha256 == nil || h.Size == nil {
+		return escrow.StatusFailed, -1, nil
+	}
+	size, found, err := e.headers.Size(ctx, *h.ObjectKey)
+	if err != nil {
+		return "", -1, err
+	}
+	if found && size != *h.Size {
+		return escrow.StatusFailed, size, nil
+	}
+	var data []byte
+	if found {
+		if data, found, err = e.headers.GetIfExists(ctx, *h.ObjectKey); err != nil {
+			return "", -1, err
+		}
+	}
 	switch {
-	case err != nil:
-		return "", err
 	case !found && e.now().Sub(h.CreatedAt) > HeaderUploadWindow:
-		return escrow.StatusFailed, nil
+		return escrow.StatusFailed, -1, nil
 	case !found:
-		return statusPending, nil
+		return statusPending, -1, nil
 	}
 	sum := sha256.Sum256(data)
 	if int64(len(data)) != *h.Size || hex.EncodeToString(sum[:]) != *h.Sha256 {
-		return escrow.StatusFailed, nil
+		return escrow.StatusFailed, -1, nil
 	}
-	return escrow.StatusStored, nil
+	return escrow.StatusStored, -1, nil
+}
+
+// finish sets the final status of a pending header; finished is false when another round finished it first.
+func (e *Escrow) finish(ctx context.Context, id uuid.UUID, status string) (finished bool, err error) {
+	err = e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		n, err := q.FinishEscrowHeader(ctx, pgstore.FinishEscrowHeaderParams{ID: id, Status: status})
+		finished = n == 1
+		return err
+	})
+	return finished, err
+}
+
+// rejectObject fails a header whose object had another size than announced, together with its audit event
+// device.header_object_rejected in one transaction: a round that finds the header already finished records nothing.
+func (e *Escrow) rejectObject(ctx context.Context, h pgstore.EscrowSecret, objectSize int64) (bool, error) {
+	volume := ""
+	if h.Volume.Valid {
+		volume = h.Volume.UUID.String()
+	}
+	spec := ActionSpec{
+		Code:   audit.CodeDeviceHeaderObjectRejected,
+		Actor:  &audit.Actor{Type: audit.ActorDevice, ID: h.DeviceID.String()},
+		Target: &audit.Target{Type: "device", ID: h.DeviceID.String()},
+		Params: map[string]any{"generation": h.Generation, "volume": volume, "declared_size": *h.Size, "object_size": objectSize},
+	}
+	return e.runner.RecordOnceRefusal(ctx, spec, problem.InvalidRequest, func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+		n, err := q.FinishEscrowHeader(ctx, pgstore.FinishEscrowHeaderParams{ID: h.ID, Status: escrow.StatusFailed})
+		return n == 1, err
+	})
 }

@@ -24,6 +24,10 @@ A single-host lab behind your own TLS proxy is a separate profile (`PADDOCK_HOST
   `sha256sum`. **The control-plane host must be amd64**: the Fleet image (`fleetdm/fleet`) is published for
   `linux/amd64` only, and `./paddock up` refuses another architecture there. The audit host may be amd64 or arm64
   (the Paddock images are published for both).
+- Keep Docker's default seccomp and AppArmor profiles enabled (do not run the daemon with them turned off). The
+  Paddock roles run without any Linux capability and without privilege gain (`cap_drop: [ALL]`,
+  `no-new-privileges:true`); Caddy keeps only `NET_BIND_SERVICE` for 80 and 443; every service has a `pids_limit`.
+  `./paddock check` fails the item `container hardening` when a Compose edit removes one of these settings.
 - Control plane: 4 vCPU, 16 GB RAM, 100 GB disk for 100 devices. Audit domain: 2 vCPU, 4 GB RAM, disk for 400 days
   of audit evidence (about 1 GB per 100 devices and year).
 - A **private interconnect** between the hosts (VPN such as WireGuard, or a private network), each host with a fixed
@@ -190,9 +194,17 @@ secret; 80/443 published by any service but Caddy, or another published port tha
 `caddy/guards.caddy` and `caddy/entrypoint.sh` not mounted next to the Caddyfile, or a Caddyfile that sets
 `trusted_proxies` itself; an edge client address configuration that is not consistent (a `/0` trusted proxy, a header
 without proxies or proxies without a header, an unknown header name, item `edge client address`); a `/0` in a role's
-`PADDOCK_TRUSTED_PROXY_CIDRS`; `PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
+`PADDOCK_TRUSTED_PROXY_CIDRS`; a Paddock role or Caddy that keeps capabilities (beyond Caddy's `NET_BIND_SERVICE`)
+or may gain privileges, or a service without `pids_limit` (item `container hardening`);
+`PADDOCK_IP_ALLOWLIST_BYPASS=true` on the api (item `ip allow list bypass is off`);
 the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
 audit bucket without Object Lock COMPLIANCE of at least 400 days.
+
+Portal sessions are kept in Valkey: while Valkey is unreachable the portal answers 503 `session_store_unavailable`
+(devices and API tokens are not affected), and after Valkey is back every session continues. Signing out ends the
+session on the server. A platform administrator ends every portal session at once under *Platform* → *Sessions*
+(with a step-up), or on the control plane with
+`./paddock compose run --rm --no-deps paddock-worker admin end-sessions` when the portal is not usable.
 
 ## 9. First platform administrator, first organization, first device
 
@@ -248,7 +260,8 @@ restore drill are in the same document.
 ## 12. Upgrade
 
 Upgrades extract the new bundle next to the running one and take over its `.env` and `.secrets/`:
-`docs/operations/upgrade.md`. Agent releases are separate: `docs/operations/agent-releases.md`.
+`docs/operations/upgrade.md`. Before upgrading to a version whose step-up accepts WebAuthn only, every administrator
+enrols a WebAuthn authenticator (`docs/operations/step-up.md`, "Before upgrading to WebAuthn-only step-up"). Agent releases are separate: `docs/operations/agent-releases.md`.
 
 **Release with the managed-file path tiers (ADR 0034): agents first, then the server.** From this release on the
 server no longer ships managed files on denied paths. An agent of this release keeps such a file on the device

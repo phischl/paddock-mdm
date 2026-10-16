@@ -339,6 +339,39 @@ func (a *Authentik) RemoveFromGroup(ctx context.Context, username, group string)
 	return a.do(ctx, http.MethodPost, "/core/groups/"+g+"/remove_user/", map[string]any{"pk": user}, nil)
 }
 
+// MoveGroup replaces the user's membership of group from by group to in one change, so that no reader sees the user in
+// neither or both groups in between.
+func (a *Authentik) MoveGroup(ctx context.Context, username, from, to string) error {
+	pk, err := a.UserPK(ctx, username)
+	if err != nil {
+		return err
+	}
+	if pk == 0 {
+		return fmt.Errorf("authentik user %s not found", username)
+	}
+	fromPK, err := a.GroupPK(ctx, from)
+	if err != nil {
+		return err
+	}
+	toPK, err := a.GroupPK(ctx, to)
+	if err != nil || toPK == "" {
+		return fmt.Errorf("authentik group %s: %w", to, err)
+	}
+	var u struct {
+		Groups []string `json:"groups"`
+	}
+	if err := a.do(ctx, http.MethodGet, fmt.Sprintf("/core/users/%d/", pk), nil, &u); err != nil {
+		return err
+	}
+	groups := []string{toPK}
+	for _, g := range u.Groups {
+		if g != fromPK && g != toPK {
+			groups = append(groups, g)
+		}
+	}
+	return a.do(ctx, http.MethodPatch, fmt.Sprintf("/core/users/%d/", pk), map[string]any{"groups": groups}, nil)
+}
+
 // UserPK returns the numeric pk of a user (0 if missing).
 func (a *Authentik) UserPK(ctx context.Context, username string) (int, error) {
 	var page struct {

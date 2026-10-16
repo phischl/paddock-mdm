@@ -29,6 +29,8 @@ type handlers struct {
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative
+	// sessions ends every portal session (plan M8s decision 16).
+	sessions *app.Sessions
 
 	users         *app.Users
 	userGroups    *app.UserGroups

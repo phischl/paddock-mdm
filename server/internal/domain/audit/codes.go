@@ -870,10 +870,10 @@ var registry = map[Code]Definition{
 	},
 	CodeAPITokenUseDenied: {
 		Code: CodeAPITokenUseDenied, Emitted: true,
-		Description: "A request authenticated with a revoked or expired API token was refused (actor: anonymous, with the token's name).",
+		Description: "A request authenticated with a revoked or expired API token, or a token whose creator was disabled or lost the required role, was refused (actor: anonymous, with the token's name).",
 		Params:      []string{"name", "reason"},
 		Outcomes:    []Outcome{OutcomeDenied},
-		Note:        "reason is revoked or expired. Unknown or malformed secrets are not recorded.",
+		Note:        "reason is revoked, expired or creator_inactive. Unknown or malformed secrets are not recorded.",
 	},
 	CodeOrganizationRecompileRequested: {
 		Code: CodeOrganizationRecompileRequested, Emitted: true,
@@ -942,7 +942,7 @@ var registry = map[Code]Definition{
 		Description: "Every portal session of an administrator account was ended by the server because the account's role or state changed (actor: system).",
 		Params:      []string{"reason", "sessions", "old_role", "new_role"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "reason is step_up_role_mismatch, role_changed, deactivated or removed; sessions is the number of sessions ended; old_role and new_role are empty when unchanged or none. Target is the administrator account.",
+		Note:        "reason is step_up_role_mismatch, role_changed, deactivated or removed; sessions is the number of sessions ended; old_role and new_role are empty when unchanged or none. Target is the administrator account (admin_account), or the platform administrator (platform_admin) in the platform pseudo-organization.",
 	},
 	CodePlatformSessionsEnded: {
 		Code: CodePlatformSessionsEnded, Emitted: true,
@@ -974,7 +974,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceHeaderObjectRejected: {
 		Code: CodeDeviceHeaderObjectRejected, Emitted: true,
-		Description: "The worker found an escrowed LUKS header object whose size differs from the announced size, deleted it and marked the escrow failed (actor: the device).",
+		Description: "The worker found an escrowed LUKS header object whose size differs from the announced size and marked the escrow failed without reading it; the object stays for the operator (actor: the device).",
 		Params:      []string{"generation", "volume", "declared_size", "object_size"},
 		Outcomes:    []Outcome{OutcomeFailure},
 	},

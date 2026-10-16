@@ -225,6 +225,20 @@ func (s *Store) GetIfExists(ctx context.Context, key string) (data []byte, found
 	return data, err == nil, err
 }
 
+// Size returns the size of the current version of an object; found is false if it does not exist.
+func (s *Store) Size(ctx context.Context, key string) (size int64, found bool, err error) {
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &key})
+	if err != nil {
+		// HEAD has no body, so a missing key arrives as NotFound rather than NoSuchKey.
+		var notFound *types.NotFound
+		if errors.As(err, &notFound) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	return aws.ToInt64(out.ContentLength), true, nil
+}
+
 // Presigner computes presigned GET and PUT URLs locally (no network call) for a public endpoint, e.g.
 // https://bundles.<domain>, through which the object store is reachable (architecture §7.3).
 type Presigner struct {
@@ -247,9 +261,11 @@ func (p *Presigner) PresignGet(ctx context.Context, key string, ttl time.Duratio
 }
 
 // PresignPut returns a PUT URL for key that is valid for ttl (escrowed LUKS headers, plan M4b decision 10). The
-// signature covers the bucket and the key, so the URL cannot write anywhere else.
-func (p *Presigner) PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error) {
-	req, err := p.client.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &p.bucket, Key: &key}, s3.WithPresignExpires(ttl))
+// signature covers the bucket, the key and the Content-Length size, so the URL cannot write anywhere else or more
+// than the announced bytes (plan M8s decision 29).
+func (p *Presigner) PresignPut(ctx context.Context, key string, size int64, ttl time.Duration) (string, error) {
+	req, err := p.client.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &p.bucket, Key: &key, ContentLength: &size},
+		s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", err
 	}
