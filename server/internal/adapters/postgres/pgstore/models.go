@@ -37,6 +37,7 @@ type AdminAccount struct {
 	Locale         string
 	LastLoginAt    *time.Time
 	Theme          string
+	DisabledAt     *time.Time
 }
 
 type AgentArtifact struct {

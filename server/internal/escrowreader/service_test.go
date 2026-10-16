@@ -93,6 +93,11 @@ func newWorld(t *testing.T) *world {
 				VALUES ($1, $2, $3, $3, $3, $4)`, uuid.New(), w.orgs[i], sub, role)
 			w.proofs.subjects["token-"+sub] = sub
 		}
+		// An administrator whose account was disabled after it lost its role (plan M8s decision 21).
+		sub := "disabled-" + w.orgs[i].String()
+		w.exec(`INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role, disabled_at)
+			VALUES ($1, $2, $3, $3, $3, 'org_admin', now())`, uuid.New(), w.orgs[i], sub)
+		w.proofs.subjects["token-"+sub] = sub
 	}
 	return w
 }
@@ -149,6 +154,7 @@ func TestDecrypt(t *testing.T) {
 	refused := map[string]func(r *app.EscrowDecryptRequest){
 		"forged or stale token":           func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = "forged" },
 		"operator":                        func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "org_operator") },
+		"disabled administrator":          func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(0, "disabled") },
 		"administrator of another org":    func(r *app.EscrowDecryptRequest) { r.StepUpIDToken = w.token(1, "org_admin") },
 		"foreign organization in request": func(r *app.EscrowDecryptRequest) { r.OrganizationID = w.orgs[1] },
 		"foreign org with its own admin": func(r *app.EscrowDecryptRequest) {

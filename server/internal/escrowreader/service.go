@@ -127,7 +127,9 @@ func (s *Service) open(ctx context.Context, req decryptRequest) (map[uuid.UUID][
 	ctx = principal.With(ctx, principal.Principal{Kind: principal.KindSystem, OrganizationID: req.OrganizationID})
 	err = s.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		admin, err := q.GetAdminAccountBySubject(ctx, claims.Subject)
-		if db.IsNoRows(err) || err == nil && (admin.OrganizationID != req.OrganizationID || admin.Role != string(principal.RoleOrgAdmin)) {
+		// A disabled account lost its role in the identity provider (plan M8s decision 21).
+		if db.IsNoRows(err) || err == nil && (admin.OrganizationID != req.OrganizationID || admin.Role != string(principal.RoleOrgAdmin) ||
+			admin.DisabledAt != nil) {
 			return errRefused{refusedAdmin, "the step-up subject is no administrator of the organization"}
 		}
 		if err != nil {

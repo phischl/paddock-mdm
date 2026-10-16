@@ -56,6 +56,8 @@ type Deps struct {
 	StepUp      *OIDC // provider paddock-portal-stepup (plan M4a decision 6)
 	// StepUpTokens keeps the raw ID token of every step-up for the escrow-reader (plan M4b.1 decision 7).
 	StepUpTokens StepUpTokenStore
+	// StepUpAccounts checks the role of a step-up against the session (plan M8s decision 20).
+	StepUpAccounts StepUpAccounts
 	// Sessions holds the server-side record of every portal session (plan M8s decision 12).
 	Sessions SessionStore
 	// EndSessions ends every portal session of the installation (plan M8s decision 16).
@@ -162,7 +164,8 @@ func NewHandler(d Deps) http.Handler {
 		tokenTTL = d.Runner.StepUpWindow()
 	}
 	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now,
-		maxAuthAge: d.StepUpMaxAuthAge, tokens: d.StepUpTokens, tokenTTL: tokenTTL, sessions: d.Sessions}}
+		maxAuthAge: d.StepUpMaxAuthAge, tokens: d.StepUpTokens, tokenTTL: tokenTTL, sessions: d.Sessions,
+		roles: d.StepUpAccounts}}
 
 	api := http.NewServeMux()
 	h := &handlers{

@@ -17,7 +17,8 @@ escrow-reader
 2. verifies the step-up ID token against Authentik's JWKS (issuer and audience of the provider
    `paddock-portal-stepup`, expiry), requires `auth_time` within the step-up window (300 s; development:
    `PADDOCK_STEPUP_WINDOW`) and MFA in `amr`;
-3. requires the token's subject to be an `org_admin` of the organization of the request, reading as database role
+3. requires the token's subject to be an `org_admin` of the organization of the request whose account is not
+   disabled (`disabled_at`, set when the account lost its role in the identity provider), reading as database role
    `paddock_escrow_reader` (`SELECT` on `admin_account`, `device` and `escrow_secret` only, row-level security on the
    organization of the request);
 4. requires every escrow to belong to the device and the organization and to be of the purpose's kind;

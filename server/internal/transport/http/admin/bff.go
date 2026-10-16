@@ -15,6 +15,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -126,6 +127,7 @@ type bff struct {
 	tokens   StepUpTokenStore
 	tokenTTL time.Duration
 	sessions SessionStore
+	roles    StepUpAccounts
 }
 
 func randomToken() string {
@@ -236,7 +238,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = claims.Email
 	}
-	res := ResolveRole(claims.Groups)
+	res := organization.ResolveRole(claims.Groups)
 	result, err := b.accounts.Login(ctx,
 		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip},
 		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs})

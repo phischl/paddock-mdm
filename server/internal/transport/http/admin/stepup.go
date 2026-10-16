@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -12,9 +13,12 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
@@ -111,6 +115,15 @@ type stepUpClaims struct {
 	AuthTime int64    `json:"auth_time"`
 	AMR      []string `json:"amr"`
 	JTI      string   `json:"jti"`
+	// Groups are the role groups at the step-up (plan M8s decision 19); nil when the provider sent none.
+	Groups []string `json:"groups"`
+}
+
+// StepUpAccounts resolves the organization of the role a step-up carries and handles a role that no longer matches
+// the session (app.Accounts, plan M8s decision 20).
+type StepUpAccounts interface {
+	OrganizationID(ctx context.Context, slug string) (uuid.UUID, error)
+	StepUpMismatch(ctx context.Context, accountID, orgID uuid.UUID, res organization.RoleResolution) error
 }
 
 // stepUpCallback completes a step-up: state, code exchange with PKCE, ID token (issuer, audience, nonce, expiry),
@@ -153,6 +166,11 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 	sess := st.Session
 	if _, err := sess.Validate(now); err != nil {
 		slog.InfoContext(ctx, "step-up for a session that ended meanwhile", "account_id", sess.PID)
+		stepUpFailed(w, r, st.ReturnTo)
+		return
+	}
+	if err := b.checkStepUpRole(ctx, claims, sess); err != nil {
+		slog.WarnContext(ctx, "step-up rejected", "error", err, "account_id", sess.PID)
 		stepUpFailed(w, r, st.ReturnTo)
 		return
 	}
@@ -214,6 +232,41 @@ func checkStepUp(c stepUpClaims, sess Session, now time.Time, maxAuthAge time.Du
 		return errors.New("the step-up did not use MFA")
 	}
 	return nil
+}
+
+// errStepUpRole is a step-up whose groups no longer grant the session's role.
+var errStepUpRole = errors.New("the step-up's groups do not grant the session's role")
+
+// checkStepUpRole resolves the role of the step-up's groups and requires the session's role in the session's
+// organization (plan M8s decision 20). When the groups of an organization session grant another role, or none, the
+// account follows the identity provider and every session of it ends (ADR 0034 decision 5); a platform session and a
+// token without groups are only refused.
+func (b *bff) checkStepUpRole(ctx context.Context, claims stepUpClaims, sess Session) error {
+	if claims.Groups == nil {
+		return errors.New("the step-up's ID token has no groups")
+	}
+	res := organization.ResolveRole(claims.Groups)
+	platform := principal.Kind(sess.Kind) == principal.KindPlatformAdmin
+	match := !res.Denied && res.Platform == platform
+	if match && !platform {
+		match = res.Role == principal.Role(sess.Role)
+		if match {
+			org, err := b.roles.OrganizationID(ctx, res.Slug)
+			if err != nil {
+				return fmt.Errorf("resolve the step-up's organization: %w", err)
+			}
+			match = org == sess.Org
+		}
+	}
+	if match {
+		return nil
+	}
+	if !platform {
+		if err := b.roles.StepUpMismatch(ctx, sess.PID, sess.Org, res); err != nil {
+			slog.ErrorContext(ctx, "account not updated after a step-up role mismatch", "error", err, "account_id", sess.PID)
+		}
+	}
+	return errStepUpRole
 }
 
 // stepUpFailed returns to returnTo with stepup=failed.

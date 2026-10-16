@@ -11,8 +11,18 @@ import (
 	"github.com/google/uuid"
 )
 
+const disableAdminAccount = `-- name: DisableAdminAccount :exec
+UPDATE admin_account SET disabled_at = now() WHERE id = $1 AND disabled_at IS NULL
+`
+
+// The account has no role in its organization any more or was deactivated (plan M8s decisions 20 and 22).
+func (q *Queries) DisableAdminAccount(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, disableAdminAccount, id)
+	return err
+}
+
 const getAdminAccount = `-- name: GetAdminAccount :one
-SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme FROM admin_account WHERE id = $1
+SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at FROM admin_account WHERE id = $1
 `
 
 func (q *Queries) GetAdminAccount(ctx context.Context, id uuid.UUID) (AdminAccount, error) {
@@ -28,12 +38,13 @@ func (q *Queries) GetAdminAccount(ctx context.Context, id uuid.UUID) (AdminAccou
 		&i.Locale,
 		&i.LastLoginAt,
 		&i.Theme,
+		&i.DisabledAt,
 	)
 	return i, err
 }
 
 const getAdminAccountBySubject = `-- name: GetAdminAccountBySubject :one
-SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme FROM admin_account WHERE authentik_sub = $1
+SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at FROM admin_account WHERE authentik_sub = $1
 `
 
 func (q *Queries) GetAdminAccountBySubject(ctx context.Context, authentikSub string) (AdminAccount, error) {
@@ -49,6 +60,7 @@ func (q *Queries) GetAdminAccountBySubject(ctx context.Context, authentikSub str
 		&i.Locale,
 		&i.LastLoginAt,
 		&i.Theme,
+		&i.DisabledAt,
 	)
 	return i, err
 }
@@ -91,10 +103,61 @@ func (q *Queries) GetPlatformAdminBySubject(ctx context.Context, authentikSub st
 	return i, err
 }
 
+const listAdminAccounts = `-- name: ListAdminAccounts :many
+SELECT id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at FROM admin_account WHERE disabled_at IS NULL ORDER BY id
+`
+
+// The accounts of the organization that are not disabled, for the worker round admin-accounts (plan M8s decision 22).
+func (q *Queries) ListAdminAccounts(ctx context.Context) ([]AdminAccount, error) {
+	rows, err := q.db.Query(ctx, listAdminAccounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AdminAccount{}
+	for rows.Next() {
+		var i AdminAccount
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.AuthentikSub,
+			&i.Username,
+			&i.DisplayName,
+			&i.Role,
+			&i.Locale,
+			&i.LastLoginAt,
+			&i.Theme,
+			&i.DisabledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setAdminAccountRole = `-- name: SetAdminAccountRole :exec
+UPDATE admin_account SET role = $1 WHERE id = $2
+`
+
+type SetAdminAccountRoleParams struct {
+	Role string
+	ID   uuid.UUID
+}
+
+// The role the identity provider grants now (plan M8s decisions 20 and 22).
+func (q *Queries) SetAdminAccountRole(ctx context.Context, arg SetAdminAccountRoleParams) error {
+	_, err := q.db.Exec(ctx, setAdminAccountRole, arg.Role, arg.ID)
+	return err
+}
+
 const updateAdminAccountSettings = `-- name: UpdateAdminAccountSettings :one
 UPDATE admin_account
 SET locale = coalesce($1, locale), theme = coalesce($2, theme)
-WHERE id = $3 RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme
+WHERE id = $3 RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at
 `
 
 type UpdateAdminAccountSettingsParams struct {
@@ -116,6 +179,7 @@ func (q *Queries) UpdateAdminAccountSettings(ctx context.Context, arg UpdateAdmi
 		&i.Locale,
 		&i.LastLoginAt,
 		&i.Theme,
+		&i.DisabledAt,
 	)
 	return i, err
 }
@@ -151,8 +215,9 @@ const upsertAdminAccount = `-- name: UpsertAdminAccount :one
 INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role, last_login_at)
 VALUES ($1, $2, $3, $4, $5, $6, now())
 ON CONFLICT (authentik_sub) DO UPDATE
-SET username = EXCLUDED.username, display_name = EXCLUDED.display_name, role = EXCLUDED.role, last_login_at = now()
-RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme
+SET username = EXCLUDED.username, display_name = EXCLUDED.display_name, role = EXCLUDED.role, last_login_at = now(),
+    disabled_at = NULL
+RETURNING id, organization_id, authentik_sub, username, display_name, role, locale, last_login_at, theme, disabled_at
 `
 
 type UpsertAdminAccountParams struct {
@@ -184,6 +249,7 @@ func (q *Queries) UpsertAdminAccount(ctx context.Context, arg UpsertAdminAccount
 		&i.Locale,
 		&i.LastLoginAt,
 		&i.Theme,
+		&i.DisabledAt,
 	)
 	return i, err
 }

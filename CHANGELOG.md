@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A step-up now also checks the administrator's role groups in the identity provider. When they no longer grant the
+  session's role in its organization, the step-up is refused, the account takes the current role (or is disabled when
+  it has none), every portal session of the account ends and `admin.sessions_revoked` is recorded. A disabled account
+  can no longer decrypt escrowed secrets; the next successful login enables it again.
 - Portal sessions are now also kept on the server, in Valkey. Signing out ends the session on the server, so a copied
   session cookie no longer works afterwards. While Valkey is unreachable the portal answers 503
   `session_store_unavailable`; devices and API tokens are not affected. Administrators sign in again after the

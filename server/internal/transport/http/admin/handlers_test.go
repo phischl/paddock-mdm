@@ -262,6 +262,8 @@ type env struct {
 	stepUps *stepUpProofs
 	// sessions are the server-side records of the portal sessions (plan M8s decision 12).
 	sessions *fakeSessions
+	// accounts are the login use cases of the handler, for the step-up role check (plan M8s decision 20).
+	accounts *app.Accounts
 }
 
 func newEnv(t *testing.T) *env {
@@ -338,7 +340,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Devices:       app.NewDevices(runner, orgPool),
 		Managed:       app.NewManagedConfig(runner, orgPool),
 		Organizations: app.NewOrganizations(runner, platformPool, idp),
-		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
+		Accounts:      app.NewAccounts(runner, orgPool, platformPool, e.sessions),
 		Releases:      app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
 		Users:         app.NewUsers(runner, orgPool, idp),
 		UserGroups:    app.NewUserGroups(runner, orgPool, idp),
@@ -368,6 +370,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		deps(&d)
 	}
 	handler := admin.NewHandler(d)
+	e.accounts = d.Accounts
 
 	spec, err := adminapi.GetSpec()
 	if err != nil {

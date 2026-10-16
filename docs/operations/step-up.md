@@ -25,6 +25,12 @@ step-up and repeats the action once.
 - `GET /api/auth/stepup/callback` accepts the ID token only for the same user (`sub`), with `auth_time` at most
   60 s old and MFA in `amr`, and then stores the time and the token ID in the session cookie. Otherwise the session
   stays as it was and the browser returns with `stepup=failed`.
+- The callback also requires that the token's `groups` grant the session's role in the session's organization (the
+  step-up provider carries the Paddock groups mapping). When they grant another role or none in it, the step-up is
+  refused, the account takes the role from the identity provider (or is disabled when it has none there), every
+  portal session of it ends and `admin.sessions_revoked` is recorded with reason `step_up_role_mismatch`; the
+  administrator signs in again with the current role. A token without `groups`, or a platform session whose groups
+  name an organization, is only refused.
 
 `max_age` is 60, not 0: Authentik ignores `max_age=0` and forces a new login for `prompt=login` only once per
 Authentik login, so a second step-up would otherwise receive a token of the first one. With `max_age=60`, a step-up
