@@ -30,6 +30,9 @@ func NewAdminAccounts(runner *ActionRunner, org *db.OrgPool, dir ports.UserDirec
 	return &AdminAccounts{runner: runner, org: org, dir: dir, sessions: sessions}
 }
 
+// ErrDirectoryEmpty fails a round whose role group listings are all empty while accounts are enabled.
+var ErrDirectoryEmpty = errors.New("app: empty role group listings")
+
 // directoryUser is what the role group listings say about one user.
 type directoryUser struct {
 	pk     string
@@ -41,7 +44,9 @@ type directoryUser struct {
 
 // Reconcile compares every account of the caller's organization that is not disabled with the members of the
 // organization's three role groups (one listing each, never one call per account) and records one
-// admin.sessions_revoked per changed account. A failing listing changes nothing.
+// admin.sessions_revoked per changed account. A failing listing, a missing role group or three empty listings while
+// the organization has enabled accounts change nothing and fail the organization's round: a renamed group or a
+// service token that may no longer see users must not disable every administrator.
 func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 	var o pgstore.Organization
 	var accounts []pgstore.AdminAccount
@@ -57,12 +62,14 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 		return err
 	}
 	users := map[string]*directoryUser{}
+	listed := 0
 	for _, g := range []organization.GroupRole{organization.GroupAdmins, organization.GroupOperators, organization.GroupAuditors} {
 		name := organization.RoleGroup(o.Slug, g)
 		members, err := a.dir.RoleGroupUsers(ctx, name)
 		if err != nil {
 			return fmt.Errorf("role group %s: %w", name, err)
 		}
+		listed += len(members)
 		// Only the username identifies a member (plan M8s decision 22): users may change their own e-mail address.
 		for _, m := range members {
 			key := user.NormalizeUsername(m.Username)
@@ -79,6 +86,9 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 				u.groups = append(u.groups, name)
 			}
 		}
+	}
+	if listed == 0 {
+		return fmt.Errorf("%w: the role groups of %s list no members while %d accounts are enabled", ErrDirectoryEmpty, o.Slug, len(accounts))
 	}
 	var errs []error
 	for _, acc := range accounts {

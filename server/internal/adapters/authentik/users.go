@@ -158,14 +158,14 @@ func (c *Client) OrganizationUsers(ctx context.Context, slug string) ([]ports.Id
 }
 
 // RoleGroupUsers lists the direct members of the role group groupName. Authentik refuses a filter on a group name it
-// does not know with 400 on groups_by_name: such a group has no members.
+// does not know with 400 on groups_by_name: ports.ErrGroupNotFound.
 func (c *Client) RoleGroupUsers(ctx context.Context, groupName string) ([]ports.IdentityUser, error) {
 	q := url.Values{"groups_by_name": {groupName}, "include_groups": {"false"}}
 	var out []ports.IdentityUser
 	err := pages(ctx, c, "/api/v3/core/users/", q, func(u user) { out = append(out, u.identity()) })
 	var st *errStatus
 	if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
-		return nil, nil
+		return nil, fmt.Errorf("%s: %w", groupName, ports.ErrGroupNotFound)
 	}
 	return out, err
 }

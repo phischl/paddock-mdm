@@ -211,7 +211,7 @@ func TestOrganizationUsersPaginates(t *testing.T) {
 }
 
 // TestRoleGroupUsers (plan M8s decision 22): the direct members of a role group with their active flag; a group that
-// does not exist has no members.
+// does not exist is ErrGroupNotFound, never an empty listing.
 func TestRoleGroupUsers(t *testing.T) {
 	f, srv := newFake(t)
 	c := client(srv)
@@ -228,7 +228,7 @@ func TestRoleGroupUsers(t *testing.T) {
 		users[1].Username != "dave@acme.test" || users[1].Active {
 		t.Fatalf("role group users %+v %v", users, err)
 	}
-	if users, err := c.RoleGroupUsers(ctx, "paddock.globex.admins"); err != nil || len(users) != 0 {
+	if users, err := c.RoleGroupUsers(ctx, "paddock.globex.admins"); !errors.Is(err, ports.ErrGroupNotFound) || len(users) != 0 {
 		t.Fatalf("missing group: %+v %v", users, err)
 	}
 }

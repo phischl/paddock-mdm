@@ -20,6 +20,9 @@ type IdentityProvider interface {
 // organization; the caller must not reveal which).
 var ErrUsernameTaken = errors.New("ports: username taken")
 
+// ErrGroupNotFound means the identity provider has no group of that name.
+var ErrGroupNotFound = errors.New("ports: group not found")
+
 // IdentityUser is a user as the identity provider knows it.
 type IdentityUser struct {
 	PK       string
@@ -58,8 +61,8 @@ type UserDirectory interface {
 	UnlockUser(ctx context.Context, slug, pk string, activate bool) error
 	// OrganizationUsers lists the direct members of the organization's root group.
 	OrganizationUsers(ctx context.Context, slug string) ([]IdentityUser, error)
-	// RoleGroupUsers lists the direct members of a role group (organization.RoleGroup) in one paged listing; a
-	// group that does not exist has none (plan M8s decision 22).
+	// RoleGroupUsers lists the direct members of a role group (organization.RoleGroup) in one paged listing (plan
+	// M8s decision 22); ErrGroupNotFound when the group does not exist.
 	RoleGroupUsers(ctx context.Context, groupName string) ([]IdentityUser, error)
 }
 

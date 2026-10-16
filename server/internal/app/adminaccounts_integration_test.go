@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -91,14 +92,24 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, dir, sessions)
 	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker", OrganizationID: org}), corr)
 
-	dir.fail = errors.New("directory down")
-	if err := accounts.Reconcile(sys); err == nil {
-		t.Fatal("a failing directory did not fail the round")
+	// Fail safe: a directory that answers with an error, a missing role group or no members at all changes nothing.
+	full := dir.roleGroups
+	for name, setup := range map[string]func(){
+		"directory down":     func() { dir.fail = errors.New("directory down") },
+		"missing role group": func() { dir.fail = fmt.Errorf("%s: %w", admins, ports.ErrGroupNotFound) },
+		"empty listings":     func() { dir.roleGroups = map[string][]ports.IdentityUser{} },
+	} {
+		setup()
+		err := accounts.Reconcile(sys)
+		dir.fail, dir.roleGroups = nil, full
+		if err == nil || name == "empty listings" && !errors.Is(err, app.ErrDirectoryEmpty) {
+			t.Fatalf("%s: round error %v", name, err)
+		}
+		if len(sessions.revoked) != 0 || countRows(t, super, "SELECT count(*) FROM admin_account WHERE organization_id = $1 AND disabled_at IS NOT NULL", org) != 0 ||
+			countRows(t, super, "SELECT count(*) FROM action WHERE code = 'admin.sessions_revoked' AND organization_id = $1", org) != 0 {
+			t.Fatalf("%s: accounts changed", name)
+		}
 	}
-	if len(sessions.revoked) != 0 || countRows(t, super, "SELECT count(*) FROM admin_account WHERE organization_id = $1 AND disabled_at IS NOT NULL", org) != 0 {
-		t.Fatal("a failing directory changed accounts")
-	}
-	dir.fail = nil
 	dir.roleGroupCalls = 0
 	if err := accounts.Reconcile(sys); err != nil {
 		t.Fatal(err)
