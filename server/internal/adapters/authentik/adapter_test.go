@@ -231,6 +231,14 @@ func TestRoleGroupUsers(t *testing.T) {
 	if users, err := c.RoleGroupUsers(ctx, "paddock.globex.admins"); !errors.Is(err, ports.ErrGroupNotFound) || len(users) != 0 {
 		t.Fatalf("missing group: %+v %v", users, err)
 	}
+	// The direct read of one user requires its UID: a username can be reused.
+	u, groups, found, err := c.UserMembership(ctx, "dave@acme.test", "uid-911")
+	if err != nil || !found || u.Active || !slices.Equal(groups, []string{"paddock.acme.admins"}) {
+		t.Fatalf("membership: %+v %v %v %v", u, groups, found, err)
+	}
+	if _, _, found, err := c.UserMembership(ctx, "dave@acme.test", "uid-910"); err != nil || found {
+		t.Fatalf("membership with another UID: %v %v", found, err)
+	}
 }
 
 // TestRoleGroupUsersSettles: a member leaving during a numbered listing would shift the next page and hide another

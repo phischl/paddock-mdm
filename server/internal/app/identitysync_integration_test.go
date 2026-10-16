@@ -33,6 +33,9 @@ type directory struct {
 	// roleGroups are the members of role groups by group name; roleGroupCalls counts their listings.
 	roleGroups     map[string][]ports.IdentityUser
 	roleGroupCalls int
+	// unlisted are UIDs the role group listings leave out (a paged listing that skipped them); a direct read still
+	// finds them.
+	unlisted map[string]bool
 }
 
 func newDirectory() *directory {
@@ -60,7 +63,28 @@ func (d *directory) RoleGroupUsers(_ context.Context, name string) ([]ports.Iden
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.roleGroupCalls++
-	return slices.Clone(d.roleGroups[name]), d.fail
+	var out []ports.IdentityUser
+	for _, m := range d.roleGroups[name] {
+		if !d.unlisted[m.UID] {
+			out = append(out, m)
+		}
+	}
+	return out, d.fail
+}
+func (d *directory) UserMembership(_ context.Context, username, uid string) (ports.IdentityUser, []string, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var u ports.IdentityUser
+	var groups []string
+	for name, members := range d.roleGroups {
+		for _, m := range members {
+			if m.UID == uid && m.Username == username {
+				u = m
+				groups = append(groups, name)
+			}
+		}
+	}
+	return u, groups, len(groups) > 0, d.fail
 }
 func (d *directory) EnsureGroup(_ context.Context, _, name string) (string, error) {
 	d.mu.Lock()

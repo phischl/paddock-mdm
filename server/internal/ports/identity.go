@@ -67,6 +67,10 @@ type UserDirectory interface {
 	// RoleGroupUsers lists the direct members of a role group (organization.RoleGroup) in one paged listing (plan
 	// M8s decision 22); ErrGroupNotFound when the group does not exist.
 	RoleGroupUsers(ctx context.Context, groupName string) ([]IdentityUser, error)
+	// UserMembership reads one user directly: the user named username whose UID is uid, with the names of its direct
+	// groups; found is false when no such user exists (removed, or renamed meanwhile). The worker confirms with it
+	// what a listing suggests before it changes an account (plan M8s decision 22).
+	UserMembership(ctx context.Context, username, uid string) (u IdentityUser, groups []string, found bool, err error)
 }
 
 // GroupDirectory manages Paddock's user groups (plan M3a decisions 3 and 9).

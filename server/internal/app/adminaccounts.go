@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -86,8 +88,10 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 	}
 	users := map[string]*directoryUser{}
 	listed := 0
+	var roleGroups []string
 	for _, g := range []organization.GroupRole{organization.GroupAdmins, organization.GroupOperators, organization.GroupAuditors} {
 		name := organization.RoleGroup(o.Slug, g)
+		roleGroups = append(roleGroups, name)
 		members, err := a.dir.RoleGroupUsers(ctx, name)
 		if err != nil {
 			return fmt.Errorf("role group %s: %w", name, err)
@@ -103,6 +107,15 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 		if reason == "" {
 			continue
 		}
+		confirmed, err := a.confirm(ctx, acc.Username, acc.AuthentikSub, roleGroups)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("account %s: confirm: %w", acc.ID, err))
+			continue
+		}
+		if reason, newRole = change(acc, confirmed); reason == "" {
+			slog.WarnContext(ctx, "the role group listing missed an administrator; the account is unchanged", "account_id", acc.ID)
+			continue
+		}
 		spec := ActionSpec{Code: audit.CodeAdminSessionsRevoked, Target: &audit.Target{Type: "admin_account", ID: acc.ID.String()}}
 		if err := a.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 			return revokeAccount(ctx, q, rec, a.sessions, acc.ID, reason, newRole)
@@ -111,6 +124,23 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// confirm reads one user directly before its account is changed: a paged listing can miss a member that is still in
+// the group when another one leaves between two pages, and a change must never rest on that alone. It returns the
+// user's membership of groups, or nil when the directory has no user with this username and UID.
+func (a *AdminAccounts) confirm(ctx context.Context, username, uid string, groups []string) (*directoryUser, error) {
+	u, member, found, err := a.dir.UserMembership(ctx, username, uid)
+	if err != nil || !found {
+		return nil, err
+	}
+	d := &directoryUser{active: u.Active}
+	for _, g := range member {
+		if slices.Contains(groups, g) {
+			d.groups = append(d.groups, g)
+		}
+	}
+	return d, nil
 }
 
 // change returns the reason to revoke the sessions of acc and its new role ("" disables it); reason is empty when the
@@ -160,14 +190,22 @@ func (a *AdminAccounts) ReconcilePlatform(ctx context.Context) error {
 	}
 	var errs []error
 	for _, adm := range admins {
-		u := users[adm.AuthentikSub]
+		if u := users[adm.AuthentikSub]; u != nil && u.active {
+			continue
+		}
+		confirmed, err := a.confirm(ctx, adm.Username, adm.AuthentikSub, []string{group})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("platform administrator %s: confirm: %w", adm.ID, err))
+			continue
+		}
 		var reason string
 		switch {
-		case u == nil:
+		case confirmed == nil || len(confirmed.groups) == 0:
 			reason = RevokeReasonRemoved
-		case !u.active:
+		case !confirmed.active:
 			reason = RevokeReasonDeactivated
 		default:
+			slog.WarnContext(ctx, "the platform group listing missed an administrator; the sessions stay", "account_id", adm.ID)
 			continue
 		}
 		if err := a.revokePlatformAdmin(ctx, adm, reason); err != nil {

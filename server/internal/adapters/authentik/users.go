@@ -94,6 +94,28 @@ func (c *Client) RecoveryLink(ctx context.Context, pk string) (string, error) {
 	return res.Link, nil
 }
 
+// UserMembership reads the user username directly, with its groups, and requires its UID: a username can be reused.
+func (c *Client) UserMembership(ctx context.Context, username, uid string) (ports.IdentityUser, []string, bool, error) {
+	q := url.Values{"username": {username}, "include_groups": {"true"}, "page": {"1"}, "page_size": {strconv.Itoa(pageSize)}}
+	var page struct {
+		Results []user `json:"results"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v3/core/users/?"+q.Encode(), nil, &page); err != nil {
+		return ports.IdentityUser{}, nil, false, upstream(err)
+	}
+	for _, u := range page.Results {
+		if u.UID != uid {
+			continue
+		}
+		groups := make([]string, 0, len(u.GroupsObj))
+		for _, g := range u.GroupsObj {
+			groups = append(groups, g.Name)
+		}
+		return u.identity(), groups, true, nil
+	}
+	return ports.IdentityUser{}, nil, false, nil
+}
+
 // UserActive reports the user's is_active.
 func (c *Client) UserActive(ctx context.Context, pk string) (bool, error) {
 	var u struct {

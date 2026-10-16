@@ -93,6 +93,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	}
 	unchanged := account("alice@acme.test", "org_admin")
 	renamed := account("hank@acme.test", "org_admin")
+	skipped := account("kim@acme.test", "org_admin")
 	moved := account("dave@acme.test", "org_admin")
 	removed := account("erin@acme.test", "org_admin")
 	inactive := account("frank@acme.test", "org_auditor")
@@ -105,6 +106,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		// The UID decides: a renamed user keeps the account, and another user with an admin's username or e-mail
 		// address does not decide that account.
 		admins: {{UID: uid("alice@acme.test"), Username: "alice@acme.test", Active: true},
+			{UID: uid("kim@acme.test"), Username: "kim@acme.test", Active: true},
 			{UID: uid("gina@acme.test"), Username: "gina@acme.test", Active: true},
 			{UID: uid("hank@acme.test"), Username: "henry@acme.test", Active: true},
 			{UID: "uid-impostor", Username: "erin@acme.test", Email: "dave@acme.test", Active: true}},
@@ -115,6 +117,8 @@ func TestAdminAccountsReconcile(t *testing.T) {
 			{UID: "uid-ivy", Username: "ivy@acme.test", Email: "alice@acme.test", Active: true}},
 	}
 
+	// The paged listing misses kim, who is still an administrator: the direct read keeps the account.
+	dir.unlisted = map[string]bool{uid("kim@acme.test"): true}
 	sessions := &revoker{revoked: map[uuid.UUID]int{}}
 	corr := "corr-" + t.Name()
 	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, platform, dir, sessions)
@@ -172,6 +176,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	}{
 		"unchanged, another user's e-mail is its username": {unchanged, "org_admin", false, ""},
 		"renamed in the directory":                         {renamed, "org_admin", false, ""},
+		"missed by the listing":                            {skipped, "org_admin", false, ""},
 		"moved to auditors":                                {moved, "org_auditor", false, "success system role_changed 2 [org_admin] [org_auditor]"},
 		"in no role group, its username used by another":   {removed, "org_admin", true, "success system removed 2 [org_admin] []"},
 		"deactivated":                                      {inactive, "org_auditor", true, "success system deactivated 2 [org_auditor] []"},
@@ -230,11 +235,13 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 	}
 	suffix := uuid.NewString()[:8]
 	kept, removed, inactive, flaky := admin("root-"+suffix), admin("gone-"+suffix), admin("off-"+suffix), admin("flaky-"+suffix)
+	missed := admin("missed-" + suffix)
 	dir := newDirectory()
 	dir.roleGroups = map[string][]ports.IdentityUser{organization.PlatformAdminsGroup(): {
 		{UID: "uid-root-" + suffix, Username: "renamed-root", Active: true}, {UID: "uid-off-" + suffix, Username: "off-" + suffix, Active: false},
-		{UID: "uid-other", Username: "gone-" + suffix, Active: true}}}
-	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{kept: 1, removed: 2, inactive: 1, flaky: 1},
+		{UID: "uid-other", Username: "gone-" + suffix, Active: true}, {UID: "uid-missed-" + suffix, Username: "missed-" + suffix, Active: true}}}
+	dir.unlisted = map[string]bool{"uid-missed-" + suffix: true}
+	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{kept: 1, removed: 2, inactive: 1, flaky: 1, missed: 1},
 		failOnce: map[uuid.UUID]bool{flaky: true}}
 	corr := "corr-" + t.Name()
 	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, platform, dir, sessions)
@@ -272,7 +279,7 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 	for name, c := range map[string]struct {
 		id    uuid.UUID
 		event string
-	}{"listed": {kept, ""}, "removed": {removed, "success removed 2 true"}, "deactivated": {inactive, "success deactivated 1 true"}} {
+	}{"listed": {kept, ""}, "missed by the listing": {missed, ""}, "removed": {removed, "success removed 2 true"}, "deactivated": {inactive, "success deactivated 1 true"}} {
 		got := event(c.id)
 		if c.event == "" && (len(got) != 0 || sessions.revoked[c.id] != 0) {
 			t.Errorf("%s: events %v, %d revocations", name, got, sessions.revoked[c.id])

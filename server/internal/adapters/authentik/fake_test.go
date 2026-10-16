@@ -419,6 +419,9 @@ func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
 		if pk := first(q["groups_by_pk"]); pk != "" && !slices.Contains(u.groups, pk) {
 			continue
 		}
+		if name := first(q["username"]); name != "" && u.username != name {
+			continue
+		}
 		match = append(match, u)
 	}
 	slices.SortFunc(match, func(a, b *fakeUser) int { return a.pk - b.pk })
