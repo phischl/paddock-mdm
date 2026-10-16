@@ -570,7 +570,10 @@ export interface paths {
         /** @description Roles: org_admin, org_operator, org_auditor. */
         get: operations["listManagedFiles"];
         put?: never;
-        /** @description Roles: org_admin, org_operator. */
+        /**
+         * @description Roles: org_admin, org_operator. A file on a sensitive path needs org_admin (403 forbidden) and a step-up
+         *     (403 step_up_required); a denied path is 422 path_not_allowed (see ManagedFileCreate.path).
+         */
         post: operations["createManagedFile"];
         delete?: never;
         options?: never;
@@ -595,7 +598,11 @@ export interface paths {
         delete: operations["deleteManagedFile"];
         options?: never;
         head?: never;
-        /** @description Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed. */
+        /**
+         * @description Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed. A file on a sensitive path
+         *     afterwards, or any change of a file that was on one, needs org_admin (403 forbidden) and a step-up (403
+         *     step_up_required).
+         */
         patch: operations["updateManagedFile"];
         trace?: never;
     };
@@ -3286,6 +3293,12 @@ export interface components {
             units: components["schemas"]["ManagedUnit"][];
             conflicts: components["schemas"]["ConfigConflict"][];
         };
+        /**
+         * @description Tier of the path (ADR 0034 decision 2): ordinary (org_admin or org_operator), sensitive (org_admin with a
+         *     step-up), denied (refused; an existing definition is not shipped to devices).
+         * @enum {string}
+         */
+        ManagedFileTier: "ordinary" | "sensitive" | "denied";
         ManagedFile: {
             /** Format: uuid */
             id: string;
@@ -3299,6 +3312,7 @@ export interface components {
             owner: string;
             group: string;
             content: string;
+            tier: components["schemas"]["ManagedFileTier"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -3310,7 +3324,14 @@ export interface components {
              * @description Omit for every device of the organization.
              */
             device_group_id?: string;
-            /** @description Below /etc/, /usr/local/etc/ or /opt/, outside protected paths (422 path_not_allowed). */
+            /**
+             * @description Below /etc/, /usr/local/etc/ or /opt/. The path falls into one of three tiers: denied paths (the protected
+             *     areas, the loader, boot, kernel and identity configuration, the units of Paddock and its components) are
+             *     refused with 422 path_not_allowed; sensitive paths (cron, systemd, login scripts, SSH, network hooks,
+             *     logrotate, any file directly in /etc/, any /etc/<name>.d/ directory and any mode with an execute bit)
+             *     need the org_admin role (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
+             *     satisfy it); every other path is ordinary.
+             */
             path: string;
             /** @default 0644 */
             mode: string;

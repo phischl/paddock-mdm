@@ -158,7 +158,7 @@
     "invalid_state": "This action is not possible in the current state.",
     "already_exists": "This is already managed for the same devices.",
     "in_use": "This item is still in use. Remove what uses it first.",
-    "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the protected areas.",
+    "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",
     "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected.",
     "username_taken": "This username is already taken.",
     "domain_taken": "One of these domains belongs to another organization.",
@@ -949,7 +949,7 @@
       "deleteTitle": "Delete managed file",
       "deleteConfirm": "Stop managing {name}? Devices keep the file as it is.",
       "path": "Path",
-      "pathHint": "Below /etc/, /usr/local/etc/ or /opt/; protected system paths are not allowed.",
+      "pathHint": "Below /etc/, /usr/local/etc/ or /opt/. Sensitive paths (cron, systemd, login scripts, SSH, files directly in /etc/, executables) need an organization administrator and a step-up; protected system paths are not allowed.",
       "mode": "Mode",
       "owner": "Owner",
       "group": "Group",
@@ -976,6 +976,15 @@
         "description": "Managed units keep systemd services enabled or disabled on their scope."
       }
     }
+  },
+  "managedFiles": {
+    "tier": {
+      "ordinary": "Ordinary",
+      "sensitive": "Sensitive",
+      "denied": "Denied (not shipped)"
+    },
+    "tierColumn": "Path tier",
+    "sensitiveForbidden": "Files on sensitive paths need an organization administrator. Ask one to create or change this file."
   },
   "users": {
     "title": "Users",

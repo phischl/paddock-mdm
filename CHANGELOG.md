@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Managed files on sensitive paths (cron, systemd, login scripts, SSH, network hooks, logrotate, files directly in
+  `/etc/`, `/etc/<name>.d/` directories and executables) can only be created or changed by an organization
+  administrator with a step-up, in the portal, the admin API and `PUT /api/v1/config`; operators keep ordinary
+  application configuration. Definitions on denied paths are refused, and existing ones are no longer shipped to
+  devices or listed in a device's effective configuration; they stay in the database for review. Managed files carry
+  `tier`, shown as a chip in the portal.
+
 - Creating, changing the commands or class of, assigning or re-scoping a permission profile that grants
   root-equivalent sudo rights (class `full`, or restricted with a root-equivalent command) now requires a step-up, in
   the portal, the admin API and `PUT /api/v1/config`; API tokens cannot make such changes and receive 403

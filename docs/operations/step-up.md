@@ -9,7 +9,9 @@ Security-relevant portal actions require a fresh MFA authentication of the admin
 | `PATCH /api/v1/permission-profiles/{id}` | the profile is effectively Full afterwards and was not before, or its class or commands change |
 | `POST /api/v1/profile-assignments` | the profile is effectively Full |
 | `PATCH /api/v1/profile-assignments/{id}` | the profile is effectively Full |
-| `PUT /api/v1/config` (`paddockctl apply`) | the document creates or changes a profile or creates an assignment as above |
+| `POST /api/v1/managed-files` | the path is sensitive (organization administrators only; other roles get 403 `forbidden`) |
+| `PATCH /api/v1/managed-files/{id}` | the path is sensitive afterwards, or the file was on a sensitive path and any field changes |
+| `PUT /api/v1/config` (`paddockctl apply`) | the document creates or changes a profile, an assignment or a managed file as above |
 
 A profile is *effectively Full* when its class is `full` or when it is restricted and one of its commands hands out
 root on its own or in combination (the catalog of `domain/privilege/rootequiv.go`, shown as "Full (effective)" in
@@ -19,6 +21,12 @@ profile needs no step-up.
 Without a fresh step-up such a request answers 403 `step_up_required` and records one audit event with outcome
 `denied`; a permitted action records the actor with `step_up: true`. The portal sends the administrator through the
 step-up and repeats the action once.
+
+Managed-file paths have three tiers (ADR 0034 decision 2, catalog in `pkg/policy`): *denied* paths are refused with
+422 `path_not_allowed`, and existing definitions on them are no longer shipped to devices; *sensitive* paths (cron,
+systemd, login scripts, SSH, network hooks, logrotate, any file directly in `/etc/`, any `/etc/<name>.d/` directory
+and every mode with an execute bit) need the rule above; every other path is *ordinary* and stays with the
+`org_operator` role without a step-up. Deleting a definition never needs a step-up.
 
 An API token cannot complete a step-up (ADR 0034 decision 3): a request made with a token that needs one answers 403
 `step_up_required` with the detail `this change needs an interactive administrator: API tokens cannot complete a

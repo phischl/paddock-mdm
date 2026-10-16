@@ -158,7 +158,7 @@
     "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
     "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
-    "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der geschützten Bereiche.",
+    "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
     "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
     "username_taken": "Dieser Benutzername ist bereits vergeben.",
     "domain_taken": "Eine dieser Domains gehört zu einer anderen Organisation.",
@@ -949,7 +949,7 @@
       "deleteTitle": "Verwaltete Datei löschen",
       "deleteConfirm": "{name} nicht mehr verwalten? Die Geräte behalten die Datei unverändert.",
       "path": "Pfad",
-      "pathHint": "Unterhalb von /etc/, /usr/local/etc/ oder /opt/; geschützte Systempfade sind nicht erlaubt.",
+      "pathHint": "Unterhalb von /etc/, /usr/local/etc/ oder /opt/. Sensible Pfade (cron, systemd, Anmeldeskripte, SSH, Dateien direkt in /etc/, ausführbare Dateien) erfordern einen Organisationsadministrator und eine Identitätsbestätigung; geschützte Systempfade sind nicht erlaubt.",
       "mode": "Modus",
       "owner": "Besitzer",
       "group": "Gruppe",
@@ -976,6 +976,15 @@
         "description": "Verwaltete Units halten systemd-Dienste in ihrem Geltungsbereich aktiviert oder deaktiviert."
       }
     }
+  },
+  "managedFiles": {
+    "tier": {
+      "ordinary": "Gewöhnlich",
+      "sensitive": "Sensibel",
+      "denied": "Gesperrt (nicht verteilt)"
+    },
+    "tierColumn": "Pfadstufe",
+    "sensitiveForbidden": "Dateien auf sensiblen Pfaden erfordern einen Organisationsadministrator. Bitten Sie einen, diese Datei anzulegen oder zu ändern."
   },
   "users": {
     "title": "Benutzer",

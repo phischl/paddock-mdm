@@ -910,7 +910,9 @@ paths:
     post:
       operationId: createManagedFile
       tags: [managed-config]
-      description: "Roles: org_admin, org_operator."
+      description: |
+        Roles: org_admin, org_operator. A file on a sensitive path needs org_admin (403 forbidden) and a step-up
+        (403 step_up_required); a denied path is 422 path_not_allowed (see ManagedFileCreate.path).
       x-paddock-audit: managed_file.created
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -953,7 +955,10 @@ paths:
     patch:
       operationId: updateManagedFile
       tags: [managed-config]
-      description: "Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed."
+      description: |
+        Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed. A file on a sensitive path
+        afterwards, or any change of a file that was on one, needs org_admin (403 forbidden) and a step-up (403
+        step_up_required).
       x-paddock-audit: managed_file.updated
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -5020,9 +5025,15 @@ components:
         conflicts:
           type: array
           items: { $ref: "#/components/schemas/ConfigConflict" }
+    ManagedFileTier:
+      type: string
+      enum: [ordinary, sensitive, denied]
+      description: |
+        Tier of the path (ADR 0034 decision 2): ordinary (org_admin or org_operator), sensitive (org_admin with a
+        step-up), denied (refused; an existing definition is not shipped to devices).
     ManagedFile:
       type: object
-      required: [id, device_group_id, path, mode, owner, group, content, created_at, updated_at]
+      required: [id, device_group_id, path, mode, owner, group, content, tier, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         device_group_id: { type: string, format: uuid, nullable: true, description: null = every device. }
@@ -5031,6 +5042,7 @@ components:
         owner: { type: string }
         group: { type: string }
         content: { type: string }
+        tier: { $ref: "#/components/schemas/ManagedFileTier" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     ManagedFileCreate:
@@ -5039,7 +5051,16 @@ components:
       additionalProperties: false
       properties:
         device_group_id: { type: string, format: uuid, description: Omit for every device of the organization. }
-        path: { type: string, maxLength: 1024, description: "Below /etc/, /usr/local/etc/ or /opt/, outside protected paths (422 path_not_allowed)." }
+        path:
+          type: string
+          maxLength: 1024
+          description: |
+            Below /etc/, /usr/local/etc/ or /opt/. The path falls into one of three tiers: denied paths (the protected
+            areas, the loader, boot, kernel and identity configuration, the units of Paddock and its components) are
+            refused with 422 path_not_allowed; sensitive paths (cron, systemd, login scripts, SSH, network hooks,
+            logrotate, any file directly in /etc/, any /etc/<name>.d/ directory and any mode with an execute bit)
+            need the org_admin role (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
+            satisfy it); every other path is ordinary.
         mode: { type: string, pattern: "^0[0-7]{3}$", default: "0644" }
         owner: { type: string, default: root }
         group: { type: string, default: root }

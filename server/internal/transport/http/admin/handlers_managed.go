@@ -3,6 +3,8 @@ package admin
 import (
 	"context"
 
+	"github.com/phischl/paddock-mdm/pkg/policy"
+
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -69,8 +71,17 @@ func (h *handlers) DeleteManagedFile(ctx context.Context, req adminapi.DeleteMan
 func toManagedFile(f pgstore.ManagedFile) adminapi.ManagedFile {
 	return adminapi.ManagedFile{
 		Id: f.ID, DeviceGroupId: idPtr(f.DeviceGroupID), Path: f.Path, Mode: f.Mode, Owner: f.Owner, Group: f.Grp,
-		Content: f.Content, CreatedAt: f.CreatedAt.UTC(), UpdatedAt: f.UpdatedAt.UTC(),
+		Content: f.Content, Tier: adminapi.ManagedFileTier(fileTier(f)), CreatedAt: f.CreatedAt.UTC(), UpdatedAt: f.UpdatedAt.UTC(),
 	}
+}
+
+// fileTier is the tier of a stored definition; a row the policy cannot classify counts as denied, as in the compiler.
+func fileTier(f pgstore.ManagedFile) policy.Tier {
+	tier, err := policy.Classify(f.Path, f.Mode)
+	if err != nil {
+		return policy.TierDenied
+	}
+	return tier
 }
 
 func (h *handlers) ListManagedUnits(ctx context.Context, req adminapi.ListManagedUnitsRequestObject) (adminapi.ListManagedUnitsResponseObject, error) {

@@ -266,7 +266,7 @@ func TestDeviceGroupsAndEffectiveConfig(t *testing.T) {
 	}
 
 	file := func(groupID, content string) result {
-		body := map[string]any{"path": "/etc/motd", "content": content}
+		body := map[string]any{"path": "/etc/acme/motd", "content": content}
 		if groupID != "" {
 			body["device_group_id"] = groupID
 		}
@@ -297,14 +297,14 @@ func TestDeviceGroupsAndEffectiveConfig(t *testing.T) {
 		wantContent = "g2"
 	}
 	if len(cfg.Files) != 1 || cfg.Files[0].Content != wantContent || len(cfg.Units) != 1 || len(cfg.Conflicts) != 1 ||
-		cfg.Conflicts[0].Resource != "file:/etc/motd" {
+		cfg.Conflicts[0].Resource != "file:/etc/acme/motd" {
 		t.Fatalf("effective config %+v", cfg)
 	}
 	var ids []string
 	for _, r := range cfg.Resources {
 		ids = append(ids, r.Id)
 	}
-	if strings.Join(ids, ",") != "file:/etc/motd,time,unit:chrony.service" {
+	if strings.Join(ids, ",") != "file:/etc/acme/motd,time,unit:chrony.service" {
 		t.Fatalf("resources %v", ids)
 	}
 	if r := e.do(call{method: "GET", path: "/api/v1/devices/" + dev.String() + "/effective-config", cookie: carol}); r.status != http.StatusNotFound {

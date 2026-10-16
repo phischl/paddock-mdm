@@ -131,7 +131,7 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	res := call(t, w.carol, http.MethodPut, "/api/v1/devices/"+dev.DeviceID+"/groups", map[string]any{"device_group_ids": []string{w.globexDeviceGroup}})
 	expectStatus(t, res, http.StatusOK, "")
 	res = call(t, w.carol, http.MethodPost, "/api/v1/managed-files", map[string]any{
-		"path": "/etc/globex-iso-" + uniqueSuffix() + ".conf", "content": "globex", "device_group_id": w.globexDeviceGroup,
+		"path": "/etc/paddock-gates/globex-iso-" + uniqueSuffix() + ".conf", "content": "globex", "device_group_id": w.globexDeviceGroup,
 	})
 	expectStatus(t, res, http.StatusCreated, "")
 	w.globexFile = createdID(t, w.carol, "/api/v1/managed-files", res)
@@ -295,7 +295,7 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/managed-files?page_size=100", nil
 	}},
 	"POST /api/v1/managed-files": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
-		return "/api/v1/managed-files", map[string]any{"path": "/etc/acme-iso-" + uniqueSuffix() + ".conf", "content": "acme",
+		return "/api/v1/managed-files", map[string]any{"path": "/etc/paddock-gates/acme-iso-" + uniqueSuffix() + ".conf", "content": "acme",
 			"device_group_id": namedGroup(t, w.alice, "acme isolation scope")}
 	}},
 	"GET /api/v1/managed-files/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, nil),

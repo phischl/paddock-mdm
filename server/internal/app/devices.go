@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
@@ -329,10 +330,12 @@ func (d *Devices) EffectiveConfig(ctx context.Context, id uuid.UUID) (EffectiveC
 	return out, err
 }
 
-// ManagedDefinitions are all managed files and units of an organization.
+// ManagedDefinitions are all managed files and units of an organization. Files on denied paths are never shipped or
+// shown as effective configuration; they are kept in Denied for the security review (ADR 0034 decision 2).
 type ManagedDefinitions struct {
-	Files []managedconfig.File
-	Units []managedconfig.Unit
+	Files  []managedconfig.File
+	Units  []managedconfig.Unit
+	Denied []pgstore.ManagedFile
 
 	fileRows map[uuid.UUID]pgstore.ManagedFile
 	unitRows map[uuid.UUID]pgstore.ManagedUnit
@@ -351,6 +354,10 @@ func LoadManagedDefinitions(ctx context.Context, q *pgstore.Queries) (ManagedDef
 		return out, fmt.Errorf("load managed files: %w", err)
 	}
 	for _, f := range files {
+		if tier, err := policy.Classify(f.Path, f.Mode); err != nil || tier == policy.TierDenied {
+			out.Denied = append(out.Denied, f)
+			continue
+		}
 		out.fileRows[f.ID] = f
 		out.Files = append(out.Files, managedconfig.File{
 			ID: f.ID, GroupID: groupPtr(f.DeviceGroupID), Path: f.Path, Mode: f.Mode, Owner: f.Owner, Group: f.Grp, Content: f.Content,

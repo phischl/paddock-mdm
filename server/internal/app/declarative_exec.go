@@ -85,6 +85,17 @@ func (ex *configExec) requireAdmin(what string) error {
 	return nil
 }
 
+// requireSensitiveFile is requireSensitiveFile of the per-resource use cases for the document's principal.
+func (ex *configExec) requireSensitiveFile() error {
+	if ex.p.APITokenID != uuid.Nil {
+		return ex.requireStepUp()
+	}
+	if err := ex.requireAdmin("may manage files on sensitive paths"); err != nil {
+		return err
+	}
+	return ex.requireStepUp()
+}
+
 func (ex *configExec) item(c declarative.Change) int { return ex.index[c.Section][c.Key] }
 
 func (ex *configExec) id(c declarative.Change) uuid.UUID { return ex.st.ids[c.Section][c.Key] }
@@ -217,10 +228,25 @@ func (ex *configExec) file(ctx context.Context, c declarative.Change) error {
 	}
 	f := (*ex.desired.ManagedFiles)[ex.item(c)]
 	next := pgstore.ManagedFile{Path: f.Path, Mode: f.Mode, Owner: f.Owner, Grp: f.Group, Content: f.Content}
-	if err := validateFile(next); err != nil {
+	tier, err := validateFile(next)
+	if err != nil {
 		return err
 	}
-	var err error
+	sensitive := tier == policy.TierSensitive
+	if c.Action == declarative.ActionUpdate {
+		// Changing a file that was on a sensitive path needs the same rule (ADR 0034 decision 2).
+		old, err := ex.q.GetManagedFile(ctx, ex.id(c))
+		if err != nil {
+			return err
+		}
+		oldTier, _ := policy.Classify(old.Path, old.Mode)
+		sensitive = sensitive || (oldTier == policy.TierSensitive && fileChanged(old, next))
+	}
+	if sensitive {
+		if err := ex.requireSensitiveFile(); err != nil {
+			return err
+		}
+	}
 	if c.Action == declarative.ActionCreate {
 		group, gerr := ex.group(f.DeviceGroup)
 		if gerr != nil {

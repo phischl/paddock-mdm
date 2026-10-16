@@ -13,6 +13,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/managedconfig"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
@@ -89,7 +90,8 @@ type FileInput struct {
 	Content       *string
 }
 
-// CreateFile defines a managed file (audited: managed_file.created).
+// CreateFile defines a managed file (audited: managed_file.created). A file on a sensitive path needs an organization
+// administrator with a step-up (ADR 0034 decision 2).
 func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.ManagedFile, error) {
 	var f pgstore.ManagedFile
 	spec := SpecManagedFileCreate
@@ -100,8 +102,14 @@ func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.M
 			Grp: deref(in.Group, "root"), Content: deref(in.Content, ""),
 		}
 		recordFile(rec, next, in.DeviceGroupID)
-		if err := validateFile(next); err != nil {
+		tier, err := validateFile(next)
+		if err != nil {
 			return err
+		}
+		if tier == policy.TierSensitive {
+			if err := requireSensitiveFile(ctx, rec); err != nil {
+				return err
+			}
 		}
 		if err := requireGroups(ctx, q, optionalID(in.DeviceGroupID)); err != nil {
 			return err
@@ -127,7 +135,9 @@ func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.M
 	return f, err
 }
 
-// UpdateFile changes a managed file; its scope is fixed (audited: managed_file.updated).
+// UpdateFile changes a managed file; its scope is fixed (audited: managed_file.updated). A file that is on a
+// sensitive path afterwards, or a change of a file that was on one, needs an organization administrator with a
+// step-up (ADR 0034 decision 2).
 func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInput) (pgstore.ManagedFile, error) {
 	var f pgstore.ManagedFile
 	spec := SpecManagedFileUpdate
@@ -146,8 +156,15 @@ func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInp
 		if next.Path != old.Path {
 			rec.SetParam("old_path", old.Path)
 		}
-		if err := validateFile(next); err != nil {
+		tier, err := validateFile(next)
+		if err != nil {
 			return err
+		}
+		oldTier, _ := policy.Classify(old.Path, old.Mode)
+		if tier == policy.TierSensitive || (oldTier == policy.TierSensitive && fileChanged(old, next)) {
+			if err := requireSensitiveFile(ctx, rec); err != nil {
+				return err
+			}
 		}
 		f, err = q.UpdateManagedFile(ctx, pgstore.UpdateManagedFileParams{
 			ID: id, Path: next.Path, Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content,
@@ -190,21 +207,52 @@ func recordFile(rec Recorder, f pgstore.ManagedFile, group *uuid.UUID) {
 	rec.SetParam("mode", f.Mode)
 	rec.SetParam("owner", f.Owner)
 	rec.SetParam("group", f.Grp)
+	tier, _ := policy.Classify(f.Path, f.Mode)
+	rec.SetParam("tier", string(tier))
 }
 
-func validateFile(f pgstore.ManagedFile) error {
+// validateFile checks a definition and returns the tier of its path; a denied path is problem.PathNotAllowed.
+func validateFile(f pgstore.ManagedFile) (policy.Tier, error) {
 	if err := policy.ValidatePath(f.Path); err != nil {
-		return problem.PathNotAllowed.WithDetail(err.Error())
+		return policy.TierDenied, problem.PathNotAllowed.WithDetail(err.Error())
 	}
 	for _, err := range []error{
 		policy.ValidateMode(f.Mode), policy.ValidateOwner(f.Owner), policy.ValidateOwner(f.Grp),
 		managedconfig.ValidateContent(f.Content),
 	} {
 		if err != nil {
-			return problem.InvalidRequest.WithDetail(err.Error())
+			return "", problem.InvalidRequest.WithDetail(err.Error())
 		}
 	}
-	return nil
+	tier, err := policy.Classify(f.Path, f.Mode)
+	if err != nil || tier == policy.TierDenied {
+		return policy.TierDenied, problem.PathNotAllowed.WithDetail(policy.ErrPathNotAllowed.Error())
+	}
+	return tier, nil
+}
+
+// fileChanged reports whether any field of a definition changes.
+func fileChanged(old, next pgstore.ManagedFile) bool {
+	return old.Path != next.Path || old.Mode != next.Mode || old.Owner != next.Owner || old.Grp != next.Grp ||
+		old.Content != next.Content
+}
+
+// requireSensitiveFile is the rule of ADR 0034 decision 2 for tier-S paths: an organization administrator with a
+// fresh step-up. Any other role is problem.Forbidden (recorded as denied). An API token is refused with the step-up
+// detail first, whatever its role: it can never complete the step-up (ADR 0034 decision 3), and the detail tells a
+// pipeline what to do instead.
+func requireSensitiveFile(ctx context.Context, rec Recorder) error {
+	p, ok := principal.From(ctx)
+	if !ok {
+		return problem.Unauthenticated
+	}
+	if p.APITokenID != uuid.Nil {
+		return rec.RequireStepUp()
+	}
+	if p.Kind != principal.KindSystem && p.Role != principal.RoleOrgAdmin {
+		return problem.Forbidden.WithDetail("files on sensitive paths need an organization administrator")
+	}
+	return rec.RequireStepUp()
 }
 
 // ListUnits returns one page of managed units.

@@ -292,7 +292,7 @@ var deviceAuditCases = func() map[string][]auditCase {
 	}
 	files := managedCases("/api/v1/managed-files", "managed_file",
 		func() map[string]any {
-			return map[string]any{"path": "/etc/a3-" + uniqueSuffix() + ".conf", "content": "a3"}
+			return map[string]any{"path": "/etc/paddock-gates/a3-" + uniqueSuffix() + ".conf", "content": "a3"}
 		},
 		map[string]any{"path": "/etc/sudoers.d/a3", "content": "a3"}, "path_not_allowed", http.StatusUnprocessableEntity)
 	units := managedCases("/api/v1/managed-units", "managed_unit",

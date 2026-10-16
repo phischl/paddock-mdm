@@ -22,7 +22,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   const stamp = Date.now()
   const hostname = `e2e-${stamp}`
   const groupName = `E2E devices ${stamp}`
-  const path = `/etc/paddock-e2e-${stamp}.conf`
+  const path = `/etc/paddock-e2e/${stamp}.conf`
   cleanup.remove('/api/v1/enrollment-tokens', `E2E token ${stamp}`)
   cleanup.remove('/api/v1/device-groups', groupName)
   cleanup.remove('/api/v1/managed-files', path)
