@@ -34,11 +34,11 @@ changes). They are decided here, once, and implemented by plan M8s.
   + Explicit; reviewable; the agent keeps its defence-in-depth check on D. − Existing definitions on D paths stop
   being shipped and must be reviewed. **Chosen.**
 - **B3 — Two tiers (ordinary, sensitive) without outright denial.** − Paths such as the loader configuration or the
-  initramfs have no legitimate management use in Paddock and would only ever be a bypass.
+  initramfs have no legitimate management use in Paddock and would only ever circumvent a protected area.
 
 ### C. API tokens and step-up classes
-- **C1 — Tokens may perform Full and tier-S changes after a one-time confirmation at creation.** − Re-opens the
-  bypass: a long-lived credential replaces MFA.
+- **C1 — Tokens may perform Full and tier-S changes after a one-time confirmation at creation.** − A long-lived
+  credential would replace MFA.
 - **C2 — Tokens are refused for every change that needs a step-up.** + A token cannot complete a step-up by
   construction; the rule is simple and stable. − GitOps pipelines need an interactive second step for root-equivalent
   changes. **Chosen.** A short-lived, step-up-bound session token for `paddockctl` is a later feature and needs its

@@ -76,7 +76,7 @@ containers run without capabilities and cannot gain privileges; the step-up acce
 
 ## 3. Binding decisions
 
-### 3.1 Step-up on the effective class (SEC-1a)
+### 3.1 Step-up on the effective class
 
 1. `server/internal/domain/privilege` MUST gain, in `privilege.go`:
 
@@ -114,7 +114,7 @@ containers run without capabilities and cannot gain privileges; the step-up acce
    `privileges.effectiveClass.*`). The confirmation text of the create and edit dialogs MUST say, when the profile
    is effectively Full, that the profile grants root (existing typed confirmation for class Full is reused).
 
-### 3.2 Managed-file path tiers (SEC-1b)
+### 3.2 Managed-file path tiers
 
 7. `pkg/policy` MUST gain:
 
@@ -284,7 +284,7 @@ Supersedes the per-profile reading of decisions 1–3.
     step-up), audited as usual. Creating a user runs the per-subject check for the new user, who had no witness
     before: an organization administrator with a step-up when root grows.
 
-### 3.3 Server-side sessions (SEC-2, part 2 and 4)
+### 3.3 Server-side sessions
 
 12. New package `server/internal/sessions` (no new dependency; `github.com/valkey-io/valkey-go` is already used):
 
@@ -352,7 +352,7 @@ Supersedes the per-profile reading of decisions 1–3.
     `step_up_role_mismatch`, `role_changed`, `deactivated`, `removed`. The api's readiness (`healthcheck`) is
     unchanged: Valkey was already a dependency of the api.
 
-### 3.4 Role at the step-up and account reconciliation (SEC-2, part 1)
+### 3.4 Role at the step-up and account reconciliation
 
 18. `ResolveRole` and `RoleResolution` MUST move from `server/internal/transport/http/admin/role.go` to
     `server/internal/domain/organization/role.go` (package `organization`, same code, same tests); the transport
@@ -398,7 +398,7 @@ Supersedes the per-profile reading of decisions 1–3.
     reuse `RoleGroupUsers`; M8s does not emit M8b's codes. If M8b's job lands first, PDK-173 extends it instead of
     adding a second round (stop condition S6).
 
-### 3.5 Review of existing data (SEC-1, "no forced re-confirmation")
+### 3.5 Review of existing data ("no forced re-confirmation")
 
 24. Migration `00045_security_review.sql`:
 
@@ -451,7 +451,7 @@ Supersedes the per-profile reading of decisions 1–3.
     organization where at least one count is > 0. Idempotent (a second run records again). The release notes tell
     operators to run it once after the upgrade.
 
-### 3.6 Escrow upload bound, edge body limits, api body limit and timeouts (SEC-3, RL-3, IV-3, HT-2)
+### 3.6 Escrow upload bound, edge body limits, api body limit and timeouts
 
 29. `objectstore.Presigner.PresignPut` MUST become
     `PresignPut(ctx context.Context, key string, size int64, ttl time.Duration) (string, error)` and set
@@ -773,7 +773,7 @@ absolute lifetime) · `sess-gen` integer. `paddock-server admin rebuild-cache` M
 5. **PDK-169 — Security review of existing data.** Decisions 24–28 (migration 00045, review endpoint, confirm
    endpoints, overview counts, CLI, portal view and banner). Verify: `make test`; `make typecheck`; the isolation
    gate (new routes answer 404 for foreign IDs).
-6. **PDK-170 — Acceptance gates SEC-1.** §9 S1–S8. Verify: `make acceptance T='TestEffectiveStepUp|TestManagedFileTiers|TestTokenCannotGrantRoot|TestSecurityReview'`.
+6. **PDK-170 — Acceptance gates for step-up and path tiers.** §9 S1–S8. Verify: `make acceptance T='TestEffectiveStepUp|TestManagedFileTiers|TestTokenCannotGrantRoot|TestSecurityReview'`.
 7. **PDK-171 — Server-side sessions, logout revocation, end all sessions.** Decisions 12–17, migration none.
    Verify: `go test ./server/internal/sessions/ ./server/internal/transport/http/admin/`; `make acceptance
    T=TestStepUp` still green; `make e2e` login/logout.
@@ -782,7 +782,7 @@ absolute lifetime) · `sess-gen` integer. `paddock-server admin rebuild-cache` M
    ./server/internal/escrowreader/`; `make acceptance T='TestStepUp|TestEscrowReader'`.
 9. **PDK-173 — Worker round admin-accounts.** Decisions 22–23. Verify: `go test ./server/internal/app/
    ./server/internal/adapters/authentik/ ./server/internal/worker/` (adapter fake with `is_active`).
-10. **PDK-174 — Acceptance gates SEC-2.** §9 S9–S13, including the disruptive `TestSessionsEndAll` behind
+10. **PDK-174 — Acceptance gates for sessions.** §9 S9–S13, including the disruptive `TestSessionsEndAll` behind
     `PADDOCK_ACCEPTANCE_DISRUPTIVE=1` and its CI step. Verify: `make acceptance T='TestSessions'`;
     `PADDOCK_ACCEPTANCE_DISRUPTIVE=1 make acceptance T=TestSessionsEndAll`.
 11. **PDK-175 — Escrow upload bound and edge body limits.** Decisions 29–31; gate S14. Verify: `make lint-caddy`;
@@ -884,5 +884,43 @@ During development every ticket adds its operator-visible line under `[Unrelease
 or `### Fixed`, in operator language and neutral (for example "Creating, changing or assigning a permission profile
 that grants root-equivalent sudo rights now requires a step-up; API tokens cannot make such changes"). No line uses
 the words vulnerability, bypass, exploit or attack, and no line goes into a `### Security` section before the
-release. The release commit of `0.1.0-alpha.N+1` moves the lines of SEC-1, SEC-2 and SEC-3 into `### Security` under
+release. The release commit of `0.1.0-alpha.N+1` moves the lines of this milestone into `### Security` under
 the release heading and adds the advisory links; the advisories are published after the release artifacts are live.
+
+## 14. Amendment 2026-10-16 — decisions taken during implementation and review
+
+These decisions were taken by the architect while the milestone was implemented and reviewed; they supersede the
+decisions they name.
+
+- **Decision 30 / S14 (escrow upload).** The worker gets no delete right on header objects. On a size mismatch it
+  reads the object's metadata only, marks the escrow failed and records exactly one `device.header_object_rejected`
+  in the same transaction; the object stays for the operator (`docs/operations/disk-recovery.md`). An error on one
+  header or organization never stops the round for the others.
+- **Decision 33 (upload deadlines).** The 10-minute deadlines of the two artifact uploads are set by a strict
+  middleware for their operation IDs, because the response writer is not reachable through the context.
+- **Decision 37 (b).** The port-80 probe is not part of the bundle smoke test: its CI overlay uses the development
+  Caddyfile without a listener on 80. The 443 probes prove that Caddy binds a privileged port with
+  `NET_BIND_SERVICE` only.
+- **Decision 9 (managed files, API tokens).** An API token on a sensitive path is refused with the token-specific
+  `step_up_required` before the role check; interactive principals follow decision 9.
+- **Decision 28 / migration 00045.** The worker role, which runs `paddock-server admin security-review`, reads
+  `managed_file` through its tenant policy.
+- **Decision 15 (logout).** Logout runs outside the session middleware, deletes the record best-effort and always
+  clears the cookie, so it works while Valkey is unavailable.
+- **Decisions 18–22 (accounts).** A step-up token without a `groups` claim is refused without changing the account.
+  Accounts are matched to directory members by the Authentik uid (the login `sub`), never by username or e-mail.
+  Before an account is disabled, demoted or revoked, the user is read once directly; only a directory user with the
+  account's uid confirms the account, every other answer counts as removed, and only a failed read changes nothing.
+  Empty or failed listings with enabled accounts change nothing. Login opens its session inside the login
+  transaction under the account row lock. The platform-admin round counts sessions under the row lock first and
+  reads the directory only when sessions exist.
+- **API tokens of inactive creators (new).** A token whose creator is missing, disabled or below the role that may
+  create it is refused (`creator_inactive`); the refusal is audited at most once per token per 15 minutes
+  (migrations 00047, 00048).
+- **Platform administrators (new).** A platform administrator who is removed or deactivated loses all sessions
+  through the worker round.
+- **Root grants.** §3.2a (operator roots, 7a–7h-ter) and §3.2b (7g–7g-sexies, both checks on every gated change,
+  future subjects, auto-approve enrolments become pending on gain, guarded user creation and group import) are part
+  of this milestone.
+- **Residual risks.** RR-35 sessions and account reconciliation, RR-36 agents older than the path tiers, RR-37
+  operator roots, RR-38 the step-up factor enforced by Authentik only, RR-39 upstream membership.
