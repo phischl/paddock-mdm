@@ -260,8 +260,9 @@ Supersedes the per-profile reading of decisions 1–3.
     (the rules of `RootEquivalentCommands`, as a set). **Profile and assignment changes** (create, update, re-scope,
     declarative documents, enrollment-token device groups): the witnesses of the union of the commands of all
     profiles with at least one assignment in the organization, before and after the change; any new witness requires
-    an organization administrator with a step-up (operators and tokens refused as before). This over-approximates
-    and does not depend on membership or device state. For an enrollment token the union of the profiles assigned to
+    an organization administrator with a step-up (operators and tokens refused as before). The union check does not
+    depend on membership or device state and covers future and empty subjects only; it does not see an existing
+    pair recombined for more users, which 7g-quinquies covers with the exact per-subject check. For an enrollment token the union of the profiles assigned to
     everyone or to one of its device groups is compared with the union of those assigned to everyone. **Membership
     and device changes** (Paddock group membership, device groups, approval, quarantine release): the exact check per
     real subject, comparing witness sets instead of classes; a subject gaining any new witness is growth, also when
