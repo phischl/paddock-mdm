@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- End all sessions: a platform administrator ends every portal session of the installation under *Platform* →
+  *Sessions* (`POST /api/platform/v1/sessions/end-all`, with a step-up, audited as `platform.sessions_ended`), or with
+  `paddock-server admin end-sessions` when the portal is not usable.
+
 - Lab installation profile (plan M8a, ADR 0029; not for production): `PADDOCK_HOST=lab` runs control plane and audit
   domain in one Compose project on one amd64 host behind the operator's own TLS-terminating reverse proxy. The
   bundle ships `compose.lab.yaml`, `caddy/Caddyfile.lab` (plain-HTTP sites, `auto_https off`), the settings template
@@ -36,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Portal sessions are now also kept on the server, in Valkey. Signing out ends the session on the server, so a copied
+  session cookie no longer works afterwards. While Valkey is unreachable the portal answers 503
+  `session_store_unavailable`; devices and API tokens are not affected. Administrators sign in again after the
+  upgrade.
 - The step-up accepts WebAuthn authenticators only; TOTP codes no longer complete a step-up (the portal login still
   accepts them). Before upgrading, every administrator enrols a WebAuthn authenticator in Authentik's user settings
   (`https://auth.<domain>/if/user/`, MFA devices); an administrator with TOTP only cannot reveal keys, lock or destroy

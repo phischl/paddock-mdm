@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -55,9 +56,13 @@ type Deps struct {
 	StepUp      *OIDC // provider paddock-portal-stepup (plan M4a decision 6)
 	// StepUpTokens keeps the raw ID token of every step-up for the escrow-reader (plan M4b.1 decision 7).
 	StepUpTokens StepUpTokenStore
-	PublicURL    string
-	Static       *StaticHandler // portal build
-	Now          func() time.Time
+	// Sessions holds the server-side record of every portal session (plan M8s decision 12).
+	Sessions SessionStore
+	// EndSessions ends every portal session of the installation (plan M8s decision 16).
+	EndSessions *app.Sessions
+	PublicURL   string
+	Static      *StaticHandler // portal build
+	Now         func() time.Time
 	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
 	StepUpMaxAuthAge time.Duration
 	// ExposeStepUp adds the session's step-up time and the step-up timing to GET /api/v1/me (development only, for
@@ -77,6 +82,7 @@ var privileged = map[string]struct {
 	"PATCH /api/v1/device-groups/{id}":                                     {app.ScopeOrg, app.SpecDeviceGroupUpdate},
 	"DELETE /api/v1/device-groups/{id}":                                    {app.ScopeOrg, app.SpecDeviceGroupDelete},
 	"POST /api/platform/v1/organizations":                                  {app.ScopePlatform, app.SpecOrganizationCreate},
+	"POST /api/platform/v1/sessions/end-all":                               {app.ScopePlatform, app.SpecSessionsEndAll},
 	"POST /api/v1/enrollment-tokens":                                       {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
 	"PUT /api/v1/devices/{id}/groups":                                      {app.ScopeOrg, app.SpecDeviceSetGroups},
 	"POST /api/v1/devices/{id}/approve":                                    {app.ScopeOrg, app.SpecDeviceApprove},
@@ -156,7 +162,7 @@ func NewHandler(d Deps) http.Handler {
 		tokenTTL = d.Runner.StepUpWindow()
 	}
 	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now,
-		maxAuthAge: d.StepUpMaxAuthAge, tokens: d.StepUpTokens, tokenTTL: tokenTTL}}
+		maxAuthAge: d.StepUpMaxAuthAge, tokens: d.StepUpTokens, tokenTTL: tokenTTL, sessions: d.Sessions}}
 
 	api := http.NewServeMux()
 	h := &handlers{
@@ -165,7 +171,7 @@ func NewHandler(d Deps) http.Handler {
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
-		declarative: d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now,
+		declarative: d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}
@@ -235,10 +241,26 @@ func (s *server) session(next http.Handler) http.Handler {
 			httpx.WriteProblem(w, r, problem.Unauthenticated)
 			return
 		}
+		rec, gen, found, err := s.d.Sessions.Get(r.Context(), sess.SID)
+		if err != nil {
+			// The cookie stays: the session is still valid once the store answers again (plan M8s decision 14).
+			slog.ErrorContext(r.Context(), "session store", "error", err)
+			httpx.WriteProblem(w, r, problem.SessionStoreUnavailable)
+			return
+		}
+		if !found || rec.Gen < gen || rec.AccountID != sess.PID || rec.Role != sess.Role || rec.Org != sess.Org {
+			http.SetCookie(w, sessionCookie("", -1))
+			httpx.WriteProblem(w, r, problem.Unauthenticated)
+			return
+		}
 		if reissue {
 			sess.Idle = now.Unix()
+			remaining := time.Unix(sess.Exp, 0).Sub(now)
+			if err := s.d.Sessions.Touch(r.Context(), sess.SID, sess.PID, remaining); err != nil {
+				slog.WarnContext(r.Context(), "session record not extended", "error", err)
+			}
 			if value, err := s.d.Keys.Seal(SessionCookie, sess); err == nil {
-				http.SetCookie(w, sessionCookie(value, int(time.Until(time.Unix(sess.Exp, 0)).Seconds())))
+				http.SetCookie(w, sessionCookie(value, int(remaining.Seconds())))
 			}
 		}
 		ctx := principal.With(r.Context(), sess.Principal(httpx.ClientIP(r)))

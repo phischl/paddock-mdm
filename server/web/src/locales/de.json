@@ -51,6 +51,7 @@
     "managedUnits": "Verwaltete Units",
     "agentReleases": "Agent-Releases",
     "ipAllowlist": "IP-Freigabeliste",
+    "sessions": "Sitzungen",
     "users": "Benutzer",
     "userGroups": "Gruppen",
     "permissionProfiles": "Berechtigungsprofile",
@@ -901,6 +902,13 @@
     "cidrHostBits": "Die Host-Bits müssen null sein.",
     "cidrMapped": "IPv4-gemappte IPv6-Bereiche sind nicht erlaubt; verwenden Sie die IPv4-Form.",
     "labelInvalid": "Die Bezeichnung braucht 1 bis 64 Zeichen ohne Steuerzeichen."
+  },
+  "sessions": {
+    "title": "Portal-Sitzungen",
+    "summary": "Beendet jede Portal-Sitzung der Installation, auch Ihre eigene. Alle Administratoren melden sich neu an; API-Tokens funktionieren weiter.",
+    "endAll": "Alle Sitzungen beenden",
+    "confirmTitle": "Alle Sitzungen beenden?",
+    "confirmMessage": "Alle Administratoren, auch Sie, werden bei der nächsten Anfrage abgemeldet. Geben Sie END zur Bestätigung ein."
   },
   "changeSets": {
     "title": "Änderungssätze",

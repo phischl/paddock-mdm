@@ -44,6 +44,8 @@ type Principal struct {
 	// The token acts in its organization with Role; ID is the creating administrator's account ID.
 	APITokenID   uuid.UUID
 	APITokenName string
+	// SessionID is the server-side session of a portal request (plan M8s decision 13); "" for tokens and system.
+	SessionID string
 }
 
 type ctxKey struct{}

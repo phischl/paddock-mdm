@@ -16,7 +16,9 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/sessions"
 )
 
 // OIDCConfig configures the portal's OIDC client (Authentik application paddock-portal).
@@ -123,6 +125,7 @@ type bff struct {
 	// tokens keeps the raw step-up ID token for tokenTTL, the step-up window.
 	tokens   StepUpTokenStore
 	tokenTTL time.Duration
+	sessions SessionStore
 }
 
 func randomToken() string {
@@ -246,7 +249,16 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
-	value, err := b.keys.Seal(SessionCookie, NewSession(result.Principal, result.Locale, b.now()))
+	now := b.now()
+	sid := sessions.NewID()
+	p := result.Principal
+	if _, err := b.sessions.Create(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
+		Org: p.OrganizationID, CreatedAt: now.Unix()}, SessionAbsolute); err != nil {
+		slog.ErrorContext(ctx, "session record", "error", err)
+		denied(w, r, app.ReasonLoginFailed)
+		return
+	}
+	value, err := b.keys.Seal(SessionCookie, NewSession(p, sid, result.Locale, now))
 	if err != nil {
 		slog.ErrorContext(ctx, "session cookie", "error", err)
 		denied(w, r, app.ReasonLoginFailed)
@@ -257,9 +269,15 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, st.ReturnTo, http.StatusFound)
 }
 
-// logout clears the session and returns the Authentik end-session URL.
+// logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. A session store
+// error still signs the browser out; the record then expires on its own (plan M8s decision 15).
 func (b *bff) logout(publicURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if p, ok := principal.From(r.Context()); ok && p.SessionID != "" {
+			if err := b.sessions.Delete(r.Context(), p.SessionID, p.ID); err != nil {
+				slog.WarnContext(r.Context(), "session record not deleted at logout", "error", err)
+			}
+		}
 		http.SetCookie(w, sessionCookie("", -1))
 		_, _, endSession := b.oidc.snapshot()
 		target := publicURL + "/"

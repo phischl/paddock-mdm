@@ -7,6 +7,7 @@ Security-relevant portal actions require a fresh MFA authentication of the admin
 | --- | --- |
 | `PATCH /api/v1/permission-profiles/{id}` | the class changes to `full` |
 | `POST /api/v1/profile-assignments` | the profile has class `full` |
+| `POST /api/platform/v1/sessions/end-all` | always (platform administrators) |
 
 Without a fresh step-up such a request answers 403 `step_up_required` and records one audit event with outcome
 `denied`; a permitted action records the actor with `step_up: true`. The portal sends the administrator through the

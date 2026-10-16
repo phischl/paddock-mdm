@@ -130,7 +130,7 @@ func newStepUpWorldWith(t *testing.T, maxAuthAge time.Duration) *stepUpWorld {
 		maxAge = strconv.Itoa(int(maxAuthAge.Seconds()))
 	}
 	tokens := newStepUpProofs()
-	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "en", time.Now()), maxAge: maxAge, tokens: tokens,
+	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "sid-alice", "en", time.Now()), maxAge: maxAge, tokens: tokens,
 		handler: admin.NewHandler(admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
 			StepUpTokens: tokens, PublicURL: "https://admin.test", StepUpMaxAuthAge: maxAuthAge})}
 }

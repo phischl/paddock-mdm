@@ -147,9 +147,11 @@ func (k *Keyring) Reload(ctx context.Context, src KeySource, interval time.Durat
 	}
 }
 
-// Session is the payload of the session cookie.
+// Session is the payload of the session cookie. V 2 (plan M8s decision 13) names the server-side record of the
+// session (sessions.Record) by SID; cookies of version 1 have none and are invalid.
 type Session struct {
 	V    int       `json:"v"`
+	SID  string    `json:"sid"`
 	Sub  string    `json:"sub"`
 	PID  uuid.UUID `json:"pid"`
 	Kind string    `json:"kind"`
@@ -165,10 +167,13 @@ type Session struct {
 	StepUpJTI string `json:"stepup_jti,omitempty"`
 }
 
-// NewSession creates a session for p at now.
-func NewSession(p principal.Principal, locale string, now time.Time) Session {
+// sessionVersion is the version of the session cookie payload.
+const sessionVersion = 2
+
+// NewSession creates a session for p at now whose server-side record is sid.
+func NewSession(p principal.Principal, sid, locale string, now time.Time) Session {
 	s := Session{
-		V: 1, Sub: p.Subject, PID: p.ID, Kind: string(p.Kind), Role: string(p.Role), Org: p.OrganizationID,
+		V: sessionVersion, SID: sid, Sub: p.Subject, PID: p.ID, Kind: string(p.Kind), Role: string(p.Role), Org: p.OrganizationID,
 		Disp: p.Display, Loc: locale, Iat: now.Unix(), Exp: now.Add(SessionAbsolute).Unix(), Idle: now.Unix(),
 	}
 	if !p.StepUpAt.IsZero() {
@@ -180,7 +185,7 @@ func NewSession(p principal.Principal, locale string, now time.Time) Session {
 // Validate checks version, absolute expiry and idle timeout. reissue reports whether the idle mark is older than
 // SessionReissue and the cookie should be re-issued.
 func (s Session) Validate(now time.Time) (reissue bool, err error) {
-	if s.V != 1 || s.PID == uuid.Nil {
+	if s.V != sessionVersion || s.SID == "" || s.PID == uuid.Nil {
 		return false, ErrInvalidCookie
 	}
 	if now.Unix() >= s.Exp {
@@ -209,7 +214,7 @@ func (s Session) Validate(now time.Time) (reissue bool, err error) {
 func (s Session) Principal(ip string) principal.Principal {
 	p := principal.Principal{
 		Kind: principal.Kind(s.Kind), ID: s.PID, Subject: s.Sub, Display: s.Disp, Role: principal.Role(s.Role),
-		OrganizationID: s.Org, IP: ip,
+		OrganizationID: s.Org, IP: ip, SessionID: s.SID,
 	}
 	if s.StepUpAt != 0 {
 		p.StepUpAt, p.StepUpJTI = time.Unix(s.StepUpAt, 0), s.StepUpJTI

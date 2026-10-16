@@ -200,6 +200,12 @@ or may gain privileges, or a service without `pids_limit` (item `container harde
 the development release key (its secret key next to the public key); and, on the audit host with `--online`, an
 audit bucket without Object Lock COMPLIANCE of at least 400 days.
 
+Portal sessions are kept in Valkey: while Valkey is unreachable the portal answers 503 `session_store_unavailable`
+(devices and API tokens are not affected), and after Valkey is back every session continues. Signing out ends the
+session on the server. A platform administrator ends every portal session at once under *Platform* → *Sessions*
+(with a step-up), or on the control plane with
+`./paddock compose run --rm --no-deps paddock-worker admin end-sessions` when the portal is not usable.
+
 ## 9. First platform administrator, first organization, first device
 
 1. Sign in to `https://auth.<domain>/if/admin/` as `akadmin` with the password of

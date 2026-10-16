@@ -25,6 +25,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/revocationsign"
+	"github.com/phischl/paddock-mdm/server/internal/sessions"
 	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/web"
@@ -134,6 +135,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
 	stepUpTokens := stepupproof.NewStore(vk)
+	sessionStore := sessions.NewStore(vk)
 	escrowAccess := app.NewEscrowAccess(escrowreader.NewClient(escrowReaderURL, escrowReaderToken), stepUpTokens)
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
@@ -191,6 +193,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		OIDC:          oidc,
 		StepUp:        stepUp,
 		StepUpTokens:  stepUpTokens,
+		Sessions:      sessionStore,
+		EndSessions:   app.NewSessions(runner, sessionStore),
 		PublicURL:     publicURL,
 		Static:        static,
 		// Development only: LoadDevStepUp refuses the variables in production.

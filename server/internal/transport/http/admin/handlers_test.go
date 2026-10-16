@@ -34,6 +34,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/sessions"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -259,6 +260,8 @@ type env struct {
 	disk *diskEscrow
 	// stepUps are the step-up ID tokens, kept as Valkey would and verified as the escrow-reader would.
 	stepUps *stepUpProofs
+	// sessions are the server-side records of the portal sessions (plan M8s decision 12).
+	sessions *fakeSessions
 }
 
 func newEnv(t *testing.T) *env {
@@ -315,7 +318,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		t.Fatal(err)
 	}
 	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
-		stepUps: newStepUpProofs()}
+		stepUps: newStepUpProofs(), sessions: newFakeSessions()}
 	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
@@ -356,6 +359,8 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Keys:          keys,
 		OIDC:          admin.NewOIDC(admin.OIDCConfig{}),
 		StepUpTokens:  e.stepUps,
+		Sessions:      e.sessions,
+		EndSessions:   app.NewSessions(runner, e.sessions),
 		PublicURL:     "https://admin.test",
 		Static:        static,
 	}
@@ -427,8 +432,14 @@ func (e *env) steppedUp(c *http.Cookie, at time.Time) *http.Cookie {
 	return &http.Cookie{Name: admin.SessionCookie, Value: v}
 }
 
+// cookie returns a session cookie of p with its server-side record, as a login creates them.
 func (e *env) cookie(p principal.Principal) *http.Cookie {
-	v, err := e.keys.Seal(admin.SessionCookie, admin.NewSession(p, "en", time.Now()))
+	sid := sessions.NewID()
+	if _, err := e.sessions.Create(context.Background(), sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
+		Org: p.OrganizationID}, admin.SessionAbsolute); err != nil {
+		e.t.Fatal(err)
+	}
+	v, err := e.keys.Seal(admin.SessionCookie, admin.NewSession(p, sid, "en", time.Now()))
 	if err != nil {
 		e.t.Fatal(err)
 	}

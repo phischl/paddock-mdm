@@ -25,7 +25,7 @@ func testSession(now time.Time) Session {
 	return NewSession(principal.Principal{
 		Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Subject: "sub-1", Display: "alice@acme.test",
 		Role: principal.RoleOrgAdmin, OrganizationID: uuid.Must(uuid.NewV7()),
-	}, "en", now)
+	}, "sid-1", "en", now)
 }
 
 func TestSessionRoundTrip(t *testing.T) {
@@ -46,7 +46,8 @@ func TestSessionRoundTrip(t *testing.T) {
 	if out != in {
 		t.Fatalf("round trip changed the session: %+v != %+v", out, in)
 	}
-	if p := out.Principal("192.0.2.1"); p.OrganizationID != in.Org || p.Role != principal.RoleOrgAdmin || p.IP != "192.0.2.1" {
+	if p := out.Principal("192.0.2.1"); p.OrganizationID != in.Org || p.Role != principal.RoleOrgAdmin || p.IP != "192.0.2.1" ||
+		p.SessionID != "sid-1" {
 		t.Fatalf("principal %+v", p)
 	}
 }
@@ -131,10 +132,19 @@ func TestSessionShapeIsChecked(t *testing.T) {
 	if _, err := p.Validate(now); err == nil {
 		t.Fatal("platform session with organization accepted")
 	}
-	v := testSession(now)
-	v.V = 2
-	if _, err := v.Validate(now); err == nil {
-		t.Fatal("unknown version accepted")
+	if v := testSession(now); v.V != 2 || v.SID != "sid-1" {
+		t.Fatalf("new session %+v, want version 2 with its sid", v)
+	}
+	// Cookies issued before the server-side sessions (plan M8s decision 13) have version 1 and no sid.
+	v1 := testSession(now)
+	v1.V = 1
+	if _, err := v1.Validate(now); err == nil {
+		t.Fatal("version 1 accepted")
+	}
+	noSID := testSession(now)
+	noSID.SID = ""
+	if _, err := noSID.Validate(now); err == nil {
+		t.Fatal("session without sid accepted")
 	}
 	sys := testSession(now)
 	sys.Kind = string(principal.KindSystem)

@@ -51,6 +51,7 @@
     "managedUnits": "Managed units",
     "agentReleases": "Agent releases",
     "ipAllowlist": "IP allow list",
+    "sessions": "Sessions",
     "users": "Users",
     "userGroups": "Groups",
     "permissionProfiles": "Permission profiles",
@@ -901,6 +902,13 @@
     "cidrHostBits": "The host bits must be zero.",
     "cidrMapped": "IPv4-mapped IPv6 ranges are not allowed; use the IPv4 form.",
     "labelInvalid": "The label must have 1 to 64 characters without control characters."
+  },
+  "sessions": {
+    "title": "Portal sessions",
+    "summary": "Ends every portal session of the installation, including your own. Every administrator signs in again; API tokens keep working.",
+    "endAll": "End all sessions",
+    "confirmTitle": "End all sessions?",
+    "confirmMessage": "Every administrator, you included, is signed out at the next request. Type END to confirm."
   },
   "changeSets": {
     "title": "Change sets",
