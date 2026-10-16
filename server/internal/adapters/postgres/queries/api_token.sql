@@ -43,5 +43,6 @@ WHERE id = @id AND revoked_at IS NULL;
 -- The api's bearer authentication (plan M6c decision 9), before an organization context exists.
 SELECT l.id::uuid AS id, l.organization_id::uuid AS organization_id, l.name::text AS name, l.role::text AS role,
        l.created_by::uuid AS created_by, l.expires_at::timestamptz AS expires_at,
-       (l.revoked_at IS NOT NULL)::boolean AS revoked
+       (l.revoked_at IS NOT NULL)::boolean AS revoked, coalesce(l.creator_role, '')::text AS creator_role,
+       l.creator_disabled::boolean AS creator_disabled
 FROM paddock_api_token_lookup(@hash::bytea) l;

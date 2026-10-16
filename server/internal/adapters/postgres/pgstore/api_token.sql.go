@@ -165,18 +165,21 @@ func (q *Queries) ListApiTokens(ctx context.Context, arg ListApiTokensParams) ([
 const lookupApiToken = `-- name: LookupApiToken :one
 SELECT l.id::uuid AS id, l.organization_id::uuid AS organization_id, l.name::text AS name, l.role::text AS role,
        l.created_by::uuid AS created_by, l.expires_at::timestamptz AS expires_at,
-       (l.revoked_at IS NOT NULL)::boolean AS revoked
+       (l.revoked_at IS NOT NULL)::boolean AS revoked, coalesce(l.creator_role, '')::text AS creator_role,
+       l.creator_disabled::boolean AS creator_disabled
 FROM paddock_api_token_lookup($1::bytea) l
 `
 
 type LookupApiTokenRow struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	Name           string
-	Role           string
-	CreatedBy      uuid.UUID
-	ExpiresAt      time.Time
-	Revoked        bool
+	ID              uuid.UUID
+	OrganizationID  uuid.UUID
+	Name            string
+	Role            string
+	CreatedBy       uuid.UUID
+	ExpiresAt       time.Time
+	Revoked         bool
+	CreatorRole     string
+	CreatorDisabled bool
 }
 
 // The api's bearer authentication (plan M6c decision 9), before an organization context exists.
@@ -191,6 +194,8 @@ func (q *Queries) LookupApiToken(ctx context.Context, hash []byte) (LookupApiTok
 		&i.CreatedBy,
 		&i.ExpiresAt,
 		&i.Revoked,
+		&i.CreatorRole,
+		&i.CreatorDisabled,
 	)
 	return i, err
 }

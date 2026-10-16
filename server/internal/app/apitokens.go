@@ -205,38 +205,14 @@ func (a *APITokens) Authenticate(ctx context.Context, secret, ip string) (princi
 	case !row.ExpiresAt.After(a.now()):
 		return principal.Principal{}, APITokenExpired, a.refuse(ctx, row, ip, APITokenExpired)
 	}
-	active, err := a.creatorActive(ctx, row)
-	if err != nil {
-		return principal.Principal{}, "", err
-	}
-	if !active {
+	// The lookup carries the creator's state, so the check costs no second transaction (PDK-184).
+	if row.CreatorDisabled || !apitoken.RoleAllowed(principal.Role(row.CreatorRole), principal.Role(row.Role)) {
 		return principal.Principal{}, APITokenCreatorInactive, a.refuse(ctx, row, ip, APITokenCreatorInactive)
 	}
 	return principal.Principal{
 		Kind: principal.KindAdmin, ID: row.CreatedBy, Display: row.Name + " (api token)", Role: principal.Role(row.Role),
 		OrganizationID: row.OrganizationID, IP: ip, APITokenID: row.ID, APITokenName: row.Name,
 	}, APITokenOK, nil
-}
-
-// creatorActive reports whether the token's creator is still enabled with a role that may create the token's role.
-func (a *APITokens) creatorActive(ctx context.Context, row pgstore.LookupApiTokenRow) (bool, error) {
-	sys := principal.Principal{Kind: principal.KindSystem, OrganizationID: row.OrganizationID}
-	var active bool
-	err := a.org.InOrg(principal.With(ctx, sys), func(ctx context.Context, q *pgstore.Queries) error {
-		acc, err := q.GetAdminAccount(ctx, row.CreatedBy)
-		if db.IsNoRows(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		active = acc.DisabledAt == nil && apitoken.RoleAllowed(principal.Role(acc.Role), principal.Role(row.Role))
-		return nil
-	})
-	if err != nil {
-		return false, fmt.Errorf("api token creator: %w", err)
-	}
-	return active, nil
 }
 
 // refuse records the refused use of a revoked or expired token and returns the error for the client.
