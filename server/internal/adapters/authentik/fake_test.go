@@ -25,6 +25,8 @@ type fakeAuthentik struct {
 
 	groups   map[string]*fakeGroup // pk → group
 	users    map[int]*fakeUser
+	// afterUserPage runs after every page of a user listing (membership changing during a listing).
+	afterUserPage func()
 	objects  map[string]map[string]map[string]any // collection → pk → object (flows, mappings, providers, …)
 	tokens   map[string][]int                     // "refresh_tokens"/"access_tokens" → owning user pks
 	sessions map[int]int                          // user pk → number of sessions
@@ -429,8 +431,13 @@ func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
 		items = append(items, f.userJSON(u, first(q["include_groups"]) == "true"))
 	}
 	out := f.page(items)
+	// Authentik's count is the total of the listing, not of the page.
+	out["pagination"].(map[string]any)["count"] = len(match)
 	if to < len(match) {
 		out["pagination"].(map[string]any)["next"] = page + 1
+	}
+	if f.afterUserPage != nil {
+		f.afterUserPage()
 	}
 	return http.StatusOK, out
 }

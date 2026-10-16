@@ -233,6 +233,40 @@ func TestRoleGroupUsers(t *testing.T) {
 	}
 }
 
+// TestRoleGroupUsersSettles: a member leaving during a numbered listing would shift the next page and hide another
+// member; the listing is repeated until the total holds, and fails when it never does.
+func TestRoleGroupUsersSettles(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	admins := f.groupByName("paddock.acme.admins").pk
+	for i := range 1203 {
+		f.users[2000+i] = &fakeUser{pk: 2000 + i, username: "a" + strconv.Itoa(i), groups: []string{admins}}
+	}
+	removed := false
+	f.afterUserPage = func() {
+		if !removed {
+			removed = true
+			delete(f.users, 2001)
+		}
+	}
+	users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins")
+	if err != nil || len(users) != 1202 || slices.ContainsFunc(users, func(u ports.IdentityUser) bool { return u.Username == "a1" }) {
+		t.Fatalf("%d users, %v", len(users), err)
+	}
+	next := 5000
+	f.afterUserPage = func() {
+		next++
+		f.users[next] = &fakeUser{pk: next, username: "n" + strconv.Itoa(next), groups: []string{admins}}
+	}
+	if _, err := c.RoleGroupUsers(ctx, "paddock.acme.admins"); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("a listing that never settles: %v", err)
+	}
+}
+
 // TestLockRevokesTokensAndSessions: a lock is the group membership AND the revocation (PoC M1 C2).
 func TestLockRevokesTokensAndSessions(t *testing.T) {
 	f, srv := newFake(t)

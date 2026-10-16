@@ -11,6 +11,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
 // Attributes Paddock sets on the users it creates; users without paddock_managed are synced from upstream.
@@ -158,17 +159,57 @@ func (c *Client) OrganizationUsers(ctx context.Context, slug string) ([]ports.Id
 	return out, err
 }
 
+// roleGroupAttempts is how often a role group is listed again when its membership changed during a listing.
+const roleGroupAttempts = 3
+
 // RoleGroupUsers lists the direct members of the role group groupName. Authentik refuses a filter on a group name it
-// does not know with 400 on groups_by_name: ports.ErrGroupNotFound.
+// does not know with 400 on groups_by_name: ports.ErrGroupNotFound. Pages are numbered, so a member that leaves during
+// the listing shifts the next page and another member could be skipped: the listing is ordered by pk and repeated when
+// the total changed between pages or does not match what was read, and fails if it never settles.
 func (c *Client) RoleGroupUsers(ctx context.Context, groupName string) ([]ports.IdentityUser, error) {
-	q := url.Values{"groups_by_name": {groupName}, "include_groups": {"false"}}
-	var out []ports.IdentityUser
-	err := pages(ctx, c, "/api/v3/core/users/", q, func(u user) { out = append(out, u.identity()) })
-	var st *errStatus
-	if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
-		return nil, fmt.Errorf("%s: %w", groupName, ports.ErrGroupNotFound)
+	for range roleGroupAttempts {
+		out, settled, err := c.listRoleGroup(ctx, groupName)
+		var st *errStatus
+		if errors.As(err, &st) && st.code == http.StatusBadRequest && strings.Contains(st.body, `"groups_by_name"`) {
+			return nil, fmt.Errorf("%s: %w", groupName, ports.ErrGroupNotFound)
+		}
+		if err != nil || settled {
+			return out, err
+		}
 	}
-	return out, err
+	return nil, fmt.Errorf("%w: the members of %s changed during every listing", problem.UpstreamUnavailable, groupName)
+}
+
+// listRoleGroup reads every page of a role group; settled is false when the total changed between pages or differs
+// from the members read.
+func (c *Client) listRoleGroup(ctx context.Context, groupName string) (out []ports.IdentityUser, settled bool, err error) {
+	q := url.Values{"groups_by_name": {groupName}, "include_groups": {"false"}, "ordering": {"pk"},
+		"page_size": {strconv.Itoa(pageSize)}}
+	total := -1
+	for page := 1; page <= maxPages; page++ {
+		q.Set("page", strconv.Itoa(page))
+		var res struct {
+			Pagination struct {
+				Next  int `json:"next"`
+				Count int `json:"count"`
+			} `json:"pagination"`
+			Results []user `json:"results"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/api/v3/core/users/?"+q.Encode(), nil, &res); err != nil {
+			return nil, false, upstream(err)
+		}
+		if total >= 0 && res.Pagination.Count != total {
+			return nil, false, nil
+		}
+		total = res.Pagination.Count
+		for _, u := range res.Results {
+			out = append(out, u.identity())
+		}
+		if res.Pagination.Next == 0 {
+			return out, len(out) == total, nil
+		}
+	}
+	return nil, false, fmt.Errorf("authentik: %s has more than %d pages of members", groupName, maxPages)
 }
 
 func userPath(pk string) string { return "/api/v3/core/users/" + url.PathEscape(pk) + "/" }
