@@ -115,6 +115,9 @@ type loginState struct {
 	Exp      int64  `json:"exp"`
 }
 
+// discardTimeout bounds the deletion of the session record of a failed login.
+const discardTimeout = 5 * time.Second
+
 // bff implements /api/auth/*.
 type bff struct {
 	oidc     *OIDC
@@ -256,7 +259,10 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		if opened == uuid.Nil {
 			return
 		}
-		if err := b.sessions.Delete(ctx, sid, opened); err != nil {
+		// The request may be ending (a client that gave up); the cleanup does not depend on it.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardTimeout)
+		defer cancel()
+		if err := b.sessions.Delete(dctx, sid, opened); err != nil {
 			slog.WarnContext(ctx, "session record of a failed login not deleted", "error", err)
 		}
 	}
