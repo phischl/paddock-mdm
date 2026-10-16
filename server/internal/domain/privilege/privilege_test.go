@@ -175,6 +175,42 @@ func TestEffectiveClassAndStepUp(t *testing.T) {
 	}
 }
 
+// TestRootGrantGrows: the merged commands of two harmless profiles form a writer/exec pair; growth is judged on the
+// merged effective profile (plan M8s decisions 7g and 7h).
+func TestRootGrantGrows(t *testing.T) {
+	user, writer, runner := uuid.New(), uuid.New(), uuid.New()
+	profiles := []Profile{
+		{ID: writer, Class: ClassRestricted, Commands: []string{"/usr/bin/tee /opt/x/run.sh"}, Lecture: LectureOnce},
+		{ID: runner, Class: ClassRestricted, Commands: []string{"/opt/x/run.sh"}, Lecture: LectureOnce},
+	}
+	for _, p := range profiles {
+		if RequiresStepUp(p) {
+			t.Fatalf("%v is root-equivalent on its own", p.Commands)
+		}
+	}
+	assign := func(ids ...uuid.UUID) EffectiveProfile {
+		var as []Assignment
+		for _, id := range ids {
+			as = append(as, Assignment{ID: uuid.New(), ProfileID: id, SubjectType: SubjectUser, SubjectID: user})
+		}
+		return Effective(Input{UserID: user, Assignments: as, Profiles: profiles})
+	}
+	none, one, both := assign(), assign(writer), assign(writer, runner)
+	if RootGrantGrows(none, one) {
+		t.Error("one harmless profile grows the root grant")
+	}
+	if !RootGrantGrows(one, both) {
+		t.Error("the second half of a writer/exec pair does not grow the root grant")
+	}
+	if RootGrantGrows(both, one) || RootGrantGrows(both, both) {
+		t.Error("removing or keeping a grant grows it")
+	}
+	full := EffectiveProfile{Class: ClassFull}
+	if !RootGrantGrows(one, full) || RootGrantGrows(full, both) {
+		t.Error("class full")
+	}
+}
+
 func TestValidateProfile(t *testing.T) {
 	ok := NormalizeProfile(Profile{Name: " nginx ", Class: ClassRestricted, Lecture: LectureOnce, TimestampTimeoutMin: 5,
 		Commands: []string{" /usr/bin/systemctl restart nginx.service", "/usr/bin/systemctl restart nginx.service"}})

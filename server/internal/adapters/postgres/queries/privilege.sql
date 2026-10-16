@@ -125,3 +125,9 @@ DELETE FROM profile_assignment WHERE subject_id = @subject_id;
 
 -- name: CountProfileAssignmentsOfProfile :one
 SELECT count(*) FROM profile_assignment WHERE profile_id = @profile_id;
+
+-- Changes that can grant root in combination (plan M8s decision 7g) compare the organization's grants before and
+-- after the change; one transaction-scoped lock per organization makes two such changes see each other.
+
+-- name: LockOrganizationPrivileges :exec
+SELECT pg_advisory_xact_lock(hashtextextended('paddock.privileges.' || current_setting('paddock.org_id'), 0));

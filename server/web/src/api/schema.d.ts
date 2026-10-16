@@ -575,7 +575,11 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Roles: org_admin, org_operator. Replaces the device group memberships. */
+        /**
+         * @description Roles: org_admin, org_operator. Replaces the device group memberships. A change that gives a user root on a device they did not have before (also through the combination of several
+         *     profiles) needs org_admin (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
+         *     satisfy it).
+         */
         put: operations["setDeviceGroups"];
         post?: never;
         delete?: never;
@@ -858,7 +862,9 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, org_operator. Adds a user to a local group. The members of imported groups are mirrored
-         *     from upstream (409 attribute_owned_upstream).
+         *     from upstream (409 attribute_owned_upstream). A change that gives a user root on a device they did not have before (also through the combination of several
+         *     profiles) needs org_admin (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
+         *     satisfy it).
          */
         post: operations["addUserGroupMember"];
         delete?: never;
@@ -3716,8 +3722,9 @@ export interface components {
             updated_at: string;
         };
         /**
-         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
-         *     step_up_required); API tokens cannot satisfy it.
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+         *     gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+         *     step-up (403 step_up_required); API tokens cannot satisfy it.
          */
         PermissionProfileCreate: {
             name: string;
@@ -3730,8 +3737,9 @@ export interface components {
             lecture?: components["schemas"]["Lecture"];
         };
         /**
-         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
-         *     step_up_required); API tokens cannot satisfy it.
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+         *     gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+         *     step-up (403 step_up_required); API tokens cannot satisfy it.
          */
         PermissionProfileUpdate: {
             name?: string;
@@ -3772,8 +3780,9 @@ export interface components {
             created_at: string;
         };
         /**
-         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
-         *     step_up_required); API tokens cannot satisfy it.
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+         *     gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+         *     step-up (403 step_up_required); API tokens cannot satisfy it.
          */
         ProfileAssignmentCreate: {
             /** Format: uuid */
@@ -3785,8 +3794,9 @@ export interface components {
             device_group_id?: string;
         };
         /**
-         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
-         *     step_up_required); API tokens cannot satisfy it.
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+         *     gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+         *     step-up (403 step_up_required); API tokens cannot satisfy it.
          */
         ProfileAssignmentUpdate: {
             /** Format: uuid */

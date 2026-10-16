@@ -889,7 +889,10 @@ paths:
     put:
       operationId: setDeviceGroups
       tags: [devices]
-      description: "Roles: org_admin, org_operator. Replaces the device group memberships."
+      description: |
+        Roles: org_admin, org_operator. Replaces the device group memberships. A change that gives a user root on a device they did not have before (also through the combination of several
+        profiles) needs org_admin (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
+        satisfy it).
       x-paddock-audit: device.groups_changed
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -1478,7 +1481,9 @@ paths:
       tags: [users]
       description: |
         Roles: org_admin, org_operator. Adds a user to a local group. The members of imported groups are mirrored
-        from upstream (409 attribute_owned_upstream).
+        from upstream (409 attribute_owned_upstream). A change that gives a user root on a device they did not have before (also through the combination of several
+        profiles) needs org_admin (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
+        satisfy it).
       x-paddock-audit: user_group.member_added
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -5526,8 +5531,9 @@ components:
     PermissionProfileCreate:
       type: object
       description: |
-        A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
-        step_up_required); API tokens cannot satisfy it.
+        A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+        gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+        step-up (403 step_up_required); API tokens cannot satisfy it.
       required: [name, class]
       additionalProperties: false
       properties:
@@ -5543,8 +5549,9 @@ components:
     PermissionProfileUpdate:
       type: object
       description: |
-        A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
-        step_up_required); API tokens cannot satisfy it.
+        A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+        gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+        step-up (403 step_up_required); API tokens cannot satisfy it.
       additionalProperties: false
       properties:
         name: { type: string, minLength: 1, maxLength: 100 }
@@ -5581,8 +5588,9 @@ components:
     ProfileAssignmentCreate:
       type: object
       description: |
-        A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
-        step_up_required); API tokens cannot satisfy it.
+        A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+        gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+        step-up (403 step_up_required); API tokens cannot satisfy it.
       required: [profile_id, subject_type]
       additionalProperties: false
       properties:
@@ -5593,8 +5601,9 @@ components:
     ProfileAssignmentUpdate:
       type: object
       description: |
-        A profile that is effectively Full (class full, or restricted with a root-equivalent command) needs a step-up (403
-        step_up_required); API tokens cannot satisfy it.
+        A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+        gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+        step-up (403 step_up_required); API tokens cannot satisfy it.
       required: [device_group_id]
       additionalProperties: false
       properties:

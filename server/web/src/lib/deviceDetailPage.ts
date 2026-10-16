@@ -15,6 +15,7 @@ import { attentionOf, getDeviceUpdates } from './updates'
 import { allUserGroups } from './userGroups'
 import { allUsers } from './users'
 import { useSessionStore } from '../stores/session'
+import { resumeStepUp, startStepUp, stepUpRequired } from './stepUp'
 
 /** The device page's state, provided by the frame to its tabs (plan M7c decision 29). */
 export type DevicePage = ReturnType<typeof useDeviceDetailPage>
@@ -152,12 +153,29 @@ export function useDeviceDetailPage(id: () => string) {
     problem.value = ''
     saved.value = false
     problem.value = (await setDeviceGroups(device.value.id, selectedGroups.value)) ?? ''
+    if (problem.value === stepUpRequired) {
+      startStepUp('device-groups', device.value.id, selectedGroups.value)
+      return
+    }
     saved.value = !problem.value
     await load()
   }
 
+  /**
+   * A device that joins the device group of a root grant needs a step-up (plan M8s decision 7g): the change the server
+   * refused with step_up_required is repeated once after the step-up.
+   */
+  async function resumeGroups(): Promise<boolean> {
+    const pending = resumeStepUp<string[]>('device-groups', id())
+    if (!pending) return false
+    problem.value = pending.failed ? 'step_up_failed' : ((await setDeviceGroups(id(), pending.payload)) ?? '')
+    saved.value = !problem.value
+    await load()
+    return true
+  }
+
   return {
-    device, config, groups, selectedGroups, problem, saved, actions, load, run, saveGroups,
+    device, config, groups, selectedGroups, problem, saved, actions, load, run, saveGroups, resumeGroups,
     users, userGroups, loginUsers, loginGroups, loginSaved, sudo, loadSubjects, saveLogin, toggleSuspension,
     diskState, updates, conditions, revocations, refresh, changed,
   }

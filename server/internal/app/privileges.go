@@ -123,7 +123,7 @@ func (p *Privileges) CreateProfile(ctx context.Context, in privilege.Profile) (p
 			return err
 		}
 		if privilege.RequiresStepUp(in) {
-			if err := rec.RequireStepUp(); err != nil {
+			if err := requireRootGrant(ctx, rec); err != nil {
 				return err
 			}
 		}
@@ -179,6 +179,10 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
 	var out pgstore.PermissionProfile
 	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		guard, err := beginRootGrantGuard(ctx, q)
+		if err != nil {
+			return err
+		}
 		cur, err := q.GetPermissionProfileForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -192,7 +196,7 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 		}
 		steppedUp := profileChangeNeedsStepUp(cur, in)
 		if steppedUp {
-			if err := rec.RequireStepUp(); err != nil {
+			if err := requireRootGrant(ctx, rec); err != nil {
 				return err
 			}
 		}
@@ -207,6 +211,11 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 		}
 		if err != nil {
 			return err
+		}
+		if !steppedUp {
+			if err := guard.check(ctx, q, rec, true); err != nil {
+				return err
+			}
 		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil
@@ -343,13 +352,18 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 		rec.SetParam("subject_type", string(in.SubjectType))
 		rec.SetParam("subject_id", idParam(in.SubjectID))
 		rec.SetParam("device_group_id", idParam(in.DeviceGroupID))
+		guard, err := beginRootGrantGuard(ctx, q)
+		if err != nil {
+			return err
+		}
 		profile, err := q.GetPermissionProfileForShare(ctx, in.ProfileID)
 		if err != nil {
 			return problem.InvalidRequest.WithDetail("unknown permission profile")
 		}
 		assignmentProfileParams(rec, profile)
-		if privilege.RequiresStepUp(profileOf(profile)) {
-			if err := rec.RequireStepUp(); err != nil {
+		full := privilege.RequiresStepUp(profileOf(profile))
+		if full {
+			if err := requireRootGrant(ctx, rec); err != nil {
 				return err
 			}
 		}
@@ -375,6 +389,11 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 			return err
 		}
 		rec.SetTarget(audit.Target{Type: "profile_assignment", ID: out.ID.String(), Display: profile.Name})
+		if !full {
+			if err := guard.check(ctx, q, rec, true); err != nil {
+				return err
+			}
+		}
 		rec.StateChanged(statechange.ScopeOrg, profile.OrganizationID)
 		return nil
 	})
@@ -410,6 +429,10 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 	spec.Target = &audit.Target{Type: "profile_assignment", ID: id.String()}
 	var out pgstore.ProfileAssignment
 	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		guard, err := beginRootGrantGuard(ctx, q)
+		if err != nil {
+			return err
+		}
 		cur, profile, err := loadAssignment(ctx, q, rec, id)
 		if err != nil {
 			return err
@@ -417,8 +440,9 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 		assignmentProfileParams(rec, profile)
 		rec.SetParam("old_device_group_id", idParam(groupPtr(cur.DeviceGroupID)))
 		rec.SetParam("device_group_id", idParam(deviceGroupID))
-		if privilege.RequiresStepUp(profileOf(profile)) {
-			if err := rec.RequireStepUp(); err != nil {
+		full := privilege.RequiresStepUp(profileOf(profile))
+		if full {
+			if err := requireRootGrant(ctx, rec); err != nil {
 				return err
 			}
 		}
@@ -433,6 +457,11 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 		}
 		if err != nil {
 			return err
+		}
+		if !full {
+			if err := guard.check(ctx, q, rec, true); err != nil {
+				return err
+			}
 		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil

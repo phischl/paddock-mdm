@@ -157,6 +157,8 @@ func TestRootEquivalenceGate(t *testing.T) {
 			t.Fatalf("a harmless profile is flagged (%v)", err)
 		}
 	}
+	// The second assignment completes the combination and needs a step-up (plan M8s decision 7g).
+	stepUp(t, alice, env.Alice, true)
 	for _, a := range []map[string]any{
 		{"profile_id": copyHelper, "subject_type": "user", "subject_id": user.ID},
 		{"profile_id": runHelper, "subject_type": "group", "subject_id": group},

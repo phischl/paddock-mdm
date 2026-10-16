@@ -346,9 +346,19 @@ func TestGroupsProfilesAndEffectiveProfile(t *testing.T) {
 	e.assign(alice, map[string]any{"profile_id": copyHelper.Id, "subject_type": "user", "subject_id": dave.User.Id})
 	assignment := e.assign(alice, map[string]any{"profile_id": runHelper.Id, "subject_type": "group", "subject_id": grp.Id})
 
-	// Membership is a privilege change: the event carries the highest class before and after.
-	add := e.do(call{method: "POST", path: "/api/v1/user-groups/" + grp.Id.String() + "/members", cookie: alice,
-		body: map[string]any{"user_id": dave.User.Id}})
+	// Membership is a privilege change: the event carries the highest class before and after. This one completes a
+	// root-equivalent combination, so it needs a step-up (plan M8s decision 7g) and is not mirrored without one.
+	member := map[string]any{"user_id": dave.User.Id}
+	refused := e.do(call{method: "POST", path: "/api/v1/user-groups/" + grp.Id.String() + "/members", cookie: alice, body: member})
+	if refused.status != http.StatusForbidden || refused.problemCode(t) != "step_up_required" {
+		t.Fatalf("root-granting membership without step-up: %d %s", refused.status, refused.body)
+	}
+	e.expectEvent(refused, "user_group.member_added:denied:step_up_required")
+	if members := e.idp.members[grpPK(e, grp.AuthentikName)]; len(members) != 0 {
+		t.Fatalf("refused membership mirrored to Authentik: %v", members)
+	}
+	add := e.do(call{method: "POST", path: "/api/v1/user-groups/" + grp.Id.String() + "/members", cookie: e.steppedUp(alice, time.Now()),
+		body: member})
 	if add.status != http.StatusNoContent {
 		t.Fatalf("add member: %d %s", add.status, add.body)
 	}

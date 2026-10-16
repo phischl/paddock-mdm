@@ -585,6 +585,18 @@ func (q *Queries) ListProfileAssignments(ctx context.Context, arg ListProfileAss
 	return items, nil
 }
 
+const lockOrganizationPrivileges = `-- name: LockOrganizationPrivileges :exec
+
+SELECT pg_advisory_xact_lock(hashtextextended('paddock.privileges.' || current_setting('paddock.org_id'), 0))
+`
+
+// Changes that can grant root in combination (plan M8s decision 7g) compare the organization's grants before and
+// after the change; one transaction-scoped lock per organization makes two such changes see each other.
+func (q *Queries) LockOrganizationPrivileges(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockOrganizationPrivileges)
+	return err
+}
+
 const updatePermissionProfile = `-- name: UpdatePermissionProfile :one
 UPDATE permission_profile
 SET name = $1, class = $2, commands = $3, require_password = $4,

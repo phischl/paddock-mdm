@@ -234,6 +234,10 @@ func (d *Devices) SetGroups(ctx context.Context, id uuid.UUID, groupIDs []uuid.U
 	spec := SpecDeviceSetGroups
 	spec.Target = &audit.Target{Type: "device", ID: id.String()}
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		guard, err := beginRootGrantGuard(ctx, q)
+		if err != nil {
+			return err
+		}
 		dev, err := q.LockDevice(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -250,6 +254,10 @@ func (d *Devices) SetGroups(ctx context.Context, id uuid.UUID, groupIDs []uuid.U
 		}
 		rec.SetParam("added", added)
 		rec.SetParam("removed", removed)
+		// A device that joins the device group of a root grant extends it (plan M8s decision 7g).
+		if err := guard.check(ctx, q, rec, false); err != nil {
+			return err
+		}
 		rec.StateChanged(statechange.ScopeDevice, id)
 		out, err = loadDeviceDetail(ctx, q, id)
 		return err

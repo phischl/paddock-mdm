@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -48,10 +49,31 @@ func (ex *configExec) run(ctx context.Context, plan declarative.Plan) error {
 	if err := ex.guardGroupDeletions(plan); err != nil {
 		return err
 	}
+	// A document can complete a root grant across profiles and assignments (plan M8s decision 7g); the whole
+	// document is compared before and after.
+	grants := slices.ContainsFunc(plan.Changes, func(c declarative.Change) bool {
+		return c.Section == declarative.SectionPermissionProfiles || c.Section == declarative.SectionProfileAssignments
+	})
+	var guard rootGrantGuard
+	if grants {
+		var err error
+		if guard, err = beginRootGrantGuard(ctx, ex.q); err != nil {
+			return err
+		}
+	}
 	for _, c := range plan.Changes {
 		path := ex.path(c)
 		if err := ex.change(ctx, c); err != nil {
 			return atPath(path, err)
+		}
+	}
+	if grants && !ex.steppedUp {
+		grows, err := guard.grows(ctx, ex.q)
+		if err != nil {
+			return err
+		}
+		if grows {
+			return ex.requireAdminStepUp("may grant root")
 		}
 	}
 	return nil
@@ -85,12 +107,13 @@ func (ex *configExec) requireAdmin(what string) error {
 	return nil
 }
 
-// requireSensitiveFile is requireSensitiveFile of the per-resource use cases for the document's principal.
-func (ex *configExec) requireSensitiveFile() error {
+// requireAdminStepUp is requireSensitiveFile and requireRootGrant of the per-resource use cases for the document's
+// principal: an API token is refused with the step-up detail, any other role but org_admin is forbidden.
+func (ex *configExec) requireAdminStepUp(what string) error {
 	if ex.p.APITokenID != uuid.Nil {
 		return ex.requireStepUp()
 	}
-	if err := ex.requireAdmin("may manage files on sensitive paths"); err != nil {
+	if err := ex.requireAdmin(what); err != nil {
 		return err
 	}
 	return ex.requireStepUp()
@@ -190,7 +213,7 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 	var row pgstore.PermissionProfile
 	if c.Action == declarative.ActionCreate {
 		if privilege.RequiresStepUp(in) {
-			if err := ex.requireStepUp(); err != nil {
+			if err := ex.requireAdminStepUp("may grant root"); err != nil {
 				return err
 			}
 		}
@@ -209,7 +232,7 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 		}
 		steppedUp := profileChangeNeedsStepUp(cur, in)
 		if steppedUp {
-			if err := ex.requireStepUp(); err != nil {
+			if err := ex.requireAdminStepUp("may grant root"); err != nil {
 				return err
 			}
 		}
@@ -252,7 +275,7 @@ func (ex *configExec) file(ctx context.Context, c declarative.Change) error {
 		sensitive = sensitive || (oldTier == policy.TierSensitive && fileChanged(old, next))
 	}
 	if sensitive {
-		if err := ex.requireSensitiveFile(); err != nil {
+		if err := ex.requireAdminStepUp("may manage files on sensitive paths"); err != nil {
 			return err
 		}
 	}
@@ -350,7 +373,7 @@ func (ex *configExec) assignment(ctx context.Context, c declarative.Change) erro
 		return err
 	}
 	if privilege.RequiresStepUp(profileOf(profile)) {
-		if err := ex.requireStepUp(); err != nil {
+		if err := ex.requireAdminStepUp("may grant root"); err != nil {
 			return err
 		}
 	}

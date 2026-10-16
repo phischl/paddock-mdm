@@ -9,6 +9,7 @@ import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { addMember, deleteUserGroup, getUserGroup, removeMember, renameUserGroup } from '../lib/userGroups'
 import { allUsers, listGroupMembers, userFilters } from '../lib/users'
+import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 
 const { t } = useI18n()
@@ -48,11 +49,22 @@ async function load(): Promise<void> {
 onMounted(async () => {
   await load()
   if (session.canWrite) users.value = await allUsers()
+  // A membership that grants root needs a step-up (plan M8s decision 7g); it is repeated once after the step-up.
+  const pending = resumeStepUp<string>('group-member-add', id.value)
+  if (!pending) return
+  await router.replace(withoutStepUpParam())
+  problem.value = pending.failed ? 'step_up_failed' : ((await addMember(id.value, pending.payload)) ?? '')
+  void list.value?.reload()
 })
 
 async function add(): Promise<void> {
   if (!newMember.value) return
-  problem.value = (await addMember(id.value, newMember.value)) ?? ''
+  const user = newMember.value
+  problem.value = (await addMember(id.value, user)) ?? ''
+  if (problem.value === stepUpRequired) {
+    startStepUp('group-member-add', id.value, user)
+    return
+  }
   newMember.value = null
   void list.value?.reload()
 }
