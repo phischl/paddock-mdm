@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -392,3 +393,7 @@ func stepUp(t *testing.T, p *env.Portal, user string, ok bool) {
 		t.Fatalf("step-up as %s returned to %s", user, final)
 	}
 }
+
+// operatorRootsMu serializes every read-modify-write of operator roots in this run: the list is replaced as a whole,
+// so two writers must never interleave (ensureOperatorRoots, the audit case of the setting, the isolation fixture).
+var operatorRootsMu sync.Mutex
