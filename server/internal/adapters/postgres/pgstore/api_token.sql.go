@@ -12,6 +12,26 @@ import (
 	"github.com/google/uuid"
 )
 
+const claimCreatorInactiveRecord = `-- name: ClaimCreatorInactiveRecord :execrows
+UPDATE api_token SET creator_inactive_recorded_at = now()
+WHERE id = $1 AND (creator_inactive_recorded_at IS NULL
+  OR creator_inactive_recorded_at < now() - make_interval(secs => $2::double precision))
+`
+
+type ClaimCreatorInactiveRecordParams struct {
+	ID            uuid.UUID
+	WindowSeconds float64
+}
+
+// One api_token.use_denied with reason creator_inactive per token and window (PDK-184).
+func (q *Queries) ClaimCreatorInactiveRecord(ctx context.Context, arg ClaimCreatorInactiveRecordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimCreatorInactiveRecord, arg.ID, arg.WindowSeconds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countApiTokens = `-- name: CountApiTokens :one
 SELECT count(*) FROM (
   SELECT 1 FROM api_token_listed

@@ -58,7 +58,7 @@ without the secret.
 ## Residual risks
 
 - **A token follows its creator's access with a delay.** A token stops working (401, `api_token.use_denied` with
-  reason `creator_inactive`) once its creator's account is disabled or no longer has a role that may create the
+  reason `creator_inactive`, recorded at most once per token and 15 minutes) once its creator's account is disabled or no longer has a role that may create the
   token's role. Paddock learns this at the creator's next step-up, or from the worker within the identity sync
   interval (5 minutes by default), so a token keeps working until then. Mitigation: the mandatory expiry, revocation
   by an organization administrator, and the *Created by* column. Review the tokens when an administrator leaves; a

@@ -184,9 +184,13 @@ const (
 	APITokenCreatorInactive APITokenAuthResult = "creator_inactive"
 )
 
+// CreatorInactiveEventWindow is how often the refused use of one token whose creator is inactive is recorded.
+const CreatorInactiveEventWindow = 15 * time.Minute
+
 // Authenticate turns an API token secret into the request principal (plan M6c decisions 7 and 9). A malformed or
 // unknown secret is refused without an audit event; a revoked or expired token is refused with exactly one
-// api_token.use_denied event in its organization. Every refusal returns problem.Unauthenticated.
+// api_token.use_denied event in its organization, a token whose creator is inactive with at most one per
+// CreatorInactiveEventWindow. Every refusal returns problem.Unauthenticated.
 func (a *APITokens) Authenticate(ctx context.Context, secret, ip string) (principal.Principal, APITokenAuthResult, error) {
 	hash, ok := apitoken.Hash(secret)
 	if !ok {
@@ -224,8 +228,19 @@ func (a *APITokens) refuse(ctx context.Context, row pgstore.LookupApiTokenRow, i
 		Target: &audit.Target{Type: "api_token", ID: row.ID.String(), Display: row.Name},
 		Params: map[string]any{"name": row.Name, "reason": string(reason)},
 	}
-	err := a.runner.RunTxRefusal(principal.With(ctx, sys), ScopeOrg, spec, problem.Forbidden,
-		func(context.Context, *pgstore.Queries, Recorder) error { return nil })
+	var err error
+	if reason == APITokenCreatorInactive {
+		// A pipeline keeps calling with such a token: one event per token and window (PDK-184).
+		_, err = a.runner.RecordOnceRefusal(principal.With(ctx, sys), spec, problem.Forbidden,
+			func(ctx context.Context, q *pgstore.Queries) (bool, error) {
+				n, err := q.ClaimCreatorInactiveRecord(ctx, pgstore.ClaimCreatorInactiveRecordParams{
+					ID: row.ID, WindowSeconds: CreatorInactiveEventWindow.Seconds()})
+				return n == 1, err
+			})
+	} else {
+		err = a.runner.RunTxRefusal(principal.With(ctx, sys), ScopeOrg, spec, problem.Forbidden,
+			func(context.Context, *pgstore.Queries, Recorder) error { return nil })
+	}
 	if err != nil && !errors.Is(err, problem.Forbidden) {
 		slog.ErrorContext(ctx, "recording the refused api token use failed", "token_id", row.ID, "error", err)
 	}

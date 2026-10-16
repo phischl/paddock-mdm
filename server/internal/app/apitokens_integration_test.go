@@ -243,14 +243,18 @@ func TestAPITokenAuthenticateRefusals(t *testing.T) {
 	t.Run("creator disabled or demoted", func(t *testing.T) {
 		creator := h.account(t, principal.RoleOrgOperator, true)
 		created := h.create(t, creator, "creator "+uuid.NewString()[:8], principal.RoleOrgOperator)
+		// recorded is whether the refusal is recorded: at most once per token and CreatorInactiveEventWindow.
 		for _, c := range []struct {
-			change string
-			want   app.APITokenAuthResult
+			change   string
+			want     app.APITokenAuthResult
+			recorded bool
 		}{
-			{"", app.APITokenOK},
-			{"UPDATE admin_account SET disabled_at = now() WHERE id = $1", app.APITokenCreatorInactive},
-			{"UPDATE admin_account SET disabled_at = NULL, role = 'org_auditor' WHERE id = $1", app.APITokenCreatorInactive},
-			{"UPDATE admin_account SET role = 'org_admin' WHERE id = $1", app.APITokenOK},
+			{"", app.APITokenOK, false},
+			{"UPDATE admin_account SET disabled_at = now() WHERE id = $1", app.APITokenCreatorInactive, true},
+			{"UPDATE admin_account SET disabled_at = NULL, role = 'org_auditor' WHERE id = $1", app.APITokenCreatorInactive, false},
+			{"UPDATE api_token SET creator_inactive_recorded_at = now() - interval '16 minutes' WHERE created_by = $1",
+				app.APITokenCreatorInactive, true},
+			{"UPDATE admin_account SET role = 'org_admin' WHERE id = $1", app.APITokenOK, false},
 		} {
 			if c.change != "" {
 				if _, err := h.super.Exec(context.Background(), c.change, creator.ID); err != nil {
@@ -263,7 +267,10 @@ func TestAPITokenAuthenticateRefusals(t *testing.T) {
 					t.Fatalf("after %q: %v, %v; want %v", c.change, result, err, c.want)
 				}
 			})
-			if c.want == app.APITokenCreatorInactive {
+			if !c.recorded && len(got) != 0 {
+				t.Fatalf("after %q: actions %v, want none", c.change, got)
+			}
+			if c.recorded {
 				if len(got) != 1 || got[0] != "api_token.use_denied:denied:forbidden" {
 					t.Fatalf("after %q: actions %v", c.change, got)
 				}

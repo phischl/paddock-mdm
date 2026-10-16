@@ -46,3 +46,9 @@ SELECT l.id::uuid AS id, l.organization_id::uuid AS organization_id, l.name::tex
        (l.revoked_at IS NOT NULL)::boolean AS revoked, coalesce(l.creator_role, '')::text AS creator_role,
        l.creator_disabled::boolean AS creator_disabled
 FROM paddock_api_token_lookup(@hash::bytea) l;
+
+-- name: ClaimCreatorInactiveRecord :execrows
+-- One api_token.use_denied with reason creator_inactive per token and window (PDK-184).
+UPDATE api_token SET creator_inactive_recorded_at = now()
+WHERE id = @id AND (creator_inactive_recorded_at IS NULL
+  OR creator_inactive_recorded_at < now() - make_interval(secs => @window_seconds::double precision));
