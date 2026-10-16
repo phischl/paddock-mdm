@@ -59,9 +59,11 @@ func expectRefusal(t *testing.T, viewer *env.Portal, res env.Response, status in
 var gateOperatorRoots = []string{"/etc/paddock-gates/", "/opt/paddock-gates/"}
 
 // ensureOperatorRoots adds roots to the operator roots of p's organization unless they are there; stepUp gives p a
-// fresh step-up first. The list is replaced as a whole, so concurrent callers only ever add the same entries.
+// fresh step-up first. It never removes a root.
 func ensureOperatorRoots(t *testing.T, p *env.Portal, stepUp func(), roots ...string) {
 	t.Helper()
+	operatorRootsMu.Lock()
+	defer operatorRootsMu.Unlock()
 	res := call(t, p, http.MethodGet, "/api/v1/settings/managed-files", nil)
 	expectStatus(t, res, http.StatusOK, "")
 	var s struct {

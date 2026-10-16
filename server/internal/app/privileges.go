@@ -474,6 +474,10 @@ func (p *Privileges) DeleteAssignment(ctx context.Context, id uuid.UUID) error {
 	spec := SpecAssignmentDelete
 	spec.Target = &audit.Target{Type: "profile_assignment", ID: id.String()}
 	return p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		// Removing a grant never grows one, but it serializes with the changes that are compared (plan M8s 7g-bis).
+		if err := q.LockOrganizationPrivileges(ctx); err != nil {
+			return err
+		}
 		cur, profile, err := loadAssignment(ctx, q, rec, id)
 		if err != nil {
 			return err

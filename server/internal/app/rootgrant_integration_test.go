@@ -5,8 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
@@ -199,5 +202,119 @@ func TestCombinedRootGrantDeclarative(t *testing.T) {
 	}
 	if _, _, err := h.config.Apply(principal.With(context.Background(), steppedUp), raw(t, doc), ""); err != nil {
 		t.Fatalf("stepped-up admin = %v", err)
+	}
+}
+
+// TestCombinedRootGrantOnInactiveDevices: a pending device is judged like an active one when it joins the device
+// group of a grant, and approving a pending device that already sits in such a group is gated, because it activates
+// the grant (plan M8s decision 7g-bis).
+func TestCombinedRootGrantOnInactiveDevices(t *testing.T) {
+	w := newCombinationWorld(t)
+	ctx := context.Background()
+	scoped, pending, waiting := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(ctx, "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'scoped')", scoped, w.org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.super.Exec(ctx, "INSERT INTO device (id, organization_id, hostname, state) VALUES ($1, $3, 'p', 'pending'), ($2, $3, 'w', 'pending')",
+		pending, waiting, w.org); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.assign(w.operator, w.writer, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.assign(w.steppedUp, w.runner, &scoped); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.devices.SetGroups(w.ctx(w.operator), pending, []uuid.UUID{scoped}); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator moving a pending device into the grant = %v", err)
+	}
+	// A device that an enrollment token put into the group: its approval activates the grant.
+	if _, err := w.super.Exec(ctx, "INSERT INTO device_group_member (organization_id, device_group_id, device_id) VALUES ($1, $2, $3)",
+		w.org, scoped, waiting); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.devices.Approve(w.ctx(w.operator), waiting); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator approving a device into the grant = %v", err)
+	}
+	if _, err := w.devices.Approve(w.ctx(w.admin), waiting); !errors.Is(err, problem.StepUpRequired) {
+		t.Fatalf("admin without step-up approving a device into the grant = %v", err)
+	}
+	if _, err := w.devices.Approve(w.ctx(w.steppedUp), waiting); err != nil {
+		t.Fatalf("stepped-up admin = %v", err)
+	}
+	// A device outside every grant is approved as before.
+	if _, err := w.devices.Approve(w.ctx(w.operator), pending); err != nil {
+		t.Fatalf("operator approving a device without a grant = %v", err)
+	}
+}
+
+// TestCombinedRootGrantOnEmptyGroup: a combination aimed at a group without members, or at everyone in an organization
+// without users, is judged through a synthetic member, so a later sync cannot complete it ungated.
+func TestCombinedRootGrantOnEmptyGroup(t *testing.T) {
+	w := newCombinationWorld(t)
+	group := uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(context.Background(), `INSERT INTO user_group (id, organization_id, slug, name, source)
+		VALUES ($1, $2, 'empty', 'Empty', 'local')`, group, w.org); err != nil {
+		t.Fatal(err)
+	}
+	global := func(p principal.Principal, profile uuid.UUID) error {
+		_, err := w.privileges.CreateAssignment(w.ctx(p), app.NewAssignment{ProfileID: profile, SubjectType: privilege.SubjectGlobal})
+		return err
+	}
+	toGroup := func(p principal.Principal, profile uuid.UUID) error {
+		_, err := w.privileges.CreateAssignment(w.ctx(p), app.NewAssignment{ProfileID: profile, SubjectType: privilege.SubjectGroup, SubjectID: &group})
+		return err
+	}
+	if err := toGroup(w.operator, w.writer); err != nil {
+		t.Fatalf("the first half to the empty group = %v", err)
+	}
+	if err := toGroup(w.operator, w.runner); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator completing the pair in an empty group = %v", err)
+	}
+	if err := global(w.operator, w.runner); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator completing the pair for everyone = %v", err)
+	}
+	if err := toGroup(w.steppedUp, w.runner); err != nil {
+		t.Fatalf("stepped-up admin = %v", err)
+	}
+}
+
+// TestEnrollmentTokenIntoRootGrant: a token whose device group would give a device root grants needs an organization
+// administrator with a step-up when it is created; an API token gets the token detail (plan M8s decision 7g-ter).
+func TestEnrollmentTokenIntoRootGrant(t *testing.T) {
+	w := newCombinationWorld(t)
+	pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	keys := func(context.Context) ([]protocol.BundleKey, error) { return []protocol.BundleKey{{KeyID: "k1"}}, nil }
+	tokens := app.NewEnrollmentTokens(w.privilegesHarness.runner, pool, keys, keys, &fakeTokenCache{}, "https://device.test")
+	scoped, plain := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(context.Background(), "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $3, 'scoped'), ($2, $3, 'plain')",
+		scoped, plain, w.org); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.assign(w.operator, w.writer, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.assign(w.steppedUp, w.runner, &scoped); err != nil {
+		t.Fatal(err)
+	}
+	in := func(group uuid.UUID) app.TokenInput {
+		return app.TokenInput{Name: "t-" + group.String()[24:], MaxUses: 5, ExpiresAt: time.Now().Add(time.Hour), AutoApprove: true, DeviceGroupID: &group}
+	}
+	if _, err := tokens.Create(w.ctx(w.admin), in(scoped)); !errors.Is(err, problem.StepUpRequired) {
+		t.Fatalf("admin without step-up = %v", err)
+	}
+	if _, err := tokens.Create(w.ctx(w.token), in(scoped)); !errors.Is(err, problem.StepUpRequired) ||
+		!strings.Contains(problem.From(err).Detail, "API tokens") {
+		t.Fatalf("API token = %v", err)
+	}
+	if _, err := tokens.Create(w.ctx(w.steppedUp), in(scoped)); err != nil {
+		t.Fatalf("stepped-up admin = %v", err)
+	}
+	if _, err := tokens.Create(w.ctx(w.admin), in(plain)); err != nil {
+		t.Fatalf("a token into a group without a grant = %v", err)
 	}
 }

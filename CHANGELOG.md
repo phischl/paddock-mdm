@@ -57,15 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step-up only below the organization's operator roots (new setting, empty by default: portal Configuration →
   Operator roots, `GET|PUT /api/v1/settings/managed-files`, declarative `settings.managed_files`, audited as
   `settings.managed_files_changed`), and not for executables, scripts, shared objects or `.d` directories there.
-  Package-manager, boot-loader, interpreter, shell, display-manager, audit, firewall, network, trust-anchor, PAM and
-  identity directories can never be operator roots. Existing definitions keep working; the security review lists
+  Package-manager, boot-loader, interpreter, shell, display-manager, audit, firewall, network, directory-client,
+  trust-anchor, PAM, identity and new-user skeleton directories can never be operator roots, below `/etc/` and
+  `/usr/local/etc/` alike. Existing definitions keep working; the security review lists
   those that now need a confirmation.
 
 - Granting root in effect needs an organization administrator with a step-up also when it happens indirectly: a
   profile change or assignment whose commands combine with another profile of the same user into a root-equivalent
   pair, adding a user to a Paddock group that carries such a grant, or adding a device to the device group of one.
   Operators receive 403 `forbidden`, API tokens 403 `step_up_required`; the portal runs the step-up for group
-  members and device groups. Membership synchronized from the upstream directory is not affected. Creating or
+  members and device groups. Creating an enrollment token into such a device group, and approving or releasing a
+  device in one, follow the same rule. Membership synchronized from the upstream directory is not affected. Creating or
   changing an effectively Full profile is now reserved to organization administrators as well.
 
 - Managed files on sensitive paths (cron, systemd, login scripts, SSH, network hooks, logrotate, files directly in
@@ -84,7 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Managed-file paths fall into three tiers (ADR 0034): denied paths (sudo, PAM, NSS and the other protected areas, the
   loader, boot, initramfs, kernel module, sysctl, AppArmor, udev and polkit configuration, and the units of Paddock,
   fleetd, Himmelblau, SSH, GDM, sudo and systemd, and systemd's type-wide drop-in directories such as
-  `/etc/systemd/system/service.d/`) are refused by server and agent; sensitive paths (cron, systemd,
+  `/etc/systemd/system/service.d/`, and the runtime unit directories `/etc/systemd/system.control/` and
+  `/etc/systemd/system.attached/`) are refused by server and agent; sensitive paths (cron, systemd,
   login scripts, SSH, network hooks, logrotate, any file directly in `/etc/`, any `/etc/<name>.d/` directory and every
   file with an execute bit) and ordinary application configuration below `/etc/`, `/usr/local/etc/` and `/opt/`
   remain manageable. The agent no longer deletes a managed file on a now-denied path when its definition leaves the

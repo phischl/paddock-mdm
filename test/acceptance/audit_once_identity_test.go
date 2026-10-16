@@ -315,6 +315,8 @@ var identityAuditCases = map[string][]auditCase{
 		// The success case writes the current roots back, so the roots every gate relies on stay.
 		{"success", func(t *testing.T, w *auditWorld) {
 			a := adminUser(t, "a3-roots")
+			operatorRootsMu.Lock()
+			defer operatorRootsMu.Unlock()
 			res := call(t, a.Portal, http.MethodGet, "/api/v1/settings/managed-files", nil)
 			var cur map[string]any
 			if err := res.JSON(&cur); err != nil {

@@ -201,7 +201,8 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin. The response carries the token secret and the enrollment configuration exactly once; only
-         *     a hash of the secret is stored.
+         *     a hash of the secret is stored. A token whose device group would give an enrolled device root grants needs a
+         *     step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it).
          */
         post: operations["createEnrollmentToken"];
         delete?: never;

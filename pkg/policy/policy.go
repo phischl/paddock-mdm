@@ -51,6 +51,9 @@ var (
 		"/etc/systemd/system.conf.d/", "/etc/systemd/system-generators/", "/etc/systemd/system-preset/",
 		"/etc/modprobe.d/", "/etc/modules-load.d/", "/etc/sysctl.d/", "/etc/apparmor.d/", "/etc/udev/rules.d/",
 		"/etc/polkit-1/",
+		// Runtime units and drop-ins that systemctl set-property and the transient unit API write; they apply to every
+		// unit, Paddock's included (plan M8s decision 7h-ter).
+		"/etc/systemd/system.control/", "/etc/systemd/system.attached/",
 		// Type-wide drop-ins apply to every unit of their type, Paddock's own included (plan M8s decision 7h-bis).
 		"/etc/systemd/system/service.d/", "/etc/systemd/system/socket.d/", "/etc/systemd/system/timer.d/", "/etc/systemd/system/path.d/", "/etc/systemd/system/mount.d/", "/etc/systemd/system/automount.d/", "/etc/systemd/system/swap.d/", "/etc/systemd/system/target.d/", "/etc/systemd/system/slice.d/", "/etc/systemd/system/scope.d/",
 	}
@@ -123,7 +126,7 @@ func denied(p string) bool {
 }
 
 // codeSuffixes are file names that interpreters or the loader run or load (plan M8s decision 7a).
-var codeSuffixes = []string{".so", ".py", ".pth", ".sh", ".pl", ".rb", ".lua", ".js"}
+var codeSuffixes = []string{".so", ".py", ".pth", ".sh", ".pl", ".pm", ".rb", ".lua", ".js", ".mjs", ".cjs", ".php", ".bash", ".zsh"}
 
 func codeSuffix(p string) bool {
 	name := path.Base(p)
@@ -147,11 +150,16 @@ var neverOperator = []string{
 	"/etc/pki/", "/etc/ssh/", "/etc/pam.d/", "/etc/security/", "/etc/himmelblau/", "/etc/sudoers*", "/etc/systemd/",
 	"/etc/cron*", "/etc/polkit-1/", "/etc/dbus-1/", "/etc/udev/", "/etc/modprobe.d/", "/etc/sysctl*", "/etc/paddock/",
 	"/opt/paddock/",
+	// Plan M8s decision 7h-ter: network, directory and authentication clients, audit dispatch, new-user skeletons,
+	// further shells and interpreters.
+	"/etc/dhcp/", "/etc/openvpn/", "/etc/netplan/", "/etc/wpa_supplicant/", "/etc/sssd/", "/etc/samba/", "/etc/ldap/",
+	"/etc/openldap/", "/etc/audisp/", "/etc/skel/", "/etc/csh*", "/etc/tcsh*", "/etc/ksh*", "/etc/php*",
 }
 
 // ValidateOperatorRoot checks one operator root (plan M8s decision 7b): a normalized directory of the form
 // /etc/<name>/…, /usr/local/etc/<name>/… or /opt/<name>/… with a trailing slash that neither is, contains nor lies
-// below a denied or sensitive catalog entry, and lies outside the never-operator directories.
+// below a denied or sensitive catalog entry, and lies outside the never-operator directories, below /etc/ and
+// /usr/local/etc/ alike.
 func ValidateOperatorRoot(root string) error {
 	dir := strings.TrimSuffix(root, "/")
 	if !strings.HasSuffix(root, "/") || !wellFormed(dir) || dir+"/" != root {
@@ -171,12 +179,20 @@ func ValidateOperatorRoot(root string) error {
 		}
 	}
 	for _, never := range neverOperator {
-		if prefix, ok := strings.CutSuffix(never, "*"); ok {
-			if strings.HasPrefix(root, prefix) {
+		// Software built for /usr/local reads the same configuration below /usr/local/etc/, so every /etc/ entry
+		// applies there as well (plan M8s decision 7h-ter).
+		entries := []string{never}
+		if rest, ok := strings.CutPrefix(never, "/etc/"); ok {
+			entries = append(entries, "/usr/local/etc/"+rest)
+		}
+		for _, entry := range entries {
+			if prefix, ok := strings.CutSuffix(entry, "*"); ok {
+				if strings.HasPrefix(root, prefix) {
+					return ErrOperatorRoot
+				}
+			} else if related(entry) {
 				return ErrOperatorRoot
 			}
-		} else if related(never) {
-			return ErrOperatorRoot
 		}
 	}
 	return nil

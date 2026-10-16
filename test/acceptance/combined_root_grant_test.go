@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
@@ -12,7 +13,8 @@ import (
 // combine into root (a writer and the executable it writes) are assigned to one user; the second assignment is
 // refused for an operator (403 forbidden) and an API token (step_up_required with the token detail), needs a step-up
 // from an administrator and is then recorded with effective_class full. Adding a user to a Paddock group that carries
-// the second half follows the same rule. All grants are scoped to an empty device group and reach no device.
+// the second half follows the same rule, and so does an enrollment token into the device group of the combination. All
+// grants are scoped to an empty device group and reach no device.
 func TestCombinedRootGrant(t *testing.T) {
 	admin := adminUser(t, "s9")
 	noStepUp := withoutStepUp(t, admin)
@@ -55,6 +57,22 @@ func TestCombinedRootGrant(t *testing.T) {
 		expectStatus(t, res, http.StatusCreated, "")
 		createdID(t, admin.Portal, "/api/v1/profile-assignments", res)
 		if ev := expectOneEvent(t, admin.Portal, res.RequestID, "profile_assignment.created", "success"); ev.Params["effective_class"] != "full" || !ev.Actor.StepUp {
+			t.Fatalf("event %+v", ev)
+		}
+	})
+
+	// A device enrolled with a token into the device group of the combination would receive it (plan M8s decision
+	// 7g-ter); runs after "assignment" completed the pair in that group.
+	t.Run("enrollment token", func(t *testing.T) {
+		body := map[string]any{"name": uniqueName("s9 token"), "max_uses": 1, "auto_approve": true, "device_group_id": group,
+			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}
+		expectRefusal(t, admin.Portal, call(t, noStepUp, http.MethodPost, "/api/v1/enrollment-tokens", body),
+			http.StatusForbidden, "step_up_required", "enrollment_token.created")
+		admin.stepUp(t)
+		res := call(t, admin.Portal, http.MethodPost, "/api/v1/enrollment-tokens", body)
+		expectStatus(t, res, http.StatusCreated, "")
+		createdTokenOf(t, admin.Portal, res)
+		if ev := expectOneEvent(t, admin.Portal, res.RequestID, "enrollment_token.created", "success"); !ev.Actor.StepUp {
 			t.Fatalf("event %+v", ev)
 		}
 	})

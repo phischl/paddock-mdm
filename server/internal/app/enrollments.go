@@ -75,6 +75,11 @@ func (e *Enrollments) Enroll(ctx context.Context, req ingest.Enroll) (EnrollResu
 			state = device.StateActive
 		}
 		rec.SetParam("state", state)
+		// Enrolment is device-initiated (system principal): it serializes with the gated grant changes, and a pending
+		// device's grants are gated when it is approved (plan M8s decision 7g-bis).
+		if err := q.LockOrganizationPrivileges(ctx); err != nil {
+			return err
+		}
 		if err := createDevice(ctx, q, req, tok, state); err != nil {
 			return err
 		}

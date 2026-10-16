@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -46,19 +47,20 @@ func beginRootGrantGuard(ctx context.Context, q *pgstore.Queries) (rootGrantGuar
 	return rootGrantGuard{before: before}, err
 }
 
-// grows reads the grants after the change and reports whether any user gained root on any device or device scope.
-func (g rootGrantGuard) grows(ctx context.Context, q *pgstore.Queries) (bool, error) {
+// grows reads the grants after the change and reports whether any user gained root on any device or device scope;
+// fresh are devices that become active with the change (approve, quarantine release).
+func (g rootGrantGuard) grows(ctx context.Context, q *pgstore.Queries, fresh ...uuid.UUID) (bool, error) {
 	after, err := LoadIdentity(ctx, q)
 	if err != nil {
 		return false, err
 	}
-	return rootGrantGrows(g.before, after), nil
+	return rootGrantGrows(g.before, after, fresh...), nil
 }
 
 // check applies requireRootGrant when the change grew a root grant. For the codes that carry effective_class
 // (profiles and assignments) the param records the effect of the change: full.
-func (g rootGrantGuard) check(ctx context.Context, q *pgstore.Queries, rec Recorder, effectiveClassParam bool) error {
-	grows, err := g.grows(ctx, q)
+func (g rootGrantGuard) check(ctx context.Context, q *pgstore.Queries, rec Recorder, effectiveClassParam bool, fresh ...uuid.UUID) error {
+	grows, err := g.grows(ctx, q, fresh...)
 	if err != nil || !grows {
 		return err
 	}
@@ -68,11 +70,34 @@ func (g rootGrantGuard) check(ctx context.Context, q *pgstore.Queries, rec Recor
 	return requireRootGrant(ctx, rec)
 }
 
-// rootGrantGrows reports whether a user's effective profile grants root after the change where it did not before.
-// The device contexts are every active device (with its device groups before and after the change), a device in no
-// group, and a device in each single device group an assignment names, so a grant through a group without devices is
-// judged as well. Users with the same groups and no assignment of their own share one evaluation.
-func rootGrantGrows(before, after *Identity) bool {
+// requireTokenGroups is the gate of an enrollment token at creation (plan M8s decision 7g-ter): a synthetic device
+// that enrolls into groups must not give any user root it does not have elsewhere, or the token needs
+// requireRootGrant. For a token that approves automatically this is the binding gate; approval keeps its own guard.
+func requireTokenGroups(ctx context.Context, q *pgstore.Queries, rec Recorder, groups []uuid.UUID) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	guard, err := beginRootGrantGuard(ctx, q)
+	if err != nil {
+		return err
+	}
+	after := *guard.before
+	after.memberGroups = maps.Clone(guard.before.memberGroups)
+	after.memberGroups[uuid.New()] = groups
+	if rootGrantGrows(guard.before, &after) {
+		return requireRootGrant(ctx, rec)
+	}
+	return nil
+}
+
+// rootGrantGrows reports whether a user's effective profile grants root after the change where it did not before
+// (plan M8s decisions 7g and 7g-bis). The device contexts are every device in any state (its device groups before and
+// after the change; a device that is new, or listed in fresh because it becomes active, starts without groups), a
+// device in no group, and a device in each single device group an assignment names, so a grant through a group without
+// devices is judged as well. The subjects are every user, plus synthetic members: one of each group an assignment
+// names, one of all of them together and one of no group, so a combination aimed at an empty group or at everyone is
+// judged before a sync fills it. Users with the same groups and no assignment of their own share one evaluation.
+func rootGrantGrows(before, after *Identity, fresh ...uuid.UUID) bool {
 	type pair struct{ before, after []uuid.UUID }
 	contexts := map[string]pair{}
 	add := func(b, a []uuid.UUID) {
@@ -86,41 +111,70 @@ func rootGrantGrows(before, after *Identity) bool {
 			}
 		}
 	}
-	for device, groups := range after.deviceGroups {
-		was, ok := before.deviceGroups[device]
-		if !ok {
-			was = groups
+	for _, id := range []*Identity{before, after} {
+		for device := range id.memberGroups {
+			was := before.memberGroups[device]
+			if slices.Contains(fresh, device) {
+				was = nil
+			}
+			add(was, after.memberGroups[device])
 		}
-		add(was, groups)
+	}
+	for _, device := range fresh {
+		add(nil, after.memberGroups[device])
 	}
 
+	type subject struct {
+		user          uuid.UUID
+		before, after []uuid.UUID
+	}
+	subjects := map[string]subject{}
 	direct := map[uuid.UUID]bool{}
+	var groups []uuid.UUID
 	for _, id := range []*Identity{before, after} {
 		for _, a := range id.Assignments {
-			if a.SubjectType == privilege.SubjectUser {
+			switch a.SubjectType {
+			case privilege.SubjectUser:
 				direct[a.SubjectID] = true
-			}
-		}
-	}
-	seen := map[string]bool{}
-	for _, id := range []*Identity{before, after} {
-		for user := range id.Users {
-			key := idsKey(before.userGroups[user]) + "→" + idsKey(after.userGroups[user])
-			if direct[user] {
-				key = user.String()
-			}
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			for _, c := range contexts {
-				if privilege.RootGrantGrows(before.Effective(user, c.before), after.Effective(user, c.after)) {
-					return true
+			case privilege.SubjectGroup:
+				if !slices.Contains(groups, a.SubjectID) {
+					groups = append(groups, a.SubjectID)
 				}
 			}
 		}
 	}
+	for _, id := range []*Identity{before, after} {
+		for user := range id.Users {
+			s := subject{user, before.userGroups[user], after.userGroups[user]}
+			key := idsKey(s.before) + "→" + idsKey(s.after)
+			if direct[user] {
+				key = user.String()
+			}
+			subjects[key] = s
+		}
+	}
+	synthetic := uuid.New()
+	for _, g := range groups {
+		subjects["synthetic:"+g.String()] = subject{synthetic, []uuid.UUID{g}, []uuid.UUID{g}}
+	}
+	subjects["synthetic:all"] = subject{synthetic, groups, groups}
+	subjects["synthetic:none"] = subject{synthetic, nil, nil}
+
+	for _, s := range subjects {
+		for _, c := range contexts {
+			if privilege.RootGrantGrows(effectiveWith(before, s.user, s.before, c.before), effectiveWith(after, s.user, s.after, c.after)) {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// effectiveWith is the effective profile of user as a member of userGroups on a device in deviceGroups.
+func effectiveWith(id *Identity, user uuid.UUID, userGroups, deviceGroups []uuid.UUID) privilege.EffectiveProfile {
+	return privilege.Effective(privilege.Input{
+		UserID: user, UserGroups: userGroups, DeviceGroups: deviceGroups, Assignments: id.Assignments, Profiles: id.Profiles,
+	})
 }
 
 func idsKey(ids []uuid.UUID) string {

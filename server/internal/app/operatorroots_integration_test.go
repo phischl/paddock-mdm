@@ -112,4 +112,13 @@ func TestOperatorRootsDeclarative(t *testing.T) {
 	if got := h.export(t, steppedUp).Settings.ManagedFiles.OperatorRoots; !slices.Equal(got, []string{"/opt/vendor/"}) {
 		t.Fatalf("exported roots %v", got)
 	}
+	// An unsorted list is the same set: no change on the next apply.
+	doc.Settings.ManagedFiles.OperatorRoots = []string{"/opt/vendor/", "/etc/zz/", " /etc/aa/"}
+	if _, _, err := h.config.Apply(principal.With(context.Background(), steppedUp), raw(t, doc), ""); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := h.config.Plan(principal.With(context.Background(), steppedUp), raw(t, doc))
+	if err != nil || len(plan.Changes) != 0 {
+		t.Fatalf("plan of an unsorted but unchanged root list: %+v, %v", plan, err)
+	}
 }

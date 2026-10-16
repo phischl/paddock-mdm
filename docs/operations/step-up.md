@@ -12,6 +12,8 @@ Security-relevant portal actions require a fresh MFA authentication of the admin
 | `POST /api/v1/managed-files` | the path is sensitive (organization administrators only; other roles get 403 `forbidden`) |
 | `PATCH /api/v1/managed-files/{id}` | the path is sensitive afterwards, or the file was on a sensitive path and any field changes |
 | `POST /api/v1/user-groups/{id}/members` | the new member gains root on a device through the group's assignments |
+| `POST /api/v1/enrollment-tokens` | a device enrolled into the token's device group would give a user root |
+| `POST /api/v1/devices/{id}/approve`, `…/release-quarantine` | the device's device groups give a user root once it is active |
 | `PUT /api/v1/devices/{id}/groups` | a user gains root on the device through the assignments of its new device groups |
 | `PUT /api/v1/config` (`paddockctl apply`) | the document creates or changes a profile, an assignment or a managed file as above |
 | `POST /api/platform/v1/sessions/end-all` | always (platform administrators) |

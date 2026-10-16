@@ -118,7 +118,8 @@ type CreatedToken struct {
 	Config protocol.EnrollmentConfig
 }
 
-// Create creates an enrollment token (audited: enrollment_token.created; the secret is never recorded).
+// Create creates an enrollment token (audited: enrollment_token.created; the secret is never recorded). A token
+// whose device groups give a device root grants needs a step-up (plan M8s decision 7g-ter).
 func (e *EnrollmentTokens) Create(ctx context.Context, in TokenInput) (CreatedToken, error) {
 	var out CreatedToken
 	name := enrollment.NormalizeName(in.Name)
@@ -133,6 +134,9 @@ func (e *EnrollmentTokens) Create(ctx context.Context, in TokenInput) (CreatedTo
 			return problem.InvalidRequest.WithDetail(err.Error())
 		}
 		if err := requireGroups(ctx, q, optionalID(in.DeviceGroupID)); err != nil {
+			return err
+		}
+		if err := requireTokenGroups(ctx, q, rec, optionalID(in.DeviceGroupID)); err != nil {
 			return err
 		}
 		keys, err := e.keys(ctx)

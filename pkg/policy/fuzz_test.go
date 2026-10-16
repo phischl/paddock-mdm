@@ -7,7 +7,7 @@ import (
 
 // FuzzClassify asserts the properties of plan M8s decision 7e without re-implementing the classification: the tier
 // denied depends neither on the mode nor on the operator roots and agrees with the agent's ValidatePath; ordinary is
-// never returned outside every operator root or with an execute bit.
+// never returned outside every operator root, below a root that ValidateOperatorRoot refuses, or with an execute bit.
 func FuzzClassify(f *testing.F) {
 	for _, v := range classifyVectors {
 		f.Add(v.path, v.mode, testRoots[0])
@@ -30,6 +30,9 @@ func FuzzClassify(f *testing.F) {
 		if tier == TierOrdinary {
 			if root == "" || !strings.HasPrefix(p, root) {
 				t.Fatalf("Classify(%q) = ordinary outside the operator root %q", p, root)
+			}
+			if err := ValidateOperatorRoot(root); err != nil {
+				t.Fatalf("Classify(%q) = ordinary below the refused root %q: %v", p, root, err)
 			}
 			if strings.ContainsAny(mode[1:], "1357") {
 				t.Fatalf("Classify(%q, %q) = ordinary with an execute bit", p, mode)

@@ -29,6 +29,8 @@ type Identity struct {
 	userGroups   map[uuid.UUID][]uuid.UUID // user → groups
 	groupUsers   map[uuid.UUID][]uuid.UUID // group → users
 	deviceGroups map[uuid.UUID][]uuid.UUID // active device → device groups
+	// memberGroups are the device groups of every device in any state (plan M8s decision 7g-bis).
+	memberGroups map[uuid.UUID][]uuid.UUID
 	logins       map[uuid.UUID][]pgstore.DeviceLoginAssignment
 	byUsername   map[string]uuid.UUID
 	seen         map[uuid.UUID][]uuid.UUID // device → users that logged in within SeenWindow
@@ -46,7 +48,7 @@ func LoadIdentity(ctx context.Context, q *pgstore.Queries) (*Identity, error) {
 	id := &Identity{
 		Users: map[uuid.UUID]pgstore.AppUser{}, Groups: map[uuid.UUID]pgstore.UserGroup{},
 		userGroups: map[uuid.UUID][]uuid.UUID{}, groupUsers: map[uuid.UUID][]uuid.UUID{},
-		deviceGroups: map[uuid.UUID][]uuid.UUID{}, logins: map[uuid.UUID][]pgstore.DeviceLoginAssignment{},
+		deviceGroups: map[uuid.UUID][]uuid.UUID{}, memberGroups: map[uuid.UUID][]uuid.UUID{}, logins: map[uuid.UUID][]pgstore.DeviceLoginAssignment{},
 		byUsername: map[string]uuid.UUID{}, seen: map[uuid.UUID][]uuid.UUID{},
 	}
 	if id.Org, err = q.GetOrganization(ctx, org); err != nil {
@@ -96,6 +98,7 @@ func LoadIdentity(ctx context.Context, q *pgstore.Queries) (*Identity, error) {
 		return nil, fmt.Errorf("load device group members: %w", err)
 	}
 	for _, m := range dgm {
+		id.memberGroups[m.DeviceID] = append(id.memberGroups[m.DeviceID], m.DeviceGroupID)
 		if _, ok := id.deviceGroups[m.DeviceID]; ok {
 			id.deviceGroups[m.DeviceID] = append(id.deviceGroups[m.DeviceID], m.DeviceGroupID)
 		}

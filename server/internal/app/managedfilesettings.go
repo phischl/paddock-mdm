@@ -80,12 +80,7 @@ func (m *ManagedConfig) SetOperatorRoots(ctx context.Context, roots []string) (M
 // normalizeOperatorRoots trims, sorts and deduplicates roots and checks each with policy.ValidateOperatorRoot; a
 // refused root is 422 path_not_allowed naming it.
 func normalizeOperatorRoots(roots []string) ([]string, error) {
-	out := []string{}
-	for _, r := range roots {
-		out = append(out, strings.TrimSpace(r))
-	}
-	slices.Sort(out)
-	out = slices.Compact(out)
+	out := sortedRoots(roots)
 	if len(out) > MaxOperatorRoots {
 		return out, problem.InvalidRequest.WithDetail("at most 50 operator roots")
 	}
@@ -95,6 +90,16 @@ func normalizeOperatorRoots(roots []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// sortedRoots trims, sorts and deduplicates roots, so that the same set always compares equal.
+func sortedRoots(roots []string) []string {
+	out := []string{}
+	for _, r := range roots {
+		out = append(out, strings.TrimSpace(r))
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // operatorRoots reads the operator roots inside an organization transaction; without a row the list is empty.

@@ -364,6 +364,11 @@ func TestAuditExactlyOnce(t *testing.T) {
 		if !ok {
 			cases, ok = identityAuditCases[op]
 		}
+		// The operator roots are one value per organization that other gates rely on: its cases run one after
+		// another and write under operatorRootsMu (see ensureOperatorRoots).
+		if op == "PUT /api/v1/settings/managed-files" {
+			serial = true
+		}
 		if !ok {
 			t.Errorf("privileged operation %s has no cases in audit_once_test.go, audit_once_devices_test.go, audit_once_releases_test.go or audit_once_identity_test.go", op)
 			continue

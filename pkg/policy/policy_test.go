@@ -54,6 +54,14 @@ var classifyVectors = []struct {
 	{"/etc", "0644", TierDenied},
 	{"/etc/sudoers.d/x", "0755", TierDenied},
 	{"/etc/systemd/system/service.d/10-env.conf", "0644", TierDenied},
+	{"/etc/systemd/system.control/myapp.service.d/50-x.conf", "0644", TierDenied},
+	{"/etc/systemd/system.attached/x.service", "0644", TierDenied},
+	{"/etc/myapp/lib/Helper.pm", "0644", TierSensitive},
+	{"/etc/myapp/index.php", "0644", TierSensitive},
+	{"/etc/myapp/rc.bash", "0644", TierSensitive},
+	{"/etc/myapp/rc.zsh", "0644", TierSensitive},
+	{"/opt/myapp/app.mjs", "0644", TierSensitive},
+	{"/opt/myapp/app.cjs", "0644", TierSensitive},
 	{"/etc/systemd/system/timer.d/x.conf", "0644", TierDenied},
 	{"/etc/systemd/system/scope.d/x.conf", "0644", TierDenied},
 	{"/usr/local/lib/systemd/system/service.d/x.conf", "0644", TierDenied},
@@ -94,9 +102,15 @@ func TestClassify(t *testing.T) {
 			}
 		})
 	}
-	// Without operator roots nothing is ordinary (sensitive is the default).
+	// Without operator roots nothing is ordinary (sensitive is the default), and a stored root that the rules refuse
+	// counts as none.
 	if got, _ := Classify("/etc/myapp/app.conf", "0644", nil); got != TierSensitive {
 		t.Errorf("without roots: %s", got)
+	}
+	for _, invalid := range []string{"/etc/", "/", "", "/opt/", "/etc/apt/", "/etc/myapp"} {
+		if got, _ := Classify("/etc/myapp/app.conf", "0644", []string{invalid}); got == TierOrdinary {
+			t.Errorf("invalid root %q yields ordinary", invalid)
+		}
 	}
 	for _, bad := range [][2]string{
 		{"../etc/x", "0644"}, {"/etc/x", "0abc"}, {"/etc/x", "644"}, {"/etc/x", "4755"}, {"", "0644"},
@@ -109,7 +123,7 @@ func TestClassify(t *testing.T) {
 }
 
 func TestValidateOperatorRoot(t *testing.T) {
-	for _, ok := range []string{"/etc/myapp/", "/etc/myapp/conf/", "/usr/local/etc/tool/", "/opt/vendor/", "/etc/paddock-gates/",
+	for _, ok := range []string{"/etc/myapp/", "/etc/myapp/conf/", "/usr/local/etc/tool/", "/usr/local/etc/myapp/conf/", "/opt/vendor/", "/etc/paddock-gates/",
 		"/opt/paddock-gates/", "/etc/shellsx/"} {
 		if err := ValidateOperatorRoot(ok); err != nil {
 			t.Errorf("%s refused: %v", ok, err)
@@ -121,6 +135,13 @@ func TestValidateOperatorRoot(t *testing.T) {
 		"/etc/yum.repos.d/", "/etc/bash_completion.d/", "/etc/profile.d/", "/etc/gdm3/", "/etc/ssh/", "/etc/cron.d/",
 		"/etc/sysctl.d/", "/etc/NetworkManager/", "/etc/ssl/", "/etc/pki/", "/etc/dbus-1/", "/opt/paddock/", "/opt/paddock/x/",
 		"/etc/X11/", "/etc/ca-certificates/", "/etc/logrotate.d/", "/etc/network/",
+		"/etc/dhcp/", "/etc/openvpn/", "/etc/netplan/", "/etc/wpa_supplicant/", "/etc/sssd/", "/etc/samba/", "/etc/ldap/",
+		"/etc/openldap/", "/etc/audisp/", "/etc/skel/", "/etc/csh.login.d/", "/etc/tcsh/", "/etc/ksh/", "/etc/php/8.3/",
+		"/etc/systemd/system.control/",
+		"/usr/local/etc/ssh/", "/usr/local/etc/sudoers.d/", "/usr/local/etc/pam.d/", "/usr/local/etc/security/",
+		"/usr/local/etc/systemd/", "/usr/local/etc/cron.d/", "/usr/local/etc/profile.d/", "/usr/local/etc/bash_completion.d/",
+		"/usr/local/etc/zsh/", "/usr/local/etc/python3.12/", "/usr/local/etc/php/", "/usr/local/etc/apt/",
+		"/usr/local/etc/default/", "/usr/local/etc/X11/", "/usr/local/etc/openvpn/", "/usr/local/etc/skel/",
 	} {
 		if err := ValidateOperatorRoot(bad); !errors.Is(err, ErrOperatorRoot) {
 			t.Errorf("%q accepted", bad)
