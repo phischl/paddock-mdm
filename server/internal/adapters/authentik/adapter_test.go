@@ -236,11 +236,8 @@ func TestRoleGroupUsers(t *testing.T) {
 	if err != nil || !found || u.Active || !slices.Equal(groups, []string{"paddock.acme.admins"}) {
 		t.Fatalf("membership: %+v %v %v %v", u, groups, found, err)
 	}
-	if _, _, found, err := c.UserMembership(ctx, "dave@acme.test", "uid-910"); !errors.Is(err, ports.ErrIdentityMismatch) || found {
+	if _, _, found, err := c.UserMembership(ctx, "dave@acme.test", "uid-910"); err != nil || found {
 		t.Fatalf("membership with another UID: %v %v", found, err)
-	}
-	if _, _, found, err := c.UserMembership(ctx, "nobody@acme.test", "uid-1"); err != nil || found {
-		t.Fatalf("membership of a missing user: %v %v", found, err)
 	}
 }
 

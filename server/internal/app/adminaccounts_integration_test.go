@@ -129,12 +129,13 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	full := dir.roleGroups
 	for name, setup := range map[string]func(){
 		"directory down":     func() { dir.fail = errors.New("directory down") },
+		"direct read fails":  func() { dir.readFail = errors.New("authentik: HTTP 503") },
 		"missing role group": func() { dir.fail = fmt.Errorf("%s: %w", admins, ports.ErrGroupNotFound) },
 		"empty listings":     func() { dir.roleGroups = map[string][]ports.IdentityUser{} },
 	} {
 		setup()
 		err := accounts.Reconcile(sys)
-		dir.fail, dir.roleGroups = nil, full
+		dir.fail, dir.readFail, dir.roleGroups = nil, nil, full
 		if err == nil || name == "empty listings" && !errors.Is(err, app.ErrDirectoryEmpty) {
 			t.Fatalf("%s: round error %v", name, err)
 		}
@@ -144,10 +145,8 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		}
 	}
 	dir.roleGroupCalls = 0
-	// erin's username now belongs to another directory user: the direct read confirms nothing, so the account stays
-	// and the round reports it.
-	if err := accounts.Reconcile(sys); !errors.Is(err, ports.ErrIdentityMismatch) {
-		t.Fatalf("round error %v, want the identity mismatch of the reused username", err)
+	if err := accounts.Reconcile(sys); err != nil {
+		t.Fatal(err)
 	}
 	if dir.roleGroupCalls != 3 {
 		t.Fatalf("%d directory listings, want 3", dir.roleGroupCalls)
@@ -181,7 +180,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		"renamed in the directory":                         {renamed, "org_admin", false, ""},
 		"missed by the listing":                            {skipped, "org_admin", false, ""},
 		"moved to auditors":                                {moved, "org_auditor", false, "success system role_changed 2 [org_admin] [org_auditor]"},
-		"in no role group, its username used by another":   {removed, "org_admin", false, ""},
+		"in no role group, its username used by another":   {removed, "org_admin", true, "success system removed 2 [org_admin] []"},
 		"deactivated":                                      {inactive, "org_auditor", true, "success system deactivated 2 [org_auditor] []"},
 		"in two role groups":                               {twice, "org_operator", true, "success system removed 2 [org_operator] []"},
 	} {
@@ -199,11 +198,11 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	}
 
 	// A second round finds nothing to change: the disabled accounts are no longer listed.
-	if err := accounts.Reconcile(sys); !errors.Is(err, ports.ErrIdentityMismatch) {
+	if err := accounts.Reconcile(sys); err != nil {
 		t.Fatal(err)
 	}
-	if n := countRows(t, super, "SELECT count(*) FROM action WHERE code = 'admin.sessions_revoked' AND organization_id = $1", org); n != 3 {
-		t.Fatalf("%d events after the second round, want 3", n)
+	if n := countRows(t, super, "SELECT count(*) FROM action WHERE code = 'admin.sessions_revoked' AND organization_id = $1", org); n != 4 {
+		t.Fatalf("%d events after the second round, want 4", n)
 	}
 }
 
@@ -301,7 +300,7 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 	dir := newDirectory()
 	dir.roleGroups = map[string][]ports.IdentityUser{organization.PlatformAdminsGroup(): {
 		{UID: "uid-root-" + suffix, Username: "renamed-root", Active: true}, {UID: "uid-off-" + suffix, Username: "off-" + suffix, Active: false},
-		{UID: "uid-other", Username: "other-" + suffix, Active: true}, {UID: "uid-missed-" + suffix, Username: "missed-" + suffix, Active: true}}}
+		{UID: "uid-other", Username: "gone-" + suffix, Active: true}, {UID: "uid-missed-" + suffix, Username: "missed-" + suffix, Active: true}}}
 	dir.unlisted = map[string]bool{"uid-missed-" + suffix: true}
 	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{kept: 1, removed: 2, inactive: 1, flaky: 1, missed: 1},
 		failOnce: map[uuid.UUID]bool{flaky: true}}

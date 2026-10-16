@@ -128,7 +128,9 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 
 // confirm reads one user directly before its account is changed: a paged listing can miss a member that is still in
 // the group when another one leaves between two pages, and a change must never rest on that alone. It returns the
-// user's membership of groups, or nil when the directory has no user with this username and UID.
+// user's membership of groups, or nil when the directory has no user with this username and UID: deleted, renamed, or
+// the username now held by another user all count as removed, so access is never kept by mistake. Only a failed read
+// is an error that changes nothing.
 func (a *AdminAccounts) confirm(ctx context.Context, username, uid string, groups []string) (*directoryUser, error) {
 	u, member, found, err := a.dir.UserMembership(ctx, username, uid)
 	if err != nil || !found {

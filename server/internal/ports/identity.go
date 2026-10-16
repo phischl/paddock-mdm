@@ -20,10 +20,6 @@ type IdentityProvider interface {
 // organization; the caller must not reveal which).
 var ErrUsernameTaken = errors.New("ports: username taken")
 
-// ErrIdentityMismatch means a user of that username exists but with another UID: the username was reused or the user
-// renamed, so the read confirms nothing.
-var ErrIdentityMismatch = errors.New("ports: the user of this username has another identity")
-
 // ErrGroupNotFound means the identity provider has no group of that name.
 var ErrGroupNotFound = errors.New("ports: group not found")
 
@@ -72,8 +68,7 @@ type UserDirectory interface {
 	// M8s decision 22); ErrGroupNotFound when the group does not exist.
 	RoleGroupUsers(ctx context.Context, groupName string) ([]IdentityUser, error)
 	// UserMembership reads one user directly: the user named username whose UID is uid, with the names of its direct
-	// groups; found is false when no user of that username exists, ErrIdentityMismatch when one exists with another
-	// UID. The worker confirms with it
+	// groups; found is false when no such user exists (removed, or renamed meanwhile). The worker confirms with it
 	// what a listing suggests before it changes an account (plan M8s decision 22).
 	UserMembership(ctx context.Context, username, uid string) (u IdentityUser, groups []string, found bool, err error)
 }

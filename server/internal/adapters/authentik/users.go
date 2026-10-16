@@ -113,9 +113,6 @@ func (c *Client) UserMembership(ctx context.Context, username, uid string) (port
 		}
 		return u.identity(), groups, true, nil
 	}
-	if len(page.Results) > 0 {
-		return ports.IdentityUser{}, nil, false, fmt.Errorf("%s: %w", username, ports.ErrIdentityMismatch)
-	}
 	return ports.IdentityUser{}, nil, false, nil
 }
 
