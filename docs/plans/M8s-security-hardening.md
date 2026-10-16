@@ -267,6 +267,15 @@ Supersedes the per-profile reading of decisions 1–3.
     real subject, comparing witness sets instead of classes; a subject gaining any new witness is growth, also when
     it already had Full. **Identity sync** stays ungated, audited and listed by the review. **Performance:** the
     profiles are read into one map per evaluation; the advisory lock is held only for the transaction.
+7g-quinquies. (Architect decision 2026-10-16; refines 7g-quater.) Every gated change runs **both** checks and needs
+    an organization administrator with a step-up when either grows: (a) the union witness growth of 7g-quater (future
+    and empty subjects) and (b) the exact witness gain of every real user on every device in any state, from
+    `LoadIdentity` before and after inside the same transaction and lock (spreading an existing combination to more
+    users). Profile, assignment and declarative changes run (a) and (b); membership, device-group, approval and
+    quarantine-release changes keep (b) (they cannot change the union); enrollment-token creation runs (a) as in
+    7g-quater and (b) with a synthetic new device in the token's device groups against every real user. Spreading to
+    a group that is still empty passes both; a later membership change in Paddock is caught by (b), a later directory
+    sync is the accepted residual risk RR-38.
 
 ### 3.3 Server-side sessions (SEC-2, part 2 and 4)
 

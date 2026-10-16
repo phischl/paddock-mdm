@@ -21,7 +21,8 @@ Since the amendment of 2026-10-16 (plan M8s decisions 7g–7k and 7g-quater) the
 measured in *root witnesses*: a root-equivalent command, a pair of a writer and the file it writes and runs, or class
 Full. A change to a profile, an assignment or an enrollment token's device group needs an organization administrator
 with a fresh step-up (operators get 403 `forbidden`) when the profiles assigned anywhere in the organization together
-gain a witness, whoever they are assigned to; a change of Paddock group membership, device groups, approval or
+gain a witness, whoever they are assigned to, or when a real user gains one (giving an approved combination to more
+users); a change of Paddock group membership, device groups, approval or
 quarantine release needs it when a real user gains a witness on a device, also a user who already has Full. Membership
 that arrives from the upstream directory is not gated. Changes that can grant root take a per-organization lock, so
 two of them never complete a combination unseen.
