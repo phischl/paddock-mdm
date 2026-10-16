@@ -51,6 +51,8 @@ var (
 		"/etc/systemd/system.conf.d/", "/etc/systemd/system-generators/", "/etc/systemd/system-preset/",
 		"/etc/modprobe.d/", "/etc/modules-load.d/", "/etc/sysctl.d/", "/etc/apparmor.d/", "/etc/udev/rules.d/",
 		"/etc/polkit-1/",
+		// Type-wide drop-ins apply to every unit of their type, Paddock's own included (plan M8s decision 7h-bis).
+		"/etc/systemd/system/service.d/", "/etc/systemd/system/socket.d/", "/etc/systemd/system/timer.d/", "/etc/systemd/system/path.d/", "/etc/systemd/system/mount.d/", "/etc/systemd/system/automount.d/", "/etc/systemd/system/swap.d/", "/etc/systemd/system/target.d/", "/etc/systemd/system/slice.d/", "/etc/systemd/system/scope.d/",
 	}
 	deniedPrefixes = []string{
 		"/etc/systemd/system/paddock", "/etc/systemd/system/orbit", "/etc/systemd/system/himmelblau",

@@ -210,6 +210,11 @@ Supersedes the *TierOrdinary* rule of decision 7 and the role rule of decision 9
     operator root; ordinary is never returned with an execute bit.
 7f. Documents: `install.md` and `upgrade.md` state the binding order "agents first, then the server" for M8s;
     RR-36 and the ADR 0013 note say the same.
+7h-bis. (Architect decision 2026-10-16.) Type-wide systemd drop-ins apply to every unit of their type, Paddock's own
+    units included, and are therefore **denied**: `/etc/systemd/system/<type>.d/` for `service`, `socket`, `timer`,
+    `path`, `mount`, `automount`, `swap`, `target`, `slice` and `scope` join `deniedDirs`; the same directories below
+    `/usr/local/lib/systemd/system/` lie outside the allowed roots and are denied already. The agent's `ValidatePath`
+    refuses them too (defence in depth).
 
 
 ### 3.2b Amendment 2026-10-16 — root equivalence over the combination of grants

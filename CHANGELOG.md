@@ -79,7 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Managed-file paths fall into three tiers (ADR 0034): denied paths (sudo, PAM, NSS and the other protected areas, the
   loader, boot, initramfs, kernel module, sysctl, AppArmor, udev and polkit configuration, and the units of Paddock,
-  fleetd, Himmelblau, SSH, GDM, sudo and systemd) are refused by server and agent; sensitive paths (cron, systemd,
+  fleetd, Himmelblau, SSH, GDM, sudo and systemd, and systemd's type-wide drop-in directories such as
+  `/etc/systemd/system/service.d/`) are refused by server and agent; sensitive paths (cron, systemd,
   login scripts, SSH, network hooks, logrotate, any file directly in `/etc/`, any `/etc/<name>.d/` directory and every
   file with an execute bit) and ordinary application configuration below `/etc/`, `/usr/local/etc/` and `/opt/`
   remain manageable. The agent no longer deletes a managed file on a now-denied path when its definition leaves the
