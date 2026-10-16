@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -712,5 +713,75 @@ func TestImportedGroupBeforeItsMembers(t *testing.T) {
 	}
 	if err := toGroup(w.operator, w.runner); !errors.Is(err, problem.Forbidden) {
 		t.Fatalf("operator completing the approved pair for the empty imported group = %v", err)
+	}
+}
+
+// importDirectory offers one upstream group whose member is user pk; members runs while the import reads them, i.e.
+// between the import's two transactions.
+type importDirectory struct {
+	*directory
+	pk      string
+	members func()
+}
+
+func (d importDirectory) UpstreamGroups(context.Context, string) ([]ports.IdentityGroup, error) {
+	return []ports.IdentityGroup{{PK: "upstream"}}, nil
+}
+
+func (d importDirectory) GroupMembers(context.Context, string) ([]string, error) {
+	d.members()
+	return []string{d.pk}, nil
+}
+
+// TestImportRacesAnAssignment: an operator assigns the second half of a pair to an imported group between the import's
+// transactions; the mirrored member who holds the first half would gain root, so the import is refused and the group
+// stays empty (plan M8s decision 7g-sexies).
+func TestImportRacesAnAssignment(t *testing.T) {
+	w := newCombinationWorld(t)
+	ctx := context.Background()
+	pool, err := db.NewOrgPool(ctx, pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var pk string
+	if err := w.super.QueryRow(ctx, "SELECT authentik_pk FROM app_user WHERE id = $1", w.user).Scan(&pk); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.assign(w.operator, w.writer, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The pair is approved in the organization already: an administrator gave the second half to another group.
+	other := uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(ctx, "INSERT INTO user_group (id, organization_id, slug, name, source) VALUES ($1, $2, 'other', 'Other', 'local')", other, w.org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.privileges.CreateAssignment(w.ctx(w.steppedUp), app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGroup, SubjectID: &other}); err != nil {
+		t.Fatal(err)
+	}
+	var group uuid.UUID
+	dir := importDirectory{directory: newDirectory(), pk: pk, members: func() {
+		if err := w.super.QueryRow(ctx, "SELECT id FROM user_group WHERE organization_id = $1 AND slug = 'imported'", w.org).Scan(&group); err != nil {
+			t.Error(err)
+			return
+		}
+		// The stand-in member of the empty group gains nothing from the second half alone.
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGroup, SubjectID: &group}); err != nil {
+			t.Errorf("operator assigning the second half to the empty group = %v", err)
+		}
+	}}
+	groups := app.NewUserGroups(w.privilegesHarness.runner, pool, dir)
+	upstream := "upstream"
+	got := w.during(t, func() {
+		if _, err := groups.Create(w.ctx(w.operator), app.NewUserGroup{Slug: "imported", Name: "Imported", UpstreamPK: &upstream}); !errors.Is(err, problem.Forbidden) {
+			t.Errorf("import whose member would gain root = %v", err)
+		}
+	})
+	if !slices.Contains(got, "user_group.created:denied:forbidden") {
+		t.Fatalf("actions %v", got)
+	}
+	var members int
+	if err := w.super.QueryRow(ctx, "SELECT count(*) FROM user_group_member WHERE group_id = $1", group).Scan(&members); err != nil || members != 0 {
+		t.Fatalf("members of the refused import: %d (%v)", members, err)
 	}
 }

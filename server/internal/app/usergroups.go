@@ -196,12 +196,22 @@ func (g *UserGroups) Create(ctx context.Context, in NewUserGroup) (pgstore.UserG
 			if err := q.SetUserGroupAuthentikPK(ctx, pgstore.SetUserGroupAuthentikPKParams{ID: out.ID, AuthentikPk: out.AuthentikPk}); err != nil {
 				return err
 			}
+			// A grant may have reached the group between the two transactions (plan M8s decision 7g-sexies): the
+			// mirrored members are checked like a membership change. A refusal rolls this transaction back, so the
+			// group stays without members and the import is recorded as denied.
+			guard, err := beginSubjectGuard(ctx, q)
+			if err != nil {
+				return err
+			}
 			for _, u := range mirrored {
 				if _, err := q.InsertUserGroupMember(ctx, pgstore.InsertUserGroupMemberParams{
 					OrganizationID: out.OrganizationID, GroupID: out.ID, UserID: u,
 				}); err != nil {
 					return err
 				}
+			}
+			if err := guard.check(ctx, q, rec); err != nil {
+				return err
 			}
 			rec.SetParam("members", len(mirrored))
 			if len(mirrored) > 0 {
