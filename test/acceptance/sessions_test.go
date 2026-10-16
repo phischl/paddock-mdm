@@ -106,7 +106,10 @@ func TestSessionsStepUpMismatch(t *testing.T) {
 	// The worker round may notice the removal before the step-up does (reason removed); then the case runs once more
 	// with a new administrator.
 	for attempt := 1; attempt <= 2; attempt++ {
-		u := mfaTempUser(t, "s10", env.RoleGroup("acme", "admins"))
+		// A member of the organization's root group, as synced users are: Authentik's portal-member policy then still
+		// lets the step-up run, and the callback sees that the groups no longer grant the admin role. A user in no
+		// Paddock group at all is refused by Authentik before the callback; the worker round ends that session.
+		u := mfaTempUser(t, "s10", env.RootGroup("acme"), env.RoleGroup("acme", "admins"))
 		ctx := testContext(t, 3*time.Minute)
 		if err := ak.RemoveFromGroup(ctx, u.username, env.RoleGroup("acme", "admins")); err != nil {
 			t.Fatal(err)
