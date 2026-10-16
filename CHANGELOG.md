@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Managed files on paths outside the denied catalog are sensitive by default: an operator manages files without a
+  step-up only below the organization's operator roots (new setting, empty by default: portal Configuration →
+  Operator roots, `GET|PUT /api/v1/settings/managed-files`, declarative `settings.managed_files`, audited as
+  `settings.managed_files_changed`), and not for executables, scripts, shared objects or `.d` directories there.
+  Package-manager, boot-loader, interpreter, shell, display-manager, audit, firewall, network, trust-anchor, PAM and
+  identity directories can never be operator roots. Existing definitions keep working; the security review lists
+  those that now need a confirmation.
+
 - Granting root in effect needs an organization administrator with a step-up also when it happens indirectly: a
   profile change or assignment whose commands combine with another profile of the same user into a root-equivalent
   pair, adding a user to a Paddock group that carries such a grant, or adding a device to the device group of one.

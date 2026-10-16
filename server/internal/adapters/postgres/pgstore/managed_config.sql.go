@@ -135,6 +135,24 @@ func (q *Queries) GetManagedFile(ctx context.Context, id uuid.UUID) (ManagedFile
 	return i, err
 }
 
+const getManagedFileSettings = `-- name: GetManagedFileSettings :one
+
+SELECT organization_id, managed_file_operator_roots, updated_at, updated_by FROM organization_managed_file_settings
+`
+
+// Operator roots (plan M8s decision 7c). Without a row the list is empty.
+func (q *Queries) GetManagedFileSettings(ctx context.Context) (OrganizationManagedFileSetting, error) {
+	row := q.db.QueryRow(ctx, getManagedFileSettings)
+	var i OrganizationManagedFileSetting
+	err := row.Scan(
+		&i.OrganizationID,
+		&i.ManagedFileOperatorRoots,
+		&i.UpdatedAt,
+		&i.UpdatedBy,
+	)
+	return i, err
+}
+
 const getManagedUnit = `-- name: GetManagedUnit :one
 SELECT id, organization_id, device_group_id, unit, enabled, active, created_at, updated_at FROM managed_unit WHERE id = $1
 `
@@ -517,6 +535,33 @@ func (q *Queries) UpdateManagedUnit(ctx context.Context, arg UpdateManagedUnitPa
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertManagedFileSettings = `-- name: UpsertManagedFileSettings :one
+INSERT INTO organization_managed_file_settings (organization_id, managed_file_operator_roots, updated_at, updated_by)
+VALUES ($1, $2, now(), $3)
+ON CONFLICT (organization_id) DO UPDATE
+SET managed_file_operator_roots = excluded.managed_file_operator_roots, updated_at = excluded.updated_at,
+    updated_by = excluded.updated_by
+RETURNING organization_id, managed_file_operator_roots, updated_at, updated_by
+`
+
+type UpsertManagedFileSettingsParams struct {
+	OrganizationID           uuid.UUID
+	ManagedFileOperatorRoots []string
+	UpdatedBy                uuid.NullUUID
+}
+
+func (q *Queries) UpsertManagedFileSettings(ctx context.Context, arg UpsertManagedFileSettingsParams) (OrganizationManagedFileSetting, error) {
+	row := q.db.QueryRow(ctx, upsertManagedFileSettings, arg.OrganizationID, arg.ManagedFileOperatorRoots, arg.UpdatedBy)
+	var i OrganizationManagedFileSetting
+	err := row.Scan(
+		&i.OrganizationID,
+		&i.ManagedFileOperatorRoots,
+		&i.UpdatedAt,
+		&i.UpdatedBy,
 	)
 	return i, err
 }

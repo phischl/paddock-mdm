@@ -12,6 +12,7 @@ import (
 // the token detail for a root-equivalent profile and a file on a sensitive path, and keeps working for an ordinary
 // profile and an ordinary file.
 func TestTokenCannotGrantRoot(t *testing.T) {
+	acmeOperatorRoots(t)
 	alice := login(t, env.Alice)
 	token := tokenPortal(t, createAPIToken(t, alice, env.Alice, "org_operator").Secret)
 	refused := func(t *testing.T, res env.Response, code string) {
@@ -40,7 +41,7 @@ func TestTokenCannotGrantRoot(t *testing.T) {
 			"path": "/etc/profile.d/s7-" + sfx + ".sh", "content": "export S7=1\n",
 		}), "managed_file.created")
 		res := call(t, token, http.MethodPost, "/api/v1/managed-files", map[string]any{
-			"path": "/opt/myapp-" + sfx + "/conf/a.ini", "mode": "0644", "content": "a=1\n",
+			"path": "/opt/paddock-gates/s7-" + sfx + "/a.ini", "mode": "0644", "content": "a=1\n",
 		})
 		expectStatus(t, res, http.StatusCreated, "")
 		createdID(t, alice, "/api/v1/managed-files", res)

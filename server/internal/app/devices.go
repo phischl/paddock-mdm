@@ -362,7 +362,7 @@ func LoadManagedDefinitions(ctx context.Context, q *pgstore.Queries) (ManagedDef
 		return out, fmt.Errorf("load managed files: %w", err)
 	}
 	for _, f := range files {
-		if tier, err := policy.Classify(f.Path, f.Mode); err != nil || tier == policy.TierDenied {
+		if policy.ValidatePath(f.Path) != nil {
 			out.Denied = append(out.Denied, f)
 			continue
 		}

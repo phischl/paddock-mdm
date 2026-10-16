@@ -11,6 +11,7 @@ import (
 // administrator with a step-up, a denied path is refused for everyone, an ordinary path stays with the operator, an
 // execute bit makes any path sensitive, and an auditor manages nothing.
 func TestManagedFileTiers(t *testing.T) {
+	acmeOperatorRoots(t)
 	admin := adminUser(t, "s6")
 	noStepUp := withoutStepUp(t, admin)
 	operator := operatorUser(t)
@@ -48,7 +49,7 @@ func TestManagedFileTiers(t *testing.T) {
 		expectOneEvent(t, admin.Portal, res.RequestID, "managed_file.created", "failure")
 	}
 
-	ordinary := "/etc/myapp-" + sfx + "/app.conf"
+	ordinary := "/etc/paddock-gates/s6-" + sfx + "/app.conf"
 	res = post(operator.Portal, file(ordinary, "0644"))
 	expectStatus(t, res, http.StatusCreated, "")
 	createdID(t, admin.Portal, "/api/v1/managed-files", res)
@@ -56,5 +57,12 @@ func TestManagedFileTiers(t *testing.T) {
 		t.Fatalf("event %+v", ev)
 	}
 	expectRefusal(t, admin.Portal, post(operator.Portal, file(ordinary, "0755")), http.StatusForbidden, "forbidden", "managed_file.created")
-	expectRefusal(t, admin.Portal, post(auditor, file("/etc/myapp-"+sfx+"/other.conf", "0644")), http.StatusForbidden, "forbidden", "managed_file.created")
+	expectRefusal(t, admin.Portal, post(auditor, file("/etc/paddock-gates/s6-"+sfx+"/other.conf", "0644")), http.StatusForbidden, "forbidden", "managed_file.created")
+
+	// Sensitive is the default: outside every operator root, and below one for scripts and .d directories (ADR 0034
+	// amendment 2026-10-16).
+	for _, p := range []string{"/etc/s6-" + sfx + "/app.conf", "/etc/paddock-gates/s6-" + sfx + "/hook.sh",
+		"/etc/paddock-gates/s6-" + sfx + "/conf.d/a.conf", "/opt/paddock-gates/s6-" + sfx + "/lib/x.py"} {
+		expectRefusal(t, admin.Portal, post(operator.Portal, file(p, "0644")), http.StatusForbidden, "forbidden", "managed_file.created")
+	}
 }

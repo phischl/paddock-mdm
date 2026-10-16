@@ -13,11 +13,15 @@ func (h *handlers) GetSecurityReview(ctx context.Context, _ adminapi.GetSecurity
 	if err != nil {
 		return nil, err
 	}
+	roots, err := h.operatorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := adminapi.SecurityReview{
 		GeneratedAt:    r.GeneratedAt,
 		RootGrants:     adminapi.SecurityReviewProfiles{Total: r.RootGrantTotal, Items: make([]adminapi.SecurityReviewProfile, len(r.RootGrants))},
-		SensitiveFiles: adminapi.SecurityReviewFiles{Total: r.SensitiveTotal, Items: toManagedFiles(r.Sensitive)},
-		DeniedFiles:    adminapi.SecurityReviewFiles{Total: r.DeniedTotal, Items: toManagedFiles(r.Denied)},
+		SensitiveFiles: adminapi.SecurityReviewFiles{Total: r.SensitiveTotal, Items: toManagedFiles(r.Sensitive, roots)},
+		DeniedFiles:    adminapi.SecurityReviewFiles{Total: r.DeniedTotal, Items: toManagedFiles(r.Denied, roots)},
 	}
 	for i, p := range r.RootGrants {
 		out.RootGrants.Items[i] = adminapi.SecurityReviewProfile{Profile: toPermissionProfile(p.Profile), Assignments: p.Assignments}
@@ -25,10 +29,10 @@ func (h *handlers) GetSecurityReview(ctx context.Context, _ adminapi.GetSecurity
 	return adminapi.GetSecurityReview200JSONResponse(out), nil
 }
 
-func toManagedFiles(files []pgstore.ManagedFile) []adminapi.ManagedFile {
+func toManagedFiles(files []pgstore.ManagedFile, roots []string) []adminapi.ManagedFile {
 	out := make([]adminapi.ManagedFile, len(files))
 	for i, f := range files {
-		out[i] = toManagedFile(f)
+		out[i] = toManagedFile(f, roots)
 	}
 	return out
 }
@@ -48,5 +52,9 @@ func (h *handlers) ConfirmManagedFileSensitive(ctx context.Context, req adminapi
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.ConfirmManagedFileSensitive200JSONResponse(toManagedFile(f)), nil
+	roots, err := h.operatorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ConfirmManagedFileSensitive200JSONResponse(toManagedFile(f, roots)), nil
 }

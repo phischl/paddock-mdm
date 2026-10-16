@@ -19,7 +19,10 @@ func gateOrg(t *testing.T, prefix string) (*mfaUser, string) {
 	body := newOrg()
 	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", body)
 	expectStatus(t, res, http.StatusCreated, "")
-	return steppedUpTempUser(t, prefix, env.RoleGroup(body["slug"], "admins")), body["slug"]
+	admin := steppedUpTempUser(t, prefix, env.RoleGroup(body["slug"], "admins"))
+	// The gates write files below operator roots without a step-up (ADR 0034 amendment 2026-10-16).
+	ensureOperatorRoots(t, admin.Portal, func() { admin.stepUp(t) }, gateOperatorRoots...)
+	return admin, body["slug"]
 }
 
 // configDoc is a paddock.v1 document as the admin API carries it.

@@ -57,6 +57,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/permission-profiles', label: 'nav.permissionProfiles', icon: 'shield-check', visible: orgReader },
       { to: '/managed-files', label: 'nav.managedFiles', icon: 'file-text', visible: orgReader },
       { to: '/managed-units', label: 'nav.managedUnits', icon: 'cog', visible: orgReader },
+      { to: '/settings/managed-files', label: 'nav.operatorRoots', icon: 'folder', visible: orgReader },
       { to: '/package-holds', label: 'nav.packageHolds', icon: 'package', visible: orgReader },
       { to: '/change-sets', label: 'nav.changeSets', icon: 'diff', visible: orgReader },
     ],

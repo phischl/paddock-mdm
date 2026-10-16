@@ -31,11 +31,22 @@ Without a fresh step-up such a request answers 403 `step_up_required` and record
 `denied`; a permitted action records the actor with `step_up: true`. The portal sends the administrator through the
 step-up and repeats the action once.
 
-Managed-file paths have three tiers (ADR 0034 decision 2, catalog in `pkg/policy`): *denied* paths are refused with
-422 `path_not_allowed`, and existing definitions on them are no longer shipped to devices; *sensitive* paths (cron,
-systemd, login scripts, SSH, network hooks, logrotate, any file directly in `/etc/`, any `/etc/<name>.d/` directory
-and every mode with an execute bit) need the rule above; every other path is *ordinary* and stays with the
-`org_operator` role without a step-up. Deleting a definition never needs a step-up.
+Managed-file paths have three tiers (ADR 0034 decision 2 and its amendment of 2026-10-16, catalog in `pkg/policy`):
+*denied* paths are refused with 422 `path_not_allowed`, and existing definitions on them are no longer shipped to
+devices; a path below an **operator root** of the organization is *ordinary* and stays with the `org_operator` role
+without a step-up, unless it has an execute bit, a script or shared-object suffix (`.so`, `.so.*`, `.py`, `.pth`,
+`.sh`, `.pl`, `.rb`, `.lua`, `.js`) or a `.d` directory component; every other path is *sensitive* and needs the
+rule above. Operator roots are empty by default and are set in the portal (Configuration → Operator roots), with
+`PUT /api/v1/settings/managed-files` or in the `settings.managed_files` section of a declarative document, always by
+an organization administrator with a step-up (`settings.managed_files_changed`). A root is a directory such as
+`/etc/myapp/` or `/opt/vendor/`; the never-operator directories (package managers, boot loader, interpreters, shells,
+display managers, audit, MAC frameworks, firewall, network connections, trust anchors, PAM, identity, Paddock) are
+refused. Changing the roots never changes existing definitions; the security review lists files whose tier rose.
+Deleting a definition never needs a step-up.
+
+| Action | When |
+| --- | --- |
+| `PUT /api/v1/settings/managed-files` | always (organization administrators only) |
 
 An API token cannot complete a step-up (ADR 0034 decision 3): a request made with a token that needs one answers 403
 `step_up_required` with the detail `this change needs an interactive administrator: API tokens cannot complete a

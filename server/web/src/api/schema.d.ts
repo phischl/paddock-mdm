@@ -953,6 +953,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/managed-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The operator roots of the managed files (ADR 0034 amendment
+         *     2026-10-16); empty until changed.
+         */
+        get: operations["getManagedFileSettings"];
+        /**
+         * @description Roles: org_admin. Replaces the operator roots: directories of the form /etc/<name>/, /usr/local/etc/<name>/
+         *     or /opt/<name>/ (trailing slash), outside the denied and sensitive paths and the never-operator directories
+         *     (422 path_not_allowed naming the root), at most 50. Below a root an operator manages files without a step-up,
+         *     except executables, scripts, shared objects and .d directories; every other path needs org_admin and a
+         *     step-up. Needs a step-up within the last 300 s (403 step_up_required); API tokens cannot satisfy it. Existing
+         *     definitions are not changed; the security review lists files whose tier rose.
+         */
+        put: operations["updateManagedFileSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/updates": {
         parameters: {
             query?: never;
@@ -2860,6 +2888,14 @@ export interface components {
             period_days: number;
             warn_days: number[];
         };
+        ManagedFileSettings: {
+            operator_roots: string[];
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        ManagedFileSettingsUpdate: {
+            operator_roots: string[];
+        };
         DMSSettings: {
             enabled: boolean;
             period_days: number;
@@ -3396,8 +3432,9 @@ export interface components {
             conflicts: components["schemas"]["ConfigConflict"][];
         };
         /**
-         * @description Tier of the path (ADR 0034 decision 2): ordinary (org_admin or org_operator), sensitive (org_admin with a
-         *     step-up), denied (refused; an existing definition is not shipped to devices).
+         * @description Tier of the path (ADR 0034 decision 2 and amendment 2026-10-16): ordinary (below an operator root of the
+         *     organization; org_admin or org_operator), sensitive (every other allowed path; org_admin with a step-up),
+         *     denied (refused; an existing definition is not shipped to devices).
          * @enum {string}
          */
         ManagedFileTier: "ordinary" | "sensitive" | "denied";
@@ -3434,10 +3471,10 @@ export interface components {
             /**
              * @description Below /etc/, /usr/local/etc/ or /opt/. The path falls into one of three tiers: denied paths (the protected
              *     areas, the loader, boot, kernel and identity configuration, the units of Paddock and its components) are
-             *     refused with 422 path_not_allowed; sensitive paths (cron, systemd, login scripts, SSH, network hooks,
-             *     logrotate, any file directly in /etc/, any /etc/<name>.d/ directory and any mode with an execute bit)
-             *     need the org_admin role (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
-             *     satisfy it); every other path is ordinary.
+             *     refused with 422 path_not_allowed; a path below an operator root of the organization (GET
+             *     /api/v1/settings/managed-files) is ordinary unless it has an execute bit, a script or shared-object suffix
+             *     or a .d directory component; every other path is sensitive and needs the org_admin role (403 forbidden
+             *     otherwise) and a step-up (403 step_up_required; API tokens cannot satisfy it).
              */
             path: string;
             /** @default 0644 */
@@ -5950,6 +5987,58 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+        };
+    };
+    getManagedFileSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The managed-file settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFileSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateManagedFileSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedFileSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFileSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
         };
     };
     getUpdateSettings: {

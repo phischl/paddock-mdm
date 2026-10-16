@@ -1,34 +1,39 @@
 package policy
 
 import (
-	"slices"
 	"strings"
 	"testing"
 )
 
-// FuzzClassify checks the invariants of plan M8s §6.2: Classify never panics, an ordinary or sensitive path is never
-// covered by the denied catalog, and ValidatePath accepts exactly the paths that Classify does not deny.
+// FuzzClassify asserts the properties of plan M8s decision 7e without re-implementing the classification: the tier
+// denied depends neither on the mode nor on the operator roots and agrees with the agent's ValidatePath; ordinary is
+// never returned outside every operator root or with an execute bit.
 func FuzzClassify(f *testing.F) {
 	for _, v := range classifyVectors {
-		f.Add(v.path, v.mode)
+		f.Add(v.path, v.mode, testRoots[0])
+		f.Add(v.path, v.mode, "/opt/myapp/")
 	}
-	f.Add("/etc/systemd/system/sudo.service", "0644")
-	f.Add("/etc//sudoers", "0644")
-	f.Fuzz(func(t *testing.T, p, mode string) {
-		tier, err := Classify(p, mode)
-		if err == nil && tier != TierDenied {
-			if slices.Contains(deniedFiles, p) || inDirs(p, deniedDirs) {
-				t.Fatalf("Classify(%q) = %s inside the denied catalog", p, tier)
-			}
-			for _, prefix := range deniedPrefixes {
-				if strings.HasPrefix(p, prefix) {
-					t.Fatalf("Classify(%q) = %s below the denied prefix %s", p, tier, prefix)
-				}
-			}
+	f.Add("/etc/systemd/system/sudo.service", "0644", "/etc/systemd/")
+	f.Add("/etc//sudoers", "0644", "/etc/")
+	f.Fuzz(func(t *testing.T, p, mode, root string) {
+		roots := []string{root}
+		tier, err := Classify(p, mode, roots)
+		if err != nil {
+			return
 		}
-		t644, err644 := Classify(p, "0644")
-		if (ValidatePath(p) == nil) != (err644 == nil && t644 != TierDenied) {
-			t.Fatalf("ValidatePath(%q) disagrees with Classify: %q, %v", p, t644, err644)
+		if (tier == TierDenied) != (ValidatePath(p) != nil) {
+			t.Fatalf("Classify(%q) = %s but ValidatePath = %v", p, tier, ValidatePath(p))
+		}
+		if plain, perr := Classify(p, "0644", nil); perr != nil || (plain == TierDenied) != (tier == TierDenied) {
+			t.Fatalf("denied of %q depends on mode or roots: %s vs %s (%v)", p, tier, plain, perr)
+		}
+		if tier == TierOrdinary {
+			if root == "" || !strings.HasPrefix(p, root) {
+				t.Fatalf("Classify(%q) = ordinary outside the operator root %q", p, root)
+			}
+			if strings.ContainsAny(mode[1:], "1357") {
+				t.Fatalf("Classify(%q, %q) = ordinary with an execute bit", p, mode)
+			}
 		}
 	})
 }

@@ -1,6 +1,9 @@
 package acceptance
 
 import (
+	"net/http"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
@@ -49,4 +52,44 @@ func expectRefusal(t *testing.T, viewer *env.Portal, res env.Response, status in
 	if ev := expectOneEvent(t, viewer, res.RequestID, code, "denied"); ev.ErrorCode != problemCode {
 		t.Fatalf("event %s/%s with error code %q, want %q", ev.Code, ev.Outcome, ev.ErrorCode, problemCode)
 	}
+}
+
+// gateOperatorRoots are the operator roots below which the gates write managed files as operators, API tokens or
+// administrators without a step-up (ADR 0034 amendment 2026-10-16: every other path needs a step-up).
+var gateOperatorRoots = []string{"/etc/paddock-gates/", "/opt/paddock-gates/"}
+
+// ensureOperatorRoots adds roots to the operator roots of p's organization unless they are there; stepUp gives p a
+// fresh step-up first. The list is replaced as a whole, so concurrent callers only ever add the same entries.
+func ensureOperatorRoots(t *testing.T, p *env.Portal, stepUp func(), roots ...string) {
+	t.Helper()
+	res := call(t, p, http.MethodGet, "/api/v1/settings/managed-files", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var s struct {
+		OperatorRoots []string `json:"operator_roots"`
+	}
+	if err := res.JSON(&s); err != nil {
+		t.Fatal(err)
+	}
+	missing := false
+	for _, r := range roots {
+		if !slices.Contains(s.OperatorRoots, r) {
+			s.OperatorRoots, missing = append(s.OperatorRoots, r), true
+		}
+	}
+	if !missing {
+		return
+	}
+	stepUp()
+	expectStatus(t, call(t, p, http.MethodPut, "/api/v1/settings/managed-files", map[string]any{"operator_roots": s.OperatorRoots}), http.StatusOK, "")
+}
+
+// acmeRoots configures gateOperatorRoots in acme once per run, as a stepped-up temporary administrator.
+var acmeRoots sync.Once
+
+func acmeOperatorRoots(t *testing.T) {
+	t.Helper()
+	acmeRoots.Do(func() {
+		admin := adminUser(t, "roots")
+		ensureOperatorRoots(t, admin.Portal, func() { admin.stepUp(t) }, gateOperatorRoots...)
+	})
 }

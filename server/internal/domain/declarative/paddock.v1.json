@@ -14,7 +14,8 @@
       "additionalProperties": false,
       "properties": {
         "login": { "$ref": "#/$defs/loginSettings" },
-        "updates": { "$ref": "#/$defs/updateSettings" }
+        "updates": { "$ref": "#/$defs/updateSettings" },
+        "managed_files": { "$ref": "#/$defs/managedFileSettings" }
       }
     },
     "device_groups": {
@@ -89,6 +90,15 @@
         "max_random_delay_min": { "type": "integer" },
         "staleness_warning_h": { "type": "integer" },
         "staleness_critical_h": { "type": "integer" }
+      }
+    },
+    "managedFileSettings": {
+      "description": "When present, operator_roots is required (same rules as PUT /api/v1/settings/managed-files: organization administrator with a step-up).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operator_roots"],
+      "properties": {
+        "operator_roots": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 1024 } }
       }
     },
     "deviceGroup": {

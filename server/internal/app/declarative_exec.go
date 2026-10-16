@@ -153,6 +153,8 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 		return ex.updateSettings(ctx)
 	case declarative.SectionSettingsLogin:
 		return ex.loginSettings(ctx)
+	case declarative.SectionSettingsManaged:
+		return ex.managedFileSettings(ctx)
 	}
 	return problem.InvalidDocument.WithDetail("unknown section " + c.Section)
 }
@@ -260,7 +262,11 @@ func (ex *configExec) file(ctx context.Context, c declarative.Change) error {
 	}
 	f := (*ex.desired.ManagedFiles)[ex.item(c)]
 	next := pgstore.ManagedFile{Path: f.Path, Mode: f.Mode, Owner: f.Owner, Grp: f.Group, Content: f.Content}
-	tier, err := validateFile(next)
+	roots, err := operatorRoots(ctx, ex.q)
+	if err != nil {
+		return err
+	}
+	tier, err := validateFile(next, roots)
 	if err != nil {
 		return err
 	}
@@ -271,7 +277,7 @@ func (ex *configExec) file(ctx context.Context, c declarative.Change) error {
 		if err != nil {
 			return err
 		}
-		oldTier, _ := policy.Classify(old.Path, old.Mode)
+		oldTier, _ := policy.Classify(old.Path, old.Mode, roots)
 		sensitive = sensitive || (oldTier == policy.TierSensitive && fileChanged(old, next))
 	}
 	if sensitive {
@@ -434,6 +440,23 @@ func (ex *configExec) updateSettings(ctx context.Context) error {
 		StalenessWarningH:     int32(in.StalenessWarningH),  //nolint:gosec // validated
 		StalenessCriticalH:    int32(in.StalenessCriticalH), //nolint:gosec // validated
 		UpdatedBy:             uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.ID != uuid.Nil},
+	})
+	return err
+}
+
+// managedFileSettings replaces the operator roots with the rule of SetOperatorRoots: an organization administrator
+// with a step-up (ADR 0034 amendment 2026-10-16).
+func (ex *configExec) managedFileSettings(ctx context.Context) error {
+	if err := ex.requireAdminStepUp("may change the operator roots"); err != nil {
+		return err
+	}
+	roots, err := normalizeOperatorRoots(ex.desired.Settings.ManagedFiles.OperatorRoots)
+	if err != nil {
+		return err
+	}
+	_, err = ex.q.UpsertManagedFileSettings(ctx, pgstore.UpsertManagedFileSettingsParams{
+		OrganizationID: ex.p.OrganizationID, ManagedFileOperatorRoots: roots,
+		UpdatedBy: uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.Kind == principal.KindAdmin && ex.p.ID != uuid.Nil},
 	})
 	return err
 }

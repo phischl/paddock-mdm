@@ -154,6 +154,7 @@ const (
 	CodeManagedFileSensitiveConfirmed       Code = "managed_file.sensitive_confirmed"
 	CodeOrganizationSecurityReviewRequired  Code = "organization.security_review_required"
 	CodeDeviceHeaderObjectRejected          Code = "device.header_object_rejected"
+	CodeSettingsManagedFilesChanged         Code = "settings.managed_files_changed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -976,6 +977,13 @@ var registry = map[Code]Definition{
 		Description: "The worker found an escrowed LUKS header object whose size differs from the announced size, deleted it and marked the escrow failed (actor: the device).",
 		Params:      []string{"generation", "volume", "declared_size", "object_size"},
 		Outcomes:    []Outcome{OutcomeFailure},
+	},
+	CodeSettingsManagedFilesChanged: {
+		Code: CodeSettingsManagedFilesChanged, Emitted: true,
+		Description: "An organization administrator changed, with a step-up, the operator roots of the managed files: the directories below which operators may manage files without a step-up.",
+		Params:      []string{"old_operator_roots", "operator_roots"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up and for API tokens, forbidden for another role; failure with path_not_allowed for a root outside the rules of ADR 0034 (amendment 2026-10-16).",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

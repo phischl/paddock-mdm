@@ -60,6 +60,7 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 	// Configuration of this device, before enrollment.
 	d.Group = s.ID(s.Call(http.MethodPost, "/api/v1/device-groups", map[string]string{"name": "systest " + vm.Name + " " + d.run}, http.StatusCreated))
 	s.DeleteOnCleanup("/api/v1/device-groups/" + d.Group)
+	s.OperatorRoot("/etc/paddock-systest/")
 	for _, name := range []string{"a", "b"} {
 		res := s.Call(http.MethodPost, "/api/v1/managed-files", map[string]any{
 			"path": d.managedPath(name), "content": "managed " + name + " " + d.run + "\n", "mode": "0640", "owner": "root",

@@ -406,6 +406,13 @@ type OrganizationLoginSetting struct {
 	BootPinMinLength       int32
 }
 
+type OrganizationManagedFileSetting struct {
+	OrganizationID           uuid.UUID
+	ManagedFileOperatorRoots []string
+	UpdatedAt                time.Time
+	UpdatedBy                uuid.NullUUID
+}
+
 type OrganizationUpdateSetting struct {
 	OrganizationID        uuid.UUID
 	SecurityDailyAt       string

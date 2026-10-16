@@ -311,6 +311,37 @@ var identityAuditCases = map[string][]auditCase{
 		}),
 	"DELETE /api/v1/profile-assignments/{id}": itemCases(http.MethodDelete, "/api/v1/profile-assignments", "", "profile_assignment.deleted",
 		http.StatusNoContent, func(t *testing.T, w *auditWorld) string { return assignment(t, w.alice) }, nil),
+	"PUT /api/v1/settings/managed-files": {
+		// The success case writes the current roots back, so the roots every gate relies on stay.
+		{"success", func(t *testing.T, w *auditWorld) {
+			a := adminUser(t, "a3-roots")
+			res := call(t, a.Portal, http.MethodGet, "/api/v1/settings/managed-files", nil)
+			var cur map[string]any
+			if err := res.JSON(&cur); err != nil {
+				t.Fatal(err)
+			}
+			a.stepUp(t)
+			res = call(t, a.Portal, http.MethodPut, "/api/v1/settings/managed-files", map[string]any{"operator_roots": cur["operator_roots"]})
+			expectStatus(t, res, http.StatusOK, "")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.managed_files_changed", "success")
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			a := adminUser(t, "a3-roots")
+			res := call(t, a.Portal, http.MethodPut, "/api/v1/settings/managed-files", map[string]any{"operator_roots": []string{"/etc/apt/"}})
+			expectStatus(t, res, http.StatusUnprocessableEntity, "path_not_allowed")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.managed_files_changed", "failure")
+		}},
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			res := call(t, login(t, env.Alice), http.MethodPut, "/api/v1/settings/managed-files", map[string]any{"operator_roots": gateOperatorRoots})
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.managed_files_changed", "denied")
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.bob, http.MethodPut, "/api/v1/settings/managed-files", map[string]any{"operator_roots": gateOperatorRoots})
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "settings.managed_files_changed", "denied")
+		}},
+	},
 	"POST /api/v1/permission-profiles/{id}/confirm-root-grant": confirmCases("/api/v1/permission-profiles", "/confirm-root-grant",
 		"permission_profile.root_grant_confirmed", map[string]any{"name": "a3 root", "class": "full"},
 		map[string]any{"name": "a3 none", "class": "none"}),

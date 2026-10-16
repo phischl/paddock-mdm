@@ -26,6 +26,9 @@ func TestOrganizationIsolation(t *testing.T) {
 		t.Fatal("alice and carol are in the same organization; run `make dev-seed`")
 	}
 	w.globexIDs = append(w.globexIDs, globex.String(), whoami(t, w.carol).ID)
+	// Managed files below operator roots need no step-up (ADR 0034 amendment 2026-10-16).
+	acmeOperatorRoots(t)
+	ensureOperatorRoots(t, w.carol, func() { stepUp(t, w.carol, env.Carol, true) }, gateOperatorRoots...)
 
 	// Globex activity that must stay invisible to acme, including its audit events.
 	globexGroup(t, w)

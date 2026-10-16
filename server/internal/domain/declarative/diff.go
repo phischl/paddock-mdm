@@ -19,12 +19,13 @@ const (
 	SectionProfileAssignments = "profile_assignments"
 	SectionSettingsUpdates    = "settings.updates"
 	SectionSettingsLogin      = "settings.login"
+	SectionSettingsManaged    = "settings.managed_files"
 )
 
 // Sections returns the sections in application order (plan M6c decision 14); deletions run in reverse order first.
 func Sections() []string {
 	return []string{SectionDeviceGroups, SectionPermissionProfiles, SectionManagedFiles, SectionManagedUnits,
-		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin}
+		SectionPackageHolds, SectionProfileAssignments, SectionSettingsUpdates, SectionSettingsLogin, SectionSettingsManaged}
 }
 
 // Actions of a change.
@@ -116,6 +117,11 @@ func section(d Document, name string) (bool, []entry) {
 			return false, nil
 		}
 		return true, []entry{{fields: d.Settings.Login.fields()}}
+	case SectionSettingsManaged:
+		if d.Settings == nil || d.Settings.ManagedFiles == nil {
+			return false, nil
+		}
+		return true, []entry{{fields: d.Settings.ManagedFiles.fields()}}
 	}
 	return false, nil
 }
@@ -173,6 +179,8 @@ func Path(section string, index int) string {
 		return "/settings/updates"
 	case SectionSettingsLogin:
 		return "/settings/login"
+	case SectionSettingsManaged:
+		return "/settings/managed_files"
 	}
 	return "/" + section + "/" + strconv.Itoa(index)
 }
@@ -228,7 +236,9 @@ func Diff(current, desired Document) Plan {
 	return plan
 }
 
-func isSettings(s string) bool { return s == SectionSettingsLogin || s == SectionSettingsUpdates }
+func isSettings(s string) bool {
+	return s == SectionSettingsLogin || s == SectionSettingsUpdates || s == SectionSettingsManaged
+}
 
 func sorted(items []entry) []entry {
 	out := slices.Clone(items)
@@ -406,6 +416,10 @@ func (s UpdateSettings) fields() []field {
 	return []field{{"security_daily_at", s.SecurityDailyAt}, {"regular_schedule", s.RegularSchedule},
 		{"regular_updates_enabled", s.RegularUpdatesEnabled}, {"max_random_delay_min", s.MaxRandomDelayMin},
 		{"staleness_warning_h", s.StalenessWarningH}, {"staleness_critical_h", s.StalenessCriticalH}}
+}
+
+func (s ManagedFileSettings) fields() []field {
+	return []field{{"operator_roots", list(s.OperatorRoots)}}
 }
 
 func (s LoginSettings) fields() []field {

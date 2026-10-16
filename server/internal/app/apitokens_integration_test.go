@@ -33,6 +33,11 @@ func newTokenHarness(t *testing.T) tokenHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	// Operators manage files only below an operator root (ADR 0034 amendment 2026-10-16); the tests use these.
+	if _, err := h.super.Exec(context.Background(), `INSERT INTO organization_managed_file_settings (organization_id, managed_file_operator_roots)
+		VALUES ($1, '{/etc/acme/,/etc/myapp/,/opt/myapp/}')`, h.org); err != nil {
+		t.Fatal(err)
+	}
 	return tokenHarness{harness: h, tokens: app.NewAPITokens(h.runner, pool), corr: "corr-" + t.Name()}
 }
 

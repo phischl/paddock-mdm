@@ -78,7 +78,8 @@
     "overview": "Overview",
     "attentionPill": "{count, plural, one {# needs attention} other {# need attention}}",
     "shortcut": "Shortcut: {keys}",
-    "securityReview": "Security review"
+    "securityReview": "Security review",
+    "operatorRoots": "Operator roots"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -347,7 +348,8 @@
     "settings": {
       "login_changed": "{actor} changed the login settings",
       "dms_changed": "{actor} {enabled, select, true {turned on the dead man's switch with a period of {period_days, number} days} other {turned off the dead man's switch}}",
-      "updates_changed": "{actor} changed the update settings"
+      "updates_changed": "{actor} changed the update settings",
+      "managed_files_changed": "{actor} changed the operator roots of the managed files"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",
@@ -985,7 +987,16 @@
       "denied": "Denied (not shipped)"
     },
     "tierColumn": "Path tier",
-    "sensitiveForbidden": "Files on sensitive paths need an organization administrator. Ask one to create or change this file."
+    "sensitiveForbidden": "Files on sensitive paths need an organization administrator. Ask one to create or change this file.",
+    "roots": {
+      "title": "Operator roots of the managed files",
+      "intro": "Below these directories operators manage files without a step-up, except executables, scripts, shared objects and .d directories. Every other path needs an organization administrator with a step-up. Changing the list needs a step-up; existing files keep their definitions, and the security review lists files that now need a confirmation.",
+      "label": "Operator roots (one per line)",
+      "hint": "Directories such as /etc/myapp/ or /opt/vendor/, with a trailing slash.",
+      "confirmTitle": "Change the operator roots",
+      "confirm": "Save {count, plural, one {# operator root} other {# operator roots}}? You confirm your identity next.",
+      "saved": "The operator roots were saved."
+    }
   },
   "users": {
     "title": "Users",

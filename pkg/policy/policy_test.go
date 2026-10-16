@@ -34,7 +34,11 @@ func TestValidatePath(t *testing.T) {
 	}
 }
 
-// classifyVectors are the test vectors of plan M8s §6.2 plus the tier rules for executables and /etc/.
+// testRoots are the operator roots of the classification vectors.
+var testRoots = []string{"/etc/myapp/", "/usr/local/etc/tool/", "/opt/myapp/"}
+
+// classifyVectors are the test vectors of plan M8s §6.2 and its amendment of 2026-10-16 (decision 7a), classified
+// with testRoots.
 var classifyVectors = []struct {
 	path, mode string
 	want       Tier
@@ -60,16 +64,23 @@ var classifyVectors = []struct {
 	{"/etc/myapp/app.conf", "0755", TierSensitive},
 	{"/etc/myapp/app.conf", "0601", TierSensitive},
 	{"/etc/crontab", "0644", TierSensitive},
+	{"/etc/default/cron", "0644", TierSensitive},
+	{"/etc/dpkg/dpkg.cfg.d/x", "0644", TierSensitive},
+	{"/etc/other/app.conf", "0644", TierSensitive},
+	{"/etc/myapp/plugin.so", "0644", TierSensitive},
+	{"/etc/myapp/libx.so.1", "0644", TierSensitive},
+	{"/opt/myapp/lib/site.py", "0644", TierSensitive},
+	{"/opt/myapp/lib/x.pth", "0644", TierSensitive},
+	{"/etc/myapp/conf.d/10.conf", "0644", TierSensitive},
 	{"/etc/myapp/app.conf", "0644", TierOrdinary},
-	{"/usr/local/etc/tool.toml", "0644", TierOrdinary},
+	{"/usr/local/etc/tool/tool.toml", "0644", TierOrdinary},
 	{"/opt/myapp/conf/settings.ini", "0640", TierOrdinary},
-	{"/etc/myapp.dir/x.conf", "0644", TierOrdinary},
 }
 
 func TestClassify(t *testing.T) {
 	for _, v := range classifyVectors {
 		t.Run(string(v.want)+":"+v.path+":"+v.mode, func(t *testing.T) {
-			got, err := Classify(v.path, v.mode)
+			got, err := Classify(v.path, v.mode, testRoots)
 			if err != nil || got != v.want {
 				t.Fatalf("Classify(%q, %q) = %q, %v; want %q", v.path, v.mode, got, err, v.want)
 			}
@@ -78,12 +89,36 @@ func TestClassify(t *testing.T) {
 			}
 		})
 	}
+	// Without operator roots nothing is ordinary (sensitive is the default).
+	if got, _ := Classify("/etc/myapp/app.conf", "0644", nil); got != TierSensitive {
+		t.Errorf("without roots: %s", got)
+	}
 	for _, bad := range [][2]string{
 		{"../etc/x", "0644"}, {"/etc/x", "0abc"}, {"/etc/x", "644"}, {"/etc/x", "4755"}, {"", "0644"},
 		{"/etc/a/../b", "0644"}, {"/etc/mo\ntd", "0644"},
 	} {
-		if _, err := Classify(bad[0], bad[1]); !errors.Is(err, ErrPathNotAllowed) {
+		if _, err := Classify(bad[0], bad[1], testRoots); !errors.Is(err, ErrPathNotAllowed) {
 			t.Errorf("Classify(%q, %q) = %v, want ErrPathNotAllowed", bad[0], bad[1], err)
+		}
+	}
+}
+
+func TestValidateOperatorRoot(t *testing.T) {
+	for _, ok := range []string{"/etc/myapp/", "/etc/myapp/conf/", "/usr/local/etc/tool/", "/opt/vendor/", "/etc/paddock-gates/",
+		"/opt/paddock-gates/", "/etc/shellsx/"} {
+		if err := ValidateOperatorRoot(ok); err != nil {
+			t.Errorf("%s refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "/etc/", "/opt/", "/usr/local/etc/", "/etc/myapp", "etc/myapp/", "/etc//myapp/", "/etc/a/../b/", "/var/lib/x/",
+		"/etc/sudoers.d/", "/etc/systemd/system/", "/etc/apt/", "/etc/dpkg/", "/etc/default/", "/etc/grub.d/", "/etc/python3.12/",
+		"/etc/yum.repos.d/", "/etc/bash_completion.d/", "/etc/profile.d/", "/etc/gdm3/", "/etc/ssh/", "/etc/cron.d/",
+		"/etc/sysctl.d/", "/etc/NetworkManager/", "/etc/ssl/", "/etc/pki/", "/etc/dbus-1/", "/opt/paddock/", "/opt/paddock/x/",
+		"/etc/X11/", "/etc/ca-certificates/", "/etc/logrotate.d/", "/etc/network/",
+	} {
+		if err := ValidateOperatorRoot(bad); !errors.Is(err, ErrOperatorRoot) {
+			t.Errorf("%q accepted", bad)
 		}
 	}
 }

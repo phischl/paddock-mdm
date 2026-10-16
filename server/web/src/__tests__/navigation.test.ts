@@ -94,7 +94,7 @@ describe('navigation drawer', () => {
     expect(linkLabels(w)).toEqual([
       'Overview', 'Attention',
       'Devices', 'Device groups', 'Enrollment tokens',
-      'Permission profiles', 'Managed files', 'Managed units', 'Package holds', 'Change sets',
+      'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package holds', 'Change sets',
       'Security review', 'Revocations', "Dead man's switch", 'Login & privileges',
       'Software', 'Vulnerabilities',
       'Users', 'Groups', 'API tokens', 'Updates', 'Audit log',
@@ -164,10 +164,10 @@ describe('navigation drawer', () => {
   it('is one Tab stop with a roving tabindex: Up/Down move, Home/End jump', async () => {
     const { w } = await mountApp(admin, '/managed-files')
     const links = drawer(w).findAll('a.pd-nav-item')
-    expect(links.length).toBe(21)
+    expect(links.length).toBe(22)
     const stops = links.filter((a) => a.attributes('tabindex') === '0')
     expect(stops.map((a) => a.attributes('href'))).toEqual(['/managed-files'])
-    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(20)
+    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(21)
 
     ;(stops[0].element as HTMLElement).focus()
     await stops[0].trigger('keydown', { key: 'ArrowDown' })

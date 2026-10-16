@@ -90,3 +90,16 @@ DELETE FROM managed_unit WHERE id = @id;
 
 -- name: ListAllManagedUnits :many
 SELECT * FROM managed_unit ORDER BY id;
+
+-- Operator roots (plan M8s decision 7c). Without a row the list is empty.
+
+-- name: GetManagedFileSettings :one
+SELECT * FROM organization_managed_file_settings;
+
+-- name: UpsertManagedFileSettings :one
+INSERT INTO organization_managed_file_settings (organization_id, managed_file_operator_roots, updated_at, updated_by)
+VALUES (@organization_id, @managed_file_operator_roots, now(), sqlc.narg(updated_by))
+ON CONFLICT (organization_id) DO UPDATE
+SET managed_file_operator_roots = excluded.managed_file_operator_roots, updated_at = excluded.updated_at,
+    updated_by = excluded.updated_by
+RETURNING *;

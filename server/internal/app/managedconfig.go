@@ -100,12 +100,16 @@ func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.M
 	spec := SpecManagedFileCreate
 	spec.Params = map[string]any{"path": deref(in.Path, ""), "device_group_id": idParam(in.DeviceGroupID)}
 	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		roots, err := operatorRoots(ctx, q)
+		if err != nil {
+			return err
+		}
 		next := pgstore.ManagedFile{
 			Path: deref(in.Path, ""), Mode: deref(in.Mode, "0644"), Owner: deref(in.Owner, "root"),
 			Grp: deref(in.Group, "root"), Content: deref(in.Content, ""),
 		}
-		recordFile(rec, next, in.DeviceGroupID)
-		tier, err := validateFile(next)
+		recordFile(rec, next, in.DeviceGroupID, roots)
+		tier, err := validateFile(next, roots)
 		if err != nil {
 			return err
 		}
@@ -152,20 +156,24 @@ func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInp
 		if err != nil {
 			return notFound(err)
 		}
+		roots, err := operatorRoots(ctx, q)
+		if err != nil {
+			return err
+		}
 		next := old
 		next.Path, next.Mode, next.Owner = deref(in.Path, old.Path), deref(in.Mode, old.Mode), deref(in.Owner, old.Owner)
 		next.Grp, next.Content = deref(in.Group, old.Grp), deref(in.Content, old.Content)
 		rec.SetTarget(audit.Target{Type: "managed_file", ID: id.String(), Display: next.Path})
-		recordFile(rec, next, groupPtr(old.DeviceGroupID))
+		recordFile(rec, next, groupPtr(old.DeviceGroupID), roots)
 		rec.SetParam("content_changed", next.Content != old.Content)
 		if next.Path != old.Path {
 			rec.SetParam("old_path", old.Path)
 		}
-		tier, err := validateFile(next)
+		tier, err := validateFile(next, roots)
 		if err != nil {
 			return err
 		}
-		oldTier, _ := policy.Classify(old.Path, old.Mode)
+		oldTier, _ := policy.Classify(old.Path, old.Mode, roots)
 		if tier == policy.TierSensitive || (oldTier == policy.TierSensitive && fileChanged(old, next)) {
 			if err := requireSensitiveFile(ctx, rec); err != nil {
 				return err
@@ -208,18 +216,19 @@ func (m *ManagedConfig) DeleteFile(ctx context.Context, id uuid.UUID) error {
 	})
 }
 
-func recordFile(rec Recorder, f pgstore.ManagedFile, group *uuid.UUID) {
+func recordFile(rec Recorder, f pgstore.ManagedFile, group *uuid.UUID, roots []string) {
 	rec.SetParam("path", f.Path)
 	rec.SetParam("device_group_id", idParam(group))
 	rec.SetParam("mode", f.Mode)
 	rec.SetParam("owner", f.Owner)
 	rec.SetParam("group", f.Grp)
-	tier, _ := policy.Classify(f.Path, f.Mode)
+	tier, _ := policy.Classify(f.Path, f.Mode, roots)
 	rec.SetParam("tier", string(tier))
 }
 
-// validateFile checks a definition and returns the tier of its path; a denied path is problem.PathNotAllowed.
-func validateFile(f pgstore.ManagedFile) (policy.Tier, error) {
+// validateFile checks a definition and returns the tier of its path under the organization's operator roots; a denied
+// path is problem.PathNotAllowed.
+func validateFile(f pgstore.ManagedFile, roots []string) (policy.Tier, error) {
 	if err := policy.ValidatePath(f.Path); err != nil {
 		return policy.TierDenied, problem.PathNotAllowed.WithDetail(err.Error())
 	}
@@ -231,7 +240,7 @@ func validateFile(f pgstore.ManagedFile) (policy.Tier, error) {
 			return "", problem.InvalidRequest.WithDetail(err.Error())
 		}
 	}
-	tier, err := policy.Classify(f.Path, f.Mode)
+	tier, err := policy.Classify(f.Path, f.Mode, roots)
 	if err != nil || tier == policy.TierDenied {
 		return policy.TierDenied, problem.PathNotAllowed.WithDetail(policy.ErrPathNotAllowed.Error())
 	}
@@ -249,7 +258,11 @@ func (m *ManagedConfig) ConfirmSensitive(ctx context.Context, id uuid.UUID) (pgs
 		if err != nil {
 			return notFound(err)
 		}
-		tier, _ := policy.Classify(cur.Path, cur.Mode)
+		roots, err := operatorRoots(ctx, q)
+		if err != nil {
+			return err
+		}
+		tier, _ := policy.Classify(cur.Path, cur.Mode, roots)
 		rec.SetTarget(audit.Target{Type: "managed_file", ID: id.String(), Display: cur.Path})
 		rec.SetParam("path", cur.Path)
 		rec.SetParam("device_group_id", idParam(groupPtr(cur.DeviceGroupID)))

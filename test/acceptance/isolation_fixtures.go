@@ -361,6 +361,20 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/settings/login", currentLoginSettings(t, w.alice)
 	}},
 
+	"GET /api/v1/settings/managed-files": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/managed-files", nil
+	}},
+	// The roots every gate relies on: the PUT changes nothing for acme (alice has a step-up in this gate).
+	"PUT /api/v1/settings/managed-files": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		res := call(t, w.alice, http.MethodGet, "/api/v1/settings/managed-files", nil)
+		var s struct {
+			OperatorRoots []string `json:"operator_roots"`
+		}
+		if err := res.JSON(&s); err != nil {
+			t.Fatal(err)
+		}
+		return "/api/v1/settings/managed-files", map[string]any{"operator_roots": s.OperatorRoots}
+	}},
 	"GET /api/v1/settings/dms": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/settings/dms", nil
 	}},

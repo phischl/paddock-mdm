@@ -24,7 +24,7 @@ type Tier string
 
 // The three tiers, from the least to the most restricted.
 const (
-	TierOrdinary  Tier = "ordinary"  // RolesWrite, no step-up
+	TierOrdinary  Tier = "ordinary"  // below an operator root: RolesWrite, no step-up
 	TierSensitive Tier = "sensitive" // org_admin with a step-up
 	TierDenied    Tier = "denied"    // refused by server and agent
 )
@@ -65,51 +65,117 @@ var (
 	}
 )
 
-// Classify returns the tier of path with mode (four octal digits). A malformed path or mode is ErrPathNotAllowed.
-// The order is: malformed → error; outside the allowed roots → TierDenied; denied catalog → TierDenied;
-// sensitive catalog, a file directly in /etc/, any /etc/<name>.d/ directory, or any execute bit in mode →
-// TierSensitive; otherwise TierOrdinary.
-func Classify(p, mode string) (Tier, error) {
-	if len(p) > 1024 || !strings.HasPrefix(p, "/") || path.Clean(p) != p || strings.Contains(p, "..") ||
-		!modePattern.MatchString(mode) {
+// Classify returns the tier of path with mode (four octal digits) for an organization with operatorRoots (directory
+// prefixes ending in "/", see ValidateOperatorRoot). A malformed path or mode is ErrPathNotAllowed. The order is:
+// malformed → error; outside the allowed roots → TierDenied; denied catalog → TierDenied; sensitive catalog →
+// TierSensitive; not below any operator root → TierSensitive; below an operator root but with an execute bit, a
+// script or shared-object suffix, or a path component ending in ".d" → TierSensitive; otherwise TierOrdinary (ADR
+// 0034 amendment 2026-10-16, plan M8s decision 7a).
+func Classify(p, mode string, operatorRoots []string) (Tier, error) {
+	if !wellFormed(p) || !modePattern.MatchString(mode) {
 		return "", ErrPathNotAllowed
 	}
-	for _, r := range p {
-		if r < 0x20 || r == 0x7f || r == '\\' {
-			return "", ErrPathNotAllowed
-		}
-	}
-	below := false
-	for _, root := range allowedRoots {
-		if strings.HasPrefix(p, root) && len(p) > len(root) {
-			below = true
-		}
-	}
-	if !below || slices.Contains(deniedFiles, p) || inDirs(p, deniedDirs) {
+	if denied(p) {
 		return TierDenied, nil
 	}
-	for _, prefix := range deniedPrefixes {
-		if strings.HasPrefix(p, prefix) {
-			return TierDenied, nil
-		}
-	}
-	if slices.Contains(sensitiveFiles, p) || inDirs(p, sensitiveDirs) || executable(mode) {
+	if slices.Contains(sensitiveFiles, p) || inDirs(p, sensitiveDirs) {
 		return TierSensitive, nil
 	}
-	if rest, ok := strings.CutPrefix(p, "/etc/"); ok {
-		first, _, nested := strings.Cut(rest, "/")
-		if !nested || strings.HasSuffix(first, ".d") {
-			return TierSensitive, nil
-		}
+	// A stored root that the current rules refuse counts as no root: the tier can only fall back to sensitive.
+	below := func(root string) bool { return strings.HasPrefix(p, root) && ValidateOperatorRoot(root) == nil }
+	if !slices.ContainsFunc(operatorRoots, below) ||
+		executable(mode) || codeSuffix(p) || dotDComponent(p) {
+		return TierSensitive, nil
 	}
 	return TierOrdinary, nil
 }
 
 // ValidatePath is the denied-only check that the agent repeats before it touches the device: it is
-// ErrPathNotAllowed when Classify(p, "0644") is TierDenied or an error.
+// ErrPathNotAllowed for a malformed path and for a path outside the allowed roots or in the denied catalog.
 func ValidatePath(p string) error {
-	if t, err := Classify(p, "0644"); err != nil || t == TierDenied {
+	if !wellFormed(p) || denied(p) {
 		return ErrPathNotAllowed
+	}
+	return nil
+}
+
+func wellFormed(p string) bool {
+	if len(p) > 1024 || !strings.HasPrefix(p, "/") || path.Clean(p) != p || strings.Contains(p, "..") {
+		return false
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f || r == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+// denied: outside the allowed roots or in the denied catalog; mode and operator roots never change it.
+func denied(p string) bool {
+	below := slices.ContainsFunc(allowedRoots, func(root string) bool { return strings.HasPrefix(p, root) && len(p) > len(root) })
+	if !below || slices.Contains(deniedFiles, p) || inDirs(p, deniedDirs) {
+		return true
+	}
+	return slices.ContainsFunc(deniedPrefixes, func(prefix string) bool { return strings.HasPrefix(p, prefix) })
+}
+
+// codeSuffixes are file names that interpreters or the loader run or load (plan M8s decision 7a).
+var codeSuffixes = []string{".so", ".py", ".pth", ".sh", ".pl", ".rb", ".lua", ".js"}
+
+func codeSuffix(p string) bool {
+	name := path.Base(p)
+	return strings.Contains(name, ".so.") || slices.ContainsFunc(codeSuffixes, func(s string) bool { return strings.HasSuffix(name, s) })
+}
+
+func dotDComponent(p string) bool {
+	return slices.ContainsFunc(strings.Split(p, "/"), func(c string) bool { return strings.HasSuffix(c, ".d") })
+}
+
+// ErrOperatorRoot is the message of a refused operator root.
+var ErrOperatorRoot = errors.New("an operator root must be a directory below /etc/<name>/, /usr/local/etc/<name>/ or /opt/<name>/ ending in /, outside the denied and sensitive paths and the never-operator directories")
+
+// neverOperator are directories that are never operator roots (plan M8s decision 7b); an entry ending in "*" matches
+// every name that starts with it.
+var neverOperator = []string{
+	"/etc/apt/", "/etc/dpkg/", "/etc/dnf/", "/etc/yum*", "/etc/pacman*", "/etc/default/", "/etc/grub*", "/etc/python*",
+	"/etc/perl*", "/etc/ruby*", "/etc/zsh/", "/etc/fish/", "/etc/bash*", "/etc/profile*", "/etc/lightdm/", "/etc/gdm*",
+	"/etc/sddm*", "/etc/xdg/", "/etc/X11/", "/etc/audit/", "/etc/selinux/", "/etc/apparmor*", "/etc/firewalld/",
+	"/etc/nftables*", "/etc/iptables/", "/etc/ufw/", "/etc/NetworkManager/", "/etc/ssl/", "/etc/ca-certificates*",
+	"/etc/pki/", "/etc/ssh/", "/etc/pam.d/", "/etc/security/", "/etc/himmelblau/", "/etc/sudoers*", "/etc/systemd/",
+	"/etc/cron*", "/etc/polkit-1/", "/etc/dbus-1/", "/etc/udev/", "/etc/modprobe.d/", "/etc/sysctl*", "/etc/paddock/",
+	"/opt/paddock/",
+}
+
+// ValidateOperatorRoot checks one operator root (plan M8s decision 7b): a normalized directory of the form
+// /etc/<name>/…, /usr/local/etc/<name>/… or /opt/<name>/… with a trailing slash that neither is, contains nor lies
+// below a denied or sensitive catalog entry, and lies outside the never-operator directories.
+func ValidateOperatorRoot(root string) error {
+	dir := strings.TrimSuffix(root, "/")
+	if !strings.HasSuffix(root, "/") || !wellFormed(dir) || dir+"/" != root {
+		return ErrOperatorRoot
+	}
+	if !slices.ContainsFunc(allowedRoots, func(base string) bool { return strings.HasPrefix(root, base) && len(root) > len(base)+1 }) {
+		return ErrOperatorRoot
+	}
+	related := func(entry string) bool { return strings.HasPrefix(entry, root) || strings.HasPrefix(root, entry) }
+	relatedFile := func(file string) bool { return strings.HasPrefix(file, root) || strings.HasPrefix(root, file+"/") }
+	if slices.ContainsFunc(deniedFiles, relatedFile) || slices.ContainsFunc(sensitiveFiles, relatedFile) {
+		return ErrOperatorRoot
+	}
+	for _, list := range [][]string{deniedDirs, deniedPrefixes, sensitiveDirs} {
+		if slices.ContainsFunc(list, related) {
+			return ErrOperatorRoot
+		}
+	}
+	for _, never := range neverOperator {
+		if prefix, ok := strings.CutSuffix(never, "*"); ok {
+			if strings.HasPrefix(root, prefix) {
+				return ErrOperatorRoot
+			}
+		} else if related(never) {
+			return ErrOperatorRoot
+		}
 	}
 	return nil
 }

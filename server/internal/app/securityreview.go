@@ -100,8 +100,12 @@ func securityReviewIn(ctx context.Context, q *pgstore.Queries, at time.Time) (Se
 	if err != nil {
 		return out, fmt.Errorf("security review files: %w", err)
 	}
+	roots, err := operatorRoots(ctx, q)
+	if err != nil {
+		return out, fmt.Errorf("security review operator roots: %w", err)
+	}
 	for _, f := range files {
-		tier, err := policy.Classify(f.Path, f.Mode)
+		tier, err := policy.Classify(f.Path, f.Mode, roots)
 		switch {
 		case err != nil || tier == policy.TierDenied:
 			out.Denied = append(out.Denied, f)

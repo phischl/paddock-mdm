@@ -326,6 +326,7 @@ func newAuditWorld(t *testing.T) *auditWorld {
 	t.Helper()
 	w := &auditWorld{alice: login(t, env.Alice), bob: login(t, env.Bob), root: login(t, env.PlatformAdmin), idx: auditIndex(t)}
 	w.acme = orgOf(t, w.alice)
+	acmeOperatorRoots(t)
 	return w
 }
 

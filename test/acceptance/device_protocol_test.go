@@ -18,6 +18,7 @@ import (
 // manual-approve token leaves the device pending until an administrator approves it.
 func TestDeviceProtocol(t *testing.T) {
 	alice := login(t, env.Alice)
+	acmeOperatorRoots(t)
 	groupID := namedGroup(t, alice, "d1 laptops")
 	dev := activeDevice(t, alice, groupID, "d1-"+uniqueSuffix())
 	if d := getDevice(t, alice, dev.DeviceID); d.State != "active" {

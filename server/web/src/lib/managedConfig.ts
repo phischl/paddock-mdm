@@ -96,3 +96,17 @@ export function validateFile(f: FileInput): FileErrors {
 export function validateUnit(u: UnitInput): { unit?: 'validation.unitInvalid' } {
   return unitPattern.test(u.unit.trim()) ? {} : { unit: 'validation.unitInvalid' }
 }
+
+/** The operator roots of the managed files (ADR 0034 amendment 2026-10-16); a problem code when they cannot be read. */
+export async function getOperatorRoots(): Promise<string[] | string> {
+  const { data, error } = await api.GET('/api/v1/settings/managed-files')
+  return data ? data.operator_roots : problemCode(error)
+}
+
+/** Replaces the operator roots (organization administrator with a step-up); null or a problem code. */
+export async function setOperatorRoots(roots: string[]): Promise<string | null> {
+  const { error } = await api.PUT('/api/v1/settings/managed-files', {
+    params: { header: { 'X-Paddock-CSRF': '1' } }, body: { operator_roots: roots },
+  })
+  return error ? problemCode(error) : null
+}

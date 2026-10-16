@@ -22,9 +22,13 @@ func (h *handlers) ListManagedFiles(ctx context.Context, req adminapi.ListManage
 	if err != nil {
 		return nil, err
 	}
+	roots, err := h.operatorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]adminapi.ManagedFile, len(res.Items))
 	for i, f := range res.Items {
-		items[i] = toManagedFile(f)
+		items[i] = toManagedFile(f, roots)
 	}
 	return adminapi.ListManagedFiles200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }
@@ -37,9 +41,13 @@ func (h *handlers) CreateManagedFile(ctx context.Context, req adminapi.CreateMan
 	if err != nil {
 		return nil, err
 	}
+	roots, err := h.operatorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
 	loc := "/api/v1/managed-files/" + f.ID.String()
 	return adminapi.CreateManagedFile201JSONResponse{
-		Body: toManagedFile(f), Headers: adminapi.CreateManagedFile201ResponseHeaders{Location: &loc},
+		Body: toManagedFile(f, roots), Headers: adminapi.CreateManagedFile201ResponseHeaders{Location: &loc},
 	}, nil
 }
 
@@ -48,7 +56,11 @@ func (h *handlers) GetManagedFile(ctx context.Context, req adminapi.GetManagedFi
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.GetManagedFile200JSONResponse(toManagedFile(f)), nil
+	roots, err := h.operatorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.GetManagedFile200JSONResponse(toManagedFile(f, roots)), nil
 }
 
 func (h *handlers) UpdateManagedFile(ctx context.Context, req adminapi.UpdateManagedFileRequestObject) (adminapi.UpdateManagedFileResponseObject, error) {
@@ -58,7 +70,11 @@ func (h *handlers) UpdateManagedFile(ctx context.Context, req adminapi.UpdateMan
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.UpdateManagedFile200JSONResponse(toManagedFile(f)), nil
+	roots, err := h.operatorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UpdateManagedFile200JSONResponse(toManagedFile(f, roots)), nil
 }
 
 func (h *handlers) DeleteManagedFile(ctx context.Context, req adminapi.DeleteManagedFileRequestObject) (adminapi.DeleteManagedFileResponseObject, error) {
@@ -68,17 +84,23 @@ func (h *handlers) DeleteManagedFile(ctx context.Context, req adminapi.DeleteMan
 	return adminapi.DeleteManagedFile204Response{}, nil
 }
 
-func toManagedFile(f pgstore.ManagedFile) adminapi.ManagedFile {
+// operatorRoots are the organization's operator roots, which the tier of every managed file of a response depends on.
+func (h *handlers) operatorRoots(ctx context.Context) ([]string, error) {
+	s, err := h.managed.GetManagedFileSettings(ctx)
+	return s.OperatorRoots, err
+}
+
+func toManagedFile(f pgstore.ManagedFile, roots []string) adminapi.ManagedFile {
 	return adminapi.ManagedFile{
 		Id: f.ID, DeviceGroupId: idPtr(f.DeviceGroupID), Path: f.Path, Mode: f.Mode, Owner: f.Owner, Group: f.Grp,
-		Content: f.Content, Tier: adminapi.ManagedFileTier(fileTier(f)),
+		Content: f.Content, Tier: adminapi.ManagedFileTier(fileTier(f, roots)),
 		SensitiveConfirmedAt: utcPtr(f.SensitiveConfirmedAt), CreatedAt: f.CreatedAt.UTC(), UpdatedAt: f.UpdatedAt.UTC(),
 	}
 }
 
 // fileTier is the tier of a stored definition; a row the policy cannot classify counts as denied, as in the compiler.
-func fileTier(f pgstore.ManagedFile) policy.Tier {
-	tier, err := policy.Classify(f.Path, f.Mode)
+func fileTier(f pgstore.ManagedFile, roots []string) policy.Tier {
+	tier, err := policy.Classify(f.Path, f.Mode, roots)
 	if err != nil {
 		return policy.TierDenied
 	}
@@ -144,4 +166,26 @@ func toManagedUnit(u pgstore.ManagedUnit) adminapi.ManagedUnit {
 		Id: u.ID, DeviceGroupId: idPtr(u.DeviceGroupID), Unit: u.Unit, Enabled: u.Enabled, Active: u.Active,
 		CreatedAt: u.CreatedAt.UTC(), UpdatedAt: u.UpdatedAt.UTC(),
 	}
+}
+
+// GetManagedFileSettings answers the operator roots of the managed files.
+func (h *handlers) GetManagedFileSettings(ctx context.Context, _ adminapi.GetManagedFileSettingsRequestObject) (adminapi.GetManagedFileSettingsResponseObject, error) {
+	s, err := h.managed.GetManagedFileSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.GetManagedFileSettings200JSONResponse(toManagedFileSettings(s)), nil
+}
+
+// UpdateManagedFileSettings replaces the operator roots (org_admin with a step-up).
+func (h *handlers) UpdateManagedFileSettings(ctx context.Context, req adminapi.UpdateManagedFileSettingsRequestObject) (adminapi.UpdateManagedFileSettingsResponseObject, error) {
+	s, err := h.managed.SetOperatorRoots(ctx, req.Body.OperatorRoots)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UpdateManagedFileSettings200JSONResponse(toManagedFileSettings(s)), nil
+}
+
+func toManagedFileSettings(s app.ManagedFileSettings) adminapi.ManagedFileSettings {
+	return adminapi.ManagedFileSettings{OperatorRoots: s.OperatorRoots, UpdatedAt: utcPtr(s.UpdatedAt)}
 }

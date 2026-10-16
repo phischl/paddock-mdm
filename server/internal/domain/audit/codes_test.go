@@ -20,6 +20,7 @@ func TestM8sCodes(t *testing.T) {
 		{CodeManagedFileSensitiveConfirmed, []string{"path", "device_group_id", "tier"}, all},
 		{CodeOrganizationSecurityReviewRequired, []string{"root_grant_profiles", "sensitive_files", "denied_files"}, []Outcome{OutcomeSuccess}},
 		{CodeDeviceHeaderObjectRejected, []string{"generation", "volume", "declared_size", "object_size"}, []Outcome{OutcomeFailure}},
+		{CodeSettingsManagedFilesChanged, []string{"old_operator_roots", "operator_roots"}, all},
 	} {
 		if !tc.code.Registered() {
 			t.Errorf("%s is not registered", tc.code)
