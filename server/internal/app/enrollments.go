@@ -70,16 +70,27 @@ func (e *Enrollments) Enroll(ctx context.Context, req ingest.Enroll) (EnrollResu
 		if err := validateEnroll(req); err != nil {
 			return err
 		}
-		state := device.StatePending
-		if tok.AutoApprove {
-			state = device.StateActive
-		}
-		rec.SetParam("state", state)
 		// Enrolment is device-initiated (system principal): it serializes with the gated grant changes, and a pending
 		// device's grants are gated when it is approved (plan M8s decision 7g-bis).
 		if err := q.LockOrganizationPrivileges(ctx); err != nil {
 			return err
 		}
+		state := device.StatePending
+		if tok.AutoApprove {
+			state = device.StateActive
+			// Fail safe (plan M8s decision 7g-sexies): a device that would give someone root waits for an
+			// administrator's approval with a step-up instead of becoming active on its own.
+			if tok.DeviceGroupID.Valid {
+				before, err := loadGuardIdentity(ctx, q)
+				if err != nil {
+					return err
+				}
+				if newDeviceGains(before, []uuid.UUID{tok.DeviceGroupID.UUID}) {
+					state = device.StatePending
+				}
+			}
+		}
+		rec.SetParam("state", state)
 		if err := createDevice(ctx, q, req, tok, state); err != nil {
 			return err
 		}

@@ -131,3 +131,8 @@ SELECT count(*) FROM profile_assignment WHERE profile_id = @profile_id;
 
 -- name: LockOrganizationPrivileges :exec
 SELECT pg_advisory_xact_lock(hashtextextended('paddock.privileges.' || current_setting('paddock.org_id'), 0));
+
+-- name: ListAutoApproveTokenGroups :many
+-- The device groups that a usable enrollment token enrolls active devices into (plan M8s decision 7g-sexies).
+SELECT DISTINCT device_group_id::uuid AS device_group_id FROM enrollment_token
+WHERE auto_approve AND revoked_at IS NULL AND expires_at > now() AND uses < max_uses AND device_group_id IS NOT NULL;

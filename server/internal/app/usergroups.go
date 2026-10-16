@@ -395,7 +395,7 @@ func recordMembershipChange(ctx context.Context, q *pgstore.Queries, rec Recorde
 	if err := changeMembership(ctx, q, group, userID, add); err != nil {
 		return err
 	}
-	after, err := LoadIdentity(ctx, q)
+	after, err := loadGuardIdentity(ctx, q)
 	if err != nil {
 		return err
 	}

@@ -50,7 +50,7 @@ func beginGrantGuard(ctx context.Context, q *pgstore.Queries) (grantGuard, error
 	if err != nil {
 		return grantGuard{}, err
 	}
-	subjects, err := LoadIdentity(ctx, q)
+	subjects, err := loadGuardIdentity(ctx, q)
 	return grantGuard{union: union, subjects: subjects}, err
 }
 
@@ -63,7 +63,7 @@ func (g grantGuard) grows(ctx context.Context, q *pgstore.Queries) (bool, error)
 	if len(privilege.NewWitnesses(g.union, union)) > 0 {
 		return true, nil
 	}
-	after, err := LoadIdentity(ctx, q)
+	after, err := loadGuardIdentity(ctx, q)
 	if err != nil {
 		return false, err
 	}
@@ -121,14 +121,14 @@ func beginSubjectGuard(ctx context.Context, q *pgstore.Queries) (subjectGuard, e
 	if err := q.LockOrganizationPrivileges(ctx); err != nil {
 		return subjectGuard{}, fmt.Errorf("lock privileges: %w", err)
 	}
-	before, err := LoadIdentity(ctx, q)
+	before, err := loadGuardIdentity(ctx, q)
 	return subjectGuard{before: before}, err
 }
 
 // check applies requireRootGrant when a real user gained a root witness on a device; fresh are devices that become
 // active with the change (approve, quarantine release).
 func (g subjectGuard) check(ctx context.Context, q *pgstore.Queries, rec Recorder, fresh ...uuid.UUID) error {
-	after, err := LoadIdentity(ctx, q)
+	after, err := loadGuardIdentity(ctx, q)
 	if err != nil {
 		return err
 	}
@@ -163,17 +163,36 @@ func requireTokenGroups(ctx context.Context, q *pgstore.Queries, rec Recorder, g
 	if len(privilege.NewWitnesses(everywhere, inGroups)) > 0 {
 		return requireRootGrant(ctx, rec)
 	}
-	before, err := LoadIdentity(ctx, q)
+	before, err := loadGuardIdentity(ctx, q)
 	if err != nil {
 		return err
 	}
-	after := *before
-	after.memberGroups = maps.Clone(before.memberGroups)
-	after.memberGroups[uuid.New()] = groups
-	if subjectsGain(before, &after) {
+	if newDeviceGains(before, groups) {
 		return requireRootGrant(ctx, rec)
 	}
 	return nil
+}
+
+// loadGuardIdentity is LoadIdentity plus the device groups of the usable auto-approve enrollment tokens, the future
+// devices that the guards judge (plan M8s decision 7g-sexies).
+func loadGuardIdentity(ctx context.Context, q *pgstore.Queries) (*Identity, error) {
+	id, err := LoadIdentity(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	if id.tokenGroups, err = q.ListAutoApproveTokenGroups(ctx); err != nil {
+		return nil, fmt.Errorf("load auto-approve token groups: %w", err)
+	}
+	return id, nil
+}
+
+// newDeviceGains reports whether a device that joins groups as a new device gives a real or future user a root
+// witness (plan M8s decisions 7g-quinquies and 7g-sexies).
+func newDeviceGains(before *Identity, groups []uuid.UUID) bool {
+	after := *before
+	after.memberGroups = maps.Clone(before.memberGroups)
+	after.memberGroups[uuid.New()] = groups
+	return subjectsGain(before, &after)
 }
 
 // subjectsGain reports whether a real user gains a root witness on a device: every device in any state with its
@@ -198,6 +217,12 @@ func subjectsGain(before, after *Identity, fresh ...uuid.UUID) bool {
 	for _, device := range fresh {
 		add(nil, after.memberGroups[device])
 	}
+	// Future devices: a device that a usable auto-approve token enrolls into its group.
+	for _, id := range []*Identity{before, after} {
+		for _, g := range id.tokenGroups {
+			add([]uuid.UUID{g}, []uuid.UUID{g})
+		}
+	}
 
 	direct := map[uuid.UUID]bool{}
 	for _, id := range []*Identity{before, after} {
@@ -219,11 +244,24 @@ func subjectsGain(before, after *Identity, fresh ...uuid.UUID) bool {
 				continue
 			}
 			seen[key] = true
+			_, existed := before.Users[user]
 			for _, c := range contexts {
-				if privilege.RootGrantGrows(effectiveWith(before, user, b, c.before), effectiveWith(after, user, a, c.after)) {
+				was := effectiveWith(before, user, b, c.before)
+				if !existed {
+					// A user created by the change had nothing before.
+					was = privilege.EffectiveProfile{}
+				}
+				if privilege.RootGrantGrows(was, effectiveWith(after, user, a, c.after)) {
 					return true
 				}
 			}
+		}
+	}
+	// A future user: no groups and no assignment of its own, so only what is granted to everyone applies.
+	future := uuid.New()
+	for _, c := range contexts {
+		if privilege.RootGrantGrows(effectiveWith(before, future, nil, c.before), effectiveWith(after, future, nil, c.after)) {
+			return true
 		}
 	}
 	return false

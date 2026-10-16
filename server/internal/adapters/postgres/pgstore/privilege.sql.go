@@ -452,6 +452,32 @@ func (q *Queries) ListAllProfileAssignments(ctx context.Context) ([]ProfileAssig
 	return items, nil
 }
 
+const listAutoApproveTokenGroups = `-- name: ListAutoApproveTokenGroups :many
+SELECT DISTINCT device_group_id::uuid AS device_group_id FROM enrollment_token
+WHERE auto_approve AND revoked_at IS NULL AND expires_at > now() AND uses < max_uses AND device_group_id IS NOT NULL
+`
+
+// The device groups that a usable enrollment token enrolls active devices into (plan M8s decision 7g-sexies).
+func (q *Queries) ListAutoApproveTokenGroups(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listAutoApproveTokenGroups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var device_group_id uuid.UUID
+		if err := rows.Scan(&device_group_id); err != nil {
+			return nil, err
+		}
+		items = append(items, device_group_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPermissionProfiles = `-- name: ListPermissionProfiles :many
 
 SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by FROM permission_profile

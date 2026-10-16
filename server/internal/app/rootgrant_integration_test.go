@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
 	"github.com/phischl/paddock-mdm/server/internal/domain/privilege"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
@@ -577,4 +578,76 @@ func TestSpreadingDeclarative(t *testing.T) {
 	if _, _, err := h.config.Apply(principal.With(ctx, steppedUp), raw(t, doc), ""); err != nil {
 		t.Fatalf("stepped-up admin = %v", err)
 	}
+}
+
+// TestFutureSubjects covers plan M8s decision 7g-sexies: a usable auto-approve token's device group is judged as a
+// future device, a user without groups as a future user, and a new user is judged from nothing.
+func TestFutureSubjects(t *testing.T) {
+	t.Run("auto-approve token into an empty device group", func(t *testing.T) {
+		w := newCombinationWorld(t)
+		pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		keys := func(context.Context) ([]protocol.BundleKey, error) { return []protocol.BundleKey{{KeyID: "k1"}}, nil }
+		tokens := app.NewEnrollmentTokens(w.privilegesHarness.runner, pool, keys, keys, &fakeTokenCache{}, "https://device.test")
+		d2 := uuid.Must(uuid.NewV7())
+		if _, err := w.super.Exec(context.Background(), "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'd2')", d2, w.org); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tokens.Create(w.ctx(w.admin), app.TokenInput{Name: "d2", MaxUses: 5, ExpiresAt: time.Now().Add(time.Hour),
+			AutoApprove: true, DeviceGroupID: &d2}); err != nil {
+			t.Fatalf("a token into an empty, unassigned group = %v", err)
+		}
+		if err := w.assign(w.operator, w.writer, &d2); err != nil {
+			t.Fatalf("the first half into d2 = %v", err)
+		}
+		if err := w.assign(w.operator, w.runner, &d2); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator completing the pair where the token enrolls = %v", err)
+		}
+	})
+
+	t.Run("future user and new users", func(t *testing.T) {
+		w := newCombinationWorld(t)
+		global := func(p principal.Principal, profile uuid.UUID) error {
+			_, err := w.privileges.CreateAssignment(w.ctx(p), app.NewAssignment{ProfileID: profile, SubjectType: privilege.SubjectGlobal})
+			return err
+		}
+		if err := global(w.operator, w.writer); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.assign(w.steppedUp, w.runner, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := global(w.operator, w.runner); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator giving the second half to everyone = %v", err)
+		}
+		if err := global(w.steppedUp, w.runner); err != nil {
+			t.Fatal(err)
+		}
+		pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		if _, err := w.super.Exec(context.Background(), "UPDATE organization SET domains = '{x.test}' WHERE id = $1", w.org); err != nil {
+			t.Fatal(err)
+		}
+		users := app.NewUsers(w.privilegesHarness.runner, pool, creatingDirectory{newDirectory()})
+		in := app.NewUser{Username: "u2-" + uuid.NewString()[:6] + "@x.test", DisplayName: "U2"}
+		if _, err := users.Create(w.ctx(w.operator), in); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator creating a user who becomes root = %v", err)
+		}
+		if _, err := users.Create(w.ctx(w.steppedUp), in); err != nil {
+			t.Fatalf("stepped-up admin = %v", err)
+		}
+	})
+}
+
+// creatingDirectory is the in-memory directory that also creates users.
+type creatingDirectory struct{ *directory }
+
+func (creatingDirectory) CreateUser(context.Context, string, ports.NewIdentityUser) (string, error) {
+	return "pk-" + uuid.NewString(), nil
 }

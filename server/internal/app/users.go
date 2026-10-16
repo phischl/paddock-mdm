@@ -149,6 +149,11 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 			if err := user.ValidateEmail(in.Email); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
+			// A new user receives what is granted to everyone (plan M8s decision 7g-sexies).
+			guard, err := beginSubjectGuard(ctx, q)
+			if err != nil {
+				return err
+			}
 			out.User, err = q.InsertAppUser(ctx, pgstore.InsertAppUserParams{
 				ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Username: in.Username, DisplayName: in.DisplayName,
 				Email: in.Email, Source: user.SourceLocal,
@@ -160,7 +165,7 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 				return err
 			}
 			rec.SetTarget(audit.Target{Type: "user", ID: out.User.ID.String(), Display: in.Username})
-			return nil
+			return guard.check(ctx, q, rec)
 		},
 		func(ctx context.Context) error {
 			var err error

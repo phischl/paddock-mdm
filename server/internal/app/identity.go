@@ -31,9 +31,12 @@ type Identity struct {
 	deviceGroups map[uuid.UUID][]uuid.UUID // active device → device groups
 	// memberGroups are the device groups of every device in any state (plan M8s decision 7g-bis).
 	memberGroups map[uuid.UUID][]uuid.UUID
-	logins       map[uuid.UUID][]pgstore.DeviceLoginAssignment
-	byUsername   map[string]uuid.UUID
-	seen         map[uuid.UUID][]uuid.UUID // device → users that logged in within SeenWindow
+	// tokenGroups are the device groups that a usable auto-approve enrollment token enrolls into; loaded only for the
+	// root-grant guards (loadGuardIdentity, plan M8s decision 7g-sexies).
+	tokenGroups []uuid.UUID
+	logins      map[uuid.UUID][]pgstore.DeviceLoginAssignment
+	byUsername  map[string]uuid.UUID
+	seen        map[uuid.UUID][]uuid.UUID // device → users that logged in within SeenWindow
 }
 
 // SeenWindow is how long a login on a device makes the user affected by locks there (plan M3a decision 10).
