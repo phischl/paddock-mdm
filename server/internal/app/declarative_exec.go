@@ -54,10 +54,10 @@ func (ex *configExec) run(ctx context.Context, plan declarative.Plan) error {
 	grants := slices.ContainsFunc(plan.Changes, func(c declarative.Change) bool {
 		return c.Section == declarative.SectionPermissionProfiles || c.Section == declarative.SectionProfileAssignments
 	})
-	var guard rootGrantGuard
+	var guard grantGuard
 	if grants {
 		var err error
-		if guard, err = beginRootGrantGuard(ctx, ex.q); err != nil {
+		if guard, err = beginGrantGuard(ctx, ex.q); err != nil {
 			return err
 		}
 	}

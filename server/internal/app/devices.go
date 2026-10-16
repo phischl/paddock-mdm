@@ -195,10 +195,10 @@ func (d *Devices) transition(ctx context.Context, spec ActionSpec, action device
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		// A device that becomes active receives the grants of its device groups (plan M8s decision 7g-bis).
 		activates := action == device.ActionApprove || action == device.ActionReleaseQuarantine
-		var guard rootGrantGuard
+		var guard subjectGuard
 		if activates {
 			var err error
-			if guard, err = beginRootGrantGuard(ctx, q); err != nil {
+			if guard, err = beginSubjectGuard(ctx, q); err != nil {
 				return err
 			}
 		}
@@ -207,7 +207,7 @@ func (d *Devices) transition(ctx context.Context, spec ActionSpec, action device
 		if err != nil || !activates {
 			return err
 		}
-		return guard.check(ctx, q, rec, false, id)
+		return guard.check(ctx, q, rec, id)
 	})
 	return out, err
 }
@@ -246,7 +246,7 @@ func (d *Devices) SetGroups(ctx context.Context, id uuid.UUID, groupIDs []uuid.U
 	spec := SpecDeviceSetGroups
 	spec.Target = &audit.Target{Type: "device", ID: id.String()}
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		guard, err := beginRootGrantGuard(ctx, q)
+		guard, err := beginSubjectGuard(ctx, q)
 		if err != nil {
 			return err
 		}
@@ -267,7 +267,7 @@ func (d *Devices) SetGroups(ctx context.Context, id uuid.UUID, groupIDs []uuid.U
 		rec.SetParam("added", added)
 		rec.SetParam("removed", removed)
 		// A device that joins the device group of a root grant extends it (plan M8s decision 7g).
-		if err := guard.check(ctx, q, rec, false); err != nil {
+		if err := guard.check(ctx, q, rec); err != nil {
 			return err
 		}
 		rec.StateChanged(statechange.ScopeDevice, id)

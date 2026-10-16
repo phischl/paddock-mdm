@@ -388,7 +388,7 @@ func (g *UserGroups) changeMember(ctx context.Context, spec ActionSpec, groupID,
 // before and after it (plan M3a decision 4); an addition that grants root needs requireRootGrant. Adding a present or
 // removing an absent member is a no-op.
 func recordMembershipChange(ctx context.Context, q *pgstore.Queries, rec Recorder, group pgstore.UserGroup, userID uuid.UUID, add bool) error {
-	guard, err := beginRootGrantGuard(ctx, q)
+	guard, err := beginSubjectGuard(ctx, q)
 	if err != nil {
 		return err
 	}
@@ -402,7 +402,7 @@ func recordMembershipChange(ctx context.Context, q *pgstore.Queries, rec Recorde
 	rec.SetParam("effective_class_before", string(guard.before.HighestClass(userID)))
 	rec.SetParam("effective_class_after", string(after.HighestClass(userID)))
 	// Joining a Paddock group that carries a root grant grants root (plan M8s decision 7g).
-	if add && rootGrantGrows(guard.before, after) {
+	if add && subjectsGain(guard.before, after) {
 		return requireRootGrant(ctx, rec)
 	}
 	return nil

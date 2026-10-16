@@ -318,3 +318,80 @@ func TestEnrollmentTokenIntoRootGrant(t *testing.T) {
 		t.Fatalf("a token into a group without a grant = %v", err)
 	}
 }
+
+// TestWitnessUnion covers the cases of plan M8s decision 7g-quater: a pair completed by an assignment to a group the
+// user is not in yet, a new pair next to an unscoped Full grant, and a membership that gives a user who is Full
+// already a new way to root.
+func TestWitnessUnion(t *testing.T) {
+	t.Run("direct grant plus a group the user is not in", func(t *testing.T) {
+		w := newCombinationWorld(t)
+		group := uuid.Must(uuid.NewV7())
+		if _, err := w.super.Exec(context.Background(), `INSERT INTO user_group (id, organization_id, slug, name, source)
+			VALUES ($1, $2, 'later', 'Later', 'local')`, group, w.org); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.assign(w.operator, w.writer, nil); err != nil {
+			t.Fatal(err)
+		}
+		in := app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGroup, SubjectID: &group}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), in); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator = %v", err)
+		}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.admin), in); !errors.Is(err, problem.StepUpRequired) {
+			t.Fatalf("admin without step-up = %v", err)
+		}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.steppedUp), in); err != nil {
+			t.Fatalf("stepped-up admin = %v", err)
+		}
+	})
+
+	t.Run("new pair next to an unscoped Full grant", func(t *testing.T) {
+		w := newCombinationWorld(t)
+		full, err := w.privileges.CreateProfile(w.ctx(w.steppedUp), privilege.Profile{Name: "full", Class: privilege.ClassFull, Lecture: privilege.LectureOnce})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.steppedUp), app.NewAssignment{ProfileID: full.ID, SubjectType: privilege.SubjectGlobal}); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.assign(w.operator, w.writer, nil); err != nil {
+			t.Fatalf("the first half = %v", err)
+		}
+		if err := w.assign(w.operator, w.runner, nil); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator completing a pair next to a Full grant = %v", err)
+		}
+	})
+
+	t.Run("membership adds a witness to a Full user", func(t *testing.T) {
+		w := newCombinationWorld(t)
+		pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		groups := app.NewUserGroups(w.privilegesHarness.runner, pool, newDirectory())
+		group := uuid.Must(uuid.NewV7())
+		if _, err := w.super.Exec(context.Background(), `INSERT INTO user_group (id, organization_id, slug, name, source, authentik_pk)
+			VALUES ($1, $2, 'pair', 'Pair', 'local', 'gpk')`, group, w.org); err != nil {
+			t.Fatal(err)
+		}
+		full, err := w.privileges.CreateProfile(w.ctx(w.steppedUp), privilege.Profile{Name: "full", Class: privilege.ClassFull, Lecture: privilege.LectureOnce})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.assign(w.steppedUp, full.ID, nil); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []uuid.UUID{w.writer, w.runner} {
+			if _, err := w.privileges.CreateAssignment(w.ctx(w.steppedUp), app.NewAssignment{ProfileID: p, SubjectType: privilege.SubjectGroup, SubjectID: &group}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := groups.AddMember(w.ctx(w.admin), group, w.user); !errors.Is(err, problem.StepUpRequired) {
+			t.Fatalf("admin without step-up adding a Full user to the pair = %v", err)
+		}
+		if err := groups.AddMember(w.ctx(w.steppedUp), group, w.user); err != nil {
+			t.Fatalf("stepped-up admin = %v", err)
+		}
+	})
+}

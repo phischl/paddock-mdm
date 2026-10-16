@@ -245,15 +245,27 @@ Supersedes the per-profile reading of decisions 1–3.
 7k. Acceptance: two profiles that are each restricted but combine into root, assigned by an operator or a token →
     403; by an admin without step-up → `step_up_required`; with step-up → success and `effective_class: full` in
     the audit params. Adding a user to a Paddock group that carries such a combination follows the same rule.
-7g-bis. (Architect decision 2026-10-16.) Growth is evaluated for devices in every state and for empty and global group
-    subjects through a synthetic member; approve, quarantine release and enrolment take the guard and the advisory
-    lock.
+7g-bis. (Architect decision 2026-10-16.) Growth is evaluated for devices in every state ~~and for empty and global group
+    subjects through a synthetic member~~ (superseded by 7g-quater); approve, quarantine release and enrolment take the
+    guard and the advisory lock.
 7g-ter. (Architect decision 2026-10-16.) Enrollment tokens are gated at creation and whenever their device groups
     change: when a synthetic device in the token's device groups gives any subject root it does not have elsewhere,
     the token needs an organization administrator with a fresh step-up (operators forbidden, API tokens refused with
     the token detail). Approval keeps its own guard (devices enrolled before this release, manual group changes); for
     tokens that approve automatically the creation gate is the binding one. Acceptance: a token into the device group
     of a combination is refused without a step-up and created with one.
+7g-quater. (Architect decision 2026-10-16; supersedes the synthetic subjects of 7g-bis.) **Witnesses:** the root
+    witnesses of a command set are every root-equivalent command, every writer/exec pair and `ALL` for class Full
+    (the rules of `RootEquivalentCommands`, as a set). **Profile and assignment changes** (create, update, re-scope,
+    declarative documents, enrollment-token device groups): the witnesses of the union of the commands of all
+    profiles with at least one assignment in the organization, before and after the change; any new witness requires
+    an organization administrator with a step-up (operators and tokens refused as before). This over-approximates
+    and does not depend on membership or device state. For an enrollment token the union of the profiles assigned to
+    everyone or to one of its device groups is compared with the union of those assigned to everyone. **Membership
+    and device changes** (Paddock group membership, device groups, approval, quarantine release): the exact check per
+    real subject, comparing witness sets instead of classes; a subject gaining any new witness is growth, also when
+    it already had Full. **Identity sync** stays ungated, audited and listed by the review. **Performance:** the
+    profiles are read into one map per evaluation; the advisory lock is held only for the transaction.
 
 ### 3.3 Server-side sessions (SEC-2, part 2 and 4)
 

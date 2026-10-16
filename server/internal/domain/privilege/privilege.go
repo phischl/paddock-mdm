@@ -141,23 +141,10 @@ func EffectiveClass(p Profile) Class {
 // RequiresStepUp reports whether creating, changing or assigning p needs a step-up: EffectiveClass(p) == ClassFull.
 func RequiresStepUp(p Profile) bool { return EffectiveClass(p) == ClassFull }
 
-// RootGrantGrows reports whether the effective profile after a change grants root in a way the one before did not:
-// class full where it was not, or a root-equivalent command (on its own or as part of a writer/exec pair in the merged
-// commands) that was not root-equivalent before (plan M8s decision 7g). A subject that already had class full gains
-// nothing.
+// RootGrantGrows reports whether the effective profile after a change has a root witness (RootWitnesses) that the one
+// before did not have, also when the subject already had root another way (plan M8s decision 7g-quater).
 func RootGrantGrows(before, after EffectiveProfile) bool {
-	if before.Class == ClassFull {
-		return false
-	}
-	if after.Class == ClassFull {
-		return true
-	}
-	for _, c := range after.RootEquivalentCommands {
-		if !slices.Contains(before.RootEquivalentCommands, c) {
-			return true
-		}
-	}
-	return false
+	return len(NewWitnesses(RootWitnesses(before.Class, before.Commands), RootWitnesses(after.Class, after.Commands))) > 0
 }
 
 // ValidateProfile checks a normalized profile.

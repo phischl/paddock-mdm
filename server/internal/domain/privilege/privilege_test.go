@@ -206,8 +206,28 @@ func TestRootGrantGrows(t *testing.T) {
 		t.Error("removing or keeping a grant grows it")
 	}
 	full := EffectiveProfile{Class: ClassFull}
-	if !RootGrantGrows(one, full) || RootGrantGrows(full, both) {
+	if !RootGrantGrows(one, full) {
 		t.Error("class full")
+	}
+	// A subject that is Full already still gains a new way to root (plan M8s decision 7g-quater).
+	fullWithPair := both
+	fullWithPair.Class = ClassFull
+	if !RootGrantGrows(full, fullWithPair) || RootGrantGrows(fullWithPair, full) {
+		t.Error("a new witness for a Full subject")
+	}
+}
+
+func TestRootWitnesses(t *testing.T) {
+	got := RootWitnesses(ClassRestricted, []string{"/usr/bin/tee /opt/x/run.sh", "/opt/x/run.sh", "/usr/bin/bash", "/usr/bin/id"})
+	want := []string{"cmd:/usr/bin/bash", "pair:/usr/bin/tee /opt/x/run.sh|/opt/x/run.sh"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("witnesses %v, want %v", got, want)
+	}
+	if got := RootWitnesses(ClassFull, nil); !slices.Equal(got, []string{"ALL"}) {
+		t.Fatalf("full: %v", got)
+	}
+	if got := RootWitnesses(ClassRestricted, []string{"/usr/bin/systemctl restart nginx.service"}); len(got) != 0 {
+		t.Fatalf("harmless: %v", got)
 	}
 }
 

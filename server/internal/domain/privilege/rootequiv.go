@@ -102,6 +102,50 @@ func RootEquivalentCommands(commands []string) []string {
 	return slices.Compact(out)
 }
 
+// RootWitnesses returns why a class and a command set hand out root, as a sorted set (plan M8s decision 7g-quater):
+// "ALL" for class full, "cmd:<command>" for every command that does so on its own and "pair:<writer>|<command>" for
+// every writer together with a command that runs what it writes. The rules are those of RootEquivalentCommands; a new
+// witness is a new way to become root, even for a subject that already has one.
+func RootWitnesses(class Class, commands []string) []string {
+	var out []string
+	if class == ClassFull {
+		out = append(out, "ALL")
+	}
+	type item struct {
+		text string
+		cmd  command
+	}
+	items := make([]item, 0, len(commands))
+	for _, c := range commands {
+		items = append(items, item{c, parse(c)})
+		if items[len(items)-1].cmd.rootEquivalentAlone() {
+			out = append(out, "cmd:"+c)
+		}
+	}
+	for w, writer := range items {
+		for _, target := range writer.cmd.targets() {
+			for x, exec := range items {
+				if x != w && (exec.cmd.binary == target || strings.HasPrefix(exec.cmd.binary, strings.TrimSuffix(target, "/")+"/")) {
+					out = append(out, "pair:"+writer.text+"|"+exec.text)
+				}
+			}
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// NewWitnesses returns the witnesses of after that before does not have.
+func NewWitnesses(before, after []string) []string {
+	var out []string
+	for _, w := range after {
+		if !slices.Contains(before, w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // IsRootEquivalent reports whether a single command hands out root on its own.
 func IsRootEquivalent(c string) bool { return parse(c).rootEquivalentAlone() }
 
