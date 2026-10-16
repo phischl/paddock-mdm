@@ -211,6 +211,30 @@ Supersedes the *TierOrdinary* rule of decision 7 and the role rule of decision 9
 7f. Documents: `install.md` and `upgrade.md` state the binding order "agents first, then the server" for M8s;
     RR-36 and the ADR 0013 note say the same.
 
+
+### 3.2b Amendment 2026-10-16 — root equivalence over the combination of grants
+
+Supersedes the per-profile reading of decisions 1–3.
+
+7g. The step-up rule applies to the **effect** of a change, not to one profile. A change MUST require an
+    organization administrator with a fresh step-up (and is refused for API tokens) when, for any subject it
+    affects, the effective root-equivalent command set (`privilege.Effective` over all assignments that apply to
+    that subject and device group) after the change contains a command or a writer/exec pair that it did not
+    contain before. Affected subjects are: for a profile create/update, every subject of every assignment of that
+    profile; for an assignment create/re-scope, the subjects and device groups of that assignment; for a change of
+    Paddock-managed user-group or device-group membership, the member being added and every assignment that targets
+    the group.
+7h. `privilege.RootEquivalentCommands` MUST be evaluated over the merged command list of a subject, so a writer in
+    one profile and the executed target in another count as a pair.
+7i. Membership that arrives from an upstream directory (identity sync, system principal) is not gated; it is
+    audited as today and listed by the review (§3.5). RR-35 states this.
+7j. Profiles, assignments and group rows that a gated change reads MUST be read `FOR UPDATE` (profiles) or
+    `FOR SHARE` (assignments, memberships) inside the same transaction, so a concurrent demotion cannot be
+    overwritten by a stale write.
+7k. Acceptance: two profiles that are each restricted but combine into root, assigned by an operator or a token →
+    403; by an admin without step-up → `step_up_required`; with step-up → success and `effective_class: full` in
+    the audit params. Adding a user to a Paddock group that carries such a combination follows the same rule.
+
 ### 3.3 Server-side sessions (SEC-2, part 2 and 4)
 
 12. New package `server/internal/sessions` (no new dependency; `github.com/valkey-io/valkey-go` is already used):
