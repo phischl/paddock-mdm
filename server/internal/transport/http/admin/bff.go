@@ -259,6 +259,14 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
+	if valid, err := b.accounts.LoginStillValid(ctx, p); err != nil || !valid {
+		slog.WarnContext(ctx, "login of an account that changed meanwhile", "account_id", p.ID, "error", err)
+		if err := b.sessions.Delete(ctx, sid, p.ID); err != nil {
+			slog.WarnContext(ctx, "session record not deleted", "error", err)
+		}
+		denied(w, r, app.ReasonLoginFailed)
+		return
+	}
 	value, err := b.keys.Seal(SessionCookie, NewSession(p, sid, result.Locale, now))
 	if err != nil {
 		slog.ErrorContext(ctx, "session cookie", "error", err)
@@ -289,4 +297,28 @@ func (b *bff) logout(publicURL string) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"end_session_url": target})
 	}
+}
+
+// sessionLive requires the server-side record of sess, of the current generation and with the cookie's account, role
+// and organization (plan M8s decision 14). Otherwise it answers: 503 session_store_unavailable while the store is
+// unreachable, keeping the cookie (the session is valid again once the store answers), or 401 with the cookie cleared.
+func (b *bff) sessionLive(w http.ResponseWriter, r *http.Request, sess Session) bool {
+	rec, gen, found, err := b.sessions.Get(r.Context(), sess.SID)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "session store", "error", err)
+		httpx.WriteProblem(w, r, problem.SessionStoreUnavailable)
+		return false
+	}
+	if !recordMatches(rec, gen, found, sess) {
+		http.SetCookie(w, sessionCookie("", -1))
+		httpx.WriteProblem(w, r, problem.Unauthenticated)
+		return false
+	}
+	return true
+}
+
+// recordMatches reports whether the record of a session exists, is of the current generation and belongs to the
+// cookie's account, role and organization.
+func recordMatches(rec sessions.Record, gen int64, found bool, sess Session) bool {
+	return found && rec.Gen >= gen && rec.AccountID == sess.PID && rec.Role == sess.Role && rec.Org == sess.Org
 }

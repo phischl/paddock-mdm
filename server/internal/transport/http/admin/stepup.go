@@ -75,6 +75,9 @@ func (b *bff) stepUpStart(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteProblem(w, r, problem.Unauthenticated)
 		return
 	}
+	if !b.sessionLive(w, r, sess) {
+		return
+	}
 	returnTo := r.URL.Query().Get("return_to")
 	if returnTo == "" {
 		returnTo = "/"
@@ -166,6 +169,11 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 	sess := st.Session
 	if _, err := sess.Validate(now); err != nil {
 		slog.InfoContext(ctx, "step-up for a session that ended meanwhile", "account_id", sess.PID)
+		stepUpFailed(w, r, st.ReturnTo)
+		return
+	}
+	if rec, gen, found, err := b.sessions.Get(ctx, sess.SID); err != nil || !recordMatches(rec, gen, found, sess) {
+		slog.InfoContext(ctx, "step-up for a session that was ended or cannot be checked", "account_id", sess.PID, "error", err)
 		stepUpFailed(w, r, st.ReturnTo)
 		return
 	}

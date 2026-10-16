@@ -58,4 +58,26 @@ func TestLoginEnablesTheAccount(t *testing.T) {
 	if role != "org_admin" || disabled {
 		t.Fatalf("after login: role %s, disabled %v", role, disabled)
 	}
+
+	// A revocation between the login's commit and its session record is caught by LoginStillValid.
+	for _, c := range []struct {
+		change string
+		want   bool
+	}{
+		{"", true},
+		{"UPDATE admin_account SET role = 'org_auditor' WHERE id = $1", false},
+		{"UPDATE admin_account SET role = 'org_admin', disabled_at = now() WHERE id = $1", false},
+	} {
+		if c.change != "" {
+			if _, err := super.Exec(ctx, c.change, account); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if valid, err := accounts.LoginStillValid(ctx, res.Principal); err != nil || valid != c.want {
+			t.Fatalf("after %q: valid %v %v, want %v", c.change, valid, err, c.want)
+		}
+	}
+	if valid, err := accounts.LoginStillValid(ctx, principal.Principal{Kind: principal.KindPlatformAdmin}); err != nil || !valid {
+		t.Fatalf("platform administrator: %v %v", valid, err)
+	}
 }

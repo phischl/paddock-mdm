@@ -109,6 +109,10 @@ type stepUpWorld struct {
 	handler http.Handler
 	session admin.Session
 	maxAge  string // max_age the authorization request must carry
+	// sessions holds the server-side record of session.
+	sessions *fakeSessions
+	// onAuthorize runs while the browser is at the provider, between the step-up start and the callback.
+	onAuthorize func()
 }
 
 func newStepUpWorld(t *testing.T) *stepUpWorld {
@@ -155,9 +159,12 @@ func newStepUpWorldFor(t *testing.T, maxAuthAge time.Duration, p principal.Princ
 	if roles == nil {
 		roles = &fakeStepUpAccounts{org: p.OrganizationID}
 	}
+	sessions := newFakeSessions()
+	sessions.records["sid-alice"] = sessionsRecord(p)
 	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "sid-alice", "en", time.Now()), maxAge: maxAge, tokens: tokens,
 		handler: admin.NewHandler(admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
-			StepUpTokens: tokens, StepUpAccounts: roles, PublicURL: "https://admin.test", StepUpMaxAuthAge: maxAuthAge})}
+			StepUpTokens: tokens, StepUpAccounts: roles, Sessions: sessions, PublicURL: "https://admin.test",
+			StepUpMaxAuthAge: maxAuthAge}), sessions: sessions}
 }
 
 func (w *stepUpWorld) serve(path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -204,6 +211,9 @@ func (w *stepUpWorld) stepUp(claims map[string]any) *httptest.ResponseRecorder {
 	w.idp.mu.Lock()
 	w.idp.claims, w.idp.nonce = claims, q.Get("nonce")
 	w.idp.mu.Unlock()
+	if w.onAuthorize != nil {
+		w.onAuthorize()
+	}
 	// Authentik redirects back cross-site: the SameSite=Strict session cookie is not sent.
 	return w.serve("/api/auth/stepup/callback?code=c&state="+url.QueryEscape(q.Get("state")), state)
 }
@@ -268,6 +278,24 @@ func TestStepUp(t *testing.T) {
 		}
 		if res := newStepUpWorldWith(t, 15*time.Second).stepUp(good); res.Header().Get("Location") != "/devices/x" {
 			t.Fatalf("5 s old login with max_age 15: %s", res.Header().Get("Location"))
+		}
+	})
+	t.Run("session ended on the server", func(t *testing.T) {
+		w := newStepUpWorld(t)
+		delete(w.sessions.records, "sid-alice")
+		value, err := w.keys.Seal(admin.SessionCookie, w.session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res := w.serve("/api/auth/stepup?return_to=%2F", &http.Cookie{Name: admin.SessionCookie, Value: value}); res.Code != http.StatusUnauthorized {
+			t.Fatalf("start for an ended session: %d", res.Code)
+		}
+	})
+	t.Run("session ended during the step-up", func(t *testing.T) {
+		w := newStepUpWorld(t)
+		w.onAuthorize = func() { delete(w.sessions.records, "sid-alice") }
+		if res := w.stepUp(good); res.Header().Get("Location") != "/devices/x?stepup=failed" || cookieOf(res, admin.SessionCookie) != nil {
+			t.Fatalf("callback for an ended session: %s", res.Header().Get("Location"))
 		}
 	})
 	t.Run("without session", func(t *testing.T) {

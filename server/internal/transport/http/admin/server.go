@@ -245,16 +245,7 @@ func (s *server) session(next http.Handler) http.Handler {
 			httpx.WriteProblem(w, r, problem.Unauthenticated)
 			return
 		}
-		rec, gen, found, err := s.d.Sessions.Get(r.Context(), sess.SID)
-		if err != nil {
-			// The cookie stays: the session is still valid once the store answers again (plan M8s decision 14).
-			slog.ErrorContext(r.Context(), "session store", "error", err)
-			httpx.WriteProblem(w, r, problem.SessionStoreUnavailable)
-			return
-		}
-		if !found || rec.Gen < gen || rec.AccountID != sess.PID || rec.Role != sess.Role || rec.Org != sess.Org {
-			http.SetCookie(w, sessionCookie("", -1))
-			httpx.WriteProblem(w, r, problem.Unauthenticated)
+		if !s.bff.sessionLive(w, r, sess) {
 			return
 		}
 		if reissue {

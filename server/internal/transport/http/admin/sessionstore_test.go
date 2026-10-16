@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
 )
@@ -93,4 +94,9 @@ func (f *fakeSessions) EndAll(context.Context) (int64, error) {
 	}
 	f.gen++
 	return f.gen, nil
+}
+
+// sessionsRecord is the record a login creates for p.
+func sessionsRecord(p principal.Principal) sessions.Record {
+	return sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role), Org: p.OrganizationID}
 }

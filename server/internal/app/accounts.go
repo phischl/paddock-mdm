@@ -374,6 +374,25 @@ func unauthenticatedIfGone(err error) error {
 	return err
 }
 
+// LoginStillValid re-reads the account of a login after its session record was created: false when the account was
+// disabled or got another role since the login committed. A revocation in between then cannot miss the new session
+// (it ran before the record existed).
+func (a *Accounts) LoginStillValid(ctx context.Context, p principal.Principal) (bool, error) {
+	if p.Kind != principal.KindAdmin {
+		return true, nil
+	}
+	var valid bool
+	err := a.org.InOrg(principal.With(ctx, p), func(ctx context.Context, q *pgstore.Queries) error {
+		acc, err := q.GetAdminAccount(ctx, p.ID)
+		if err != nil {
+			return err
+		}
+		valid = acc.DisabledAt == nil && acc.Role == string(p.Role)
+		return nil
+	})
+	return valid, err
+}
+
 // OrganizationID resolves the slug of a role group to its active organization (uuid.Nil: unknown or inactive).
 func (a *Accounts) OrganizationID(ctx context.Context, slug string) (uuid.UUID, error) {
 	return a.org.ResolveSlug(ctx, slug)
