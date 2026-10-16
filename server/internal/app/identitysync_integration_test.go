@@ -36,6 +36,8 @@ type directory struct {
 	// unlisted are UIDs the role group listings leave out (a paged listing that skipped them); a direct read still
 	// finds them.
 	unlisted map[string]bool
+	// directReads counts UserMembership calls by UID.
+	directReads map[string]int
 }
 
 func newDirectory() *directory {
@@ -74,6 +76,10 @@ func (d *directory) RoleGroupUsers(_ context.Context, name string) ([]ports.Iden
 func (d *directory) UserMembership(_ context.Context, username, uid string) (ports.IdentityUser, []string, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.directReads == nil {
+		d.directReads = map[string]int{}
+	}
+	d.directReads[uid]++
 	var u ports.IdentityUser
 	var groups []string
 	for name, members := range d.roleGroups {

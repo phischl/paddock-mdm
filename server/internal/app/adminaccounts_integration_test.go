@@ -295,7 +295,7 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 	}
 	suffix := uuid.NewString()[:8]
 	kept, removed, inactive, flaky := admin("root-"+suffix), admin("gone-"+suffix), admin("off-"+suffix), admin("flaky-"+suffix)
-	missed := admin("missed-" + suffix)
+	missed, idle := admin("missed-"+suffix), admin("idle-"+suffix)
 	dir := newDirectory()
 	dir.roleGroups = map[string][]ports.IdentityUser{organization.PlatformAdminsGroup(): {
 		{UID: "uid-root-" + suffix, Username: "renamed-root", Active: true}, {UID: "uid-off-" + suffix, Username: "off-" + suffix, Active: false},
@@ -332,6 +332,10 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 			t.Fatal(err)
 		}
 		return out
+	}
+	// An administrator without sessions costs no direct read and records nothing.
+	if n := dir.directReads["uid-idle-"+suffix]; n != 0 || len(event(idle)) != 0 {
+		t.Fatalf("administrator without sessions: %d direct reads, events %v", n, event(idle))
 	}
 	if got := event(flaky); len(got) != 2 || !slices.Contains(got, "success removed 1 true") || slices.Contains(got, "success removed 0 true") {
 		t.Fatalf("flaky administrator: events %v, want the failure and the retried success", got)

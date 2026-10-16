@@ -193,6 +193,16 @@ func (a *AdminAccounts) ReconcilePlatform(ctx context.Context) error {
 		if u := users[adm.AuthentikSub]; u != nil && u.active {
 			continue
 		}
+		// A platform administrator without sessions has nothing to end: once the sessions of a removed administrator
+		// are gone, later rounds cost no directory read for it.
+		open, err := a.sessions.CountAccount(ctx, adm.ID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("platform administrator %s: count sessions: %w", adm.ID, err))
+			continue
+		}
+		if open == 0 {
+			continue
+		}
 		confirmed, err := a.confirm(ctx, adm.Username, adm.AuthentikSub, []string{group})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("platform administrator %s: confirm: %w", adm.ID, err))
