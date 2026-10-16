@@ -108,12 +108,18 @@ func (f *File) Apply(ctx context.Context, r bundle.Resource) Result {
 }
 
 // Remove deletes a file that left the bundle if Paddock wrote it and nobody changed it since. It returns
-// ErrModified (and keeps the file) if the content differs from what Paddock wrote. Either way the file is no longer
-// managed afterwards.
+// ErrModified (and keeps the file) if the content differs from what Paddock wrote, and ErrDenied (and keeps the file
+// without reading it) if the policy now denies its path. Either way the file is no longer managed afterwards.
 func (f *File) Remove(path string) error {
 	sum, ok := f.Managed.Files[path]
 	if !ok {
 		return nil
+	}
+	if policy.ValidatePath(path) != nil {
+		if err := f.Managed.Forget(path); err != nil {
+			return err
+		}
+		return ErrDenied
 	}
 	data, _, err := f.Sys.ReadFile(path)
 	switch {
@@ -137,3 +143,7 @@ func (f *File) Remove(path string) error {
 
 // ErrModified is the message of a removed file resource whose file was changed locally (plan M2b decision 10).
 var ErrModified = errors.New("left_modified_file")
+
+// ErrDenied is the message of a removed file resource whose path the policy now denies: the file stays as it is
+// and is no longer managed (ADR 0034 decision 2).
+var ErrDenied = errors.New("left_denied_file")

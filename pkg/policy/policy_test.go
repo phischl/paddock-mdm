@@ -34,6 +34,60 @@ func TestValidatePath(t *testing.T) {
 	}
 }
 
+// classifyVectors are the test vectors of plan M8s §6.2 plus the tier rules for executables and /etc/.
+var classifyVectors = []struct {
+	path, mode string
+	want       Tier
+}{
+	{"/etc/ld.so.preload", "0644", TierDenied},
+	{"/etc/tmpfiles.d/x.conf", "0644", TierDenied},
+	{"/etc/systemd/system/sshd.service.d/override.conf", "0644", TierDenied},
+	{"/etc/polkit-1/rules.d/10.rules", "0644", TierDenied},
+	{"/etc/sudo.conf", "0644", TierDenied},
+	{"/etc/apparmor.d/usr.bin.x", "0644", TierDenied},
+	{"/opt/paddock/x", "0644", TierDenied},
+	{"/var/lib/x", "0644", TierDenied},
+	{"/etc", "0644", TierDenied},
+	{"/etc/sudoers.d/x", "0755", TierDenied},
+	{"/etc/cron.d/backup", "0644", TierSensitive},
+	{"/etc/systemd/system/myapp.service", "0644", TierSensitive},
+	{"/etc/profile.d/proxy.sh", "0644", TierSensitive},
+	{"/etc/ssh/sshd_config.d/10.conf", "0644", TierSensitive},
+	{"/etc/foo.conf", "0644", TierSensitive},
+	{"/etc/foo.d/bar.conf", "0644", TierSensitive},
+	{"/etc/myapp/hook.sh", "0755", TierSensitive},
+	{"/opt/myapp/bin/run", "0750", TierSensitive},
+	{"/etc/myapp/app.conf", "0755", TierSensitive},
+	{"/etc/myapp/app.conf", "0601", TierSensitive},
+	{"/etc/crontab", "0644", TierSensitive},
+	{"/etc/myapp/app.conf", "0644", TierOrdinary},
+	{"/usr/local/etc/tool.toml", "0644", TierOrdinary},
+	{"/opt/myapp/conf/settings.ini", "0640", TierOrdinary},
+	{"/etc/myapp.dir/x.conf", "0644", TierOrdinary},
+}
+
+func TestClassify(t *testing.T) {
+	for _, v := range classifyVectors {
+		t.Run(string(v.want)+":"+v.path+":"+v.mode, func(t *testing.T) {
+			got, err := Classify(v.path, v.mode)
+			if err != nil || got != v.want {
+				t.Fatalf("Classify(%q, %q) = %q, %v; want %q", v.path, v.mode, got, err, v.want)
+			}
+			if denied := errors.Is(ValidatePath(v.path), ErrPathNotAllowed); denied != (v.want == TierDenied) {
+				t.Fatalf("ValidatePath(%q) denied = %v, want %v", v.path, denied, v.want == TierDenied)
+			}
+		})
+	}
+	for _, bad := range [][2]string{
+		{"../etc/x", "0644"}, {"/etc/x", "0abc"}, {"/etc/x", "644"}, {"/etc/x", "4755"}, {"", "0644"},
+		{"/etc/a/../b", "0644"}, {"/etc/mo\ntd", "0644"},
+	} {
+		if _, err := Classify(bad[0], bad[1]); !errors.Is(err, ErrPathNotAllowed) {
+			t.Errorf("Classify(%q, %q) = %v, want ErrPathNotAllowed", bad[0], bad[1], err)
+		}
+	}
+}
+
 func TestValidateModeOwner(t *testing.T) {
 	for _, m := range []string{"0644", "0600", "0755", "0000", "0777"} {
 		if ValidateMode(m) != nil {

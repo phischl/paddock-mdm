@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Managed-file paths fall into three tiers (ADR 0034): denied paths (sudo, PAM, NSS and the other protected areas, the
+  loader, boot, initramfs, kernel module, sysctl, AppArmor, udev and polkit configuration, and the units of Paddock,
+  fleetd, Himmelblau, SSH, GDM, sudo and systemd) are refused by server and agent; sensitive paths (cron, systemd,
+  login scripts, SSH, network hooks, logrotate, any file directly in `/etc/`, any `/etc/<name>.d/` directory and every
+  file with an execute bit) and ordinary application configuration below `/etc/`, `/usr/local/etc/` and `/opt/`
+  remain manageable. The agent no longer deletes a managed file on a now-denied path when its definition leaves the
+  bundle: it keeps the file unchanged, stops tracking it and reports `left_denied_file`.
+
 - `PADDOCK_ACME_EMAIL` no longer stops `compose.prod.yaml` from rendering when it is unset, because the lab profile
   has no ACME. A production control plane still refuses to run without it: `./paddock check` fails the Caddy item
   and Caddy refuses to start.

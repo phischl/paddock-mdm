@@ -143,6 +143,37 @@ func TestFileRemove(t *testing.T) {
 	}
 }
 
+// TestFileRemoveDeniedPath: a file Paddock wrote on a path that the policy denies today is never deleted, not even
+// when it is unchanged; it is only forgotten (ADR 0034 decision 8).
+func TestFileRemoveDeniedPath(t *testing.T) {
+	ctx := context.Background()
+	sys := fakesys.New()
+	f := &reconcile.File{Sys: sys, Managed: managed(t)}
+	f.Apply(ctx, fileRes(t, "/etc/myapp/app.conf", "0644", "root", "root", "managed\n"))
+	sum := f.Managed.Files["/etc/myapp/app.conf"]
+	sys.Files["/etc/ld.so.preload"] = &fakesys.File{Data: []byte("managed\n"), Mode: 0o644}
+	if err := f.Managed.Record("/etc/ld.so.preload", sum); err != nil {
+		t.Fatal(err)
+	}
+	sys.TakeCalls()
+
+	if err := f.Remove("/etc/ld.so.preload"); !errors.Is(err, reconcile.ErrDenied) {
+		t.Fatalf("remove on a denied path: %v", err)
+	}
+	if got := sys.Files["/etc/ld.so.preload"]; got == nil || string(got.Data) != "managed\n" {
+		t.Fatalf("file on a denied path changed: %+v", got)
+	}
+	if calls := sys.TakeCalls(); len(calls) != 0 {
+		t.Fatalf("calls on a denied path: %v", calls)
+	}
+	if _, ok := f.Managed.Files["/etc/ld.so.preload"]; ok {
+		t.Fatal("denied path still managed")
+	}
+	if err := f.Remove("/etc/myapp/app.conf"); err != nil || sys.Files["/etc/myapp/app.conf"] != nil {
+		t.Fatalf("ordinary path not removed: %v", err)
+	}
+}
+
 // TestFileOnDisk runs the real OS port in a temporary root: atomic write, parent directories, mode, idempotency.
 func TestFileOnDisk(t *testing.T) {
 	ctx := context.Background()
