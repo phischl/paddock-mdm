@@ -24,3 +24,12 @@ check accepts every bundle a newer server produces. During a staged agent rollou
 device: an older agent deletes an unchanged managed file that left the bundle, a newer agent keeps a file on a
 denied path and stops tracking it. Operators roll the agent out before deleting denied definitions (residual risk
 RR-36).
+
+## Amendment 2026-10-16 (2) — upgrade order of the path tiers (ADR 0034 amendment of the same date)
+The trigger named in the first amendment of this date is wrong: an older agent does not wait for an administrator to
+delete denied definitions. The server stops shipping files on denied paths as soon as it is upgraded, and an agent
+older than that release deletes every unchanged file that leaves its bundle at its next check-in. For that release the
+upgrade order is therefore binding and reverses the usual order: **agents first, then the server** (the agent release
+is uploaded to the running server of the same minor version and rolled out to every device before the control plane
+is upgraded). Devices that are offline during the rollout and return with an older agent after the server upgrade are
+residual risk RR-36.

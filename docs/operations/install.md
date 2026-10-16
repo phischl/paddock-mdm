@@ -250,8 +250,16 @@ restore drill are in the same document.
 Upgrades extract the new bundle next to the running one and take over its `.env` and `.secrets/`:
 `docs/operations/upgrade.md`. Agent releases are separate: `docs/operations/agent-releases.md`.
 
-After the upgrade to the release with the managed-file path tiers and the step-up on effectively Full profiles
-(ADR 0034), run the security review once on the control plane:
+**Release with the managed-file path tiers (ADR 0034): agents first, then the server.** From this release on the
+server no longer ships managed files on denied paths. An agent of this release keeps such a file on the device
+unchanged and stops tracking it (`left_denied_file`); an agent older than this release deletes every unchanged file
+that leaves its bundle, so it would delete those files at its next check-in after the server upgrade, without any
+operator action. Before you upgrade the control plane, upload the agent release of the new version to the running
+server and roll it out to every device (`docs/operations/agent-releases.md`); upgrade the server only when no device
+runs an older agent. A device that is offline during the rollout and returns after the server upgrade with an older
+agent loses its unchanged files on denied paths (residual risk RR-36).
+
+After the upgrade of the server, run the security review once on the control plane:
 
 ```sh
 docker compose … run --rm --no-deps paddock-worker admin security-review
@@ -260,8 +268,9 @@ docker compose … run --rm --no-deps paddock-worker admin security-review
 It prints one line per organization (`<slug>: root_grants=<n> sensitive_files=<n> denied_files=<n>`) and records
 `organization.security_review_required` in every organization with something to review. Organization administrators
 then open the banner on the overview (`/security-review`): they confirm existing root grants and files on sensitive
-paths with a step-up, and delete the definitions on denied paths they no longer need. Nothing is withdrawn from
-devices; files on denied paths are no longer shipped and stay on the devices unchanged.
+paths with a step-up, and delete the definitions on denied paths they no longer need. Root grants and files on
+sensitive paths keep working while they await review. Files on denied paths are no longer shipped; they stay on the
+devices unchanged only on agents of this release or newer (see the upgrade order above).
 
 ## 13. Residual risks you must record in your ISMS
 

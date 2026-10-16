@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Upgrade order for the release with the managed-file path tiers: roll out the new agent to every device first, then
+  upgrade the server. The new server no longer ships managed files on denied paths, and an older agent would delete
+  unchanged files that leave its bundle (`docs/operations/upgrade.md`, residual risk RR-36).
+
 - Managed files on paths outside the denied catalog are sensitive by default: an operator manages files without a
   step-up only below the organization's operator roots (new setting, empty by default: portal Configuration →
   Operator roots, `GET|PUT /api/v1/settings/managed-files`, declarative `settings.managed_files`, audited as

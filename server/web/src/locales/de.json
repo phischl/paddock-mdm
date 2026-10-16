@@ -1576,7 +1576,7 @@
   },
   "securityReview": {
     "title": "Sicherheitsprüfung",
-    "intro": "Diese Einträge bestanden, bevor Root-Berechtigungen und sensible Pfade eine Identitätsbestätigung erforderten. Sie wirken weiter; ein Organisationsadministrator bestätigt jeden mit einer Identitätsbestätigung. Dateien auf gesperrten Pfaden werden nicht mehr an Geräte verteilt und bleiben dort unverändert, bis Sie ihre Definition löschen.",
+    "intro": "Diese Einträge bestanden, bevor Root-Berechtigungen und sensible Pfade eine Identitätsbestätigung erforderten. Sie wirken weiter; ein Organisationsadministrator bestätigt jeden mit einer Identitätsbestätigung. Dateien auf gesperrten Pfaden werden nicht mehr verteilt: Agents dieses Releases oder neuer lassen sie auf den Geräten unverändert, ältere Agents löschen unveränderte Dateien, sobald sie nicht mehr verteilt werden. Verteilen Sie den aktuellen Agent vor dem Server-Upgrade.",
     "rootGrants": "Root-Berechtigungen ohne Bestätigung ({total, number})",
     "sensitiveFiles": "Dateien auf sensiblen Pfaden ohne Bestätigung ({total, number})",
     "deniedFiles": "Dateien auf gesperrten Pfaden, nicht verteilt ({total, number})",
@@ -1587,7 +1587,7 @@
     "confirmTitle": "Nach Identitätsbestätigung bestätigen",
     "confirmProfile": "Bestätigen, dass {name} weiterhin root-Rechte geben darf? Anschließend bestätigen Sie Ihre Identität.",
     "confirmFile": "Bestätigen, dass {name} auf einem sensiblen Pfad verwaltet bleiben darf? Anschließend bestätigen Sie Ihre Identität.",
-    "deniedIntro": "Paddock verwaltet diese Pfade nicht mehr. Löschen Sie die Definitionen, die Sie nicht mehr brauchen; die Dateien auf den Geräten bleiben unverändert.",
+    "deniedIntro": "Paddock verwaltet diese Pfade nicht mehr. Agents dieses Releases oder neuer lassen die Dateien auf den Geräten unverändert; ein älterer Agent löscht eine unveränderte Datei, sobald sie nicht mehr verteilt wird. Löschen Sie die Definitionen, die Sie nicht mehr brauchen.",
     "deleteDefinition": "Definition löschen"
   }
 }

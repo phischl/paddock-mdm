@@ -1576,7 +1576,7 @@
   },
   "securityReview": {
     "title": "Security review",
-    "intro": "These items existed before root grants and sensitive paths needed a step-up. They keep working; an organization administrator confirms each with a step-up. Files on denied paths are no longer shipped to devices and stay there unchanged until you delete their definition.",
+    "intro": "These items existed before root grants and sensitive paths needed a step-up. They keep working; an organization administrator confirms each with a step-up. Files on denied paths are no longer shipped: agents of this release or newer keep them on the devices unchanged, while older agents delete unchanged files once they are no longer shipped. Roll out the current agent before the server upgrade.",
     "rootGrants": "Root grants awaiting confirmation ({total, number})",
     "sensitiveFiles": "Files on sensitive paths awaiting confirmation ({total, number})",
     "deniedFiles": "Files on denied paths, not shipped ({total, number})",
@@ -1587,7 +1587,7 @@
     "confirmTitle": "Confirm after a step-up",
     "confirmProfile": "Confirm that {name} may keep granting root? You confirm your identity next.",
     "confirmFile": "Confirm that {name} may stay managed on a sensitive path? You confirm your identity next.",
-    "deniedIntro": "Paddock no longer manages these paths. Delete the definitions you no longer need; the files on the devices stay as they are.",
+    "deniedIntro": "Paddock no longer manages these paths. Agents of this release or newer keep the files on the devices unchanged; an older agent deletes an unchanged file once it is no longer shipped. Delete the definitions you no longer need.",
     "deleteDefinition": "Delete definition"
   }
 }
