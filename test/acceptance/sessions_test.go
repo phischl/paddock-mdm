@@ -295,3 +295,29 @@ func TestAPITokenCreatorInactive(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionsPlatformAdminRemoved is the gate of PDK-185: a platform administrator removed from the platform group
+// loses the portal session within the worker's interval, and the revocation is recorded once in the platform
+// pseudo-organization.
+func TestSessionsPlatformAdminRemoved(t *testing.T) {
+	idx := auditIndex(t)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, password := tempUser(t, "pdk185", "paddock.platform.admins")
+	p, err := loginAs(t, user, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := whoami(t, p); m.Role != "platform_admin" {
+		t.Fatalf("role %s, want platform_admin", m.Role)
+	}
+	if err := ak.RemoveFromGroup(testContext(t, time.Minute), user, "paddock.platform.admins"); err != nil {
+		t.Fatal(err)
+	}
+	waitUnauthenticated(t, p, accountRoundTimeout)
+	if ev := revokedEvent(t, idx, platformOrg, user, auditPollTimeout); ev.Params["reason"] != "removed" {
+		t.Fatalf("event params %v", ev.Params)
+	}
+}

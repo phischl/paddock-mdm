@@ -19,17 +19,23 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
-// revoker counts the sessions it ends per account.
+// revoker counts the revocations per account; open, when set, is the number of sessions each account has (default 2).
 type revoker struct {
 	mu      sync.Mutex
 	revoked map[uuid.UUID]int
+	open    map[uuid.UUID]int
 }
 
 func (r *revoker) RevokeAccount(_ context.Context, id uuid.UUID) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.revoked[id]++
-	return 2, nil
+	if r.open == nil {
+		return 2, nil
+	}
+	n := r.open[id]
+	r.open[id] = 0
+	return n, nil
 }
 
 // TestAdminAccountsReconcile covers plan M8s decision 22: accounts follow their role groups with three listings per
@@ -89,7 +95,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 
 	sessions := &revoker{revoked: map[uuid.UUID]int{}}
 	corr := "corr-" + t.Name()
-	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, dir, sessions)
+	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, platform, dir, sessions)
 	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker", OrganizationID: org}), corr)
 
 	// Fail safe: a directory that answers with an error, a missing role group or no members at all changes nothing.
@@ -168,5 +174,80 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	}
 	if n := countRows(t, super, "SELECT count(*) FROM action WHERE code = 'admin.sessions_revoked' AND organization_id = $1", org); n != 4 {
 		t.Fatalf("%d events after the second round, want 4", n)
+	}
+}
+
+// TestAdminAccountsReconcilePlatform covers PDK-185: platform administrators the directory no longer lists, or lists as
+// deactivated, lose their sessions once with one event in the platform pseudo-organization; listed ones keep them; a
+// directory that cannot be read changes nothing.
+func TestAdminAccountsReconcilePlatform(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	worker, err := db.NewOrgPool(ctx, env.Worker, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(worker.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	admin := func(username string) uuid.UUID {
+		id := uuid.Must(uuid.NewV7())
+		if _, err := super.Exec(ctx, `INSERT INTO platform_admin (id, authentik_sub, username, display_name) VALUES ($1, $2, $3, $3)`,
+			id, uuid.NewString(), username); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	suffix := uuid.NewString()[:8]
+	kept, removed, inactive := admin("root-"+suffix), admin("gone-"+suffix), admin("off-"+suffix)
+	dir := newDirectory()
+	dir.roleGroups = map[string][]ports.IdentityUser{organization.PlatformAdminsGroup(): {
+		{PK: "1", Username: "root-" + suffix, Active: true}, {PK: "2", Username: "off-" + suffix, Active: false}}}
+	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{kept: 1, removed: 2, inactive: 1}}
+	corr := "corr-" + t.Name()
+	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, platform, dir, sessions)
+	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"}), corr)
+
+	dir.fail = errors.New("directory down")
+	if err := accounts.ReconcilePlatform(sys); err == nil || sessions.revoked[removed] != 0 {
+		t.Fatalf("directory down: %v, %d revocations", err, sessions.revoked[removed])
+	}
+	dir.fail = nil
+	for round := 1; round <= 2; round++ {
+		if err := accounts.ReconcilePlatform(sys); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := func(id uuid.UUID) []string {
+		rows, err := super.Query(ctx, `SELECT outcome || ' ' || (params->>'reason') || ' ' || (params->>'sessions') || ' ' ||
+			(organization_id = $2)::text FROM action WHERE code = 'admin.sessions_revoked' AND target->>'id' = $1`, id.String(), uuid.Nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	for name, c := range map[string]struct {
+		id    uuid.UUID
+		event string
+	}{"listed": {kept, ""}, "removed": {removed, "success removed 2 true"}, "deactivated": {inactive, "success deactivated 1 true"}} {
+		got := event(c.id)
+		if c.event == "" && (len(got) != 0 || sessions.revoked[c.id] != 0) {
+			t.Errorf("%s: events %v, %d revocations", name, got, sessions.revoked[c.id])
+		}
+		if c.event != "" && (len(got) != 1 || got[0] != c.event) {
+			t.Errorf("%s: events %v, want [%s]", name, got, c.event)
+		}
 	}
 }

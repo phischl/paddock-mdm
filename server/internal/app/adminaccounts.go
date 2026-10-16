@@ -21,13 +21,15 @@ import (
 type AdminAccounts struct {
 	runner   *ActionRunner
 	org      *db.OrgPool
+	platform *db.PlatformPool
 	dir      ports.UserDirectory
 	sessions SessionRevoker
 }
 
 // NewAdminAccounts creates the use case.
-func NewAdminAccounts(runner *ActionRunner, org *db.OrgPool, dir ports.UserDirectory, sessions SessionRevoker) *AdminAccounts {
-	return &AdminAccounts{runner: runner, org: org, dir: dir, sessions: sessions}
+func NewAdminAccounts(runner *ActionRunner, org *db.OrgPool, platform *db.PlatformPool, dir ports.UserDirectory,
+	sessions SessionRevoker) *AdminAccounts {
+	return &AdminAccounts{runner: runner, org: org, platform: platform, dir: dir, sessions: sessions}
 }
 
 // ErrDirectoryEmpty fails a round whose role group listings are all empty while accounts are enabled.
@@ -129,4 +131,75 @@ func change(acc pgstore.AdminAccount, u *directoryUser) (reason string, newRole 
 		return RevokeReasonRoleChanged, res.Role
 	}
 	return "", ""
+}
+
+// ReconcilePlatform ends the portal sessions of every platform administrator whom the directory no longer lists, active,
+// in paddock.platform.admins (PDK-185). A platform administrator has no account state to change: the next login is
+// refused by the groups claim. One admin.sessions_revoked is recorded in the platform pseudo-organization when sessions
+// were ended, none when there were none, so a removed administrator is recorded once. A failing listing, a missing
+// group or an empty listing while platform administrators exist change nothing.
+func (a *AdminAccounts) ReconcilePlatform(ctx context.Context) error {
+	var admins []pgstore.PlatformAdmin
+	if err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		admins, err = q.ListPlatformAdmins(ctx)
+		return err
+	}); err != nil || len(admins) == 0 {
+		return err
+	}
+	group := organization.PlatformAdminsGroup()
+	members, err := a.dir.RoleGroupUsers(ctx, group)
+	if err != nil {
+		return fmt.Errorf("role group %s: %w", group, err)
+	}
+	if len(members) == 0 {
+		return fmt.Errorf("%w: %s lists no members while %d platform administrators exist", ErrDirectoryEmpty, group, len(admins))
+	}
+	users := map[string]*directoryUser{}
+	for _, m := range members {
+		key := user.NormalizeUsername(m.Username)
+		switch u := users[key]; {
+		case key == "":
+		case u == nil:
+			users[key] = &directoryUser{pk: m.PK, groups: []string{group}, active: m.Active}
+		case u.pk != m.PK:
+			u.ambiguous = true
+		}
+	}
+	var errs []error
+	for _, adm := range admins {
+		u := users[user.NormalizeUsername(adm.Username)]
+		var reason string
+		switch {
+		case u != nil && u.ambiguous:
+			slog.WarnContext(ctx, "platform administrator left unchanged: two directory users share its username", "account_id", adm.ID)
+			continue
+		case u == nil:
+			reason = RevokeReasonRemoved
+		case !u.active:
+			reason = RevokeReasonDeactivated
+		default:
+			continue
+		}
+		if err := a.revokePlatformAdmin(ctx, adm, reason); err != nil {
+			errs = append(errs, fmt.Errorf("platform administrator %s: %w", adm.ID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// revokePlatformAdmin ends the sessions of adm and records them; with no session to end nothing is recorded. The
+// sessions end before the event's transaction, so a failing record is logged by the caller with the sessions already
+// ended (fail safe).
+func (a *AdminAccounts) revokePlatformAdmin(ctx context.Context, adm pgstore.PlatformAdmin, reason string) error {
+	n, err := a.sessions.RevokeAccount(ctx, adm.ID)
+	if err != nil || n == 0 {
+		return err
+	}
+	spec := ActionSpec{
+		Code:   audit.CodeAdminSessionsRevoked,
+		Target: &audit.Target{Type: "platform_admin", ID: adm.ID.String(), Display: adm.Username},
+		Params: map[string]any{"reason": reason, "sessions": n, "old_role": string(principal.RolePlatform), "new_role": ""},
+	}
+	return a.runner.RunTx(ctx, ScopePlatform, spec, func(context.Context, *pgstore.Queries, Recorder) error { return nil })
 }

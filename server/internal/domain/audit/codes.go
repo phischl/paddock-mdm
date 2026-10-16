@@ -941,7 +941,7 @@ var registry = map[Code]Definition{
 		Description: "Every portal session of an administrator account was ended by the server because the account's role or state changed (actor: system).",
 		Params:      []string{"reason", "sessions", "old_role", "new_role"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "reason is step_up_role_mismatch, role_changed, deactivated or removed; sessions is the number of sessions ended; old_role and new_role are empty when unchanged or none. Target is the administrator account.",
+		Note:        "reason is step_up_role_mismatch, role_changed, deactivated or removed; sessions is the number of sessions ended; old_role and new_role are empty when unchanged or none. Target is the administrator account (admin_account), or the platform administrator (platform_admin) in the platform pseudo-organization.",
 	},
 	CodePlatformSessionsEnded: {
 		Code: CodePlatformSessionsEnded, Emitted: true,

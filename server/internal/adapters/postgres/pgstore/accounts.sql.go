@@ -139,6 +139,39 @@ func (q *Queries) ListAdminAccounts(ctx context.Context) ([]AdminAccount, error)
 	return items, nil
 }
 
+const listPlatformAdmins = `-- name: ListPlatformAdmins :many
+SELECT id, authentik_sub, username, display_name, locale, last_login_at, theme FROM platform_admin ORDER BY id
+`
+
+// Every platform administrator that ever signed in, for the worker round admin-accounts (PDK-185).
+func (q *Queries) ListPlatformAdmins(ctx context.Context) ([]PlatformAdmin, error) {
+	rows, err := q.db.Query(ctx, listPlatformAdmins)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PlatformAdmin{}
+	for rows.Next() {
+		var i PlatformAdmin
+		if err := rows.Scan(
+			&i.ID,
+			&i.AuthentikSub,
+			&i.Username,
+			&i.DisplayName,
+			&i.Locale,
+			&i.LastLoginAt,
+			&i.Theme,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setAdminAccountRole = `-- name: SetAdminAccountRole :exec
 UPDATE admin_account SET role = $1 WHERE id = $2
 `

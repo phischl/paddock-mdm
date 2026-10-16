@@ -111,7 +111,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak),
-		app.NewAdminAccounts(runner, pool, ak, sessions.NewStore(vk)), ak, pool, platformPool, syncEvery, reconcileEvery)
+		app.NewAdminAccounts(runner, pool, platformPool, ak, sessions.NewStore(vk)), ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
 		platformPool, inventoryEvery)
@@ -149,6 +149,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		identity.RunSync,
 		identity.RunReconcile,
 		identity.RunAdminAccounts,
+		identity.RunPlatformAdmins,
 		identity.RunBrandFlows,
 		inventory.RunSettings,
 		inventory.RunSync,

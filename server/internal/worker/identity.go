@@ -8,6 +8,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
@@ -30,9 +31,10 @@ type BrandFlows interface {
 
 // Advisory locks of the identity rounds ("paddock idsync", "paddock idrecn", "paddock idacct").
 const (
-	identitySyncLockKey          = 0x7061646420696473
-	identityReconcileLockKey     = 0x706164642069647e
-	identityAdminAccountsLockKey = 0x7061646420696461
+	identitySyncLockKey           = 0x7061646420696473
+	identityReconcileLockKey      = 0x706164642069647e
+	identityAdminAccountsLockKey  = 0x7061646420696461
+	identityPlatformAdminsLockKey = 0x7061646420696470
 )
 
 // Identity runs the identity rounds: synced users and group mirrors every sync interval, the organizations'
@@ -88,16 +90,33 @@ func (i *Identity) RunAdminAccounts(ctx context.Context) error {
 	return i.every(ctx, i.syncEvery, identityAdminAccountsLockKey, "admin-accounts", i.accounts.Reconcile)
 }
 
+// RunPlatformAdmins ends the sessions of platform administrators the directory no longer lists (PDK-185), at start
+// and then every sync interval until ctx ends, under its own lock.
+func (i *Identity) RunPlatformAdmins(ctx context.Context) error {
+	return i.loop(ctx, i.syncEvery, "platform-admins", func(ctx context.Context) error {
+		sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
+		_, err := i.platform.WithLeaderLock(sys, identityPlatformAdminsLockKey, func(ctx context.Context) error {
+			return i.accounts.ReconcilePlatform(httpx.WithRequestID(ctx, "platform-admins-"+i.now().UTC().Format(time.RFC3339)))
+		})
+		return err
+	})
+}
+
 // RunReconcile runs the reconcile round at start and then every reconcile interval until ctx ends.
 func (i *Identity) RunReconcile(ctx context.Context) error {
 	return i.every(ctx, i.reconcile, identityReconcileLockKey, "identity-reconcile", i.sync.Reconcile)
 }
 
 func (i *Identity) every(ctx context.Context, interval time.Duration, lock int64, name string, fn func(ctx context.Context) error) error {
+	return i.loop(ctx, interval, name, func(ctx context.Context) error { return i.Round(ctx, lock, name, fn) })
+}
+
+// loop runs round at start and then every interval until ctx ends; a failed round is logged and retried next time.
+func (i *Identity) loop(ctx context.Context, interval time.Duration, name string, round func(ctx context.Context) error) error {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
-		if err := i.Round(ctx, lock, name, fn); err != nil && ctx.Err() == nil {
+		if err := round(ctx); err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "identity round failed; retrying next round", "round", name, "error", err)
 		}
 		select {
