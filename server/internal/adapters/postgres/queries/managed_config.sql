@@ -1,6 +1,8 @@
 -- name: InsertManagedFile :one
-INSERT INTO managed_file (id, organization_id, device_group_id, path, mode, owner, grp, content)
-VALUES (@id, @organization_id, sqlc.narg(device_group_id), @path, @mode, @owner, @grp, @content)
+INSERT INTO managed_file (id, organization_id, device_group_id, path, mode, owner, grp, content, sensitive_confirmed_at,
+  sensitive_confirmed_by)
+VALUES (@id, @organization_id, sqlc.narg(device_group_id), @path, @mode, @owner, @grp, @content,
+  sqlc.narg(sensitive_confirmed_at), sqlc.narg(sensitive_confirmed_by))
 RETURNING *;
 
 -- name: GetManagedFile :one
@@ -31,7 +33,14 @@ SELECT count(*) FROM (
 ) matching;
 
 -- name: UpdateManagedFile :one
-UPDATE managed_file SET path = @path, mode = @mode, owner = @owner, grp = @grp, content = @content, updated_at = now()
+UPDATE managed_file SET path = @path, mode = @mode, owner = @owner, grp = @grp, content = @content, updated_at = now(),
+  sensitive_confirmed_at = CASE WHEN @set_sensitive::bool THEN sqlc.narg(sensitive_confirmed_at) ELSE sensitive_confirmed_at END,
+  sensitive_confirmed_by = CASE WHEN @set_sensitive::bool THEN sqlc.narg(sensitive_confirmed_by) ELSE sensitive_confirmed_by END
+WHERE id = @id
+RETURNING *;
+
+-- name: ConfirmManagedFileSensitive :one
+UPDATE managed_file SET sensitive_confirmed_at = now(), sensitive_confirmed_by = sqlc.narg(confirmed_by)
 WHERE id = @id
 RETURNING *;
 

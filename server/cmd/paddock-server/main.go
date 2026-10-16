@@ -29,6 +29,7 @@ commands:
   admin bump-bundle-seq --by N
   admin recompile --all
   admin rebuild-cache
+  admin security-review
   admin allowlist show|disable
   admin allowlist add --cidr <cidr> --label <label>
   admin agent-release --version <x.y.z> --dir <dir>

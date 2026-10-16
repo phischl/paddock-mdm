@@ -29,6 +29,7 @@ function overviewOf(over: Partial<Overview> = {}): Overview {
       agent: { current_version: null, on_current: 0, outdated: 0, ahead: 0, unknown: 10, latest_published: null, rollout: null },
     },
     attention: { conditions: 5, devices: 3 },
+    security_review: { root_grants: 0, sensitive_files: 0, denied_files: 0 },
     ...over,
   }
 }
@@ -87,6 +88,7 @@ async function mountOverview(role = 'org_admin'): Promise<VueWrapper> {
       { path: '/devices/:id', name: 'device', component: stub },
       { path: '/vulnerabilities', name: 'vulnerabilities', component: stub },
       { path: '/vulnerabilities/:cve', name: 'vulnerability', component: stub },
+      { path: '/security-review', name: 'security-review', component: stub },
     ],
   })
   await router.push('/')
@@ -122,6 +124,18 @@ describe('overview helpers (plan M7c decision 28)', () => {
 })
 
 describe('overview page (plan M7c decision 28)', () => {
+  it('shows the security review banner with its counts and a link, and hides it at zero (ADR 0034 decision 7)', async () => {
+    let w = await mountOverview()
+    expect(w.find('[data-testid="security-review-banner"]').exists()).toBe(false)
+    w.unmount()
+    wrapper = null
+    overview = overviewOf({ security_review: { root_grants: 2, sensitive_files: 1, denied_files: 3 } })
+    w = await mountOverview()
+    const banner = w.find('[data-testid="security-review-banner"]')
+    expect(banner.text()).toContain('2 root grants and 1 file on a sensitive path await confirmation; 3 files on denied paths are not shipped.')
+    expect(banner.find('a').attributes('href')).toBe('/security-review')
+  })
+
   it('shows the heading, the subtitle, the KPI strip and the severity bar with a label listing every segment', async () => {
     const w = await mountOverview()
     expect(w.find('h1').text()).toBe('Overview')

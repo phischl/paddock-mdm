@@ -47,6 +47,8 @@ type handlers struct {
 	attention   *app.Attention
 	ipAllowlist *app.IPAllowlist
 	overview    *app.Overview
+	// securityReview is the review of existing data (ADR 0034 decision 7).
+	securityReview *app.SecurityReview
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).

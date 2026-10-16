@@ -44,6 +44,8 @@ type Deps struct {
 	Updates       *app.Updates
 	Attention     *app.Attention
 	Overview      *app.Overview
+	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
+	SecurityReview *app.SecurityReview
 	// IPAllowlist and IPGuard are the IP allow list of the administrative surfaces (plan M7a decisions 12 and 17);
 	// a nil IPGuard installs no enforcement (serveAPI always installs one).
 	IPAllowlist *app.IPAllowlist
@@ -96,6 +98,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/managed-files":                                           {app.ScopeOrg, app.SpecManagedFileCreate},
 	"PATCH /api/v1/managed-files/{id}":                                     {app.ScopeOrg, app.SpecManagedFileUpdate},
 	"DELETE /api/v1/managed-files/{id}":                                    {app.ScopeOrg, app.SpecManagedFileDelete},
+	"POST /api/v1/managed-files/{id}/confirm-sensitive":                    {app.ScopeOrg, app.SpecManagedFileConfirmSensitive},
 	"POST /api/v1/managed-units":                                           {app.ScopeOrg, app.SpecManagedUnitCreate},
 	"PATCH /api/v1/managed-units/{id}":                                     {app.ScopeOrg, app.SpecManagedUnitUpdate},
 	"DELETE /api/v1/managed-units/{id}":                                    {app.ScopeOrg, app.SpecManagedUnitDelete},
@@ -117,6 +120,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/permission-profiles":                                     {app.ScopeOrg, app.SpecProfileCreate},
 	"PATCH /api/v1/permission-profiles/{id}":                               {app.ScopeOrg, app.SpecProfileUpdate},
 	"DELETE /api/v1/permission-profiles/{id}":                              {app.ScopeOrg, app.SpecProfileDelete},
+	"POST /api/v1/permission-profiles/{id}/confirm-root-grant":             {app.ScopeOrg, app.SpecProfileConfirmRootGrant},
 	"POST /api/v1/profile-assignments":                                     {app.ScopeOrg, app.SpecAssignmentCreate},
 	"PATCH /api/v1/profile-assignments/{id}":                               {app.ScopeOrg, app.SpecAssignmentUpdate},
 	"DELETE /api/v1/profile-assignments/{id}":                              {app.ScopeOrg, app.SpecAssignmentDelete},
@@ -164,7 +168,8 @@ func NewHandler(d Deps) http.Handler {
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
-		declarative: d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now,
+		securityReview: d.SecurityReview,
+		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}

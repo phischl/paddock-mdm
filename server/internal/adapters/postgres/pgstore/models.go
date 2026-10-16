@@ -346,16 +346,18 @@ type IpAllowlistEntry struct {
 }
 
 type ManagedFile struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	DeviceGroupID  uuid.NullUUID
-	Path           string
-	Mode           string
-	Owner          string
-	Grp            string
-	Content        string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                   uuid.UUID
+	OrganizationID       uuid.UUID
+	DeviceGroupID        uuid.NullUUID
+	Path                 string
+	Mode                 string
+	Owner                string
+	Grp                  string
+	Content              string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	SensitiveConfirmedAt *time.Time
+	SensitiveConfirmedBy uuid.NullUUID
 }
 
 type ManagedUnit struct {
@@ -467,16 +469,18 @@ type PackageHold struct {
 }
 
 type PermissionProfile struct {
-	ID                  uuid.UUID
-	OrganizationID      uuid.UUID
-	Name                string
-	Class               string
-	Commands            []string
-	RequirePassword     bool
-	TimestampTimeoutMin int32
-	Lecture             string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                   uuid.UUID
+	OrganizationID       uuid.UUID
+	Name                 string
+	Class                string
+	Commands             []string
+	RequirePassword      bool
+	TimestampTimeoutMin  int32
+	Lecture              string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	RootGrantConfirmedAt *time.Time
+	RootGrantConfirmedBy uuid.NullUUID
 }
 
 type PlatformAdmin struct {

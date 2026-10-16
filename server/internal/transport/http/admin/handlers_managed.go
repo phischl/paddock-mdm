@@ -71,7 +71,8 @@ func (h *handlers) DeleteManagedFile(ctx context.Context, req adminapi.DeleteMan
 func toManagedFile(f pgstore.ManagedFile) adminapi.ManagedFile {
 	return adminapi.ManagedFile{
 		Id: f.ID, DeviceGroupId: idPtr(f.DeviceGroupID), Path: f.Path, Mode: f.Mode, Owner: f.Owner, Group: f.Grp,
-		Content: f.Content, Tier: adminapi.ManagedFileTier(fileTier(f)), CreatedAt: f.CreatedAt.UTC(), UpdatedAt: f.UpdatedAt.UTC(),
+		Content: f.Content, Tier: adminapi.ManagedFileTier(fileTier(f)),
+		SensitiveConfirmedAt: utcPtr(f.SensitiveConfirmedAt), CreatedAt: f.CreatedAt.UTC(), UpdatedAt: f.UpdatedAt.UTC(),
 	}
 }
 

@@ -250,6 +250,19 @@ restore drill are in the same document.
 Upgrades extract the new bundle next to the running one and take over its `.env` and `.secrets/`:
 `docs/operations/upgrade.md`. Agent releases are separate: `docs/operations/agent-releases.md`.
 
+After the upgrade to the release with the managed-file path tiers and the step-up on effectively Full profiles
+(ADR 0034), run the security review once on the control plane:
+
+```sh
+docker compose … run --rm --no-deps paddock-worker admin security-review
+```
+
+It prints one line per organization (`<slug>: root_grants=<n> sensitive_files=<n> denied_files=<n>`) and records
+`organization.security_review_required` in every organization with something to review. Organization administrators
+then open the banner on the overview (`/security-review`): they confirm existing root grants and files on sensitive
+paths with a step-up, and delete the definitions on denied paths they no longer need. Nothing is withdrawn from
+devices; files on denied paths are no longer shipped and stay on the devices unchanged.
+
 ## 13. Residual risks you must record in your ISMS
 
 Paddock leaves risks that only your organization can accept, mitigate or transfer, for example the young WORM

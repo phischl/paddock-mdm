@@ -194,22 +194,26 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 				return err
 			}
 		}
+		at, by := confirmation(ctx, privilege.RequiresStepUp(in))
 		row, err = ex.q.InsertPermissionProfile(ctx, pgstore.InsertPermissionProfileParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: ex.p.OrganizationID, Name: in.Name, Class: string(in.Class),
 			Commands: in.Commands, RequirePassword: in.RequirePassword,
 			TimestampTimeoutMin: int32(in.TimestampTimeoutMin), //nolint:gosec // validated 0–60
-			Lecture:             string(in.Lecture),
+			Lecture:             string(in.Lecture), RootGrantConfirmedAt: at, RootGrantConfirmedBy: by,
 		})
 	} else {
-		if profileChangeNeedsStepUp(ex.st.profiles[ex.st.names[c.Key]], in) {
+		steppedUp := profileChangeNeedsStepUp(ex.st.profiles[ex.st.names[c.Key]], in)
+		if steppedUp {
 			if err := ex.requireStepUp(); err != nil {
 				return err
 			}
 		}
-		row, err = ex.q.UpdatePermissionProfile(ctx, pgstore.UpdatePermissionProfileParams{
+		params := pgstore.UpdatePermissionProfileParams{
 			ID: ex.id(c), Name: in.Name, Class: string(in.Class), Commands: in.Commands, RequirePassword: in.RequirePassword,
 			TimestampTimeoutMin: int32(in.TimestampTimeoutMin), Lecture: string(in.Lecture), //nolint:gosec // validated 0–60
-		})
+		}
+		params.SetRootGrant, params.RootGrantConfirmedAt, params.RootGrantConfirmedBy = rootGrantChange(ctx, in, steppedUp)
+		row, err = ex.q.UpdatePermissionProfile(ctx, params)
 	}
 	if db.IsUniqueViolation(err, "permission_profile_organization_id_name_key") {
 		return problem.NameTaken.WithDetail("a permission profile with this name exists")
@@ -247,6 +251,7 @@ func (ex *configExec) file(ctx context.Context, c declarative.Change) error {
 			return err
 		}
 	}
+	at, by := confirmation(ctx, tier == policy.TierSensitive)
 	if c.Action == declarative.ActionCreate {
 		group, gerr := ex.group(f.DeviceGroup)
 		if gerr != nil {
@@ -254,11 +259,13 @@ func (ex *configExec) file(ctx context.Context, c declarative.Change) error {
 		}
 		_, err = ex.q.InsertManagedFile(ctx, pgstore.InsertManagedFileParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: ex.p.OrganizationID, DeviceGroupID: nullID(group), Path: next.Path,
-			Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content,
+			Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content, SensitiveConfirmedAt: at,
+			SensitiveConfirmedBy: by,
 		})
 	} else {
 		_, err = ex.q.UpdateManagedFile(ctx, pgstore.UpdateManagedFileParams{
 			ID: ex.id(c), Path: next.Path, Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content,
+			SetSensitive: true, SensitiveConfirmedAt: at, SensitiveConfirmedBy: by,
 		})
 	}
 	if db.IsUniqueViolation(err, "") {

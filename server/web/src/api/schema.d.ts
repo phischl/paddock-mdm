@@ -443,6 +443,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/permission-profiles/{id}/confirm-root-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Confirms an effectively Full profile that existed before the step-up rule covered it; needs
+         *     a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). A profile that is not
+         *     effectively Full: 409 invalid_state.
+         */
+        post: operations["confirmPermissionProfileRootGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/managed-files/{id}/confirm-sensitive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Confirms a managed file on a sensitive path that existed before the path tiers; needs a
+         *     step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). A file on another tier:
+         *     409 invalid_state.
+         */
+        post: operations["confirmManagedFileSensitive"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/approve": {
         parameters: {
             query?: never;
@@ -978,6 +1024,28 @@ export interface paths {
         };
         /** @description Roles: org_admin, org_operator, org_auditor. The numbers of the overview page, computed in one transaction; never cached. */
         get: operations["getOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The review of existing data (ADR 0034 decision 7): effectively Full
+         *     permission profiles and managed files on sensitive paths that no organization administrator has confirmed with
+         *     a step-up yet, and managed files on denied paths, which are not shipped to devices. One review object, not a
+         *     collection: every list holds at most 100 items ordered by name or path, and total counts all of them.
+         */
+        get: operations["getSecurityReview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2964,6 +3032,34 @@ export interface components {
             vulnerabilities: components["schemas"]["OverviewVulnerabilities"];
             updates: components["schemas"]["OverviewUpdates"];
             attention: components["schemas"]["OverviewAttention"];
+            security_review: components["schemas"]["OverviewSecurityReview"];
+        };
+        /** @description The totals of GET /api/v1/security-review. */
+        OverviewSecurityReview: {
+            root_grants: number;
+            sensitive_files: number;
+            denied_files: number;
+        };
+        SecurityReview: {
+            /** Format: date-time */
+            generated_at: string;
+            root_grants: components["schemas"]["SecurityReviewProfiles"];
+            sensitive_files: components["schemas"]["SecurityReviewFiles"];
+            denied_files: components["schemas"]["SecurityReviewFiles"];
+        };
+        /** @description Effectively Full profiles without a confirmation, by name. */
+        SecurityReviewProfiles: {
+            total: number;
+            items: components["schemas"]["SecurityReviewProfile"][];
+        };
+        SecurityReviewProfile: {
+            profile: components["schemas"]["PermissionProfile"];
+            assignments: number;
+        };
+        /** @description Managed files of one tier, by path. */
+        SecurityReviewFiles: {
+            total: number;
+            items: components["schemas"]["ManagedFile"][];
         };
         OverviewDevices: {
             /** @description pending + active + quarantined */
@@ -3313,6 +3409,11 @@ export interface components {
             group: string;
             content: string;
             tier: components["schemas"]["ManagedFileTier"];
+            /**
+             * Format: date-time
+             * @description When an organization administrator confirmed this file on a sensitive path with a step-up; null otherwise.
+             */
+            sensitive_confirmed_at: string | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -3597,6 +3698,11 @@ export interface components {
             /** @description A command hands out root on its own or in combination. */
             root_equivalent: boolean;
             effective_class: components["schemas"]["PrivilegeClass"];
+            /**
+             * Format: date-time
+             * @description When an organization administrator confirmed this effectively Full profile with a step-up; null otherwise.
+             */
+            root_grant_confirmed_at: string | null;
             root_equivalent_commands: string[];
             /**
              * @description Commands stored before the command check was tightened that it now refuses. A profile with invalid commands
@@ -4706,6 +4812,62 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    confirmPermissionProfileRootGrant: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The confirmed profile. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    confirmManagedFileSensitive: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The confirmed managed file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFile"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     approveDevice: {
@@ -5996,6 +6158,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Overview"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getSecurityReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The security review of the organization. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityReview"];
                 };
             };
             401: components["responses"]["Problem"];

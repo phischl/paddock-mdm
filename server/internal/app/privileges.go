@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -36,6 +37,9 @@ var (
 	SpecAssignmentCreate = ActionSpec{Code: audit.CodeProfileAssignmentCreated, AllowedRoles: RolesWrite}
 	SpecAssignmentUpdate = ActionSpec{Code: audit.CodeProfileAssignmentUpdated, AllowedRoles: RolesWrite}
 	SpecAssignmentDelete = ActionSpec{Code: audit.CodeProfileAssignmentDeleted, AllowedRoles: RolesWrite}
+	// SpecProfileConfirmRootGrant confirms an effectively Full profile that predates the step-up rule (ADR 0034
+	// decision 7).
+	SpecProfileConfirmRootGrant = ActionSpec{Code: audit.CodePermissionProfileRootGrantConfirmed, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 )
 
 // ListProfiles returns one page of permission profiles.
@@ -127,10 +131,11 @@ func (p *Privileges) CreateProfile(ctx context.Context, in privilege.Profile) (p
 		if err != nil {
 			return err
 		}
+		at, by := confirmation(ctx, privilege.RequiresStepUp(in))
 		out, err = q.InsertPermissionProfile(ctx, pgstore.InsertPermissionProfileParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Name: in.Name, Class: string(in.Class), Commands: in.Commands,
 			RequirePassword: in.RequirePassword, TimestampTimeoutMin: int32(in.TimestampTimeoutMin), //nolint:gosec // validated 0–60
-			Lecture: string(in.Lecture),
+			Lecture: string(in.Lecture), RootGrantConfirmedAt: at, RootGrantConfirmedBy: by,
 		})
 		if db.IsUniqueViolation(err, "permission_profile_organization_id_name_key") {
 			return problem.NameTaken.WithDetail("a permission profile with this name exists")
@@ -185,15 +190,18 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 		if err != nil {
 			return err
 		}
-		if profileChangeNeedsStepUp(cur, in) {
+		steppedUp := profileChangeNeedsStepUp(cur, in)
+		if steppedUp {
 			if err := rec.RequireStepUp(); err != nil {
 				return err
 			}
 		}
-		out, err = q.UpdatePermissionProfile(ctx, pgstore.UpdatePermissionProfileParams{
+		params := pgstore.UpdatePermissionProfileParams{
 			ID: id, Name: in.Name, Class: string(in.Class), Commands: in.Commands, RequirePassword: in.RequirePassword,
 			TimestampTimeoutMin: int32(in.TimestampTimeoutMin), Lecture: string(in.Lecture), //nolint:gosec // validated 0–60
-		})
+		}
+		params.SetRootGrant, params.RootGrantConfirmedAt, params.RootGrantConfirmedBy = rootGrantChange(ctx, in, steppedUp)
+		out, err = q.UpdatePermissionProfile(ctx, params)
 		if db.IsUniqueViolation(err, "permission_profile_organization_id_name_key") {
 			return problem.NameTaken.WithDetail("a permission profile with this name exists")
 		}
@@ -202,6 +210,42 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil
+	})
+	return out, err
+}
+
+// rootGrantChange is how an update changes the confirmation columns: a stepped-up change confirms the grant, a
+// profile that is no longer effectively Full loses its confirmation, and any other change keeps it.
+func rootGrantChange(ctx context.Context, in privilege.Profile, steppedUp bool) (bool, *time.Time, uuid.NullUUID) {
+	if !steppedUp && privilege.RequiresStepUp(in) {
+		return false, nil, uuid.NullUUID{}
+	}
+	at, by := confirmation(ctx, steppedUp)
+	return true, at, by
+}
+
+// ConfirmRootGrant confirms, with a step-up, an effectively Full profile that existed before the step-up rule covered
+// it (audited: permission_profile.root_grant_confirmed); a profile that is not effectively Full is 409 invalid_state.
+func (p *Privileges) ConfirmRootGrant(ctx context.Context, id uuid.UUID) (pgstore.PermissionProfile, error) {
+	spec := SpecProfileConfirmRootGrant
+	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
+	var out pgstore.PermissionProfile
+	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		cur, err := q.GetPermissionProfile(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		profile := profileOf(cur)
+		rec.SetTarget(audit.Target{Type: "permission_profile", ID: id.String(), Display: cur.Name})
+		rec.SetParam("name", cur.Name)
+		rec.SetParam("effective_class", string(privilege.EffectiveClass(profile)))
+		rec.SetParam("commands", cur.Commands)
+		if !privilege.RequiresStepUp(profile) {
+			return problem.InvalidState.WithDetail("the profile does not grant root")
+		}
+		_, by := confirmation(ctx, true)
+		out, err = q.ConfirmPermissionProfileRootGrant(ctx, pgstore.ConfirmPermissionProfileRootGrantParams{ID: id, ConfirmedBy: by})
+		return err
 	})
 	return out, err
 }

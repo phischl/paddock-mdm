@@ -239,6 +239,9 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/overview": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/overview", nil
 	}},
+	"GET /api/v1/security-review": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/security-review", nil
+	}},
 	"GET /api/v1/attention/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/attention/devices?page_size=100", nil
 	}},
@@ -301,6 +304,13 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/managed-files/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, nil),
 	"PATCH /api/v1/managed-files/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, map[string]any{"content": "taken over by acme"}),
 	"DELETE /api/v1/managed-files/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, nil),
+	// alice has a step-up (TestOrganizationIsolation), so the confirmations reach the lookup.
+	"POST /api/v1/managed-files/{id}/confirm-sensitive": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/managed-files/" + w.globexFile + "/confirm-sensitive"
+	}, nil),
+	"POST /api/v1/permission-profiles/{id}/confirm-root-grant": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/permission-profiles/" + w.globexProfile + "/confirm-root-grant"
+	}, nil),
 
 	"GET /api/v1/managed-units": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/managed-units?page_size=100", nil

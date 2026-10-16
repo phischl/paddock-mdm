@@ -25,7 +25,7 @@ import (
 // adminCommand is a parsed paddock-server admin command line (plan M6c decision 20; allowlist: plan M7a decision 21;
 // agent-release: plan M7b decision 31).
 type adminCommand struct {
-	name    string // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release
+	name    string // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | security-review
 	by      int64  // bump-bundle-seq only
 	sub     string // allowlist only: show | disable | add
 	cidr    string // allowlist add
@@ -58,7 +58,7 @@ func parseAdmin(args []string) (adminCommand, error) {
 		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || !*all {
 			return adminCommand{}, errUsage
 		}
-	case "rebuild-cache":
+	case "rebuild-cache", "security-review":
 		if len(args) != 1 {
 			return adminCommand{}, errUsage
 		}
@@ -156,6 +156,13 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 		fmt.Fprintf(os.Stdout, "cache rebuilt for %d organizations\n", n)
 	case "allowlist":
 		return runAllowlist(ctx, cmd, admin.Runner(), platformPool, vkCfg)
+	case "security-review":
+		reviews, err := admin.SecurityReviewAll(ctx)
+		for _, r := range reviews {
+			fmt.Fprintf(os.Stdout, "%s: root_grants=%d sensitive_files=%d denied_files=%d\n", r.Slug, r.Counts.RootGrants,
+				r.Counts.SensitiveFiles, r.Counts.DeniedFiles)
+		}
+		return err
 	}
 	return nil
 }

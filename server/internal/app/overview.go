@@ -36,6 +36,7 @@ type OverviewResult struct {
 	Vulnerabilities OverviewVulnerabilities
 	Updates         OverviewUpdates
 	Attention       pgstore.OverviewAttentionRow
+	SecurityReview  SecurityReviewCounts
 }
 
 // OverviewVulnerabilities: devices by their worst finding, the critical and high CVEs, and the top CVEs.
@@ -168,6 +169,11 @@ func (o *Overview) Get(ctx context.Context) (OverviewResult, error) {
 		if out.Attention, err = q.OverviewAttention(ctx); err != nil {
 			return fmt.Errorf("overview attention: %w", err)
 		}
+		review, err := securityReviewIn(ctx, q, out.GeneratedAt)
+		if err != nil {
+			return err
+		}
+		out.SecurityReview = review.Counts()
 		return nil
 	})
 	return out, err

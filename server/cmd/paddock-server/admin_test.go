@@ -15,6 +15,7 @@ func TestParseAdmin(t *testing.T) {
 		{[]string{"bump-bundle-seq", "--by", "1000000000"}, adminCommand{name: "bump-bundle-seq", by: 1000000000}},
 		{[]string{"recompile", "--all"}, adminCommand{name: "recompile"}},
 		{[]string{"rebuild-cache"}, adminCommand{name: "rebuild-cache"}},
+		{[]string{"security-review"}, adminCommand{name: "security-review"}},
 		{[]string{"allowlist", "show"}, adminCommand{name: "allowlist", sub: "show"}},
 		{[]string{"allowlist", "disable"}, adminCommand{name: "allowlist", sub: "disable"}},
 		{[]string{"allowlist", "add", "--cidr", "203.0.113.0/24", "--label", "host"}, adminCommand{name: "allowlist", sub: "add", cidr: "203.0.113.0/24", label: "host"}},
@@ -30,7 +31,7 @@ func TestParseAdmin(t *testing.T) {
 	for _, args := range [][]string{
 		nil, {"unknown"}, {"bump-bundle-seq"}, {"bump-bundle-seq", "--by", "0"}, {"bump-bundle-seq", "--by", "-5"},
 		{"bump-bundle-seq", "--by", "1000000001"}, {"bump-bundle-seq", "--by", "x"}, {"bump-bundle-seq", "--by", "5", "extra"},
-		{"recompile"}, {"recompile", "--all", "x"}, {"recompile", "--some"}, {"rebuild-cache", "--all"},
+		{"recompile"}, {"recompile", "--all", "x"}, {"recompile", "--some"}, {"rebuild-cache", "--all"}, {"security-review", "x"},
 		{"allowlist"}, {"allowlist", "list"}, {"allowlist", "show", "x"}, {"allowlist", "disable", "--all"},
 		{"allowlist", "add"}, {"allowlist", "add", "--cidr", "203.0.113.0/24"}, {"allowlist", "add", "--label", "host"},
 		{"allowlist", "add", "--cidr", "203.0.113.0/24", "--label", "host", "extra"},

@@ -13,7 +13,7 @@ import { useSessionStore } from '../stores/session'
 
 const cron: ManagedFile = {
   id: 'f1', device_group_id: null, path: '/etc/cron.d/backup', mode: '0644', owner: 'root', group: 'root', content: 'x',
-  tier: 'sensitive', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+  tier: 'sensitive', sensitive_confirmed_at: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
 }
 const saveManagedFile = vi.fn<(id: string | null, input: FileInput) => Promise<string | null>>()
 

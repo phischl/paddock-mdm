@@ -769,6 +769,52 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/permission-profiles/{id}/confirm-root-grant:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: confirmPermissionProfileRootGrant
+      tags: [privileges]
+      description: |
+        Roles: org_admin. Confirms an effectively Full profile that existed before the step-up rule covered it; needs
+        a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). A profile that is not
+        effectively Full: 409 invalid_state.
+      x-paddock-audit: permission_profile.root_grant_confirmed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The confirmed profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PermissionProfile" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/managed-files/{id}/confirm-sensitive:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: confirmManagedFileSensitive
+      tags: [managed-config]
+      description: |
+        Roles: org_admin. Confirms a managed file on a sensitive path that existed before the path tiers; needs a
+        step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). A file on another tier:
+        409 invalid_state.
+      x-paddock-audit: managed_file.sensitive_confirmed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: The confirmed managed file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagedFile" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/approve:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -1734,6 +1780,23 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Overview" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/v1/security-review:
+    get:
+      operationId: getSecurityReview
+      tags: [overview]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The review of existing data (ADR 0034 decision 7): effectively Full
+        permission profiles and managed files on sensitive paths that no organization administrator has confirmed with
+        a step-up yet, and managed files on denied paths, which are not shipped to devices. One review object, not a
+        collection: every list holds at most 100 items ordered by name or path, and total counts all of them.
+      responses:
+        "200":
+          description: The security review of the organization.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecurityReview" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
   /api/v1/attention/devices:
@@ -4660,7 +4723,7 @@ components:
         sort: { type: string, description: Applied sort. }
     Overview:
       type: object
-      required: [generated_at, devices, encryption, vulnerabilities, updates, attention]
+      required: [generated_at, devices, encryption, vulnerabilities, updates, attention, security_review]
       properties:
         generated_at: { type: string, format: date-time }
         devices: { $ref: "#/components/schemas/OverviewDevices" }
@@ -4668,6 +4731,49 @@ components:
         vulnerabilities: { $ref: "#/components/schemas/OverviewVulnerabilities" }
         updates: { $ref: "#/components/schemas/OverviewUpdates" }
         attention: { $ref: "#/components/schemas/OverviewAttention" }
+        security_review: { $ref: "#/components/schemas/OverviewSecurityReview" }
+    OverviewSecurityReview:
+      type: object
+      description: The totals of GET /api/v1/security-review.
+      required: [root_grants, sensitive_files, denied_files]
+      properties:
+        root_grants: { type: integer }
+        sensitive_files: { type: integer }
+        denied_files: { type: integer }
+    SecurityReview:
+      type: object
+      required: [generated_at, root_grants, sensitive_files, denied_files]
+      properties:
+        generated_at: { type: string, format: date-time }
+        root_grants: { $ref: "#/components/schemas/SecurityReviewProfiles" }
+        sensitive_files: { $ref: "#/components/schemas/SecurityReviewFiles" }
+        denied_files: { $ref: "#/components/schemas/SecurityReviewFiles" }
+    SecurityReviewProfiles:
+      type: object
+      description: Effectively Full profiles without a confirmation, by name.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/SecurityReviewProfile" }
+    SecurityReviewProfile:
+      type: object
+      required: [profile, assignments]
+      properties:
+        profile: { $ref: "#/components/schemas/PermissionProfile" }
+        assignments: { type: integer }
+    SecurityReviewFiles:
+      type: object
+      description: Managed files of one tier, by path.
+      required: [total, items]
+      properties:
+        total: { type: integer }
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/ManagedFile" }
     OverviewDevices:
       type: object
       required: [total, active, pending, quarantined, retired, rejected, online, silent, silent_critical, presumed_lost, never_contacted]
@@ -5033,7 +5139,7 @@ components:
         step-up), denied (refused; an existing definition is not shipped to devices).
     ManagedFile:
       type: object
-      required: [id, device_group_id, path, mode, owner, group, content, tier, created_at, updated_at]
+      required: [id, device_group_id, path, mode, owner, group, content, tier, sensitive_confirmed_at, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         device_group_id: { type: string, format: uuid, nullable: true, description: null = every device. }
@@ -5043,6 +5149,11 @@ components:
         group: { type: string }
         content: { type: string }
         tier: { $ref: "#/components/schemas/ManagedFileTier" }
+        sensitive_confirmed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When an organization administrator confirmed this file on a sensitive path with a step-up; null otherwise.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     ManagedFileCreate:
@@ -5382,7 +5493,7 @@ components:
     PermissionProfile:
       type: object
       required: [id, name, class, commands, require_password, timestamp_timeout_min, lecture, root_equivalent,
-                 effective_class, root_equivalent_commands, invalid_commands, created_at, updated_at]
+                 effective_class, root_equivalent_commands, invalid_commands, root_grant_confirmed_at, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
@@ -5395,6 +5506,11 @@ components:
         lecture: { $ref: "#/components/schemas/Lecture" }
         root_equivalent: { type: boolean, description: A command hands out root on its own or in combination. }
         effective_class: { $ref: "#/components/schemas/PrivilegeClass" }
+        root_grant_confirmed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When an organization administrator confirmed this effectively Full profile with a step-up; null otherwise.
         root_equivalent_commands:
           type: array
           items: { type: string }

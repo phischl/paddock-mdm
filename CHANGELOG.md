@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Security review of existing data (ADR 0034): `GET /api/v1/security-review` lists effectively Full permission
+  profiles and managed files on sensitive paths that no organization administrator has confirmed yet, and managed
+  files on denied paths; `POST /api/v1/permission-profiles/{id}/confirm-root-grant` and
+  `POST /api/v1/managed-files/{id}/confirm-sensitive` confirm an item with a step-up. Permission profiles carry
+  `root_grant_confirmed_at`, managed files `sensitive_confirmed_at`, and the overview `security_review` counts. The
+  portal shows a banner on the overview and the page Security review. Run `paddock-server admin security-review`
+  once after the upgrade; it prints the counts per organization and records them in the audit log. Existing grants and
+  files keep working while they await review.
+
 - Lab installation profile (plan M8a, ADR 0029; not for production): `PADDOCK_HOST=lab` runs control plane and audit
   domain in one Compose project on one amd64 host behind the operator's own TLS-terminating reverse proxy. The
   bundle ships `compose.lab.yaml`, `caddy/Caddyfile.lab` (plain-HTTP sites, `auto_https off`), the settings template

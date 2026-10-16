@@ -15,7 +15,7 @@ import { useSessionStore } from '../stores/session'
 const shell: PermissionProfile = {
   id: 'p1', name: 'shell', class: 'restricted', commands: ['/usr/bin/bash'], require_password: true,
   timestamp_timeout_min: 5, lecture: 'once', root_equivalent: true, effective_class: 'full',
-  root_equivalent_commands: ['/usr/bin/bash'], invalid_commands: [], created_at: '2026-10-01T00:00:00Z',
+  root_equivalent_commands: ['/usr/bin/bash'], invalid_commands: [], root_grant_confirmed_at: null, created_at: '2026-10-01T00:00:00Z',
   updated_at: '2026-10-01T00:00:00Z',
 }
 const createProfile = vi.fn<(input: ProfileInput) => Promise<PermissionProfile | string>>()

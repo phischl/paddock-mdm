@@ -129,6 +129,7 @@ docker compose … run --rm --no-deps paddock-worker admin recompile --all
 | `admin bump-bundle-seq --by N` (1 ≤ N ≤ 1 000 000 000) | Raises the bundle sequence of every device by N, so the next bundle is newer than anything a device accepted. | `platform.bundle_seq_bumped` (`by`, `devices`) |
 | `admin rebuild-cache` | Rewrites the gateway's enrollment tokens, device keys and sequence numbers in Valkey from PostgreSQL. The running compiler rewrites bundle pointers and time tickets within 60 s. | `platform.cache_rebuilt` (`organizations`) |
 | `admin recompile --all` | Publishes a new bundle version for every active device, also when its content is unchanged. | `organization.recompile_requested`, one per organization |
+| `admin security-review` | Prints, per organization, the unconfirmed root grants, the unconfirmed files on sensitive paths and the files on denied paths (ADR 0034); run once after the upgrade that introduced them. | `organization.security_review_required`, one per organization with a count above zero |
 
 Each prints one line (`bumped bundle_seq of 42 devices by 1000000`, `cache rebuilt for 2 organizations`,
 `recompile requested for 2 organizations`) and exits with 0, 1 (failure) or 2 (usage). `paddock-server audit verify`

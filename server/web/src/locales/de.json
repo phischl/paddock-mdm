@@ -77,7 +77,8 @@
     },
     "overview": "Übersicht",
     "attentionPill": "{count, plural, one {# braucht Aufmerksamkeit} other {# brauchen Aufmerksamkeit}}",
-    "shortcut": "Tastenkürzel: {keys}"
+    "shortcut": "Tastenkürzel: {keys}",
+    "securityReview": "Sicherheitsprüfung"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -1556,6 +1557,26 @@
       "code": "Code",
       "empty": "Keine Ereignisse in den letzten Tagen."
     },
-    "keyboardHint": "Tastatur: {mod} K Befehlspalette · j / k bewegen · Enter öffnen · g d Geräte. Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog."
+    "keyboardHint": "Tastatur: {mod} K Befehlspalette · j / k bewegen · Enter öffnen · g d Geräte. Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog.",
+    "securityReview": {
+      "banner": "Sicherheitsprüfung: {rootGrants, plural, one {# Root-Berechtigung wartet} other {# Root-Berechtigungen warten}} und {sensitiveFiles, plural, one {# Datei auf einem sensiblen Pfad wartet} other {# Dateien auf sensiblen Pfaden warten}} auf Bestätigung; {deniedFiles, plural, one {# Datei auf einem gesperrten Pfad wird} other {# Dateien auf gesperrten Pfaden werden}} nicht verteilt.",
+      "link": "Prüfen"
+    }
+  },
+  "securityReview": {
+    "title": "Sicherheitsprüfung",
+    "intro": "Diese Einträge bestanden, bevor Root-Berechtigungen und sensible Pfade eine Identitätsbestätigung erforderten. Sie wirken weiter; ein Organisationsadministrator bestätigt jeden mit einer Identitätsbestätigung. Dateien auf gesperrten Pfaden werden nicht mehr an Geräte verteilt und bleiben dort unverändert, bis Sie ihre Definition löschen.",
+    "rootGrants": "Root-Berechtigungen ohne Bestätigung ({total, number})",
+    "sensitiveFiles": "Dateien auf sensiblen Pfaden ohne Bestätigung ({total, number})",
+    "deniedFiles": "Dateien auf gesperrten Pfaden, nicht verteilt ({total, number})",
+    "none": "Nichts zu prüfen.",
+    "assignments": "Zuweisungen",
+    "confirm": "Bestätigen",
+    "confirmLabel": "{name} bestätigen",
+    "confirmTitle": "Nach Identitätsbestätigung bestätigen",
+    "confirmProfile": "Bestätigen, dass {name} weiterhin root-Rechte geben darf? Anschließend bestätigen Sie Ihre Identität.",
+    "confirmFile": "Bestätigen, dass {name} auf einem sensiblen Pfad verwaltet bleiben darf? Anschließend bestätigen Sie Ihre Identität.",
+    "deniedIntro": "Paddock verwaltet diese Pfade nicht mehr. Löschen Sie die Definitionen, die Sie nicht mehr brauchen; die Dateien auf den Geräten bleiben unverändert.",
+    "deleteDefinition": "Definition löschen"
   }
 }

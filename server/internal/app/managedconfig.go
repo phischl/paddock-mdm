@@ -33,9 +33,12 @@ var (
 	SpecManagedFileCreate = ActionSpec{Code: audit.CodeManagedFileCreated, AllowedRoles: RolesWrite}
 	SpecManagedFileUpdate = ActionSpec{Code: audit.CodeManagedFileUpdated, AllowedRoles: RolesWrite}
 	SpecManagedFileDelete = ActionSpec{Code: audit.CodeManagedFileDeleted, AllowedRoles: RolesWrite}
-	SpecManagedUnitCreate = ActionSpec{Code: audit.CodeManagedUnitCreated, AllowedRoles: RolesWrite}
-	SpecManagedUnitUpdate = ActionSpec{Code: audit.CodeManagedUnitUpdated, AllowedRoles: RolesWrite}
-	SpecManagedUnitDelete = ActionSpec{Code: audit.CodeManagedUnitDeleted, AllowedRoles: RolesWrite}
+	// SpecManagedFileConfirmSensitive confirms a file on a sensitive path that predates the path tiers (ADR 0034
+	// decision 7).
+	SpecManagedFileConfirmSensitive = ActionSpec{Code: audit.CodeManagedFileSensitiveConfirmed, AllowedRoles: RolesAdmin, RequiresStepUp: true}
+	SpecManagedUnitCreate           = ActionSpec{Code: audit.CodeManagedUnitCreated, AllowedRoles: RolesWrite}
+	SpecManagedUnitUpdate           = ActionSpec{Code: audit.CodeManagedUnitUpdated, AllowedRoles: RolesWrite}
+	SpecManagedUnitDelete           = ActionSpec{Code: audit.CodeManagedUnitDeleted, AllowedRoles: RolesWrite}
 )
 
 // ManagedQuery selects a page of managed files or units.
@@ -118,9 +121,11 @@ func (m *ManagedConfig) CreateFile(ctx context.Context, in FileInput) (pgstore.M
 		if err != nil {
 			return err
 		}
+		at, by := confirmation(ctx, tier == policy.TierSensitive)
 		f, err = q.InsertManagedFile(ctx, pgstore.InsertManagedFileParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: org, DeviceGroupID: nullID(in.DeviceGroupID), Path: next.Path,
-			Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content,
+			Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content, SensitiveConfirmedAt: at,
+			SensitiveConfirmedBy: by,
 		})
 		if db.IsUniqueViolation(err, "") {
 			return problem.AlreadyExists.WithDetail("this path is already managed in this scope")
@@ -166,8 +171,10 @@ func (m *ManagedConfig) UpdateFile(ctx context.Context, id uuid.UUID, in FileInp
 				return err
 			}
 		}
+		at, by := confirmation(ctx, tier == policy.TierSensitive)
 		f, err = q.UpdateManagedFile(ctx, pgstore.UpdateManagedFileParams{
 			ID: id, Path: next.Path, Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content,
+			SetSensitive: true, SensitiveConfirmedAt: at, SensitiveConfirmedBy: by,
 		})
 		if db.IsUniqueViolation(err, "") {
 			return problem.AlreadyExists.WithDetail("this path is already managed in this scope")
@@ -229,6 +236,32 @@ func validateFile(f pgstore.ManagedFile) (policy.Tier, error) {
 		return policy.TierDenied, problem.PathNotAllowed.WithDetail(policy.ErrPathNotAllowed.Error())
 	}
 	return tier, nil
+}
+
+// ConfirmSensitive confirms, with a step-up, a managed file on a sensitive path that existed before the path tiers
+// (audited: managed_file.sensitive_confirmed); a file on another tier is 409 invalid_state.
+func (m *ManagedConfig) ConfirmSensitive(ctx context.Context, id uuid.UUID) (pgstore.ManagedFile, error) {
+	spec := SpecManagedFileConfirmSensitive
+	spec.Target = &audit.Target{Type: "managed_file", ID: id.String()}
+	var f pgstore.ManagedFile
+	err := m.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		cur, err := q.GetManagedFile(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		tier, _ := policy.Classify(cur.Path, cur.Mode)
+		rec.SetTarget(audit.Target{Type: "managed_file", ID: id.String(), Display: cur.Path})
+		rec.SetParam("path", cur.Path)
+		rec.SetParam("device_group_id", idParam(groupPtr(cur.DeviceGroupID)))
+		rec.SetParam("tier", string(tier))
+		if tier != policy.TierSensitive {
+			return problem.InvalidState.WithDetail("the file is not on a sensitive path")
+		}
+		_, by := confirmation(ctx, true)
+		f, err = q.ConfirmManagedFileSensitive(ctx, pgstore.ConfirmManagedFileSensitiveParams{ID: id, ConfirmedBy: by})
+		return err
+	})
+	return f, err
 }
 
 // fileChanged reports whether any field of a definition changes.

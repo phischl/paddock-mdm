@@ -65,6 +65,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     key: 'security',
     label: 'nav.groups.security',
     items: [
+      { to: '/security-review', label: 'nav.securityReview', icon: 'triangle-alert', visible: orgReader },
       { to: '/revocations', label: 'nav.revocations', icon: 'lock', visible: (a) => a.canDelete },
       { to: '/settings/dms', label: 'nav.dms', icon: 'timer', visible: orgReader },
       { to: '/settings/login', label: 'nav.loginSettings', icon: 'log-in', visible: orgReader },

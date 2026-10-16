@@ -7,9 +7,41 @@ package pgstore
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const confirmPermissionProfileRootGrant = `-- name: ConfirmPermissionProfileRootGrant :one
+UPDATE permission_profile SET root_grant_confirmed_at = now(), root_grant_confirmed_by = $1
+WHERE id = $2
+RETURNING id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by
+`
+
+type ConfirmPermissionProfileRootGrantParams struct {
+	ConfirmedBy uuid.NullUUID
+	ID          uuid.UUID
+}
+
+func (q *Queries) ConfirmPermissionProfileRootGrant(ctx context.Context, arg ConfirmPermissionProfileRootGrantParams) (PermissionProfile, error) {
+	row := q.db.QueryRow(ctx, confirmPermissionProfileRootGrant, arg.ConfirmedBy, arg.ID)
+	var i PermissionProfile
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.Name,
+		&i.Class,
+		&i.Commands,
+		&i.RequirePassword,
+		&i.TimestampTimeoutMin,
+		&i.Lecture,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RootGrantConfirmedAt,
+		&i.RootGrantConfirmedBy,
+	)
+	return i, err
+}
 
 const countPermissionProfiles = `-- name: CountPermissionProfiles :one
 SELECT count(*) FROM (
@@ -70,6 +102,35 @@ func (q *Queries) CountProfileAssignments(ctx context.Context, arg CountProfileA
 	return count, err
 }
 
+const countProfileAssignmentsByProfile = `-- name: CountProfileAssignmentsByProfile :many
+SELECT profile_id, count(*) AS assignments FROM profile_assignment GROUP BY profile_id
+`
+
+type CountProfileAssignmentsByProfileRow struct {
+	ProfileID   uuid.UUID
+	Assignments int64
+}
+
+func (q *Queries) CountProfileAssignmentsByProfile(ctx context.Context) ([]CountProfileAssignmentsByProfileRow, error) {
+	rows, err := q.db.Query(ctx, countProfileAssignmentsByProfile)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountProfileAssignmentsByProfileRow{}
+	for rows.Next() {
+		var i CountProfileAssignmentsByProfileRow
+		if err := rows.Scan(&i.ProfileID, &i.Assignments); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countProfileAssignmentsOfProfile = `-- name: CountProfileAssignmentsOfProfile :one
 SELECT count(*) FROM profile_assignment WHERE profile_id = $1
 `
@@ -119,7 +180,7 @@ func (q *Queries) DeleteProfileAssignmentsOfSubject(ctx context.Context, subject
 }
 
 const getPermissionProfile = `-- name: GetPermissionProfile :one
-SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at FROM permission_profile WHERE id = $1
+SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by FROM permission_profile WHERE id = $1
 `
 
 func (q *Queries) GetPermissionProfile(ctx context.Context, id uuid.UUID) (PermissionProfile, error) {
@@ -136,6 +197,8 @@ func (q *Queries) GetPermissionProfile(ctx context.Context, id uuid.UUID) (Permi
 		&i.Lecture,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RootGrantConfirmedAt,
+		&i.RootGrantConfirmedBy,
 	)
 	return i, err
 }
@@ -161,20 +224,24 @@ func (q *Queries) GetProfileAssignment(ctx context.Context, id uuid.UUID) (Profi
 
 const insertPermissionProfile = `-- name: InsertPermissionProfile :one
 
-INSERT INTO permission_profile (id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at
+INSERT INTO permission_profile (id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture,
+  root_grant_confirmed_at, root_grant_confirmed_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+  $9, $10)
+RETURNING id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by
 `
 
 type InsertPermissionProfileParams struct {
-	ID                  uuid.UUID
-	OrganizationID      uuid.UUID
-	Name                string
-	Class               string
-	Commands            []string
-	RequirePassword     bool
-	TimestampTimeoutMin int32
-	Lecture             string
+	ID                   uuid.UUID
+	OrganizationID       uuid.UUID
+	Name                 string
+	Class                string
+	Commands             []string
+	RequirePassword      bool
+	TimestampTimeoutMin  int32
+	Lecture              string
+	RootGrantConfirmedAt *time.Time
+	RootGrantConfirmedBy uuid.NullUUID
 }
 
 // Permission profiles and their assignments (plan M3a decisions 12–14).
@@ -188,6 +255,8 @@ func (q *Queries) InsertPermissionProfile(ctx context.Context, arg InsertPermiss
 		arg.RequirePassword,
 		arg.TimestampTimeoutMin,
 		arg.Lecture,
+		arg.RootGrantConfirmedAt,
+		arg.RootGrantConfirmedBy,
 	)
 	var i PermissionProfile
 	err := row.Scan(
@@ -201,6 +270,8 @@ func (q *Queries) InsertPermissionProfile(ctx context.Context, arg InsertPermiss
 		&i.Lecture,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RootGrantConfirmedAt,
+		&i.RootGrantConfirmedBy,
 	)
 	return i, err
 }
@@ -243,7 +314,7 @@ func (q *Queries) InsertProfileAssignment(ctx context.Context, arg InsertProfile
 }
 
 const listAllPermissionProfiles = `-- name: ListAllPermissionProfiles :many
-SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at FROM permission_profile ORDER BY id
+SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by FROM permission_profile ORDER BY id
 `
 
 func (q *Queries) ListAllPermissionProfiles(ctx context.Context) ([]PermissionProfile, error) {
@@ -266,6 +337,8 @@ func (q *Queries) ListAllPermissionProfiles(ctx context.Context) ([]PermissionPr
 			&i.Lecture,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RootGrantConfirmedAt,
+			&i.RootGrantConfirmedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -311,7 +384,7 @@ func (q *Queries) ListAllProfileAssignments(ctx context.Context) ([]ProfileAssig
 
 const listPermissionProfiles = `-- name: ListPermissionProfiles :many
 
-SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at FROM permission_profile
+SELECT id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by FROM permission_profile
 WHERE ($1::text IS NULL OR name ILIKE $1::text ESCAPE '\')
   AND ($2::text[] IS NULL OR class = ANY($2::text[]))
 ORDER BY
@@ -362,6 +435,8 @@ func (q *Queries) ListPermissionProfiles(ctx context.Context, arg ListPermission
 			&i.Lecture,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RootGrantConfirmedAt,
+			&i.RootGrantConfirmedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -443,19 +518,24 @@ func (q *Queries) ListProfileAssignments(ctx context.Context, arg ListProfileAss
 const updatePermissionProfile = `-- name: UpdatePermissionProfile :one
 UPDATE permission_profile
 SET name = $1, class = $2, commands = $3, require_password = $4,
-    timestamp_timeout_min = $5, lecture = $6, updated_at = now()
-WHERE id = $7
-RETURNING id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at
+    timestamp_timeout_min = $5, lecture = $6, updated_at = now(),
+    root_grant_confirmed_at = CASE WHEN $7::bool THEN $8 ELSE root_grant_confirmed_at END,
+    root_grant_confirmed_by = CASE WHEN $7::bool THEN $9 ELSE root_grant_confirmed_by END
+WHERE id = $10
+RETURNING id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture, created_at, updated_at, root_grant_confirmed_at, root_grant_confirmed_by
 `
 
 type UpdatePermissionProfileParams struct {
-	Name                string
-	Class               string
-	Commands            []string
-	RequirePassword     bool
-	TimestampTimeoutMin int32
-	Lecture             string
-	ID                  uuid.UUID
+	Name                 string
+	Class                string
+	Commands             []string
+	RequirePassword      bool
+	TimestampTimeoutMin  int32
+	Lecture              string
+	SetRootGrant         bool
+	RootGrantConfirmedAt *time.Time
+	RootGrantConfirmedBy uuid.NullUUID
+	ID                   uuid.UUID
 }
 
 func (q *Queries) UpdatePermissionProfile(ctx context.Context, arg UpdatePermissionProfileParams) (PermissionProfile, error) {
@@ -466,6 +546,9 @@ func (q *Queries) UpdatePermissionProfile(ctx context.Context, arg UpdatePermiss
 		arg.RequirePassword,
 		arg.TimestampTimeoutMin,
 		arg.Lecture,
+		arg.SetRootGrant,
+		arg.RootGrantConfirmedAt,
+		arg.RootGrantConfirmedBy,
 		arg.ID,
 	)
 	var i PermissionProfile
@@ -480,6 +563,8 @@ func (q *Queries) UpdatePermissionProfile(ctx context.Context, arg UpdatePermiss
 		&i.Lecture,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RootGrantConfirmedAt,
+		&i.RootGrantConfirmedBy,
 	)
 	return i, err
 }

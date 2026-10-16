@@ -77,7 +77,8 @@
     },
     "overview": "Overview",
     "attentionPill": "{count, plural, one {# needs attention} other {# need attention}}",
-    "shortcut": "Shortcut: {keys}"
+    "shortcut": "Shortcut: {keys}",
+    "securityReview": "Security review"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -1556,6 +1557,26 @@
       "code": "Code",
       "empty": "No events in the last days."
     },
-    "keyboardHint": "Keyboard: {mod} K palette · j / k move · Enter open · g d devices. Destructive actions never have a shortcut; they always open the confirm dialog."
+    "keyboardHint": "Keyboard: {mod} K palette · j / k move · Enter open · g d devices. Destructive actions never have a shortcut; they always open the confirm dialog.",
+    "securityReview": {
+      "banner": "Security review: {rootGrants, plural, one {# root grant} other {# root grants}} and {sensitiveFiles, plural, one {# file on a sensitive path} other {# files on sensitive paths}} await confirmation; {deniedFiles, plural, one {# file on a denied path is} other {# files on denied paths are}} not shipped.",
+      "link": "Review"
+    }
+  },
+  "securityReview": {
+    "title": "Security review",
+    "intro": "These items existed before root grants and sensitive paths needed a step-up. They keep working; an organization administrator confirms each with a step-up. Files on denied paths are no longer shipped to devices and stay there unchanged until you delete their definition.",
+    "rootGrants": "Root grants awaiting confirmation ({total, number})",
+    "sensitiveFiles": "Files on sensitive paths awaiting confirmation ({total, number})",
+    "deniedFiles": "Files on denied paths, not shipped ({total, number})",
+    "none": "Nothing to review.",
+    "assignments": "Assignments",
+    "confirm": "Confirm",
+    "confirmLabel": "Confirm {name}",
+    "confirmTitle": "Confirm after a step-up",
+    "confirmProfile": "Confirm that {name} may keep granting root? You confirm your identity next.",
+    "confirmFile": "Confirm that {name} may stay managed on a sensitive path? You confirm your identity next.",
+    "deniedIntro": "Paddock no longer manages these paths. Delete the definitions you no longer need; the files on the devices stay as they are.",
+    "deleteDefinition": "Delete definition"
   }
 }

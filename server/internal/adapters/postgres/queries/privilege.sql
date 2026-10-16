@@ -1,8 +1,10 @@
 -- Permission profiles and their assignments (plan M3a decisions 12–14).
 
 -- name: InsertPermissionProfile :one
-INSERT INTO permission_profile (id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture)
-VALUES (@id, @organization_id, @name, @class, @commands, @require_password, @timestamp_timeout_min, @lecture)
+INSERT INTO permission_profile (id, organization_id, name, class, commands, require_password, timestamp_timeout_min, lecture,
+  root_grant_confirmed_at, root_grant_confirmed_by)
+VALUES (@id, @organization_id, @name, @class, @commands, @require_password, @timestamp_timeout_min, @lecture,
+  sqlc.narg(root_grant_confirmed_at), sqlc.narg(root_grant_confirmed_by))
 RETURNING *;
 
 -- name: GetPermissionProfile :one
@@ -40,9 +42,19 @@ SELECT * FROM permission_profile ORDER BY id;
 -- name: UpdatePermissionProfile :one
 UPDATE permission_profile
 SET name = @name, class = @class, commands = @commands, require_password = @require_password,
-    timestamp_timeout_min = @timestamp_timeout_min, lecture = @lecture, updated_at = now()
+    timestamp_timeout_min = @timestamp_timeout_min, lecture = @lecture, updated_at = now(),
+    root_grant_confirmed_at = CASE WHEN @set_root_grant::bool THEN sqlc.narg(root_grant_confirmed_at) ELSE root_grant_confirmed_at END,
+    root_grant_confirmed_by = CASE WHEN @set_root_grant::bool THEN sqlc.narg(root_grant_confirmed_by) ELSE root_grant_confirmed_by END
 WHERE id = @id
 RETURNING *;
+
+-- name: ConfirmPermissionProfileRootGrant :one
+UPDATE permission_profile SET root_grant_confirmed_at = now(), root_grant_confirmed_by = sqlc.narg(confirmed_by)
+WHERE id = @id
+RETURNING *;
+
+-- name: CountProfileAssignmentsByProfile :many
+SELECT profile_id, count(*) AS assignments FROM profile_assignment GROUP BY profile_id;
 
 -- name: DeletePermissionProfile :execrows
 DELETE FROM permission_profile WHERE id = @id;

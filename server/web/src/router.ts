@@ -6,6 +6,7 @@ export const router = createRouter({
   routes: [
     { path: '/', name: 'home', component: () => import('./views/Overview.vue') },
     { path: '/attention', name: 'attention', component: () => import('./views/Attention.vue') },
+    { path: '/security-review', name: 'security-review', component: () => import('./views/SecurityReview.vue') },
     { path: '/login-denied', name: 'login-denied', component: () => import('./views/LoginDenied.vue'), meta: { public: true } },
     { path: '/device-groups', name: 'device-groups', component: () => import('./views/DeviceGroups.vue') },
     { path: '/device-groups/:id', name: 'device-group', component: () => import('./views/DeviceGroupDetail.vue') },

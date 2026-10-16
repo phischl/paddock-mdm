@@ -12,7 +12,7 @@ import type { PermissionProfile } from '../api/client'
 const legacy: PermissionProfile = {
   id: 'p1', name: 'legacy', class: 'restricted', commands: ['/usr/bin/journalctl', '/usr/bin/systemctl ^.*$'],
   require_password: true, timestamp_timeout_min: 5, lecture: 'once', root_equivalent: false, effective_class: 'restricted', root_equivalent_commands: [],
-  invalid_commands: ['/usr/bin/systemctl ^.*$'], created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+  invalid_commands: ['/usr/bin/systemctl ^.*$'], root_grant_confirmed_at: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
 }
 let profile = legacy
 
