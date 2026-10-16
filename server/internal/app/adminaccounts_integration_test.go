@@ -81,16 +81,18 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Accounts', 'active')", org, slug); err != nil {
 		t.Fatal(err)
 	}
+	// uid is the directory UID of the user an account was created for: the subject of its login.
+	uid := func(username string) string { return "uid-" + username + "-" + org.String()[:8] }
 	account := func(username, role string) uuid.UUID {
 		id := uuid.Must(uuid.NewV7())
 		if _, err := super.Exec(ctx, `INSERT INTO admin_account (id, organization_id, authentik_sub, username, display_name, role)
-			VALUES ($1, $2, $3, $4, $4, $5)`, id, org, uuid.NewString(), username, role); err != nil {
+			VALUES ($1, $2, $3, $4, $4, $5)`, id, org, uid(username), username, role); err != nil {
 			t.Fatal(err)
 		}
 		return id
 	}
 	unchanged := account("alice@acme.test", "org_admin")
-	shared := account("hank@acme.test", "org_admin")
+	renamed := account("hank@acme.test", "org_admin")
 	moved := account("dave@acme.test", "org_admin")
 	removed := account("erin@acme.test", "org_admin")
 	inactive := account("frank@acme.test", "org_auditor")
@@ -100,13 +102,17 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	auditors := organization.RoleGroup(slug, organization.GroupAuditors)
 	dir := newDirectory()
 	dir.roleGroups = map[string][]ports.IdentityUser{
-		admins: {{PK: "1", Username: "Alice@acme.test", Active: true}, {PK: "7", Username: "gina@acme.test", Active: true},
-			{PK: "8", Username: "hank@acme.test", Active: true}},
-		operators: {{PK: "7", Username: "gina@acme.test", Active: true}, {PK: "9", Username: "nobody@acme.test", Active: true},
-			{PK: "10", Username: "HANK@acme.test", Active: true}},
-		// An auditor who set the e-mail address to an administrator's username does not decide that account.
-		auditors: {{PK: "4", Username: "dave@acme.test", Active: true}, {PK: "6", Username: "frank@acme.test", Active: false},
-			{PK: "11", Username: "ivy@acme.test", Email: "alice@acme.test", Active: true}},
+		// The UID decides: a renamed user keeps the account, and another user with an admin's username or e-mail
+		// address does not decide that account.
+		admins: {{UID: uid("alice@acme.test"), Username: "alice@acme.test", Active: true},
+			{UID: uid("gina@acme.test"), Username: "gina@acme.test", Active: true},
+			{UID: uid("hank@acme.test"), Username: "henry@acme.test", Active: true},
+			{UID: "uid-impostor", Username: "erin@acme.test", Email: "dave@acme.test", Active: true}},
+		operators: {{UID: uid("gina@acme.test"), Username: "gina@acme.test", Active: true},
+			{UID: uid("nobody@acme.test"), Username: "nobody@acme.test", Active: true}, {Username: "no-uid@acme.test", Active: true}},
+		auditors: {{UID: uid("dave@acme.test"), Username: "dave@acme.test", Active: true},
+			{UID: uid("frank@acme.test"), Username: "frank@acme.test", Active: false},
+			{UID: "uid-ivy", Username: "ivy@acme.test", Email: "alice@acme.test", Active: true}},
 	}
 
 	sessions := &revoker{revoked: map[uuid.UUID]int{}}
@@ -165,11 +171,11 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		event    string
 	}{
 		"unchanged, another user's e-mail is its username": {unchanged, "org_admin", false, ""},
-		"two directory users share the username":           {shared, "org_admin", false, ""},
+		"renamed in the directory":                         {renamed, "org_admin", false, ""},
 		"moved to auditors":                                {moved, "org_auditor", false, "success system role_changed 2 [org_admin] [org_auditor]"},
-		"in no role group":                                 {removed, "org_admin", true, "success system removed 2 [org_admin] []"},
-		"deactivated":                                      {inactive, "org_auditor", true, "success system deactivated 2 [org_auditor] []"},
-		"in two role groups":                               {twice, "org_operator", true, "success system removed 2 [org_operator] []"},
+		"in no role group, its username used by another":   {removed, "org_admin", true, "success system removed 2 [org_admin] []"},
+		"deactivated":        {inactive, "org_auditor", true, "success system deactivated 2 [org_auditor] []"},
+		"in two role groups": {twice, "org_operator", true, "success system removed 2 [org_operator] []"},
 	} {
 		role, disabled := state(c.id)
 		events := event(c.id)
@@ -217,7 +223,7 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 	admin := func(username string) uuid.UUID {
 		id := uuid.Must(uuid.NewV7())
 		if _, err := super.Exec(ctx, `INSERT INTO platform_admin (id, authentik_sub, username, display_name) VALUES ($1, $2, $3, $3)`,
-			id, uuid.NewString(), username); err != nil {
+			id, "uid-"+username, username); err != nil {
 			t.Fatal(err)
 		}
 		return id
@@ -226,7 +232,8 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 	kept, removed, inactive, flaky := admin("root-"+suffix), admin("gone-"+suffix), admin("off-"+suffix), admin("flaky-"+suffix)
 	dir := newDirectory()
 	dir.roleGroups = map[string][]ports.IdentityUser{organization.PlatformAdminsGroup(): {
-		{PK: "1", Username: "root-" + suffix, Active: true}, {PK: "2", Username: "off-" + suffix, Active: false}}}
+		{UID: "uid-root-" + suffix, Username: "renamed-root", Active: true}, {UID: "uid-off-" + suffix, Username: "off-" + suffix, Active: false},
+		{UID: "uid-other", Username: "gone-" + suffix, Active: true}}}
 	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{kept: 1, removed: 2, inactive: 1, flaky: 1},
 		failOnce: map[uuid.UUID]bool{flaky: true}}
 	corr := "corr-" + t.Name()

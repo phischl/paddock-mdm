@@ -225,7 +225,7 @@ func TestRoleGroupUsers(t *testing.T) {
 	f.users[912] = &fakeUser{pk: 912, username: "bob@acme.test", groups: []string{f.groupByName("paddock.acme.auditors").pk}}
 	users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins")
 	if err != nil || len(users) != 2 || users[0].Username != "alice@acme.test" || !users[0].Active ||
-		users[1].Username != "dave@acme.test" || users[1].Active {
+		users[1].Username != "dave@acme.test" || users[1].Active || users[0].UID != "uid-910" {
 		t.Fatalf("role group users %+v %v", users, err)
 	}
 	if users, err := c.RoleGroupUsers(ctx, "paddock.globex.admins"); !errors.Is(err, ports.ErrGroupNotFound) || len(users) != 0 {

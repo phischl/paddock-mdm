@@ -33,6 +33,9 @@ type IdentityUser struct {
 	Managed bool
 	// Active is false for a user deactivated in the identity provider.
 	Active bool
+	// UID is the user's stable identifier, the subject of the portal's and the step-up's ID tokens (Authentik's uid
+	// under the providers' sub_mode hashed_user_id) and so admin_account.authentik_sub.
+	UID string
 }
 
 // NewIdentityUser is a local user to create.

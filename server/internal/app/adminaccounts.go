@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
-	"github.com/phischl/paddock-mdm/server/internal/domain/user"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
@@ -45,11 +43,26 @@ var ErrDirectoryEmpty = errors.New("app: empty role group listings")
 
 // directoryUser is what the role group listings say about one user.
 type directoryUser struct {
-	pk     string
 	groups []string
 	active bool
-	// ambiguous marks a username that two directory users share once normalized: neither decides the account.
-	ambiguous bool
+}
+
+// directoryByUID indexes the members of role group listings by their UID, the subject an account was created with:
+// a username or an e-mail address can change or repeat, the UID cannot. A member without a UID matches no account; it
+// returns how many members had one.
+func directoryByUID(users map[string]*directoryUser, group string, members []ports.IdentityUser) (indexed int) {
+	for _, m := range members {
+		if m.UID == "" {
+			continue
+		}
+		indexed++
+		if u := users[m.UID]; u != nil {
+			u.groups = append(u.groups, group)
+			continue
+		}
+		users[m.UID] = &directoryUser{groups: []string{group}, active: m.Active}
+	}
+	return indexed
 }
 
 // Reconcile compares every account of the caller's organization that is not disabled with the members of the
@@ -79,36 +92,14 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("role group %s: %w", name, err)
 		}
-		listed += len(members)
-		// Only the username identifies a member (plan M8s decision 22): users may change their own e-mail address.
-		for _, m := range members {
-			key := user.NormalizeUsername(m.Username)
-			if key == "" {
-				continue
-			}
-			u := users[key]
-			switch {
-			case u == nil:
-				users[key] = &directoryUser{pk: m.PK, groups: []string{name}, active: m.Active}
-			case u.pk != m.PK:
-				u.ambiguous = true
-			default:
-				u.groups = append(u.groups, name)
-			}
-		}
+		listed += directoryByUID(users, name, members)
 	}
 	if listed == 0 {
-		return fmt.Errorf("%w: the role groups of %s list no members while %d accounts are enabled", ErrDirectoryEmpty, o.Slug, len(accounts))
+		return fmt.Errorf("%w: the role groups of %s list no member with a UID while %d accounts are enabled", ErrDirectoryEmpty, o.Slug, len(accounts))
 	}
 	var errs []error
 	for _, acc := range accounts {
-		u := users[user.NormalizeUsername(acc.Username)]
-		if u != nil && u.ambiguous {
-			slog.WarnContext(ctx, "administrator account left unchanged: two directory users share its username",
-				"account_id", acc.ID)
-			continue
-		}
-		reason, newRole := change(acc, u)
+		reason, newRole := change(acc, users[acc.AuthentikSub])
 		if reason == "" {
 			continue
 		}
@@ -164,24 +155,14 @@ func (a *AdminAccounts) ReconcilePlatform(ctx context.Context) error {
 		return fmt.Errorf("%w: %s lists no members while %d platform administrators exist", ErrDirectoryEmpty, group, len(admins))
 	}
 	users := map[string]*directoryUser{}
-	for _, m := range members {
-		key := user.NormalizeUsername(m.Username)
-		switch u := users[key]; {
-		case key == "":
-		case u == nil:
-			users[key] = &directoryUser{pk: m.PK, groups: []string{group}, active: m.Active}
-		case u.pk != m.PK:
-			u.ambiguous = true
-		}
+	if directoryByUID(users, group, members) == 0 {
+		return fmt.Errorf("%w: %s lists no member with a UID while %d platform administrators exist", ErrDirectoryEmpty, group, len(admins))
 	}
 	var errs []error
 	for _, adm := range admins {
-		u := users[user.NormalizeUsername(adm.Username)]
+		u := users[adm.AuthentikSub]
 		var reason string
 		switch {
-		case u != nil && u.ambiguous:
-			slog.WarnContext(ctx, "platform administrator left unchanged: two directory users share its username", "account_id", adm.ID)
-			continue
 		case u == nil:
 			reason = RevokeReasonRemoved
 		case !u.active:

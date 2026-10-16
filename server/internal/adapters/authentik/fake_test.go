@@ -126,6 +126,7 @@ func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any
 	j := f.fixture("post_core_users.json")
 	j["pk"], j["username"], j["name"], j["email"], j["attributes"], j["groups"] = u.pk, u.username, u.name, u.email, u.attributes, u.groups
 	j["is_active"] = !u.inactive
+	j["uid"] = "uid-" + strconv.Itoa(u.pk)
 	j["groups_obj"] = nil
 	if includeGroups {
 		objs := []map[string]any{}

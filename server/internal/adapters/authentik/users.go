@@ -29,6 +29,7 @@ type user struct {
 	Email      string         `json:"email"`
 	Attributes map[string]any `json:"attributes"`
 	IsActive   bool           `json:"is_active"`
+	UID        string         `json:"uid"`
 	// GroupsObj are the direct groups of the user (only with include_groups=true).
 	GroupsObj []group `json:"groups_obj"`
 }
@@ -36,7 +37,7 @@ type user struct {
 func (u user) identity() ports.IdentityUser {
 	managed, _ := u.Attributes[attrManaged].(bool)
 	return ports.IdentityUser{PK: strconv.Itoa(u.PK), Username: u.Username, Name: u.Name, Email: u.Email, Managed: managed,
-		Active: u.IsActive}
+		Active: u.IsActive, UID: u.UID}
 }
 
 // CreateUser creates a Paddock-managed internal user without password in the organization's root group (path
