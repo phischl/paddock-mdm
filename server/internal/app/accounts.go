@@ -40,6 +40,11 @@ type LoginIdentity struct {
 	Username string // preferred_username
 	Name     string
 	IP       string
+	// OpenSession creates the server-side session of the login (sessions.Store). It runs inside the login's
+	// transaction, after the account row is written and locked: a revocation of the account (revokeAccount, which
+	// updates the same row first) then either waits for the login and also ends the new session, or ran before it and
+	// the login re-grants the role the groups claim carries now. An error fails the login and records it as failed.
+	OpenSession func(ctx context.Context, p principal.Principal) error
 }
 
 // LoginRole is the role resolved from the groups claim.
@@ -118,7 +123,7 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 			return errors.New("app: account ID changed during login")
 		}
 		locale = acc.Locale
-		return nil
+		return id.openSession(ctx, p)
 	})
 	if err != nil {
 		return LoginResult{}, err
@@ -157,12 +162,22 @@ func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginRe
 			return err
 		}
 		locale = acc.Locale
-		return nil
+		return id.openSession(ctx, p)
 	})
 	if err != nil {
 		return LoginResult{}, err
 	}
 	return LoginResult{Principal: p, Locale: locale}, nil
+}
+
+func (id LoginIdentity) openSession(ctx context.Context, p principal.Principal) error {
+	if id.OpenSession == nil {
+		return nil
+	}
+	if err := id.OpenSession(ctx, p); err != nil {
+		return fmt.Errorf("open session: %w", err)
+	}
+	return nil
 }
 
 // recordDenied audits a rejected login: in the organization when exactly one named organization resolves,
@@ -372,25 +387,6 @@ func unauthenticatedIfGone(err error) error {
 		return problem.Unauthenticated
 	}
 	return err
-}
-
-// LoginStillValid re-reads the account of a login after its session record was created: false when the account was
-// disabled or got another role since the login committed. A revocation in between then cannot miss the new session
-// (it ran before the record existed).
-func (a *Accounts) LoginStillValid(ctx context.Context, p principal.Principal) (bool, error) {
-	if p.Kind != principal.KindAdmin {
-		return true, nil
-	}
-	var valid bool
-	err := a.org.InOrg(principal.With(ctx, p), func(ctx context.Context, q *pgstore.Queries) error {
-		acc, err := q.GetAdminAccount(ctx, p.ID)
-		if err != nil {
-			return err
-		}
-		valid = acc.DisabledAt == nil && acc.Role == string(p.Role)
-		return nil
-	})
-	return valid, err
 }
 
 // OrganizationID resolves the slug of a role group to its active organization (uuid.Nil: unknown or inactive).

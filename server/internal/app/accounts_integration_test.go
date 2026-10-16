@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -59,25 +60,25 @@ func TestLoginEnablesTheAccount(t *testing.T) {
 		t.Fatalf("after login: role %s, disabled %v", role, disabled)
 	}
 
-	// A revocation between the login's commit and its session record is caught by LoginStillValid.
-	for _, c := range []struct {
-		change string
-		want   bool
-	}{
-		{"", true},
-		{"UPDATE admin_account SET role = 'org_auditor' WHERE id = $1", false},
-		{"UPDATE admin_account SET role = 'org_admin', disabled_at = now() WHERE id = $1", false},
-	} {
-		if c.change != "" {
-			if _, err := super.Exec(ctx, c.change, account); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if valid, err := accounts.LoginStillValid(ctx, res.Principal); err != nil || valid != c.want {
-			t.Fatalf("after %q: valid %v %v, want %v", c.change, valid, err, c.want)
-		}
+	// The session opens inside the login's transaction while the account row is locked, so a concurrent revocation
+	// (which updates the row first) cannot miss it; a session that cannot be opened fails the login, recorded as failed.
+	var locked error
+	res, err = accounts.Login(ctx, app.LoginIdentity{Subject: subject, Username: "alice", IP: "192.0.2.1",
+		OpenSession: func(context.Context, principal.Principal) error {
+			_, locked = super.Exec(ctx, "SELECT 1 FROM admin_account WHERE id = $1 FOR UPDATE NOWAIT", account)
+			return nil
+		}}, app.LoginRole{Slug: slug, Role: principal.RoleOrgAdmin})
+	if err != nil || locked == nil {
+		t.Fatalf("login: %v; the account row was not locked while the session opened (%v)", err, locked)
 	}
-	if valid, err := accounts.LoginStillValid(ctx, principal.Principal{Kind: principal.KindPlatformAdmin}); err != nil || !valid {
-		t.Fatalf("platform administrator: %v %v", valid, err)
+	failing := app.LoginIdentity{Subject: subject, Username: "alice", IP: "192.0.2.1",
+		OpenSession: func(context.Context, principal.Principal) error { return errors.New("session store down") }}
+	if _, err := accounts.Login(ctx, failing, app.LoginRole{Slug: slug, Role: principal.RoleOrgAdmin}); err == nil {
+		t.Fatal("login without a session succeeded")
+	}
+	var outcome string
+	if err := super.QueryRow(ctx, `SELECT outcome FROM action WHERE code = 'admin.login' AND target->>'id' = $1
+		ORDER BY started_at DESC, id DESC LIMIT 1`, account.String()).Scan(&outcome); err != nil || outcome != "failure" {
+		t.Fatalf("last admin.login outcome %q %v, want failure", outcome, err)
 	}
 }

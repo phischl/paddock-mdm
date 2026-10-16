@@ -17,6 +17,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
 )
@@ -238,8 +239,15 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		username = claims.Email
 	}
 	res := organization.ResolveRole(claims.Groups)
+	now := b.now()
+	sid := sessions.NewID()
+	openSession := func(ctx context.Context, p principal.Principal) error {
+		_, err := b.sessions.Create(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
+			Org: p.OrganizationID, CreatedAt: now.Unix()}, SessionAbsolute)
+		return err
+	}
 	result, err := b.accounts.Login(ctx,
-		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip},
+		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip, OpenSession: openSession},
 		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs})
 	if errors.Is(err, problem.Forbidden) {
 		denied(w, r, app.ReasonNotAuthorized)
@@ -250,23 +258,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
-	now := b.now()
-	sid := sessions.NewID()
 	p := result.Principal
-	if _, err := b.sessions.Create(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
-		Org: p.OrganizationID, CreatedAt: now.Unix()}, SessionAbsolute); err != nil {
-		slog.ErrorContext(ctx, "session record", "error", err)
-		denied(w, r, app.ReasonLoginFailed)
-		return
-	}
-	if valid, err := b.accounts.LoginStillValid(ctx, p); err != nil || !valid {
-		slog.WarnContext(ctx, "login of an account that changed meanwhile", "account_id", p.ID, "error", err)
-		if err := b.sessions.Delete(ctx, sid, p.ID); err != nil {
-			slog.WarnContext(ctx, "session record not deleted", "error", err)
-		}
-		denied(w, r, app.ReasonLoginFailed)
-		return
-	}
 	value, err := b.keys.Seal(SessionCookie, NewSession(p, sid, result.Locale, now))
 	if err != nil {
 		slog.ErrorContext(ctx, "session cookie", "error", err)
