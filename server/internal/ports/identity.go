@@ -28,6 +28,8 @@ type IdentityUser struct {
 	Email    string
 	// Managed is true for users Paddock created (attribute paddock_managed); others are synced from upstream.
 	Managed bool
+	// Active is false for a user deactivated in the identity provider.
+	Active bool
 }
 
 // NewIdentityUser is a local user to create.
@@ -56,6 +58,9 @@ type UserDirectory interface {
 	UnlockUser(ctx context.Context, slug, pk string, activate bool) error
 	// OrganizationUsers lists the direct members of the organization's root group.
 	OrganizationUsers(ctx context.Context, slug string) ([]IdentityUser, error)
+	// RoleGroupUsers lists the direct members of a role group (organization.RoleGroup) in one paged listing; a
+	// group that does not exist has none (plan M8s decision 22).
+	RoleGroupUsers(ctx context.Context, groupName string) ([]IdentityUser, error)
 }
 
 // GroupDirectory manages Paddock's user groups (plan M3a decisions 3 and 9).

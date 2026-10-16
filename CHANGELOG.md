@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The worker follows administrator accounts to the identity provider every identity sync interval
+  (`PADDOCK_IDENTITY_SYNC_INTERVAL`, default 5 minutes): an administrator moved to another role group takes the new
+  role, one removed from every role group or deactivated is disabled, and every portal session of the account ends
+  (`admin.sessions_revoked` with reason `role_changed`, `removed` or `deactivated`).
 - A step-up now also checks the administrator's role groups in the identity provider. When they no longer grant the
   session's role in its organization, the step-up is refused, the account takes the current role (or is disabled when
   it has none), every portal session of the account ends and `admin.sessions_revoked` is recorded. A disabled account

@@ -323,5 +323,5 @@ func upstream(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return fmt.Errorf("%w: %v", problem.UpstreamUnavailable, err)
+	return fmt.Errorf("%w: %w", problem.UpstreamUnavailable, err)
 }

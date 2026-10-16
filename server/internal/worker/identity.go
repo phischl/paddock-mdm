@@ -28,10 +28,11 @@ type BrandFlows interface {
 	EnsureBrandFlows(ctx context.Context) error
 }
 
-// Advisory locks of the identity rounds ("paddock idsync", "paddock idrecn").
+// Advisory locks of the identity rounds ("paddock idsync", "paddock idrecn", "paddock idacct").
 const (
-	identitySyncLockKey      = 0x7061646420696473
-	identityReconcileLockKey = 0x706164642069647e
+	identitySyncLockKey          = 0x7061646420696473
+	identityReconcileLockKey     = 0x706164642069647e
+	identityAdminAccountsLockKey = 0x7061646420696461
 )
 
 // Identity runs the identity rounds: synced users and group mirrors every sync interval, the organizations'
@@ -39,6 +40,7 @@ const (
 // acts. The default brand's flows are ensured by every replica (idempotent) at start and every reconcile interval.
 type Identity struct {
 	sync       *app.IdentitySync
+	accounts   *app.AdminAccounts
 	brand      BrandFlows
 	brandRetry time.Duration
 	org        *db.OrgPool
@@ -52,9 +54,9 @@ type Identity struct {
 }
 
 // NewIdentity creates the identity rounds.
-func NewIdentity(s *app.IdentitySync, brand BrandFlows, org *db.OrgPool, platform *db.PlatformPool,
+func NewIdentity(s *app.IdentitySync, accounts *app.AdminAccounts, brand BrandFlows, org *db.OrgPool, platform *db.PlatformPool,
 	syncEvery, reconcile time.Duration) *Identity {
-	return &Identity{sync: s, brand: brand, brandRetry: brandRetryInterval, org: org, platform: platform,
+	return &Identity{sync: s, accounts: accounts, brand: brand, brandRetry: brandRetryInterval, org: org, platform: platform,
 		syncEvery: syncEvery, reconcile: reconcile, now: time.Now, conflicts: map[string]time.Time{}}
 }
 
@@ -78,6 +80,12 @@ func (i *Identity) RunBrandFlows(ctx context.Context) error {
 // RunSync runs the sync round at start and then every sync interval until ctx ends.
 func (i *Identity) RunSync(ctx context.Context) error {
 	return i.every(ctx, i.syncEvery, identitySyncLockKey, "identity-sync", i.syncOrg)
+}
+
+// RunAdminAccounts runs the round admin-accounts (plan M8s decision 22) at start and then every sync interval until
+// ctx ends: administrator accounts follow their role groups in the identity provider.
+func (i *Identity) RunAdminAccounts(ctx context.Context) error {
+	return i.every(ctx, i.syncEvery, identityAdminAccountsLockKey, "admin-accounts", i.accounts.Reconcile)
 }
 
 // RunReconcile runs the reconcile round at start and then every reconcile interval until ctx ends.

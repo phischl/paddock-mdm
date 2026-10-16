@@ -19,6 +19,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/objectstore"
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
+	"github.com/phischl/paddock-mdm/server/internal/sessions"
 	"github.com/phischl/paddock-mdm/server/internal/worker"
 )
 
@@ -109,7 +110,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		min(worker.StalenessInterval, stalenessUnit/4))
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
-	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak), ak, pool, platformPool, syncEvery, reconcileEvery)
+	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak),
+		app.NewAdminAccounts(runner, pool, ak, sessions.NewStore(vk)), ak, pool, platformPool, syncEvery, reconcileEvery)
 	fleetClient := fleet.New(fleetURL, fleetToken, fleetPublicURL)
 	inventory := worker.NewInventory(fleetClient, fleetClient, app.NewInventorySync(runner, pool, platformPool), pool,
 		platformPool, inventoryEvery)
@@ -146,6 +148,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		rollouts.Run,
 		identity.RunSync,
 		identity.RunReconcile,
+		identity.RunAdminAccounts,
 		identity.RunBrandFlows,
 		inventory.RunSettings,
 		inventory.RunSync,

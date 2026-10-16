@@ -154,6 +154,10 @@ func (f *fakeIdP) OrganizationUsers(context.Context, string) ([]ports.IdentityUs
 	return nil, f.err()
 }
 
+func (f *fakeIdP) RoleGroupUsers(context.Context, string) ([]ports.IdentityUser, error) {
+	return nil, f.err()
+}
+
 func (f *fakeIdP) EnsureGroup(_ context.Context, _, name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
