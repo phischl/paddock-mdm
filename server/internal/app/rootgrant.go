@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -31,26 +32,42 @@ func requireRootGrant(ctx context.Context, rec Recorder) error {
 	return rec.RequireStepUp()
 }
 
-// grantGuard is the check of a change to a profile, an assignment or a declarative document (plan M8s decision
-// 7g-quater): the root witnesses of the union of the commands of every assigned profile, before and after the change.
-// It over-approximates on purpose: it does not depend on who is in which group or which device is in which state, so
-// no shape of subject or device can hide a combination. begin takes the organization's privilege lock first.
+// grantGuard is the check of a change to a profile, an assignment or a declarative document (plan M8s decisions
+// 7g-quater and 7g-quinquies). It runs two checks and the change grows when either does: (a) the root witnesses of the
+// union of the commands of every assigned profile, which covers future and empty subjects, and (b) the exact witness
+// gain of every real user on every device in any state, which covers spreading an existing combination to more users.
+// begin takes the organization's privilege lock first.
 type grantGuard struct {
-	before []string
+	union    []string
+	subjects *Identity
 }
 
 func beginGrantGuard(ctx context.Context, q *pgstore.Queries) (grantGuard, error) {
 	if err := q.LockOrganizationPrivileges(ctx); err != nil {
 		return grantGuard{}, fmt.Errorf("lock privileges: %w", err)
 	}
-	before, err := assignedWitnesses(ctx, q, nil)
-	return grantGuard{before: before}, err
+	union, err := assignedWitnesses(ctx, q, nil)
+	if err != nil {
+		return grantGuard{}, err
+	}
+	subjects, err := LoadIdentity(ctx, q)
+	return grantGuard{union: union, subjects: subjects}, err
 }
 
-// grows reports whether the assigned profiles have a root witness after the change that they did not have before.
+// grows reports whether the change added a witness to the union of the assigned profiles or to a real user.
 func (g grantGuard) grows(ctx context.Context, q *pgstore.Queries) (bool, error) {
-	after, err := assignedWitnesses(ctx, q, nil)
-	return len(privilege.NewWitnesses(g.before, after)) > 0, err
+	union, err := assignedWitnesses(ctx, q, nil)
+	if err != nil {
+		return false, err
+	}
+	if len(privilege.NewWitnesses(g.union, union)) > 0 {
+		return true, nil
+	}
+	after, err := LoadIdentity(ctx, q)
+	if err != nil {
+		return false, err
+	}
+	return subjectsGain(g.subjects, after), nil
 }
 
 // check applies requireRootGrant when the change added a witness and records the effect as effective_class full.
@@ -121,10 +138,11 @@ func (g subjectGuard) check(ctx context.Context, q *pgstore.Queries, rec Recorde
 	return requireRootGrant(ctx, rec)
 }
 
-// requireTokenGroups is the gate of an enrollment token at creation (plan M8s decisions 7g-ter and 7g-quater): the
-// witnesses of the profiles assigned to everyone or to one of the token's device groups, against those assigned to
-// everyone. A device that enrolls into the groups gains nothing new, or the token needs requireRootGrant. For a token
-// that approves automatically this is the binding gate; approval keeps its own guard.
+// requireTokenGroups is the gate of an enrollment token at creation (plan M8s decisions 7g-ter, 7g-quater and
+// 7g-quinquies): (a) the witnesses of the profiles assigned to everyone or to one of the token's device groups, against
+// those assigned to everyone, and (b) the exact gain of every real user on a new device in the token's groups. When
+// either grows the token needs requireRootGrant. For a token that approves automatically this is the binding gate;
+// approval keeps its own guard.
 func requireTokenGroups(ctx context.Context, q *pgstore.Queries, rec Recorder, groups []uuid.UUID) error {
 	if len(groups) == 0 {
 		return nil
@@ -143,6 +161,16 @@ func requireTokenGroups(ctx context.Context, q *pgstore.Queries, rec Recorder, g
 		return err
 	}
 	if len(privilege.NewWitnesses(everywhere, inGroups)) > 0 {
+		return requireRootGrant(ctx, rec)
+	}
+	before, err := LoadIdentity(ctx, q)
+	if err != nil {
+		return err
+	}
+	after := *before
+	after.memberGroups = maps.Clone(before.memberGroups)
+	after.memberGroups[uuid.New()] = groups
+	if subjectsGain(before, &after) {
 		return requireRootGrant(ctx, rec)
 	}
 	return nil

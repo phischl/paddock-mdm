@@ -395,3 +395,186 @@ func TestWitnessUnion(t *testing.T) {
 		}
 	})
 }
+
+// spreadWorld: user one holds the writer/exec pair (approved by an administrator with a step-up); user two is a member
+// of group A and holds the writer only (plan M8s decision 7g-quinquies).
+type spreadWorld struct {
+	combinationWorld
+	two    uuid.UUID
+	groupA uuid.UUID
+}
+
+func newSpreadWorld(t *testing.T) spreadWorld {
+	t.Helper()
+	w := spreadWorld{combinationWorld: newCombinationWorld(t), two: uuid.Must(uuid.NewV7()), groupA: uuid.Must(uuid.NewV7())}
+	ctx := context.Background()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO app_user (id, organization_id, authentik_pk, username, source) VALUES ($1, $2, $3, $4, 'local')`,
+			[]any{w.two, w.org, "u" + w.two.String()[24:], "two-" + w.two.String()[24:] + "@x.test"}},
+		{`INSERT INTO user_group (id, organization_id, slug, name, source, authentik_pk) VALUES ($1, $2, 'group-a', 'A', 'local', 'apk')`,
+			[]any{w.groupA, w.org}},
+		{`INSERT INTO user_group_member (organization_id, group_id, user_id) VALUES ($1, $2, $3)`, []any{w.org, w.groupA, w.two}},
+	} {
+		if _, err := w.super.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatalf("%s: %v", q.sql, err)
+		}
+	}
+	for _, p := range []uuid.UUID{w.writer, w.runner} {
+		if err := w.assign(w.steppedUp, p, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), app.NewAssignment{ProfileID: w.writer, SubjectType: privilege.SubjectUser, SubjectID: &w.two}); err != nil {
+		t.Fatalf("the writer alone for user two = %v", err)
+	}
+	return w
+}
+
+// TestSpreadingAnApprovedCombination: once a pair exists, giving it to another real user needs the step-up again,
+// through a new assignment, a re-scope, a profile change, a declarative document or an enrollment token
+// (plan M8s decision 7g-quinquies).
+func TestSpreadingAnApprovedCombination(t *testing.T) {
+	t.Run("assignment to the group", func(t *testing.T) {
+		w := newSpreadWorld(t)
+		in := app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGroup, SubjectID: &w.groupA}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), in); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator = %v", err)
+		}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.token), in); !errors.Is(err, problem.StepUpRequired) {
+			t.Fatalf("token = %v", err)
+		}
+		global := app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGlobal}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), global); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator, global = %v", err)
+		}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.steppedUp), in); err != nil {
+			t.Fatalf("stepped-up admin = %v", err)
+		}
+	})
+
+	t.Run("re-scope to every device", func(t *testing.T) {
+		w := newSpreadWorld(t)
+		scoped := uuid.Must(uuid.NewV7())
+		if _, err := w.super.Exec(context.Background(), "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'empty')", scoped, w.org); err != nil {
+			t.Fatal(err)
+		}
+		a, err := w.privileges.CreateAssignment(w.ctx(w.operator), app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectUser,
+			SubjectID: &w.two, DeviceGroupID: &scoped})
+		if err != nil {
+			t.Fatalf("the pair for user two in a device group without devices = %v", err)
+		}
+		if _, err := w.privileges.UpdateAssignmentScope(w.ctx(w.operator), a.ID, nil); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator re-scoping to every device = %v", err)
+		}
+	})
+
+	t.Run("profile text", func(t *testing.T) {
+		w := newSpreadWorld(t)
+		other := w.profile(t, "other", []string{"/usr/bin/systemctl restart nginx.service"})
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), app.NewAssignment{ProfileID: other, SubjectType: privilege.SubjectGroup, SubjectID: &w.groupA}); err != nil {
+			t.Fatal(err)
+		}
+		commands := runnerCommands
+		if _, err := w.privileges.UpdateProfile(w.ctx(w.operator), other, app.ProfilePatch{Commands: &commands}); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator adding the exec text to a profile of group A = %v", err)
+		}
+	})
+
+	t.Run("enrollment token into a device-scoped spread", func(t *testing.T) {
+		w := newSpreadWorld(t)
+		d := uuid.Must(uuid.NewV7())
+		if _, err := w.super.Exec(context.Background(), "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'd')", d, w.org); err != nil {
+			t.Fatal(err)
+		}
+		// Spreading into a device group without devices passes both checks ...
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGroup,
+			SubjectID: &w.groupA, DeviceGroupID: &d}); err != nil {
+			t.Fatalf("operator spreading into an empty device group = %v", err)
+		}
+		// ... a token that enrolls devices into it does not.
+		pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		keys := func(context.Context) ([]protocol.BundleKey, error) { return []protocol.BundleKey{{KeyID: "k1"}}, nil }
+		tokens := app.NewEnrollmentTokens(w.privilegesHarness.runner, pool, keys, keys, &fakeTokenCache{}, "https://device.test")
+		in := app.TokenInput{Name: "d", MaxUses: 5, ExpiresAt: time.Now().Add(time.Hour), AutoApprove: true, DeviceGroupID: &d}
+		if _, err := tokens.Create(w.ctx(w.admin), in); !errors.Is(err, problem.StepUpRequired) {
+			t.Fatalf("token into the spread = %v", err)
+		}
+		if _, err := tokens.Create(w.ctx(w.steppedUp), in); err != nil {
+			t.Fatalf("stepped-up admin = %v", err)
+		}
+	})
+}
+
+// TestSpreadingToAnEmptyGroup: giving the second half to a group without members passes; adding a member who holds
+// the first half afterwards needs the step-up.
+func TestSpreadingToAnEmptyGroup(t *testing.T) {
+	w := newSpreadWorld(t)
+	empty := uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(context.Background(), `INSERT INTO user_group (id, organization_id, slug, name, source, authentik_pk)
+		VALUES ($1, $2, 'empty', 'Empty', 'local', 'epk')`, empty, w.org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGroup, SubjectID: &empty}); err != nil {
+		t.Fatalf("operator spreading to an empty group = %v", err)
+	}
+	pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	groups := app.NewUserGroups(w.privilegesHarness.runner, pool, newDirectory())
+	if err := groups.AddMember(w.ctx(w.operator), empty, w.two); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator adding the member = %v", err)
+	}
+	if err := groups.AddMember(w.ctx(w.admin), empty, w.two); !errors.Is(err, problem.StepUpRequired) {
+		t.Fatalf("admin without step-up adding the member = %v", err)
+	}
+	if err := groups.AddMember(w.ctx(w.steppedUp), empty, w.two); err != nil {
+		t.Fatalf("stepped-up admin = %v", err)
+	}
+}
+
+// TestSpreadingDeclarative: a document that gives the pair to another user needs the step-up although the union of
+// the assigned profiles does not change.
+func TestSpreadingDeclarative(t *testing.T) {
+	h := newConfigHarness(t)
+	operator := h.account(t, principal.RoleOrgOperator, true)
+	steppedUp := h.account(t, principal.RoleOrgAdmin, true)
+	ctx := context.Background()
+	names := []string{"one-" + uuid.NewString()[:8] + "@x.test", "two-" + uuid.NewString()[:8] + "@x.test"}
+	for _, n := range names {
+		id := uuid.Must(uuid.NewV7())
+		if _, err := h.super.Exec(ctx, `INSERT INTO app_user (id, organization_id, authentik_pk, username, source) VALUES ($1, $2, $3, $4, 'local')`,
+			id, h.org, "p"+id.String()[24:], n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := h.export(t, steppedUp)
+	*doc.PermissionProfiles = append(*doc.PermissionProfiles,
+		declarative.PermissionProfile{Name: "writer", Class: "restricted", Commands: writerCommands, Lecture: "once"},
+		declarative.PermissionProfile{Name: "runner", Class: "restricted", Commands: runnerCommands, Lecture: "once"})
+	for _, p := range []string{"writer", "runner"} {
+		*doc.ProfileAssignments = append(*doc.ProfileAssignments,
+			declarative.ProfileAssignment{Profile: p, Subject: declarative.Subject{Type: "user", Username: names[0]}})
+	}
+	*doc.ProfileAssignments = append(*doc.ProfileAssignments,
+		declarative.ProfileAssignment{Profile: "writer", Subject: declarative.Subject{Type: "user", Username: names[1]}})
+	if _, _, err := h.config.Apply(principal.With(ctx, steppedUp), raw(t, doc), ""); err != nil {
+		t.Fatalf("the approved pair = %v", err)
+	}
+	*doc.ProfileAssignments = append(*doc.ProfileAssignments,
+		declarative.ProfileAssignment{Profile: "runner", Subject: declarative.Subject{Type: "user", Username: names[1]}})
+	if _, _, err := h.config.Apply(principal.With(ctx, operator), raw(t, doc), ""); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator spreading the pair = %v", err)
+	}
+	if _, _, err := h.config.Apply(principal.With(ctx, steppedUp), raw(t, doc), ""); err != nil {
+		t.Fatalf("stepped-up admin = %v", err)
+	}
+}
