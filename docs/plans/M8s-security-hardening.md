@@ -220,7 +220,8 @@ Supersedes the *TierOrdinary* rule of decision 7 and the role rule of decision 9
     `/etc/netplan/`, `/etc/wpa_supplicant/`, `/etc/sssd/`, `/etc/samba/`, `/etc/ldap/`, `/etc/openldap/`,
     `/etc/audisp/`, `/etc/skel/`, `/etc/csh*`, `/etc/tcsh*`, `/etc/ksh*` and `/etc/php*`; the code suffixes are
     extended by `.pm`, `.php`, `.bash`, `.zsh`, `.mjs` and `.cjs`. Every `/etc/` entry of the never-operator list
-    applies below `/usr/local/etc/` as well (one rule, no duplicated entries).
+    applies below `/usr/local/etc/` as well (one rule, no duplicated entries). Fix round 3 adds `/etc/sysconfig/`,
+    `/etc/docker/` and `/etc/containers/` to the never-operator list and `.pyc` and `.jar` to the code suffixes.
 
 
 ### 3.2b Amendment 2026-10-16 — root equivalence over the combination of grants

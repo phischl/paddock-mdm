@@ -154,6 +154,8 @@ var neverOperator = []string{
 	// further shells and interpreters.
 	"/etc/dhcp/", "/etc/openvpn/", "/etc/netplan/", "/etc/wpa_supplicant/", "/etc/sssd/", "/etc/samba/", "/etc/ldap/",
 	"/etc/openldap/", "/etc/audisp/", "/etc/skel/", "/etc/csh*", "/etc/tcsh*", "/etc/ksh*", "/etc/php*",
+	// Service environment files and container runtimes (plan M8s fix round 3).
+	"/etc/sysconfig/", "/etc/docker/", "/etc/containers/",
 }
 
 // ValidateOperatorRoot checks one operator root (plan M8s decision 7b): a normalized directory of the form

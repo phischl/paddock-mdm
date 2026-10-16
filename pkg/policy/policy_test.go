@@ -142,6 +142,8 @@ func TestValidateOperatorRoot(t *testing.T) {
 		"/usr/local/etc/systemd/", "/usr/local/etc/cron.d/", "/usr/local/etc/profile.d/", "/usr/local/etc/bash_completion.d/",
 		"/usr/local/etc/zsh/", "/usr/local/etc/python3.12/", "/usr/local/etc/php/", "/usr/local/etc/apt/",
 		"/usr/local/etc/default/", "/usr/local/etc/X11/", "/usr/local/etc/openvpn/", "/usr/local/etc/skel/",
+		"/etc/sysconfig/", "/etc/docker/", "/etc/containers/registries.conf.d/", "/usr/local/etc/sysconfig/",
+		"/usr/local/etc/docker/", "/usr/local/etc/containers/",
 	} {
 		if err := ValidateOperatorRoot(bad); !errors.Is(err, ErrOperatorRoot) {
 			t.Errorf("%q accepted", bad)
