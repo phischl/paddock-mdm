@@ -146,6 +146,14 @@ const (
 	CodePlatformIPAllowlistChanged  Code = "platform.ip_allowlist_changed"
 	CodePlatformIPAllowlistDenied   Code = "platform.ip_allowlist_denied"
 	CodePlatformIPAllowlistDisabled Code = "platform.ip_allowlist_disabled"
+
+	// Step-up on the effective class, path tiers, revocable sessions and the escrow size bound (plan M8s §6.4).
+	CodeAdminSessionsRevoked                Code = "admin.sessions_revoked"
+	CodePlatformSessionsEnded               Code = "platform.sessions_ended"
+	CodePermissionProfileRootGrantConfirmed Code = "permission_profile.root_grant_confirmed"
+	CodeManagedFileSensitiveConfirmed       Code = "managed_file.sensitive_confirmed"
+	CodeOrganizationSecurityReviewRequired  Code = "organization.security_review_required"
+	CodeDeviceHeaderObjectRejected          Code = "device.header_object_rejected"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -374,13 +382,13 @@ var registry = map[Code]Definition{
 	CodeManagedFileCreated: {
 		Code: CodeManagedFileCreated, Emitted: true,
 		Description: "A managed file was defined for the organization or a device group.",
-		Params:      []string{"path", "device_group_id", "mode", "owner", "group"},
+		Params:      []string{"path", "device_group_id", "mode", "owner", "group", "tier"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedFileUpdated: {
 		Code: CodeManagedFileUpdated, Emitted: true,
 		Description: "A managed file definition was changed.",
-		Params:      []string{"path", "device_group_id", "mode", "owner", "group", "content_changed", "old_path"},
+		Params:      []string{"path", "device_group_id", "mode", "owner", "group", "tier", "content_changed", "old_path"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeManagedFileDeleted: {
@@ -563,14 +571,14 @@ var registry = map[Code]Definition{
 	CodePermissionProfileCreated: {
 		Code: CodePermissionProfileCreated, Emitted: true,
 		Description: "A permission profile was created.",
-		Params:      []string{"name", "class", "commands", "root_equivalent"},
+		Params:      []string{"name", "class", "commands", "root_equivalent", "effective_class"},
 		Outcomes:    adminOutcomes,
 		Note:        "root_equivalent is true when a command of the profile hands out root on its own or in combination (catalog version in the effective profile).",
 	},
 	CodePermissionProfileUpdated: {
 		Code: CodePermissionProfileUpdated, Emitted: true,
 		Description: "A permission profile was changed.",
-		Params:      []string{"name", "class", "old_class", "commands", "root_equivalent"},
+		Params:      []string{"name", "class", "old_class", "commands", "root_equivalent", "effective_class"},
 		Outcomes:    adminOutcomes,
 	},
 	CodePermissionProfileDeleted: {
@@ -582,13 +590,13 @@ var registry = map[Code]Definition{
 	CodeProfileAssignmentCreated: {
 		Code: CodeProfileAssignmentCreated, Emitted: true,
 		Description: "A permission profile was assigned globally, to a group or to a user, optionally only on the devices of one device group.",
-		Params:      []string{"profile", "class", "root_equivalent", "subject_type", "subject_id", "device_group_id"},
+		Params:      []string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeProfileAssignmentUpdated: {
 		Code: CodeProfileAssignmentUpdated, Emitted: true,
 		Description: "The device group scope of a profile assignment was changed.",
-		Params:      []string{"profile", "class", "root_equivalent", "subject_type", "subject_id", "device_group_id", "old_device_group_id"},
+		Params:      []string{"profile", "class", "root_equivalent", "effective_class", "subject_type", "subject_id", "device_group_id", "old_device_group_id"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeProfileAssignmentDeleted: {
@@ -927,6 +935,47 @@ var registry = map[Code]Definition{
 		Params:      []string{"release", "agent_version"},
 		Outcomes:    adminOutcomes,
 		Note:        "release is the Ubuntu release (24.04 or 26.04); agent_version is the release whose packages the device installs.",
+	},
+	CodeAdminSessionsRevoked: {
+		Code: CodeAdminSessionsRevoked, Emitted: true,
+		Description: "Every portal session of an administrator account was ended by the server because the account's role or state changed (actor: system).",
+		Params:      []string{"reason", "sessions", "old_role", "new_role"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "reason is step_up_role_mismatch, role_changed, deactivated or removed; sessions is the number of sessions ended; old_role and new_role are empty when unchanged or none. Target is the administrator account.",
+	},
+	CodePlatformSessionsEnded: {
+		Code: CodePlatformSessionsEnded, Emitted: true,
+		Description: "A platform administrator ended every portal session of the installation.",
+		Params:      []string{"generation"},
+		Outcomes:    adminOutcomes,
+		Note:        "generation is the new session generation; every session of an older generation is invalid. Denied with step_up_required without a fresh step-up, forbidden for a non-platform principal. Platform pseudo-organization.",
+	},
+	CodePermissionProfileRootGrantConfirmed: {
+		Code: CodePermissionProfileRootGrantConfirmed, Emitted: true,
+		Description: "An organization administrator confirmed, with a step-up, a root-equivalent permission profile that existed before the step-up rule covered it.",
+		Params:      []string{"name", "effective_class", "commands"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up, forbidden for another role; failure with invalid_state when the profile is not effectively Full.",
+	},
+	CodeManagedFileSensitiveConfirmed: {
+		Code: CodeManagedFileSensitiveConfirmed, Emitted: true,
+		Description: "An organization administrator confirmed, with a step-up, a managed file on a sensitive path that existed before the path tiers.",
+		Params:      []string{"path", "device_group_id", "tier"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up, forbidden for another role; failure with invalid_state when the file is not on a sensitive path.",
+	},
+	CodeOrganizationSecurityReviewRequired: {
+		Code: CodeOrganizationSecurityReviewRequired, Emitted: true,
+		Description: "An operator ran paddock-server admin security-review: the organization has unconfirmed root-equivalent profiles, unconfirmed sensitive files or files on denied paths (actor: system).",
+		Params:      []string{"root_grant_profiles", "sensitive_files", "denied_files"},
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Recorded once per run in every organization where at least one count is greater than zero.",
+	},
+	CodeDeviceHeaderObjectRejected: {
+		Code: CodeDeviceHeaderObjectRejected, Emitted: true,
+		Description: "The worker found an escrowed LUKS header object whose size differs from the announced size, deleted it and marked the escrow failed (actor: the device).",
+		Params:      []string{"generation", "volume", "declared_size", "object_size"},
+		Outcomes:    []Outcome{OutcomeFailure},
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

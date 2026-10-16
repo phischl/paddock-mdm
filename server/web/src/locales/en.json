@@ -176,7 +176,8 @@
     "ip_not_allowed": "Your address is not on the IP allow list.",
     "ip_allowlist_unavailable": "The portal is starting and cannot check the IP allow list yet. Try again in a moment.",
     "lockout_confirmation_required": "This change would remove your own address from the allow list.",
-    "disable_confirmation_required": "This change would switch the allow list off."
+    "disable_confirmation_required": "This change would switch the allow list off.",
+    "session_store_unavailable": "The portal cannot reach its session store. Try again in a moment."
   },
   "audit": {
     "title": "Audit log",
@@ -203,12 +204,14 @@
       "unknown": "Unknown"
     },
     "admin": {
-      "login": "{actor} signed in"
+      "login": "{actor} signed in",
+      "sessions_revoked": "{reason, select, step_up_role_mismatch {The sessions of {target} were ended: the role at the step-up did not match} role_changed {The sessions of {target} were ended: the role changed from {old_role} to {new_role}} deactivated {The sessions of {target} were ended: the account was deactivated} other {The sessions of {target} were ended: the account no longer has a role}}"
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
       "domains_changed": "{actor} set the domains of {slug}",
-      "recompile_requested": "{actor} requested a new bundle for every device (restore)"
+      "recompile_requested": "{actor} requested a new bundle for every device (restore)",
+      "security_review_required": "A security review is required: {root_grant_profiles, number} root grants, {sensitive_files, number} sensitive files and {denied_files, number} files on denied paths"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -272,7 +275,8 @@
       "updates_run": "The device {target} finished its {kind} updates: {result, select, ok {{upgraded, number} packages upgraded} timeout {timed out} other {failed}}",
       "stale_warning": "The device {target} has not contacted Paddock for {threshold_h, number} hours (warning)",
       "stale_critical": "The device {target} has not contacted Paddock for {threshold_h, number} hours and is presumed lost",
-      "stale_cleared": "The device {target} contacted Paddock again"
+      "stale_cleared": "The device {target} contacted Paddock again",
+      "header_object_rejected": "The escrowed LUKS header of {hostname} was rejected: its size differs from the announced size"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
@@ -302,7 +306,8 @@
       "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)",
       "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",
       "ip_allowlist_denied": "{aggregated, select, true {{count, number} requests from {ip} were refused by the IP allow list} other {A request from {ip} was refused by the IP allow list}}",
-      "ip_allowlist_disabled": "{method, select, env {The IP allow list is bypassed on the api (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} switched the IP allow list off: {entries_removed, number} entries removed}}"
+      "ip_allowlist_disabled": "{method, select, env {The IP allow list is bypassed on the api (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} switched the IP allow list off: {entries_removed, number} entries removed}}",
+      "sessions_ended": "{actor} ended every portal session"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -314,7 +319,8 @@
     "managed_file": {
       "created": "{actor} defined the managed file {path}",
       "updated": "{actor} changed the managed file {path}",
-      "deleted": "{actor} deleted the managed file {path}"
+      "deleted": "{actor} deleted the managed file {path}",
+      "sensitive_confirmed": "{actor} confirmed the managed file {path} on a sensitive path"
     },
     "managed_unit": {
       "created": "{actor} defined the managed unit {unit}",
@@ -350,7 +356,8 @@
     "permission_profile": {
       "created": "{actor} created the permission profile {name}",
       "updated": "{actor} changed the permission profile {name}",
-      "deleted": "{actor} deleted the permission profile {name}"
+      "deleted": "{actor} deleted the permission profile {name}",
+      "root_grant_confirmed": "{actor} confirmed the root grant of the permission profile {name}"
     },
     "profile_assignment": {
       "created": "{actor} assigned the permission profile {profile}",
