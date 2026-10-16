@@ -1,0 +1,1321 @@
+# Implementierungsplan: M10 — Evidence and privacy (retention, purge jobs, privacy pack, evidence export, read-access audit)
+
+Status: Ready for implementation · 2026-10-16 · Author: architect
+Basis: ADR 0032 (retention and deletion; accepted), ADR 0010 (audit pipeline, recording day), ADR 0002 (RLS,
+scheduler iterates organizations), ADR 0017 (object store), ADR 0018 (lists and dialogs); roadmap M10 (AUD-01,
+AUD-07, AUD-10, AUD-11, G5, G6; sysadmin F-24 partly); plan M3a decision 10 (`app.SeenWindow`), plan M5a decisions
+6–7 (inventory tables), plan M5b decision 10 (staleness round as the pattern of a worker round), plan M6c (paddockctl).
+
+Binding language: **MUST** / **MUST NOT** / **SHOULD** / **MAY**.
+
+Parallel plans: M8b (document corrections G1–G6, event gap, nightly chain verification with an auditor-visible status,
+role-group audit, clock drift), M9 (notifications, finding handling, cursor feed; ADR 0031), M11 (safe configuration
+changes; ADR 0033). This plan's steps 1–7 (PDK-135 to PDK-141) depend on none of them. Steps 8–14 (the evidence
+export) reuse `auditwriter.Verifier` as it exists today; where M8b adds a nightly verification status, the export's
+`verification` block of §6.5 is the per-range result of the same verifier plus M8b's nightly runs of the range
+(`audit_verification_run`, PDK-109). The audit writer's own events (purge, export) are recorded through M8b's
+`auditwriter.Recorder` (PDK-109: event first, then row; params capped at 50 × 500 characters) — this plan adds no
+second mechanism; PDK-140 and PDK-143 therefore start after PDK-109 is merged. The order of `events.jsonl` (§6.5)
+is the evidence order (manifest day, object key, line order); M9's `commit_seq` (PDK-120) is an index column that the
+stored event JSON does not carry, so the package does not contain it — an auditor reconciles the feed and the package
+by `event_id`.
+
+## 1. Goal
+
+After this milestone every store of Paddock has a documented retention with a legal basis (`docs/compliance/retention.md`),
+the worker and the audit writer delete what has expired and leave an audit event as deletion evidence
+(`device_user_seen`, inventory and Fleet hosts of retired devices, audit index partitions, evidence exports,
+read-access windows), an organization administrator can configure the organization's privacy settings
+(`/api/v1/settings/privacy`), the works council and the data protection officer receive four English templates under
+`docs/compliance/privacy-pack/`, an `org_auditor` can request, download and offline-verify a signed evidence package
+for a range of sealed days without a platform operator (`POST /api/v1/audit/exports`, `paddockctl audit verify-export`),
+and reads of the audit log and of a device's inventory are recorded as audit events when the organization switches it
+on.
+
+## 2. Context
+
+- The audit writer (`server/internal/auditwriter/`) writes events per organization as `org/<org>/YYYY/MM/DD/HH-<event_id>.jsonl.zst`
+  (zstd-compressed JSON lines, one `audit.Event` per line, `encodeObject`/`DecodeObject` in `writer.go`), indexes them
+  in `paddock_audit.audit_event` (partitioned monthly by `occurred_at`; `audit_ensure_partition` is a `SECURITY DEFINER`
+  function run by `paddock_audit_writer`) and seals every recording day at 00:15 UTC (`sealer.go`: `Manifest`,
+  `ManifestFile`, `CanonicalManifest`, `ManifestKey`, signed with the OpenBao Transit key `audit-chain`;
+  `bao.Client.Sign` returns `Signature{Value: "vault:v<N>:<base64>", KeyVersion}`; `bao.Client.PublicKeys(ctx, key)`
+  returns `map[int][]byte` raw ed25519 keys). `verify.go` (`Verifier.Verify(ctx, org, from, to) (*Report, error)`)
+  checks the chain and every object hash for a range of days; `paddock-server audit verify` runs it in the
+  audit-writer container. The writer's object store credential may `PutObject`, `PutObjectRetention`, `GetObject`,
+  `ListBucket` on `paddock-audit`.
+- The audit database roles (`deploy/compose/audit-postgres/init/10-roles.sh`): `audit_owner` (migrations),
+  `paddock_audit_writer` (`SELECT, INSERT` on the three tables, `EXECUTE audit_ensure_partition`), `paddock_audit_reader`
+  (`SELECT` on `audit_event` under the `reader` RLS policy; no grants on `audit_object`, `audit_manifest`). The api
+  reaches the audit index through `db.AuditReader.InOrg` (`PADDOCK_AUDIT_DB_READER_URL_FILE`), the audit writer through
+  `db.AuditWriterPool` (`InWriter`, `InWriterWithTimeout`, `WithSession`).
+- `app.ActionRunner` (`server/internal/app/action.go`): `RunTx`, `RunTxRefusal`, `RunExternal`, `RecordOnce`
+  (system principals only), `RecordOnceBatch`, `RecordOnceRefusal`, `RecordRejected`; `ActionSpec{Code, AllowedRoles,
+  Target, Params, Actor, RequiresStepUp, CorrelationID}`; `Recorder{SetTarget, SetParam, SetOrganization, …}`. Role
+  sets in `app.go`: `RolesRead` (admin, operator, auditor), `RolesWrite`, `RolesAdmin`, `RolesAudit` (admin, auditor),
+  `RolesPlatform`. `app.RequireOrg(ctx, roles)` guards reads outside the runner.
+- The worker round pattern: `server/internal/worker/staleness.go` (`NewStaleness`, `Run` with a ticker, `Round` under
+  `PlatformPool.WithLeaderLock(sys, key, fn)`, `pool.OrganizationIDs`, `systemContext(ctx, org, correlation)` per
+  organization). Jobs are wired in `server/cmd/paddock-server/worker.go` (`runAll(ctx, …, dms.Run, staleness.Run, …)`).
+  The inventory round (`worker/inventory.go`, `app.NewInventorySync`) uses the port `ports.Inventory`
+  (`server/internal/ports/inventory.go`), implemented by `adapters/fleet.Client` (`hosts.go`: `do(ctx, method, path,
+  in, out)`).
+- `device_user_seen` (migration `00007_identity.sql`): `(organization_id, device_id, username, last_seen_at)`,
+  upserted by `app/devicereports.go` from `session.login` events, read by `app/identity.go` `LoadIdentity` with
+  `SeenWindow = 365 * 24 * time.Hour`. Grants: `paddock_worker` has `SELECT, INSERT, UPDATE` (no `DELETE`).
+- Inventory tables (migration `00024_inventory.sql`): `device_inventory_ref` (`external_id` = Fleet host ID),
+  `installed_software`, `vulnerability_finding`, `inventory_policy_result`; `paddock_worker` has `SELECT, INSERT,
+  UPDATE, DELETE`, RLS `tenant` policy. A retired device keeps its last inventory; nothing deletes its Fleet host.
+- Settings pattern: `organization_update_settings` (migration `00025_updates.sql`, default row per organization by
+  trigger as in `organization_login_settings_default`), `GET`/`PUT /api/v1/settings/updates` (`x-paddock-audit:
+  settings.updates_changed`, `app.SpecUpdateSettings`, `handlers_updates.go`, portal `views/UpdateSettings.vue`,
+  route `/settings/updates`, nav group `organization` in `web/src/lib/navigation.ts`), section `settings.updates` of
+  `api/schema/paddock.v1.json` and the declarative apply (`app/config*.go`).
+- Audit list: `app/auditlog.go` (`AuditLog.List`, `AuditQuery`, 92-day cap), handler `admin/handlers.go`
+  `ListAuditEvents`, portal `views/Audit.vue` with `components/AuditEventList.vue`. Inventory lists:
+  `admin/handlers_inventory.go` (`ListDeviceSoftware`, `ListDeviceVulnerabilities`).
+- Audit codes: closed registry `server/internal/domain/audit/codes.go` (`Definition{Code, Description, Params,
+  Outcomes, Emitted, Note}`, `adminOutcomes`); `make gen` renders `docs/compliance/audit-codes.md`; the portal
+  localizes `audit.<code>` in `web/src/locales/en.json` and `de.json`.
+- Acceptance: every `/api/v1` operation needs a fixture in `test/acceptance/isolation_fixtures.go` (gate
+  `TestOrganizationIsolation` fails otherwise); every collection `GET` is checked by `TestListContract`
+  (`x-paddock-list`); `stack.PaddockServer(ctx, args…)` runs `paddock-server` in the audit-writer container;
+  `env.Bob` is the acme **auditor**, `env.Alice` an acme admin, `env.Carol` a globex admin; `tempUser(t, name,
+  env.RoleGroup(slug, "auditors"))` creates an auditor; `devicesim.Device.SendEvents` reports device events;
+  `test/acceptance/fleethost.go` registers a simulated Fleet host; `TestPaddockctl` runs `bin/paddockctl` from
+  `PADDOCK_ACCEPTANCE_PADDOCKCTL`.
+- `pkg/` keeps an import allow list (standard library and `github.com/gowebpki/jcs`; `pkg/imports_test.go`);
+  `pkg/canonicaljson` has `Transform(doc []byte) ([]byte, error)` and `Marshal(v any) ([]byte, error)`. The `cli`
+  module (`cli/go.mod`) depends on `github.com/oasdiff/yaml` only; `cli/internal/cmd/cmd.go` dispatches
+  subcommands (`dispatch`), exit codes 0/1/2/3 (`docs/operations/paddockctl.md`).
+- `prodcheck` refuses development-only variables listed in `server/internal/prodcheck/prodcheck.go` line 124
+  (`PADDOCK_STALENESS_UNIT`, …). `compose.dev.yaml` sets them for the development stack.
+
+## 3. Binding decisions
+
+### 3.0 Cross-plan rules
+
+- **Migration numbers.** M8b uses control-plane `00045` and audit `00004`; M11 uses control-plane `00045`–`00049`.
+  Every migration of this plan is written as `NNNNN_<name>.sql`: the implementer takes the **next free number** of
+  the directory at the time of the ticket (`ls server/migrations/paddock | tail -1`) and never renumbers an existing
+  file. The order of creation within this plan is fixed: paddock `privacy_settings` → `retention_grants` →
+  `read_audit_window` → `change_set_before_purge`; audit `index_purge` → `audit_exports`. A migration MUST NOT be
+  merged while a lower-numbered migration of another plan is still open on `main` with the same number (rebase and
+  take the next number).
+- **M8b (ADR 0030, `docs/plans/M8b-evidence-integrity.md`)** adds `audit_verification_run` and reader policies on
+  `audit_manifest`, the endpoints `GET /api/v1/audit/integrity`, `/api/v1/audit/verification-runs`,
+  `/api/v1/audit/manifests`, and the tables `organization_role_member`, `platform_role_member`,
+  `device_event_dropped`, `device_event_gap`. This plan's export (§6.5) carries the nightly verification runs of the
+  range from `audit_verification_run` (decision 32) and creates the reader policy on `audit_object` only when it is
+  missing (§6.2 `DO` block); the policy on `audit_manifest` comes from M8b. The retention of M8b's tables is in ADR
+  0032 §1 (kept for the WORM retention; no purge in this milestone).
+- **M11 (ADR 0033, `docs/plans/M11-safe-config.md`)** adds `change_set.before` (managed file contents before a
+  change), `change_set.before_purged_at` (the worker holds `UPDATE` on `change_set`), `device_bundle_report` and
+  `device_resource_status`. This plan owns their periods (ADR 0032 §1) and the purge of `change_set.before`
+  (decision 15a): when M11's columns do not exist yet at the time of PDK-137, PDK-137 ships without the
+  `change_set.before` pass and PDK-147 adds it (stop condition: never add the columns from this plan).
+
+### 3.1 Retention documents (PDK-135)
+
+1. `docs/compliance/retention.md` (new) MUST contain: the retention matrix of ADR 0032 §1 verbatim as a table (same
+   columns), a section "Deletion evidence" naming the codes `retention.purged` (params `store`, `deleted`, `cutoff`,
+   `partition`) and `device.inventory_purged`, how to list them (`GET /api/v1/audit-events?code=retention.purged`),
+   a section "Deletion lag" (backups up to 30 days, RR-35), a section "Erasure requests" (restriction instead of
+   deletion for WORM evidence, Art. 17(3)(b)/(e)), and a section "What is not purged yet" listing the rows of the
+   matrix whose purge column says "None in this milestone".
+2. `docs/compliance/privacy.md` MUST change: the sentence "reading it is not audited" (inventory) becomes "reading
+   it is recorded as `device.inventory_viewed` when the organization switches *Record inventory views* on
+   (`/api/v1/settings/privacy`), coalesced per administrator, device and day"; the `session.login` row's "Stored"
+   cell gains "kept 365 days after the last login (ADR 0032)"; the fleetd section gains "Inventory of a retired device
+   is deleted, in Paddock and in Fleet, `retired_inventory_days` after retirement (default 30)"; the Administrators
+   section gains "Searches of the audit log are recorded as `audit.searched` when the organization switches it on;
+   evidence exports are always recorded (`audit.export_requested`, `audit.export_downloaded`)" and the retention
+   pointer `docs/compliance/retention.md`.
+3. `docs/compliance/iso27001-mapping.md` MUST gain the rows **A.5.28 Collection of evidence** (feature: signed
+   evidence package per range of sealed days, offline verifier `paddockctl audit verify-export`; evidence:
+   `audit.export_*` events, the package's `export.json`; duty: record the `audit-chain` key fingerprint from the
+   *Evidence exports* page in the ISMS and hand it to the auditor out of band), **A.5.34 Privacy and protection of
+   PII** (feature: negative list, retention matrix, purge jobs with deletion evidence, privacy settings, read-access
+   recording, privacy pack; evidence: `retention.md`, `retention.purged`, `device.inventory_purged`,
+   `settings.privacy_changed`; duty: complete the privacy pack, decide the read-access switches with the works
+   council) and **A.8.10 Information deletion** (feature: the purge jobs; evidence: the deletion events; duty: add the
+   WORM lifecycle rule, set `retired_inventory_days`, keep backup expiry at 30 days or document a different value).
+   The A.5.33 row's duty cell MUST add "set `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` if the index is to outlive the
+   bucket's lifecycle rule".
+4. `docs/compliance/residual-risks.md` MUST gain, in section "Control plane and audit domain": `RR-35` **Deletion
+   lag in backups** (purged rows survive in backups up to 30 days; mitigation: encrypted backups, expiry; duty:
+   state the lag in the privacy notice), `RR-36` **Evidence export is an egress of personal data** (a package holds
+   every event of the range with names and addresses; mitigation: step-up, purpose field, audited request and every
+   download, 7-day expiry; duty: handle packages as confidential, hand over through an agreed channel) and `RR-37`
+   **Index purge equals WORM expiry** (the index is purged when the WORM retention has lapsed, so the portal can show
+   nothing the bucket no longer holds; mitigation: `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` may be longer; duty: align the
+   lifecycle rule with it).
+5. `docs/compliance/README.md` MUST list `retention.md` and `privacy-pack/` (one row each). `docs/operations/audit-bucket.md`
+   section 3 MUST gain two bullets: the nightly index purge (`PADDOCK_AUDIT_INDEX_RETENTION_DAYS`, `paddock-server
+   audit purge --dry-run`) and the evidence exports (built on the audit host, 7-day expiry, never in the bucket).
+6. `docs/architecture.md` MUST gain an appended block `> **Amendment 2026-10-16 (M10, ADR 0032):**` at the end of
+   §14.4 stating: one platform-wide WORM retention today, per-organization retention planned (extend-only); the audit
+   index is purged by partition after `PADDOCK_AUDIT_INDEX_RETENTION_DAYS`; exports are built by the audit writer and
+   stored in the index database; and at the end of §16.1 listing the new tables `organization_privacy_settings`,
+   `read_audit_window` (paddock) and `audit_export`, `audit_export_chunk`, `audit_signing_key` (paddock_audit). No
+   other line of `docs/architecture.md` changes in this milestone (M8b corrects G5/G6 wording).
+
+### 3.2 Privacy settings (PDK-136)
+
+7. Migration `server/migrations/paddock/NNNNN_privacy_settings.sql` MUST be §6.1 verbatim.
+8. `GET`/`PUT /api/v1/settings/privacy` per §6.3 (`PrivacySettings`, `PrivacySettingsUpdate`); `PUT` is
+   `x-paddock-audit: settings.privacy_changed`, role `org_admin` (`app.SpecPrivacySettings = ActionSpec{Code:
+   audit.CodeSettingsPrivacyChanged, AllowedRoles: RolesAdmin}`), no step-up; `GET` roles `org_admin`, `org_operator`,
+   `org_auditor`. Validation: `retired_inventory_days` outside 1–365 → `400 invalid_request`. The event params are
+   the three new values.
+9. `api/schema/paddock.v1.json` MUST gain `settings.privacy` (`$defs/privacySettings`: the three fields, all required
+   when present, same constraints) and the declarative apply MUST treat it exactly like `settings.updates` (plan
+   lines `~ settings.privacy retired_inventory_days: 30 -> 14`; `paddockctl get config` exports it).
+10. Portal: view `web/src/views/PrivacySettings.vue`, route `/settings/privacy` (name `privacy-settings`), nav item
+    `{ to: '/settings/privacy', label: 'nav.privacySettings', icon: 'shield', visible: orgReader }` after
+    `nav.updateSettings` in group `organization`; a form with a number field and two switches, help text per field
+    from the i18n catalog, save through the generated client, success snackbar, inline error; read-only for
+    operators and auditors. Keys in `en.json` and `de.json`.
+
+### 3.3 Worker retention round (PDK-137, PDK-138)
+
+11. Migration `NNNNN_retention_grants.sql` MUST be exactly: the header comment, `-- +goose Up`, `GRANT DELETE ON
+    device_user_seen TO paddock_worker;`, `-- +goose Down`.
+12. `app.Retention` (new file `server/internal/app/retention.go`) and `worker.Retention` (new file
+    `server/internal/worker/retention.go`) per §6.6. The round runs at start and every `PADDOCK_RETENTION_INTERVAL`
+    (`config.Loader.Duration`, default `6h`) under the leader lock `retentionLockKey = 0x7061646420726574`, iterates
+    `pool.OrganizationIDs`, and for every organization calls, in this order, `PurgeUserSeen`, `PurgeReadWindows`
+    (PDK-139; a no-op until the table exists is NOT allowed — PDK-139 adds the call), `PurgeRetiredInventory`
+    (PDK-138). A failing organization does not stop the others (`errors.Join`).
+13. `PurgeUserSeen` deletes rows with `last_seen_at < now − app.SeenWindow` in batches of at most 1 000 rows
+    (`DELETE … WHERE ctid IN (SELECT ctid FROM device_user_seen WHERE last_seen_at < @cutoff LIMIT 1000)` as query
+    `DeleteExpiredDeviceUserSeen :execrows` in `queries/login.sql`), repeating until a batch deletes fewer than 1 000.
+    It records exactly one `retention.purged` event per organization and round **only when** the total is > 0 or a
+    batch failed (`RunTx` with `ScopeOrg`, the deletion batches inside `fn`; a failure after some batches records
+    `failure` with `deleted` = the rows of the batches that committed — every batch runs in its own `RunTx`? No:
+    **all batches of one organization run inside one `RunTx`** so that the event and the deletion commit together;
+    the 1 000-row batching limits lock scope, not transactions). Params: `store: "device_user_seen"`, `deleted`,
+    `cutoff` (RFC 3339).
+14. Development unit: `PADDOCK_RETENTION_UNIT` (`days` default, `seconds` allowed only with
+    `PADDOCK_ENV=development`; the loader MUST `Invalid` any other value and `seconds` outside development). With
+    `seconds`, every period of the round (`SeenWindow`, `retired_inventory_days`, the 48 h window) counts days as
+    seconds. `compose.dev.yaml` MUST set `PADDOCK_RETENTION_UNIT: ${PADDOCK_RETENTION_UNIT:-seconds}` and
+    `PADDOCK_RETENTION_INTERVAL: ${PADDOCK_RETENTION_INTERVAL:-15s}` on `paddock-worker`; `prodcheck.go` line 124
+    MUST list `PADDOCK_RETENTION_UNIT` among the development-only variables; `prod.env.example` and
+    `lab.env.example` do not mention it.
+15. Metrics (worker): `paddock_retention_last_success_timestamp_seconds{store}` (set after each successful store
+    pass over all organizations; stores `device_user_seen`, `read_audit_window`, `retired_inventory`),
+    `paddock_retention_deleted_total{store}`, `paddock_retention_stores` (constant 3). Alert
+    `PaddockRetentionPurgeStale` (critical): any store's last success older than 48 h for 1 h, plus the
+    `…Missing` pattern (`count(paddock_retention_last_success_timestamp_seconds) < paddock_retention_stores` for 1 h,
+    warning). `docs/operations/monitoring.md` tables gain both and the metrics row.
+15a. `PurgeChangeSetBefore` (decision 12's round, fourth pass; PDK-137 or PDK-147 per §3.0): per organization,
+    `UPDATE change_set SET before = NULL, before_purged_at = now() WHERE before IS NOT NULL AND before_purged_at IS
+    NULL AND applied_at < now − ChangeSetBeforeRetention` in batches of 1 000 (`PurgeChangeSetBefore :execrows` in
+    `queries/change_set.sql`); `ChangeSetBeforeRetention = 90 * 24 * time.Hour` (ADR 0032 §1: before-states hold
+    full managed file contents and serve M11 revert; 90 days covers a quarter of change control). One
+    `retention.purged` with `store: "change_set_before"` per organization and round when > 0. The migration
+    `NNNNN_change_set_before_purge.sql` of this plan contains only `GRANT UPDATE (before, before_purged_at) ON
+    change_set TO paddock_worker;` **when** M11's migration did not grant it already (the implementer checks; if M11
+    granted `UPDATE` on the table, this migration is not created). Store `change_set_before` is the fourth value of
+    `paddock_retention_stores` (then constant 4).
+16. `PurgeRetiredInventory` (PDK-138): per organization, read `retired_inventory_days` from
+    `organization_privacy_settings`; select devices `state = 'retired' AND state_changed_at < now − days` that still
+    have a `device_inventory_ref` row or any `installed_software`, `vulnerability_finding`, `inventory_policy_result`
+    row (query `ListRetiredDevicesWithInventory :many` in `queries/inventory.sql`, at most 100 per round per
+    organization). For every device, one `RunExternal` with `ScopeOrg`, spec `device.inventory_purged`, target the
+    device: `prepare` locks the device row and reads the counts and the `external_id`; `external` calls
+    `InventoryAdmin.DeleteHost(ctx, ref)` when a ref exists (a 404 from Fleet counts as deleted); `finalize` deletes the
+    four tables' rows of the device and sets params `hostname`, `retired_at`, `software`, `findings`,
+    `policy_results`, `fleet_host_deleted` (bool). When `DeleteHost` fails, finalize MUST NOT delete the Paddock rows
+    (the event records `failure` with `error_code: upstream_unavailable`; the device is retried next round).
+17. `ports.InventoryAdmin` and `fleet.Client.DeleteHost` per §6.6; `DELETE /api/v1/fleet/hosts/{id}`; a 404 returns
+    nil. The fake inventory of `adapters/fleet/fake_test.go` and `worker/inventory_test.go` gains `DeleteHost`.
+
+### 3.4 Read-access recording (PDK-139)
+
+18. Migration `NNNNN_read_audit_window.sql` MUST be §6.1 verbatim. `ActionRunner.RecordReadOnce` per §6.6:
+    authorization as in `RunTx` (denied is recorded), then one `OrgPool.InOrg` transaction in which `claim` runs
+    first; `claim` returns `false` when the window key already existed, and then **nothing** is inserted into
+    `action` or `outbox`; `true` records the event with outcome `success` in the same transaction. A `claim` error
+    rolls back and records `failure` as `RunTx` does.
+19. `app.ReadAudit` per §6.6. `AuditSearched` reads `organization_privacy_settings.audit_search_recorded` inside the
+    claim transaction (query `GetPrivacySettings :one`); when false it returns `false, nil` without recording; the
+    window key is `(actor key, "audit.searched", "", now.UTC().Truncate(time.Hour))`; params: `from`, `to` (RFC 3339
+    of the effective range), `codes`, `outcomes`, `actor_types` (arrays, omitted when empty), `target_id` (omitted when
+    nil), `q_used` (bool), `window_start`. The actor key is `principal.ID` (account ID; for an API token the token ID).
+    `InventoryViewed` checks `inventory_view_recorded`; key `(actor key, "device.inventory_viewed", device ID,
+    dayOf(now))`; params `hostname`, `view` (`software` or `vulnerabilities`), `window_start`; target the device.
+20. Handlers: `ListAuditEvents` MUST call `h.readAudit.AuditSearched(ctx, query)` **before** `h.audit.List` and return
+    its error (a denied role is recorded and refused); `ListDeviceSoftware` and `ListDeviceVulnerabilities` call
+    `InventoryViewed` before the list. `GET /api/v1/devices/{id}/audit` does not exist; the device audit tab uses
+    `target_id`, which `AuditSearched` records.
+21. `PurgeReadWindows` (decision 12) deletes `read_audit_window` rows with `window_start < now − 48 h` in one
+    statement per organization; `retention.purged` with `store: "read_audit_window"` only when > 0.
+
+### 3.5 Audit index purge (PDK-140)
+
+22. Audit migration `server/migrations/audit/NNNNN_index_purge.sql` MUST be §6.2 verbatim (function
+    `audit_purge_partition`). `auditwriter.Purger` per §6.6: `Run(ctx, now, dryRun)` lists the partitions of
+    `audit_event` (`SELECT inhrelid::regclass::text FROM pg_inherits WHERE inhparent = 'audit_event'::regclass` as
+    query `ListAuditPartitions :many`), parses the month from the name `audit_event_YYYY_MM`, computes
+    `cutoff = now − indexRetentionDays` and, for every partition whose month end is before `cutoff`, calls
+    `audit_purge_partition(month, cutoff)` in its own `InWriter` transaction (`SET LOCAL lock_timeout = '5s'` first;
+    a lock timeout is reported as `Reason: "lock_timeout"` and retried next night). In dry-run mode it only reports.
+    For every **dropped** partition it records `retention.purged` through `RecordSelf` in the platform
+    pseudo-organization (`audit.PlatformOrganizationID`) with params `store: "audit_index"`, `partition`,
+    `deleted` (events), `cutoff`; a failed drop records `failure` with `error_code: "purge_failed"`. "Records" means
+    `auditwriter.Recorder.Record` of M8b (PDK-109) with a one-event report; `RecordSelf` below is the name of the thin
+    helper the purger and the exporter call, implemented on top of that recorder (not a second write path).
+23. `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` (`loadAuditDeps`): default `PADDOCK_AUDIT_RETENTION_DAYS`; a value below it
+    is `Invalid`. `RunDaily` of the purger fires at 01:15 UTC (`PurgeDelay = 75 * time.Minute`, same loop shape as
+    `Sealer.RunDaily`; after the seal at 00:15 and M8b's nightly verification at 00:45); `serveAuditWriter` adds it to `runAll`. CLI: `paddock-server audit purge [--dry-run]` prints
+    one line per partition `DROP audit_event_2025_01: 12345 events` / `KEEP audit_event_2026_09: <reason>` and
+    `nothing to purge` when no partition qualifies; exit 1 when a drop failed.
+24. `RecordSelf(ctx, rec *Recorder, ev audit.Event) error` (file `selfevent.go`) fills `Schema`, `EventID` (`uuid.NewV7`),
+    `OccurredAt` (now), `Source: audit.SourceSystem`, `Actor{Type: audit.ActorSystem, Display: "audit-writer"}` when
+    empty, validates (`Validate`) and hands the event to M8b's `auditwriter.Recorder` (PDK-109), which writes it
+    through `WriteBatch`. It MUST NOT be called inside an `InWriter` transaction. If PDK-109 is not merged when
+    PDK-140 starts: stop (§12).
+25. Metrics (audit writer): `paddock_audit_index_purge_last_success_timestamp_seconds`,
+    `paddock_audit_index_partitions_dropped_total`; alert `PaddockAuditIndexPurgeStale` (warning, > 48 h for 1 h);
+    `monitoring.md` rows.
+
+### 3.6 Privacy pack (PDK-141)
+
+26. Four files under `docs/compliance/privacy-pack/`, English, each starting with the banner
+    `> Template. Not legal advice. Complete the fields in [brackets] and have your data protection officer and works
+    council review the result. Facts about Paddock in this document are taken from docs/compliance/privacy.md and
+    docs/compliance/retention.md as of <version>.`:
+    - `transparency-notice.md` (GDPR Art. 13 employee notice): controller `[Organization]`, DPO contact, purposes
+      (device management, security, evidence), the data categories per the `privacy.md` tables, the negative list
+      verbatim, recipients (platform operator `[Operator]`, Fleet as a component, SIEM/SOC `[if configured]`), retention
+      per the matrix (numbers, not prose), rights (access, rectification, restriction instead of erasure for evidence),
+      the fact that reads of inventory and audit log are `[recorded | not recorded]` per the organization's setting,
+      the dead man's switch `[enabled: period | disabled]`, and a "How to see what Paddock knows about you" paragraph
+      (ask the administrator for the device page and the audit events with your username).
+    - `record-of-processing.md` (Art. 30(1) input): one table per processing activity — *Device management*,
+      *Identity and login*, *Privileged access (sudo)*, *Disk encryption and escrow*, *Inventory and vulnerabilities*,
+      *Audit trail*, *Administrator access* — with columns purpose, data subjects, data categories, recipients,
+      third-country transfer (`[none unless the operator hosts abroad]`), retention (matrix values), TOMs (pointer
+      to `iso27001-mapping.md` rows), legal basis.
+    - `dpia-input.md` (Art. 35 input): threshold assessment (systematic monitoring of employees → DPIA likely
+      required), the risk list from the employee's perspective (RR-01, RR-06, RR-15, RR-20, RR-35, RR-36, and
+      "behaviour evaluation through audit search" with the mitigation `audit_search_recorded`), likelihood/severity
+      columns left as `[ ]`, mitigations from Paddock (negative list, coalesced read events, purge jobs, step-up,
+      two administrators for Destroy) and the residual risks the organization accepts `[ ]`.
+    - `works-council-annex.md` (BetrVG §87(1) Nr. 6 annex): exhaustive list of data and evaluations (every table of
+      `privacy.md` plus the portal pages that show per-person data), permitted purposes, an explicit prohibition of
+      performance and behaviour evaluation, roles with access (`org_admin`, `org_operator`, `org_auditor`,
+      platform operator with what they cannot see), the configurable switches (`audit_search_recorded`,
+      `inventory_view_recorded`, dead man's switch, `retired_inventory_days`) with the agreed values `[ ]`, deletion
+      periods (matrix), the change procedure (a new data category or a changed switch = annex change; Paddock records
+      `settings.privacy_changed`), and the employee's information rights.
+27. `docs/compliance/README.md` MUST describe the pack as "templates the operator completes; not legal advice".
+
+### 3.7 Evidence export: data model and request API (PDK-142)
+
+28. Audit migration `NNNNN_audit_exports.sql` MUST be §6.2 verbatim. OpenAPI per §6.3 (`/api/v1/audit/exports`
+    `GET` list contract and `POST`, `/api/v1/audit/exports/{id}` `GET`). Problem codes (`server/internal/problem/problem.go`):
+    `DayNotSealed = &Error{Code: "day_not_sealed", Status: 422}`, `TooManyExports = &Error{Code:
+    "too_many_exports", Status: 409}`, `ExportNotReady = &Error{Code: "export_not_ready", Status: 409}`.
+29. `app.AuditExports` per §6.6. `Request` runs `runner.RunExternal(ctx, ScopeOrg, spec, prepare, external, finalize)`
+    with `spec = SpecAuditExportRequest` (`Code: audit.CodeAuditExportRequested, AllowedRoles: RolesAudit,
+    RequiresStepUp: true`): `prepare` validates (`from_day ≤ to_day` else `400 invalid_request`; `to_day − from_day`
+    ≤ 400 days else `400 range_too_large`; `purpose` 1–500 characters after trimming else `400 invalid_request`) and
+    sets params `export_id` (a new UUIDv7), `from_day`, `to_day`, `purpose`; `external` runs one
+    `reader.InOrg` transaction on the audit database: `to_day` has a manifest (`GetAuditManifest`) else
+    `422 day_not_sealed`; `from_day` has a manifest **or** is before the organization's first manifest day
+    (`FirstAuditManifestDay :one`) — no: `from_day` MUST have a manifest else `422 day_not_sealed` (a range before
+    the first sealed day is not evidence); pending+running exports of the organization < 3
+    (`CountOpenAuditExports :one`) else `409 too_many_exports`; then `InsertAuditExport` with status `pending`,
+    `requested_by` = the principal as `audit.Actor` without `IP`, `correlation_id` = the action's correlation ID;
+    `finalize` does nothing but keep the params. A validation error in `external` is a `problem.Error` and is
+    recorded as `denied`/`failure` per the runner's rules. `Get` and `List` run under `RequireOrg(ctx, RolesAudit)`
+    through `reader.InOrg`; `List` follows ADR 0018 (`listing.Parse` with the spec `auditExportList`; sort allow list
+    `requested_at`, `status`, `from_day`, `to_day`; search over `purpose` and `requested_by->>'display'`; filter
+    `status` repeatable).
+30. Fixtures: `isolation_fixtures.go` gains the three operations (a pending export of acme as the fixture object);
+    `list_contract_test.go` needs no parent for `/api/v1/audit/exports`. The handler file is
+    `admin/handlers_auditexports.go`.
+
+### 3.8 Export builder in the audit writer (PDK-143)
+
+31. `auditwriter.Exporter` per §6.6, started by `serveAuditWriter` (`exporter.Run`). `Run` polls every
+    `PADDOCK_AUDIT_EXPORT_POLL_INTERVAL` (`Duration`, default `30s`; `compose.dev.yaml` sets `2s`): claims the oldest
+    pending export (`ClaimPendingAuditExport :one`: `UPDATE audit_export SET status='running', started_at=now()
+    WHERE id = (SELECT id FROM audit_export WHERE status='pending' ORDER BY requested_at LIMIT 1 FOR UPDATE SKIP
+    LOCKED) RETURNING *`) and calls `Build`. Then `Expire(ctx, now)` (decision 34).
+32. `Build(ctx, export)` MUST produce the package of §6.5 in this order and streaming: (1) list the manifests of
+    `[from_day, to_day]` from the index (`ListAuditManifests`); a day without a manifest fails the build
+    (`error: "day <d>: no manifest"`); (2) run `Verifier.Verify(ctx, org, from_day, to_day)`; the build continues when
+    the report has problems (they go into `export.json.verification.problems`; `verify_ok` is false) — the auditor must
+    see a broken chain, not an error; (2a) read M8b's `audit_verification_run` rows of the organization whose verified
+    range overlaps `[from_day, to_day]` (`ListAuditVerificationRunsOverlapping :many`, newest first, at most 100) and
+    put them into `export.json.verification.runs` (§6.5 `Run`: `run_id`, `started_at`, `from_day`, `to_day`, `ok`,
+    `problems`); when the table does not exist yet (M8b not merged), `runs` is `[]` and the ticket reports it; (3) open a temp file (`os.CreateTemp` in `os.TempDir()`, removed in a `defer`)
+    for `events.jsonl`; (4) write the tar through `chunkWriter` (8 MiB rows, each `InsertAuditExportChunk` in its own
+    `InWriterWithTimeout(ctx, 2*time.Minute)` transaction, running SHA-256 over the whole stream): `README.md`
+    (§6.5 text verbatim), then for every day in order `manifests/<day>.json` = the stored manifest object bytes
+    verbatim (`store.Get(ManifestKey)`), then for every object of the day's manifest in key order
+    `objects/<key without "org/<org>/">` = the stored bytes verbatim (hash checked against the manifest entry; a
+    mismatch is added to `verification.problems` as `"<day>: object <key> was modified (SHA-256 mismatch)"` and the
+    object is still included), each object decoded (`DecodeObject` is NOT used: the raw decompressed bytes are
+    appended to the temp file so that `events.jsonl` is byte-identical to the concatenation) while counting lines;
+    then `events.jsonl` from the temp file; then `export.json` (canonical bytes of §6.5, built from everything
+    collected); then `export.sig` (§6.5). (5) `UpdateAuditExportReady` sets status `ready`, `ready_at`, `expires_at =
+    ready_at + ExportTTL`, `event_count`, `object_count`, `size`, `package_sha256`, `verify_ok`, `verify_problems`,
+    `signature`, `key_version`. Any error: delete the chunks, status `failed`, `error` = the message (at most 500
+    characters, no secrets). (6) `RecordSelf` of `audit.export_completed` in the export's organization: outcome
+    `success` or `failure`, target `{type: "audit_export", id}`, params `export_id`, `from_day`, `to_day`, `days`,
+    `objects`, `events`, `size`, `package_sha256` (hex), `verify_ok`, `key_version`, `error` (failure only),
+    `error_code: "export_failed"` on failure; `CorrelationID` = the export's `correlation_id`.
+33. The signature: `signer.Sign(ctx, SigningKey, sum[:])` where `sum = sha256(canonical export.json)`; the keys
+    embedded in `export.json` are `keys(ctx)` (`bao.PublicKeys(ctx, "audit-chain")`), all versions.
+34. `Expire(ctx, now)`: exports with status `ready` and `expires_at < now` → delete their chunks
+    (`DeleteAuditExportChunks`), status `expired`; exports `running` with `started_at < now − 2 h` → status `failed`,
+    `error: "exporter restarted"`, chunks deleted. For every expired export one `RecordSelf` of `retention.purged` in
+    the export's organization with params `store: "audit_exports"`, `deleted: 1`, `export_id`, `cutoff`. Metrics:
+    `paddock_audit_export_total{result}` (`ready`, `failed`, `expired`), `paddock_audit_export_pending_age_seconds`
+    (age of the oldest pending export, 0 when none), `paddock_audit_export_build_seconds` (histogram). Alerts:
+    `PaddockAuditExportFailed` (warning: `increase(paddock_audit_export_total{result="failed"}[1h]) > 0`),
+    `PaddockAuditExportStuck` (warning: pending age > 3 600 s for 10 min).
+
+### 3.9 Download, signing keys, portal (PDK-144, PDK-148, PDK-145)
+
+35. `GET /api/v1/audit/exports/{id}/download` (§6.3): roles `org_admin`, `org_auditor`; `404 not_found` for an
+    unknown or foreign export; `409 export_not_ready` unless status is `ready`; records `audit.export_downloaded`
+    (`RunTx`, `ScopeOrg`, params `export_id`, `from_day`, `to_day`, `size`, `package_sha256`) **before** streaming;
+    then streams the chunks in `seq` order inside one `reader.InOrg` transaction with `Content-Type:
+    application/x-tar`, `Content-Length: <size>`, `Content-Disposition: attachment; filename="<name>"` where
+    `<name> = paddock-audit-export-<organization slug>-<from_day>_<to_day>-<first 8 hex of id>.tar`, and
+    `X-Paddock-Package-SHA256: <hex>`. The handler returns the generated strict-server response type for a binary
+    body (`io.Reader` + `ContentLength`); the implementer verifies the generated name after `make gen`.
+36. `audit_signing_key` upkeep (PDK-148): after every successful `Sign` in `sealDay` and in `Build`, the audit writer
+    calls `EnsureAuditSigningKey(key_version, public_key)` (`INSERT … ON CONFLICT DO NOTHING`) with the key from
+    `bao.PublicKeys` (cached per process for 10 minutes). `GET /api/v1/audit/keys` (§6.3) returns every row
+    with `fingerprint` = lowercase hex SHA-256 of the raw 32-byte public key; roles `org_admin`, `org_auditor`.
+    `paddock-server audit keys` prints `audit-chain v<N> <fingerprint>` per version from OpenBao (the ISB's
+    out-of-band copy).
+37. Portal (PDK-145): view `web/src/views/AuditExports.vue`, route `/audit/exports` (name `audit-exports`), nav
+    item `{ to: '/audit/exports', label: 'nav.auditExports', icon: 'file-check', visible: (a) => a.canReadAudit }`
+    directly after `nav.auditIntegrity` (M8b, PDK-110; after `nav.audit` if that item does not exist yet); a button
+    *Evidence exports* in the toolbar of `views/Audit.vue` linking there, and a link on `views/AuditIntegrity.vue` when
+    it exists. The
+    page: a `DataList` (columns requested, range, status chip, purpose, requested by, size, chain status
+    (`verify_ok`: *intact* / *problems* with the problems in a tooltip or expandable row), actions: *Download* when
+    ready — an anchor to the download URL, which the browser fetches with the session cookie); a *New export* dialog
+    (from/to date fields, default range the last 365 days ending yesterday, purpose text field, explanatory text that
+    the request needs a step-up and is recorded) that starts the step-up exactly as `DiskEncryptionCard.vue` does
+    (`startStepUp`/`resumeStepUp` of `web/src/lib/stepUp`) and posts after returning; a card *Signing keys* listing
+    `key_version` and `fingerprint` from `/api/v1/audit/keys` with the text "Compare with the fingerprint your
+    ISMS recorded". Errors `day_not_sealed`, `too_many_exports`, `range_too_large`, `step_up_required` as inline
+    alerts with their own messages. Keys in `en.json` and `de.json`; audit code messages for the eight new codes in
+    both catalogs. Playwright spec `web/e2e/auditExports.spec.ts`: as Bob (auditor) the page lists exports, the
+    *New export* dialog validates the range, the keys card shows at least one fingerprint; creating an export with
+    step-up is exercised when the e2e step-up helper of `revocation.spec.ts` supports Bob, otherwise the spec asserts
+    the dialog and the step-up redirect start only.
+
+### 3.10 Offline verifier (PDK-146)
+
+38. `pkg/auditevidence` (new package, standard library + `pkg/canonicaljson` only) per §6.7: the types of
+    `export.json` and of a manifest file, `Fingerprint`, `VerifySignature`, `ExportDigest`, `ManifestDigest`. The
+    server's exporter MUST use these types for `export.json` (the server keeps its own `auditwriter.Manifest` types
+    for sealing; the JSON of both is identical, enforced by `TestManifestTypesAgree` in `auditwriter` that marshals
+    one manifest through both and compares the bytes).
+39. `paddockctl audit verify-export <file> [--fingerprint <hex>] [-o text|json]` in `cli/internal/evidence/`
+    (verification) and `cli/internal/cmd/commands.go` (`runAuditVerifyExport`): no configuration or token is read
+    (`dispatch` MUST NOT call `connect` for it). It reads the tar twice (pass 1: `export.json`, `export.sig`;
+    pass 2: everything else), and checks in this order, collecting problems (never stopping at the first):
+    1. `export.json` parses, `schema == "paddock.audit-export.v1"`; `export.sig` parses; the signature verifies with
+       `keys[key_version]` over `sha256(canonical export.json)` (`VerifySignature`); when `--fingerprint` is given it
+       equals `Fingerprint(keys[key_version])` (problem `signing key fingerprint differs from --fingerprint`).
+    2. For every day from `from_day` to `to_day`: member `manifests/<day>.json` exists, parses as a manifest file,
+       `ManifestDigest` equals `days[].manifest_sha256`, its signature verifies with the embedded keys, the manifest's
+       `organization_id`, `day` and `schema` match, `prev_manifest_sha256` equals the previous day's digest (the first
+       day's value is reported as `chain anchor` and not checked), and `days[]` has no extra or missing day.
+    3. Every object of every manifest exists as `objects/<key without prefix>` with the manifest's `sha256`; no
+       member under `objects/` is unlisted; `objects[]` of `export.json` equals the union.
+    4. `events.jsonl` has the SHA-256 `events_sha256` and is byte-identical to the concatenation of the zstd-decoded
+       objects in manifest order; `event_count` equals its line count; every line parses as JSON with
+       `organization_id == organization_id` and `schema == "paddock.audit.v1"`.
+    5. `verification.ok` and `verification.runs` are reported (`chain verified by the server: yes/no`, `nightly runs:
+       <n>, with problems: <m>`, problems listed) but a server-side problem is not a verifier problem.
+    Exit 0 and `OK <organization_id> <from>..<to>: <days> days, <objects> objects, <events> events; signed with
+    audit-chain v<N> (fingerprint <hex>); chain anchor <prev hash or "none">` on success; exit 1 and `FAIL <problem>`
+    lines plus the summary on problems; exit 2 on usage errors or an unreadable file. `-o json`: `{ok, organization_id,
+    from_day, to_day, days, objects, events, key_version, fingerprint, chain_anchor, server_verification: {ok,
+    problems}, problems}`. `cli/go.mod` adds `github.com/klauspost/compress v1.20.1` and
+    `github.com/phischl/paddock-mdm/pkg` (ADR 0032 §6). `docs/operations/paddockctl.md` gains the command row and a
+    section "Verifying an evidence package" (the five checks, the fingerprint handshake, the exit codes).
+
+### 3.11 Container log rotation (PDK-149)
+
+40. `deploy/compose/compose.yaml` MUST define `x-paddock-logging: &paddock-logging { driver: json-file, options:
+    { max-size: "50m", max-file: "10" } }` and every service in `compose.yaml`, `compose.audit.yaml` and
+    `compose.backup.yaml` MUST carry `logging: *paddock-logging` (overlays that already define `logging` for a
+    service: none today). `prodcheck` gains the item `container logs are rotated` (FAIL for any service whose rendered
+    `logging.driver` is not `json-file` or whose `max-size` is unset; `Service` gains `Logging struct{Driver string;
+    Options map[string]string}` from the rendered JSON). `docs/operations/install.md` gets one paragraph "Logs" (what
+    the roles log, that Caddy's access log holds client addresses, the rotation values, and that a central log system
+    is the operator's choice) and `restore.md` one sentence on the deletion lag (ADR 0032). `compose_test.go` asserts
+    every service of every host's file set has the logging block.
+
+## 4. Non-goals
+
+- No change to the WORM bucket, its policy, Object Lock, `PADDOCK_AUDIT_RETENTION_DAYS` semantics or
+  `rustfs-audit-bootstrap.sh`; Paddock still never deletes audit objects.
+- No per-organization WORM retention; no legal hold; no purge of `action`, `device_command`, `device_alert`,
+  `change_set`, `revocation_request`, escrow of retired devices, `admin_account`, `api_token` (ADR 0032 follow-ups).
+- No SIEM forward, no cursor feed, no notification on purge or export (M9); no nightly verification status page
+  (M8b); no corrections of G1–G6 wording in `docs/architecture.md` beyond decision 6 (M8b).
+- No filtering of the export by code or actor; no CSV; no export of inventory or device lists (F-24 later).
+- No change to the agent, the device protocol, `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, the
+  supervisor, Fleet's settings (`settings.go` `wanted()`), the OpenBao policies, the audit database roles script.
+- No German versions of the privacy pack; no on-device self-information file.
+- No API-token creation for `org_auditor` (open point 3).
+
+## 5. Affected files
+
+| Path | Action | Purpose |
+| --- | --- | --- |
+| `docs/adr/0032-retention-and-deletion.md` | new (done) | the decision |
+| `docs/compliance/retention.md`, `docs/compliance/privacy-pack/{transparency-notice,record-of-processing,dpia-input,works-council-annex}.md` | new | decisions 1, 26 |
+| `docs/compliance/privacy.md`, `iso27001-mapping.md`, `residual-risks.md`, `README.md`, `audit-codes.md` (generated) | change | decisions 2–5, 27 |
+| `docs/operations/audit-bucket.md`, `monitoring.md`, `paddockctl.md`, `install.md`, `restore.md`, `local-dev.md` | change | decisions 5, 15, 25, 34, 39, 40 |
+| `docs/architecture.md` | change (amendment blocks only) | decision 6 |
+| `server/migrations/paddock/NNNNN_privacy_settings.sql`, `NNNNN_retention_grants.sql`, `NNNNN_read_audit_window.sql`, `NNNNN_change_set_before_purge.sql` (only if M11 did not grant the update) | new | §6.1, decision 15a |
+| `server/migrations/audit/NNNNN_index_purge.sql`, `NNNNN_audit_exports.sql` | new | §6.2 |
+| `api/openapi/admin.yaml`, `api/schema/paddock.v1.json` | change | §6.3, decision 9 |
+| `server/internal/domain/audit/codes.go` | change | §6.4 |
+| `server/internal/problem/problem.go` | change | decision 28 |
+| `server/internal/app/{privacy,retention,readaudit,auditexports}.go`, `action.go` (`RecordReadOnce`), `config*.go` (settings.privacy) | new/change | §6.6 |
+| `server/internal/adapters/postgres/queries/{privacy,login,inventory,readaudit,change_set}.sql` | new/change | queries named in §6.6 and decision 15a |
+| `server/internal/adapters/auditpg/queries/audit.sql` (+ `export.sql`) | change/new | queries named in §6.6 |
+| `server/internal/ports/inventory.go`, `server/internal/adapters/fleet/hosts.go` | change | `InventoryAdmin`, `DeleteHost` |
+| `server/internal/worker/retention.go` | new | decision 12 |
+| `server/internal/auditwriter/{purger,exporter,selfevent}.go`, `sealer.go` (key upkeep) | new/change | decisions 22–24, 31–36 |
+| `server/cmd/paddock-server/{worker,auditwriter}.go` | change | wiring, `audit purge`, `audit keys` |
+| `server/internal/transport/http/admin/{handlers_privacy,handlers_auditexports,handlers_evidence}.go`, `handlers.go`, `handlers_inventory.go` | new/change | decisions 8, 20, 29, 35, 36 |
+| `server/internal/prodcheck/prodcheck.go`, `compose_test.go` | change | decisions 14, 40 |
+| `deploy/compose/compose.yaml`, `compose.audit.yaml`, `compose.backup.yaml`, `compose.dev.yaml` | change | decisions 14, 31, 40 |
+| `deploy/compose/prometheus/alerts.yml`, `alerts_test.yml` | change | decisions 15, 25, 34 |
+| `pkg/auditevidence/*.go` | new | §6.7 |
+| `cli/internal/evidence/*.go`, `cli/internal/cmd/{cmd,commands}.go`, `cli/go.mod`, `cli/go.sum` | new/change | decision 39 |
+| `server/web/src/views/{PrivacySettings,AuditExports}.vue`, `router.ts`, `lib/navigation.ts`, `locales/{en,de}.json`, `views/Audit.vue`, `web/e2e/auditExports.spec.ts` | new/change | decisions 10, 37 |
+| `test/acceptance/{retention_test.go,readaudit_test.go,audit_export_test.go}`, `isolation_fixtures.go` | new/change | §8 |
+| `CHANGELOG.md` | change | every ticket |
+
+Not to be touched: `agent/`, `pkg/` except the new package, `deploy/compose/scripts/rustfs-audit-bootstrap.sh`,
+`deploy/compose/audit-postgres/init/`, `deploy/compose/openbao/`, `server/internal/auditwriter/verify.go` (read
+only; the exporter calls it), `server/internal/adapters/fleet/settings.go`, every ADR but 0032, `docs/reqirements/`,
+`docs/architecture.md` outside the two amendment blocks, the existing migrations.
+
+## 6. Interfaces and formats
+
+### 6.1 Migrations, database `paddock`
+
+```sql
+-- server/migrations/paddock/NNNNN_privacy_settings.sql
+-- Privacy settings of an organization (ADR 0032 §2, plan M10 decision 7). Forward-only: there is no Down migration.
+-- +goose Up
+CREATE TABLE organization_privacy_settings (
+  organization_id uuid PRIMARY KEY REFERENCES organization(id),
+  retired_inventory_days int NOT NULL DEFAULT 30 CHECK (retired_inventory_days BETWEEN 1 AND 365),
+  audit_search_recorded boolean NOT NULL DEFAULT false,
+  inventory_view_recorded boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by uuid
+);
+INSERT INTO organization_privacy_settings (organization_id) SELECT id FROM organization;
+-- +goose StatementBegin
+CREATE FUNCTION organization_privacy_settings_default() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  INSERT INTO organization_privacy_settings (organization_id) VALUES (NEW.id) ON CONFLICT DO NOTHING;
+  RETURN NULL;
+END $$;
+-- +goose StatementEnd
+REVOKE ALL ON FUNCTION organization_privacy_settings_default() FROM PUBLIC;
+CREATE TRIGGER organization_privacy_settings_default AFTER INSERT ON organization
+  FOR EACH ROW EXECUTE FUNCTION organization_privacy_settings_default();
+ALTER TABLE organization_privacy_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE organization_privacy_settings FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant ON organization_privacy_settings TO paddock_api, paddock_worker
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+GRANT SELECT, INSERT, UPDATE ON organization_privacy_settings TO paddock_api;
+GRANT SELECT ON organization_privacy_settings TO paddock_worker;
+-- +goose Down
+```
+
+```sql
+-- server/migrations/paddock/NNNNN_read_audit_window.sql
+-- Coalescing keys of read-access audit events (ADR 0032 §4, plan M10 decision 18). Forward-only.
+-- +goose Up
+CREATE TABLE read_audit_window (
+  organization_id uuid NOT NULL REFERENCES organization(id),
+  actor_id text NOT NULL,
+  code text NOT NULL,
+  target_id text NOT NULL DEFAULT '',
+  window_start timestamptz NOT NULL,
+  PRIMARY KEY (organization_id, actor_id, code, target_id, window_start)
+);
+CREATE INDEX read_audit_window_start_idx ON read_audit_window (organization_id, window_start);
+ALTER TABLE read_audit_window ENABLE ROW LEVEL SECURITY;
+ALTER TABLE read_audit_window FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant ON read_audit_window TO paddock_api, paddock_worker
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+GRANT SELECT, INSERT ON read_audit_window TO paddock_api;
+GRANT SELECT, DELETE ON read_audit_window TO paddock_worker;
+-- +goose Down
+```
+
+### 6.2 Migrations, database `paddock_audit`
+
+```sql
+-- server/migrations/audit/NNNNN_index_purge.sql
+-- Index purge (ADR 0032 §3, plan M10 decision 22): drops one monthly partition of audit_event once every event in it
+-- was recorded before the cutoff. Owner-executed like audit_ensure_partition; the writer keeps no DELETE grant.
+-- Forward-only: there is no Down migration.
+-- +goose Up
+-- +goose StatementBegin
+CREATE FUNCTION audit_purge_partition(p_month date, p_cutoff timestamptz)
+  RETURNS TABLE (dropped boolean, events bigint, reason text)
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  start_ts date := date_trunc('month', p_month)::date;
+  end_ts   date := (date_trunc('month', p_month) + interval '1 month')::date;
+  part     text := format('audit_event_%s', to_char(start_ts, 'YYYY_MM'));
+  n        bigint;
+  newest   timestamptz;
+BEGIN
+  IF to_regclass(part) IS NULL THEN
+    RETURN QUERY SELECT false, 0::bigint, 'no such partition'; RETURN;
+  END IF;
+  IF end_ts::timestamptz > p_cutoff THEN
+    RETURN QUERY SELECT false, 0::bigint, 'month not past the cutoff'; RETURN;
+  END IF;
+  EXECUTE format('SELECT count(*), max(recorded_at) FROM %I', part) INTO n, newest;
+  IF newest IS NOT NULL AND newest >= p_cutoff THEN
+    RETURN QUERY SELECT false, n, 'late events still within retention'; RETURN;
+  END IF;
+  EXECUTE format('ALTER TABLE audit_event DETACH PARTITION %I', part);
+  EXECUTE format('DROP TABLE %I', part);
+  RETURN QUERY SELECT true, n, 'dropped';
+END $$;
+-- +goose StatementEnd
+REVOKE ALL ON FUNCTION audit_purge_partition(date, timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION audit_purge_partition(date, timestamptz) TO paddock_audit_writer;
+-- +goose Down
+```
+
+```sql
+-- server/migrations/audit/NNNNN_audit_exports.sql
+-- Evidence exports and the published signing keys (ADR 0032 §5, plan M10 decisions 28–36). The reader role may
+-- insert export requests and read manifests, objects and exports of its organization; it keeps no UPDATE or DELETE.
+-- Forward-only: there is no Down migration.
+-- +goose Up
+CREATE TABLE audit_export (
+  id uuid PRIMARY KEY,
+  organization_id uuid NOT NULL,
+  status text NOT NULL CHECK (status IN ('pending','running','ready','failed','expired')),
+  from_day date NOT NULL,
+  to_day date NOT NULL CHECK (to_day >= from_day),
+  purpose text NOT NULL CHECK (char_length(purpose) BETWEEN 1 AND 500),
+  requested_by jsonb NOT NULL,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  ready_at timestamptz,
+  expires_at timestamptz,
+  event_count bigint,
+  object_count int,
+  size bigint,
+  package_sha256 bytea,
+  verify_ok boolean,
+  verify_problems jsonb,
+  signature text,
+  key_version int,
+  error text,
+  correlation_id text NOT NULL
+);
+CREATE INDEX audit_export_org_requested_idx ON audit_export (organization_id, requested_at DESC);
+CREATE INDEX audit_export_pending_idx ON audit_export (requested_at) WHERE status = 'pending';
+CREATE INDEX audit_export_expiry_idx ON audit_export (expires_at) WHERE status = 'ready';
+
+CREATE TABLE audit_export_chunk (
+  export_id uuid NOT NULL REFERENCES audit_export(id) ON DELETE CASCADE,
+  organization_id uuid NOT NULL,
+  seq int NOT NULL,
+  data bytea NOT NULL,
+  PRIMARY KEY (export_id, seq)
+);
+ALTER TABLE audit_export_chunk ALTER COLUMN data SET STORAGE EXTERNAL;
+
+CREATE TABLE audit_signing_key (
+  key_version int PRIMARY KEY,
+  public_key bytea NOT NULL CHECK (octet_length(public_key) = 32),
+  first_seen_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE audit_export ENABLE ROW LEVEL SECURITY; ALTER TABLE audit_export FORCE ROW LEVEL SECURITY;
+CREATE POLICY reader ON audit_export TO paddock_audit_reader
+  USING (organization_id = current_setting('paddock.org_id')::uuid)
+  WITH CHECK (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY writer ON audit_export TO paddock_audit_writer USING (true) WITH CHECK (true);
+ALTER TABLE audit_export_chunk ENABLE ROW LEVEL SECURITY; ALTER TABLE audit_export_chunk FORCE ROW LEVEL SECURITY;
+CREATE POLICY reader ON audit_export_chunk TO paddock_audit_reader
+  USING (organization_id = current_setting('paddock.org_id')::uuid);
+CREATE POLICY writer ON audit_export_chunk TO paddock_audit_writer USING (true) WITH CHECK (true);
+-- The reader policies on audit_manifest (and audit_verification_run) come from M8b (ADR 0030). audit_object gets its
+-- reader policy here unless an earlier migration created one under the same name.
+-- +goose StatementBegin
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'audit_object' AND policyname = 'reader') THEN
+    CREATE POLICY reader ON audit_object TO paddock_audit_reader
+      USING (organization_id = current_setting('paddock.org_id')::uuid);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'audit_manifest' AND policyname = 'reader') THEN
+    CREATE POLICY reader ON audit_manifest TO paddock_audit_reader
+      USING (organization_id = current_setting('paddock.org_id')::uuid);
+  END IF;
+END $$;
+-- +goose StatementEnd
+
+GRANT SELECT, INSERT ON audit_export TO paddock_audit_reader;
+GRANT SELECT ON audit_export_chunk, audit_object, audit_manifest, audit_signing_key TO paddock_audit_reader;
+GRANT SELECT, INSERT, UPDATE, DELETE ON audit_export, audit_export_chunk TO paddock_audit_writer;
+GRANT SELECT, INSERT ON audit_signing_key TO paddock_audit_writer;
+-- +goose Down
+```
+
+### 6.3 OpenAPI (`api/openapi/admin.yaml`, additions)
+
+```yaml
+  /api/v1/settings/privacy:
+    get:
+      operationId: getPrivacySettings
+      tags: [settings]
+      description: "Roles: org_admin, org_operator, org_auditor. The privacy settings (ADR 0032 §2); the defaults until changed."
+      responses:
+        "200": { description: The privacy settings., content: { application/json: { schema: { $ref: "#/components/schemas/PrivacySettings" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: updatePrivacySettings
+      tags: [settings]
+      description: |
+        Roles: org_admin. Replaces the privacy settings: retired_inventory_days (1–365; the inventory of a retired
+        device, in Paddock and in Fleet, is deleted that many days after retirement), audit_search_recorded (searches
+        of the audit log are recorded as audit.searched, once per administrator and hour) and
+        inventory_view_recorded (views of a device's software and vulnerabilities are recorded as
+        device.inventory_viewed, once per administrator, device and day). 400 invalid_request for a value out of range.
+      x-paddock-audit: settings.privacy_changed
+      parameters: [ { $ref: "#/components/parameters/Csrf" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PrivacySettingsUpdate" } } } }
+      responses:
+        "200": { description: Updated., content: { application/json: { schema: { $ref: "#/components/schemas/PrivacySettings" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/exports:
+    get:
+      operationId: listAuditExports
+      tags: [audit]
+      description: "Roles: org_admin, org_auditor. The organization's evidence exports (ADR 0032 §5)."
+      x-paddock-list:
+        sort: [requested_at, status, from_day, to_day]
+        default_sort: -requested_at
+        search: [purpose, requested_by.display]
+        filters: [status]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/AuditExportSort"
+        - $ref: "#/components/parameters/Search"
+        - name: status
+          in: query
+          description: Repeatable.
+          style: form
+          explode: true
+          schema: { type: array, items: { $ref: "#/components/schemas/AuditExportStatus" } }
+      responses:
+        "200": { description: One page of exports., content: { application/json: { schema: { $ref: "#/components/schemas/AuditExportPage" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createAuditExport
+      tags: [audit]
+      description: |
+        Roles: org_admin, org_auditor, with a step-up within the last 300 s (403 step_up_required). Requests a signed
+        evidence package for the recording days from_day..to_day (both sealed: 422 day_not_sealed otherwise; at most
+        400 days: 400 range_too_large; from_day after to_day or an empty purpose: 400 invalid_request). At most two
+        exports of the organization may be pending or running (409 too_many_exports). The audit writer builds the
+        package on the audit host; it is ready within minutes for small ranges and expires 7 days after it is ready.
+        Recorded as audit.export_requested; every download as audit.export_downloaded.
+      x-paddock-audit: audit.export_requested
+      parameters: [ { $ref: "#/components/parameters/Csrf" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AuditExportCreate" } } } }
+      responses:
+        "202": { description: The pending export., content: { application/json: { schema: { $ref: "#/components/schemas/AuditExport" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/exports/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      operationId: getAuditExport
+      tags: [audit]
+      description: "Roles: org_admin, org_auditor."
+      responses:
+        "200": { description: The export., content: { application/json: { schema: { $ref: "#/components/schemas/AuditExport" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/exports/{id}/download:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      operationId: downloadAuditExport
+      tags: [audit]
+      description: |
+        Roles: org_admin, org_auditor. Streams the package (a tar archive, docs/operations/paddockctl.md "Verifying an
+        evidence package") of a ready export; 409 export_not_ready otherwise. Recorded as audit.export_downloaded.
+        The response carries Content-Length, Content-Disposition and X-Paddock-Package-SHA256.
+      x-paddock-audit: audit.export_downloaded
+      responses:
+        "200":
+          description: The package.
+          headers:
+            Content-Disposition: { schema: { type: string } }
+            X-Paddock-Package-SHA256: { schema: { type: string } }
+          content:
+            application/x-tar: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/audit/keys:
+    get:
+      operationId: listAuditEvidenceKeys
+      tags: [audit]
+      description: "Roles: org_admin, org_auditor. The public keys the audit chain and the evidence packages are signed with, by key version, with their SHA-256 fingerprints."
+      responses:
+        "200": { description: The keys., content: { application/json: { schema: { $ref: "#/components/schemas/AuditEvidenceKeys" } } } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  # components/parameters
+    AuditExportSort:
+      name: sort
+      in: query
+      schema: { type: string, enum: [requested_at, -requested_at, status, -status, from_day, -from_day, to_day, -to_day] }
+
+  # components/schemas
+    PrivacySettings:
+      type: object
+      required: [retired_inventory_days, audit_search_recorded, inventory_view_recorded, updated_at]
+      properties:
+        retired_inventory_days: { type: integer, minimum: 1, maximum: 365 }
+        audit_search_recorded: { type: boolean }
+        inventory_view_recorded: { type: boolean }
+        updated_at: { type: string, format: date-time }
+    PrivacySettingsUpdate:
+      type: object
+      required: [retired_inventory_days, audit_search_recorded, inventory_view_recorded]
+      properties:
+        retired_inventory_days: { type: integer, minimum: 1, maximum: 365 }
+        audit_search_recorded: { type: boolean }
+        inventory_view_recorded: { type: boolean }
+    AuditExportStatus: { type: string, enum: [pending, running, ready, failed, expired] }
+    AuditExportCreate:
+      type: object
+      required: [from_day, to_day, purpose]
+      properties:
+        from_day: { type: string, format: date }
+        to_day: { type: string, format: date }
+        purpose: { type: string, minLength: 1, maxLength: 500 }
+    AuditExport:
+      type: object
+      required: [id, status, from_day, to_day, purpose, requested_by, requested_at, ready_at, expires_at, event_count, object_count, size, package_sha256, verify_ok, verify_problems, key_version, error]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/AuditExportStatus" }
+        from_day: { type: string, format: date }
+        to_day: { type: string, format: date }
+        purpose: { type: string }
+        requested_by: { $ref: "#/components/schemas/AuditActor" }
+        requested_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        event_count: { type: integer, format: int64, nullable: true }
+        object_count: { type: integer, nullable: true }
+        size: { type: integer, format: int64, nullable: true }
+        package_sha256: { type: string, nullable: true, description: Lowercase hex. }
+        verify_ok: { type: boolean, nullable: true }
+        verify_problems: { type: array, items: { type: string } }
+        key_version: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+    AuditExportPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AuditExport" } }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+        total_capped: { type: boolean }
+        sort: { type: string }
+    AuditEvidenceKey:
+      type: object
+      required: [key_version, public_key, fingerprint, first_seen_at]
+      properties:
+        key_version: { type: integer }
+        public_key: { type: string, description: Base64 of the raw 32-byte ed25519 public key. }
+        fingerprint: { type: string, description: Lowercase hex SHA-256 of the raw public key. }
+        first_seen_at: { type: string, format: date-time }
+    AuditEvidenceKeys:
+      type: object
+      required: [keys]
+      properties:
+        keys: { type: array, items: { $ref: "#/components/schemas/AuditEvidenceKey" } }
+```
+
+`AuditActor` is the existing schema (`type`, `id`, `display`, `ip`, `step_up`); `requested_by` carries no `ip`.
+
+### 6.4 Audit codes (`server/internal/domain/audit/codes.go`, registry entries)
+
+```go
+CodeSettingsPrivacyChanged   Code = "settings.privacy_changed"
+CodeRetentionPurged          Code = "retention.purged"
+CodeDeviceInventoryPurged    Code = "device.inventory_purged"
+CodeAuditSearched            Code = "audit.searched"
+CodeDeviceInventoryViewed    Code = "device.inventory_viewed"
+CodeAuditExportRequested     Code = "audit.export_requested"
+CodeAuditExportCompleted     Code = "audit.export_completed"
+CodeAuditExportDownloaded    Code = "audit.export_downloaded"
+
+CodeSettingsPrivacyChanged: {Emitted: true,
+  Description: "An organization administrator changed the privacy settings: the inventory retention of retired devices and whether audit searches and inventory views are recorded (ADR 0032).",
+  Params: []string{"retired_inventory_days", "audit_search_recorded", "inventory_view_recorded"}, Outcomes: adminOutcomes},
+CodeRetentionPurged: {Emitted: true,
+  Description: "A retention job deleted expired rows of one store (actor: system). store is device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization) or audit_exports (one event per expired export, in its organization).",
+  Params: []string{"store", "deleted", "cutoff", "partition", "export_id"}, Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure},
+  Note: "Deletion evidence (ISO/IEC 27001 A.8.10); docs/compliance/retention.md."},
+CodeDeviceInventoryPurged: {Emitted: true,
+  Description: "The retention job deleted the inventory of a retired device in Paddock and its host in Fleet, retired_inventory_days after retirement (actor: system). failure with upstream_unavailable leaves the Paddock rows in place; the device is retried next round.",
+  Params: []string{"hostname", "retired_at", "software", "findings", "policy_results", "fleet_host_deleted"}, Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure}},
+CodeAuditSearched: {Emitted: true,
+  Description: "An administrator, auditor or API token searched the audit log; recorded once per actor and clock hour and only while the organization's audit_search_recorded setting is on. Filters are recorded, never results or the search text.",
+  Params: []string{"from", "to", "codes", "outcomes", "actor_types", "target_id", "q_used", "window_start"}, Outcomes: []Outcome{OutcomeSuccess, OutcomeDenied}},
+CodeDeviceInventoryViewed: {Emitted: true,
+  Description: "An organization member viewed the software or vulnerabilities of a device; recorded once per actor, device and UTC day and only while inventory_view_recorded is on. view is the first view of the day.",
+  Params: []string{"hostname", "view", "window_start"}, Outcomes: []Outcome{OutcomeSuccess, OutcomeDenied}},
+CodeAuditExportRequested: {Emitted: true,
+  Description: "An organization administrator or auditor requested a signed evidence package for a range of sealed recording days after a step-up; denied with step_up_required without one.",
+  Params: []string{"export_id", "from_day", "to_day", "purpose"}, Outcomes: adminOutcomes},
+CodeAuditExportCompleted: {Emitted: true,
+  Description: "The audit writer finished building an evidence package (actor: system). verify_ok tells whether the chain of the range verified; a package with problems is still delivered so that the auditor sees them. failure carries the error and error_code export_failed.",
+  Params: []string{"export_id", "from_day", "to_day", "days", "objects", "events", "size", "package_sha256", "verify_ok", "key_version", "error"}, Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure}},
+CodeAuditExportDownloaded: {Emitted: true,
+  Description: "An organization administrator or auditor downloaded an evidence package; every download is recorded.",
+  Params: []string{"export_id", "from_day", "to_day", "size", "package_sha256"}, Outcomes: adminOutcomes},
+```
+
+### 6.5 The evidence package
+
+Tar archive (POSIX ustar/PAX as `archive/tar` writes it; no compression of the archive itself), members in this order:
+
+```
+README.md
+manifests/<YYYY-MM-DD>.json          one per day, from_day..to_day, the stored ManifestFile bytes verbatim
+objects/<YYYY>/<MM>/<DD>/<HH>-<event_id>.jsonl.zst   every object of every manifest, key order, bytes verbatim
+events.jsonl                         the zstd-decoded objects concatenated in manifest order (days ascending, keys ascending)
+export.json                          canonical JSON (RFC 8785) of the Export below
+export.sig                           {"signature":"vault:v<N>:<base64>","key_version":<N>}  (JSON, not canonicalized)
+```
+
+`export.json` (schema `paddock.audit-export.v1`, `pkg/auditevidence.Export`):
+
+```json
+{
+  "schema": "paddock.audit-export.v1",
+  "export_id": "<uuid>",
+  "organization_id": "<uuid>",
+  "organization_slug": "acme",
+  "from_day": "2026-01-01",
+  "to_day": "2026-03-31",
+  "requested_by": {"type": "admin", "id": "<uuid>", "display": "bob@acme.test"},
+  "requested_at": "2026-04-02T07:00:00Z",
+  "created_at": "2026-04-02T07:01:12Z",
+  "purpose": "ISO 27001 surveillance audit 2026",
+  "generator": "paddock-server <version>",
+  "days": [{"day": "2026-01-01", "manifest_key": "org/<org>/manifests/2026-01-01.json", "manifest_sha256": "<hex>", "object_count": 3, "event_count": 120}],
+  "objects": [{"key": "org/<org>/2026/01/01/08-<id>.jsonl.zst", "path": "objects/2026/01/01/08-<id>.jsonl.zst", "sha256": "<hex>", "event_count": 40}],
+  "event_count": 120,
+  "events_sha256": "<hex>",
+  "chain_anchor": "<hex of the first day's prev_manifest_sha256, or null>",
+  "verification": {"ok": true, "problems": [], "verified_at": "2026-04-02T07:00:40Z", "verifier": "paddock-server <version>",
+                   "runs": [{"run_id": "<uuid>", "started_at": "2026-04-01T02:00:00Z", "from_day": "2026-03-31", "to_day": "2026-03-31", "ok": true, "problems": []}]},
+  "keys": [{"key_version": 1, "public_key": "<base64>", "fingerprint": "<hex>"}]
+}
+```
+
+`README.md` (verbatim, `<…>` replaced by the export's values):
+
+```
+# Paddock audit evidence package
+
+Organization <slug> (<organization_id>), recording days <from_day> to <to_day>, requested by <display> on
+<requested_at> for: <purpose>. Built by <generator> on <created_at>. Package ID <export_id>.
+
+What is inside: manifests/ holds the signed daily manifests of the audit chain (one per recording day), objects/
+holds every audit object those manifests list, byte for byte as stored in the WORM bucket, events.jsonl holds the
+decoded events of those objects in recording order, export.json describes the package and export.sig is its
+signature with the audit-chain key (version <key_version>, SHA-256 fingerprint <fingerprint>).
+
+How to verify without access to Paddock: install paddockctl (https://github.com/phischl/paddock-mdm/releases) and run
+
+    paddockctl audit verify-export <this file> --fingerprint <fingerprint recorded by your ISMS>
+
+It checks the package signature, every manifest signature and link, every object hash, that events.jsonl equals the
+objects, and prints OK or the list of problems. The manifest of the first day links to the manifest of the day
+before (chain anchor <chain_anchor>); verify consecutive packages against each other to extend the chain.
+
+Server-side verification at build time: <ok: "no problems" | the problems, one per line>. Nightly verification runs
+that covered days of this range (from the audit writer's verification log): <count> runs, <count> with problems.
+
+This package contains personal data (names and addresses of administrators, user names, host names). Handle it
+according to your organization's rules for audit evidence and delete it when the audit is closed.
+```
+
+### 6.6 Go signatures
+
+```go
+// server/internal/app/action.go
+// RecordReadOnce records a read of sensitive data at most once per window: authorization as in RunTx (a denied role
+// is recorded as denied), then claim runs inside the organization transaction; it returns false when the window key
+// existed, and then nothing is recorded (no action, no outbox row). true records outcome success in the same
+// transaction. A claim error rolls back and is recorded as failure.
+func (r *ActionRunner) RecordReadOnce(ctx context.Context, spec ActionSpec,
+	claim func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error)) (bool, error)
+
+// server/internal/app/privacy.go
+type PrivacySettings struct { RetiredInventoryDays int; AuditSearchRecorded, InventoryViewRecorded bool; UpdatedAt time.Time }
+var SpecPrivacySettings = ActionSpec{Code: audit.CodeSettingsPrivacyChanged, AllowedRoles: RolesAdmin}
+type Privacy struct{ runner *ActionRunner; org *db.OrgPool }
+func NewPrivacy(runner *ActionRunner, org *db.OrgPool) *Privacy
+func (p *Privacy) Get(ctx context.Context) (PrivacySettings, error)                       // RequireOrg(RolesRead)
+func (p *Privacy) Update(ctx context.Context, s PrivacySettings) (PrivacySettings, error) // RunTx, ScopeOrg
+
+// server/internal/app/readaudit.go
+var SpecAuditSearched = ActionSpec{Code: audit.CodeAuditSearched, AllowedRoles: RolesAudit}
+var SpecInventoryViewed = ActionSpec{Code: audit.CodeDeviceInventoryViewed, AllowedRoles: RolesRead}
+type ReadAudit struct{ runner *ActionRunner; now func() time.Time }
+func NewReadAudit(runner *ActionRunner) *ReadAudit
+func (r *ReadAudit) AuditSearched(ctx context.Context, q AuditQuery) (recorded bool, err error)
+func (r *ReadAudit) InventoryViewed(ctx context.Context, deviceID uuid.UUID, view string) (recorded bool, err error)
+
+// server/internal/app/retention.go
+type RetentionUnit time.Duration // time.Hour*24 or, in development, time.Second
+var SpecRetentionPurged = ActionSpec{Code: audit.CodeRetentionPurged}            // system principal only
+var SpecDeviceInventoryPurged = ActionSpec{Code: audit.CodeDeviceInventoryPurged} // system principal only
+type Retention struct{ runner *ActionRunner; org *db.OrgPool; inventory ports.InventoryAdmin; unit RetentionUnit }
+func NewRetention(runner *ActionRunner, org *db.OrgPool, inventory ports.InventoryAdmin, unit RetentionUnit) *Retention
+const ReadWindowRetention = 48 * time.Hour
+func (r *Retention) PurgeUserSeen(ctx context.Context, now time.Time) (deleted int64, err error)
+func (r *Retention) PurgeReadWindows(ctx context.Context, now time.Time) (deleted int64, err error)
+func (r *Retention) PurgeRetiredInventory(ctx context.Context, now time.Time) (devices int, err error)
+
+// server/internal/worker/retention.go
+const RetentionInterval = 6 * time.Hour
+const retentionLockKey = 0x7061646420726574
+type Retention struct{ app *app.Retention; pool *db.OrgPool; platform *db.PlatformPool; interval time.Duration; now func() time.Time }
+func NewRetention(a *app.Retention, pool *db.OrgPool, platform *db.PlatformPool, interval time.Duration) *Retention
+func (r *Retention) Run(ctx context.Context) error
+func (r *Retention) Round(ctx context.Context) error
+
+// server/internal/ports/inventory.go
+// InventoryAdmin deletes hosts from the inventory system (retention of retired devices, ADR 0032).
+type InventoryAdmin interface {
+	// DeleteHost removes a host; a host that no longer exists is not an error.
+	DeleteHost(ctx context.Context, ref HostRef) error
+}
+// server/internal/adapters/fleet/hosts.go
+func (c *Client) DeleteHost(ctx context.Context, ref ports.HostRef) error // DELETE /api/v1/fleet/hosts/{id}; 404 → nil
+
+// server/internal/auditwriter/selfevent.go (on top of M8b's auditwriter.Recorder, PDK-109)
+func RecordSelf(ctx context.Context, rec *Recorder, ev audit.Event) error
+
+// server/internal/auditwriter/purger.go
+const PurgeDelay = 75 * time.Minute
+type PurgedPartition struct { Name string; Month time.Time; Events int64; Dropped bool; Reason string }
+type PurgeReport struct { Cutoff time.Time; Partitions []PurgedPartition }
+type Purger struct{ pool *db.AuditWriterPool; writer *Writer; retentionDays int; now func() time.Time }
+func NewPurger(pool *db.AuditWriterPool, writer *Writer, indexRetentionDays int) *Purger
+func (p *Purger) Run(ctx context.Context, now time.Time, dryRun bool) (PurgeReport, error)
+func (p *Purger) RunDaily(ctx context.Context)
+
+// server/internal/auditwriter/exporter.go
+const ExportSchema = "paddock.audit-export.v1"
+const ExportChunkSize = 8 << 20
+const ExportTTL = 7 * 24 * time.Hour
+const ExportStuckAfter = 2 * time.Hour
+type Exporter struct{ pool *db.AuditWriterPool; writer *Writer; store ObjectStore; signer Signer; keys PublicKeys; verifier *Verifier; version string; poll time.Duration; now func() time.Time }
+func NewExporter(pool *db.AuditWriterPool, writer *Writer, store ObjectStore, signer Signer, keys PublicKeys, verifier *Verifier, version string, poll time.Duration) *Exporter
+func (e *Exporter) Run(ctx context.Context) error
+func (e *Exporter) Build(ctx context.Context, export auditstore.AuditExport) error
+func (e *Exporter) Expire(ctx context.Context, now time.Time) (expired int, err error)
+
+// server/internal/app/auditexports.go
+var SpecAuditExportRequest = ActionSpec{Code: audit.CodeAuditExportRequested, AllowedRoles: RolesAudit, RequiresStepUp: true}
+var SpecAuditExportDownload = ActionSpec{Code: audit.CodeAuditExportDownloaded, AllowedRoles: RolesAudit}
+const MaxExportDays = 400
+const MaxOpenExports = 2
+type AuditExportRequest struct { FromDay, ToDay time.Time; Purpose string }
+type AuditExports struct{ runner *ActionRunner; reader *db.AuditReader; org *db.OrgPool; now func() time.Time }
+func NewAuditExports(runner *ActionRunner, reader *db.AuditReader, org *db.OrgPool) *AuditExports
+func (a *AuditExports) Request(ctx context.Context, req AuditExportRequest) (auditstore.AuditExport, error)
+func (a *AuditExports) Get(ctx context.Context, id uuid.UUID) (auditstore.AuditExport, error)
+func (a *AuditExports) List(ctx context.Context, q AuditExportQuery) (AuditExportListed, error)
+type AuditExportQuery struct { Statuses []string; Page ListPage }
+type AuditExportListed struct { Items []auditstore.AuditExport; Count int }
+// Download records audit.export_downloaded, then calls stream once per chunk in seq order inside one reader transaction.
+func (a *AuditExports) Download(ctx context.Context, id uuid.UUID, stream func(chunk []byte) error) (auditstore.AuditExport, error)
+func (a *AuditExports) Keys(ctx context.Context) ([]auditstore.AuditSigningKey, error)
+
+// auditpg queries (server/internal/adapters/auditpg/queries/export.sql), names fixed:
+// InsertAuditExport, GetAuditExport, ListAuditExports, CountAuditExports, CountOpenAuditExports,
+// ClaimPendingAuditExport, UpdateAuditExportReady, UpdateAuditExportFailed, UpdateAuditExportExpired,
+// ListExpiredAuditExports, ListStuckAuditExports, InsertAuditExportChunk, GetAuditExportChunk,
+// DeleteAuditExportChunks, EnsureAuditSigningKey, ListAuditSigningKeys, OldestPendingAuditExportAge.
+// audit.sql additions: ListAuditPartitions, PurgeAuditPartition (SELECT * FROM audit_purge_partition(@month, @cutoff)).
+// pgstore queries: GetPrivacySettings, UpsertPrivacySettings (privacy.sql); DeleteExpiredDeviceUserSeen (login.sql);
+// ListRetiredDevicesWithInventory, CountDeviceInventory, DeleteDeviceInventory (inventory.sql);
+// ClaimReadAuditWindow (INSERT … ON CONFLICT DO NOTHING RETURNING true), DeleteExpiredReadAuditWindows (readaudit.sql).
+```
+
+### 6.7 `pkg/auditevidence`
+
+```go
+// Package auditevidence defines the evidence package (export.json) and the manifest file of the audit chain as the
+// offline verifier and the server share them (plan M10 §6.5). Standard library and pkg/canonicaljson only.
+package auditevidence
+
+const ExportSchema = "paddock.audit-export.v1"
+const ManifestSchema = "paddock.audit-manifest.v1"
+const EventSchema = "paddock.audit.v1"
+
+type Actor struct { Type string `json:"type"`; ID string `json:"id,omitempty"`; Display string `json:"display,omitempty"` }
+type Day struct { Day string `json:"day"`; ManifestKey string `json:"manifest_key"`; ManifestSHA256 string `json:"manifest_sha256"`; ObjectCount int `json:"object_count"`; EventCount int `json:"event_count"` }
+type Object struct { Key string `json:"key"`; Path string `json:"path"`; SHA256 string `json:"sha256"`; EventCount int `json:"event_count"` }
+type Run struct { RunID string `json:"run_id"`; StartedAt time.Time `json:"started_at"`; FromDay string `json:"from_day"`; ToDay string `json:"to_day"`; OK bool `json:"ok"`; Problems []string `json:"problems"` }
+type Verification struct { OK bool `json:"ok"`; Problems []string `json:"problems"`; VerifiedAt time.Time `json:"verified_at"`; Verifier string `json:"verifier"`; Runs []Run `json:"runs"` }
+type Key struct { KeyVersion int `json:"key_version"`; PublicKey []byte `json:"public_key"`; Fingerprint string `json:"fingerprint"` }
+type Export struct {
+	Schema string `json:"schema"`; ExportID string `json:"export_id"`; OrganizationID string `json:"organization_id"`
+	OrganizationSlug string `json:"organization_slug"`; FromDay string `json:"from_day"`; ToDay string `json:"to_day"`
+	RequestedBy Actor `json:"requested_by"`; RequestedAt time.Time `json:"requested_at"`; CreatedAt time.Time `json:"created_at"`
+	Purpose string `json:"purpose"`; Generator string `json:"generator"`; Days []Day `json:"days"`; Objects []Object `json:"objects"`
+	EventCount int `json:"event_count"`; EventsSHA256 string `json:"events_sha256"`; ChainAnchor *string `json:"chain_anchor"`
+	Verification Verification `json:"verification"`; Keys []Key `json:"keys"`
+}
+type Signature struct { Signature string `json:"signature"`; KeyVersion int `json:"key_version"` }
+type ManifestObject struct { Key string `json:"key"`; SHA256 string `json:"sha256"`; EventCount int `json:"event_count"` }
+type Manifest struct { Schema string `json:"schema"`; OrganizationID string `json:"organization_id"`; Day string `json:"day"`; Objects []ManifestObject `json:"objects"`; PrevManifestSHA256 *string `json:"prev_manifest_sha256"` }
+type ManifestFile struct { Manifest json.RawMessage `json:"manifest"`; Signature string `json:"signature"`; KeyVersion int `json:"key_version"` }
+
+func Fingerprint(pub []byte) string                                                   // lowercase hex sha256
+func VerifySignature(keys map[int][]byte, version int, sig string, message []byte) bool // "vault:v<N>:<base64>", ed25519
+func ExportDigest(canonical []byte) [32]byte                                           // sha256 of the canonical bytes
+func ManifestDigest(file ManifestFile) ([]byte, [32]byte, error)                        // canonical bytes and sha256 of file.Manifest
+func ObjectPath(organizationID, key string) (string, error)                             // "org/<org>/…" → "objects/…"; error for a foreign prefix
+```
+
+## 7. Development stack
+
+`compose.dev.yaml`: `paddock-worker` gets `PADDOCK_RETENTION_UNIT: ${PADDOCK_RETENTION_UNIT:-seconds}` and
+`PADDOCK_RETENTION_INTERVAL: ${PADDOCK_RETENTION_INTERVAL:-15s}`; `paddock-audit-writer` gets
+`PADDOCK_AUDIT_EXPORT_POLL_INTERVAL: ${PADDOCK_AUDIT_EXPORT_POLL_INTERVAL:-2s}`. `docs/operations/local-dev.md`
+lists them next to `PADDOCK_STALENESS_UNIT`.
+
+## 8. Steps (tickets, in order)
+
+1. **PDK-135 — Retention schedule and compliance documents.** Decisions 1–6. Verify: `make scan-secrets` green; every
+   table of `retention.md` matches ADR 0032 §1 (reviewer reads).
+2. **PDK-136 — Privacy settings (API, schema, portal).** Decisions 7–10, §6.1 (privacy_settings), §6.3 (settings), §6.4
+   (`settings.privacy_changed`). Verify: `make gen` no diff; `go test ./server/...`; gate `TestDeclarativeConfig`
+   (settings.privacy round-trips) and `TestListContract`, `TestOrganizationIsolation` green; browser check of
+   `/settings/privacy` (skill `frontend-verify`).
+3. **PDK-137 — Worker retention round: `device_user_seen`.** Decisions 11–15, `retention.purged`. Gate R1. Verify:
+   `make acceptance T=TestRetentionUserSeen`; `make lint-prometheus`.
+4. **PDK-138 — Retired-device inventory purge with Fleet host deletion.** Decisions 16–17,
+   `device.inventory_purged`. Gate R2.
+5. **PDK-139 — Read-access recording.** Decisions 18–21, §6.1 (read_audit_window), `audit.searched`, `device.inventory_viewed`.
+   Gate R3.
+6. **PDK-140 — Audit index purge.** Decisions 22–25, §6.2 (index_purge), `RecordSelf`, `audit purge`. Integration test
+   `TestPurgerDropsExpiredPartition` in `auditwriter` (Docker PostgreSQL as the existing writer tests use); gate R4.
+7. **PDK-141 — Privacy and works-council pack.** Decisions 26–27.
+8. **PDK-142 — Evidence export: data model and request API.** Decisions 28–30, §6.2 (audit_exports), §6.3, codes
+   `audit.export_requested`. Gates `TestListContract`, `TestOrganizationIsolation`, E1 (request, refusals).
+9. **PDK-143 — Evidence export: builder in the audit writer.** Decisions 31–34, §6.5, §6.7 types, `audit.export_completed`,
+   `retention.purged` (store `audit_exports`). Gate E2 (ready within the poll interval, counts match).
+10. **PDK-144 — Evidence export: download.** Decision 35, `audit.export_downloaded`. Gate E3 (download, sha256, headers).
+11. **PDK-148 — Signing keys: publication and CLI.** Decision 36. Gate E3 extended (keys endpoint returns the key
+    version the package names).
+12. **PDK-145 — Portal: evidence exports page.** Decision 37. Playwright `auditExports.spec.ts`; browser check.
+13. **PDK-146 — `paddockctl audit verify-export`.** Decisions 38–39. Unit tests with a generated package (§8 tests);
+    gate E4 (verifier accepts the downloaded package, rejects a modified one).
+14. **PDK-147 — Evidence export: acceptance gate and documentation.** Gates E1–E4 as one file `audit_export_test.go`
+    where the earlier tickets left stubs; `audit-bucket.md`, `paddockctl.md`, `iso27001-mapping.md` A.5.28 row
+    cross-checked; `CHANGELOG.md` consolidated under one "Evidence export" entry.
+15. **PDK-149 — Container log rotation.** Decision 40. Verify: `make bundle-test`, `make test`
+    (`compose_test.go`), `./paddock check` of a local bundle passes the new item.
+
+PDK-141 MAY run at any time after PDK-135. PDK-139 MAY run in parallel with PDK-137/138 once PDK-136 is merged.
+PDK-149 MAY run at any time. PDK-148 MAY run in parallel with PDK-144. Everything else is sequential as listed.
+
+## 9. Tests
+
+- Unit (Go): `app.Retention` with a fake `InventoryAdmin` (success, Fleet 404, Fleet 500 → no Paddock deletion,
+  batching over 2 500 rows); `app.ReadAudit` coalescing (second call in the window records nothing; next window
+  records; setting off records nothing; denied role recorded as denied); `ActionRunner.RecordReadOnce` (claim false →
+  no action row, no outbox row); `auditwriter.Purger` (`Run` dry-run reporting, lock timeout reason, month-boundary
+  cases: a partition whose month ends exactly at the cutoff is kept); `auditwriter.Exporter` with the in-memory store
+  of `export_test.go`: package member order, byte identity of objects and manifests, `events.jsonl` equals the
+  concatenation, `export.json` canonical and signed, a modified object yields a `verification.problems` entry and
+  `verify_ok=false` but status `ready`, a missing manifest fails the build, chunk boundaries at exactly 8 MiB, expiry
+  and stuck handling; `pkg/auditevidence` (`VerifySignature` with a known key, `ManifestDigest` equals the server's
+  `CanonicalManifest`, `ObjectPath` refuses a foreign prefix); `cli/internal/evidence` with a package built by a test
+  helper (OK; each of the five check groups failing in turn: bad signature, wrong fingerprint, missing manifest, broken
+  link, modified object, extra object, events.jsonl mismatch, wrong organization in a line); `prodcheck` logging item.
+- Integration (Docker PostgreSQL): the three paddock and the two audit migrations of this plan apply on the previous schema;
+  `audit_purge_partition` drops a backdated partition and keeps one with a late event (`recorded_at` set through the
+  writer's test clock); RLS of `audit_export*` (reader of organization A cannot see B's export; reader cannot update).
+- Acceptance (`test/acceptance/`), new gates:
+  - **R1 `TestRetentionUserSeen`** (`retention_test.go`): a simulated device of acme reports `session.login` for
+    user `retention-<rand>`; after at most 365 s + two rounds (`PADDOCK_RETENTION_UNIT=seconds`), an audit event
+    `retention.purged` with `store=device_user_seen`, `deleted ≥ 1` exists for acme; globex has none from this run.
+  - **R2 `TestRetentionRetiredInventory`**: enroll a simulated device, register its Fleet host (`fleethost.go`), wait
+    for `installed_software` to be listed (`GET /api/v1/devices/{id}/software` ≥ 1 item), set
+    `retired_inventory_days=1`, retire the device; within 90 s `device.inventory_purged` (outcome success,
+    `fleet_host_deleted=true`) exists with the device as target, the software list is empty, and the Fleet admin API
+    (`stack.FleetAdminURL()`) no longer lists the host.
+  - **R3 `TestReadAccessAudit`** (`readaudit_test.go`): with the switches off, Alice lists audit events and device
+    software → no `audit.searched`, no `device.inventory_viewed` within 10 s; with both on, two searches within the
+    hour → exactly one `audit.searched` (params without `q`), two views of the same device → exactly one
+    `device.inventory_viewed`; Bob (auditor) searching → one event with actor type `admin`; Carol sees none of them.
+  - **R4 `TestAuditIndexPurge`**: `stack.PaddockServer(ctx, "audit", "purge", "--dry-run")` exits 0 and prints
+    `nothing to purge` or `KEEP` lines only (no partition of the development stack is older than 400 days).
+  - **E1–E4 `TestAuditEvidenceExport`** (`audit_export_test.go`): a fresh organization with an auditor (`tempUser`,
+    role group `auditors`) and activity; `audit seal --day <today> --org <id>` (development-only, as `TestAuditChain`);
+    E1: `POST /api/v1/audit/exports` without step-up → 403 `step_up_required` and an `audit.export_requested` denied
+    event; with step-up: 202, status `pending`, `audit.export_requested` success; a range ending tomorrow → 422
+    `day_not_sealed`; a third open export → 409 `too_many_exports`; Carol's `GET /api/v1/audit/exports/{id}` → 404.
+    E2: status `ready` within 60 s; `event_count` equals the number of events the audit log lists for the organization
+    with `from=<day 00:00Z>`; `verify_ok=true`; `audit.export_completed` success exists. E3: the download returns
+    `application/x-tar`, `Content-Length == size`, `X-Paddock-Package-SHA256 == package_sha256`, the body's SHA-256
+    matches, `audit.export_downloaded` exists; `GET /api/v1/audit/keys` lists `key_version` of the export
+    with a fingerprint equal to `export.json.keys[]`. E4: `paddockctl audit verify-export <file> --fingerprint <fp>`
+    exits 0 with `OK`; a copy with one byte of one object flipped exits 1 with `SHA-256 mismatch`; a copy with the
+    first manifest removed exits 1 with `no manifest`.
+- Playwright: `auditExports.spec.ts` (decision 37); `accessibility.spec.ts` gains the two new pages.
+
+## 10. Acceptance criteria
+
+- **M10-1 (data protection officer):** Given `docs/compliance/retention.md`, when the DPO asks for the retention and
+  legal basis of any store, then the matrix names it, and every "purge" cell names a job that exists and an audit code
+  that `audit-codes.md` lists. (PDK-135)
+- **M10-2 (organization administrator):** Given the portal, when the administrator opens *Privacy settings*, changes
+  `retired_inventory_days` to 14 and saves, then the API returns the new value, `settings.privacy_changed` appears in
+  the audit log with the three values, and `paddockctl get config` shows `settings.privacy.retired_inventory_days: 14`.
+  (PDK-136)
+- **M10-3 (auditor):** Given a device whose user logged in more than 365 days ago (seconds in development), when the
+  retention round runs, then the row is gone and `retention.purged` (store `device_user_seen`) proves it; a user who
+  logged in within 365 days stays an affected user of a lock. (PDK-137, gate R1)
+- **M10-4 (auditor, works council):** Given a device retired longer than `retired_inventory_days` ago, when the round
+  runs, then its software, vulnerabilities and policy results are gone from the portal and the host is gone from Fleet,
+  and `device.inventory_purged` names the device and the counts. (PDK-138, gate R2)
+- **M10-5 (works council):** Given `audit_search_recorded` and `inventory_view_recorded` on, when an administrator
+  searches the audit log or opens a device's software twice within the window, then exactly one `audit.searched` and
+  one `device.inventory_viewed` exist; given them off, none. (PDK-139, gate R3)
+- **M10-6 (platform operator):** Given an index partition whose newest event was recorded more than
+  `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` ago, when the nightly purge runs, then the partition is dropped and
+  `retention.purged` (store `audit_index`, the partition name, the event count) exists in the platform
+  pseudo-organization; a partition with a later event is kept with the reason. (PDK-140)
+- **M10-7 (DPO, works council):** Given the four templates, when the operator fills the bracketed fields, then no
+  fact about Paddock has to be looked up elsewhere (every data category, retention value and switch is in the
+  template). (PDK-141)
+- **M10-8 (auditor):** Given the auditor role without any platform access, when the auditor requests an export for a
+  range of sealed days after a step-up, then the export becomes `ready` without operator action, the download is a
+  tar with the members of §6.5, and `paddockctl audit verify-export` prints `OK` with the key fingerprint that the
+  *Evidence exports* page shows. (PDK-142 to PDK-148, gates E1–E4)
+- **M10-9 (auditor):** Given a package whose object or manifest was altered after download, when verified offline,
+  then the verifier exits 1 naming the member; given a package whose chain was already broken on the server, then the
+  package is still delivered with `verify_ok=false` and the problems in `export.json`. (PDK-143, PDK-146)
+- **M10-10 (security):** Given Carol (globex), when she requests, lists, gets or downloads acme's export, then 404
+  `not_found`; given an operator role, then 403 `forbidden`; given an auditor without step-up, then 403
+  `step_up_required` and a denied event. (PDK-142, PDK-144)
+- **M10-11 (operator):** Given a production bundle, when `./paddock check` runs, then it fails if any service's logs
+  are not rotated or if `PADDOCK_RETENTION_UNIT` is set. (PDK-137, PDK-149)
+
+## 11. Freedoms
+
+- Internal structure of the purge queries (ctid batching vs. a key-range loop) as long as no statement touches more
+  than 1 000 rows; helper names; the shape of the chunk writer; whether the exporter keeps the temp file in memory
+  below 64 MiB; the tooltip vs. expandable row for verification problems; icon names from `PdIconSet.ts`; the exact
+  English of help texts and the German translations; the sqlc file split (`export.sql` vs. appending to `audit.sql`);
+  whether `ReadAudit` caches the privacy settings within one request; test fixture builders.
+
+## 12. Stop conditions
+
+- M8b's `auditwriter.Recorder` (PDK-109) is not merged when PDK-140 or PDK-143 starts: stop; do not add a second
+  self-event write path.
+- `ALTER TABLE … DETACH PARTITION` or `DROP TABLE` inside the `SECURITY DEFINER` function fails on the pinned
+  PostgreSQL with a permission error: report; do not grant `DELETE` or ownership to the writer role.
+- The generated strict-server type for a binary `application/x-tar` response does not stream (buffers the body):
+  report; do not switch the download to a presigned URL or a new bucket.
+- The acceptance step-up helper cannot act for an auditor account: report with the failing step; do not weaken
+  `RequiresStepUp`.
+- `klauspost/compress` v1.20.1 cannot be added to `cli/go.mod` without changing the server's version: report.
+- Any need to change `verify.go`, `rustfs-audit-bootstrap.sh`, the audit roles script, the OpenBao policies, Fleet's
+  `wanted()` settings, the agent, or any table of the revocation path.
+- M9's `commit_seq` (PDK-120) turns out to be part of the stored event JSON (it must not be): report before PDK-143,
+  because `events.jsonl` must stay byte-identical to the WORM objects.
+- A partition drop would delete events whose WORM objects are still locked (cutoff earlier than the WORM retention
+  because `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` was accepted below `PADDOCK_AUDIT_RETENTION_DAYS`): this is a loader bug;
+  stop and fix the validation, never the function.
+
+## 13. Risks and open points
+
+- **Open 1 — escrow of retired devices** (default chosen: keep until Destroy; ADR 0032 follow-up). The orchestrator
+  decides whether a per-organization "destroy escrow N days after retirement" is wanted; it would need the revocation
+  issuer's deletion path and is not in M10.
+- **Open 2 — `action` and operational history purge** (default: not in M10; follow-up ticket stub to be created by
+  the orchestrator after M10, named in `retention.md` "What is not purged yet").
+- **Open 3 — API tokens for `org_auditor`** (default: no). Without them, `paddockctl` cannot download a package; the
+  portal download suffices for M10 and the verifier needs no token.
+- **Open 4 — M8b's `/audit/integrity` page (`AuditIntegrity.vue`, PDK-110) vs. this plan's `/audit/exports`**
+  (default: separate pages; the exports nav item follows `nav.auditIntegrity`; PDK-145 adds a link from the
+  integrity page to the exports page when the page exists).
+- **Open 5 — M9 event order:** resolved (evidence order in the package, `commit_seq` index-only).
+- **Risk — large packages:** a year of a 300-device fleet is a few GB through PostgreSQL chunks. Mitigation: chunked
+  transactions, `MaxExportDays = 400`, `MaxOpenExports = 2`, 7-day expiry, metrics and the stuck alert. If the audit
+  index database grows beyond the operator's disk, the operator shortens ranges; a bucket-based path is a later ADR.
+- **Risk — partition drop locks the writer:** `lock_timeout 5s` and the 00:45 UTC slot; a timeout is retried next night.
+- **Risk — Fleet host deletion of a re-enrolled device:** a reinstalled device enrolls as a new device with the same
+  hardware UUID; the old retired device's host is the same Fleet host. Mitigation: `DeleteHost` only when the ref's
+  `external_id` is not referenced by any active device (`CountInventoryRefsByExternalID` guard inside `prepare`); when
+  referenced, the Paddock rows of the retired device are deleted and `fleet_host_deleted=false` is recorded.
+- **Risk — read-access recording floods:** coalescing per hour/day bounds it to one event per actor and window; the
+  switches default to off.
+- **Risk — doc conflicts with M8b:** both touch `privacy.md`, `iso27001-mapping.md`, `residual-risks.md`. Mitigation:
+  M10 adds rows and sections; it does not rewrite existing rows except the cells named in decisions 2–4.

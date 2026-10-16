@@ -36,5 +36,11 @@ offsite replica. Optional SIEM forwarding.
   `audit_verification_run` (its organization only). The api exposes them to `org_admin` and `org_auditor`
   (`GET /api/v1/audit/integrity`, `/audit/verification-runs`, `/audit/manifests`); the evidence export of M10 reads
   the same tables.
-- "Optional SIEM forwarding" is unchanged as a design intent and not implemented; the roadmap plans a cursor feed
-  (M9) and a push forward (M12) under their own ADRs.
+- "Optional SIEM forwarding" is not implemented by M8b; ADR 0031 specifies it (see the next amendment).
+
+## Amendment 2026-10-15 — outbound integrations
+
+The "optional SIEM forwarding" of the decision is specified in ADR 0031 (notifications, the audit cursor feed and
+the SIEM forward): the source is the committed index in commit order (`audit_event.commit_seq`, assigned by the
+audit writer under a per-organization row lock), never the queue; the forward runs in a new control-plane role
+`notifier`, not in the audit domain. Nothing else in this decision changes.
