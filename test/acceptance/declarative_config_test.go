@@ -154,7 +154,7 @@ func TestDeclarativeConfig(t *testing.T) {
 		actions["package_holds"] != `delete [null,"t2-held"]` {
 		t.Fatalf("dry run changes %v", actions)
 	}
-	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2") != 0 {
+	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t2.conf") != 0 {
 		t.Fatal("the dry run created the managed file")
 	}
 
@@ -171,7 +171,7 @@ func TestDeclarativeConfig(t *testing.T) {
 		t.Fatal("the change set is not listed")
 	}
 	expectStatus(t, call(t, admin.Portal, http.MethodGet, "/api/v1/change-sets/"+*applied.ChangeSetID, nil), http.StatusOK, "")
-	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2") != 1 {
+	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t2.conf") != 1 {
 		t.Fatal("the managed file was not created")
 	}
 	if listTotal(t, admin.Portal, "/api/v1/package-holds?q=t2-held") != 0 {
@@ -254,7 +254,7 @@ func TestDeclarativeConfig(t *testing.T) {
 		if !strings.Contains(string(res.Body), "/managed_files/") {
 			t.Fatalf("detail does not name the file: %s", res.Body)
 		}
-		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2-lab") != 1 {
+		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t2-lab.conf") != 1 {
 			t.Fatal("a refused apply changed something")
 		}
 
@@ -277,7 +277,7 @@ func TestDeclarativeConfig(t *testing.T) {
 		if out := configResultOf(t, res); out.Plan.Deleted != 2 {
 			t.Fatalf("apply: %s", res.Body)
 		}
-		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2-lab") != 0 {
+		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t2-lab.conf") != 0 {
 			t.Fatal("the group's file survived")
 		}
 	})
