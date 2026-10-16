@@ -67,7 +67,7 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		return id
 	}
 	unchanged := account("alice@acme.test", "org_admin")
-	byMail := account("mail@acme.test", "org_operator")
+	shared := account("hank@acme.test", "org_admin")
 	moved := account("dave@acme.test", "org_admin")
 	removed := account("erin@acme.test", "org_admin")
 	inactive := account("frank@acme.test", "org_auditor")
@@ -77,11 +77,15 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	auditors := organization.RoleGroup(slug, organization.GroupAuditors)
 	dir := newDirectory()
 	dir.roleGroups = map[string][]ports.IdentityUser{
-		admins: {{Username: "Alice@acme.test", Active: true}, {Username: "gina@acme.test", Active: true}},
-		operators: {{Username: "m", Email: "mail@acme.test", Active: true}, {Username: "gina@acme.test", Active: true},
-			{Username: "nobody@acme.test", Active: true}},
-		auditors: {{Username: "dave@acme.test", Active: true}, {Username: "frank@acme.test", Active: false}},
+		admins: {{PK: "1", Username: "Alice@acme.test", Active: true}, {PK: "7", Username: "gina@acme.test", Active: true},
+			{PK: "8", Username: "hank@acme.test", Active: true}},
+		operators: {{PK: "7", Username: "gina@acme.test", Active: true}, {PK: "9", Username: "nobody@acme.test", Active: true},
+			{PK: "10", Username: "HANK@acme.test", Active: true}},
+		// An auditor who set the e-mail address to an administrator's username does not decide that account.
+		auditors: {{PK: "4", Username: "dave@acme.test", Active: true}, {PK: "6", Username: "frank@acme.test", Active: false},
+			{PK: "11", Username: "ivy@acme.test", Email: "alice@acme.test", Active: true}},
 	}
+
 	sessions := &revoker{revoked: map[uuid.UUID]int{}}
 	corr := "corr-" + t.Name()
 	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, dir, sessions)
@@ -127,12 +131,12 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		disabled bool
 		event    string
 	}{
-		"unchanged":          {unchanged, "org_admin", false, ""},
-		"matched by e-mail":  {byMail, "org_operator", false, ""},
-		"moved to auditors":  {moved, "org_auditor", false, "success system role_changed 2 [org_admin] [org_auditor]"},
-		"in no role group":   {removed, "org_admin", true, "success system removed 2 [org_admin] []"},
-		"deactivated":        {inactive, "org_auditor", true, "success system deactivated 2 [org_auditor] []"},
-		"in two role groups": {twice, "org_operator", true, "success system removed 2 [org_operator] []"},
+		"unchanged, another user's e-mail is its username": {unchanged, "org_admin", false, ""},
+		"two directory users share the username":           {shared, "org_admin", false, ""},
+		"moved to auditors":                                {moved, "org_auditor", false, "success system role_changed 2 [org_admin] [org_auditor]"},
+		"in no role group":                                 {removed, "org_admin", true, "success system removed 2 [org_admin] []"},
+		"deactivated":                                      {inactive, "org_auditor", true, "success system deactivated 2 [org_auditor] []"},
+		"in two role groups":                               {twice, "org_operator", true, "success system removed 2 [org_operator] []"},
 	} {
 		role, disabled := state(c.id)
 		events := event(c.id)

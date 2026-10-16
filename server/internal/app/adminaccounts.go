@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -31,8 +32,11 @@ func NewAdminAccounts(runner *ActionRunner, org *db.OrgPool, dir ports.UserDirec
 
 // directoryUser is what the role group listings say about one user.
 type directoryUser struct {
+	pk     string
 	groups []string
 	active bool
+	// ambiguous marks a username that two directory users share once normalized: neither decides the account.
+	ambiguous bool
 }
 
 // Reconcile compares every account of the caller's organization that is not disabled with the members of the
@@ -59,25 +63,32 @@ func (a *AdminAccounts) Reconcile(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("role group %s: %w", name, err)
 		}
+		// Only the username identifies a member (plan M8s decision 22): users may change their own e-mail address.
 		for _, m := range members {
-			// The login takes preferred_username, or the e-mail address when the provider has none.
-			for _, key := range []string{user.NormalizeUsername(m.Username), user.NormalizeUsername(m.Email)} {
-				if key == "" {
-					continue
-				}
-				u := users[key]
-				if u == nil {
-					u = &directoryUser{}
-					users[key] = u
-				}
+			key := user.NormalizeUsername(m.Username)
+			if key == "" {
+				continue
+			}
+			u := users[key]
+			switch {
+			case u == nil:
+				users[key] = &directoryUser{pk: m.PK, groups: []string{name}, active: m.Active}
+			case u.pk != m.PK:
+				u.ambiguous = true
+			default:
 				u.groups = append(u.groups, name)
-				u.active = u.active || m.Active
 			}
 		}
 	}
 	var errs []error
 	for _, acc := range accounts {
-		reason, newRole := change(acc, users[user.NormalizeUsername(acc.Username)])
+		u := users[user.NormalizeUsername(acc.Username)]
+		if u != nil && u.ambiguous {
+			slog.WarnContext(ctx, "administrator account left unchanged: two directory users share its username",
+				"account_id", acc.ID)
+			continue
+		}
+		reason, newRole := change(acc, u)
 		if reason == "" {
 			continue
 		}
