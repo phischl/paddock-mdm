@@ -164,6 +164,10 @@ func (ex *configExec) deviceGroup(ctx context.Context, c declarative.Change) err
 		if err := ex.requireAdmin("delete device groups"); err != nil {
 			return err
 		}
+		// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+		if err := ex.q.LockOrganizationPrivileges(ctx); err != nil {
+			return err
+		}
 		if err := ex.lockedGroupIsEmpty(ctx, c); err != nil {
 			return err
 		}

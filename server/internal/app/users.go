@@ -265,6 +265,10 @@ func (u *Users) Delete(ctx context.Context, id uuid.UUID) error {
 
 // removeUser deletes a user with its assignments and queues a recompile of the organization.
 func removeUser(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID) error {
+	// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+	if err := q.LockOrganizationPrivileges(ctx); err != nil {
+		return err
+	}
 	if _, err := q.DeleteLoginAssignmentsOfSubject(ctx, id); err != nil {
 		return err
 	}

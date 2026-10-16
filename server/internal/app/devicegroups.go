@@ -144,6 +144,10 @@ func (d *DeviceGroups) Delete(ctx context.Context, id uuid.UUID) error {
 	spec := SpecDeviceGroupDelete
 	spec.Target = &audit.Target{Type: "device_group", ID: id.String()}
 	return d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+		if err := q.LockOrganizationPrivileges(ctx); err != nil {
+			return err
+		}
 		old, err := q.GetDeviceGroup(ctx, id)
 		if err != nil {
 			return notFound(err)

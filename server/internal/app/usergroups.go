@@ -320,6 +320,10 @@ func (g *UserGroups) Delete(ctx context.Context, id uuid.UUID) error {
 			if externalErr != nil {
 				return nil
 			}
+			// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+			if err := q.LockOrganizationPrivileges(ctx); err != nil {
+				return err
+			}
 			if _, err := q.DeleteLoginAssignmentsOfSubject(ctx, id); err != nil {
 				return err
 			}
