@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The admin API accepts request bodies of at most 256 KiB; a larger body is refused with 400 `invalid_request`. The
+  declarative configuration (`PUT /api/v1/config`, 1 MiB) and the agent release uploads (128 MiB) keep their own
+  limits. The api, gateway and escrow-reader roles now close a connection that takes longer than 60 seconds to send
+  its request or 120 seconds to receive its answer; agent release uploads may take up to 10 minutes.
 - `PADDOCK_ACME_EMAIL` no longer stops `compose.prod.yaml` from rendering when it is unset, because the lab profile
   has no ACME. A production control plane still refuses to run without it: `./paddock check` fails the Caddy item
   and Caddy refuses to start.

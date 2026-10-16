@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 
@@ -199,7 +198,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		ExposeStepUp:     common.Development(),
 		TrustedProxies:   common.TrustedProxies,
 	})
-	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	srv := newHTTPServer(httpAddr, handler)
 	slog.InfoContext(ctx, "api starting", "addr", httpAddr, "public_url", publicURL)
 
 	keySource := func(ctx context.Context) (string, string, error) {

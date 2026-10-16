@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -52,7 +51,7 @@ func serveEscrowReader(ctx context.Context, l *config.Loader, common config.Comm
 	defer vk.Close()
 	verifier := stepupproof.NewVerifier(issuer, clientID, window, time.Now)
 	svc := escrowreader.NewService(secret, pool, verifier, stepupproof.NewStore(vk), reader)
-	srv := &http.Server{Addr: httpAddr, Handler: svc.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	srv := newHTTPServer(httpAddr, svc.Handler())
 	slog.InfoContext(ctx, "escrow-reader starting", "addr", httpAddr, "stepup_window", window)
 	return runAll(ctx,
 		func(ctx context.Context) error {

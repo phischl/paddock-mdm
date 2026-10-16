@@ -3,6 +3,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -169,14 +170,14 @@ func NewHandler(d Deps) http.Handler {
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}
 	}
-	strict := adminapi.NewStrictHandlerWithOptions(h, nil,
+	strict := adminapi.NewStrictHandlerWithOptions(h, []adminapi.StrictMiddlewareFunc{uploadDeadlines},
 		adminapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc:  s.rejected,
 			ResponseErrorHandlerFunc: httpx.WriteProblem,
 		})
 	adminapi.HandlerWithOptions(strict, adminapi.StdHTTPServerOptions{
 		BaseRouter:       api,
-		Middlewares:      []adminapi.MiddlewareFunc{s.csrf, limitConfigBody},
+		Middlewares:      []adminapi.MiddlewareFunc{s.csrf, limitBody},
 		ErrorHandlerFunc: s.rejected,
 	})
 	api.Handle("POST /api/auth/logout", s.csrf(s.bff.logout(d.PublicURL)))
@@ -282,16 +283,47 @@ func (s *server) rejected(w http.ResponseWriter, r *http.Request, err error) {
 	httpx.WriteProblem(w, r, p)
 }
 
-// limitConfigBody bounds the body of PUT /api/v1/config one byte above app.MaxDocumentBytes, so that a larger
-// document is refused while it is read (400 invalid_request, audited by rejected) and a document of exactly the limit
-// reaches the use case.
-func limitConfigBody(next http.Handler) http.Handler {
+// maxBodyBytes bounds the body of every admin API request without its own limit (plan M8s decision 32).
+const maxBodyBytes = 256 << 10
+
+// artifactUploadPrefix is the path prefix of the agent release uploads, whose handlers bound the body to
+// agentrelease.MaxArtifactBytes themselves.
+const artifactUploadPrefix = "/api/platform/v1/agent-releases/"
+
+// artifactUploadDeadline is how long an agent release upload may take to read its body and write the answer, in place
+// of the server's read and write timeouts (plan M8s decision 33).
+const artifactUploadDeadline = 10 * time.Minute
+
+// limitBody bounds request bodies one byte above their limit, so that a larger body is refused while it is read
+// (400 invalid_request, audited by rejected) and a body of exactly the limit reaches the use case: PUT /api/v1/config
+// at app.MaxDocumentBytes, the artifact uploads not at all, every other request at maxBodyBytes.
+func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPut && r.URL.Path == "/api/v1/config" {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/config":
 			r.Body = http.MaxBytesReader(w, r.Body, app.MaxDocumentBytes+1)
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, artifactUploadPrefix):
+		default:
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes+1)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// uploadDeadlines extends the read and write deadlines of the agent release uploads before their handlers read the
+// body: a 128 MiB artifact over a slow link takes longer than the server's timeouts allow.
+func uploadDeadlines(f adminapi.StrictHandlerFunc, operationID string) adminapi.StrictHandlerFunc {
+	if operationID != "UploadAgentArtifact" && operationID != "UploadAgentPackage" {
+		return f
+	}
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
+		rc := http.NewResponseController(w)
+		deadline := time.Now().Add(artifactUploadDeadline)
+		// A writer without deadline support (HTTP/2 streams, tests) has no connection timeout to extend either.
+		_ = rc.SetReadDeadline(deadline)
+		_ = rc.SetWriteDeadline(deadline)
+		return f(ctx, w, r, request)
+	}
 }
 
 func noStore(next http.Handler) http.Handler {

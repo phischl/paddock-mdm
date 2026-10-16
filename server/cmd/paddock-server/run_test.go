@@ -48,3 +48,22 @@ func TestRetryUntilDone(t *testing.T) {
 		t.Fatal("retries do not stop when the context ends")
 	}
 }
+
+// TestNewHTTPServer: the api, gateway and escrow-reader servers bound reading a request to 60 s and writing the
+// response to 120 s next to the header and idle timeouts.
+func TestNewHTTPServer(t *testing.T) {
+	srv := newHTTPServer(":8080", nil)
+	if srv.Addr != ":8080" {
+		t.Errorf("Addr = %q", srv.Addr)
+	}
+	for name, got := range map[string]struct{ got, want time.Duration }{
+		"ReadHeaderTimeout": {srv.ReadHeaderTimeout, 10 * time.Second},
+		"ReadTimeout":       {srv.ReadTimeout, 60 * time.Second},
+		"WriteTimeout":      {srv.WriteTimeout, 120 * time.Second},
+		"IdleTimeout":       {srv.IdleTimeout, 2 * time.Minute},
+	} {
+		if got.got != got.want {
+			t.Errorf("%s = %s, want %s", name, got.got, got.want)
+		}
+	}
+}
