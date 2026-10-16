@@ -246,6 +246,21 @@ var auditCases = map[string][]auditCase{
 			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "organization.created", "failure", auditPollTimeout)
 		}},
 	},
+	// Ending every session would sign out every parallel gate: the success is gate S13 (TestSessionsEndAll, run alone
+	// with PADDOCK_ACCEPTANCE_DISRUPTIVE=1); here only the refusals, which end nothing.
+	"POST /api/platform/v1/sessions/end-all": {
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			root := login(t, env.PlatformAdmin)
+			res := call(t, root, http.MethodPost, "/api/platform/v1/sessions/end-all", nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.sessions_ended", "denied", auditPollTimeout)
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPost, "/api/platform/v1/sessions/end-all", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "platform.sessions_ended", "denied")
+		}},
+	},
 	// The IP allow list is platform-wide state (gate A1 exercises the successful changes and cleans up); here only
 	// the cases that leave it as it is (plan M7a decision 16).
 	"POST /api/platform/v1/ip-allowlist": {
