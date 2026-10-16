@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -201,6 +202,65 @@ func TestAdminAccountsReconcile(t *testing.T) {
 	}
 	if n := countRows(t, super, "SELECT count(*) FROM action WHERE code = 'admin.sessions_revoked' AND organization_id = $1", org); n != 4 {
 		t.Fatalf("%d events after the second round, want 4", n)
+	}
+}
+
+// TestPlatformRevocationWaitsForLogin: the worker's revocation locks the platform administrator's row first, so it
+// waits for a running login that holds the row while it opens its session (PDK-185).
+func TestPlatformRevocationWaitsForLogin(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	worker, err := db.NewOrgPool(ctx, env.Worker, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(worker.Close)
+	platform, err := db.NewPlatformPool(ctx, env.Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	id, name := uuid.Must(uuid.NewV7()), "waiting-"+uuid.NewString()[:8]
+	if _, err := super.Exec(ctx, `INSERT INTO platform_admin (id, authentik_sub, username, display_name) VALUES ($1, $2, $3, $3)`,
+		id, "uid-"+name, name); err != nil {
+		t.Fatal(err)
+	}
+	dir := newDirectory()
+	dir.roleGroups = map[string][]ports.IdentityUser{organization.PlatformAdminsGroup(): {{UID: "uid-someone", Username: "someone", Active: true}}}
+	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{id: 1}}
+	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, httpx.RequestID), worker, platform, dir, sessions)
+	sys := principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"})
+
+	login, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := login.Exec(ctx, "SELECT 1 FROM platform_admin WHERE id = $1 FOR UPDATE", id); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- accounts.ReconcilePlatform(sys) }()
+	select {
+	case err := <-done:
+		t.Fatalf("the revocation did not wait for the login: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	if sessions.revoked[id] != 0 {
+		t.Fatal("sessions ended while the login held the row")
+	}
+	if err := login.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if sessions.revoked[id] != 1 {
+		t.Fatalf("%d revocations after the login, want 1", sessions.revoked[id])
 	}
 }
 

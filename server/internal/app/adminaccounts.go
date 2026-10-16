@@ -227,7 +227,12 @@ func (a *AdminAccounts) revokePlatformAdmin(ctx context.Context, adm pgstore.Pla
 		Target: &audit.Target{Type: "platform_admin", ID: adm.ID.String(), Display: adm.Username},
 		Params: map[string]any{"reason": reason, "old_role": string(principal.RolePlatform), "new_role": ""},
 	}
-	return a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, _ *pgstore.Queries, rec Recorder) error {
+	return a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		// The row lock waits for a running login of this administrator, which opens its session while its upsert holds
+		// the row (LoginIdentity.OpenSession): the revocation then also ends that session.
+		if _, err := q.LockPlatformAdmin(ctx, adm.ID); err != nil {
+			return fmt.Errorf("lock platform administrator: %w", err)
+		}
 		// The sessions end inside the event's transaction, as on the organization path: a failing revocation fails the
 		// transaction and records the failure, and the next round counts the sessions again and retries. A commit that
 		// fails after the revocation leaves the sessions ended (fail safe) and the round reports the error.

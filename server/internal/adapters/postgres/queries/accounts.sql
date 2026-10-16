@@ -50,3 +50,7 @@ SELECT * FROM admin_account WHERE disabled_at IS NULL ORDER BY id;
 -- name: ListPlatformAdmins :many
 -- Every platform administrator that ever signed in, for the worker round admin-accounts (PDK-185).
 SELECT * FROM platform_admin ORDER BY id;
+
+-- name: LockPlatformAdmin :one
+-- The worker's revocation waits for a running login of the platform administrator, whose upsert holds the row.
+SELECT id FROM platform_admin WHERE id = @id FOR UPDATE;

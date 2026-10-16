@@ -172,6 +172,18 @@ func (q *Queries) ListPlatformAdmins(ctx context.Context) ([]PlatformAdmin, erro
 	return items, nil
 }
 
+const lockPlatformAdmin = `-- name: LockPlatformAdmin :one
+SELECT id FROM platform_admin WHERE id = $1 FOR UPDATE
+`
+
+// The worker's revocation waits for a running login of the platform administrator, whose upsert holds the row.
+func (q *Queries) LockPlatformAdmin(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lockPlatformAdmin, id)
+	var id_2 uuid.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const setAdminAccountRole = `-- name: SetAdminAccountRole :exec
 UPDATE admin_account SET role = $1 WHERE id = $2
 `

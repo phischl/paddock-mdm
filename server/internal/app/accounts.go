@@ -41,9 +41,10 @@ type LoginIdentity struct {
 	Name     string
 	IP       string
 	// OpenSession creates the server-side session of the login (sessions.Store). It runs inside the login's
-	// transaction, after the account row is written and locked: a revocation of the account (revokeAccount, which
-	// updates the same row first) then either waits for the login and also ends the new session, or ran before it and
-	// the login re-grants the role the groups claim carries now. An error fails the login and records it as failed.
+	// transaction, after the account row (admin_account or platform_admin) is written and locked: a revocation of the
+	// account locks the same row first (revokeAccount updates it, revokePlatformAdmin selects it FOR UPDATE), so it
+	// either waits for the login and also ends the new session, or ran before it and the login re-grants the role the
+	// groups claim carries now. An error fails the login and records it as failed.
 	OpenSession func(ctx context.Context, p principal.Principal) error
 }
 
