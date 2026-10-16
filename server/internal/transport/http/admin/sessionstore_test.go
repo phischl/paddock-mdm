@@ -20,6 +20,8 @@ type fakeSessions struct {
 	down    bool // every call fails as with an unreachable Valkey
 	calls   int
 	touched []string
+	// afterCreate runs after a record was created (a login that fails later).
+	afterCreate func()
 }
 
 func newFakeSessions() *fakeSessions { return &fakeSessions{records: map[string]sessions.Record{}} }
@@ -40,6 +42,9 @@ func (f *fakeSessions) Create(_ context.Context, sid string, rec sessions.Record
 	}
 	rec.Gen = f.gen
 	f.records[sid] = rec
+	if f.afterCreate != nil {
+		f.afterCreate()
+	}
 	return rec, nil
 }
 
@@ -60,7 +65,11 @@ func (f *fakeSessions) Touch(_ context.Context, sid string, _ uuid.UUID, _ time.
 	return f.err()
 }
 
-func (f *fakeSessions) Delete(_ context.Context, sid string, _ uuid.UUID) error {
+func (f *fakeSessions) Delete(ctx context.Context, sid string, _ uuid.UUID) error {
+	// Valkey refuses a call whose context ended.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.err(); err != nil {
