@@ -687,3 +687,30 @@ func TestNewUserNextToAPlainUser(t *testing.T) {
 		t.Fatalf("operator creating a user who becomes root next to a plain user = %v", err)
 	}
 }
+
+// TestImportedGroupBeforeItsMembers: an imported group exists without members between its creation and the mirroring
+// of its upstream members; an operator who completes an approved pair for it in that window is refused through the
+// stand-in member of the group (plan M8s decision 7g-sexies). The mirrored members themselves stay ungated (RR-39).
+func TestImportedGroupBeforeItsMembers(t *testing.T) {
+	w := newCombinationWorld(t)
+	group := uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(context.Background(), `INSERT INTO user_group (id, organization_id, slug, name, source, upstream_authentik_pk)
+		VALUES ($1, $2, 'imported', 'Imported', 'synced', 'upk')`, group, w.org); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []uuid.UUID{w.writer, w.runner} {
+		if err := w.assign(w.steppedUp, p, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	toGroup := func(p principal.Principal, profile uuid.UUID) error {
+		_, err := w.privileges.CreateAssignment(w.ctx(p), app.NewAssignment{ProfileID: profile, SubjectType: privilege.SubjectGroup, SubjectID: &group})
+		return err
+	}
+	if err := toGroup(w.operator, w.writer); err != nil {
+		t.Fatalf("the first half to the imported group = %v", err)
+	}
+	if err := toGroup(w.operator, w.runner); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator completing the approved pair for the empty imported group = %v", err)
+	}
+}
