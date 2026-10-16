@@ -54,10 +54,10 @@ func (ex *configExec) run(ctx context.Context, plan declarative.Plan) error {
 	grants := slices.ContainsFunc(plan.Changes, func(c declarative.Change) bool {
 		return c.Section == declarative.SectionPermissionProfiles || c.Section == declarative.SectionProfileAssignments
 	})
-	var guard rootGrantGuard
+	var guard grantGuard
 	if grants {
 		var err error
-		if guard, err = beginRootGrantGuard(ctx, ex.q); err != nil {
+		if guard, err = beginGrantGuard(ctx, ex.q); err != nil {
 			return err
 		}
 	}
@@ -162,6 +162,10 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 func (ex *configExec) deviceGroup(ctx context.Context, c declarative.Change) error {
 	if c.Action == declarative.ActionDelete {
 		if err := ex.requireAdmin("delete device groups"); err != nil {
+			return err
+		}
+		// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+		if err := ex.q.LockOrganizationPrivileges(ctx); err != nil {
 			return err
 		}
 		if err := ex.lockedGroupIsEmpty(ctx, c); err != nil {

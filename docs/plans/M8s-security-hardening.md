@@ -220,7 +220,8 @@ Supersedes the *TierOrdinary* rule of decision 7 and the role rule of decision 9
     `/etc/netplan/`, `/etc/wpa_supplicant/`, `/etc/sssd/`, `/etc/samba/`, `/etc/ldap/`, `/etc/openldap/`,
     `/etc/audisp/`, `/etc/skel/`, `/etc/csh*`, `/etc/tcsh*`, `/etc/ksh*` and `/etc/php*`; the code suffixes are
     extended by `.pm`, `.php`, `.bash`, `.zsh`, `.mjs` and `.cjs`. Every `/etc/` entry of the never-operator list
-    applies below `/usr/local/etc/` as well (one rule, no duplicated entries).
+    applies below `/usr/local/etc/` as well (one rule, no duplicated entries). Fix round 3 adds `/etc/sysconfig/`,
+    `/etc/docker/` and `/etc/containers/` to the never-operator list and `.pyc` and `.jar` to the code suffixes.
 
 
 ### 3.2b Amendment 2026-10-16 — root equivalence over the combination of grants
@@ -238,22 +239,50 @@ Supersedes the per-profile reading of decisions 1–3.
 7h. `privilege.RootEquivalentCommands` MUST be evaluated over the merged command list of a subject, so a writer in
     one profile and the executed target in another count as a pair.
 7i. Membership that arrives from an upstream directory (identity sync, system principal) is not gated; it is
-    audited as today and listed by the review (§3.5). RR-35 states this.
+    audited as today and listed by the review (§3.5). RR-39 states this.
 7j. Profiles, assignments and group rows that a gated change reads MUST be read `FOR UPDATE` (profiles) or
     `FOR SHARE` (assignments, memberships) inside the same transaction, so a concurrent demotion cannot be
     overwritten by a stale write.
 7k. Acceptance: two profiles that are each restricted but combine into root, assigned by an operator or a token →
     403; by an admin without step-up → `step_up_required`; with step-up → success and `effective_class: full` in
     the audit params. Adding a user to a Paddock group that carries such a combination follows the same rule.
-7g-bis. (Architect decision 2026-10-16.) Growth is evaluated for devices in every state and for empty and global group
-    subjects through a synthetic member; approve, quarantine release and enrolment take the guard and the advisory
-    lock.
+7g-bis. (Architect decision 2026-10-16.) Growth is evaluated for devices in every state ~~and for empty and global group
+    subjects through a synthetic member~~ (superseded by 7g-quater); approve, quarantine release and enrolment take the
+    guard and the advisory lock.
 7g-ter. (Architect decision 2026-10-16.) Enrollment tokens are gated at creation and whenever their device groups
     change: when a synthetic device in the token's device groups gives any subject root it does not have elsewhere,
     the token needs an organization administrator with a fresh step-up (operators forbidden, API tokens refused with
     the token detail). Approval keeps its own guard (devices enrolled before this release, manual group changes); for
     tokens that approve automatically the creation gate is the binding one. Acceptance: a token into the device group
     of a combination is refused without a step-up and created with one.
+7g-quater. (Architect decision 2026-10-16; supersedes the synthetic subjects of 7g-bis.) **Witnesses:** the root
+    witnesses of a command set are every root-equivalent command, every writer/exec pair and `ALL` for class Full
+    (the rules of `RootEquivalentCommands`, as a set). **Profile and assignment changes** (create, update, re-scope,
+    declarative documents, enrollment-token device groups): the witnesses of the union of the commands of all
+    profiles with at least one assignment in the organization, before and after the change; any new witness requires
+    an organization administrator with a step-up (operators and tokens refused as before). The union check does not
+    depend on membership or device state and covers future and empty subjects only; it does not see an existing
+    pair recombined for more users, which 7g-quinquies covers with the exact per-subject check. For an enrollment token the union of the profiles assigned to
+    everyone or to one of its device groups is compared with the union of those assigned to everyone. **Membership
+    and device changes** (Paddock group membership, device groups, approval, quarantine release): the exact check per
+    real subject, comparing witness sets instead of classes; a subject gaining any new witness is growth, also when
+    it already had Full. **Identity sync** stays ungated, audited and listed by the review. **Performance:** the
+    profiles are read into one map per evaluation; the advisory lock is held only for the transaction.
+7g-quinquies. (Architect decision 2026-10-16; refines 7g-quater.) Every gated change runs **both** checks and needs
+    an organization administrator with a step-up when either grows: (a) the union witness growth of 7g-quater (future
+    and empty subjects) and (b) the exact witness gain of every real user on every device in any state, from
+    `LoadIdentity` before and after inside the same transaction and lock (spreading an existing combination to more
+    users). Profile, assignment and declarative changes run (a) and (b); membership, device-group, approval and
+    quarantine-release changes keep (b) (they cannot change the union); enrollment-token creation runs (a) as in
+    7g-quater and (b) with a synthetic new device in the token's device groups against every real user. Spreading to
+    a group that is still empty passes both; a later membership change in Paddock is caught by (b), a later directory
+    sync is the accepted residual risk RR-39.
+7g-sexies. (Architect decision 2026-10-16.) Check (b) also judges the future subjects (stand-ins): a stand-in user with
+    no groups and no assignments of its own; a stand-in member of each group subject that an assignment names; and a
+    stand-in device in each device group that an assignment or a usable auto-approve enrollment token names. An auto-approve enrolment runs the per-subject check for the new device and enrolls
+    it **pending** instead of active when it would gain a witness (fail safe; an administrator approves it with a
+    step-up), audited as usual. Creating a user runs the per-subject check for the new user, who had no witness
+    before: an organization administrator with a step-up when root grows.
 
 ### 3.3 Server-side sessions (SEC-2, part 2 and 4)
 

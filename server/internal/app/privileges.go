@@ -179,7 +179,7 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
 	var out pgstore.PermissionProfile
 	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		guard, err := beginRootGrantGuard(ctx, q)
+		guard, err := beginGrantGuard(ctx, q)
 		if err != nil {
 			return err
 		}
@@ -213,7 +213,7 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 			return err
 		}
 		if !steppedUp {
-			if err := guard.check(ctx, q, rec, true); err != nil {
+			if err := guard.check(ctx, q, rec); err != nil {
 				return err
 			}
 		}
@@ -352,7 +352,7 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 		rec.SetParam("subject_type", string(in.SubjectType))
 		rec.SetParam("subject_id", idParam(in.SubjectID))
 		rec.SetParam("device_group_id", idParam(in.DeviceGroupID))
-		guard, err := beginRootGrantGuard(ctx, q)
+		guard, err := beginGrantGuard(ctx, q)
 		if err != nil {
 			return err
 		}
@@ -390,7 +390,7 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 		}
 		rec.SetTarget(audit.Target{Type: "profile_assignment", ID: out.ID.String(), Display: profile.Name})
 		if !full {
-			if err := guard.check(ctx, q, rec, true); err != nil {
+			if err := guard.check(ctx, q, rec); err != nil {
 				return err
 			}
 		}
@@ -429,7 +429,7 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 	spec.Target = &audit.Target{Type: "profile_assignment", ID: id.String()}
 	var out pgstore.ProfileAssignment
 	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		guard, err := beginRootGrantGuard(ctx, q)
+		guard, err := beginGrantGuard(ctx, q)
 		if err != nil {
 			return err
 		}
@@ -459,7 +459,7 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 			return err
 		}
 		if !full {
-			if err := guard.check(ctx, q, rec, true); err != nil {
+			if err := guard.check(ctx, q, rec); err != nil {
 				return err
 			}
 		}

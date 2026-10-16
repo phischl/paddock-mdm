@@ -344,7 +344,14 @@ func TestGroupsProfilesAndEffectiveProfile(t *testing.T) {
 	}
 
 	e.assign(alice, map[string]any{"profile_id": copyHelper.Id, "subject_type": "user", "subject_id": dave.User.Id})
-	assignment := e.assign(alice, map[string]any{"profile_id": runHelper.Id, "subject_type": "group", "subject_id": grp.Id})
+	// The second half completes a writer/exec pair among the assigned profiles of the organization: a step-up at
+	// assignment time, whoever is in the group (plan M8s decision 7g-quater).
+	runAssignment := map[string]any{"profile_id": runHelper.Id, "subject_type": "group", "subject_id": grp.Id}
+	pair := e.do(call{method: "POST", path: "/api/v1/profile-assignments", cookie: alice, body: runAssignment})
+	if pair.status != http.StatusForbidden || pair.problemCode(t) != "step_up_required" {
+		t.Fatalf("assignment completing a pair without step-up: %d %s", pair.status, pair.body)
+	}
+	assignment := e.assign(e.steppedUp(alice, time.Now()), runAssignment)
 
 	// Membership is a privilege change: the event carries the highest class before and after. This one completes a
 	// root-equivalent combination, so it needs a step-up (plan M8s decision 7g) and is not mirrored without one.

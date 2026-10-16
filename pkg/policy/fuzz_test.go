@@ -15,6 +15,10 @@ func FuzzClassify(f *testing.F) {
 	}
 	f.Add("/etc/systemd/system/sudo.service", "0644", "/etc/systemd/")
 	f.Add("/etc//sudoers", "0644", "/etc/")
+	// A refused root with a path below it: the path must never become ordinary.
+	f.Add("/etc/apt/apt.conf.d/99x", "0644", "/etc/apt/")
+	f.Add("/etc/myapp/app.conf", "0644", "/etc/")
+	f.Add("/usr/local/etc/ssh/sshd_config", "0644", "/usr/local/etc/ssh/")
 	f.Fuzz(func(t *testing.T, p, mode, root string) {
 		roots := []string{root}
 		tier, err := Classify(p, mode, roots)

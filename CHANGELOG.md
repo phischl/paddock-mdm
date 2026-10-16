@@ -56,18 +56,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Managed files on paths outside the denied catalog are sensitive by default: an operator manages files without a
   step-up only below the organization's operator roots (new setting, empty by default: portal Configuration →
   Operator roots, `GET|PUT /api/v1/settings/managed-files`, declarative `settings.managed_files`, audited as
-  `settings.managed_files_changed`), and not for executables, scripts, shared objects or `.d` directories there.
+  `settings.managed_files_changed`), and not for executables, scripts, compiled bytecode, Java archives, shared
+  objects or `.d` directories there.
   Package-manager, boot-loader, interpreter, shell, display-manager, audit, firewall, network, directory-client,
-  trust-anchor, PAM, identity and new-user skeleton directories can never be operator roots, below `/etc/` and
+  trust-anchor, PAM, identity, new-user skeleton, service-environment and container-runtime directories can never be
+  operator roots, below `/etc/` and
   `/usr/local/etc/` alike. Existing definitions keep working; the security review lists
   those that now need a confirmation.
 
 - Granting root in effect needs an organization administrator with a step-up also when it happens indirectly: a
-  profile change or assignment whose commands combine with another profile of the same user into a root-equivalent
-  pair, adding a user to a Paddock group that carries such a grant, or adding a device to the device group of one.
+  profile change or assignment whose commands combine with another assigned profile of the organization into a
+  root-equivalent pair, adding a user to a Paddock group that carries such a grant, or adding a device to the device group of one.
   Operators receive 403 `forbidden`, API tokens 403 `step_up_required`; the portal runs the step-up for group
   members and device groups. Creating an enrollment token into such a device group, and approving or releasing a
-  device in one, follow the same rule. Membership synchronized from the upstream directory is not affected. Creating or
+  device in one, follow the same rule, as does creating a user who would receive root through grants to everyone. A
+  device that an auto-approve token would activate into such a grant is enrolled pending and waits for an approval;
+  `device.enrolled` records it with `auto_approve_withheld: root_grant`. Membership synchronized from the upstream directory is not affected. Creating or
   changing an effectively Full profile is now reserved to organization administrators as well.
 
 - Managed files on sensitive paths (cron, systemd, login scripts, SSH, network hooks, logrotate, files directly in

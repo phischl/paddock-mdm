@@ -62,6 +62,8 @@ var classifyVectors = []struct {
 	{"/etc/myapp/rc.zsh", "0644", TierSensitive},
 	{"/opt/myapp/app.mjs", "0644", TierSensitive},
 	{"/opt/myapp/app.cjs", "0644", TierSensitive},
+	{"/opt/myapp/lib/__pycache__/x.cpython-312.pyc", "0644", TierSensitive},
+	{"/opt/myapp/lib/plugin.jar", "0644", TierSensitive},
 	{"/etc/systemd/system/timer.d/x.conf", "0644", TierDenied},
 	{"/etc/systemd/system/scope.d/x.conf", "0644", TierDenied},
 	{"/usr/local/lib/systemd/system/service.d/x.conf", "0644", TierDenied},
@@ -142,6 +144,8 @@ func TestValidateOperatorRoot(t *testing.T) {
 		"/usr/local/etc/systemd/", "/usr/local/etc/cron.d/", "/usr/local/etc/profile.d/", "/usr/local/etc/bash_completion.d/",
 		"/usr/local/etc/zsh/", "/usr/local/etc/python3.12/", "/usr/local/etc/php/", "/usr/local/etc/apt/",
 		"/usr/local/etc/default/", "/usr/local/etc/X11/", "/usr/local/etc/openvpn/", "/usr/local/etc/skel/",
+		"/etc/sysconfig/", "/etc/docker/", "/etc/containers/registries.conf.d/", "/usr/local/etc/sysconfig/",
+		"/usr/local/etc/docker/", "/usr/local/etc/containers/",
 	} {
 		if err := ValidateOperatorRoot(bad); !errors.Is(err, ErrOperatorRoot) {
 			t.Errorf("%q accepted", bad)

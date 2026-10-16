@@ -1,55 +1,66 @@
 # Step-up authentication
 
 Security-relevant portal actions require a fresh MFA authentication of the administrator, at most 300 s old
-(architecture §9.6, plan M4a decisions 6 and 7):
+(architecture §9.6, plan M4a decisions 6 and 7).
+
+
+**Root grants.** Every change that would give a user root on a device in effect, on its own or in combination with
+other grants, needs an organization administrator with a fresh step-up; operators get 403 `forbidden` (ADR 0034
+decision 1 and its amendment of 2026-10-16, plan M8s decisions 7g–7k and 7g-quater to 7g-sexies). Paddock measures
+root in *root witnesses*: a root-equivalent command, a pair of a writer and the file it writes and runs, or class
+Full. A profile is *effectively Full* when its class is `full` or when it is restricted and one of its commands
+hands out root on its own or in combination (the catalog of `domain/privilege/rootequiv.go`, shown as "Full
+(effective)" in the portal). The requests and when they need the step-up:
 
 | Action | When |
 | --- | --- |
 | `POST /api/v1/permission-profiles` | the profile is effectively Full |
-| `PATCH /api/v1/permission-profiles/{id}` | the profile is effectively Full afterwards and was not before, or its class or commands change |
-| `POST /api/v1/profile-assignments` | the profile is effectively Full |
-| `PATCH /api/v1/profile-assignments/{id}` | the profile is effectively Full |
-| `POST /api/v1/managed-files` | the path is sensitive (organization administrators only; other roles get 403 `forbidden`) |
-| `PATCH /api/v1/managed-files/{id}` | the path is sensitive afterwards, or the file was on a sensitive path and any field changes |
-| `POST /api/v1/user-groups/{id}/members` | the new member gains root on a device through the group's assignments |
-| `POST /api/v1/enrollment-tokens` | a device enrolled into the token's device group would give a user root |
-| `POST /api/v1/devices/{id}/approve`, `…/release-quarantine` | the device's device groups give a user root once it is active |
-| `PUT /api/v1/devices/{id}/groups` | a user gains root on the device through the assignments of its new device groups |
-| `PUT /api/v1/config` (`paddockctl apply`) | the document creates or changes a profile, an assignment or a managed file as above |
-| `POST /api/platform/v1/sessions/end-all` | always (platform administrators) |
+| `PATCH /api/v1/permission-profiles/{id}` | the profile is effectively Full afterwards and was not before, or its class or commands change; or the change gives anyone a new witness (below) |
+| `POST /api/v1/profile-assignments` | the profile is effectively Full, or the assignment gives anyone a new witness |
+| `PATCH /api/v1/profile-assignments/{id}` | the profile is effectively Full, or the new scope gives anyone a new witness |
+| `PUT /api/v1/config` (`paddockctl apply`) | the document creates or changes a profile or an assignment as above, or a managed file as below |
+| `POST /api/v1/user-groups/{id}/members` | the new member gains a witness through the group's assignments |
+| `PUT /api/v1/devices/{id}/groups` | a user gains a witness on the device through its new device groups |
+| `POST /api/v1/devices/{id}/approve`, `…/release-quarantine` | the device's device groups give a user a witness once it is active |
+| `POST /api/v1/enrollment-tokens` | a device enrolled into the token's device group would give a user a witness |
+| `POST /api/v1/users` | the new user would receive a witness through grants to everyone |
 
-Since the amendment of 2026-10-16 (plan M8s decisions 7g–7k) the rule follows the effect of a change: a change that
-gives any user root on a device or device group where the user did not have it before needs an organization
-administrator with a fresh step-up (operators get 403 `forbidden`), also when no single profile is effectively Full
-but the merged commands of several profiles form a root-equivalent pair (a writer and the file it writes and runs).
-Membership that arrives from the upstream directory is not gated. Changes that can grant root take a per-organization
-lock, so two of them never complete a combination unseen.
-
-A profile is *effectively Full* when its class is `full` or when it is restricted and one of its commands hands out
-root on its own or in combination (the catalog of `domain/privilege/rootequiv.go`, shown as "Full (effective)" in
-the portal; ADR 0034 decision 1). A rename or a change of the password, lecture or timeout settings of such a
-profile needs no step-up.
+*Gives anyone a new witness* means either of two checks: the profiles assigned anywhere in the organization
+together gain a witness, whoever they are assigned to; or a real user, a future user (no groups, or a member of a
+group an assignment names) or a device (every device in any state, and a future device in each device group that
+an assignment or a usable auto-approve token names) gains one, also a user who already has Full. A rename or a
+change of the password, lecture or timeout settings of an effectively Full profile needs no step-up. A device that
+an auto-approve enrollment token would activate into such a grant is enrolled pending instead and waits for an
+approval with a step-up (`device.enrolled` records `auto_approve_withheld: root_grant`). Membership that arrives
+from the upstream directory, including the members an imported group mirrors, is not gated (residual risk RR-39).
+Changes that can grant root take a per-organization lock, so two of them never complete a combination unseen.
 
 Without a fresh step-up such a request answers 403 `step_up_required` and records one audit event with outcome
 `denied`; a permitted action records the actor with `step_up: true`. The portal sends the administrator through the
 step-up and repeats the action once.
 
-Managed-file paths have three tiers (ADR 0034 decision 2 and its amendment of 2026-10-16, catalog in `pkg/policy`):
-*denied* paths are refused with 422 `path_not_allowed`, and existing definitions on them are no longer shipped to
-devices; a path below an **operator root** of the organization is *ordinary* and stays with the `org_operator` role
-without a step-up, unless it has an execute bit, a script or shared-object suffix (`.so`, `.so.*`, `.py`, `.pth`,
-`.sh`, `.pl`, `.rb`, `.lua`, `.js`) or a `.d` directory component; every other path is *sensitive* and needs the
-rule above. Operator roots are empty by default and are set in the portal (Configuration → Operator roots), with
-`PUT /api/v1/settings/managed-files` or in the `settings.managed_files` section of a declarative document, always by
-an organization administrator with a step-up (`settings.managed_files_changed`). A root is a directory such as
-`/etc/myapp/` or `/opt/vendor/`; the never-operator directories (package managers, boot loader, interpreters, shells,
-display managers, audit, MAC frameworks, firewall, network connections, trust anchors, PAM, identity, Paddock) are
-refused. Changing the roots never changes existing definitions; the security review lists files whose tier rose.
-Deleting a definition never needs a step-up.
+**Managed files.** Paths have three tiers (ADR 0034 decision 2 and its amendment of 2026-10-16, catalog in
+`pkg/policy`): *denied* paths are refused with 422 `path_not_allowed`, and existing definitions on them are no longer
+shipped to devices; a path below an **operator root** of the organization is *ordinary* and stays with the
+`org_operator` role without a step-up, unless it has an execute bit, a script, bytecode, archive or shared-object
+suffix (`.so`, `.so.*`, `.py`, `.pyc`, `.pth`, `.sh`, `.bash`, `.zsh`, `.pl`, `.pm`, `.rb`, `.lua`, `.js`, `.mjs`,
+`.cjs`, `.php`, `.jar`) or a `.d` directory component; every other path is *sensitive* and needs an organization
+administrator with a fresh step-up:
 
 | Action | When |
 | --- | --- |
-| `PUT /api/v1/settings/managed-files` | always (organization administrators only) |
+| `POST /api/v1/managed-files` | the path is sensitive (organization administrators only; other roles get 403 `forbidden`) |
+| `PATCH /api/v1/managed-files/{id}` | the path is sensitive afterwards, or the file was on a sensitive path and any field changes |
+
+Operator roots are empty by default and are set in the portal (Configuration → Operator roots), with
+`PUT /api/v1/settings/managed-files` or in the `settings.managed_files` section of a declarative document, always by
+an organization administrator with a step-up (`settings.managed_files_changed`). A root is a directory such as
+`/etc/myapp/` or `/opt/vendor/`; the never-operator directories (package managers, boot loader, interpreters,
+shells, display managers, audit, MAC frameworks, firewall, network connections and clients, directory and
+authentication clients, trust anchors, PAM, identity, service environments, container runtimes, new-user skeletons,
+Paddock) are refused below `/etc/` and `/usr/local/etc/` alike. An operator root is a trust decision (residual risk
+RR-37). Changing the roots never changes existing definitions; the security review lists files whose tier rose.
+Deleting a definition never needs a step-up.
 
 These actions always need a fresh step-up, whatever their content:
 
@@ -65,10 +76,7 @@ These actions always need a fresh step-up, whatever their content:
 | `POST /api/v1/api-tokens` | organization administrators and operators |
 | `POST`, `PATCH`, `DELETE /api/platform/v1/ip-allowlist…` | platform administrators |
 | `POST /api/platform/v1/sessions/end-all` | platform administrators |
-
-In general: every change that would grant a user root on a device in effect, on its own or in combination with
-other grants, needs an organization administrator with a fresh step-up; the tables above name the requests where
-this applies.
+| `PUT /api/v1/settings/managed-files` | organization administrators (operator roots) |
 
 **API tokens** (ADR 0034 decision 3): a request authenticated with an API token never satisfies a step-up. Such a
 request is refused with 403 `step_up_required` and the detail `this change needs an interactive administrator: API

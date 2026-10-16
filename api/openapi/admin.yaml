@@ -1188,7 +1188,9 @@ paths:
       description: |
         Roles: org_admin, org_operator. Creates a local user in Authentik (no password, member of paddock.<slug>) and
         returns a one-time recovery link (valid 24 h) with which the user sets a password; it is returned only here.
-        The username is <local-part>@<a domain of the organization> (409 username_taken if it exists anywhere).
+        The username is <local-part>@<a domain of the organization> (409 username_taken if it exists anywhere). A
+        user who would receive root through grants to everyone needs org_admin (403 forbidden) and a step-up (403
+        step_up_required; API tokens cannot satisfy it).
       x-paddock-audit: user.created
       parameters:
         - $ref: "#/components/parameters/Csrf"

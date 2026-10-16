@@ -196,12 +196,22 @@ func (g *UserGroups) Create(ctx context.Context, in NewUserGroup) (pgstore.UserG
 			if err := q.SetUserGroupAuthentikPK(ctx, pgstore.SetUserGroupAuthentikPKParams{ID: out.ID, AuthentikPk: out.AuthentikPk}); err != nil {
 				return err
 			}
+			// A grant may have reached the group between the two transactions (plan M8s decision 7g-sexies): the
+			// mirrored members are checked like a membership change. A refusal rolls this transaction back, so the
+			// group stays without members and the import is recorded as denied.
+			guard, err := beginSubjectGuard(ctx, q)
+			if err != nil {
+				return err
+			}
 			for _, u := range mirrored {
 				if _, err := q.InsertUserGroupMember(ctx, pgstore.InsertUserGroupMemberParams{
 					OrganizationID: out.OrganizationID, GroupID: out.ID, UserID: u,
 				}); err != nil {
 					return err
 				}
+			}
+			if err := guard.check(ctx, q, rec); err != nil {
+				return err
 			}
 			rec.SetParam("members", len(mirrored))
 			if len(mirrored) > 0 {
@@ -310,6 +320,10 @@ func (g *UserGroups) Delete(ctx context.Context, id uuid.UUID) error {
 			if externalErr != nil {
 				return nil
 			}
+			// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+			if err := q.LockOrganizationPrivileges(ctx); err != nil {
+				return err
+			}
 			if _, err := q.DeleteLoginAssignmentsOfSubject(ctx, id); err != nil {
 				return err
 			}
@@ -388,21 +402,21 @@ func (g *UserGroups) changeMember(ctx context.Context, spec ActionSpec, groupID,
 // before and after it (plan M3a decision 4); an addition that grants root needs requireRootGrant. Adding a present or
 // removing an absent member is a no-op.
 func recordMembershipChange(ctx context.Context, q *pgstore.Queries, rec Recorder, group pgstore.UserGroup, userID uuid.UUID, add bool) error {
-	guard, err := beginRootGrantGuard(ctx, q)
+	guard, err := beginSubjectGuard(ctx, q)
 	if err != nil {
 		return err
 	}
 	if err := changeMembership(ctx, q, group, userID, add); err != nil {
 		return err
 	}
-	after, err := LoadIdentity(ctx, q)
+	after, err := loadGuardIdentity(ctx, q)
 	if err != nil {
 		return err
 	}
 	rec.SetParam("effective_class_before", string(guard.before.HighestClass(userID)))
 	rec.SetParam("effective_class_after", string(after.HighestClass(userID)))
 	// Joining a Paddock group that carries a root grant grants root (plan M8s decision 7g).
-	if add && rootGrantGrows(guard.before, after) {
+	if add && subjectsGain(guard.before, after) {
 		return requireRootGrant(ctx, rec)
 	}
 	return nil

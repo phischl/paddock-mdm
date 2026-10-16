@@ -149,6 +149,11 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 			if err := user.ValidateEmail(in.Email); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
+			// A new user receives what is granted to everyone (plan M8s decision 7g-sexies).
+			guard, err := beginSubjectGuard(ctx, q)
+			if err != nil {
+				return err
+			}
 			out.User, err = q.InsertAppUser(ctx, pgstore.InsertAppUserParams{
 				ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Username: in.Username, DisplayName: in.DisplayName,
 				Email: in.Email, Source: user.SourceLocal,
@@ -160,7 +165,7 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 				return err
 			}
 			rec.SetTarget(audit.Target{Type: "user", ID: out.User.ID.String(), Display: in.Username})
-			return nil
+			return guard.check(ctx, q, rec)
 		},
 		func(ctx context.Context) error {
 			var err error
@@ -260,6 +265,10 @@ func (u *Users) Delete(ctx context.Context, id uuid.UUID) error {
 
 // removeUser deletes a user with its assignments and queues a recompile of the organization.
 func removeUser(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID) error {
+	// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+	if err := q.LockOrganizationPrivileges(ctx); err != nil {
+		return err
+	}
 	if _, err := q.DeleteLoginAssignmentsOfSubject(ctx, id); err != nil {
 		return err
 	}
