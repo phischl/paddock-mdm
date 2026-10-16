@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -67,6 +68,26 @@ func (g rootGrantGuard) check(ctx context.Context, q *pgstore.Queries, rec Recor
 		rec.SetParam("effective_class", string(privilege.ClassFull))
 	}
 	return requireRootGrant(ctx, rec)
+}
+
+// requireTokenGroups is the gate of an enrollment token at creation (plan M8s decision 7g-ter): a synthetic device
+// that enrolls into groups must not give any user root it does not have elsewhere, or the token needs
+// requireRootGrant. For a token that approves automatically this is the binding gate; approval keeps its own guard.
+func requireTokenGroups(ctx context.Context, q *pgstore.Queries, rec Recorder, groups []uuid.UUID) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	guard, err := beginRootGrantGuard(ctx, q)
+	if err != nil {
+		return err
+	}
+	after := *guard.before
+	after.memberGroups = maps.Clone(guard.before.memberGroups)
+	after.memberGroups[uuid.New()] = groups
+	if rootGrantGrows(guard.before, &after) {
+		return requireRootGrant(ctx, rec)
+	}
+	return nil
 }
 
 // rootGrantGrows reports whether a user's effective profile grants root after the change where it did not before

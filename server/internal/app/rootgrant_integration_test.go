@@ -5,8 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/declarative"
@@ -273,5 +276,45 @@ func TestCombinedRootGrantOnEmptyGroup(t *testing.T) {
 	}
 	if err := toGroup(w.steppedUp, w.runner); err != nil {
 		t.Fatalf("stepped-up admin = %v", err)
+	}
+}
+
+// TestEnrollmentTokenIntoRootGrant: a token whose device group would give a device root grants needs an organization
+// administrator with a step-up when it is created; an API token gets the token detail (plan M8s decision 7g-ter).
+func TestEnrollmentTokenIntoRootGrant(t *testing.T) {
+	w := newCombinationWorld(t)
+	pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	keys := func(context.Context) ([]protocol.BundleKey, error) { return []protocol.BundleKey{{KeyID: "k1"}}, nil }
+	tokens := app.NewEnrollmentTokens(w.privilegesHarness.runner, pool, keys, keys, &fakeTokenCache{}, "https://device.test")
+	scoped, plain := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(context.Background(), "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $3, 'scoped'), ($2, $3, 'plain')",
+		scoped, plain, w.org); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.assign(w.operator, w.writer, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.assign(w.steppedUp, w.runner, &scoped); err != nil {
+		t.Fatal(err)
+	}
+	in := func(group uuid.UUID) app.TokenInput {
+		return app.TokenInput{Name: "t-" + group.String()[24:], MaxUses: 5, ExpiresAt: time.Now().Add(time.Hour), AutoApprove: true, DeviceGroupID: &group}
+	}
+	if _, err := tokens.Create(w.ctx(w.admin), in(scoped)); !errors.Is(err, problem.StepUpRequired) {
+		t.Fatalf("admin without step-up = %v", err)
+	}
+	if _, err := tokens.Create(w.ctx(w.token), in(scoped)); !errors.Is(err, problem.StepUpRequired) ||
+		!strings.Contains(problem.From(err).Detail, "API tokens") {
+		t.Fatalf("API token = %v", err)
+	}
+	if _, err := tokens.Create(w.ctx(w.steppedUp), in(scoped)); err != nil {
+		t.Fatalf("stepped-up admin = %v", err)
+	}
+	if _, err := tokens.Create(w.ctx(w.admin), in(plain)); err != nil {
+		t.Fatalf("a token into a group without a grant = %v", err)
 	}
 }
