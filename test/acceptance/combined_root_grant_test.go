@@ -33,8 +33,10 @@ func TestCombinedRootGrant(t *testing.T) {
 	writer := profile("s9 writer", "/usr/bin/tee "+dir+"/run.sh")
 	runner := profile("s9 runner", dir+"/run.sh")
 
+	// The user and the assignments of "assignment" belong to the gate: "enrollment token" relies on the combination.
+	gate := t
+	user := createLocalUser(t, admin.Portal, "s9")
 	t.Run("assignment", func(t *testing.T) {
-		user := createLocalUser(t, admin.Portal, "s9")
 		assign := func(p *env.Portal, profileID string) env.Response {
 			return call(t, p, http.MethodPost, "/api/v1/profile-assignments", map[string]any{
 				"profile_id": profileID, "subject_type": "user", "subject_id": user.ID, "device_group_id": group,
@@ -42,7 +44,7 @@ func TestCombinedRootGrant(t *testing.T) {
 		}
 		res := assign(operator.Portal, writer)
 		expectStatus(t, res, http.StatusCreated, "")
-		createdID(t, admin.Portal, "/api/v1/profile-assignments", res)
+		createdIDFor(t, gate, admin.Portal, "/api/v1/profile-assignments", res)
 
 		expectRefusal(t, admin.Portal, assign(operator.Portal, runner), http.StatusForbidden, "forbidden", "profile_assignment.created")
 		res = assign(token, runner)
@@ -55,7 +57,7 @@ func TestCombinedRootGrant(t *testing.T) {
 		admin.stepUp(t)
 		res = assign(admin.Portal, runner)
 		expectStatus(t, res, http.StatusCreated, "")
-		createdID(t, admin.Portal, "/api/v1/profile-assignments", res)
+		createdIDFor(t, gate, admin.Portal, "/api/v1/profile-assignments", res)
 		if ev := expectOneEvent(t, admin.Portal, res.RequestID, "profile_assignment.created", "success"); ev.Params["effective_class"] != "full" || !ev.Actor.StepUp {
 			t.Fatalf("event %+v", ev)
 		}

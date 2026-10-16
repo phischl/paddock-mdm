@@ -90,6 +90,15 @@ func createdID(t *testing.T, p *env.Portal, collection string, res env.Response)
 	return id
 }
 
+// createdIDFor is createdID for a resource that later subtests use: it is deleted when owner ends, not when the
+// subtest t that created it ends.
+func createdIDFor(t, owner *testing.T, p *env.Portal, collection string, res env.Response) string {
+	t.Helper()
+	id := responseID(t, res).String()
+	deleteOnCleanup(owner, p, collection+"/"+id)
+	return id
+}
+
 // removeCreated removes the resource that a POST to collection created when the test ends.
 func removeCreated(t *testing.T, p *env.Portal, collection string, res env.Response) {
 	t.Helper()

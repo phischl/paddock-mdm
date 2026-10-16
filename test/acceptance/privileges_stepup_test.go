@@ -23,6 +23,7 @@ func TestEffectiveStepUp(t *testing.T) {
 	auditor := login(t, env.Bob)
 
 	var profileID string
+	gate := t // owns what later subtests use
 	t.Run("S1 create", func(t *testing.T) {
 		res := call(t, noStepUp, http.MethodPost, "/api/v1/permission-profiles", rootProfile())
 		expectRefusal(t, admin.Portal, res, http.StatusForbidden, "step_up_required", "permission_profile.created")
@@ -30,7 +31,7 @@ func TestEffectiveStepUp(t *testing.T) {
 		admin.stepUp(t)
 		res = call(t, admin.Portal, http.MethodPost, "/api/v1/permission-profiles", rootProfile())
 		expectStatus(t, res, http.StatusCreated, "")
-		profileID = createdID(t, admin.Portal, "/api/v1/permission-profiles", res)
+		profileID = createdIDFor(t, gate, admin.Portal, "/api/v1/permission-profiles", res)
 		var p struct {
 			EffectiveClass       string  `json:"effective_class"`
 			RootGrantConfirmedAt *string `json:"root_grant_confirmed_at"`
