@@ -228,8 +228,17 @@ func (a *AdminAccounts) ReconcilePlatform(ctx context.Context) error {
 // revokePlatformAdmin ends the sessions of adm and records them; with no session to end nothing is recorded, so a
 // removed administrator is recorded once.
 func (a *AdminAccounts) revokePlatformAdmin(ctx context.Context, adm pgstore.PlatformAdmin, reason string) error {
-	open, err := a.sessions.CountAccount(ctx, adm.ID)
-	if err != nil || open == 0 {
+	// The count runs under the row lock, after a running login of this administrator committed its session, so a
+	// session it opened is counted; with none there is nothing to end and nothing to record.
+	var open int
+	if err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if _, err := q.LockPlatformAdmin(ctx, adm.ID); err != nil {
+			return fmt.Errorf("lock platform administrator: %w", err)
+		}
+		var err error
+		open, err = a.sessions.CountAccount(ctx, adm.ID)
+		return err
+	}); err != nil || open == 0 {
 		return err
 	}
 	spec := ActionSpec{
