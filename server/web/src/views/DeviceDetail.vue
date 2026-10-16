@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, provide, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import DeviceHeader from '../components/DeviceHeader.vue'
 import DevicePane from '../components/DevicePane.vue'
@@ -9,6 +9,7 @@ import { paneOnly } from '../lib/deviceHealth'
 import { deviceDetailKey, useDeviceDetailPage } from '../lib/deviceDetailPage'
 import { currentDevice } from '../lib/pageContext'
 import { useProblemText } from '../lib/problems'
+import { withoutStepUpParam } from '../lib/stepUp'
 
 /**
  * The device frame (plan M7c decision 29): the list pane on the left, the header band with the device's chips and
@@ -18,6 +19,7 @@ const { t } = useI18n()
 const route = useRoute()
 const problemText = useProblemText()
 const id = computed(() => String(route.params.id))
+const router = useRouter()
 const page = useDeviceDetailPage(() => id.value)
 const { device, problem } = page
 provide(deviceDetailKey, page)
@@ -26,6 +28,7 @@ watch(id, async () => {
   problem.value = ''
   await page.load()
   await page.loadSubjects()
+  if (await page.resumeGroups()) await router.replace(withoutStepUpParam())
 }, { immediate: true })
 watch(device, (d) => {
   currentDevice.value = d ? { id: d.id, hostname: d.hostname } : null

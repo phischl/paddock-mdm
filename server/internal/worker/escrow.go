@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -95,16 +96,22 @@ func (e *Escrow) Round(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// One organization's failure never holds up the others; the round reports every failure at the end.
+		var errs []error
 		for _, org := range orgs {
 			outcomes, err := e.escrow.VerifyHeaders(systemContext(ctx, org, "escrow-round"))
 			for _, o := range outcomes {
 				if perr := e.cache.PutEscrowStatus(ctx, o.EscrowID, o.DeviceID, o.Status); perr != nil {
-					return perr
+					err = errors.Join(err, fmt.Errorf("escrow status %s: %w", o.EscrowID, perr))
 				}
 			}
 			if err != nil {
-				return fmt.Errorf("organization %s: %w", org, err)
+				slog.WarnContext(ctx, "escrow header round of an organization failed", "organization_id", org, "error", err)
+				errs = append(errs, fmt.Errorf("organization %s: %w", org, err))
 			}
+		}
+		if len(errs) > 0 {
+			return fmt.Errorf("%d of %d organizations failed: %w", len(errs), len(orgs), errors.Join(errs...))
 		}
 		return nil
 	})

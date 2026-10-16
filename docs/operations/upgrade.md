@@ -1,7 +1,16 @@
 # Upgrade and rollback
 
 How to move an installation from version A to version B with the operator bundle (plan M7b decisions 27–28,
-ADR 0013, ADR 0022). Upgrade the control plane first, the audit host second; agents after the servers.
+ADR 0013, ADR 0022). Upgrade the control plane first, the audit host second; agents after the servers — except
+where the release notes of B say otherwise.
+
+**Binding exception — the release with the managed-file path tiers (ADR 0034, amendment 2026-10-16): agents first,
+then the server.** The new server stops shipping managed files on denied paths, and an agent older than that release
+deletes every unchanged file that leaves its bundle. Upload B's agent release to the running server of A (same minor
+version) and roll it out to every device first; upgrade the control plane only when no active device runs an older
+agent (`docs/operations/agent-releases.md`). See residual risk RR-36 for devices that are offline meanwhile. That
+release also needs a WebAuthn authenticator for every administrator before the upgrade, signs every administrator out
+once and asks for one security review afterwards: follow the four steps in `docs/operations/install.md`, section 12.
 
 ## Before you start
 

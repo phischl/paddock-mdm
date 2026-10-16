@@ -130,9 +130,9 @@ func TestPaddockctl(t *testing.T) {
 	if r := ctl.run(t, org, "", "get", "config", "-o", "json"); r.code != 0 || json.Unmarshal([]byte(r.stdout), &doc) != nil {
 		t.Fatalf("get config -o json: %+v", r)
 	}
-	doc["managed_files"] = append(doc["managed_files"].([]any), map[string]any{"path": "/etc/paddock-t3.conf", "content": "t3\n"})
+	doc["managed_files"] = append(doc["managed_files"].([]any), map[string]any{"path": "/etc/paddock-gates/t3.conf", "content": "t3\n"})
 	added, _ := json.Marshal(doc)
-	if r := ctl.run(t, org, string(added), "apply", "--dry-run", "-f", "-"); r.code != 0 || !strings.Contains(r.stdout, "+ managed_files [null,\"/etc/paddock-t3.conf\"]\n") {
+	if r := ctl.run(t, org, string(added), "apply", "--dry-run", "-f", "-"); r.code != 0 || !strings.Contains(r.stdout, "+ managed_files [null,\"/etc/paddock-gates/t3.conf\"]\n") {
 		t.Fatalf("dry run of a changed file: %+v", r)
 	}
 	if n := listTotal(t, admin.Portal, "/api/v1/change-sets"); n != 0 {
@@ -148,7 +148,7 @@ func TestPaddockctl(t *testing.T) {
 	if r := ctl.run(t, org, "", "apply", "-f", file); r.code != 3 || !strings.Contains(r.stderr, "plan deletes 1 resources; re-run with --yes") {
 		t.Fatalf("apply with a deletion and no --yes: %+v", r)
 	}
-	if listTotal(t, admin.Portal, "/api/v1/package-holds?q=t3-held") != 1 || listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t3") != 0 {
+	if listTotal(t, admin.Portal, "/api/v1/package-holds?q=t3-held") != 1 || listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t3.conf") != 0 {
 		t.Fatal("the refused apply changed something")
 	}
 	// The apply carries the confirmed plan (plan M6c amendment 2026-10-08): another plan is refused with 412 and
@@ -161,7 +161,7 @@ func TestPaddockctl(t *testing.T) {
 	if r := ctl.run(t, org, "", "apply", "--yes", "-f", file); r.code != 0 || !changeSetLine.MatchString(r.stdout) {
 		t.Fatalf("apply --yes: %+v", r)
 	}
-	if listTotal(t, admin.Portal, "/api/v1/package-holds?q=t3-held") != 0 || listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t3") != 1 {
+	if listTotal(t, admin.Portal, "/api/v1/package-holds?q=t3-held") != 0 || listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t3.conf") != 1 {
 		t.Fatal("apply --yes did not apply the document")
 	}
 	if listTotal(t, admin.Portal, "/api/v1/change-sets?source=api_token") != 1 {

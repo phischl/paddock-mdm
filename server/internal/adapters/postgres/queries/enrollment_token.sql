@@ -50,3 +50,9 @@ SELECT * FROM enrollment_token WHERE expires_at > now() ORDER BY id;
 -- Paddock autoinstall (plan M4b decision 2): the token of an enrollment configuration, within the organization.
 -- name: GetEnrollmentTokenBySecret :one
 SELECT * FROM enrollment_token WHERE secret_sha256 = @secret_sha256;
+
+-- A revoked, expired or used-up token no longer assigns devices, so it does not keep its device group alive.
+-- name: DetachInactiveEnrollmentTokens :exec
+UPDATE enrollment_token SET device_group_id = NULL
+WHERE device_group_id = @device_group_id
+  AND (revoked_at IS NOT NULL OR expires_at <= now() OR uses >= max_uses);

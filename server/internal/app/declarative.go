@@ -274,6 +274,10 @@ func normalize(doc *declarative.Document) {
 		l := loginSettingsOf(*doc.Settings.Login)
 		*doc.Settings.Login = loginDocOf(loginsettings.Normalize(l))
 	}
+	// The stored roots are sorted; an unsorted document must not show a change on every apply.
+	if doc.Settings != nil && doc.Settings.ManagedFiles != nil {
+		doc.Settings.ManagedFiles.OperatorRoots = sortedRoots(doc.Settings.ManagedFiles.OperatorRoots)
+	}
 }
 
 // configState is the current configuration and the IDs behind its natural keys.
@@ -304,10 +308,14 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	if err != nil {
 		return st, fmt.Errorf("update settings: %w", err)
 	}
+	roots, err := operatorRoots(ctx, q)
+	if err != nil {
+		return st, fmt.Errorf("managed-file settings: %w", err)
+	}
 	doc.Settings = &declarative.Settings{Login: loginDocOfRow(login), Updates: &declarative.UpdateSettings{
 		SecurityDailyAt: upd.SecurityDailyAt, RegularSchedule: upd.RegularSchedule, RegularUpdatesEnabled: upd.RegularUpdatesEnabled,
 		MaxRandomDelayMin: upd.MaxRandomDelayMin, StalenessWarningH: upd.StalenessWarningH, StalenessCriticalH: upd.StalenessCriticalH,
-	}}
+	}, ManagedFiles: &declarative.ManagedFileSettings{OperatorRoots: roots}}
 
 	groups, err := q.ListAllDeviceGroups(ctx)
 	if err != nil {

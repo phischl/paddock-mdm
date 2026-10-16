@@ -18,6 +18,7 @@ import (
 // manual-approve token leaves the device pending until an administrator approves it.
 func TestDeviceProtocol(t *testing.T) {
 	alice := login(t, env.Alice)
+	acmeOperatorRoots(t)
 	groupID := namedGroup(t, alice, "d1 laptops")
 	dev := activeDevice(t, alice, groupID, "d1-"+uniqueSuffix())
 	if d := getDevice(t, alice, dev.DeviceID); d.State != "active" {
@@ -37,7 +38,7 @@ func TestDeviceProtocol(t *testing.T) {
 	}
 
 	// A managed file for the device's group is visible at the next check-in within 10 s.
-	path := "/etc/paddock-gate-" + uniqueSuffix() + ".conf"
+	path := "/etc/paddock-gates/gate-" + uniqueSuffix() + ".conf"
 	res := call(t, alice, http.MethodPost, "/api/v1/managed-files", map[string]any{
 		"device_group_id": groupID, "path": path, "content": "gate=d1\n",
 	})

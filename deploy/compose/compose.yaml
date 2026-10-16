@@ -7,6 +7,9 @@ x-paddock: &paddock
   profiles: [paddock]
   read_only: true
   tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 256
   restart: unless-stopped
   healthcheck:
     test: ["CMD", "/paddock-server", "healthcheck"]
@@ -27,6 +30,11 @@ services:
   caddy:
     image: ${CADDY_IMAGE}
     restart: unless-stopped
+    cap_drop: [ALL]
+    # Binds 80 and 443 inside the container.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
     # Validates the edge client address configuration and renders the servers block (plan M7a decision 2).
     entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
     ports:
@@ -68,6 +76,9 @@ services:
   caddy-ca-export:
     image: ${CADDY_IMAGE}
     restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
     command: ["sh", "-c", "cat /data/caddy/pki/authorities/local/root.crt > /export/caddy-root.crt"]
     volumes:
       - caddy-data:/data:ro
@@ -80,6 +91,7 @@ services:
   postgres:
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
+    pids_limit: 512
     environment:
       POSTGRES_DB: paddock
       POSTGRES_USER: postgres
@@ -115,6 +127,7 @@ services:
   rabbitmq:
     image: ${RABBITMQ_IMAGE}
     restart: unless-stopped
+    pids_limit: 1024
     hostname: rabbitmq
     volumes:
       - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
@@ -135,6 +148,7 @@ services:
   valkey:
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
+    pids_limit: 256
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
       - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
@@ -151,6 +165,7 @@ services:
   rustfs:
     image: ${RUSTFS_IMAGE}
     restart: unless-stopped
+    pids_limit: 512
     environment:
       RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_root_user
       RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_root_password
@@ -170,6 +185,7 @@ services:
   openbao:
     image: ${OPENBAO_IMAGE}
     restart: unless-stopped
+    pids_limit: 256
     command: ["bao", "server", "-config=/openbao/config/config.hcl"]
     cap_add: [IPC_LOCK]
     volumes:
@@ -187,6 +203,7 @@ services:
   authentik-postgres:
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
+    pids_limit: 512
     environment:
       POSTGRES_DB: authentik
       POSTGRES_USER: authentik
@@ -204,6 +221,7 @@ services:
   authentik-server: &authentik
     image: ${AUTHENTIK_IMAGE}
     restart: unless-stopped
+    pids_limit: 512
     entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
     command: ["server"]
     environment: &authentik-env
@@ -244,6 +262,7 @@ services:
   authentik-worker:
     <<: *authentik
     command: ["worker"]
+    pids_limit: 1024
     depends_on:
       authentik-postgres:
         condition: service_healthy
@@ -257,6 +276,7 @@ services:
   fleet-mysql:
     image: ${FLEET_MYSQL_IMAGE}
     restart: unless-stopped
+    pids_limit: 512
     environment:
       MYSQL_ROOT_PASSWORD_FILE: /run/secrets/fleet_mysql_root_password
       MYSQL_DATABASE: fleet
@@ -277,6 +297,7 @@ services:
   fleet-redis:
     image: ${VALKEY_IMAGE}
     restart: unless-stopped
+    pids_limit: 256
     command: ["valkey-server", "/etc/valkey/valkey.conf"]
     volumes:
       - ./valkey/valkey.conf:/etc/valkey/valkey.conf:ro
@@ -295,6 +316,7 @@ services:
   fleet:
     image: ${FLEET_IMAGE}
     restart: unless-stopped
+    pids_limit: 512
     entrypoint: ["/bin/sh", "/paddock/entrypoint.sh"]
     environment:
       FLEET_MYSQL_ADDRESS: fleet-mysql:3306
@@ -664,6 +686,7 @@ services:
     image: ${PROMETHEUS_IMAGE}
     profiles: [observability]
     restart: unless-stopped
+    pids_limit: 256
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus

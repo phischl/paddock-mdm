@@ -129,6 +129,24 @@ func NormalizeProfile(p Profile) Profile {
 	return p
 }
 
+// EffectiveClass is the class a profile grants in effect: full for class full and for a restricted profile with a
+// root-equivalent command (the rule of Effective's ReportedClass applied to one profile, ADR 0034).
+func EffectiveClass(p Profile) Class {
+	if p.Class == ClassRestricted && len(RootEquivalentCommands(p.Commands)) > 0 {
+		return ClassFull
+	}
+	return p.Class
+}
+
+// RequiresStepUp reports whether creating, changing or assigning p needs a step-up: EffectiveClass(p) == ClassFull.
+func RequiresStepUp(p Profile) bool { return EffectiveClass(p) == ClassFull }
+
+// RootGrantGrows reports whether the effective profile after a change has a root witness (RootWitnesses) that the one
+// before did not have, also when the subject already had root another way (plan M8s decision 7g-quater).
+func RootGrantGrows(before, after EffectiveProfile) bool {
+	return len(NewWitnesses(RootWitnesses(before.Class, before.Commands), RootWitnesses(after.Class, after.Commands))) > 0
+}
+
 // ValidateProfile checks a normalized profile.
 func ValidateProfile(p Profile) error {
 	if n := utf8.RuneCountInString(p.Name); n < 1 || n > MaxNameLen {

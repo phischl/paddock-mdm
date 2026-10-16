@@ -30,6 +30,15 @@ type directory struct {
 	groups  map[string]string   // pk → name
 	members map[string][]string // group pk → user pks
 	fail    error
+	// roleGroups are the members of role groups by group name; roleGroupCalls counts their listings.
+	roleGroups     map[string][]ports.IdentityUser
+	roleGroupCalls int
+	// unlisted are UIDs the role group listings leave out (a paged listing that skipped them); a direct read still
+	// finds them.
+	unlisted map[string]bool
+	// directReads counts UserMembership calls by UID; readFail makes them fail (the listings still work).
+	directReads map[string]int
+	readFail    error
 }
 
 func newDirectory() *directory {
@@ -52,6 +61,40 @@ func (d *directory) OrganizationUsers(context.Context, string) ([]ports.Identity
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return slices.Clone(d.users), d.fail
+}
+func (d *directory) RoleGroupUsers(_ context.Context, name string) ([]ports.IdentityUser, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.roleGroupCalls++
+	var out []ports.IdentityUser
+	for _, m := range d.roleGroups[name] {
+		if !d.unlisted[m.UID] {
+			out = append(out, m)
+		}
+	}
+	return out, d.fail
+}
+func (d *directory) UserMembership(_ context.Context, username, uid string) (ports.IdentityUser, []string, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.directReads == nil {
+		d.directReads = map[string]int{}
+	}
+	d.directReads[uid]++
+	if d.readFail != nil {
+		return ports.IdentityUser{}, nil, false, d.readFail
+	}
+	var u ports.IdentityUser
+	var groups []string
+	for name, members := range d.roleGroups {
+		for _, m := range members {
+			if m.UID == uid && m.Username == username {
+				u = m
+				groups = append(groups, name)
+			}
+		}
+	}
+	return u, groups, len(groups) > 0, d.fail
 }
 func (d *directory) EnsureGroup(_ context.Context, _, name string) (string, error) {
 	d.mu.Lock()

@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 )
@@ -86,6 +87,20 @@ func (f *fakeStepUpIdP) sign(t *testing.T, claims map[string]any) string {
 	return signed + "." + b64(sig)
 }
 
+// fakeStepUpAccounts resolves the slug acme to the organization of the step-up world's session.
+type fakeStepUpAccounts struct{ org uuid.UUID }
+
+func (f *fakeStepUpAccounts) OrganizationID(_ context.Context, slug string) (uuid.UUID, error) {
+	if slug == "acme" {
+		return f.org, nil
+	}
+	return uuid.Nil, nil
+}
+
+func (f *fakeStepUpAccounts) StepUpMismatch(context.Context, uuid.UUID, uuid.UUID, organization.RoleResolution) error {
+	return nil
+}
+
 type stepUpWorld struct {
 	t       *testing.T
 	idp     *fakeStepUpIdP
@@ -94,6 +109,10 @@ type stepUpWorld struct {
 	handler http.Handler
 	session admin.Session
 	maxAge  string // max_age the authorization request must carry
+	// sessions holds the server-side record of session.
+	sessions *fakeSessions
+	// onAuthorize runs while the browser is at the provider, between the step-up start and the callback.
+	onAuthorize func()
 }
 
 func newStepUpWorld(t *testing.T) *stepUpWorld {
@@ -103,6 +122,15 @@ func newStepUpWorld(t *testing.T) *stepUpWorld {
 
 // newStepUpWorldWith is newStepUpWorld with Deps.StepUpMaxAuthAge (0: the production value).
 func newStepUpWorldWith(t *testing.T, maxAuthAge time.Duration) *stepUpWorld {
+	t.Helper()
+	p := principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Subject: "sub-alice",
+		Display: "alice@acme.test", Role: principal.RoleOrgAdmin, OrganizationID: uuid.Must(uuid.NewV7())}
+	return newStepUpWorldFor(t, maxAuthAge, p, nil)
+}
+
+// newStepUpWorldFor is a step-up world for the session of p whose role check uses roles (nil: a fake that resolves
+// acme to the session's organization).
+func newStepUpWorldFor(t *testing.T, maxAuthAge time.Duration, p principal.Principal, roles admin.StepUpAccounts) *stepUpWorld {
 	t.Helper()
 	idp := newFakeStepUpIdP(t)
 	key := make([]byte, 32)
@@ -123,16 +151,20 @@ func newStepUpWorldWith(t *testing.T, maxAuthAge time.Duration) *stepUpWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Subject: "sub-alice",
-		Display: "alice@acme.test", Role: principal.RoleOrgAdmin, OrganizationID: uuid.Must(uuid.NewV7())}
 	maxAge := "60"
 	if maxAuthAge > 0 {
 		maxAge = strconv.Itoa(int(maxAuthAge.Seconds()))
 	}
 	tokens := newStepUpProofs()
-	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "en", time.Now()), maxAge: maxAge, tokens: tokens,
+	if roles == nil {
+		roles = &fakeStepUpAccounts{org: p.OrganizationID}
+	}
+	sessions := newFakeSessions()
+	sessions.records["sid-alice"] = sessionsRecord(p)
+	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "sid-alice", "en", time.Now()), maxAge: maxAge, tokens: tokens,
 		handler: admin.NewHandler(admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
-			StepUpTokens: tokens, PublicURL: "https://admin.test", StepUpMaxAuthAge: maxAuthAge})}
+			StepUpTokens: tokens, StepUpAccounts: roles, Sessions: sessions, PublicURL: "https://admin.test",
+			StepUpMaxAuthAge: maxAuthAge}), sessions: sessions}
 }
 
 func (w *stepUpWorld) serve(path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -179,13 +211,17 @@ func (w *stepUpWorld) stepUp(claims map[string]any) *httptest.ResponseRecorder {
 	w.idp.mu.Lock()
 	w.idp.claims, w.idp.nonce = claims, q.Get("nonce")
 	w.idp.mu.Unlock()
+	if w.onAuthorize != nil {
+		w.onAuthorize()
+	}
 	// Authentik redirects back cross-site: the SameSite=Strict session cookie is not sent.
 	return w.serve("/api/auth/stepup/callback?code=c&state="+url.QueryEscape(q.Get("state")), state)
 }
 
 func TestStepUp(t *testing.T) {
 	now := time.Now().Unix()
-	good := map[string]any{"sub": "sub-alice", "auth_time": now - 5, "amr": []string{"pwd", "mfa"}, "jti": "jti-1"}
+	good := map[string]any{"sub": "sub-alice", "auth_time": now - 5, "amr": []string{"pwd", "mfa"}, "jti": "jti-1",
+		"groups": []string{"paddock.acme", "paddock.acme.admins"}}
 	with := func(k string, v any) map[string]any {
 		c := map[string]any{}
 		for key, val := range good {
@@ -223,6 +259,7 @@ func TestStepUp(t *testing.T) {
 		"no auth_time":       with("auth_time", 0),
 		"without MFA":        with("amr", []string{"pwd"}),
 		"without jti":        with("jti", ""),
+		"without groups":     with("groups", nil),
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newStepUpWorld(t)
@@ -241,6 +278,24 @@ func TestStepUp(t *testing.T) {
 		}
 		if res := newStepUpWorldWith(t, 15*time.Second).stepUp(good); res.Header().Get("Location") != "/devices/x" {
 			t.Fatalf("5 s old login with max_age 15: %s", res.Header().Get("Location"))
+		}
+	})
+	t.Run("session ended on the server", func(t *testing.T) {
+		w := newStepUpWorld(t)
+		delete(w.sessions.records, "sid-alice")
+		value, err := w.keys.Seal(admin.SessionCookie, w.session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res := w.serve("/api/auth/stepup?return_to=%2F", &http.Cookie{Name: admin.SessionCookie, Value: value}); res.Code != http.StatusUnauthorized {
+			t.Fatalf("start for an ended session: %d", res.Code)
+		}
+	})
+	t.Run("session ended during the step-up", func(t *testing.T) {
+		w := newStepUpWorld(t)
+		w.onAuthorize = func() { delete(w.sessions.records, "sid-alice") }
+		if res := w.stepUp(good); res.Header().Get("Location") != "/devices/x?stepup=failed" || cookieOf(res, admin.SessionCookie) != nil {
+			t.Fatalf("callback for an ended session: %s", res.Header().Get("Location"))
 		}
 	})
 	t.Run("without session", func(t *testing.T) {

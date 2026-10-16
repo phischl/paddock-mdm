@@ -6,6 +6,7 @@ services:
   backup-s3-tls:
     image: ${CADDY_IMAGE}
     restart: unless-stopped
+    pids_limit: 256
     # The proxy keeps the Host header, so the S3 signatures stay valid. It copies its root certificate to a volume
     # pgBackRest reads, because Caddy's own PKI directory is private to root.
     command:

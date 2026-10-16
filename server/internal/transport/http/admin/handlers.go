@@ -29,6 +29,8 @@ type handlers struct {
 	// API tokens and the declarative configuration (plan M6c).
 	apiTokens   *app.APITokens
 	declarative *app.Declarative
+	// sessions ends every portal session (plan M8s decision 16).
+	sessions *app.Sessions
 
 	users         *app.Users
 	userGroups    *app.UserGroups
@@ -47,6 +49,8 @@ type handlers struct {
 	attention   *app.Attention
 	ipAllowlist *app.IPAllowlist
 	overview    *app.Overview
+	// securityReview is the review of existing data (ADR 0034 decision 7).
+	securityReview *app.SecurityReview
 
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).

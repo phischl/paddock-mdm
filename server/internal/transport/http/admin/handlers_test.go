@@ -34,6 +34,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
+	"github.com/phischl/paddock-mdm/server/internal/sessions"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -153,6 +154,14 @@ func (f *fakeIdP) OrganizationUsers(context.Context, string) ([]ports.IdentityUs
 	return nil, f.err()
 }
 
+func (f *fakeIdP) RoleGroupUsers(context.Context, string) ([]ports.IdentityUser, error) {
+	return nil, f.err()
+}
+
+func (f *fakeIdP) UserMembership(context.Context, string, string) (ports.IdentityUser, []string, bool, error) {
+	return ports.IdentityUser{}, nil, false, f.err()
+}
+
 func (f *fakeIdP) EnsureGroup(_ context.Context, _, name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -259,6 +268,10 @@ type env struct {
 	disk *diskEscrow
 	// stepUps are the step-up ID tokens, kept as Valkey would and verified as the escrow-reader would.
 	stepUps *stepUpProofs
+	// sessions are the server-side records of the portal sessions (plan M8s decision 12).
+	sessions *fakeSessions
+	// accounts are the login use cases of the handler, for the step-up role check (plan M8s decision 20).
+	accounts *app.Accounts
 }
 
 func newEnv(t *testing.T) *env {
@@ -315,7 +328,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		t.Fatal(err)
 	}
 	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
-		stepUps: newStepUpProofs()}
+		stepUps: newStepUpProofs(), sessions: newFakeSessions()}
 	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
@@ -328,41 +341,45 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		return []protocol.BundleKey{{KeyID: "revocation-signing:v1", PublicKey: testBundleKey}}, nil
 	}
 	d := admin.Deps{
-		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
-		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, nil, "https://device.test"),
-		APITokens:     app.NewAPITokens(runner, orgPool),
-		Declarative:   app.NewDeclarative(runner, orgPool),
-		Devices:       app.NewDevices(runner, orgPool),
-		Managed:       app.NewManagedConfig(runner, orgPool),
-		Organizations: app.NewOrganizations(runner, platformPool, idp),
-		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
-		Releases:      app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
-		Users:         app.NewUsers(runner, orgPool, idp),
-		UserGroups:    app.NewUserGroups(runner, orgPool, idp),
-		Logins:        app.NewLogins(runner, orgPool, idp),
-		LoginSettings: app.NewLoginSettings(runner, orgPool),
-		Privileges:    app.NewPrivileges(runner, orgPool),
-		Commands:      app.NewDeviceCommands(orgPool),
-		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowAccess),
-		Autoinstall:   app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
-		Disk:          app.NewDisk(runner, orgPool, escrowAccess, e.disk),
-		Revocations:   app.NewRevocations(runner, orgPool, e.stepUps, true),
-		DMS:           app.NewDMS(runner, orgPool, discardCommands{}, true, false),
-		Inventory:     app.NewInventory(orgPool),
-		AuditLog:      app.NewAuditLog(reader, orgPool),
-		Attention:     app.NewAttention(orgPool),
-		Overview:      app.NewOverview(orgPool),
-		Runner:        runner,
-		Keys:          keys,
-		OIDC:          admin.NewOIDC(admin.OIDCConfig{}),
-		StepUpTokens:  e.stepUps,
-		PublicURL:     "https://admin.test",
-		Static:        static,
+		DeviceGroups:   app.NewDeviceGroups(runner, orgPool),
+		Tokens:         app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, nil, "https://device.test"),
+		APITokens:      app.NewAPITokens(runner, orgPool),
+		Declarative:    app.NewDeclarative(runner, orgPool),
+		Devices:        app.NewDevices(runner, orgPool),
+		Managed:        app.NewManagedConfig(runner, orgPool),
+		Organizations:  app.NewOrganizations(runner, platformPool, idp),
+		Accounts:       app.NewAccounts(runner, orgPool, platformPool, e.sessions),
+		Releases:       app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
+		Users:          app.NewUsers(runner, orgPool, idp),
+		UserGroups:     app.NewUserGroups(runner, orgPool, idp),
+		Logins:         app.NewLogins(runner, orgPool, idp),
+		LoginSettings:  app.NewLoginSettings(runner, orgPool),
+		Privileges:     app.NewPrivileges(runner, orgPool),
+		Commands:       app.NewDeviceCommands(orgPool),
+		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),
+		Autoinstall:    app.NewAutoinstall(runner, orgPool, "https://bundles.test"),
+		Disk:           app.NewDisk(runner, orgPool, escrowAccess, e.disk),
+		Revocations:    app.NewRevocations(runner, orgPool, e.stepUps, true),
+		DMS:            app.NewDMS(runner, orgPool, discardCommands{}, true, false),
+		Inventory:      app.NewInventory(orgPool),
+		AuditLog:       app.NewAuditLog(reader, orgPool),
+		Attention:      app.NewAttention(orgPool),
+		Overview:       app.NewOverview(orgPool),
+		SecurityReview: app.NewSecurityReview(orgPool),
+		Runner:         runner,
+		Keys:           keys,
+		OIDC:           admin.NewOIDC(admin.OIDCConfig{}),
+		StepUpTokens:   e.stepUps,
+		Sessions:       e.sessions,
+		EndSessions:    app.NewSessions(runner, e.sessions),
+		PublicURL:      "https://admin.test",
+		Static:         static,
 	}
 	if deps != nil {
 		deps(&d)
 	}
 	handler := admin.NewHandler(d)
+	e.accounts = d.Accounts
 
 	spec, err := adminapi.GetSpec()
 	if err != nil {
@@ -427,8 +444,14 @@ func (e *env) steppedUp(c *http.Cookie, at time.Time) *http.Cookie {
 	return &http.Cookie{Name: admin.SessionCookie, Value: v}
 }
 
+// cookie returns a session cookie of p with its server-side record, as a login creates them.
 func (e *env) cookie(p principal.Principal) *http.Cookie {
-	v, err := e.keys.Seal(admin.SessionCookie, admin.NewSession(p, "en", time.Now()))
+	sid := sessions.NewID()
+	if _, err := e.sessions.Create(context.Background(), sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
+		Org: p.OrganizationID}, admin.SessionAbsolute); err != nil {
+		e.t.Fatal(err)
+	}
+	v, err := e.keys.Seal(admin.SessionCookie, admin.NewSession(p, sid, "en", time.Now()))
 	if err != nil {
 		e.t.Fatal(err)
 	}

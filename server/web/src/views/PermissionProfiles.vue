@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import DataList from '../components/DataList.vue'
@@ -10,6 +10,7 @@ import type { PermissionProfile } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import type { ListColumn } from '../lib/listQuery'
 import { classFilter, createProfile, listProfiles, type ProfileInput } from '../lib/profiles'
+import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 
 const { t } = useI18n()
@@ -26,23 +27,39 @@ const columns: ListColumn[] = [
   { key: 'updated_at', title: 'common.updatedAt', sortable: true },
 ]
 
-async function onCreate(input: ProfileInput): Promise<void> {
-  // Full rights are high-risk: typed confirmation (step-up follows in M4).
-  if (input.class === 'full') {
-    const confirmed = await confirm({
-      title: t('profiles.fullTitle'), message: t('profiles.fullConfirm', { name: input.name }),
-      confirmLabel: t('common.create'), destructive: true, requireTypedText: input.name.trim(),
-    })
-    if (!confirmed) return
-  }
+/** Full rights are high-risk: the typed name confirms them, for class full before and for a root-equivalent
+ * restricted profile when the server asks for the step-up (ADR 0034 decision 1). */
+async function confirmRoot(input: ProfileInput, message: string): Promise<boolean> {
+  return confirm({
+    title: t('profiles.fullTitle'), message, confirmLabel: t('common.create'), destructive: true,
+    requireTypedText: input.name.trim(),
+  })
+}
+
+async function create(input: ProfileInput): Promise<string> {
   const res = await createProfile(input)
-  if (typeof res === 'string') {
-    problem.value = res
-    return
-  }
+  if (typeof res === 'string') return res
   open.value = false
   await router.push({ name: 'permission-profile', params: { id: res.id } })
+  return ''
 }
+
+async function onCreate(input: ProfileInput): Promise<void> {
+  if (input.class === 'full' && !(await confirmRoot(input, t('profiles.fullConfirm', { name: input.name })))) return
+  problem.value = await create(input)
+  if (problem.value !== stepUpRequired) return
+  if (input.class !== 'full' && !(await confirmRoot(input, t('profiles.rootGrantConfirm', { name: input.name })))) return
+  startStepUp('profile-create', 'new', input)
+}
+
+/** A creation the server refused with step_up_required is repeated once after the step-up. */
+onMounted(async () => {
+  const pending = resumeStepUp<ProfileInput>('profile-create', 'new')
+  if (!pending) return
+  await router.replace(withoutStepUpParam())
+  problem.value = pending.failed ? 'step_up_failed' : await create(pending.payload)
+  if (problem.value) open.value = true
+})
 </script>
 
 <template>
@@ -86,6 +103,12 @@ async function onCreate(input: ProfileInput): Promise<void> {
       </template>
       <template #[`item.class`]="{ item }: { item: PermissionProfile }">
         {{ t('profiles.classes.' + item.class) }}
+        <StatusChip
+          v-if="item.effective_class !== item.class"
+          status="warn"
+          :label="t('privileges.effectiveClass.' + item.effective_class)"
+          data-testid="profile-effective-class"
+        />
         <StatusChip
           v-if="item.root_equivalent"
           status="warn"

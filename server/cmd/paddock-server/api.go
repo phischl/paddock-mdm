@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/ops"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/revocationsign"
+	"github.com/phischl/paddock-mdm/server/internal/sessions"
 	"github.com/phischl/paddock-mdm/server/internal/stepupproof"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/web"
@@ -135,6 +135,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	}
 	runner := app.NewActionRunner(orgPool, platformPool, httpx.RequestID, runnerOpts...)
 	stepUpTokens := stepupproof.NewStore(vk)
+	sessionStore := sessions.NewStore(vk)
+	accounts := app.NewAccounts(runner, orgPool, platformPool, sessionStore)
 	escrowAccess := app.NewEscrowAccess(escrowreader.NewClient(escrowReaderURL, escrowReaderToken), stepUpTokens)
 	keys := &admin.Keyring{}
 	oidc := admin.NewOIDC(oidcCfg)
@@ -160,46 +162,50 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		}
 	})
 	handler := admin.NewHandler(admin.Deps{
-		DeviceGroups:  app.NewDeviceGroups(runner, orgPool),
-		Tokens:        app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
-		APITokens:     app.NewAPITokens(runner, orgPool),
-		Declarative:   app.NewDeclarative(runner, orgPool),
-		Devices:       app.NewDevices(runner, orgPool),
-		Managed:       app.NewManagedConfig(runner, orgPool),
-		Organizations: app.NewOrganizations(runner, platformPool, ak),
-		Users:         app.NewUsers(runner, orgPool, ak),
-		UserGroups:    app.NewUserGroups(runner, orgPool, ak),
-		Logins:        app.NewLogins(runner, orgPool, ak),
-		LoginSettings: app.NewLoginSettings(runner, orgPool),
-		Privileges:    app.NewPrivileges(runner, orgPool),
-		Commands:      app.NewDeviceCommands(orgPool),
-		LocalAdmin:    app.NewLocalAdmin(runner, orgPool, escrowAccess),
-		Autoinstall:   app.NewAutoinstall(runner, orgPool, bundlesURL),
-		Disk:          app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
-		Revocations:   app.NewRevocations(runner, orgPool, stepUpTokens, revocationEnabled),
-		DMS:           app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
-		Updates:       app.NewUpdates(runner, orgPool),
-		Attention:     app.NewAttention(orgPool),
-		Overview:      app.NewOverview(orgPool),
-		Inventory:     app.NewInventory(orgPool),
-		Accounts:      app.NewAccounts(runner, orgPool, platformPool),
-		Releases:      app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development()),
-		AuditLog:      app.NewAuditLog(auditReader, orgPool),
-		IPAllowlist:   ipAllowlist,
-		IPGuard:       ipGuard,
-		Runner:        runner,
-		Keys:          keys,
-		OIDC:          oidc,
-		StepUp:        stepUp,
-		StepUpTokens:  stepUpTokens,
-		PublicURL:     publicURL,
-		Static:        static,
+		DeviceGroups:   app.NewDeviceGroups(runner, orgPool),
+		Tokens:         app.NewEnrollmentTokens(runner, orgPool, bundleKeys, revocationKeys, devicecache.New(vk), deviceURL),
+		APITokens:      app.NewAPITokens(runner, orgPool),
+		Declarative:    app.NewDeclarative(runner, orgPool),
+		Devices:        app.NewDevices(runner, orgPool),
+		Managed:        app.NewManagedConfig(runner, orgPool),
+		Organizations:  app.NewOrganizations(runner, platformPool, ak),
+		Users:          app.NewUsers(runner, orgPool, ak),
+		UserGroups:     app.NewUserGroups(runner, orgPool, ak),
+		Logins:         app.NewLogins(runner, orgPool, ak),
+		LoginSettings:  app.NewLoginSettings(runner, orgPool),
+		Privileges:     app.NewPrivileges(runner, orgPool),
+		Commands:       app.NewDeviceCommands(orgPool),
+		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),
+		Autoinstall:    app.NewAutoinstall(runner, orgPool, bundlesURL),
+		Disk:           app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
+		Revocations:    app.NewRevocations(runner, orgPool, stepUpTokens, revocationEnabled),
+		DMS:            app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
+		Updates:        app.NewUpdates(runner, orgPool),
+		Attention:      app.NewAttention(orgPool),
+		Overview:       app.NewOverview(orgPool),
+		SecurityReview: app.NewSecurityReview(orgPool),
+		Inventory:      app.NewInventory(orgPool),
+		Accounts:       accounts,
+		Releases:       app.NewAgentReleases(runner, platformPool, artifacts, verifyRelease, verifyRevokeRelease, common.Development()),
+		AuditLog:       app.NewAuditLog(auditReader, orgPool),
+		IPAllowlist:    ipAllowlist,
+		IPGuard:        ipGuard,
+		Runner:         runner,
+		Keys:           keys,
+		OIDC:           oidc,
+		StepUp:         stepUp,
+		StepUpTokens:   stepUpTokens,
+		Sessions:       sessionStore,
+		StepUpAccounts: accounts,
+		EndSessions:    app.NewSessions(runner, sessionStore),
+		PublicURL:      publicURL,
+		Static:         static,
 		// Development only: LoadDevStepUp refuses the variables in production.
 		StepUpMaxAuthAge: devStepUp.MaxAuthAge,
 		ExposeStepUp:     common.Development(),
 		TrustedProxies:   common.TrustedProxies,
 	})
-	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	srv := newHTTPServer(httpAddr, handler)
 	slog.InfoContext(ctx, "api starting", "addr", httpAddr, "public_url", publicURL)
 
 	keySource := func(ctx context.Context) (string, string, error) {

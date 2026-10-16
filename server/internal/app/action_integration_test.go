@@ -274,6 +274,17 @@ func TestRunTxStepUp(t *testing.T) {
 			t.Fatalf("29 s old with a 30 s window: %v", err)
 		}
 	})
+	t.Run("API token", func(t *testing.T) {
+		h := newHarness(t)
+		p, _ := principal.From(h.admin(principal.RoleOrgAdmin))
+		p.APITokenID, p.APITokenName, p.StepUpAt = uuid.Must(uuid.NewV7()), "ci", time.Now()
+		err := h.runner.RunTx(principal.With(context.Background(), p), app.ScopeOrg, spec, createGroup("token"))
+		if !errors.Is(err, problem.StepUpRequired) ||
+			problem.From(err).Detail != "this change needs an interactive administrator: API tokens cannot complete a step-up" {
+			t.Fatalf("RunTx = %v, want the API token detail", err)
+		}
+		expectOne(t, h, audit.OutcomeDenied, "step_up_required")
+	})
 	t.Run("required inside the action", func(t *testing.T) {
 		h := newHarness(t)
 		err := h.runner.RunTx(withStepUp(h, time.Time{}), app.ScopeOrg, createSpec,

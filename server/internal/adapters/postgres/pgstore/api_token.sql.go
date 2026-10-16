@@ -12,6 +12,26 @@ import (
 	"github.com/google/uuid"
 )
 
+const claimCreatorInactiveRecord = `-- name: ClaimCreatorInactiveRecord :execrows
+UPDATE api_token SET creator_inactive_recorded_at = now()
+WHERE id = $1 AND (creator_inactive_recorded_at IS NULL
+  OR creator_inactive_recorded_at < now() - make_interval(secs => $2::double precision))
+`
+
+type ClaimCreatorInactiveRecordParams struct {
+	ID            uuid.UUID
+	WindowSeconds float64
+}
+
+// One api_token.use_denied with reason creator_inactive per token and window (PDK-184).
+func (q *Queries) ClaimCreatorInactiveRecord(ctx context.Context, arg ClaimCreatorInactiveRecordParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimCreatorInactiveRecord, arg.ID, arg.WindowSeconds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countApiTokens = `-- name: CountApiTokens :one
 SELECT count(*) FROM (
   SELECT 1 FROM api_token_listed
@@ -165,18 +185,21 @@ func (q *Queries) ListApiTokens(ctx context.Context, arg ListApiTokensParams) ([
 const lookupApiToken = `-- name: LookupApiToken :one
 SELECT l.id::uuid AS id, l.organization_id::uuid AS organization_id, l.name::text AS name, l.role::text AS role,
        l.created_by::uuid AS created_by, l.expires_at::timestamptz AS expires_at,
-       (l.revoked_at IS NOT NULL)::boolean AS revoked
+       (l.revoked_at IS NOT NULL)::boolean AS revoked, coalesce(l.creator_role, '')::text AS creator_role,
+       l.creator_disabled::boolean AS creator_disabled
 FROM paddock_api_token_lookup($1::bytea) l
 `
 
 type LookupApiTokenRow struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	Name           string
-	Role           string
-	CreatedBy      uuid.UUID
-	ExpiresAt      time.Time
-	Revoked        bool
+	ID              uuid.UUID
+	OrganizationID  uuid.UUID
+	Name            string
+	Role            string
+	CreatedBy       uuid.UUID
+	ExpiresAt       time.Time
+	Revoked         bool
+	CreatorRole     string
+	CreatorDisabled bool
 }
 
 // The api's bearer authentication (plan M6c decision 9), before an organization context exists.
@@ -191,6 +214,8 @@ func (q *Queries) LookupApiToken(ctx context.Context, hash []byte) (LookupApiTok
 		&i.CreatedBy,
 		&i.ExpiresAt,
 		&i.Revoked,
+		&i.CreatorRole,
+		&i.CreatorDisabled,
 	)
 	return i, err
 }

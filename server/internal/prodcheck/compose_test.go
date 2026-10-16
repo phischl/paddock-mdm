@@ -178,6 +178,52 @@ func TestCaddyfilesEdge(t *testing.T) {
 	if proxies != 4 {
 		t.Errorf("found %d proxies to Paddock roles, want 4 (admin_site, device. in the three Caddyfiles)", proxies)
 	}
+	// Plan M8s decision 31: every proxy to a role or an upstream is preceded by a request body limit in its block.
+	limited := 0
+	for _, name := range []string{"Caddyfile", "Caddyfile.prod", "Caddyfile.lab", "guards.caddy"} {
+		lines := strings.Split(read(name), "\n")
+		for i, line := range lines {
+			m := upstreamProxy.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			limited++
+			if !requestBodyBefore(lines, i) {
+				t.Errorf("%s:%d: reverse_proxy %s has no request_body before it in its block", name, i+1, m[1])
+			}
+		}
+	}
+	// body_limit answers a declared Content-Length above the limit with 413 before the upstream sees the request, and
+	// bounds the body with request_body (an upstream that answers without reading the body would hide the limit).
+	if g := read("guards.caddy"); !strings.Contains(g, "(body_limit) {") || !strings.Contains(g, "max_size {args[0]}") ||
+		!strings.Contains(g, "int({http.request.header.Content-Length}) > {args[1]}") {
+		t.Error("guards.caddy has no body_limit snippet with a Content-Length check and request_body")
+	}
+	if limited != 17 {
+		t.Errorf("found %d proxies to roles and upstreams, want 17 (2 in the guards, 5 in each Caddyfile)", limited)
+	}
+}
+
+// upstreamProxy matches a reverse_proxy to a Paddock role or an upstream the edge publishes.
+var upstreamProxy = regexp.MustCompile(`^\t*reverse_proxy (paddock-api|paddock-gateway|rustfs|fleet|authentik-server):`)
+
+// requestBodyBefore reports whether a request_body directive precedes line i at its indentation in the same block.
+func requestBodyBefore(lines []string, i int) bool {
+	depth := len(lines[i]) - len(strings.TrimLeft(lines[i], "\t"))
+	for j := i - 1; j >= 0; j-- {
+		l := lines[j]
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		d := len(l) - len(strings.TrimLeft(l, "\t"))
+		if d < depth {
+			return false
+		}
+		if d == depth && (strings.HasPrefix(strings.TrimSpace(l), "request_body") || strings.HasPrefix(strings.TrimSpace(l), "import body_limit ")) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestProductionEdge renders the production control plane: Caddy publishes 80 and 443 only, runs the entrypoint with
@@ -194,7 +240,7 @@ func TestProductionEdge(t *testing.T) {
 	}
 	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{}) {
 		switch r.Item {
-		case "edge client address", "role trusted proxies":
+		case "edge client address", "role trusted proxies", "container hardening":
 			if !r.OK {
 				t.Errorf("%s:\n%s", r.Item, r.Detail)
 			}
@@ -232,6 +278,7 @@ func TestLabEdge(t *testing.T) {
 		"lab: caddy has no hostname aliases":                    false,
 		"lab: roles resolve the public names to the proxy":      false,
 		"only Caddy's HTTP port published, on the bind address": false,
+		"container hardening":                                   false,
 	}
 	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: prodcheck.HostLab}) {
 		if _, ok := want[r.Item]; !ok {
@@ -246,5 +293,87 @@ func TestLabEdge(t *testing.T) {
 		if !seen {
 			t.Errorf("no item %q", item)
 		}
+	}
+}
+
+// hardeningResult runs the checks over cfg for host and returns the item container hardening.
+func hardeningResult(t *testing.T, cfg prodcheck.Config, host string) prodcheck.Result {
+	t.Helper()
+	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: host}) {
+		if r.Item == "container hardening" {
+			return r
+		}
+	}
+	t.Fatal("no item container hardening")
+	return prodcheck.Result{}
+}
+
+// TestContainerHardening renders every Compose file set (plan M8s decisions 34–36): the Paddock roles and Caddy drop
+// every capability and privilege gain, and every service bounds its processes. A control plane whose x-paddock anchor
+// lost the settings fails the item naming each role and each missing setting.
+func TestContainerHardening(t *testing.T) {
+	cases := map[string]struct {
+		host     string
+		files    []string
+		envFiles []string
+	}{
+		"production control plane": {prodcheck.HostControlPlane, prodFiles(t, "controlplane"), []string{"prod.env.example"}},
+		"production audit host":    {prodcheck.HostAudit, prodFiles(t, "audit"), []string{"prod.env.example"}},
+		"lab":                      {prodcheck.HostLab, prodFiles(t, "lab"), []string{"lab.env.example"}},
+		"lab with backups": {prodcheck.HostLab, append(prodFiles(t, "lab"), libFiles(t, "LAB_BACKUP_FILES")...),
+			[]string{"lab.env.example"}},
+		"development": {prodcheck.HostControlPlane, libFiles(t, "DEV_FILES"), []string{".env.example"}},
+		"development with backups": {prodcheck.HostControlPlane, append(libFiles(t, "DEV_FILES"), libFiles(t, "DEV_BACKUP_FILES")...),
+			[]string{".env.example"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := renderConfig(t, tc.files, tc.envFiles...)
+			if r := hardeningResult(t, cfg, tc.host); !r.OK {
+				t.Fatalf("%s:\n%s", r.Item, r.Detail)
+			}
+			if c, ok := cfg.Services["caddy"]; ok && c.PidsLimit != 256 {
+				t.Errorf("caddy pids_limit %d, want 256", c.PidsLimit)
+			}
+		})
+	}
+
+	t.Run("stripped anchor", func(t *testing.T) {
+		cfg := renderConfig(t, prodFiles(t, "controlplane"), "prod.env.example")
+		for name, s := range cfg.Services {
+			if strings.HasPrefix(name, "paddock-") {
+				s.CapDrop, s.SecurityOpt, s.PidsLimit = nil, nil, 0
+				cfg.Services[name] = s
+			}
+		}
+		r := hardeningResult(t, cfg, prodcheck.HostControlPlane)
+		for _, want := range []string{"paddock-api: cap_drop is not [ALL]", "paddock-gateway: security_opt lacks no-new-privileges:true",
+			"paddock-compiler: no pids_limit"} {
+			if r.OK || !strings.Contains(r.Detail, want) {
+				t.Errorf("no finding %q in\n%s", want, r.Detail)
+			}
+		}
+	})
+}
+
+// TestStepUpBlueprintWebAuthnOnly (plan M8s decision 40): the shipped step-up flow validates with WebAuthn only; only
+// the development blueprint adds a stage that accepts TOTP.
+func TestStepUpBlueprintWebAuthnOnly(t *testing.T) {
+	read := func(path string) string {
+		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	stepup := read(filepath.Join("blueprints", "paddock-stepup.yaml"))
+	if !strings.Contains(stepup, "\n      device_classes: [webauthn]\n") {
+		t.Error("paddock-stepup.yaml does not validate with device_classes: [webauthn]")
+	}
+	if strings.Contains(stepup, "totp") {
+		t.Error("paddock-stepup.yaml mentions totp")
+	}
+	if !strings.Contains(read(filepath.Join("dev", "paddock-dev.yaml")), "paddock-dev-stepup-mfa") {
+		t.Error("the development blueprint has no stage paddock-dev-stepup-mfa")
 	}
 }

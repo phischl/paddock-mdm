@@ -202,6 +202,9 @@ expect_status() {
 expect_status 200 admin.paddock.localhost GET /
 expect_status 200 auth.paddock.localhost GET /-/health/ready/
 expect_status '4[0-9][0-9]' device.paddock.localhost POST /v1/checkin
+# The probes above prove Caddy's bind to 443 with NET_BIND_SERVICE as its only capability. Port 80 is not probed: the
+# CI overlay runs the development Caddyfile, which has no HTTP listener (auto_https disable_redirects).
+"$here/assert-hardening.sh" paddock-cp paddock-audit
 cp_paddock compose run --rm --no-deps -T pgbackrest backup --start-fast
 cp_paddock compose run --rm --no-deps -T pgbackrest info | tee "$W/pgbackrest-info.txt"
 grep -q 'full backup' "$W/pgbackrest-info.txt" || fail "pgbackrest info shows no full backup"

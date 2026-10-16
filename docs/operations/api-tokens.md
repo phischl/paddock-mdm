@@ -15,8 +15,12 @@ are managed on the portal page *API tokens* or through `/api/v1/api-tokens`.
   auditors. A role above the creator's is refused (403 `forbidden`).
 - **Step-up for every creation.** A token lets its holder act without MFA until it expires, so creating one needs a
   step-up of the last 5 minutes, like revealing a password ([step-up.md](step-up.md)). A token never has a step-up, so
-  a token cannot create tokens (403 `step_up_required`). For the same reason, a token cannot assign a full permission
-  profile or change a profile to full, also not through `PUT /api/v1/config`. Make those changes in the portal.
+  a token cannot create tokens (403 `step_up_required`). For the same reason a token cannot make any change that needs
+  a step-up ([step-up.md](step-up.md)): changes that would grant root in effect, alone or in combination, managed
+  files on sensitive paths, operator roots, confirmations of the security review — also not through
+  `PUT /api/v1/config`. Such a request answers 403 `step_up_required` with the detail `this change needs an
+  interactive administrator: API tokens cannot complete a step-up`. Pipelines use the two-step flow of
+  [paddockctl.md](paddockctl.md#ci-example).
 - **Expiry is required:** between 1 hour and 365 days after creation (portal default: 90 days). Expired tokens stay
   listed with status *expired*.
 - **The secret is shown once.** It has the form `pdk_` and 43 characters (32 random bytes). Paddock stores only its
@@ -57,9 +61,12 @@ without the secret.
 
 ## Residual risks
 
-- **A token outlives its creator's access.** It keeps working when the administrator who created it loses the role or
-  is locked in Authentik. Mitigation: the mandatory expiry, revocation by an organization administrator, and the
-  *Created by* column. Review the tokens when an administrator leaves.
+- **A token follows its creator's access with a delay.** A token stops working (401, `api_token.use_denied` with
+  reason `creator_inactive`, recorded at most once per token and 15 minutes) once its creator's account is disabled or no longer has a role that may create the
+  token's role. Paddock learns this at the creator's next step-up, or from the worker within the identity sync
+  interval (5 minutes by default), so a token keeps working until then. Mitigation: the mandatory expiry, revocation
+  by an organization administrator, and the *Created by* column. Review the tokens when an administrator leaves; a
+  token meant to outlive its creator must be created by an account that keeps the role.
 - **Unknown secrets are not rate-limited.** Guessing a 256-bit secret is not practical; the metric above shows
   attempts.
 - **A token in a CI system is only as safe as that system.** Give CI the narrowest role it needs. A pipeline that only

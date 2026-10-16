@@ -20,6 +20,9 @@ type IdentityProvider interface {
 // organization; the caller must not reveal which).
 var ErrUsernameTaken = errors.New("ports: username taken")
 
+// ErrGroupNotFound means the identity provider has no group of that name.
+var ErrGroupNotFound = errors.New("ports: group not found")
+
 // IdentityUser is a user as the identity provider knows it.
 type IdentityUser struct {
 	PK       string
@@ -28,6 +31,11 @@ type IdentityUser struct {
 	Email    string
 	// Managed is true for users Paddock created (attribute paddock_managed); others are synced from upstream.
 	Managed bool
+	// Active is false for a user deactivated in the identity provider.
+	Active bool
+	// UID is the user's stable identifier, the subject of the portal's and the step-up's ID tokens (Authentik's uid
+	// under the providers' sub_mode hashed_user_id) and so admin_account.authentik_sub.
+	UID string
 }
 
 // NewIdentityUser is a local user to create.
@@ -56,6 +64,13 @@ type UserDirectory interface {
 	UnlockUser(ctx context.Context, slug, pk string, activate bool) error
 	// OrganizationUsers lists the direct members of the organization's root group.
 	OrganizationUsers(ctx context.Context, slug string) ([]IdentityUser, error)
+	// RoleGroupUsers lists the direct members of a role group (organization.RoleGroup) in one paged listing (plan
+	// M8s decision 22); ErrGroupNotFound when the group does not exist.
+	RoleGroupUsers(ctx context.Context, groupName string) ([]IdentityUser, error)
+	// UserMembership reads one user directly: the user named username whose UID is uid, with the names of its direct
+	// groups; found is false when no such user exists (removed, or renamed meanwhile). The worker confirms with it
+	// what a listing suggests before it changes an account (plan M8s decision 22).
+	UserMembership(ctx context.Context, username, uid string) (u IdentityUser, groups []string, found bool, err error)
 }
 
 // GroupDirectory manages Paddock's user groups (plan M3a decisions 3 and 9).

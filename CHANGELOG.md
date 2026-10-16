@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Security review of existing data (ADR 0034): `GET /api/v1/security-review` lists effectively Full permission
+  profiles and managed files on sensitive paths that no organization administrator has confirmed yet, and managed
+  files on denied paths; `POST /api/v1/permission-profiles/{id}/confirm-root-grant` and
+  `POST /api/v1/managed-files/{id}/confirm-sensitive` confirm an item with a step-up. Permission profiles carry
+  `root_grant_confirmed_at`, managed files `sensitive_confirmed_at`, and the overview `security_review` counts. The
+  portal shows a banner on the overview and the page Security review. Run `paddock-server admin security-review`
+  once after the upgrade; it prints the counts per organization and records them in the audit log. Existing grants and
+  files keep working while they await review.
+
+- End all sessions: a platform administrator ends every portal session of the installation under *Platform* →
+  *Sessions* (`POST /api/platform/v1/sessions/end-all`, with a step-up, audited as `platform.sessions_ended`), or with
+  `paddock-server admin end-sessions` when the portal is not usable.
+
 - Lab installation profile (plan M8a, ADR 0029; not for production): `PADDOCK_HOST=lab` runs control plane and audit
   domain in one Compose project on one amd64 host behind the operator's own TLS-terminating reverse proxy. The
   bundle ships `compose.lab.yaml`, `caddy/Caddyfile.lab` (plain-HTTP sites, `auto_https off`), the settings template
@@ -25,11 +38,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   specific proxies, never `private_ranges`); every other production item applies unchanged. Guide:
   `docs/operations/lab-install.md`.
 
+- Audit codes `admin.sessions_revoked`, `platform.sessions_ended`, `permission_profile.root_grant_confirmed`,
+  `managed_file.sensitive_confirmed`, `organization.security_review_required` and `device.header_object_rejected`
+  (plan M8s), the parameter `effective_class` of the permission-profile and profile-assignment events, the parameter
+  `tier` of `managed_file.created` and `managed_file.updated`, and the problem code `session_store_unavailable`
+  (503) in the registry, the portal's messages and `docs/compliance/audit-codes.md`.
+
 - `SECURITY.md`: supported versions, how to report a vulnerability privately, response targets, scope and how to
   verify releases.
 
 ### Changed
 
+- A device group can be deleted once its enrollment tokens are revoked, expired or used up; only an active token
+  keeps it (409 `in_use`).
+
+- Upgrade order for the release with the managed-file path tiers: roll out the new agent to every device first, then
+  upgrade the server. The new server no longer ships managed files on denied paths, and an older agent would delete
+  unchanged files that leave its bundle (`docs/operations/upgrade.md`, residual risk RR-36).
+
+- Managed files on paths outside the denied catalog are sensitive by default: an operator manages files without a
+  step-up only below the organization's operator roots (new setting, empty by default: portal Configuration →
+  Operator roots, `GET|PUT /api/v1/settings/managed-files`, declarative `settings.managed_files`, audited as
+  `settings.managed_files_changed`), and not for executables, scripts, compiled bytecode, Java archives, shared
+  objects or `.d` directories there.
+  Package-manager, boot-loader, interpreter, shell, display-manager, audit, firewall, network, directory-client,
+  trust-anchor, PAM, identity, new-user skeleton, service-environment and container-runtime directories can never be
+  operator roots, below `/etc/` and
+  `/usr/local/etc/` alike. Existing definitions keep working; the security review lists
+  those that now need a confirmation.
+
+- Granting root in effect needs an organization administrator with a step-up also when it happens indirectly: a
+  profile change or assignment whose commands combine with another assigned profile of the organization into a
+  root-equivalent pair, adding a user to a Paddock group that carries such a grant, or adding a device to the device group of one.
+  Operators receive 403 `forbidden`, API tokens 403 `step_up_required`; the portal runs the step-up for group
+  members and device groups. Creating an enrollment token into such a device group, and approving or releasing a
+  device in one, follow the same rule, as does creating a user who would receive root through grants to everyone. A
+  device that an auto-approve token would activate into such a grant is enrolled pending and waits for an approval;
+  `device.enrolled` records it with `auto_approve_withheld: root_grant`. Membership synchronized from the upstream directory is not affected. Creating or
+  changing an effectively Full profile is now reserved to organization administrators as well.
+
+- Managed files on sensitive paths (cron, systemd, login scripts, SSH, network hooks, logrotate, files directly in
+  `/etc/`, `/etc/<name>.d/` directories and executables) can only be created or changed by an organization
+  administrator with a step-up, in the portal, the admin API and `PUT /api/v1/config`; operators keep ordinary
+  application configuration. Definitions on denied paths are refused, and existing ones are no longer shipped to
+  devices or listed in a device's effective configuration; they stay in the database for review. Managed files carry
+  `tier`, shown as a chip in the portal.
+
+- Creating, changing the commands or class of, assigning or re-scoping a permission profile that grants
+  root-equivalent sudo rights (class `full`, or restricted with a root-equivalent command) now requires a step-up, in
+  the portal, the admin API and `PUT /api/v1/config`; API tokens cannot make such changes and receive 403
+  `step_up_required` with an explanatory detail. Permission profiles carry `effective_class`, and the portal shows
+  it ("Full (effective)") and asks for the typed name before the step-up.
+
+- Managed-file paths fall into three tiers (ADR 0034): denied paths (sudo, PAM, NSS and the other protected areas, the
+  loader, boot, initramfs, kernel module, sysctl, AppArmor, udev and polkit configuration, and the units of Paddock,
+  fleetd, Himmelblau, SSH, GDM, sudo and systemd, and systemd's type-wide drop-in directories such as
+  `/etc/systemd/system/service.d/`, and the runtime unit directories `/etc/systemd/system.control/` and
+  `/etc/systemd/system.attached/`) are refused by server and agent; sensitive paths (cron, systemd,
+  login scripts, SSH, network hooks, logrotate, any file directly in `/etc/`, any `/etc/<name>.d/` directory and every
+  file with an execute bit) and ordinary application configuration below `/etc/`, `/usr/local/etc/` and `/opt/`
+  remain manageable. The agent no longer deletes a managed file on a now-denied path when its definition leaves the
+  bundle: it keeps the file unchanged, stops tracking it and reports `left_denied_file`.
+
+- API tokens stop working once their creator's account is disabled or no longer has a role that may create the
+  token's role; such a use is refused with 401 and recorded as `api_token.use_denied` with reason `creator_inactive`.
+  A token that must outlive its creator needs a creator who keeps the role.
+- The worker follows administrator accounts to the identity provider every identity sync interval
+  (`PADDOCK_IDENTITY_SYNC_INTERVAL`, default 5 minutes): an administrator moved to another role group takes the new
+  role, one removed from every role group or deactivated is disabled, and every portal session of the account ends
+  (`admin.sessions_revoked` with reason `role_changed`, `removed` or `deactivated`). A platform administrator removed
+  from `paddock.platform.admins` or deactivated loses every portal session the same way. When the role groups cannot
+  be read, or list no members at all while accounts exist, nothing changes and the round reports the failure.
+- A step-up now also checks the administrator's role groups in the identity provider. When they no longer grant the
+  session's role in its organization, the step-up is refused, the account takes the current role (or is disabled when
+  it has none), every portal session of the account ends and `admin.sessions_revoked` is recorded. A disabled account
+  can no longer decrypt escrowed secrets; the next successful login enables it again.
+- Portal sessions are now also kept on the server, in Valkey. Signing out ends the session on the server, so a copied
+  session cookie no longer works afterwards. While Valkey is unreachable the portal answers 503
+  `session_store_unavailable`; devices and API tokens are not affected. Administrators sign in again after the
+  upgrade.
+- The step-up accepts WebAuthn authenticators only; TOTP codes no longer complete a step-up (the portal login still
+  accepts them). Before upgrading, every administrator enrols a WebAuthn authenticator in Authentik's user settings
+  (`https://auth.<domain>/if/user/`, MFA devices); an administrator with TOTP only cannot reveal keys, lock or destroy
+  devices, create API tokens or grant root-equivalent rights until then. New administrators enrol a WebAuthn
+  authenticator as well: the login still offers TOTP enrolment, which is not enough for a step-up. The development
+  stack keeps a TOTP step-up through its development blueprint. The upgrade steps are in `docs/operations/install.md`,
+  section 12.
+- The upload URL of an escrowed LUKS header now binds the announced size: the object store refuses a body of another
+  size, and the worker checks the stored object's size before reading it. An object of another size fails the escrow
+  without being read and is recorded as `device.header_object_rejected`; it stays in the bucket for the operator
+  (`docs/operations/disk-recovery.md`). A header the worker cannot check no longer holds up the others.
+- Caddy bounds the request bodies it forwards on every site: admin 2 MiB (agent release uploads 130 MiB), auth
+  16 MiB, device 2 MiB, bundles 1 MiB (escrow uploads 33 MiB), Fleet's device paths 64 MiB. A larger body is refused
+  with 413.
+- Containers run with tighter defaults: the Paddock roles drop every Linux capability and may not gain privileges,
+  Caddy keeps only the capability to bind 80 and 443, and every service of every Compose file set has a process limit
+  (`pids_limit`). `./paddock check` adds the item `container hardening`, which fails when an edit removes one of these
+  settings. Keep Docker's default seccomp and AppArmor profiles enabled on the hosts.
+- The admin API accepts request bodies of at most 256 KiB; a larger body is refused with 400 `invalid_request`. The
+  declarative configuration (`PUT /api/v1/config`, 1 MiB) and the agent release uploads (128 MiB) keep their own
+  limits. The api, gateway and escrow-reader roles now close a connection that takes longer than 60 seconds to send
+  its request or 120 seconds to receive its answer; agent release uploads may take up to 10 minutes.
 - `PADDOCK_ACME_EMAIL` no longer stops `compose.prod.yaml` from rendering when it is unset, because the lab profile
   has no ACME. A production control plane still refuses to run without it: `./paddock check` fails the Caddy item
   and Caddy refuses to start.

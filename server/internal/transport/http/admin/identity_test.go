@@ -331,17 +331,41 @@ func TestGroupsProfilesAndEffectiveProfile(t *testing.T) {
 		}
 		e.expectEvent(bad, "permission_profile.created:failure:invalid_command")
 	}
-	root := e.profile(alice, map[string]any{"name": "editor", "class": "restricted", "commands": []string{"/usr/bin/vim /etc/hosts"}})
-	if !root.RootEquivalent || len(root.RootEquivalentCommands) != 1 {
+	// A restricted profile with a root-equivalent command is Full in effect and needs a step-up (ADR 0034).
+	editor := map[string]any{"name": "editor", "class": "restricted", "commands": []string{"/usr/bin/vim /etc/hosts"}}
+	noStepUp := e.do(call{method: "POST", path: "/api/v1/permission-profiles", cookie: alice, body: editor})
+	if noStepUp.status != http.StatusForbidden || noStepUp.problemCode(t) != "step_up_required" {
+		t.Fatalf("root-equivalent profile without step-up: %d %s", noStepUp.status, noStepUp.body)
+	}
+	e.expectEvent(noStepUp, "permission_profile.created:denied:step_up_required")
+	root := e.profile(e.steppedUp(alice, time.Now()), editor)
+	if !root.RootEquivalent || len(root.RootEquivalentCommands) != 1 || root.EffectiveClass != "full" {
 		t.Fatalf("vim profile %+v", root)
 	}
 
 	e.assign(alice, map[string]any{"profile_id": copyHelper.Id, "subject_type": "user", "subject_id": dave.User.Id})
-	assignment := e.assign(alice, map[string]any{"profile_id": runHelper.Id, "subject_type": "group", "subject_id": grp.Id})
+	// The second half completes a writer/exec pair among the assigned profiles of the organization: a step-up at
+	// assignment time, whoever is in the group (plan M8s decision 7g-quater).
+	runAssignment := map[string]any{"profile_id": runHelper.Id, "subject_type": "group", "subject_id": grp.Id}
+	pair := e.do(call{method: "POST", path: "/api/v1/profile-assignments", cookie: alice, body: runAssignment})
+	if pair.status != http.StatusForbidden || pair.problemCode(t) != "step_up_required" {
+		t.Fatalf("assignment completing a pair without step-up: %d %s", pair.status, pair.body)
+	}
+	assignment := e.assign(e.steppedUp(alice, time.Now()), runAssignment)
 
-	// Membership is a privilege change: the event carries the highest class before and after.
-	add := e.do(call{method: "POST", path: "/api/v1/user-groups/" + grp.Id.String() + "/members", cookie: alice,
-		body: map[string]any{"user_id": dave.User.Id}})
+	// Membership is a privilege change: the event carries the highest class before and after. This one completes a
+	// root-equivalent combination, so it needs a step-up (plan M8s decision 7g) and is not mirrored without one.
+	member := map[string]any{"user_id": dave.User.Id}
+	refused := e.do(call{method: "POST", path: "/api/v1/user-groups/" + grp.Id.String() + "/members", cookie: alice, body: member})
+	if refused.status != http.StatusForbidden || refused.problemCode(t) != "step_up_required" {
+		t.Fatalf("root-granting membership without step-up: %d %s", refused.status, refused.body)
+	}
+	e.expectEvent(refused, "user_group.member_added:denied:step_up_required")
+	if members := e.idp.members[grpPK(e, grp.AuthentikName)]; len(members) != 0 {
+		t.Fatalf("refused membership mirrored to Authentik: %v", members)
+	}
+	add := e.do(call{method: "POST", path: "/api/v1/user-groups/" + grp.Id.String() + "/members", cookie: e.steppedUp(alice, time.Now()),
+		body: member})
 	if add.status != http.StatusNoContent {
 		t.Fatalf("add member: %d %s", add.status, add.body)
 	}

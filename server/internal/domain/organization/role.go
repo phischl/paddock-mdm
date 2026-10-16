@@ -1,9 +1,8 @@
-package admin
+package organization
 
 import (
 	"slices"
 
-	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
@@ -28,7 +27,7 @@ func ResolveRole(groups []string) RoleResolution {
 	matches := 0
 	var role principal.Role
 	seen := map[string]bool{}
-	platformAdmins := organization.PlatformAdminsGroup()
+	platformAdmins := PlatformAdminsGroup()
 	for _, g := range groups {
 		// Identity providers may repeat a group (Authentik merges the groups claim of several scopes).
 		if seen[g] {
@@ -39,15 +38,15 @@ func ResolveRole(groups []string) RoleResolution {
 			platform = true
 			continue
 		}
-		slug, groupRole, ok := organization.ParseRoleGroup(g)
+		slug, groupRole, ok := ParseRoleGroup(g)
 		if !ok {
 			continue
 		}
 		matches++
 		switch groupRole {
-		case organization.GroupAdmins:
+		case GroupAdmins:
 			role = principal.RoleOrgAdmin
-		case organization.GroupOperators:
+		case GroupOperators:
 			role = principal.RoleOrgOperator
 		default:
 			role = principal.RoleOrgAuditor

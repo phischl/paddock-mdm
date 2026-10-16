@@ -124,6 +124,9 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
   step-up accepts (`max_age`). Both are Go durations for `paddock-api`; with `PADDOCK_ENV=production` either variable
   stops the start with a configuration error. `GET /api/v1/me` then also returns `step_up` (the session's last
   step-up and both values), which the acceptance gates use instead of the client clock.
+- A TOTP step-up: the shipped step-up flow accepts WebAuthn only; the development blueprint skips that stage and adds
+  `paddock-dev-stepup-mfa` (WebAuthn or TOTP), so the test users complete step-ups with their seeded TOTP keys
+  (`docs/operations/step-up.md`, "Development stack").
 
 ## Useful commands
 

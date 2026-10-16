@@ -48,6 +48,13 @@ type Document struct {
 type Settings struct {
 	Login   *LoginSettings  `json:"login,omitempty"`
 	Updates *UpdateSettings `json:"updates,omitempty"`
+	// ManagedFiles are the operator roots of the managed files (plan M8s decision 7c).
+	ManagedFiles *ManagedFileSettings `json:"managed_files,omitempty"`
+}
+
+// ManagedFileSettings are the fields of PUT /api/v1/settings/managed-files.
+type ManagedFileSettings struct {
+	OperatorRoots []string `json:"operator_roots"`
 }
 
 // LoginSettings are the fields of PUT /api/v1/settings/login.

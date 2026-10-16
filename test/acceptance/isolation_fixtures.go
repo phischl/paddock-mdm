@@ -131,7 +131,7 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	res := call(t, w.carol, http.MethodPut, "/api/v1/devices/"+dev.DeviceID+"/groups", map[string]any{"device_group_ids": []string{w.globexDeviceGroup}})
 	expectStatus(t, res, http.StatusOK, "")
 	res = call(t, w.carol, http.MethodPost, "/api/v1/managed-files", map[string]any{
-		"path": "/etc/globex-iso-" + uniqueSuffix() + ".conf", "content": "globex", "device_group_id": w.globexDeviceGroup,
+		"path": "/etc/paddock-gates/globex-iso-" + uniqueSuffix() + ".conf", "content": "globex", "device_group_id": w.globexDeviceGroup,
 	})
 	expectStatus(t, res, http.StatusCreated, "")
 	w.globexFile = createdID(t, w.carol, "/api/v1/managed-files", res)
@@ -239,6 +239,9 @@ var isolationFixtures = map[string]isolationFixture{
 	"GET /api/v1/overview": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/overview", nil
 	}},
+	"GET /api/v1/security-review": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/security-review", nil
+	}},
 	"GET /api/v1/attention/devices": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/attention/devices?page_size=100", nil
 	}},
@@ -295,12 +298,19 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/managed-files?page_size=100", nil
 	}},
 	"POST /api/v1/managed-files": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
-		return "/api/v1/managed-files", map[string]any{"path": "/etc/acme-iso-" + uniqueSuffix() + ".conf", "content": "acme",
+		return "/api/v1/managed-files", map[string]any{"path": "/etc/paddock-gates/acme-iso-" + uniqueSuffix() + ".conf", "content": "acme",
 			"device_group_id": namedGroup(t, w.alice, "acme isolation scope")}
 	}},
 	"GET /api/v1/managed-files/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, nil),
 	"PATCH /api/v1/managed-files/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, map[string]any{"content": "taken over by acme"}),
 	"DELETE /api/v1/managed-files/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/managed-files/" + w.globexFile }, nil),
+	// alice has a step-up (TestOrganizationIsolation), so the confirmations reach the lookup.
+	"POST /api/v1/managed-files/{id}/confirm-sensitive": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/managed-files/" + w.globexFile + "/confirm-sensitive"
+	}, nil),
+	"POST /api/v1/permission-profiles/{id}/confirm-root-grant": itemFixture(func(w *isolationWorld) string {
+		return "/api/v1/permission-profiles/" + w.globexProfile + "/confirm-root-grant"
+	}, nil),
 
 	"GET /api/v1/managed-units": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/managed-units?page_size=100", nil
@@ -351,6 +361,23 @@ var isolationFixtures = map[string]isolationFixture{
 		return "/api/v1/settings/login", currentLoginSettings(t, w.alice)
 	}},
 
+	"GET /api/v1/settings/managed-files": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/settings/managed-files", nil
+	}},
+	// The roots every gate relies on: the PUT writes acme's current list back (alice has a step-up in this gate).
+	// After acmeOperatorRoots, which this gate calls first, no gate changes acme's list, so it cannot lose a root.
+	"PUT /api/v1/settings/managed-files": {kind: isoOwn, request: func(t *testing.T, w *isolationWorld) (string, any) {
+		operatorRootsMu.Lock()
+		defer operatorRootsMu.Unlock()
+		res := call(t, w.alice, http.MethodGet, "/api/v1/settings/managed-files", nil)
+		var s struct {
+			OperatorRoots []string `json:"operator_roots"`
+		}
+		if err := res.JSON(&s); err != nil {
+			t.Fatal(err)
+		}
+		return "/api/v1/settings/managed-files", map[string]any{"operator_roots": s.OperatorRoots}
+	}},
 	"GET /api/v1/settings/dms": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/settings/dms", nil
 	}},

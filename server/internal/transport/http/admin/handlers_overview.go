@@ -41,6 +41,10 @@ func (h *handlers) GetOverview(ctx context.Context, _ adminapi.GetOverviewReques
 			OsReleases: make([]adminapi.OverviewOSRelease, len(o.Updates.OSReleases)),
 		},
 		Attention: adminapi.OverviewAttention{Conditions: int(o.Attention.Conditions), Devices: int(o.Attention.Devices)},
+		SecurityReview: adminapi.OverviewSecurityReview{
+			RootGrants: o.SecurityReview.RootGrants, SensitiveFiles: o.SecurityReview.SensitiveFiles,
+			DeniedFiles: o.SecurityReview.DeniedFiles,
+		},
 	}
 	for i, c := range o.Vulnerabilities.Top {
 		out.Vulnerabilities.Top[i] = adminapi.OverviewTopCVE{Cve: c.CVE, Severity: adminapi.Severity(c.Severity), Devices: c.Devices, Packages: c.Packages}

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/policy"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
@@ -192,9 +193,21 @@ func (d *Devices) transition(ctx context.Context, spec ActionSpec, action device
 	var out pgstore.Device
 	spec.Target = &audit.Target{Type: "device", ID: id.String()}
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		// A device that becomes active receives the grants of its device groups (plan M8s decision 7g-bis).
+		activates := action == device.ActionApprove || action == device.ActionReleaseQuarantine
+		var guard subjectGuard
+		if activates {
+			var err error
+			if guard, err = beginSubjectGuard(ctx, q); err != nil {
+				return err
+			}
+		}
 		var err error
 		out, err = TransitionDevice(ctx, q, rec, action, id)
-		return err
+		if err != nil || !activates {
+			return err
+		}
+		return guard.check(ctx, q, rec, id)
 	})
 	return out, err
 }
@@ -233,6 +246,10 @@ func (d *Devices) SetGroups(ctx context.Context, id uuid.UUID, groupIDs []uuid.U
 	spec := SpecDeviceSetGroups
 	spec.Target = &audit.Target{Type: "device", ID: id.String()}
 	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		guard, err := beginSubjectGuard(ctx, q)
+		if err != nil {
+			return err
+		}
 		dev, err := q.LockDevice(ctx, id)
 		if err != nil {
 			return notFound(err)
@@ -249,6 +266,10 @@ func (d *Devices) SetGroups(ctx context.Context, id uuid.UUID, groupIDs []uuid.U
 		}
 		rec.SetParam("added", added)
 		rec.SetParam("removed", removed)
+		// A device that joins the device group of a root grant extends it (plan M8s decision 7g).
+		if err := guard.check(ctx, q, rec); err != nil {
+			return err
+		}
 		rec.StateChanged(statechange.ScopeDevice, id)
 		out, err = loadDeviceDetail(ctx, q, id)
 		return err
@@ -329,10 +350,12 @@ func (d *Devices) EffectiveConfig(ctx context.Context, id uuid.UUID) (EffectiveC
 	return out, err
 }
 
-// ManagedDefinitions are all managed files and units of an organization.
+// ManagedDefinitions are all managed files and units of an organization. Files on denied paths are never shipped or
+// shown as effective configuration; they are kept in Denied for the security review (ADR 0034 decision 2).
 type ManagedDefinitions struct {
-	Files []managedconfig.File
-	Units []managedconfig.Unit
+	Files  []managedconfig.File
+	Units  []managedconfig.Unit
+	Denied []pgstore.ManagedFile
 
 	fileRows map[uuid.UUID]pgstore.ManagedFile
 	unitRows map[uuid.UUID]pgstore.ManagedUnit
@@ -351,6 +374,10 @@ func LoadManagedDefinitions(ctx context.Context, q *pgstore.Queries) (ManagedDef
 		return out, fmt.Errorf("load managed files: %w", err)
 	}
 	for _, f := range files {
+		if policy.ValidatePath(f.Path) != nil {
+			out.Denied = append(out.Denied, f)
+			continue
+		}
 		out.fileRows[f.ID] = f
 		out.Files = append(out.Files, managedconfig.File{
 			ID: f.ID, GroupID: groupPtr(f.DeviceGroupID), Path: f.Path, Mode: f.Mode, Owner: f.Owner, Group: f.Grp, Content: f.Content,

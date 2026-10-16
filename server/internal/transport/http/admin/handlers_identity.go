@@ -365,7 +365,9 @@ func toPermissionProfile(p pgstore.PermissionProfile) adminapi.PermissionProfile
 	return adminapi.PermissionProfile{
 		Id: p.ID, Name: p.Name, Class: adminapi.PrivilegeClass(p.Class), Commands: p.Commands, RequirePassword: p.RequirePassword,
 		TimestampTimeoutMin: int(p.TimestampTimeoutMin), Lecture: adminapi.Lecture(p.Lecture), RootEquivalent: len(root) > 0,
-		RootEquivalentCommands: root, InvalidCommands: invalid, CreatedAt: p.CreatedAt.UTC(), UpdatedAt: p.UpdatedAt.UTC(),
+		EffectiveClass:         adminapi.PrivilegeClass(privilege.EffectiveClass(privilege.Profile{Class: privilege.Class(p.Class), Commands: p.Commands})),
+		RootEquivalentCommands: root, InvalidCommands: invalid, RootGrantConfirmedAt: utcPtr(p.RootGrantConfirmedAt),
+		CreatedAt: p.CreatedAt.UTC(), UpdatedAt: p.UpdatedAt.UTC(),
 	}
 }
 

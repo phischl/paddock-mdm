@@ -57,6 +57,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/permission-profiles', label: 'nav.permissionProfiles', icon: 'shield-check', visible: orgReader },
       { to: '/managed-files', label: 'nav.managedFiles', icon: 'file-text', visible: orgReader },
       { to: '/managed-units', label: 'nav.managedUnits', icon: 'cog', visible: orgReader },
+      { to: '/settings/managed-files', label: 'nav.operatorRoots', icon: 'folder', visible: orgReader },
       { to: '/package-holds', label: 'nav.packageHolds', icon: 'package', visible: orgReader },
       { to: '/change-sets', label: 'nav.changeSets', icon: 'diff', visible: orgReader },
     ],
@@ -65,6 +66,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
     key: 'security',
     label: 'nav.groups.security',
     items: [
+      { to: '/security-review', label: 'nav.securityReview', icon: 'triangle-alert', visible: orgReader },
       { to: '/revocations', label: 'nav.revocations', icon: 'lock', visible: (a) => a.canDelete },
       { to: '/settings/dms', label: 'nav.dms', icon: 'timer', visible: orgReader },
       { to: '/settings/login', label: 'nav.loginSettings', icon: 'log-in', visible: orgReader },
@@ -96,6 +98,7 @@ export const navigationGroups: readonly NavigationGroup[] = [
       { to: '/platform/organizations', label: 'nav.organizations', icon: 'building-complex', visible: (a) => a.isPlatform },
       { to: '/platform/agent-releases', label: 'nav.agentReleases', icon: 'rocket', visible: (a) => a.isPlatform },
       { to: '/platform/ip-allowlist', label: 'nav.ipAllowlist', icon: 'globe-lock', visible: (a) => a.isPlatform },
+      { to: '/platform/sessions', label: 'nav.sessions', icon: 'log-in', visible: (a) => a.isPlatform },
     ],
   },
 ]

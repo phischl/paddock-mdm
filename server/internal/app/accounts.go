@@ -3,27 +3,35 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
+
+// SessionRevoker ends every portal session of an account (sessions.Store).
+type SessionRevoker interface {
+	RevokeAccount(ctx context.Context, accountID uuid.UUID) (int, error)
+}
 
 // Accounts are the login and "me" use cases.
 type Accounts struct {
 	runner   *ActionRunner
 	org      *db.OrgPool
 	platform *db.PlatformPool
+	sessions SessionRevoker
 }
 
 // NewAccounts creates the use cases.
-func NewAccounts(runner *ActionRunner, org *db.OrgPool, platform *db.PlatformPool) *Accounts {
-	return &Accounts{runner: runner, org: org, platform: platform}
+func NewAccounts(runner *ActionRunner, org *db.OrgPool, platform *db.PlatformPool, sessions SessionRevoker) *Accounts {
+	return &Accounts{runner: runner, org: org, platform: platform, sessions: sessions}
 }
 
 // LoginIdentity is what the verified ID token says about the user.
@@ -32,6 +40,13 @@ type LoginIdentity struct {
 	Username string // preferred_username
 	Name     string
 	IP       string
+	// OpenSession creates the server-side session of the login (sessions.Store). It runs inside the login's
+	// transaction, after the account row (admin_account or platform_admin) is written and locked: a revocation of the
+	// account locks the same row first (revokeAccount updates it; revokePlatformAdmin selects it FOR UPDATE, then
+	// counts and ends the sessions), so it either waits for the login and also counts and ends the new session, or ran
+	// before it and the login re-grants the role the groups claim carries now. An error fails the login and records it
+	// as failed.
+	OpenSession func(ctx context.Context, p principal.Principal) error
 }
 
 // LoginRole is the role resolved from the groups claim.
@@ -110,7 +125,7 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 			return errors.New("app: account ID changed during login")
 		}
 		locale = acc.Locale
-		return nil
+		return id.openSession(ctx, p)
 	})
 	if err != nil {
 		return LoginResult{}, err
@@ -149,12 +164,22 @@ func (a *Accounts) loginPlatform(ctx context.Context, id LoginIdentity) (LoginRe
 			return err
 		}
 		locale = acc.Locale
-		return nil
+		return id.openSession(ctx, p)
 	})
 	if err != nil {
 		return LoginResult{}, err
 	}
 	return LoginResult{Principal: p, Locale: locale}, nil
+}
+
+func (id LoginIdentity) openSession(ctx context.Context, p principal.Principal) error {
+	if id.OpenSession == nil {
+		return nil
+	}
+	if err := id.OpenSession(ctx, p); err != nil {
+		return fmt.Errorf("open session: %w", err)
+	}
+	return nil
 }
 
 // recordDenied audits a rejected login: in the organization when exactly one named organization resolves,
@@ -364,4 +389,77 @@ func unauthenticatedIfGone(err error) error {
 		return problem.Unauthenticated
 	}
 	return err
+}
+
+// OrganizationID resolves the slug of a role group to its active organization (uuid.Nil: unknown or inactive).
+func (a *Accounts) OrganizationID(ctx context.Context, slug string) (uuid.UUID, error) {
+	return a.org.ResolveSlug(ctx, slug)
+}
+
+// Reasons of admin.sessions_revoked (plan M8s decision 17).
+const (
+	RevokeReasonStepUpRoleMismatch = "step_up_role_mismatch"
+	RevokeReasonRoleChanged        = "role_changed"
+	RevokeReasonDeactivated        = "deactivated"
+	RevokeReasonRemoved            = "removed"
+)
+
+// stepUpCheckActor is the actor of a revocation at the step-up: the api's own check, not the administrator.
+var stepUpCheckActor = audit.Actor{Type: audit.ActorSystem, Display: "step-up role check"}
+
+// StepUpMismatch records admin.sessions_revoked (reason step_up_role_mismatch, actor system, target the account),
+// writes the resolved role to admin_account.role when res names the same organization, sets disabled_at = now()
+// when res grants no role in it, and revokes every session of the account (ADR 0034 decision 5).
+func (a *Accounts) StepUpMismatch(ctx context.Context, accountID, orgID uuid.UUID, res organization.RoleResolution) error {
+	var newRole principal.Role
+	if !res.Denied && !res.Platform && res.Role != "" {
+		resolved, err := a.org.ResolveSlug(ctx, res.Slug)
+		if err != nil {
+			return err
+		}
+		if resolved == orgID {
+			newRole = res.Role
+		}
+	}
+	ctx = principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: stepUpCheckActor.Display, OrganizationID: orgID})
+	spec := ActionSpec{
+		Code:   audit.CodeAdminSessionsRevoked,
+		Actor:  &stepUpCheckActor,
+		Target: &audit.Target{Type: "admin_account", ID: accountID.String()},
+	}
+	return a.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		return revokeAccount(ctx, q, rec, a.sessions, accountID, RevokeReasonStepUpRoleMismatch, newRole)
+	})
+}
+
+// revokeAccount gives the account newRole, or disables it when newRole is empty, revokes every session of it and sets
+// the params of admin.sessions_revoked.
+func revokeAccount(ctx context.Context, q *pgstore.Queries, rec Recorder, store SessionRevoker, accountID uuid.UUID,
+	reason string, newRole principal.Role) error {
+	acc, err := q.GetAdminAccount(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("account: %w", err)
+	}
+	rec.SetTarget(audit.Target{Type: "admin_account", ID: accountID.String(), Display: acc.Username})
+	if newRole == "" {
+		err = q.DisableAdminAccount(ctx, accountID)
+	} else {
+		err = q.SetAdminAccountRole(ctx, pgstore.SetAdminAccountRoleParams{ID: accountID, Role: string(newRole)})
+	}
+	if err != nil {
+		return fmt.Errorf("update account: %w", err)
+	}
+	n, err := store.RevokeAccount(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("revoke sessions: %w", err)
+	}
+	oldRole := acc.Role
+	if string(newRole) == oldRole {
+		oldRole, newRole = "", ""
+	}
+	rec.SetParam("reason", reason)
+	rec.SetParam("sessions", n)
+	rec.SetParam("old_role", oldRole)
+	rec.SetParam("new_role", string(newRole))
+	return nil
 }

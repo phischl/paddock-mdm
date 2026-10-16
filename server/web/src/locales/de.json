@@ -51,6 +51,7 @@
     "managedUnits": "Verwaltete Units",
     "agentReleases": "Agent-Releases",
     "ipAllowlist": "IP-Freigabeliste",
+    "sessions": "Sitzungen",
     "users": "Benutzer",
     "userGroups": "Gruppen",
     "permissionProfiles": "Berechtigungsprofile",
@@ -77,7 +78,9 @@
     },
     "overview": "Übersicht",
     "attentionPill": "{count, plural, one {# braucht Aufmerksamkeit} other {# brauchen Aufmerksamkeit}}",
-    "shortcut": "Tastenkürzel: {keys}"
+    "shortcut": "Tastenkürzel: {keys}",
+    "securityReview": "Sicherheitsprüfung",
+    "operatorRoots": "Operator-Wurzeln"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -158,7 +161,7 @@
     "invalid_state": "Diese Aktion ist im aktuellen Zustand nicht möglich.",
     "already_exists": "Das wird für dieselben Geräte bereits verwaltet.",
     "in_use": "Dieser Eintrag wird noch verwendet. Entfernen Sie zuerst, was ihn verwendet.",
-    "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der geschützten Bereiche.",
+    "path_not_allowed": "Dieser Pfad ist nicht erlaubt. Verwenden Sie einen Pfad unterhalb von /etc/, /usr/local/etc/ oder /opt/ außerhalb der gesperrten Pfade.",
     "unit_not_allowed": "Diese Unit ist nicht erlaubt. Units von Paddock, Himmelblau, Fleet, SSH, GDM und systemd selbst sind geschützt.",
     "username_taken": "Dieser Benutzername ist bereits vergeben.",
     "domain_taken": "Eine dieser Domains gehört zu einer anderen Organisation.",
@@ -176,7 +179,8 @@
     "ip_not_allowed": "Ihre Adresse steht nicht auf der IP-Freigabeliste.",
     "ip_allowlist_unavailable": "Das Portal startet und kann die IP-Freigabeliste noch nicht prüfen. Versuchen Sie es gleich noch einmal.",
     "lockout_confirmation_required": "Diese Änderung würde Ihre eigene Adresse aus der Freigabeliste entfernen.",
-    "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten."
+    "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten.",
+    "session_store_unavailable": "Das Portal erreicht seinen Sitzungsspeicher nicht. Versuchen Sie es gleich noch einmal."
   },
   "audit": {
     "title": "Audit-Protokoll",
@@ -203,12 +207,14 @@
       "unknown": "Unbekannt"
     },
     "admin": {
-      "login": "{actor} hat sich angemeldet"
+      "login": "{actor} hat sich angemeldet",
+      "sessions_revoked": "{reason, select, step_up_role_mismatch {Die Sitzungen von {target} wurden beendet: die Rolle bei der Identitätsbestätigung stimmte nicht überein} role_changed {Die Sitzungen von {target} wurden beendet: die Rolle hat sich von {old_role} zu {new_role} geändert} deactivated {Die Sitzungen von {target} wurden beendet: das Konto wurde deaktiviert} other {Die Sitzungen von {target} wurden beendet: das Konto hat keine Rolle mehr}}"
     },
     "organization": {
       "created": "{actor} hat die Organisation {slug} angelegt",
       "domains_changed": "{actor} hat die Domains von {slug} festgelegt",
-      "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)"
+      "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)",
+      "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden"
     },
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
@@ -225,7 +231,7 @@
     "api_token": {
       "created": "{actor} hat das API-Token {name} ({role}) angelegt",
       "revoked": "{actor} hat das API-Token {name} widerrufen",
-      "use_denied": "Eine Anfrage mit dem {reason, select, revoked {widerrufenen} expired {abgelaufenen} other {ungültigen}} API-Token {name} wurde abgelehnt"
+      "use_denied": "Eine Anfrage mit dem API-Token {name} wurde abgelehnt: {reason, select, revoked {das Token ist widerrufen} expired {das Token ist abgelaufen} creator_inactive {sein Ersteller ist deaktiviert oder hat die nötige Rolle verloren} other {{reason}}}"
     },
     "device": {
       "enrolled": "Das Gerät {hostname} hat sich registriert",
@@ -272,7 +278,8 @@
       "updates_run": "Das Gerät {target} hat seine {kind, select, security {Sicherheitsupdates} regular {regulären Updates} other {Updates ({kind})}} abgeschlossen: {result, select, ok {{upgraded, number} Pakete aktualisiert} timeout {Zeitüberschreitung} other {fehlgeschlagen}}",
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
-      "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert"
+      "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",
+      "header_object_rejected": "Der hinterlegte LUKS-Header von {hostname} wurde abgewiesen: seine Größe weicht von der angekündigten ab"
     },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
@@ -302,7 +309,8 @@
       "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)",
       "ip_allowlist_changed": "{action, select, added {{actor} hat {cidr} ({label}) zur IP-Freigabeliste hinzugefügt} updated {{actor} hat den Eintrag {previous_cidr} der IP-Freigabeliste zu {cidr} ({label}) geändert} other {{actor} hat {cidr} ({label}) aus der IP-Freigabeliste entfernt}}",
       "ip_allowlist_denied": "{aggregated, select, true {{count, number} Anfragen von {ip} wurden durch die IP-Freigabeliste abgewiesen} other {Eine Anfrage von {ip} wurde durch die IP-Freigabeliste abgewiesen}}",
-      "ip_allowlist_disabled": "{method, select, env {Die IP-Freigabeliste wird auf der API umgangen (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} hat die IP-Freigabeliste abgeschaltet: {entries_removed, number} Einträge entfernt}}"
+      "ip_allowlist_disabled": "{method, select, env {Die IP-Freigabeliste wird auf der API umgangen (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} hat die IP-Freigabeliste abgeschaltet: {entries_removed, number} Einträge entfernt}}",
+      "sessions_ended": "{actor} hat alle Portal-Sitzungen beendet"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -314,7 +322,8 @@
     "managed_file": {
       "created": "{actor} hat die verwaltete Datei {path} definiert",
       "updated": "{actor} hat die verwaltete Datei {path} geändert",
-      "deleted": "{actor} hat die verwaltete Datei {path} gelöscht"
+      "deleted": "{actor} hat die verwaltete Datei {path} gelöscht",
+      "sensitive_confirmed": "{actor} hat die verwaltete Datei {path} auf einem sensiblen Pfad bestätigt"
     },
     "managed_unit": {
       "created": "{actor} hat die verwaltete Unit {unit} definiert",
@@ -340,7 +349,8 @@
     "settings": {
       "login_changed": "{actor} hat die Anmeldeeinstellungen geändert",
       "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
-      "updates_changed": "{actor} hat die Update-Einstellungen geändert"
+      "updates_changed": "{actor} hat die Update-Einstellungen geändert",
+      "managed_files_changed": "{actor} hat die Operator-Wurzeln der verwalteten Dateien geändert"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
@@ -350,7 +360,8 @@
     "permission_profile": {
       "created": "{actor} hat das Berechtigungsprofil {name} angelegt",
       "updated": "{actor} hat das Berechtigungsprofil {name} geändert",
-      "deleted": "{actor} hat das Berechtigungsprofil {name} gelöscht"
+      "deleted": "{actor} hat das Berechtigungsprofil {name} gelöscht",
+      "root_grant_confirmed": "{actor} hat die Root-Berechtigung des Berechtigungsprofils {name} bestätigt"
     },
     "profile_assignment": {
       "created": "{actor} hat das Berechtigungsprofil {profile} zugewiesen",
@@ -895,6 +906,13 @@
     "cidrMapped": "IPv4-gemappte IPv6-Bereiche sind nicht erlaubt; verwenden Sie die IPv4-Form.",
     "labelInvalid": "Die Bezeichnung braucht 1 bis 64 Zeichen ohne Steuerzeichen."
   },
+  "sessions": {
+    "title": "Portal-Sitzungen",
+    "summary": "Beendet jede Portal-Sitzung der Installation, auch Ihre eigene. Alle Administratoren melden sich neu an; API-Tokens funktionieren weiter.",
+    "endAll": "Alle Sitzungen beenden",
+    "confirmTitle": "Alle Sitzungen beenden?",
+    "confirmMessage": "Alle Administratoren, auch Sie, werden bei der nächsten Anfrage abgemeldet. Geben Sie END zur Bestätigung ein."
+  },
   "changeSets": {
     "title": "Änderungssätze",
     "summary": "Jede mit paddockctl oder PUT /api/v1/config angewendete Konfiguration, die etwas geändert hat, mit ihrem Plan.",
@@ -942,7 +960,7 @@
       "deleteTitle": "Verwaltete Datei löschen",
       "deleteConfirm": "{name} nicht mehr verwalten? Die Geräte behalten die Datei unverändert.",
       "path": "Pfad",
-      "pathHint": "Unterhalb von /etc/, /usr/local/etc/ oder /opt/; geschützte Systempfade sind nicht erlaubt.",
+      "pathHint": "Unterhalb von /etc/, /usr/local/etc/ oder /opt/. Sensible Pfade (cron, systemd, Anmeldeskripte, SSH, Dateien direkt in /etc/, ausführbare Dateien) erfordern einen Organisationsadministrator und eine Identitätsbestätigung; geschützte Systempfade sind nicht erlaubt.",
       "mode": "Modus",
       "owner": "Besitzer",
       "group": "Gruppe",
@@ -968,6 +986,25 @@
         "title": "Noch keine verwalteten Units",
         "description": "Verwaltete Units halten systemd-Dienste in ihrem Geltungsbereich aktiviert oder deaktiviert."
       }
+    }
+  },
+  "managedFiles": {
+    "tier": {
+      "ordinary": "Gewöhnlich",
+      "sensitive": "Sensibel",
+      "denied": "Gesperrt (nicht verteilt)"
+    },
+    "tierColumn": "Pfadstufe",
+    "sensitiveForbidden": "Dateien auf sensiblen Pfaden erfordern einen Organisationsadministrator. Bitten Sie einen, diese Datei anzulegen oder zu ändern.",
+    "roots": {
+      "title": "Operator-Wurzeln der verwalteten Dateien",
+      "intro": "Unterhalb dieser Verzeichnisse verwalten Operatoren Dateien ohne Identitätsbestätigung, außer ausführbaren Dateien, Skripten, Shared Objects und .d-Verzeichnissen. Jeder andere Pfad erfordert einen Organisationsadministrator mit Identitätsbestätigung. Das Ändern der Liste erfordert eine Identitätsbestätigung; bestehende Dateien behalten ihre Definitionen, und die Sicherheitsprüfung listet Dateien, die nun eine Bestätigung brauchen.",
+      "label": "Operator-Wurzeln (eine pro Zeile)",
+      "hint": "Verzeichnisse wie /etc/myapp/ oder /opt/vendor/, mit abschließendem Schrägstrich.",
+      "confirmTitle": "Operator-Wurzeln ändern",
+      "confirm": "{count, plural, one {# Operator-Wurzel} other {# Operator-Wurzeln}} speichern? Anschließend bestätigen Sie Ihre Identität.",
+      "saved": "Die Operator-Wurzeln wurden gespeichert.",
+      "warning": "Operator-Wurzeln sind eine Vertrauensentscheidung: Ein Programm, das als root läuft und Dateien unterhalb einer Wurzel ausführt oder einliest (Konfiguration, die es auswertet, Includes, die es ausführt), macht diese Wurzel root-gleichwertig, und Paddock kann das nicht erkennen. Fügen Sie nur Verzeichnisse reiner Anwendungskonfiguration hinzu."
     }
   },
   "users": {
@@ -1119,6 +1156,15 @@
     "empty": {
       "title": "Noch keine Berechtigungsprofile",
       "description": "Profile vergeben sudo-Rechte an Benutzer oder Gruppen auf ihren Geräten."
+    },
+    "effectiveClass": "Effektive Klasse",
+    "rootGrantConfirm": "{name} gibt über seine Befehle root-Rechte. Alle, denen es zugewiesen ist, werden auf ihren Geräten root. Fortfahren?"
+  },
+  "privileges": {
+    "effectiveClass": {
+      "none": "Keine (effektiv)",
+      "restricted": "Eingeschränkt (effektiv)",
+      "full": "Voll (effektiv)"
     }
   },
   "loginSettings": {
@@ -1531,6 +1577,26 @@
       "code": "Code",
       "empty": "Keine Ereignisse in den letzten Tagen."
     },
-    "keyboardHint": "Tastatur: {mod} K Befehlspalette · j / k bewegen · Enter öffnen · g d Geräte. Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog."
+    "keyboardHint": "Tastatur: {mod} K Befehlspalette · j / k bewegen · Enter öffnen · g d Geräte. Destruktive Aktionen haben nie ein Tastenkürzel; sie öffnen immer den Bestätigungsdialog.",
+    "securityReview": {
+      "banner": "Sicherheitsprüfung: {rootGrants, plural, one {# Root-Berechtigung wartet} other {# Root-Berechtigungen warten}} und {sensitiveFiles, plural, one {# Datei auf einem sensiblen Pfad wartet} other {# Dateien auf sensiblen Pfaden warten}} auf Bestätigung; {deniedFiles, plural, one {# Datei auf einem gesperrten Pfad wird} other {# Dateien auf gesperrten Pfaden werden}} nicht verteilt.",
+      "link": "Prüfen"
+    }
+  },
+  "securityReview": {
+    "title": "Sicherheitsprüfung",
+    "intro": "Diese Einträge bestanden, bevor Root-Berechtigungen und sensible Pfade eine Identitätsbestätigung erforderten. Sie wirken weiter; ein Organisationsadministrator bestätigt jeden mit einer Identitätsbestätigung. Dateien auf gesperrten Pfaden werden nicht mehr verteilt: Agents dieses Releases oder neuer lassen sie auf den Geräten unverändert, ältere Agents löschen unveränderte Dateien, sobald sie nicht mehr verteilt werden. Verteilen Sie den aktuellen Agent vor dem Server-Upgrade.",
+    "rootGrants": "Root-Berechtigungen ohne Bestätigung ({total, number})",
+    "sensitiveFiles": "Dateien auf sensiblen Pfaden ohne Bestätigung ({total, number})",
+    "deniedFiles": "Dateien auf gesperrten Pfaden, nicht verteilt ({total, number})",
+    "none": "Nichts zu prüfen.",
+    "assignments": "Zuweisungen",
+    "confirm": "Bestätigen",
+    "confirmLabel": "{name} bestätigen",
+    "confirmTitle": "Nach Identitätsbestätigung bestätigen",
+    "confirmProfile": "Bestätigen, dass {name} weiterhin root-Rechte geben darf? Anschließend bestätigen Sie Ihre Identität.",
+    "confirmFile": "Bestätigen, dass {name} auf einem sensiblen Pfad verwaltet bleiben darf? Anschließend bestätigen Sie Ihre Identität.",
+    "deniedIntro": "Paddock verwaltet diese Pfade nicht mehr. Agents dieses Releases oder neuer lassen die Dateien auf den Geräten unverändert; ein älterer Agent löscht eine unveränderte Datei, sobald sie nicht mehr verteilt wird. Löschen Sie die Definitionen, die Sie nicht mehr brauchen.",
+    "deleteDefinition": "Definition löschen"
   }
 }

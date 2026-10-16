@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -48,10 +49,31 @@ func (ex *configExec) run(ctx context.Context, plan declarative.Plan) error {
 	if err := ex.guardGroupDeletions(plan); err != nil {
 		return err
 	}
+	// A document can complete a root grant across profiles and assignments (plan M8s decision 7g); the whole
+	// document is compared before and after.
+	grants := slices.ContainsFunc(plan.Changes, func(c declarative.Change) bool {
+		return c.Section == declarative.SectionPermissionProfiles || c.Section == declarative.SectionProfileAssignments
+	})
+	var guard grantGuard
+	if grants {
+		var err error
+		if guard, err = beginGrantGuard(ctx, ex.q); err != nil {
+			return err
+		}
+	}
 	for _, c := range plan.Changes {
 		path := ex.path(c)
 		if err := ex.change(ctx, c); err != nil {
 			return atPath(path, err)
+		}
+	}
+	if grants && !ex.steppedUp {
+		grows, err := guard.grows(ctx, ex.q)
+		if err != nil {
+			return err
+		}
+		if grows {
+			return ex.requireAdminStepUp("may grant root")
 		}
 	}
 	return nil
@@ -83,6 +105,18 @@ func (ex *configExec) requireAdmin(what string) error {
 		return problem.Forbidden.WithDetail("only organization administrators " + what)
 	}
 	return nil
+}
+
+// requireAdminStepUp is requireSensitiveFile and requireRootGrant of the per-resource use cases for the document's
+// principal: an API token is refused with the step-up detail, any other role but org_admin is forbidden.
+func (ex *configExec) requireAdminStepUp(what string) error {
+	if ex.p.APITokenID != uuid.Nil {
+		return ex.requireStepUp()
+	}
+	if err := ex.requireAdmin(what); err != nil {
+		return err
+	}
+	return ex.requireStepUp()
 }
 
 func (ex *configExec) item(c declarative.Change) int { return ex.index[c.Section][c.Key] }
@@ -119,6 +153,8 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 		return ex.updateSettings(ctx)
 	case declarative.SectionSettingsLogin:
 		return ex.loginSettings(ctx)
+	case declarative.SectionSettingsManaged:
+		return ex.managedFileSettings(ctx)
 	}
 	return problem.InvalidDocument.WithDetail("unknown section " + c.Section)
 }
@@ -126,6 +162,10 @@ func (ex *configExec) change(ctx context.Context, c declarative.Change) error {
 func (ex *configExec) deviceGroup(ctx context.Context, c declarative.Change) error {
 	if c.Action == declarative.ActionDelete {
 		if err := ex.requireAdmin("delete device groups"); err != nil {
+			return err
+		}
+		// A cascading delete serializes with the changes the root-grant guards compare (plan M8s decision 7g-bis).
+		if err := ex.q.LockOrganizationPrivileges(ctx); err != nil {
 			return err
 		}
 		if err := ex.lockedGroupIsEmpty(ctx, c); err != nil {
@@ -178,22 +218,36 @@ func (ex *configExec) profile(ctx context.Context, c declarative.Change) error {
 	}
 	var row pgstore.PermissionProfile
 	if c.Action == declarative.ActionCreate {
+		if privilege.RequiresStepUp(in) {
+			if err := ex.requireAdminStepUp("may grant root"); err != nil {
+				return err
+			}
+		}
+		at, by := confirmation(ctx, privilege.RequiresStepUp(in))
 		row, err = ex.q.InsertPermissionProfile(ctx, pgstore.InsertPermissionProfileParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: ex.p.OrganizationID, Name: in.Name, Class: string(in.Class),
 			Commands: in.Commands, RequirePassword: in.RequirePassword,
 			TimestampTimeoutMin: int32(in.TimestampTimeoutMin), //nolint:gosec // validated 0–60
-			Lecture:             string(in.Lecture),
+			Lecture:             string(in.Lecture), RootGrantConfirmedAt: at, RootGrantConfirmedBy: by,
 		})
 	} else {
-		if in.Class == privilege.ClassFull && ex.st.profiles[ex.st.names[c.Key]].Class != string(privilege.ClassFull) {
-			if err := ex.requireStepUp(); err != nil {
+		// The state was read before the plan; the decision needs the row as it is now (plan M8s decision 7j).
+		cur, lockErr := ex.q.GetPermissionProfileForUpdate(ctx, ex.id(c))
+		if lockErr != nil {
+			return lockErr
+		}
+		steppedUp := profileChangeNeedsStepUp(cur, in)
+		if steppedUp {
+			if err := ex.requireAdminStepUp("may grant root"); err != nil {
 				return err
 			}
 		}
-		row, err = ex.q.UpdatePermissionProfile(ctx, pgstore.UpdatePermissionProfileParams{
+		params := pgstore.UpdatePermissionProfileParams{
 			ID: ex.id(c), Name: in.Name, Class: string(in.Class), Commands: in.Commands, RequirePassword: in.RequirePassword,
 			TimestampTimeoutMin: int32(in.TimestampTimeoutMin), Lecture: string(in.Lecture), //nolint:gosec // validated 0–60
-		})
+		}
+		params.SetRootGrant, params.RootGrantConfirmedAt, params.RootGrantConfirmedBy = rootGrantChange(ctx, in, steppedUp)
+		row, err = ex.q.UpdatePermissionProfile(ctx, params)
 	}
 	if db.IsUniqueViolation(err, "permission_profile_organization_id_name_key") {
 		return problem.NameTaken.WithDetail("a permission profile with this name exists")
@@ -212,10 +266,30 @@ func (ex *configExec) file(ctx context.Context, c declarative.Change) error {
 	}
 	f := (*ex.desired.ManagedFiles)[ex.item(c)]
 	next := pgstore.ManagedFile{Path: f.Path, Mode: f.Mode, Owner: f.Owner, Grp: f.Group, Content: f.Content}
-	if err := validateFile(next); err != nil {
+	roots, err := operatorRoots(ctx, ex.q)
+	if err != nil {
 		return err
 	}
-	var err error
+	tier, err := validateFile(next, roots)
+	if err != nil {
+		return err
+	}
+	sensitive := tier == policy.TierSensitive
+	if c.Action == declarative.ActionUpdate {
+		// Changing a file that was on a sensitive path needs the same rule (ADR 0034 decision 2).
+		old, err := ex.q.GetManagedFile(ctx, ex.id(c))
+		if err != nil {
+			return err
+		}
+		oldTier, _ := policy.Classify(old.Path, old.Mode, roots)
+		sensitive = sensitive || (oldTier == policy.TierSensitive && fileChanged(old, next))
+	}
+	if sensitive {
+		if err := ex.requireAdminStepUp("may manage files on sensitive paths"); err != nil {
+			return err
+		}
+	}
+	at, by := confirmation(ctx, tier == policy.TierSensitive)
 	if c.Action == declarative.ActionCreate {
 		group, gerr := ex.group(f.DeviceGroup)
 		if gerr != nil {
@@ -223,11 +297,13 @@ func (ex *configExec) file(ctx context.Context, c declarative.Change) error {
 		}
 		_, err = ex.q.InsertManagedFile(ctx, pgstore.InsertManagedFileParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: ex.p.OrganizationID, DeviceGroupID: nullID(group), Path: next.Path,
-			Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content,
+			Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content, SensitiveConfirmedAt: at,
+			SensitiveConfirmedBy: by,
 		})
 	} else {
 		_, err = ex.q.UpdateManagedFile(ctx, pgstore.UpdateManagedFileParams{
 			ID: ex.id(c), Path: next.Path, Mode: next.Mode, Owner: next.Owner, Grp: next.Grp, Content: next.Content,
+			SetSensitive: true, SensitiveConfirmedAt: at, SensitiveConfirmedBy: by,
 		})
 	}
 	if db.IsUniqueViolation(err, "") {
@@ -298,12 +374,16 @@ func (ex *configExec) assignment(ctx context.Context, c declarative.Change) erro
 		return err
 	}
 	a := (*ex.desired.ProfileAssignments)[ex.item(c)]
-	profile, ok := ex.st.profiles[a.Profile]
+	known, ok := ex.st.profiles[a.Profile]
 	if !ok {
 		return problem.InvalidRequest.WithDetail("unknown permission profile " + strconv.Quote(a.Profile))
 	}
-	if profile.Class == string(privilege.ClassFull) {
-		if err := ex.requireStepUp(); err != nil {
+	profile, err := ex.q.GetPermissionProfileForShare(ctx, known.ID)
+	if err != nil {
+		return err
+	}
+	if privilege.RequiresStepUp(profileOf(profile)) {
+		if err := ex.requireAdminStepUp("may grant root"); err != nil {
 			return err
 		}
 	}
@@ -364,6 +444,23 @@ func (ex *configExec) updateSettings(ctx context.Context) error {
 		StalenessWarningH:     int32(in.StalenessWarningH),  //nolint:gosec // validated
 		StalenessCriticalH:    int32(in.StalenessCriticalH), //nolint:gosec // validated
 		UpdatedBy:             uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.ID != uuid.Nil},
+	})
+	return err
+}
+
+// managedFileSettings replaces the operator roots with the rule of SetOperatorRoots: an organization administrator
+// with a step-up (ADR 0034 amendment 2026-10-16).
+func (ex *configExec) managedFileSettings(ctx context.Context) error {
+	if err := ex.requireAdminStepUp("may change the operator roots"); err != nil {
+		return err
+	}
+	roots, err := normalizeOperatorRoots(ex.desired.Settings.ManagedFiles.OperatorRoots)
+	if err != nil {
+		return err
+	}
+	_, err = ex.q.UpsertManagedFileSettings(ctx, pgstore.UpsertManagedFileSettingsParams{
+		OrganizationID: ex.p.OrganizationID, ManagedFileOperatorRoots: roots,
+		UpdatedBy: uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.Kind == principal.KindAdmin && ex.p.ID != uuid.Nil},
 	})
 	return err
 }

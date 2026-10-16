@@ -308,8 +308,12 @@ func (h *handlers) GetDeviceEffectiveConfig(ctx context.Context, req adminapi.Ge
 			return nil, err
 		}
 	}
+	roots, err := h.operatorRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for _, f := range cfg.Files {
-		out.Files = append(out.Files, toManagedFile(f))
+		out.Files = append(out.Files, toManagedFile(f, roots))
 	}
 	for _, u := range cfg.Units {
 		out.Units = append(out.Units, toManagedUnit(u))

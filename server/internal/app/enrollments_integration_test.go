@@ -196,3 +196,43 @@ func TestEnrollPendingAndRejections(t *testing.T) {
 		t.Fatalf("foreign token: %v", err)
 	}
 }
+
+// TestAutoApproveIntoRootGrantIsPending: an auto-approve enrolment that would give a user root through the token's
+// device group enrolls the device pending (fail safe, plan M8s decision 7g-sexies); without such a grant it is active.
+func TestAutoApproveIntoRootGrantIsPending(t *testing.T) {
+	h := newEnrollHarness(t)
+	plain := newEnrollHarness(t)
+	ctx := context.Background()
+	user, writer, runner := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO app_user (id, organization_id, authentik_pk, username, source) VALUES ($1, $2, 'pk', 'u@x.test', 'local')`, []any{user, h.org}},
+		{`INSERT INTO permission_profile (id, organization_id, name, class, commands) VALUES
+			($1, $3, 'writer', 'restricted', '{"/usr/bin/tee /opt/x/run.sh"}'), ($2, $3, 'runner', 'restricted', '{/opt/x/run.sh}')`,
+			[]any{writer, runner, h.org}},
+		{`INSERT INTO profile_assignment (id, organization_id, profile_id, subject_type, subject_id, device_group_id) VALUES
+			(gen_random_uuid(), $1, $2, 'user', $4, NULL), (gen_random_uuid(), $1, $3, 'user', $4, $5)`,
+			[]any{h.org, writer, runner, user, h.group}},
+	} {
+		if _, err := h.super.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatalf("%s: %v", q.sql, err)
+		}
+	}
+	req := newRequest(t, h.org, h.token(t, 5, true, time.Now().Add(time.Hour)))
+	res, err := h.enroll(req)
+	if err != nil || res.State != "pending" {
+		t.Fatalf("auto-approve into a root grant = %+v, %v", res, err)
+	}
+	var withheld string
+	if err := h.super.QueryRow(ctx, `SELECT payload->'params'->>'auto_approve_withheld' FROM outbox
+		WHERE payload->>'correlation_id' = $1 AND payload->>'code' = 'device.enrolled'`, req.EnrollmentID.String()).Scan(&withheld); err != nil ||
+		withheld != "root_grant" {
+		t.Fatalf("auto_approve_withheld = %q, %v", withheld, err)
+	}
+	res, err = plain.enroll(newRequest(t, plain.org, plain.token(t, 5, true, time.Now().Add(time.Hour))))
+	if err != nil || res.State != "active" {
+		t.Fatalf("auto-approve without a grant = %+v, %v", res, err)
+	}
+}

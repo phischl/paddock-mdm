@@ -181,6 +181,7 @@ check_with_warning "$W/check.txt"
 check_with_warning "$W/check-online.txt" --online
 lab_paddock up
 lab_paddock ps
+"$here/assert-hardening.sh" paddock-lab
 
 step "9 probes"
 # probe <name> <method> <path> [curl arguments]: the HTTP status through Nginx on 127.0.0.1:443, with the throwaway CA.

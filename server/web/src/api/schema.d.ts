@@ -201,7 +201,8 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin. The response carries the token secret and the enrollment configuration exactly once; only
-         *     a hash of the secret is stored.
+         *     a hash of the secret is stored. A token whose device group would give an enrolled device root grants needs a
+         *     step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it).
          */
         post: operations["createEnrollmentToken"];
         delete?: never;
@@ -443,6 +444,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/permission-profiles/{id}/confirm-root-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Confirms an effectively Full profile that existed before the step-up rule covered it; needs
+         *     a step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). A profile that is not
+         *     effectively Full: 409 invalid_state.
+         */
+        post: operations["confirmPermissionProfileRootGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/managed-files/{id}/confirm-sensitive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Confirms a managed file on a sensitive path that existed before the path tiers; needs a
+         *     step-up within the last 300 s (403 step_up_required; API tokens cannot satisfy it). A file on another tier:
+         *     409 invalid_state.
+         */
+        post: operations["confirmManagedFileSensitive"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/approve": {
         parameters: {
             query?: never;
@@ -529,7 +576,11 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Roles: org_admin, org_operator. Replaces the device group memberships. */
+        /**
+         * @description Roles: org_admin, org_operator. Replaces the device group memberships. A change that gives a user root on a device they did not have before (also through the combination of several
+         *     profiles) needs org_admin (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
+         *     satisfy it).
+         */
         put: operations["setDeviceGroups"];
         post?: never;
         delete?: never;
@@ -570,7 +621,10 @@ export interface paths {
         /** @description Roles: org_admin, org_operator, org_auditor. */
         get: operations["listManagedFiles"];
         put?: never;
-        /** @description Roles: org_admin, org_operator. */
+        /**
+         * @description Roles: org_admin, org_operator. A file on a sensitive path needs org_admin (403 forbidden) and a step-up
+         *     (403 step_up_required); a denied path is 422 path_not_allowed (see ManagedFileCreate.path).
+         */
         post: operations["createManagedFile"];
         delete?: never;
         options?: never;
@@ -595,7 +649,11 @@ export interface paths {
         delete: operations["deleteManagedFile"];
         options?: never;
         head?: never;
-        /** @description Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed. */
+        /**
+         * @description Roles: org_admin, org_operator. The scope (device_group_id) cannot be changed. A file on a sensitive path
+         *     afterwards, or any change of a file that was on one, needs org_admin (403 forbidden) and a step-up (403
+         *     step_up_required).
+         */
         patch: operations["updateManagedFile"];
         trace?: never;
     };
@@ -651,7 +709,9 @@ export interface paths {
         /**
          * @description Roles: org_admin, org_operator. Creates a local user in Authentik (no password, member of paddock.<slug>) and
          *     returns a one-time recovery link (valid 24 h) with which the user sets a password; it is returned only here.
-         *     The username is <local-part>@<a domain of the organization> (409 username_taken if it exists anywhere).
+         *     The username is <local-part>@<a domain of the organization> (409 username_taken if it exists anywhere). A
+         *     user who would receive root through grants to everyone needs org_admin (403 forbidden) and a step-up (403
+         *     step_up_required; API tokens cannot satisfy it).
          */
         post: operations["createUser"];
         delete?: never;
@@ -805,7 +865,9 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, org_operator. Adds a user to a local group. The members of imported groups are mirrored
-         *     from upstream (409 attribute_owned_upstream).
+         *     from upstream (409 attribute_owned_upstream). A change that gives a user root on a device they did not have before (also through the combination of several
+         *     profiles) needs org_admin (403 forbidden otherwise) and a step-up (403 step_up_required; API tokens cannot
+         *     satisfy it).
          */
         post: operations["addUserGroupMember"];
         delete?: never;
@@ -894,6 +956,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/managed-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The operator roots of the managed files (ADR 0034 amendment
+         *     2026-10-16); empty until changed.
+         */
+        get: operations["getManagedFileSettings"];
+        /**
+         * @description Roles: org_admin. Replaces the operator roots: directories of the form /etc/<name>/, /usr/local/etc/<name>/
+         *     or /opt/<name>/ (trailing slash), outside the denied and sensitive paths and the never-operator directories
+         *     (422 path_not_allowed naming the root), at most 50. Below a root an operator manages files without a step-up,
+         *     except executables, scripts, shared objects and .d directories; every other path needs org_admin and a
+         *     step-up. Needs a step-up within the last 300 s (403 step_up_required); API tokens cannot satisfy it. Existing
+         *     definitions are not changed; the security review lists files whose tier rose.
+         */
+        put: operations["updateManagedFileSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/updates": {
         parameters: {
             query?: never;
@@ -971,6 +1061,28 @@ export interface paths {
         };
         /** @description Roles: org_admin, org_operator, org_auditor. The numbers of the overview page, computed in one transaction; never cached. */
         get: operations["getOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/security-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The review of existing data (ADR 0034 decision 7): effectively Full
+         *     permission profiles and managed files on sensitive paths that no organization administrator has confirmed with
+         *     a step-up yet, and managed files on denied paths, which are not shipped to devices. One review object, not a
+         *     collection: every list holds at most 100 items ordered by name or path, and total counts all of them.
+         */
+        get: operations["getSecurityReview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1614,7 +1726,9 @@ export interface paths {
         /**
          * @description Roles: org_admin, org_operator. A restricted profile lists absolute command paths with optional arguments;
          *     commands with ALL, "!", "#", the sudoers separators ,:=\ or the pattern characters ^$*?[] are refused with 422
-         *     invalid_command; the detail names a refused pattern character.
+         *     invalid_command; the detail names a refused pattern character. A profile that is effectively Full (class full,
+         *     or restricted with a root-equivalent command) needs a step-up within the last 300 s (403 step_up_required);
+         *     API tokens cannot satisfy it.
          */
         post: operations["createPermissionProfile"];
         delete?: never;
@@ -1642,7 +1756,9 @@ export interface paths {
         head?: never;
         /**
          * @description Roles: org_admin, org_operator. Changing the class away from restricted drops the commands unless given.
-         *     Changing the class to full needs a step-up within the last 300 s (403 step_up_required).
+         *     A change after which the profile is effectively Full needs a step-up within the last 300 s (403
+         *     step_up_required) when the profile was not effectively Full before or its class or commands change; a rename
+         *     or a change of require_password, timestamp_timeout_min or lecture does not. API tokens cannot satisfy it.
          */
         patch: operations["updatePermissionProfile"];
         trace?: never;
@@ -1659,8 +1775,8 @@ export interface paths {
         put?: never;
         /**
          * @description Roles: org_admin, org_operator. Assigns a profile globally, to a group or to a user, optionally only on the
-         *     devices of one device group. Assigning a full profile needs a step-up within the last 300 s (403
-         *     step_up_required).
+         *     devices of one device group. Assigning a profile that is effectively Full needs a step-up within the last 300 s
+         *     (403 step_up_required); API tokens cannot satisfy it.
          */
         post: operations["createProfileAssignment"];
         delete?: never;
@@ -1686,7 +1802,11 @@ export interface paths {
         delete: operations["deleteProfileAssignment"];
         options?: never;
         head?: never;
-        /** @description Roles: org_admin, org_operator. Changes the device group scope (null = every device). */
+        /**
+         * @description Roles: org_admin, org_operator. Changes the device group scope (null = every device). The assignment of a
+         *     profile that is effectively Full needs a step-up within the last 300 s (403 step_up_required); API tokens
+         *     cannot satisfy it.
+         */
         patch: operations["updateProfileAssignment"];
         trace?: never;
     };
@@ -1956,6 +2076,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/sessions/end-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal session of the installation, the caller's own with its next request; every administrator signs in again. API tokens are not affected. 503 session_store_unavailable while the session store is unreachable. */
+        post: operations["endAllSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases/{version}/rollout/resume": {
         parameters: {
             query?: never;
@@ -2187,6 +2324,13 @@ export interface components {
             failure_threshold_percent?: number;
             /** @description Default 3. */
             failure_threshold_min?: number;
+        };
+        SessionsEnded: {
+            /**
+             * Format: int64
+             * @description The new session generation; every session of an older generation is invalid.
+             */
+            generation: number;
         };
         AgentRollout: {
             version: string;
@@ -2771,6 +2915,14 @@ export interface components {
             period_days: number;
             warn_days: number[];
         };
+        ManagedFileSettings: {
+            operator_roots: string[];
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        ManagedFileSettingsUpdate: {
+            operator_roots: string[];
+        };
         DMSSettings: {
             enabled: boolean;
             period_days: number;
@@ -2949,6 +3101,34 @@ export interface components {
             vulnerabilities: components["schemas"]["OverviewVulnerabilities"];
             updates: components["schemas"]["OverviewUpdates"];
             attention: components["schemas"]["OverviewAttention"];
+            security_review: components["schemas"]["OverviewSecurityReview"];
+        };
+        /** @description The totals of GET /api/v1/security-review. */
+        OverviewSecurityReview: {
+            root_grants: number;
+            sensitive_files: number;
+            denied_files: number;
+        };
+        SecurityReview: {
+            /** Format: date-time */
+            generated_at: string;
+            root_grants: components["schemas"]["SecurityReviewProfiles"];
+            sensitive_files: components["schemas"]["SecurityReviewFiles"];
+            denied_files: components["schemas"]["SecurityReviewFiles"];
+        };
+        /** @description Effectively Full profiles without a confirmation, by name. */
+        SecurityReviewProfiles: {
+            total: number;
+            items: components["schemas"]["SecurityReviewProfile"][];
+        };
+        SecurityReviewProfile: {
+            profile: components["schemas"]["PermissionProfile"];
+            assignments: number;
+        };
+        /** @description Managed files of one tier, by path. */
+        SecurityReviewFiles: {
+            total: number;
+            items: components["schemas"]["ManagedFile"][];
         };
         OverviewDevices: {
             /** @description pending + active + quarantined */
@@ -3278,6 +3458,13 @@ export interface components {
             units: components["schemas"]["ManagedUnit"][];
             conflicts: components["schemas"]["ConfigConflict"][];
         };
+        /**
+         * @description Tier of the path (ADR 0034 decision 2 and amendment 2026-10-16): ordinary (below an operator root of the
+         *     organization; org_admin or org_operator), sensitive (every other allowed path; org_admin with a step-up),
+         *     denied (refused; an existing definition is not shipped to devices).
+         * @enum {string}
+         */
+        ManagedFileTier: "ordinary" | "sensitive" | "denied";
         ManagedFile: {
             /** Format: uuid */
             id: string;
@@ -3291,6 +3478,12 @@ export interface components {
             owner: string;
             group: string;
             content: string;
+            tier: components["schemas"]["ManagedFileTier"];
+            /**
+             * Format: date-time
+             * @description When an organization administrator confirmed this file on a sensitive path with a step-up; null otherwise.
+             */
+            sensitive_confirmed_at: string | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -3302,7 +3495,14 @@ export interface components {
              * @description Omit for every device of the organization.
              */
             device_group_id?: string;
-            /** @description Below /etc/, /usr/local/etc/ or /opt/, outside protected paths (422 path_not_allowed). */
+            /**
+             * @description Below /etc/, /usr/local/etc/ or /opt/. The path falls into one of three tiers: denied paths (the protected
+             *     areas, the loader, boot, kernel and identity configuration, the units of Paddock and its components) are
+             *     refused with 422 path_not_allowed; a path below an operator root of the organization (GET
+             *     /api/v1/settings/managed-files) is ordinary unless it has an execute bit, a script or shared-object suffix
+             *     or a .d directory component; every other path is sensitive and needs the org_admin role (403 forbidden
+             *     otherwise) and a step-up (403 step_up_required; API tokens cannot satisfy it).
+             */
             path: string;
             /** @default 0644 */
             mode: string;
@@ -3567,6 +3767,12 @@ export interface components {
             lecture: components["schemas"]["Lecture"];
             /** @description A command hands out root on its own or in combination. */
             root_equivalent: boolean;
+            effective_class: components["schemas"]["PrivilegeClass"];
+            /**
+             * Format: date-time
+             * @description When an organization administrator confirmed this effectively Full profile with a step-up; null otherwise.
+             */
+            root_grant_confirmed_at: string | null;
             root_equivalent_commands: string[];
             /**
              * @description Commands stored before the command check was tightened that it now refuses. A profile with invalid commands
@@ -3579,6 +3785,11 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /**
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+         *     gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+         *     step-up (403 step_up_required); API tokens cannot satisfy it.
+         */
         PermissionProfileCreate: {
             name: string;
             class: components["schemas"]["PrivilegeClass"];
@@ -3589,6 +3800,11 @@ export interface components {
             timestamp_timeout_min: number;
             lecture?: components["schemas"]["Lecture"];
         };
+        /**
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+         *     gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+         *     step-up (403 step_up_required); API tokens cannot satisfy it.
+         */
         PermissionProfileUpdate: {
             name?: string;
             class?: components["schemas"]["PrivilegeClass"];
@@ -3627,6 +3843,11 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        /**
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+         *     gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+         *     step-up (403 step_up_required); API tokens cannot satisfy it.
+         */
         ProfileAssignmentCreate: {
             /** Format: uuid */
             profile_id: string;
@@ -3636,6 +3857,11 @@ export interface components {
             /** Format: uuid */
             device_group_id?: string;
         };
+        /**
+         * @description A profile that is effectively Full (class full, or restricted with a root-equivalent command), or a change that
+         *     gives a user root through the combination of several profiles, needs org_admin (403 forbidden otherwise) and a
+         *     step-up (403 step_up_required); API tokens cannot satisfy it.
+         */
         ProfileAssignmentUpdate: {
             /** Format: uuid */
             device_group_id: string | null;
@@ -4660,6 +4886,62 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    confirmPermissionProfileRootGrant: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The confirmed profile. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionProfile"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    confirmManagedFileSensitive: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The confirmed managed file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFile"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     approveDevice: {
@@ -5734,6 +6016,58 @@ export interface operations {
             403: components["responses"]["Problem"];
         };
     };
+    getManagedFileSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The managed-file settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFileSettings"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    updateManagedFileSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedFileSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedFileSettings"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
     getUpdateSettings: {
         parameters: {
             query?: never;
@@ -5950,6 +6284,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Overview"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    getSecurityReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The security review of the organization. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityReview"];
                 };
             };
             401: components["responses"]["Problem"];
@@ -7721,6 +8077,31 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    endAllSessions: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every session of an older generation is ended. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsEnded"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     resumeAgentRollout: {

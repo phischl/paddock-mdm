@@ -46,6 +46,11 @@ onMounted(async () => {
 })
 
 const cells = computed(() => (overview.value ? kpiCells(overview.value) : []))
+/** The counts of the security review (ADR 0034 decision 7); null hides the banner. */
+const review = computed(() => {
+  const r = overview.value?.security_review
+  return r && r.root_grants + r.sensitive_files + r.denied_files > 0 ? r : null
+})
 const subtitle = computed(() =>
   overview.value
     ? t('overview.subtitle', {
@@ -95,6 +100,18 @@ const latestPublished = computed(() => {
       <div class="pd-placeholder pd-placeholder--panel" />
     </div>
     <template v-if="overview">
+      <v-alert
+        v-if="review"
+        type="warning"
+        variant="tonal"
+        class="conflict"
+        data-testid="security-review-banner"
+      >
+        {{ t('overview.securityReview.banner', { rootGrants: review.root_grants, sensitiveFiles: review.sensitive_files, deniedFiles: review.denied_files }) }}
+        <RouterLink :to="{ name: 'security-review' }">
+          {{ t('overview.securityReview.link') }}
+        </RouterLink>
+      </v-alert>
       <KpiStrip :cells="cells" />
 
       <div class="pd-overview-grid">

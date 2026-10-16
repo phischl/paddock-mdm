@@ -51,6 +51,7 @@
     "managedUnits": "Managed units",
     "agentReleases": "Agent releases",
     "ipAllowlist": "IP allow list",
+    "sessions": "Sessions",
     "users": "Users",
     "userGroups": "Groups",
     "permissionProfiles": "Permission profiles",
@@ -77,7 +78,9 @@
     },
     "overview": "Overview",
     "attentionPill": "{count, plural, one {# needs attention} other {# need attention}}",
-    "shortcut": "Shortcut: {keys}"
+    "shortcut": "Shortcut: {keys}",
+    "securityReview": "Security review",
+    "operatorRoots": "Operator roots"
   },
   "roles": {
     "org_admin": "Organization administrator",
@@ -158,7 +161,7 @@
     "invalid_state": "This action is not possible in the current state.",
     "already_exists": "This is already managed for the same devices.",
     "in_use": "This item is still in use. Remove what uses it first.",
-    "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the protected areas.",
+    "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",
     "unit_not_allowed": "This unit is not allowed. Units of Paddock, Himmelblau, Fleet, SSH, GDM and systemd itself are protected.",
     "username_taken": "This username is already taken.",
     "domain_taken": "One of these domains belongs to another organization.",
@@ -176,7 +179,8 @@
     "ip_not_allowed": "Your address is not on the IP allow list.",
     "ip_allowlist_unavailable": "The portal is starting and cannot check the IP allow list yet. Try again in a moment.",
     "lockout_confirmation_required": "This change would remove your own address from the allow list.",
-    "disable_confirmation_required": "This change would switch the allow list off."
+    "disable_confirmation_required": "This change would switch the allow list off.",
+    "session_store_unavailable": "The portal cannot reach its session store. Try again in a moment."
   },
   "audit": {
     "title": "Audit log",
@@ -203,12 +207,14 @@
       "unknown": "Unknown"
     },
     "admin": {
-      "login": "{actor} signed in"
+      "login": "{actor} signed in",
+      "sessions_revoked": "{reason, select, step_up_role_mismatch {The sessions of {target} were ended: the role at the step-up did not match} role_changed {The sessions of {target} were ended: the role changed from {old_role} to {new_role}} deactivated {The sessions of {target} were ended: the account was deactivated} other {The sessions of {target} were ended: the account no longer has a role}}"
     },
     "organization": {
       "created": "{actor} created the organization {slug}",
       "domains_changed": "{actor} set the domains of {slug}",
-      "recompile_requested": "{actor} requested a new bundle for every device (restore)"
+      "recompile_requested": "{actor} requested a new bundle for every device (restore)",
+      "security_review_required": "A security review is required: {root_grant_profiles, number} root grants, {sensitive_files, number} sensitive files and {denied_files, number} files on denied paths"
     },
     "device_group": {
       "created": "{actor} created the device group {name}",
@@ -225,7 +231,7 @@
     "api_token": {
       "created": "{actor} created the API token {name} ({role})",
       "revoked": "{actor} revoked the API token {name}",
-      "use_denied": "A request with the {reason} API token {name} was refused"
+      "use_denied": "A request with the API token {name} was refused: {reason, select, revoked {the token is revoked} expired {the token expired} creator_inactive {its creator is disabled or lost the required role} other {{reason}}}"
     },
     "device": {
       "enrolled": "The device {hostname} enrolled",
@@ -272,7 +278,8 @@
       "updates_run": "The device {target} finished its {kind} updates: {result, select, ok {{upgraded, number} packages upgraded} timeout {timed out} other {failed}}",
       "stale_warning": "The device {target} has not contacted Paddock for {threshold_h, number} hours (warning)",
       "stale_critical": "The device {target} has not contacted Paddock for {threshold_h, number} hours and is presumed lost",
-      "stale_cleared": "The device {target} contacted Paddock again"
+      "stale_cleared": "The device {target} contacted Paddock again",
+      "header_object_rejected": "The escrowed LUKS header of {hostname} was rejected: its size differs from the announced size"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
@@ -302,7 +309,8 @@
       "osv_imported": "Ubuntu's vulnerability data was imported from a file ({entries, number} entries)",
       "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",
       "ip_allowlist_denied": "{aggregated, select, true {{count, number} requests from {ip} were refused by the IP allow list} other {A request from {ip} was refused by the IP allow list}}",
-      "ip_allowlist_disabled": "{method, select, env {The IP allow list is bypassed on the api (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} switched the IP allow list off: {entries_removed, number} entries removed}}"
+      "ip_allowlist_disabled": "{method, select, env {The IP allow list is bypassed on the api (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} switched the IP allow list off: {entries_removed, number} entries removed}}",
+      "sessions_ended": "{actor} ended every portal session"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -314,7 +322,8 @@
     "managed_file": {
       "created": "{actor} defined the managed file {path}",
       "updated": "{actor} changed the managed file {path}",
-      "deleted": "{actor} deleted the managed file {path}"
+      "deleted": "{actor} deleted the managed file {path}",
+      "sensitive_confirmed": "{actor} confirmed the managed file {path} on a sensitive path"
     },
     "managed_unit": {
       "created": "{actor} defined the managed unit {unit}",
@@ -340,7 +349,8 @@
     "settings": {
       "login_changed": "{actor} changed the login settings",
       "dms_changed": "{actor} {enabled, select, true {turned on the dead man's switch with a period of {period_days, number} days} other {turned off the dead man's switch}}",
-      "updates_changed": "{actor} changed the update settings"
+      "updates_changed": "{actor} changed the update settings",
+      "managed_files_changed": "{actor} changed the operator roots of the managed files"
     },
     "package_hold": {
       "created": "{actor} held the package {package}",
@@ -350,7 +360,8 @@
     "permission_profile": {
       "created": "{actor} created the permission profile {name}",
       "updated": "{actor} changed the permission profile {name}",
-      "deleted": "{actor} deleted the permission profile {name}"
+      "deleted": "{actor} deleted the permission profile {name}",
+      "root_grant_confirmed": "{actor} confirmed the root grant of the permission profile {name}"
     },
     "profile_assignment": {
       "created": "{actor} assigned the permission profile {profile}",
@@ -895,6 +906,13 @@
     "cidrMapped": "IPv4-mapped IPv6 ranges are not allowed; use the IPv4 form.",
     "labelInvalid": "The label must have 1 to 64 characters without control characters."
   },
+  "sessions": {
+    "title": "Portal sessions",
+    "summary": "Ends every portal session of the installation, including your own. Every administrator signs in again; API tokens keep working.",
+    "endAll": "End all sessions",
+    "confirmTitle": "End all sessions?",
+    "confirmMessage": "Every administrator, you included, is signed out at the next request. Type END to confirm."
+  },
   "changeSets": {
     "title": "Change sets",
     "summary": "Every configuration applied with paddockctl or PUT /api/v1/config that changed something, with its plan.",
@@ -942,7 +960,7 @@
       "deleteTitle": "Delete managed file",
       "deleteConfirm": "Stop managing {name}? Devices keep the file as it is.",
       "path": "Path",
-      "pathHint": "Below /etc/, /usr/local/etc/ or /opt/; protected system paths are not allowed.",
+      "pathHint": "Below /etc/, /usr/local/etc/ or /opt/. Sensitive paths (cron, systemd, login scripts, SSH, files directly in /etc/, executables) need an organization administrator and a step-up; protected system paths are not allowed.",
       "mode": "Mode",
       "owner": "Owner",
       "group": "Group",
@@ -968,6 +986,25 @@
         "title": "No managed units yet",
         "description": "Managed units keep systemd services enabled or disabled on their scope."
       }
+    }
+  },
+  "managedFiles": {
+    "tier": {
+      "ordinary": "Ordinary",
+      "sensitive": "Sensitive",
+      "denied": "Denied (not shipped)"
+    },
+    "tierColumn": "Path tier",
+    "sensitiveForbidden": "Files on sensitive paths need an organization administrator. Ask one to create or change this file.",
+    "roots": {
+      "title": "Operator roots of the managed files",
+      "intro": "Below these directories operators manage files without a step-up, except executables, scripts, shared objects and .d directories. Every other path needs an organization administrator with a step-up. Changing the list needs a step-up; existing files keep their definitions, and the security review lists files that now need a confirmation.",
+      "label": "Operator roots (one per line)",
+      "hint": "Directories such as /etc/myapp/ or /opt/vendor/, with a trailing slash.",
+      "confirmTitle": "Change the operator roots",
+      "confirm": "Save {count, plural, one {# operator root} other {# operator roots}}? You confirm your identity next.",
+      "saved": "The operator roots were saved.",
+      "warning": "Operator roots are a trust decision: a program that runs as root and executes or sources files below a root (configuration it evaluates, includes it runs) makes that root root-equivalent, and Paddock cannot detect it. Add only directories of plain application configuration."
     }
   },
   "users": {
@@ -1119,6 +1156,15 @@
     "empty": {
       "title": "No permission profiles yet",
       "description": "Profiles grant sudo rights to users or groups on their devices."
+    },
+    "effectiveClass": "Effective class",
+    "rootGrantConfirm": "{name} hands out root through its commands. Everyone it is assigned to becomes root on their devices. Continue?"
+  },
+  "privileges": {
+    "effectiveClass": {
+      "none": "None (effective)",
+      "restricted": "Restricted (effective)",
+      "full": "Full (effective)"
     }
   },
   "loginSettings": {
@@ -1531,6 +1577,26 @@
       "code": "Code",
       "empty": "No events in the last days."
     },
-    "keyboardHint": "Keyboard: {mod} K palette · j / k move · Enter open · g d devices. Destructive actions never have a shortcut; they always open the confirm dialog."
+    "keyboardHint": "Keyboard: {mod} K palette · j / k move · Enter open · g d devices. Destructive actions never have a shortcut; they always open the confirm dialog.",
+    "securityReview": {
+      "banner": "Security review: {rootGrants, plural, one {# root grant} other {# root grants}} and {sensitiveFiles, plural, one {# file on a sensitive path} other {# files on sensitive paths}} await confirmation; {deniedFiles, plural, one {# file on a denied path is} other {# files on denied paths are}} not shipped.",
+      "link": "Review"
+    }
+  },
+  "securityReview": {
+    "title": "Security review",
+    "intro": "These items existed before root grants and sensitive paths needed a step-up. They keep working; an organization administrator confirms each with a step-up. Files on denied paths are no longer shipped: agents of this release or newer keep them on the devices unchanged, while older agents delete unchanged files once they are no longer shipped. Roll out the current agent before the server upgrade.",
+    "rootGrants": "Root grants awaiting confirmation ({total, number})",
+    "sensitiveFiles": "Files on sensitive paths awaiting confirmation ({total, number})",
+    "deniedFiles": "Files on denied paths, not shipped ({total, number})",
+    "none": "Nothing to review.",
+    "assignments": "Assignments",
+    "confirm": "Confirm",
+    "confirmLabel": "Confirm {name}",
+    "confirmTitle": "Confirm after a step-up",
+    "confirmProfile": "Confirm that {name} may keep granting root? You confirm your identity next.",
+    "confirmFile": "Confirm that {name} may stay managed on a sensitive path? You confirm your identity next.",
+    "deniedIntro": "Paddock no longer manages these paths. Agents of this release or newer keep the files on the devices unchanged; an older agent deletes an unchanged file once it is no longer shipped. Delete the definitions you no longer need.",
+    "deleteDefinition": "Delete definition"
   }
 }

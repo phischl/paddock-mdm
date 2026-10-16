@@ -23,12 +23,14 @@ type fakeAuthentik struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	groups   map[string]*fakeGroup // pk → group
-	users    map[int]*fakeUser
-	objects  map[string]map[string]map[string]any // collection → pk → object (flows, mappings, providers, …)
-	tokens   map[string][]int                     // "refresh_tokens"/"access_tokens" → owning user pks
-	sessions map[int]int                          // user pk → number of sessions
-	nextPK   int
+	groups map[string]*fakeGroup // pk → group
+	users  map[int]*fakeUser
+	// afterUserPage runs after every page of a user listing (membership changing during a listing).
+	afterUserPage func()
+	objects       map[string]map[string]map[string]any // collection → pk → object (flows, mappings, providers, …)
+	tokens        map[string][]int                     // "refresh_tokens"/"access_tokens" → owning user pks
+	sessions      map[int]int                          // user pk → number of sessions
+	nextPK        int
 	// deactivations counts PATCHes with is_active false.
 	deactivations int
 
@@ -126,6 +128,7 @@ func (f *fakeAuthentik) userJSON(u *fakeUser, includeGroups bool) map[string]any
 	j := f.fixture("post_core_users.json")
 	j["pk"], j["username"], j["name"], j["email"], j["attributes"], j["groups"] = u.pk, u.username, u.name, u.email, u.attributes, u.groups
 	j["is_active"] = !u.inactive
+	j["uid"] = "uid-" + strconv.Itoa(u.pk)
 	j["groups_obj"] = nil
 	if includeGroups {
 		objs := []map[string]any{}
@@ -404,12 +407,19 @@ func intOf(v any) int {
 }
 
 func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
+	// Authentik validates groups_by_name against the existing groups.
+	if name := first(q["groups_by_name"]); name != "" && f.groupByName(name) == nil {
+		return http.StatusBadRequest, map[string]any{"groups_by_name": []string{"Select a valid choice. " + name + " is not one of the available choices."}}
+	}
 	var match []*fakeUser
 	for _, u := range f.users {
 		if name := first(q["groups_by_name"]); name != "" && !slices.ContainsFunc(u.groups, func(pk string) bool { return f.groups[pk] != nil && f.groups[pk].name == name }) {
 			continue
 		}
 		if pk := first(q["groups_by_pk"]); pk != "" && !slices.Contains(u.groups, pk) {
+			continue
+		}
+		if name := first(q["username"]); name != "" && u.username != name {
 			continue
 		}
 		match = append(match, u)
@@ -424,8 +434,13 @@ func (f *fakeAuthentik) listUsers(q map[string][]string) (int, any) {
 		items = append(items, f.userJSON(u, first(q["include_groups"]) == "true"))
 	}
 	out := f.page(items)
+	// Authentik's count is the total of the listing, not of the page.
+	out["pagination"].(map[string]any)["count"] = len(match)
 	if to < len(match) {
 		out["pagination"].(map[string]any)["next"] = page + 1
+	}
+	if f.afterUserPage != nil {
+		f.afterUserPage()
 	}
 	return http.StatusOK, out
 }

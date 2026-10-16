@@ -60,6 +60,7 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 	// Configuration of this device, before enrollment.
 	d.Group = s.ID(s.Call(http.MethodPost, "/api/v1/device-groups", map[string]string{"name": "systest " + vm.Name + " " + d.run}, http.StatusCreated))
 	s.DeleteOnCleanup("/api/v1/device-groups/" + d.Group)
+	s.OperatorRoot("/etc/paddock-systest/")
 	for _, name := range []string{"a", "b"} {
 		res := s.Call(http.MethodPost, "/api/v1/managed-files", map[string]any{
 			"path": d.managedPath(name), "content": "managed " + name + " " + d.run + "\n", "mode": "0640", "owner": "root",
@@ -68,6 +69,7 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 		d.Files[d.managedPath(name)] = s.ID(res)
 		s.DeleteOnCleanup("/api/v1/managed-files/" + d.Files[d.managedPath(name)])
 	}
+	s.StepUp() // a unit file is on a sensitive path (ADR 0034 decision 2)
 	unitFile := "/etc/systemd/system/" + d.Unit
 	res := s.Call(http.MethodPost, "/api/v1/managed-files", map[string]any{
 		"path": unitFile, "mode": "0644", "device_group_id": d.Group,

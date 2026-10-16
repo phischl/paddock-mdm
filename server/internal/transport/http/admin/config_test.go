@@ -24,8 +24,8 @@ func TestDeclarativeConfigEndpoints(t *testing.T) {
 		t.Fatalf("export: %d %s", r.status, r.body)
 	}
 	body := string(r.body)
-	order := []string{`"api_version"`, `"kind"`, `"settings"`, `"login"`, `"updates"`, `"device_groups"`, `"permission_profiles"`,
-		`"managed_files"`, `"managed_units"`, `"package_holds"`, `"profile_assignments"`}
+	order := []string{`"api_version"`, `"kind"`, `"settings"`, `"login"`, `"updates"`, `"managed_files":{"operator_roots"`,
+		`"device_groups"`, `"permission_profiles"`, `"managed_files":[`, `"managed_units"`, `"package_holds"`, `"profile_assignments"`}
 	last := -1
 	for _, k := range order {
 		i := strings.Index(body, k)

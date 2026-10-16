@@ -19,7 +19,10 @@ func gateOrg(t *testing.T, prefix string) (*mfaUser, string) {
 	body := newOrg()
 	res := call(t, root, http.MethodPost, "/api/platform/v1/organizations", body)
 	expectStatus(t, res, http.StatusCreated, "")
-	return steppedUpTempUser(t, prefix, env.RoleGroup(body["slug"], "admins")), body["slug"]
+	admin := steppedUpTempUser(t, prefix, env.RoleGroup(body["slug"], "admins"))
+	// The gates write files below operator roots without a step-up (ADR 0034 amendment 2026-10-16).
+	ensureOperatorRoots(t, admin.Portal, func() { admin.stepUp(t) }, gateOperatorRoots...)
+	return admin, body["slug"]
 }
 
 // configDoc is a paddock.v1 document as the admin API carries it.
@@ -135,7 +138,7 @@ func TestDeclarativeConfig(t *testing.T) {
 	expectNoEvent(t, admin.Portal, res.RequestID)
 
 	changed := clone(t, doc)
-	changed["managed_files"] = append(changed["managed_files"].([]any), map[string]any{"path": "/etc/paddock-t2.conf", "content": "t2"})
+	changed["managed_files"] = append(changed["managed_files"].([]any), map[string]any{"path": "/etc/paddock-gates/t2.conf", "content": "t2"})
 	changed["settings"].(map[string]any)["updates"].(map[string]any)["security_daily_at"] = "02:45"
 	changed["package_holds"] = []any{}
 	res = putConfig(t, admin.Portal, changed, true)
@@ -147,11 +150,11 @@ func TestDeclarativeConfig(t *testing.T) {
 	for _, c := range dry.Plan.Changes {
 		actions[c.Section] = c.Action + " " + c.Key
 	}
-	if actions["managed_files"] != `create [null,"/etc/paddock-t2.conf"]` || actions["settings.updates"] != "update " ||
+	if actions["managed_files"] != `create [null,"/etc/paddock-gates/t2.conf"]` || actions["settings.updates"] != "update " ||
 		actions["package_holds"] != `delete [null,"t2-held"]` {
 		t.Fatalf("dry run changes %v", actions)
 	}
-	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2") != 0 {
+	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t2.conf") != 0 {
 		t.Fatal("the dry run created the managed file")
 	}
 
@@ -168,7 +171,7 @@ func TestDeclarativeConfig(t *testing.T) {
 		t.Fatal("the change set is not listed")
 	}
 	expectStatus(t, call(t, admin.Portal, http.MethodGet, "/api/v1/change-sets/"+*applied.ChangeSetID, nil), http.StatusOK, "")
-	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2") != 1 {
+	if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t2.conf") != 1 {
 		t.Fatal("the managed file was not created")
 	}
 	if listTotal(t, admin.Portal, "/api/v1/package-holds?q=t2-held") != 0 {
@@ -176,13 +179,13 @@ func TestDeclarativeConfig(t *testing.T) {
 	}
 	eff := call(t, admin.Portal, http.MethodGet, "/api/v1/devices/"+dev.DeviceID+"/effective-config", nil)
 	expectStatus(t, eff, http.StatusOK, "")
-	if !strings.Contains(string(eff.Body), "/etc/paddock-t2.conf") {
+	if !strings.Contains(string(eff.Body), "/etc/paddock-gates/t2.conf") {
 		t.Fatalf("effective config of the device lacks the file: %s", eff.Body)
 	}
 
 	t.Run("schema violation", func(t *testing.T) {
 		bad := clone(t, changed)
-		bad["managed_files"] = []any{map[string]any{"path": "/etc/paddock-t2.conf", "content": "t2", "mode": "999"}}
+		bad["managed_files"] = []any{map[string]any{"path": "/etc/paddock-gates/t2.conf", "content": "t2", "mode": "999"}}
 		res := putConfig(t, admin.Portal, bad, false)
 		expectStatus(t, res, http.StatusUnprocessableEntity, "invalid_document")
 		if !strings.Contains(string(res.Body), "/managed_files/0/mode") {
@@ -225,7 +228,7 @@ func TestDeclarativeConfig(t *testing.T) {
 		seed := getConfig(t, admin.Portal)
 		seed["device_groups"] = append(seed["device_groups"].([]any), map[string]any{"name": "t2-lab"})
 		seed["managed_files"] = append(seed["managed_files"].([]any),
-			map[string]any{"path": "/etc/paddock-t2-lab.conf", "content": "lab", "device_group": "t2-lab"})
+			map[string]any{"path": "/etc/paddock-gates/t2-lab.conf", "content": "lab", "device_group": "t2-lab"})
 		configResultOf(t, putConfig(t, admin.Portal, seed, false))
 		doc := getConfig(t, admin.Portal)
 		var keep []any
@@ -251,7 +254,7 @@ func TestDeclarativeConfig(t *testing.T) {
 		if !strings.Contains(string(res.Body), "/managed_files/") {
 			t.Fatalf("detail does not name the file: %s", res.Body)
 		}
-		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2-lab") != 1 {
+		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t2-lab.conf") != 1 {
 			t.Fatal("a refused apply changed something")
 		}
 
@@ -274,7 +277,7 @@ func TestDeclarativeConfig(t *testing.T) {
 		if out := configResultOf(t, res); out.Plan.Deleted != 2 {
 			t.Fatalf("apply: %s", res.Body)
 		}
-		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-t2-lab") != 0 {
+		if listTotal(t, admin.Portal, "/api/v1/managed-files?q=paddock-gates/t2-lab.conf") != 0 {
 			t.Fatal("the group's file survived")
 		}
 	})

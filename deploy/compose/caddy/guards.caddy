@@ -2,10 +2,54 @@
 # PADDOCK_ADMIN_ALLOWED_CIDRS: ranges that may use the administrative surfaces (space-separated; default: every
 # address). PADDOCK_INTERNAL_CIDRS: ranges of the Paddock roles, which use Authentik's API through Caddy.
 # client_ip is the address resolved through the trusted proxies of PADDOCK_EDGE_TRUSTED_PROXIES.
+# body_limit <size> <bytes> bounds the request body a site forwards (plan M8s decision 31). A declared Content-Length
+# above the limit is answered 413 before the request reaches the upstream: request_body alone only fails once the
+# upstream reads that far, and an upstream that answers without reading (401, 403) would hide the limit. request_body
+# still bounds bodies without a Content-Length.
+(body_limit) {
+	@body_too_large expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > {args[1]}`
+	handle @body_too_large {
+		respond 413
+	}
+	request_body {
+		max_size {args[0]}
+	}
+}
+
 (admin_site) {
 	@admin_denied not client_ip {$PADDOCK_ADMIN_ALLOWED_CIDRS}
 	handle @admin_denied {
 		respond 403
+	}
+	# Request body limits at the edge (plan M8s decision 31): agent release uploads up to agentrelease.MaxArtifactBytes
+	# plus slack, everything else well above the api's own 256 KiB and 1 MiB limits.
+	@artifacts {
+		method PUT
+		path /api/platform/v1/agent-releases/*
+	}
+	@artifacts_too_large {
+		method PUT
+		path /api/platform/v1/agent-releases/*
+		expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 136314880`
+	}
+	handle @artifacts_too_large {
+		respond 413
+	}
+	request_body @artifacts {
+		max_size 130MiB
+	}
+	@other {
+		not path /api/platform/v1/agent-releases/*
+	}
+	@other_too_large {
+		not path /api/platform/v1/agent-releases/*
+		expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 2097152`
+	}
+	handle @other_too_large {
+		respond 413
+	}
+	request_body @other {
+		max_size 2MiB
 	}
 	reverse_proxy paddock-api:8080 {
 		header_up X-Paddock-Client-IP {client_ip}
@@ -31,5 +75,6 @@
 	handle @denied_api {
 		respond 403
 	}
+	import body_limit 16MiB 16777216
 	reverse_proxy authentik-server:9000
 }

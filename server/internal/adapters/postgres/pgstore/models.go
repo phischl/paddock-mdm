@@ -37,6 +37,7 @@ type AdminAccount struct {
 	Locale         string
 	LastLoginAt    *time.Time
 	Theme          string
+	DisabledAt     *time.Time
 }
 
 type AgentArtifact struct {
@@ -96,18 +97,19 @@ type AgentUpdateReport struct {
 }
 
 type ApiToken struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	Name           string
-	Role           string
-	SecretSha256   []byte
-	Prefix         string
-	CreatedBy      uuid.UUID
-	CreatedAt      time.Time
-	ExpiresAt      time.Time
-	LastUsedAt     *time.Time
-	RevokedAt      *time.Time
-	RevokedBy      uuid.NullUUID
+	ID                        uuid.UUID
+	OrganizationID            uuid.UUID
+	Name                      string
+	Role                      string
+	SecretSha256              []byte
+	Prefix                    string
+	CreatedBy                 uuid.UUID
+	CreatedAt                 time.Time
+	ExpiresAt                 time.Time
+	LastUsedAt                *time.Time
+	RevokedAt                 *time.Time
+	RevokedBy                 uuid.NullUUID
+	CreatorInactiveRecordedAt *time.Time
 }
 
 type ApiTokenListed struct {
@@ -346,16 +348,18 @@ type IpAllowlistEntry struct {
 }
 
 type ManagedFile struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	DeviceGroupID  uuid.NullUUID
-	Path           string
-	Mode           string
-	Owner          string
-	Grp            string
-	Content        string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                   uuid.UUID
+	OrganizationID       uuid.UUID
+	DeviceGroupID        uuid.NullUUID
+	Path                 string
+	Mode                 string
+	Owner                string
+	Grp                  string
+	Content              string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	SensitiveConfirmedAt *time.Time
+	SensitiveConfirmedBy uuid.NullUUID
 }
 
 type ManagedUnit struct {
@@ -402,6 +406,13 @@ type OrganizationLoginSetting struct {
 	RotateAfterRevealHours *int32
 	NoticeText             string
 	BootPinMinLength       int32
+}
+
+type OrganizationManagedFileSetting struct {
+	OrganizationID           uuid.UUID
+	ManagedFileOperatorRoots []string
+	UpdatedAt                time.Time
+	UpdatedBy                uuid.NullUUID
 }
 
 type OrganizationUpdateSetting struct {
@@ -467,16 +478,18 @@ type PackageHold struct {
 }
 
 type PermissionProfile struct {
-	ID                  uuid.UUID
-	OrganizationID      uuid.UUID
-	Name                string
-	Class               string
-	Commands            []string
-	RequirePassword     bool
-	TimestampTimeoutMin int32
-	Lecture             string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                   uuid.UUID
+	OrganizationID       uuid.UUID
+	Name                 string
+	Class                string
+	Commands             []string
+	RequirePassword      bool
+	TimestampTimeoutMin  int32
+	Lecture              string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	RootGrantConfirmedAt *time.Time
+	RootGrantConfirmedBy uuid.NullUUID
 }
 
 type PlatformAdmin struct {

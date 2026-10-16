@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { expect } from '@playwright/test'
-import { login } from './auth'
+import { login, stepUp } from './auth'
 import { expectAccessible, mainNav, watchCSP } from './checks'
 import { test } from './cleanup'
 
@@ -22,7 +22,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   const stamp = Date.now()
   const hostname = `e2e-${stamp}`
   const groupName = `E2E devices ${stamp}`
-  const path = `/etc/paddock-e2e-${stamp}.conf`
+  const path = `/etc/paddock-e2e/${stamp}.conf`
   cleanup.remove('/api/v1/enrollment-tokens', `E2E token ${stamp}`)
   cleanup.remove('/api/v1/device-groups', groupName)
   cleanup.remove('/api/v1/managed-files', path)
@@ -82,6 +82,19 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await page.keyboard.press('Escape')
   await page.getByTestId('save-device-groups').click()
   await expect(page.getByRole('main').getByRole('status')).toHaveText('Device groups saved.')
+
+  // Files outside an operator root need a step-up (ADR 0034 amendment 2026-10-16): the administrator adds the
+  // e2e directory as an operator root once, with the typed confirmation and the step-up.
+  await mainNav(page).getByRole('link', { name: 'Operator roots' }).click()
+  const roots = page.getByTestId('operator-roots').locator('textarea')
+  if (!(await roots.inputValue()).split('\n').includes('/etc/paddock-e2e/')) {
+    await roots.fill(((await roots.inputValue()) + '\n/etc/paddock-e2e/').trim())
+    await stepUp(page, async () => {
+      await page.getByTestId('save-roots').click()
+      await page.getByRole('dialog', { name: 'Change the operator roots' }).getByRole('button', { name: 'Save' }).click()
+    }, 'alice@acme.test', 'dev_alice_password', 'dev_alice_totp_key')
+    await expect(page.getByTestId('roots-saved')).toBeVisible()
+  }
 
   await mainNav(page).getByRole('link', { name: 'Managed files' }).click()
   await expect(page.getByRole('heading', { name: 'Managed files' })).toBeVisible()

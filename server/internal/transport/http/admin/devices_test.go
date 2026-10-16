@@ -265,8 +265,26 @@ func TestDeviceGroupsAndEffectiveConfig(t *testing.T) {
 		t.Fatalf("foreign group members: %d", r.status)
 	}
 
+	// Below an operator root (ADR 0034 amendment 2026-10-16) the file is ordinary: no step-up for the edits below.
+	roots := e.do(call{method: "PUT", path: "/api/v1/settings/managed-files", cookie: e.steppedUp(alice, time.Now()),
+		body: map[string]any{"operator_roots": []string{"/etc/acme/"}}})
+	if roots.status != http.StatusOK {
+		t.Fatalf("operator roots: %d %s", roots.status, roots.body)
+	}
+	e.expectEvent(roots, "settings.managed_files_changed:success:")
+	refused := e.do(call{method: "PUT", path: "/api/v1/settings/managed-files", cookie: alice,
+		body: map[string]any{"operator_roots": []string{"/etc/acme/"}}})
+	if refused.status != http.StatusForbidden || refused.problemCode(t) != "step_up_required" {
+		t.Fatalf("operator roots without step-up: %d %s", refused.status, refused.body)
+	}
+	bad := e.do(call{method: "PUT", path: "/api/v1/settings/managed-files", cookie: e.steppedUp(alice, time.Now()),
+		body: map[string]any{"operator_roots": []string{"/etc/apt/"}}})
+	if bad.status != http.StatusUnprocessableEntity || bad.problemCode(t) != "path_not_allowed" {
+		t.Fatalf("never-operator root: %d %s", bad.status, bad.body)
+	}
+
 	file := func(groupID, content string) result {
-		body := map[string]any{"path": "/etc/motd", "content": content}
+		body := map[string]any{"path": "/etc/acme/motd", "content": content}
 		if groupID != "" {
 			body["device_group_id"] = groupID
 		}
@@ -297,14 +315,14 @@ func TestDeviceGroupsAndEffectiveConfig(t *testing.T) {
 		wantContent = "g2"
 	}
 	if len(cfg.Files) != 1 || cfg.Files[0].Content != wantContent || len(cfg.Units) != 1 || len(cfg.Conflicts) != 1 ||
-		cfg.Conflicts[0].Resource != "file:/etc/motd" {
+		cfg.Conflicts[0].Resource != "file:/etc/acme/motd" {
 		t.Fatalf("effective config %+v", cfg)
 	}
 	var ids []string
 	for _, r := range cfg.Resources {
 		ids = append(ids, r.Id)
 	}
-	if strings.Join(ids, ",") != "file:/etc/motd,time,unit:chrony.service" {
+	if strings.Join(ids, ",") != "file:/etc/acme/motd,time,unit:chrony.service" {
 		t.Fatalf("resources %v", ids)
 	}
 	if r := e.do(call{method: "GET", path: "/api/v1/devices/" + dev.String() + "/effective-config", cookie: carol}); r.status != http.StatusNotFound {

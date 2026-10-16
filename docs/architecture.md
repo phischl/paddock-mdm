@@ -978,6 +978,13 @@ offline PASS, unlock FAIL; in the auth phase — unlock refused, fail safe. Henc
 | `org_auditor` | Read-only, including audit log and evidence export |
 | `platform_admin` | Create organizations, manage releases; **no** access to organization data |
 
+**Amended 2026-10-16 (ADR 0034, plan M8s):** the step-up keys on the *effective* class of a permission profile
+(class `full`, or `restricted` with a root-equivalent command) for create, change, assign and scope changes, and on
+the *tier* of a managed-file path (sensitive paths need `org_admin` with a step-up; denied paths are refused). An API
+token never satisfies a step-up. Sessions have a server-side record in Valkey (`sess:<sid>`): logout, a step-up
+whose `groups` claim resolves to another role, a role change or a deactivation found by the worker, and the platform
+action "end all sessions" end them immediately. The step-up flow validates with WebAuthn only.
+
 ---
 
 ## 10. Permission profiles and sudo

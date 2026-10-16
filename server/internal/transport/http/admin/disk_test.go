@@ -36,6 +36,13 @@ func newDiskEscrow(t *testing.T) *diskEscrow {
 	return &diskEscrow{key: key, objects: map[string][]byte{}}
 }
 
+func (d *diskEscrow) Size(_ context.Context, key string) (int64, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	data, ok := d.objects[key]
+	return int64(len(data)), ok, nil
+}
+
 func (d *diskEscrow) GetIfExists(_ context.Context, key string) ([]byte, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

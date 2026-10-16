@@ -108,3 +108,20 @@ device asks for the recovery key. Re-enroll TPM2+PIN as in step 3.
   bundles credential may only `s3:PutObject` below `org/*/devices/*/luks-header/*`; the worker and the api have
   read-only credentials (`PADDOCK_ESCROW_S3_*`). Only the `paddock-escrow-reader` role can unwrap the header key,
   after it verified the administrator's step-up itself (`docs/operations/escrow-reader.md`).
+
+### Header object of another size
+
+The presigned upload URL binds the size the device announced, so the object store refuses a header upload of any
+other size. If an object of another size is in the bucket anyway, it was written outside the device's upload path
+(for example with an administrative credential of the object store). The worker then checks only its size, never
+reads it, marks the escrow generation `failed` and records `device.header_object_rejected` with the announced and
+the stored size. The worker's credential is read-only, so the object stays in the bucket:
+
+1. Find the event in the audit log (*Audit* → `device.header_object_rejected`) and note the device, the generation and
+   the volume.
+2. Examine the object with the object store's administrative credential, for example
+   `aws s3api list-object-versions --bucket paddock-escrow --prefix org/<org>/devices/<device>/luks-header/`, and find
+   out how it was written.
+3. Remove it (`aws s3api delete-object --bucket paddock-escrow --key <key> --version-id <version>`) once it is no
+   longer needed for the investigation. Until then, an escrow of the same generation can find this object before
+   the device's own upload arrives and fail as well.

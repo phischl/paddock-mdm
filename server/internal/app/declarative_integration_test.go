@@ -112,7 +112,7 @@ func TestDeclarativeApplyChanges(t *testing.T) {
 	}
 	doc := h.export(t, admin)
 	*doc.DeviceGroups = append(*doc.DeviceGroups, declarative.DeviceGroup{Name: "laptops"})
-	*doc.ManagedFiles = append(*doc.ManagedFiles, declarative.ManagedFile{Path: "/etc/motd", DeviceGroup: strPtr("laptops"), Mode: "0644",
+	*doc.ManagedFiles = append(*doc.ManagedFiles, declarative.ManagedFile{Path: "/etc/acme/motd", DeviceGroup: strPtr("laptops"), Mode: "0644",
 		Owner: "root", Group: "root", Content: "managed by paddock"})
 	doc.Settings.Updates.SecurityDailyAt = "02:15"
 	*doc.PackageHolds = []declarative.PackageHold{}
@@ -177,7 +177,7 @@ func TestDeclarativeApplyIsAtomic(t *testing.T) {
 	admin := h.account(t, principal.RoleOrgAdmin, false)
 	ctx := principal.With(context.Background(), admin)
 	doc := h.export(t, admin)
-	*doc.ManagedFiles = append(*doc.ManagedFiles, declarative.ManagedFile{Path: "/etc/ok.conf", Mode: "0644", Owner: "root", Group: "root"})
+	*doc.ManagedFiles = append(*doc.ManagedFiles, declarative.ManagedFile{Path: "/etc/acme/ok.conf", Mode: "0644", Owner: "root", Group: "root"})
 	*doc.ManagedUnits = append(*doc.ManagedUnits, declarative.ManagedUnit{Unit: "paddockd.service", Enabled: true, Active: true})
 	for name, apply := range map[string]func() error{
 		"dry run": func() error { _, err := h.config.Plan(ctx, raw(t, doc)); return err },
@@ -251,10 +251,10 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 		t.Fatalf("invalid schedule = %v", err)
 	}
 
-	// A full profile and its assignment need a step-up; an API token never has one.
+	// A profile that is effectively Full and its assignment need a step-up; an API token never has one (ADR 0034).
 	full := h.export(t, admin)
-	*full.PermissionProfiles = append(*full.PermissionProfiles, declarative.PermissionProfile{Name: "root", Class: "full",
-		Commands: []string{}, RequirePassword: true, TimestampTimeoutMin: 5, Lecture: "once"})
+	*full.PermissionProfiles = append(*full.PermissionProfiles, declarative.PermissionProfile{Name: "root", Class: "restricted",
+		Commands: []string{"/usr/bin/bash"}, RequirePassword: true, TimestampTimeoutMin: 5, Lecture: "once"})
 	*full.ProfileAssignments = append(*full.ProfileAssignments, declarative.ProfileAssignment{Profile: "root",
 		Subject: declarative.Subject{Type: "global"}, DeviceGroup: strPtr("kept")})
 	token := h.create(t, steppedUp, "ci", principal.RoleOrgAdmin)
@@ -262,9 +262,13 @@ func TestDeclarativeRulesOfThePerResourceUseCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := h.config.Apply(ctx(admin), raw(t, full), ""); !errors.Is(err, problem.StepUpRequired) {
+		t.Fatalf("admin without step-up granting root = %v", err)
+	}
 	got := h.during(t, func() {
-		if _, _, err := h.config.Apply(ctx(tp), raw(t, full), ""); !errors.Is(err, problem.StepUpRequired) {
-			t.Errorf("token assigning a full profile = %v", err)
+		if _, _, err := h.config.Apply(ctx(tp), raw(t, full), ""); !errors.Is(err, problem.StepUpRequired) ||
+			!strings.Contains(problem.From(err).Detail, "API tokens") {
+			t.Errorf("token granting root = %v", err)
 		}
 	})
 	if len(got) != 1 || got[0] != "config.applied:denied:step_up_required" {
@@ -376,8 +380,8 @@ func TestDeclarativeGroupDeletionCascade(t *testing.T) {
 	*seed.PermissionProfiles = append(*seed.PermissionProfiles, declarative.PermissionProfile{Name: "p", Class: "none",
 		Commands: []string{}, RequirePassword: true, TimestampTimeoutMin: 5, Lecture: "once"})
 	*seed.ManagedFiles = append(*seed.ManagedFiles,
-		declarative.ManagedFile{Path: "/etc/lab.conf", DeviceGroup: strPtr("lab"), Mode: "0644", Owner: "root", Group: "root", Content: "lab"},
-		declarative.ManagedFile{Path: "/etc/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"})
+		declarative.ManagedFile{Path: "/etc/acme/lab.conf", DeviceGroup: strPtr("lab"), Mode: "0644", Owner: "root", Group: "root", Content: "lab"},
+		declarative.ManagedFile{Path: "/etc/acme/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"})
 	*seed.ManagedUnits = append(*seed.ManagedUnits, declarative.ManagedUnit{Unit: "lab.service", DeviceGroup: strPtr("lab"), Enabled: true, Active: true})
 	*seed.PackageHolds = append(*seed.PackageHolds, declarative.PackageHold{Package: "vim", DeviceGroup: strPtr("lab")})
 	*seed.ProfileAssignments = append(*seed.ProfileAssignments, declarative.ProfileAssignment{Profile: "p",
@@ -419,7 +423,7 @@ func TestDeclarativeGroupDeletionCascade(t *testing.T) {
 	refused("sections omitted", omitted, problem.InUse, `device group "lab"`)
 	onlyFiles := withoutLab()
 	onlyFiles.ManagedUnits, onlyFiles.PackageHolds, onlyFiles.ProfileAssignments = nil, nil, nil
-	*onlyFiles.ManagedFiles = []declarative.ManagedFile{{Path: "/etc/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"}}
+	*onlyFiles.ManagedFiles = []declarative.ManagedFile{{Path: "/etc/acme/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"}}
 	refused("unit section omitted", onlyFiles, problem.InUse, `managed unit "lab.service"`)
 
 	// The document still lists an item of the deleted group, unchanged or updated.
@@ -435,7 +439,7 @@ func TestDeclarativeGroupDeletionCascade(t *testing.T) {
 
 	// The sections are present without the group's items: the plan lists every deletion, and its hash covers them.
 	clean := withoutLab()
-	*clean.ManagedFiles = []declarative.ManagedFile{{Path: "/etc/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"}}
+	*clean.ManagedFiles = []declarative.ManagedFile{{Path: "/etc/acme/all.conf", Mode: "0644", Owner: "root", Group: "root", Content: "all"}}
 	*clean.ManagedUnits = []declarative.ManagedUnit{}
 	*clean.PackageHolds = []declarative.PackageHold{}
 	*clean.ProfileAssignments = []declarative.ProfileAssignment{}

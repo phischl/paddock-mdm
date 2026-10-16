@@ -234,6 +234,20 @@ func TestCompileAffectsExactlyTheChangedDevices(t *testing.T) {
 	}
 }
 
+// TestDeniedFileIsNotShipped: a stored definition on a denied path (ADR 0034 decision 2) is left out of the bundle,
+// while an ordinary file of the same scope is shipped.
+func TestDeniedFileIsNotShipped(t *testing.T) {
+	w := newWorld(t)
+	d := w.device("active", w.g1)
+	w.exec(`INSERT INTO managed_file (id, organization_id, device_group_id, path, mode, content) VALUES
+		($1, $3, $4, '/etc/ld.so.preload', '0644', 'x'), ($2, $3, $4, '/etc/acme/app.conf', '0644', 'y')`,
+		uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), w.org, w.g1)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := resourceIDs(w.fetch(d)); got != "file:/etc/acme/app.conf,time" {
+		t.Fatalf("bundle resources %s", got)
+	}
+}
+
 // TestForcedStateChangePublishesUnchangedContent: a forced state change publishes a new bundle version even when the
 // content equals the latest bundle (plan M6c decision 19, restore after a database restore), and only for the devices
 // it targets; a plain one does not.

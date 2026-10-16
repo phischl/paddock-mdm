@@ -94,8 +94,8 @@ describe('navigation drawer', () => {
     expect(linkLabels(w)).toEqual([
       'Overview', 'Attention',
       'Devices', 'Device groups', 'Enrollment tokens',
-      'Permission profiles', 'Managed files', 'Managed units', 'Package holds', 'Change sets',
-      'Revocations', "Dead man's switch", 'Login & privileges',
+      'Permission profiles', 'Managed files', 'Managed units', 'Operator roots', 'Package holds', 'Change sets',
+      'Security review', 'Revocations', "Dead man's switch", 'Login & privileges',
       'Software', 'Vulnerabilities',
       'Users', 'Groups', 'API tokens', 'Updates', 'Audit log',
     ])
@@ -147,7 +147,7 @@ describe('navigation drawer', () => {
 
     const platform = await mountApp({ ...admin, role: 'platform_admin', organization: null }, '/platform/organizations')
     expect(groupLabels(platform.w)).toEqual(['Overview', 'Platform'])
-    expect(linkLabels(platform.w)).toEqual(['Overview', 'Organizations', 'Agent releases', 'IP allow list'])
+    expect(linkLabels(platform.w)).toEqual(['Overview', 'Organizations', 'Agent releases', 'IP allow list', 'Sessions'])
     expect(platform.w.find('[data-testid="app-bar-attention"]').exists()).toBe(false)
     expect(platform.w.find('[data-testid="org-name"]').exists()).toBe(false)
   })
@@ -164,10 +164,10 @@ describe('navigation drawer', () => {
   it('is one Tab stop with a roving tabindex: Up/Down move, Home/End jump', async () => {
     const { w } = await mountApp(admin, '/managed-files')
     const links = drawer(w).findAll('a.pd-nav-item')
-    expect(links.length).toBe(20)
+    expect(links.length).toBe(22)
     const stops = links.filter((a) => a.attributes('tabindex') === '0')
     expect(stops.map((a) => a.attributes('href'))).toEqual(['/managed-files'])
-    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(19)
+    expect(links.filter((a) => a.attributes('tabindex') === '-1').length).toBe(21)
 
     ;(stops[0].element as HTMLElement).focus()
     await stops[0].trigger('keydown', { key: 'ArrowDown' })

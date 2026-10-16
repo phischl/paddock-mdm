@@ -7,9 +7,41 @@ package pgstore
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const confirmManagedFileSensitive = `-- name: ConfirmManagedFileSensitive :one
+UPDATE managed_file SET sensitive_confirmed_at = now(), sensitive_confirmed_by = $1
+WHERE id = $2
+RETURNING id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at, sensitive_confirmed_at, sensitive_confirmed_by
+`
+
+type ConfirmManagedFileSensitiveParams struct {
+	ConfirmedBy uuid.NullUUID
+	ID          uuid.UUID
+}
+
+func (q *Queries) ConfirmManagedFileSensitive(ctx context.Context, arg ConfirmManagedFileSensitiveParams) (ManagedFile, error) {
+	row := q.db.QueryRow(ctx, confirmManagedFileSensitive, arg.ConfirmedBy, arg.ID)
+	var i ManagedFile
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.DeviceGroupID,
+		&i.Path,
+		&i.Mode,
+		&i.Owner,
+		&i.Grp,
+		&i.Content,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SensitiveConfirmedAt,
+		&i.SensitiveConfirmedBy,
+	)
+	return i, err
+}
 
 const countManagedFiles = `-- name: CountManagedFiles :one
 SELECT count(*) FROM (
@@ -80,7 +112,7 @@ func (q *Queries) DeleteManagedUnit(ctx context.Context, id uuid.UUID) (int64, e
 }
 
 const getManagedFile = `-- name: GetManagedFile :one
-SELECT id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at FROM managed_file WHERE id = $1
+SELECT id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at, sensitive_confirmed_at, sensitive_confirmed_by FROM managed_file WHERE id = $1
 `
 
 func (q *Queries) GetManagedFile(ctx context.Context, id uuid.UUID) (ManagedFile, error) {
@@ -97,6 +129,26 @@ func (q *Queries) GetManagedFile(ctx context.Context, id uuid.UUID) (ManagedFile
 		&i.Content,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SensitiveConfirmedAt,
+		&i.SensitiveConfirmedBy,
+	)
+	return i, err
+}
+
+const getManagedFileSettings = `-- name: GetManagedFileSettings :one
+
+SELECT organization_id, managed_file_operator_roots, updated_at, updated_by FROM organization_managed_file_settings
+`
+
+// Operator roots (plan M8s decision 7c). Without a row the list is empty.
+func (q *Queries) GetManagedFileSettings(ctx context.Context) (OrganizationManagedFileSetting, error) {
+	row := q.db.QueryRow(ctx, getManagedFileSettings)
+	var i OrganizationManagedFileSetting
+	err := row.Scan(
+		&i.OrganizationID,
+		&i.ManagedFileOperatorRoots,
+		&i.UpdatedAt,
+		&i.UpdatedBy,
 	)
 	return i, err
 }
@@ -122,20 +174,24 @@ func (q *Queries) GetManagedUnit(ctx context.Context, id uuid.UUID) (ManagedUnit
 }
 
 const insertManagedFile = `-- name: InsertManagedFile :one
-INSERT INTO managed_file (id, organization_id, device_group_id, path, mode, owner, grp, content)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at
+INSERT INTO managed_file (id, organization_id, device_group_id, path, mode, owner, grp, content, sensitive_confirmed_at,
+  sensitive_confirmed_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+  $9, $10)
+RETURNING id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at, sensitive_confirmed_at, sensitive_confirmed_by
 `
 
 type InsertManagedFileParams struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	DeviceGroupID  uuid.NullUUID
-	Path           string
-	Mode           string
-	Owner          string
-	Grp            string
-	Content        string
+	ID                   uuid.UUID
+	OrganizationID       uuid.UUID
+	DeviceGroupID        uuid.NullUUID
+	Path                 string
+	Mode                 string
+	Owner                string
+	Grp                  string
+	Content              string
+	SensitiveConfirmedAt *time.Time
+	SensitiveConfirmedBy uuid.NullUUID
 }
 
 func (q *Queries) InsertManagedFile(ctx context.Context, arg InsertManagedFileParams) (ManagedFile, error) {
@@ -148,6 +204,8 @@ func (q *Queries) InsertManagedFile(ctx context.Context, arg InsertManagedFilePa
 		arg.Owner,
 		arg.Grp,
 		arg.Content,
+		arg.SensitiveConfirmedAt,
+		arg.SensitiveConfirmedBy,
 	)
 	var i ManagedFile
 	err := row.Scan(
@@ -161,6 +219,8 @@ func (q *Queries) InsertManagedFile(ctx context.Context, arg InsertManagedFilePa
 		&i.Content,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SensitiveConfirmedAt,
+		&i.SensitiveConfirmedBy,
 	)
 	return i, err
 }
@@ -204,7 +264,7 @@ func (q *Queries) InsertManagedUnit(ctx context.Context, arg InsertManagedUnitPa
 }
 
 const listAllManagedFiles = `-- name: ListAllManagedFiles :many
-SELECT id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at FROM managed_file ORDER BY id
+SELECT id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at, sensitive_confirmed_at, sensitive_confirmed_by FROM managed_file ORDER BY id
 `
 
 func (q *Queries) ListAllManagedFiles(ctx context.Context) ([]ManagedFile, error) {
@@ -227,6 +287,8 @@ func (q *Queries) ListAllManagedFiles(ctx context.Context) ([]ManagedFile, error
 			&i.Content,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SensitiveConfirmedAt,
+			&i.SensitiveConfirmedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -273,7 +335,7 @@ func (q *Queries) ListAllManagedUnits(ctx context.Context) ([]ManagedUnit, error
 
 const listManagedFiles = `-- name: ListManagedFiles :many
 
-SELECT id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at FROM managed_file
+SELECT id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at, sensitive_confirmed_at, sensitive_confirmed_by FROM managed_file
 WHERE ($1::text IS NULL OR path ILIKE $1::text ESCAPE '\')
   AND ($2::uuid IS NULL OR device_group_id = $2::uuid)
 ORDER BY
@@ -322,6 +384,8 @@ func (q *Queries) ListManagedFiles(ctx context.Context, arg ListManagedFilesPara
 			&i.Content,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SensitiveConfirmedAt,
+			&i.SensitiveConfirmedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -392,18 +456,23 @@ func (q *Queries) ListManagedUnits(ctx context.Context, arg ListManagedUnitsPara
 }
 
 const updateManagedFile = `-- name: UpdateManagedFile :one
-UPDATE managed_file SET path = $1, mode = $2, owner = $3, grp = $4, content = $5, updated_at = now()
-WHERE id = $6
-RETURNING id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at
+UPDATE managed_file SET path = $1, mode = $2, owner = $3, grp = $4, content = $5, updated_at = now(),
+  sensitive_confirmed_at = CASE WHEN $6::bool THEN $7 ELSE sensitive_confirmed_at END,
+  sensitive_confirmed_by = CASE WHEN $6::bool THEN $8 ELSE sensitive_confirmed_by END
+WHERE id = $9
+RETURNING id, organization_id, device_group_id, path, mode, owner, grp, content, created_at, updated_at, sensitive_confirmed_at, sensitive_confirmed_by
 `
 
 type UpdateManagedFileParams struct {
-	Path    string
-	Mode    string
-	Owner   string
-	Grp     string
-	Content string
-	ID      uuid.UUID
+	Path                 string
+	Mode                 string
+	Owner                string
+	Grp                  string
+	Content              string
+	SetSensitive         bool
+	SensitiveConfirmedAt *time.Time
+	SensitiveConfirmedBy uuid.NullUUID
+	ID                   uuid.UUID
 }
 
 func (q *Queries) UpdateManagedFile(ctx context.Context, arg UpdateManagedFileParams) (ManagedFile, error) {
@@ -413,6 +482,9 @@ func (q *Queries) UpdateManagedFile(ctx context.Context, arg UpdateManagedFilePa
 		arg.Owner,
 		arg.Grp,
 		arg.Content,
+		arg.SetSensitive,
+		arg.SensitiveConfirmedAt,
+		arg.SensitiveConfirmedBy,
 		arg.ID,
 	)
 	var i ManagedFile
@@ -427,6 +499,8 @@ func (q *Queries) UpdateManagedFile(ctx context.Context, arg UpdateManagedFilePa
 		&i.Content,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SensitiveConfirmedAt,
+		&i.SensitiveConfirmedBy,
 	)
 	return i, err
 }
@@ -461,6 +535,33 @@ func (q *Queries) UpdateManagedUnit(ctx context.Context, arg UpdateManagedUnitPa
 		&i.Active,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertManagedFileSettings = `-- name: UpsertManagedFileSettings :one
+INSERT INTO organization_managed_file_settings (organization_id, managed_file_operator_roots, updated_at, updated_by)
+VALUES ($1, $2, now(), $3)
+ON CONFLICT (organization_id) DO UPDATE
+SET managed_file_operator_roots = excluded.managed_file_operator_roots, updated_at = excluded.updated_at,
+    updated_by = excluded.updated_by
+RETURNING organization_id, managed_file_operator_roots, updated_at, updated_by
+`
+
+type UpsertManagedFileSettingsParams struct {
+	OrganizationID           uuid.UUID
+	ManagedFileOperatorRoots []string
+	UpdatedBy                uuid.NullUUID
+}
+
+func (q *Queries) UpsertManagedFileSettings(ctx context.Context, arg UpsertManagedFileSettingsParams) (OrganizationManagedFileSetting, error) {
+	row := q.db.QueryRow(ctx, upsertManagedFileSettings, arg.OrganizationID, arg.ManagedFileOperatorRoots, arg.UpdatedBy)
+	var i OrganizationManagedFileSetting
+	err := row.Scan(
+		&i.OrganizationID,
+		&i.ManagedFileOperatorRoots,
+		&i.UpdatedAt,
+		&i.UpdatedBy,
 	)
 	return i, err
 }

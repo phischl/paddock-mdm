@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -38,6 +39,8 @@ var (
 	SpecBundleSeqBump      = ActionSpec{Code: audit.CodePlatformBundleSeqBumped, Actor: &adminActor}
 	SpecRecompileRequested = ActionSpec{Code: audit.CodeOrganizationRecompileRequested, Actor: &adminActor}
 	SpecCacheRebuilt       = ActionSpec{Code: audit.CodePlatformCacheRebuilt, Actor: &adminActor}
+	// SpecSecurityReviewRequired records the start of the review of existing data (ADR 0034 decision 7).
+	SpecSecurityReviewRequired = ActionSpec{Code: audit.CodeOrganizationSecurityReviewRequired, Actor: &adminActor}
 )
 
 // Bounds of BumpBundleSeq.
@@ -94,6 +97,50 @@ func (a *Admin) RecompileAll(ctx context.Context) (int, error) {
 		}
 	}
 	return len(orgs), errors.Join(errs...)
+}
+
+// OrganizationReview is the outcome of the security review of one organization.
+type OrganizationReview struct {
+	Slug   string
+	Counts SecurityReviewCounts
+}
+
+// SecurityReviewAll computes the security review of every organization and records
+// organization.security_review_required in every organization where a count is above zero (plan M8s decision 28).
+// A second run records again.
+func (a *Admin) SecurityReviewAll(ctx context.Context) ([]OrganizationReview, error) {
+	orgs, err := a.org.OrganizationIDs(system(ctx, uuid.Nil))
+	if err != nil {
+		return nil, fmt.Errorf("list organizations: %w", err)
+	}
+	var out []OrganizationReview
+	var errs []error
+	for _, org := range orgs {
+		var r OrganizationReview
+		err := a.org.InOrg(system(ctx, org), func(ctx context.Context, q *pgstore.Queries) error {
+			o, err := q.GetOrganization(ctx, org)
+			if err != nil {
+				return fmt.Errorf("organization: %w", err)
+			}
+			review, err := securityReviewIn(ctx, q, time.Now())
+			r = OrganizationReview{Slug: o.Slug, Counts: review.Counts()}
+			return err
+		})
+		if err == nil && r.Counts != (SecurityReviewCounts{}) {
+			spec := SpecSecurityReviewRequired
+			spec.Target = &audit.Target{Type: "organization", ID: org.String(), Display: r.Slug}
+			spec.Params = map[string]any{
+				"root_grant_profiles": r.Counts.RootGrants, "sensitive_files": r.Counts.SensitiveFiles, "denied_files": r.Counts.DeniedFiles,
+			}
+			err = a.runner.RunTx(system(ctx, org), ScopeOrg, spec, func(context.Context, *pgstore.Queries, Recorder) error { return nil })
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("organization %s: %w", org, err))
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, errors.Join(errs...)
 }
 
 // RebuildCache runs rebuild, which rewrites the gateway's cache from PostgreSQL (worker.CacheSync.ReconcileAll), and

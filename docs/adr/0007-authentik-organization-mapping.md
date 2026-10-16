@@ -39,3 +39,11 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
 - **Claim hygiene:** device providers do not use Authentik's managed `profile` mapping (it emits all groups); a Paddock
   mapping emits the profile claims and only the organization's `paddock.<slug>…` groups.
 
+## Amendment 2026-10-16 (ADR 0034)
+- The step-up provider `paddock-portal-stepup` emits the Paddock groups claim (`io.paddock/scope-groups`) explicitly;
+  the step-up callback resolves the role from it with the login's resolution and refuses a step-up whose role or
+  organization differs from the session (the account's sessions are revoked and `admin_account` updated).
+- The worker reconciles `admin_account` against the organization's role groups and `is_active` every identity sync
+  interval; a removed, demoted or deactivated administrator loses every session.
+- The step-up flow `paddock-stepup` validates with WebAuthn only in the shipped blueprint; TOTP for the step-up
+  exists in the development blueprint alone.

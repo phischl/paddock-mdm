@@ -1,6 +1,7 @@
 # yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
-# DEVELOPMENT ONLY (mounted by compose.dev.yaml): test users and an admin login without the authenticator
-# validation stage. Organization groups are assigned by `make dev-seed` after the organizations exist.
+# DEVELOPMENT ONLY (mounted by compose.dev.yaml): test users, an admin login without the authenticator validation
+# stage and a step-up that also accepts TOTP. Organization groups are assigned by `make dev-seed` after the
+# organizations exist.
 version: 1
 metadata:
   name: Paddock - Development
@@ -32,6 +33,44 @@ entries:
       order: 0
     attrs:
       target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 30]]
+
+  # The step-up validates with WebAuthn only; the test users have scripted TOTP authenticators. The WebAuthn stage at
+  # order 30 is skipped like the login's, and a stage that also accepts TOTP takes its place at order 31.
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        path: paddock/paddock-stepup.yaml
+      required: true
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: skip-stepup-webauthn
+    identifiers:
+      name: paddock-dev-skip-stepup-webauthn
+    attrs:
+      expression: |
+        # This blueprint is only mounted by compose.dev.yaml (PADDOCK_ENV=development).
+        return False
+
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-stepup-webauthn
+      order: 0
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-stepup]]], [order, 30]]
+
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: stepup-mfa
+    identifiers:
+      name: paddock-dev-stepup-mfa
+    attrs:
+      device_classes: [webauthn, totp]
+      not_configured_action: deny
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, paddock-stepup]]
+      stage: !KeyOf stepup-mfa
+      order: 31
 
   - model: authentik_core.user
     identifiers:

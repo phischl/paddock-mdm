@@ -122,6 +122,23 @@ func (s *Stack) cleanupCall(method, path string, ok ...int) {
 }
 
 // ID decodes the id of a created resource.
+// OperatorRoot adds root to alice's organization's operator roots unless it is there, with a fresh step-up: below it
+// the system tests manage files without a step-up (ADR 0034 amendment 2026-10-16).
+func (s *Stack) OperatorRoot(root string) {
+	s.t.Helper()
+	var cur struct {
+		OperatorRoots []string `json:"operator_roots"`
+	}
+	if err := json.Unmarshal(s.Call(http.MethodGet, "/api/v1/settings/managed-files", nil, http.StatusOK).Body, &cur); err != nil {
+		s.t.Fatal(err)
+	}
+	if slices.Contains(cur.OperatorRoots, root) {
+		return
+	}
+	s.StepUp()
+	s.Call(http.MethodPut, "/api/v1/settings/managed-files", map[string]any{"operator_roots": append(cur.OperatorRoots, root)}, http.StatusOK)
+}
+
 func (s *Stack) ID(res portal.Response) string {
 	s.t.Helper()
 	var v struct {

@@ -345,3 +345,13 @@ worker/compiler; a requirement conflicts with ADR 0003/0004/0005/0018 or `CLAUDE
 | R1 | Bundles bucket on the same host as the control plane | Intended (bundles are not evidence); backups not needed (recompiled) |
 | R2 | Valkey loss empties `dk:`/`bp:`/`seq:` | Worker/compiler reconcile loops rebuild from PostgreSQL every 60 s; documented in `local-dev.md` |
 | R3 | Enrollment config contains the token in plain text | Shown once; operator distributes it like a password; token hashes only in DB |
+
+## Amendment 2026-10-16 (ADR 0034, plan M8s)
+
+Decision 8's file path policy becomes a three-tier classification in `pkg/policy` (`Classify(path, mode)`): denied
+paths (the protected list of decision 8 plus loader, boot, kernel, identity, polkit, udev, tmpfiles and reserved
+systemd paths; plan M8s §6.2) are refused by server and agent; sensitive paths (cron, systemd units, profile.d,
+autostart, SSH, network hooks, logrotate, any file directly in `/etc/`, any `/etc/*.d/`, any executable mode) need
+the `org_admin` role and a step-up; ordinary paths keep `RolesWrite`. The agent never deletes a file on a denied
+path, not even one it wrote (`left_denied_file`). The compiler does not ship definitions on denied paths; they are
+listed for review.

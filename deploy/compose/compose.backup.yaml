@@ -45,6 +45,7 @@ services:
   pgbackrest: &pgbackrest
     image: ${PADDOCK_PGBACKREST_IMAGE:-paddock-pgbackrest:dev}
     restart: unless-stopped
+    pids_limit: 128
     command: ["serve"]
     read_only: true
     tmpfs: [/tmp]
@@ -85,6 +86,7 @@ services:
   fleet-backup:
     image: ${FLEET_MYSQL_IMAGE}
     restart: unless-stopped
+    pids_limit: 128
     entrypoint: ["/bin/bash", "/paddock/backup.sh"]
     command: ["serve"]
     read_only: true
@@ -104,6 +106,7 @@ services:
   fleet-backup-upload:
     image: ${AWS_CLI_IMAGE}
     restart: unless-stopped
+    pids_limit: 128
     entrypoint: ["/bin/bash", "/paddock/backup-upload.sh"]
     command: ["serve"]
     read_only: true

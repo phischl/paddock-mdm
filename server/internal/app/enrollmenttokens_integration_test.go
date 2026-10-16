@@ -17,6 +17,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 )
 
@@ -90,5 +91,59 @@ func TestEnrollmentTokensPublishToTheDeviceCache(t *testing.T) {
 	in.MaxUses = 0
 	if _, err := tokens.Create(admin(), in); err == nil || len(cache.puts) != 3 {
 		t.Fatalf("invalid token: %v, %d publishes", err, len(cache.puts))
+	}
+}
+
+// TestDeviceGroupDeleteDetachesInactiveTokens: an active token keeps its device group (409 in_use); once the token is
+// revoked the group can be deleted and the token no longer names it.
+func TestDeviceGroupDeleteDetachesInactiveTokens(t *testing.T) {
+	env := pgtest.SharedPaddock(t)
+	ctx := context.Background()
+	pool, err := db.NewOrgPool(ctx, env.API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = super.Close(ctx) })
+	org := uuid.Must(uuid.NewV7())
+	if _, err := super.Exec(ctx, "INSERT INTO organization (id, slug, name, status) VALUES ($1, $2, 'Test', 'active')",
+		org, "g"+org.String()[24:]); err != nil {
+		t.Fatal(err)
+	}
+	admin := func() context.Context {
+		return httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()),
+			Display: "alice", Role: principal.RoleOrgAdmin, OrganizationID: org}), uuid.NewString())
+	}
+	keys := func(context.Context) ([]protocol.BundleKey, error) { return []protocol.BundleKey{{KeyID: "k1"}}, nil }
+	runner := app.NewActionRunner(pool, nil, httpx.RequestID)
+	groups := app.NewDeviceGroups(runner, pool)
+	tokens := app.NewEnrollmentTokens(runner, pool, keys, keys, &fakeTokenCache{}, "https://device.test")
+
+	group, err := groups.Create(admin(), "laptops", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := tokens.Create(admin(), app.TokenInput{Name: "laptops", MaxUses: 5,
+		ExpiresAt: time.Now().Add(time.Hour), DeviceGroupID: &group.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := groups.Delete(admin(), group.ID); !errors.Is(err, problem.InUse) {
+		t.Fatalf("delete with an active token: %v, want in_use", err)
+	}
+	if _, err := tokens.Revoke(admin(), created.Token.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := groups.Delete(admin(), group.ID); err != nil {
+		t.Fatalf("delete after revoke: %v", err)
+	}
+	var named bool
+	if err := super.QueryRow(ctx, "SELECT device_group_id IS NOT NULL FROM enrollment_token WHERE id = $1",
+		created.Token.ID).Scan(&named); err != nil || named {
+		t.Fatalf("revoked token still names the group: %v %v", named, err)
 	}
 }

@@ -41,6 +41,18 @@ func (q *Queries) CountEnrollmentTokens(ctx context.Context, arg CountEnrollment
 	return count, err
 }
 
+const detachInactiveEnrollmentTokens = `-- name: DetachInactiveEnrollmentTokens :exec
+UPDATE enrollment_token SET device_group_id = NULL
+WHERE device_group_id = $1
+  AND (revoked_at IS NOT NULL OR expires_at <= now() OR uses >= max_uses)
+`
+
+// A revoked, expired or used-up token no longer assigns devices, so it does not keep its device group alive.
+func (q *Queries) DetachInactiveEnrollmentTokens(ctx context.Context, deviceGroupID uuid.NullUUID) error {
+	_, err := q.db.Exec(ctx, detachInactiveEnrollmentTokens, deviceGroupID)
+	return err
+}
+
 const getEnrollmentToken = `-- name: GetEnrollmentToken :one
 SELECT id, organization_id, name, secret_sha256, device_group_id, auto_approve, max_uses, uses, expires_at, revoked_at, created_by, created_at FROM enrollment_token WHERE id = $1
 `

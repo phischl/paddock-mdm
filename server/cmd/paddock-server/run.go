@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -45,5 +46,19 @@ func retryUntilDone(ctx context.Context, what string, first, maxWait time.Durati
 		case <-time.After(wait):
 		}
 		wait = min(wait*2, maxWait)
+	}
+}
+
+// newHTTPServer returns the server of a role that answers HTTP requests. The read and write timeouts bound how long a
+// slow client can hold a connection; handlers that legitimately need longer (the artifact uploads) extend their own
+// deadlines (plan M8s decision 33).
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 }

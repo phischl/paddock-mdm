@@ -6,6 +6,7 @@ export const router = createRouter({
   routes: [
     { path: '/', name: 'home', component: () => import('./views/Overview.vue') },
     { path: '/attention', name: 'attention', component: () => import('./views/Attention.vue') },
+    { path: '/security-review', name: 'security-review', component: () => import('./views/SecurityReview.vue') },
     { path: '/login-denied', name: 'login-denied', component: () => import('./views/LoginDenied.vue'), meta: { public: true } },
     { path: '/device-groups', name: 'device-groups', component: () => import('./views/DeviceGroups.vue') },
     { path: '/device-groups/:id', name: 'device-group', component: () => import('./views/DeviceGroupDetail.vue') },
@@ -42,6 +43,7 @@ export const router = createRouter({
     },
     { path: '/settings/login', name: 'login-settings', component: () => import('./views/LoginSettings.vue') },
     { path: '/settings/dms', name: 'dms-settings', component: () => import('./views/DMSSettings.vue') },
+    { path: '/settings/managed-files', name: 'managed-file-settings', component: () => import('./views/ManagedFileSettings.vue') },
     { path: '/settings/updates', name: 'update-settings', component: () => import('./views/UpdateSettings.vue') },
     { path: '/package-holds', name: 'package-holds', component: () => import('./views/PackageHolds.vue') },
     { path: '/revocations', name: 'revocations', component: () => import('./views/RevocationRequests.vue') },
@@ -50,6 +52,7 @@ export const router = createRouter({
     { path: '/platform/agent-releases', name: 'agent-releases', component: () => import('./views/AgentReleases.vue') },
     { path: '/platform/agent-releases/:version', name: 'agent-release', component: () => import('./views/AgentReleaseDetail.vue') },
     { path: '/platform/ip-allowlist', name: 'ip-allowlist', component: () => import('./views/IpAllowlist.vue') },
+    { path: '/platform/sessions', name: 'platform-sessions', component: () => import('./views/PlatformSessions.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFound.vue') },
   ],
 })

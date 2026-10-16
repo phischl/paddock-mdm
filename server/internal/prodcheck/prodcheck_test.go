@@ -84,7 +84,22 @@ func newFixture(t *testing.T) *fixture {
 			},
 		},
 	}
+	harden(f.cfg)
 	return f
+}
+
+// harden gives every service of cfg the settings of plan M8s decisions 34 and 35.
+func harden(cfg prodcheck.Config) {
+	for name, s := range cfg.Services {
+		s.PidsLimit = 256
+		if strings.HasPrefix(name, "paddock-") || name == "caddy" || name == "caddy-ca-export" {
+			s.CapDrop, s.SecurityOpt = []string{"ALL"}, []string{"no-new-privileges:true"}
+		}
+		if name == "caddy" {
+			s.CapAdd = []string{"NET_BIND_SERVICE"}
+		}
+		cfg.Services[name] = s
+	}
 }
 
 func (f *fixture) service(name string) prodcheck.Service { return f.cfg.Services[name] }
@@ -125,8 +140,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 13 {
-		t.Fatalf("expected 13 items:\n%s", out)
+	if strings.Count(out, "PASS") != 14 {
+		t.Fatalf("expected 14 items:\n%s", out)
 	}
 }
 
@@ -473,6 +488,7 @@ var labItems = []string{
 	"secrets the services reference are mounted",
 	"only Caddy's HTTP port published, on the bind address",
 	"links between the hosts use TLS",
+	"container hardening",
 	"Caddy: plain HTTP behind the TLS proxy",
 	"edge client address",
 	"lab: edge admin allow list",
@@ -523,6 +539,7 @@ func newLabFixture(t *testing.T) *fixture {
 		ExtraHosts:  labHosts(),
 		Environment: map[string]*string{"PADDOCK_TLS_PROBE_ADDR": ptr(labProxy + ":443")},
 	}
+	harden(f.cfg)
 	return f
 }
 
@@ -769,4 +786,65 @@ func TestParseLabShapes(t *testing.T) {
 		cfg.Prod.LabProxyAddr != "192.0.2.5" || cfg.Services["proxy"].NetworkMode != "host" {
 		t.Fatalf("unexpected parse result: %+v", cfg)
 	}
+}
+
+// TestContainerHardeningFindings: each setting of plan M8s decision 36 fails the item, naming the service.
+func TestContainerHardeningFindings(t *testing.T) {
+	cases := map[string]struct {
+		edit func(*fixture)
+		want string
+	}{
+		"role keeps capabilities": {func(f *fixture) {
+			s := f.service("paddock-api")
+			s.CapDrop = nil
+			f.cfg.Services["paddock-api"] = s
+		}, "paddock-api: cap_drop is not [ALL]"},
+		"role may gain privileges": {func(f *fixture) {
+			s := f.service("paddock-api")
+			s.SecurityOpt = []string{"label:disable"}
+			f.cfg.Services["paddock-api"] = s
+		}, "paddock-api: security_opt lacks no-new-privileges:true"},
+		"role adds a capability": {func(f *fixture) {
+			s := f.service("paddock-api")
+			s.CapAdd = []string{"NET_ADMIN"}
+			f.cfg.Services["paddock-api"] = s
+		}, "paddock-api: cap_add [NET_ADMIN]"},
+		"caddy adds more than the bind": {func(f *fixture) {
+			s := f.service("caddy")
+			s.CapAdd = []string{"NET_BIND_SERVICE", "SYS_ADMIN"}
+			f.cfg.Services["caddy"] = s
+		}, "caddy: cap_add [NET_BIND_SERVICE SYS_ADMIN], want [NET_BIND_SERVICE]"},
+		"caddy keeps capabilities": {func(f *fixture) {
+			s := f.service("caddy")
+			s.CapDrop = []string{"NET_RAW"}
+			f.cfg.Services["caddy"] = s
+		}, "caddy: cap_drop is not [ALL]"},
+		"third-party service without a process bound": {func(f *fixture) {
+			s := f.service("postgres")
+			s.PidsLimit = 0
+			f.cfg.Services["postgres"] = s
+		}, "postgres: no pids_limit"},
+		"unbounded processes": {func(f *fixture) {
+			s := f.service("rabbitmq")
+			s.PidsLimit = -1
+			f.cfg.Services["rabbitmq"] = s
+		}, "rabbitmq: no pids_limit"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			tc.edit(f)
+			_, out := run(t, f.cfg, prodcheck.Options{})
+			failItem(t, out, "container hardening", tc.want)
+		})
+	}
+	t.Run("a third-party service keeps its capabilities", func(t *testing.T) {
+		f := newFixture(t)
+		s := f.service("postgres")
+		s.CapAdd = []string{"IPC_LOCK"}
+		f.cfg.Services["postgres"] = s
+		if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok {
+			t.Fatalf("expected all PASS:\n%s", out)
+		}
+	})
 }

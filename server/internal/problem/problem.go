@@ -93,6 +93,9 @@ var (
 	IPAllowlistUnavailable      = &Error{Code: "ip_allowlist_unavailable", Status: http.StatusServiceUnavailable}
 	LockoutConfirmationRequired = &Error{Code: "lockout_confirmation_required", Status: http.StatusConflict}
 	DisableConfirmationRequired = &Error{Code: "disable_confirmation_required", Status: http.StatusConflict}
+	// SessionStoreUnavailable answers every portal session request while the session store cannot be reached; the
+	// session fails closed and the cookie is kept (ADR 0034 decision 4). API tokens are not affected.
+	SessionStoreUnavailable = &Error{Code: "session_store_unavailable", Status: http.StatusServiceUnavailable}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}

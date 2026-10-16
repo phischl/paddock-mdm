@@ -68,7 +68,7 @@ type Presigner interface {
 
 // UploadPresigner computes presigned PUT URLs (objectstore.Presigner of the escrow bucket).
 type UploadPresigner interface {
-	PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error)
+	PresignPut(ctx context.Context, key string, size int64, ttl time.Duration) (string, error)
 }
 
 // Deps are the dependencies of the device API.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -35,6 +37,9 @@ var (
 	SpecAssignmentCreate = ActionSpec{Code: audit.CodeProfileAssignmentCreated, AllowedRoles: RolesWrite}
 	SpecAssignmentUpdate = ActionSpec{Code: audit.CodeProfileAssignmentUpdated, AllowedRoles: RolesWrite}
 	SpecAssignmentDelete = ActionSpec{Code: audit.CodeProfileAssignmentDeleted, AllowedRoles: RolesWrite}
+	// SpecProfileConfirmRootGrant confirms an effectively Full profile that predates the step-up rule (ADR 0034
+	// decision 7).
+	SpecProfileConfirmRootGrant = ActionSpec{Code: audit.CodePermissionProfileRootGrantConfirmed, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 )
 
 // ListProfiles returns one page of permission profiles.
@@ -95,9 +100,20 @@ func profileParams(rec Recorder, in privilege.Profile) {
 	rec.SetParam("class", string(in.Class))
 	rec.SetParam("commands", in.Commands)
 	rec.SetParam("root_equivalent", len(privilege.RootEquivalentCommands(in.Commands)) > 0)
+	rec.SetParam("effective_class", string(privilege.EffectiveClass(in)))
 }
 
-// CreateProfile creates a permission profile (audited: permission_profile.created).
+// profileChangeNeedsStepUp is the update rule of ADR 0034 decision 1: a profile that is effectively Full after the
+// change needs a step-up when it was not before, or when its class or commands change. A rename or a change of the
+// password, lecture or timeout settings of an effectively Full profile grants nothing new.
+func profileChangeNeedsStepUp(cur pgstore.PermissionProfile, in privilege.Profile) bool {
+	old := privilege.NormalizeProfile(profileOf(cur))
+	return privilege.RequiresStepUp(in) &&
+		(!privilege.RequiresStepUp(old) || in.Class != old.Class || !slices.Equal(in.Commands, old.Commands))
+}
+
+// CreateProfile creates a permission profile (audited: permission_profile.created). A profile that is effectively
+// Full requires a step-up (ADR 0034 decision 1).
 func (p *Privileges) CreateProfile(ctx context.Context, in privilege.Profile) (pgstore.PermissionProfile, error) {
 	var out pgstore.PermissionProfile
 	err := p.runner.RunTx(ctx, ScopeOrg, SpecProfileCreate, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
@@ -106,14 +122,20 @@ func (p *Privileges) CreateProfile(ctx context.Context, in privilege.Profile) (p
 		if err != nil {
 			return err
 		}
+		if privilege.RequiresStepUp(in) {
+			if err := requireRootGrant(ctx, rec); err != nil {
+				return err
+			}
+		}
 		org, err := orgOf(ctx)
 		if err != nil {
 			return err
 		}
+		at, by := confirmation(ctx, privilege.RequiresStepUp(in))
 		out, err = q.InsertPermissionProfile(ctx, pgstore.InsertPermissionProfileParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: org, Name: in.Name, Class: string(in.Class), Commands: in.Commands,
 			RequirePassword: in.RequirePassword, TimestampTimeoutMin: int32(in.TimestampTimeoutMin), //nolint:gosec // validated 0–60
-			Lecture: string(in.Lecture),
+			Lecture: string(in.Lecture), RootGrantConfirmedAt: at, RootGrantConfirmedBy: by,
 		})
 		if db.IsUniqueViolation(err, "permission_profile_organization_id_name_key") {
 			return problem.NameTaken.WithDetail("a permission profile with this name exists")
@@ -151,13 +173,17 @@ func (pp ProfilePatch) apply(p privilege.Profile) privilege.Profile {
 }
 
 // UpdateProfile changes a permission profile (audited: permission_profile.updated) and recompiles the organization.
-// Changing the class to full requires a step-up (plan M4a decision 7).
+// A change that profileChangeNeedsStepUp names requires a step-up (ADR 0034 decision 1).
 func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch ProfilePatch) (pgstore.PermissionProfile, error) {
 	spec := SpecProfileUpdate
 	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
 	var out pgstore.PermissionProfile
 	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-		cur, err := q.GetPermissionProfile(ctx, id)
+		guard, err := beginGrantGuard(ctx, q)
+		if err != nil {
+			return err
+		}
+		cur, err := q.GetPermissionProfileForUpdate(ctx, id)
 		if err != nil {
 			return notFound(err)
 		}
@@ -168,23 +194,67 @@ func (p *Privileges) UpdateProfile(ctx context.Context, id uuid.UUID, patch Prof
 		if err != nil {
 			return err
 		}
-		if in.Class == privilege.ClassFull && cur.Class != string(privilege.ClassFull) {
-			if err := rec.RequireStepUp(); err != nil {
+		steppedUp := profileChangeNeedsStepUp(cur, in)
+		if steppedUp {
+			if err := requireRootGrant(ctx, rec); err != nil {
 				return err
 			}
 		}
-		out, err = q.UpdatePermissionProfile(ctx, pgstore.UpdatePermissionProfileParams{
+		params := pgstore.UpdatePermissionProfileParams{
 			ID: id, Name: in.Name, Class: string(in.Class), Commands: in.Commands, RequirePassword: in.RequirePassword,
 			TimestampTimeoutMin: int32(in.TimestampTimeoutMin), Lecture: string(in.Lecture), //nolint:gosec // validated 0–60
-		})
+		}
+		params.SetRootGrant, params.RootGrantConfirmedAt, params.RootGrantConfirmedBy = rootGrantChange(ctx, in, steppedUp)
+		out, err = q.UpdatePermissionProfile(ctx, params)
 		if db.IsUniqueViolation(err, "permission_profile_organization_id_name_key") {
 			return problem.NameTaken.WithDetail("a permission profile with this name exists")
 		}
 		if err != nil {
 			return err
 		}
+		if !steppedUp {
+			if err := guard.check(ctx, q, rec); err != nil {
+				return err
+			}
+		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil
+	})
+	return out, err
+}
+
+// rootGrantChange is how an update changes the confirmation columns: a stepped-up change confirms the grant, a
+// profile that is no longer effectively Full loses its confirmation, and any other change keeps it.
+func rootGrantChange(ctx context.Context, in privilege.Profile, steppedUp bool) (bool, *time.Time, uuid.NullUUID) {
+	if !steppedUp && privilege.RequiresStepUp(in) {
+		return false, nil, uuid.NullUUID{}
+	}
+	at, by := confirmation(ctx, steppedUp)
+	return true, at, by
+}
+
+// ConfirmRootGrant confirms, with a step-up, an effectively Full profile that existed before the step-up rule covered
+// it (audited: permission_profile.root_grant_confirmed); a profile that is not effectively Full is 409 invalid_state.
+func (p *Privileges) ConfirmRootGrant(ctx context.Context, id uuid.UUID) (pgstore.PermissionProfile, error) {
+	spec := SpecProfileConfirmRootGrant
+	spec.Target = &audit.Target{Type: "permission_profile", ID: id.String()}
+	var out pgstore.PermissionProfile
+	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		cur, err := q.GetPermissionProfileForUpdate(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		profile := profileOf(cur)
+		rec.SetTarget(audit.Target{Type: "permission_profile", ID: id.String(), Display: cur.Name})
+		rec.SetParam("name", cur.Name)
+		rec.SetParam("effective_class", string(privilege.EffectiveClass(profile)))
+		rec.SetParam("commands", cur.Commands)
+		if !privilege.RequiresStepUp(profile) {
+			return problem.InvalidState.WithDetail("the profile does not grant root")
+		}
+		_, by := confirmation(ctx, true)
+		out, err = q.ConfirmPermissionProfileRootGrant(ctx, pgstore.ConfirmPermissionProfileRootGrantParams{ID: id, ConfirmedBy: by})
+		return err
 	})
 	return out, err
 }
@@ -271,7 +341,7 @@ type NewAssignment struct {
 }
 
 // CreateAssignment assigns a profile (audited: profile_assignment.created) and recompiles the organization.
-// Assigning a full profile requires a step-up (plan M4a decision 7).
+// Assigning an effectively Full profile requires a step-up (ADR 0034 decision 1).
 func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pgstore.ProfileAssignment, error) {
 	var out pgstore.ProfileAssignment
 	err := p.runner.RunTx(ctx, ScopeOrg, SpecAssignmentCreate, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
@@ -282,13 +352,18 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 		rec.SetParam("subject_type", string(in.SubjectType))
 		rec.SetParam("subject_id", idParam(in.SubjectID))
 		rec.SetParam("device_group_id", idParam(in.DeviceGroupID))
-		profile, err := q.GetPermissionProfile(ctx, in.ProfileID)
+		guard, err := beginGrantGuard(ctx, q)
+		if err != nil {
+			return err
+		}
+		profile, err := q.GetPermissionProfileForShare(ctx, in.ProfileID)
 		if err != nil {
 			return problem.InvalidRequest.WithDetail("unknown permission profile")
 		}
 		assignmentProfileParams(rec, profile)
-		if profile.Class == string(privilege.ClassFull) {
-			if err := rec.RequireStepUp(); err != nil {
+		full := privilege.RequiresStepUp(profileOf(profile))
+		if full {
+			if err := requireRootGrant(ctx, rec); err != nil {
 				return err
 			}
 		}
@@ -314,6 +389,11 @@ func (p *Privileges) CreateAssignment(ctx context.Context, in NewAssignment) (pg
 			return err
 		}
 		rec.SetTarget(audit.Target{Type: "profile_assignment", ID: out.ID.String(), Display: profile.Name})
+		if !full {
+			if err := guard.check(ctx, q, rec); err != nil {
+				return err
+			}
+		}
 		rec.StateChanged(statechange.ScopeOrg, profile.OrganizationID)
 		return nil
 	})
@@ -324,6 +404,7 @@ func assignmentProfileParams(rec Recorder, profile pgstore.PermissionProfile) {
 	rec.SetParam("profile", profile.Name)
 	rec.SetParam("class", profile.Class)
 	rec.SetParam("root_equivalent", len(privilege.RootEquivalentCommands(profile.Commands)) > 0)
+	rec.SetParam("effective_class", string(privilege.EffectiveClass(profileOf(profile))))
 }
 
 // requireSubject checks that a group or user subject exists in the organization.
@@ -341,12 +422,17 @@ func requireSubject(ctx context.Context, q *pgstore.Queries, t privilege.Subject
 	return err
 }
 
-// UpdateAssignmentScope changes the device group scope of an assignment (audited: profile_assignment.updated).
+// UpdateAssignmentScope changes the device group scope of an assignment (audited: profile_assignment.updated). The
+// assignment of an effectively Full profile requires a step-up (ADR 0034 decision 1).
 func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, deviceGroupID *uuid.UUID) (pgstore.ProfileAssignment, error) {
 	spec := SpecAssignmentUpdate
 	spec.Target = &audit.Target{Type: "profile_assignment", ID: id.String()}
 	var out pgstore.ProfileAssignment
 	err := p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		guard, err := beginGrantGuard(ctx, q)
+		if err != nil {
+			return err
+		}
 		cur, profile, err := loadAssignment(ctx, q, rec, id)
 		if err != nil {
 			return err
@@ -354,6 +440,12 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 		assignmentProfileParams(rec, profile)
 		rec.SetParam("old_device_group_id", idParam(groupPtr(cur.DeviceGroupID)))
 		rec.SetParam("device_group_id", idParam(deviceGroupID))
+		full := privilege.RequiresStepUp(profileOf(profile))
+		if full {
+			if err := requireRootGrant(ctx, rec); err != nil {
+				return err
+			}
+		}
 		if deviceGroupID != nil {
 			if _, err := q.GetDeviceGroup(ctx, *deviceGroupID); err != nil {
 				return problem.InvalidRequest.WithDetail("unknown device group")
@@ -366,6 +458,11 @@ func (p *Privileges) UpdateAssignmentScope(ctx context.Context, id uuid.UUID, de
 		if err != nil {
 			return err
 		}
+		if !full {
+			if err := guard.check(ctx, q, rec); err != nil {
+				return err
+			}
+		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil
 	})
@@ -377,6 +474,10 @@ func (p *Privileges) DeleteAssignment(ctx context.Context, id uuid.UUID) error {
 	spec := SpecAssignmentDelete
 	spec.Target = &audit.Target{Type: "profile_assignment", ID: id.String()}
 	return p.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		// Removing a grant never grows one, but it serializes with the changes that are compared (plan M8s 7g-bis).
+		if err := q.LockOrganizationPrivileges(ctx); err != nil {
+			return err
+		}
 		cur, profile, err := loadAssignment(ctx, q, rec, id)
 		if err != nil {
 			return err
@@ -393,11 +494,11 @@ func (p *Privileges) DeleteAssignment(ctx context.Context, id uuid.UUID) error {
 }
 
 func loadAssignment(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID) (pgstore.ProfileAssignment, pgstore.PermissionProfile, error) {
-	cur, err := q.GetProfileAssignment(ctx, id)
+	cur, err := q.GetProfileAssignmentForUpdate(ctx, id)
 	if err != nil {
 		return cur, pgstore.PermissionProfile{}, notFound(err)
 	}
-	profile, err := q.GetPermissionProfile(ctx, cur.ProfileID)
+	profile, err := q.GetPermissionProfileForShare(ctx, cur.ProfileID)
 	if err != nil {
 		return cur, profile, err
 	}

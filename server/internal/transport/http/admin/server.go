@@ -3,8 +3,10 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -44,6 +46,8 @@ type Deps struct {
 	Updates       *app.Updates
 	Attention     *app.Attention
 	Overview      *app.Overview
+	// SecurityReview lists existing data from before the step-up rules (ADR 0034 decision 7).
+	SecurityReview *app.SecurityReview
 	// IPAllowlist and IPGuard are the IP allow list of the administrative surfaces (plan M7a decisions 12 and 17);
 	// a nil IPGuard installs no enforcement (serveAPI always installs one).
 	IPAllowlist *app.IPAllowlist
@@ -54,9 +58,15 @@ type Deps struct {
 	StepUp      *OIDC // provider paddock-portal-stepup (plan M4a decision 6)
 	// StepUpTokens keeps the raw ID token of every step-up for the escrow-reader (plan M4b.1 decision 7).
 	StepUpTokens StepUpTokenStore
-	PublicURL    string
-	Static       *StaticHandler // portal build
-	Now          func() time.Time
+	// StepUpAccounts checks the role of a step-up against the session (plan M8s decision 20).
+	StepUpAccounts StepUpAccounts
+	// Sessions holds the server-side record of every portal session (plan M8s decision 12).
+	Sessions SessionStore
+	// EndSessions ends every portal session of the installation (plan M8s decision 16).
+	EndSessions *app.Sessions
+	PublicURL   string
+	Static      *StaticHandler // portal build
+	Now         func() time.Time
 	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
 	StepUpMaxAuthAge time.Duration
 	// ExposeStepUp adds the session's step-up time and the step-up timing to GET /api/v1/me (development only, for
@@ -76,6 +86,7 @@ var privileged = map[string]struct {
 	"PATCH /api/v1/device-groups/{id}":                                     {app.ScopeOrg, app.SpecDeviceGroupUpdate},
 	"DELETE /api/v1/device-groups/{id}":                                    {app.ScopeOrg, app.SpecDeviceGroupDelete},
 	"POST /api/platform/v1/organizations":                                  {app.ScopePlatform, app.SpecOrganizationCreate},
+	"POST /api/platform/v1/sessions/end-all":                               {app.ScopePlatform, app.SpecSessionsEndAll},
 	"POST /api/v1/enrollment-tokens":                                       {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
 	"PUT /api/v1/devices/{id}/groups":                                      {app.ScopeOrg, app.SpecDeviceSetGroups},
 	"POST /api/v1/devices/{id}/approve":                                    {app.ScopeOrg, app.SpecDeviceApprove},
@@ -96,6 +107,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/managed-files":                                           {app.ScopeOrg, app.SpecManagedFileCreate},
 	"PATCH /api/v1/managed-files/{id}":                                     {app.ScopeOrg, app.SpecManagedFileUpdate},
 	"DELETE /api/v1/managed-files/{id}":                                    {app.ScopeOrg, app.SpecManagedFileDelete},
+	"POST /api/v1/managed-files/{id}/confirm-sensitive":                    {app.ScopeOrg, app.SpecManagedFileConfirmSensitive},
 	"POST /api/v1/managed-units":                                           {app.ScopeOrg, app.SpecManagedUnitCreate},
 	"PATCH /api/v1/managed-units/{id}":                                     {app.ScopeOrg, app.SpecManagedUnitUpdate},
 	"DELETE /api/v1/managed-units/{id}":                                    {app.ScopeOrg, app.SpecManagedUnitDelete},
@@ -117,6 +129,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/permission-profiles":                                     {app.ScopeOrg, app.SpecProfileCreate},
 	"PATCH /api/v1/permission-profiles/{id}":                               {app.ScopeOrg, app.SpecProfileUpdate},
 	"DELETE /api/v1/permission-profiles/{id}":                              {app.ScopeOrg, app.SpecProfileDelete},
+	"POST /api/v1/permission-profiles/{id}/confirm-root-grant":             {app.ScopeOrg, app.SpecProfileConfirmRootGrant},
 	"POST /api/v1/profile-assignments":                                     {app.ScopeOrg, app.SpecAssignmentCreate},
 	"PATCH /api/v1/profile-assignments/{id}":                               {app.ScopeOrg, app.SpecAssignmentUpdate},
 	"DELETE /api/v1/profile-assignments/{id}":                              {app.ScopeOrg, app.SpecAssignmentDelete},
@@ -131,6 +144,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/revocation-requests/{id}/reject":                         {app.ScopeOrg, app.SpecRevocationReject},
 	"POST /api/v1/revocation-requests/{id}/cancel":                         {app.ScopeOrg, app.SpecRevocationCancel},
 	"PUT /api/v1/settings/dms":                                             {app.ScopeOrg, app.SpecDMSUpdate},
+	"PUT /api/v1/settings/managed-files":                                   {app.ScopeOrg, app.SpecManagedFileSettingsChange},
 	"PUT /api/v1/settings/updates":                                         {app.ScopeOrg, app.SpecUpdateSettings},
 	"POST /api/v1/package-holds":                                           {app.ScopeOrg, app.SpecPackageHoldCreate},
 	"PATCH /api/v1/package-holds/{id}":                                     {app.ScopeOrg, app.SpecPackageHoldUpdate},
@@ -155,7 +169,8 @@ func NewHandler(d Deps) http.Handler {
 		tokenTTL = d.Runner.StepUpWindow()
 	}
 	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now,
-		maxAuthAge: d.StepUpMaxAuthAge, tokens: d.StepUpTokens, tokenTTL: tokenTTL}}
+		maxAuthAge: d.StepUpMaxAuthAge, tokens: d.StepUpTokens, tokenTTL: tokenTTL, sessions: d.Sessions,
+		roles: d.StepUpAccounts}}
 
 	api := http.NewServeMux()
 	h := &handlers{
@@ -164,22 +179,22 @@ func NewHandler(d Deps) http.Handler {
 		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
-		declarative: d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now,
+		securityReview: d.SecurityReview,
+		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
 	}
 	if d.ExposeStepUp {
 		h.stepUpTiming = &stepUpTiming{window: d.Runner.StepUpWindow(), maxAuthAge: d.StepUpMaxAuthAge}
 	}
-	strict := adminapi.NewStrictHandlerWithOptions(h, nil,
+	strict := adminapi.NewStrictHandlerWithOptions(h, []adminapi.StrictMiddlewareFunc{uploadDeadlines},
 		adminapi.StrictHTTPServerOptions{
 			RequestErrorHandlerFunc:  s.rejected,
 			ResponseErrorHandlerFunc: httpx.WriteProblem,
 		})
 	adminapi.HandlerWithOptions(strict, adminapi.StdHTTPServerOptions{
 		BaseRouter:       api,
-		Middlewares:      []adminapi.MiddlewareFunc{s.csrf, limitConfigBody},
+		Middlewares:      []adminapi.MiddlewareFunc{s.csrf, limitBody},
 		ErrorHandlerFunc: s.rejected,
 	})
-	api.Handle("POST /api/auth/logout", s.csrf(s.bff.logout(d.PublicURL)))
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { httpx.WriteProblem(w, r, problem.NotFound) })
 	authenticated := s.session(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		api.ServeHTTP(w, r)
@@ -191,6 +206,8 @@ func NewHandler(d Deps) http.Handler {
 	root.HandleFunc("GET /api/auth/callback", s.bff.callback)
 	root.HandleFunc("GET /api/auth/stepup", s.bff.stepUpStart)
 	root.HandleFunc("GET /api/auth/stepup/callback", s.bff.stepUpCallback)
+	// Outside the session middleware: signing out works while the session store is unreachable (plan M8s decision 15).
+	root.Handle("POST /api/auth/logout", noStore(s.csrf(s.bff.logout(d.PublicURL))))
 	root.Handle("/api/", noStore(authenticated))
 	root.Handle("/", d.Static)
 
@@ -234,10 +251,17 @@ func (s *server) session(next http.Handler) http.Handler {
 			httpx.WriteProblem(w, r, problem.Unauthenticated)
 			return
 		}
+		if !s.bff.sessionLive(w, r, sess) {
+			return
+		}
 		if reissue {
 			sess.Idle = now.Unix()
+			remaining := time.Unix(sess.Exp, 0).Sub(now)
+			if err := s.d.Sessions.Touch(r.Context(), sess.SID, sess.PID, remaining); err != nil {
+				slog.WarnContext(r.Context(), "session record not extended", "error", err)
+			}
 			if value, err := s.d.Keys.Seal(SessionCookie, sess); err == nil {
-				http.SetCookie(w, sessionCookie(value, int(time.Until(time.Unix(sess.Exp, 0)).Seconds())))
+				http.SetCookie(w, sessionCookie(value, int(remaining.Seconds())))
 			}
 		}
 		ctx := principal.With(r.Context(), sess.Principal(httpx.ClientIP(r)))
@@ -282,16 +306,47 @@ func (s *server) rejected(w http.ResponseWriter, r *http.Request, err error) {
 	httpx.WriteProblem(w, r, p)
 }
 
-// limitConfigBody bounds the body of PUT /api/v1/config one byte above app.MaxDocumentBytes, so that a larger
-// document is refused while it is read (400 invalid_request, audited by rejected) and a document of exactly the limit
-// reaches the use case.
-func limitConfigBody(next http.Handler) http.Handler {
+// maxBodyBytes bounds the body of every admin API request without its own limit (plan M8s decision 32).
+const maxBodyBytes = 256 << 10
+
+// artifactUploadPrefix is the path prefix of the agent release uploads, whose handlers bound the body to
+// agentrelease.MaxArtifactBytes themselves.
+const artifactUploadPrefix = "/api/platform/v1/agent-releases/"
+
+// artifactUploadDeadline is how long an agent release upload may take to read its body and write the answer, in place
+// of the server's read and write timeouts (plan M8s decision 33).
+const artifactUploadDeadline = 10 * time.Minute
+
+// limitBody bounds request bodies one byte above their limit, so that a larger body is refused while it is read
+// (400 invalid_request, audited by rejected) and a body of exactly the limit reaches the use case: PUT /api/v1/config
+// at app.MaxDocumentBytes, the artifact uploads not at all, every other request at maxBodyBytes.
+func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPut && r.URL.Path == "/api/v1/config" {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/config":
 			r.Body = http.MaxBytesReader(w, r.Body, app.MaxDocumentBytes+1)
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, artifactUploadPrefix):
+		default:
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes+1)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// uploadDeadlines extends the read and write deadlines of the agent release uploads before their handlers read the
+// body: a 128 MiB artifact over a slow link takes longer than the server's timeouts allow.
+func uploadDeadlines(f adminapi.StrictHandlerFunc, operationID string) adminapi.StrictHandlerFunc {
+	if operationID != "UploadAgentArtifact" && operationID != "UploadAgentPackage" {
+		return f
+	}
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
+		rc := http.NewResponseController(w)
+		deadline := time.Now().Add(artifactUploadDeadline)
+		// A writer without deadline support (HTTP/2 streams, tests) has no connection timeout to extend either.
+		_ = rc.SetReadDeadline(deadline)
+		_ = rc.SetWriteDeadline(deadline)
+		return f(ctx, w, r, request)
+	}
 }
 
 func noStore(next http.Handler) http.Handler {

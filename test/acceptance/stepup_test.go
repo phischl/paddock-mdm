@@ -66,8 +66,11 @@ func TestStepUp(t *testing.T) {
 		return res
 	}
 	group := namedGroup(t, alice, "u1 empty")
+	// Creating a full profile needs a step-up too (ADR 0034); another administrator creates it so that alice's
+	// session starts without one.
+	creator := steppedUpTempUser(t, "u1", env.RoleGroup("acme", "admins"))
 	full := createdID(t, alice, "/api/v1/permission-profiles",
-		expectCreated(t, call(t, alice, http.MethodPost, "/api/v1/permission-profiles", map[string]any{"name": uniqueName("u1 full"), "class": "full"})))
+		expectCreated(t, call(t, creator.Portal, http.MethodPost, "/api/v1/permission-profiles", map[string]any{"name": uniqueName("u1 full"), "class": "full"})))
 	restricted := createdID(t, alice, "/api/v1/permission-profiles", expectCreated(t, call(t, alice, http.MethodPost,
 		"/api/v1/permission-profiles", map[string]any{"name": uniqueName("u1 restricted"), "class": "restricted", "commands": []string{"/usr/bin/true"}})))
 	// Global within an empty device group: the assignment reaches no device.
@@ -165,4 +168,61 @@ func expectCreated(t *testing.T, res env.Response) env.Response {
 	t.Helper()
 	expectStatus(t, res, http.StatusCreated, "")
 	return res
+}
+
+// TestStepUpFactor is gate S16 of plan M8s (decision 40): the shipped step-up flow validates with WebAuthn only at
+// order 30, the development blueprint adds the stage at order 31 that also accepts TOTP, and both blueprints applied.
+func TestStepUpFactor(t *testing.T) {
+	ctx := testContext(t, time.Minute)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"paddock/paddock-stepup.yaml", "paddock-dev/paddock-dev.yaml"} {
+		b, ok, err := ak.Blueprint(ctx, path)
+		if err != nil || !ok || b.Status != "successful" {
+			t.Errorf("blueprint %s: %+v found %v, %v", path, b, ok, err)
+		}
+	}
+	var flows struct {
+		Results []struct {
+			PK string `json:"pk"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/instances/?slug=paddock-stepup", &flows); err != nil || len(flows.Results) != 1 {
+		t.Fatalf("flow paddock-stepup: %+v %v", flows, err)
+	}
+	var bindings struct {
+		Results []struct {
+			Order int    `json:"order"`
+			Stage string `json:"stage"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	stages := map[int]string{}
+	for _, b := range bindings.Results {
+		stages[b.Order] = b.Stage
+	}
+	classes := func(order int) []string {
+		t.Helper()
+		stage, ok := stages[order]
+		if !ok {
+			t.Fatalf("no stage binding at order %d: %+v", order, bindings.Results)
+		}
+		var v struct {
+			DeviceClasses []string `json:"device_classes"`
+		}
+		if err := ak.Get(ctx, "/stages/authenticator/validate/"+stage+"/", &v); err != nil {
+			t.Fatal(err)
+		}
+		return v.DeviceClasses
+	}
+	if got := classes(30); fmt.Sprint(got) != "[webauthn]" {
+		t.Errorf("order 30 validates %v, want [webauthn]", got)
+	}
+	if got := classes(31); fmt.Sprint(got) != "[webauthn totp]" {
+		t.Errorf("order 31 (development) validates %v, want [webauthn totp]", got)
+	}
 }

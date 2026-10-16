@@ -210,6 +210,71 @@ func TestOrganizationUsersPaginates(t *testing.T) {
 	}
 }
 
+// TestRoleGroupUsers (plan M8s decision 22): the direct members of a role group with their active flag; a group that
+// does not exist is ErrGroupNotFound, never an empty listing.
+func TestRoleGroupUsers(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	admins := f.groupByName("paddock.acme.admins").pk
+	f.users[910] = &fakeUser{pk: 910, username: "alice@acme.test", groups: []string{admins}}
+	f.users[911] = &fakeUser{pk: 911, username: "dave@acme.test", groups: []string{admins}, inactive: true}
+	f.users[912] = &fakeUser{pk: 912, username: "bob@acme.test", groups: []string{f.groupByName("paddock.acme.auditors").pk}}
+	users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins")
+	if err != nil || len(users) != 2 || users[0].Username != "alice@acme.test" || !users[0].Active ||
+		users[1].Username != "dave@acme.test" || users[1].Active || users[0].UID != "uid-910" {
+		t.Fatalf("role group users %+v %v", users, err)
+	}
+	if users, err := c.RoleGroupUsers(ctx, "paddock.globex.admins"); !errors.Is(err, ports.ErrGroupNotFound) || len(users) != 0 {
+		t.Fatalf("missing group: %+v %v", users, err)
+	}
+	// The direct read of one user requires its UID: a username can be reused.
+	u, groups, found, err := c.UserMembership(ctx, "dave@acme.test", "uid-911")
+	if err != nil || !found || u.Active || !slices.Equal(groups, []string{"paddock.acme.admins"}) {
+		t.Fatalf("membership: %+v %v %v %v", u, groups, found, err)
+	}
+	if _, _, found, err := c.UserMembership(ctx, "dave@acme.test", "uid-910"); err != nil || found {
+		t.Fatalf("membership with another UID: %v %v", found, err)
+	}
+}
+
+// TestRoleGroupUsersSettles: a member leaving during a numbered listing would shift the next page and hide another
+// member; the listing is repeated until the total holds, and fails when it never does.
+func TestRoleGroupUsersSettles(t *testing.T) {
+	f, srv := newFake(t)
+	c := client(srv)
+	ctx := context.Background()
+	if _, err := c.EnsureOrganization(ctx, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	admins := f.groupByName("paddock.acme.admins").pk
+	for i := range 1203 {
+		f.users[2000+i] = &fakeUser{pk: 2000 + i, username: "a" + strconv.Itoa(i), groups: []string{admins}}
+	}
+	removed := false
+	f.afterUserPage = func() {
+		if !removed {
+			removed = true
+			delete(f.users, 2001)
+		}
+	}
+	users, err := c.RoleGroupUsers(ctx, "paddock.acme.admins")
+	if err != nil || len(users) != 1202 || slices.ContainsFunc(users, func(u ports.IdentityUser) bool { return u.Username == "a1" }) {
+		t.Fatalf("%d users, %v", len(users), err)
+	}
+	next := 5000
+	f.afterUserPage = func() {
+		next++
+		f.users[next] = &fakeUser{pk: next, username: "n" + strconv.Itoa(next), groups: []string{admins}}
+	}
+	if _, err := c.RoleGroupUsers(ctx, "paddock.acme.admins"); !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("a listing that never settles: %v", err)
+	}
+}
+
 // TestLockRevokesTokensAndSessions: a lock is the group membership AND the revocation (PoC M1 C2).
 func TestLockRevokesTokensAndSessions(t *testing.T) {
 	f, srv := newFake(t)
