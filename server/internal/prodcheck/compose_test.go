@@ -194,7 +194,7 @@ func TestProductionEdge(t *testing.T) {
 	}
 	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{}) {
 		switch r.Item {
-		case "edge client address", "role trusted proxies":
+		case "edge client address", "role trusted proxies", "container hardening":
 			if !r.OK {
 				t.Errorf("%s:\n%s", r.Item, r.Detail)
 			}
@@ -232,6 +232,7 @@ func TestLabEdge(t *testing.T) {
 		"lab: caddy has no hostname aliases":                    false,
 		"lab: roles resolve the public names to the proxy":      false,
 		"only Caddy's HTTP port published, on the bind address": false,
+		"container hardening":                                   false,
 	}
 	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: prodcheck.HostLab}) {
 		if _, ok := want[r.Item]; !ok {
@@ -247,4 +248,64 @@ func TestLabEdge(t *testing.T) {
 			t.Errorf("no item %q", item)
 		}
 	}
+}
+
+// hardeningResult runs the checks over cfg for host and returns the item container hardening.
+func hardeningResult(t *testing.T, cfg prodcheck.Config, host string) prodcheck.Result {
+	t.Helper()
+	for _, r := range prodcheck.Run(context.Background(), cfg, prodcheck.Options{Host: host}) {
+		if r.Item == "container hardening" {
+			return r
+		}
+	}
+	t.Fatal("no item container hardening")
+	return prodcheck.Result{}
+}
+
+// TestContainerHardening renders every Compose file set (plan M8s decisions 34–36): the Paddock roles and Caddy drop
+// every capability and privilege gain, and every service bounds its processes. A control plane whose x-paddock anchor
+// lost the settings fails the item naming each role and each missing setting.
+func TestContainerHardening(t *testing.T) {
+	cases := map[string]struct {
+		host     string
+		files    []string
+		envFiles []string
+	}{
+		"production control plane": {prodcheck.HostControlPlane, prodFiles(t, "controlplane"), []string{"prod.env.example"}},
+		"production audit host":    {prodcheck.HostAudit, prodFiles(t, "audit"), []string{"prod.env.example"}},
+		"lab":                      {prodcheck.HostLab, prodFiles(t, "lab"), []string{"lab.env.example"}},
+		"lab with backups": {prodcheck.HostLab, append(prodFiles(t, "lab"), libFiles(t, "LAB_BACKUP_FILES")...),
+			[]string{"lab.env.example"}},
+		"development": {prodcheck.HostControlPlane, libFiles(t, "DEV_FILES"), []string{".env.example"}},
+		"development with backups": {prodcheck.HostControlPlane, append(libFiles(t, "DEV_FILES"), libFiles(t, "DEV_BACKUP_FILES")...),
+			[]string{".env.example"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := renderConfig(t, tc.files, tc.envFiles...)
+			if r := hardeningResult(t, cfg, tc.host); !r.OK {
+				t.Fatalf("%s:\n%s", r.Item, r.Detail)
+			}
+			if c, ok := cfg.Services["caddy"]; ok && c.PidsLimit != 256 {
+				t.Errorf("caddy pids_limit %d, want 256", c.PidsLimit)
+			}
+		})
+	}
+
+	t.Run("stripped anchor", func(t *testing.T) {
+		cfg := renderConfig(t, prodFiles(t, "controlplane"), "prod.env.example")
+		for name, s := range cfg.Services {
+			if strings.HasPrefix(name, "paddock-") {
+				s.CapDrop, s.SecurityOpt, s.PidsLimit = nil, nil, 0
+				cfg.Services[name] = s
+			}
+		}
+		r := hardeningResult(t, cfg, prodcheck.HostControlPlane)
+		for _, want := range []string{"paddock-api: cap_drop is not [ALL]", "paddock-gateway: security_opt lacks no-new-privileges:true",
+			"paddock-compiler: no pids_limit"} {
+			if r.OK || !strings.Contains(r.Detail, want) {
+				t.Errorf("no finding %q in\n%s", want, r.Detail)
+			}
+		}
+	})
 }

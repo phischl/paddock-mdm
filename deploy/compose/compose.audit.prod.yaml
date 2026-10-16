@@ -46,6 +46,7 @@ services:
     image: ${PROMETHEUS_IMAGE}
     profiles: [observability]
     restart: unless-stopped
+    pids_limit: 256
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus

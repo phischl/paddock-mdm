@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Containers run with tighter defaults: the Paddock roles drop every Linux capability and may not gain privileges,
+  Caddy keeps only the capability to bind 80 and 443, and every service of every Compose file set has a process limit
+  (`pids_limit`). `./paddock check` adds the item `container hardening`, which fails when an edit removes one of these
+  settings. Keep Docker's default seccomp and AppArmor profiles enabled on the hosts.
 - The admin API accepts request bodies of at most 256 KiB; a larger body is refused with 400 `invalid_request`. The
   declarative configuration (`PUT /api/v1/config`, 1 MiB) and the agent release uploads (128 MiB) keep their own
   limits. The api, gateway and escrow-reader roles now close a connection that takes longer than 60 seconds to send

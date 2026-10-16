@@ -156,6 +156,7 @@ test: ## Unit and integration tests (requires Docker)
 	bash packaging/release_test.sh
 	bash deploy/bundle/bundle_test.sh
 	bash deploy/bundle/ci/prune-edge_test.sh
+	bash deploy/bundle/ci/assert-hardening_test.sh
 	bash test/scan-secrets_test.sh
 	bash test/supervisor-budget_test.sh
 	$(MAKE) --no-print-directory image-pgbackrest

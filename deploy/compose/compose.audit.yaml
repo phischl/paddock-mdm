@@ -4,6 +4,7 @@ services:
   audit-postgres:
     image: ${POSTGRES_IMAGE}
     restart: unless-stopped
+    pids_limit: 512
     environment:
       POSTGRES_DB: paddock_audit
       POSTGRES_USER: postgres
@@ -29,6 +30,7 @@ services:
   audit-rustfs:
     image: ${RUSTFS_IMAGE}
     restart: unless-stopped
+    pids_limit: 512
     environment:
       RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_audit_root_user
       RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_audit_root_password
@@ -51,6 +53,9 @@ services:
       profiles: [paddock]
       read_only: true
       tmpfs: [/tmp]
+      cap_drop: [ALL]
+      security_opt: ["no-new-privileges:true"]
+      pids_limit: 256
     restart: "no"
     command: ["migrate", "audit"]
     environment:

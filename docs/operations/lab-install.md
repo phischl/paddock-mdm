@@ -315,6 +315,8 @@ Every production item that applies to one host runs unchanged:
 - `secret files present, not empty and not world-readable`
 - `secrets the services reference are mounted`
 - `links between the hosts use TLS` (local service names pass; OpenBao is `https://` everywhere)
+- `container hardening` (the Paddock roles and Caddy drop every capability but Caddy's `NET_BIND_SERVICE` and may not
+  gain privileges; every service has a `pids_limit`)
 - `role trusted proxies` (no `/0` in `PADDOCK_TRUSTED_PROXY_CIDRS`)
 - `ip allow list bypass is off`
 - `release public keys are production keys`
