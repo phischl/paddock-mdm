@@ -154,6 +154,9 @@ func (d *DeviceGroups) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 		rec.SetTarget(audit.Target{Type: "device_group", ID: id.String(), Display: old.Name})
 		rec.SetParam("name", old.Name)
+		if err := q.DetachInactiveEnrollmentTokens(ctx, uuid.NullUUID{UUID: id, Valid: true}); err != nil {
+			return err
+		}
 		n, err := q.DeleteDeviceGroup(ctx, id)
 		if db.IsForeignKeyViolation(err) {
 			return problem.InUse.WithDetail("an enrollment token still assigns devices to this group")

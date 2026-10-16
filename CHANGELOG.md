@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A device group can be deleted once its enrollment tokens are revoked, expired or used up; only an active token
+  keeps it (409 `in_use`).
+
 - Upgrade order for the release with the managed-file path tiers: roll out the new agent to every device first, then
   upgrade the server. The new server no longer ships managed files on denied paths, and an older agent would delete
   unchanged files that leave its bundle (`docs/operations/upgrade.md`, residual risk RR-36).
