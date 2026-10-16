@@ -3,7 +3,6 @@
 Security-relevant portal actions require a fresh MFA authentication of the administrator, at most 300 s old
 (architecture §9.6, plan M4a decisions 6 and 7).
 
-
 **Root grants.** Every change that would give a user root on a device in effect, on its own or in combination with
 other grants, needs an organization administrator with a fresh step-up; operators get 403 `forbidden` (ADR 0034
 decision 1 and its amendment of 2026-10-16, plan M8s decisions 7g–7k and 7g-quater to 7g-sexies). Paddock measures
