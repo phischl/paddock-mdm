@@ -164,3 +164,35 @@ func TestEndAllSessions(t *testing.T) {
 		}
 	}
 }
+
+// TestLogoutWithoutSessionStore covers plan M8s decision 15: signing out always clears the cookie and answers 200, also
+// while the session store is unreachable (the record then expires on its own) and without a session.
+func TestLogoutWithoutSessionStore(t *testing.T) {
+	e := newEnv(t)
+	logout := func(c *http.Cookie) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "https://admin.test/api/auth/logout", nil)
+		req.Header.Set("X-Paddock-CSRF", "1")
+		if c != nil {
+			req.AddCookie(c)
+		}
+		rec := httptest.NewRecorder()
+		e.handler.ServeHTTP(rec, req)
+		return rec
+	}
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	e.sessions.down = true
+	if rec := logout(alice); rec.Code != http.StatusOK || !cleared(rec.Header()) || !strings.Contains(rec.Body.String(), "end_session_url") {
+		t.Fatalf("logout with the store down: %d %s %v", rec.Code, rec.Body, rec.Header().Values("Set-Cookie"))
+	}
+	e.sessions.down = false
+	if rec := logout(nil); rec.Code != http.StatusOK || !cleared(rec.Header()) {
+		t.Fatalf("logout without a session: %d", rec.Code)
+	}
+	bob := e.session(e.acme, principal.RoleOrgAuditor)
+	if rec := logout(bob); rec.Code != http.StatusOK {
+		t.Fatalf("logout: %d", rec.Code)
+	}
+	if r := e.do(call{method: "GET", path: "/api/v1/me", cookie: bob}); r.status != http.StatusUnauthorized {
+		t.Fatalf("the cookie after logout: %d", r.status)
+	}
+}

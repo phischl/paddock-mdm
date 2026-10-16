@@ -17,7 +17,6 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/platform/httpx"
-	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
 )
@@ -271,12 +270,14 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, st.ReturnTo, http.StatusFound)
 }
 
-// logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. A session store
-// error still signs the browser out; the record then expires on its own (plan M8s decision 15).
+// logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. It reads the
+// cookie itself, so it also signs the browser out while the session store is unreachable; the record then expires on
+// its own (plan M8s decision 15).
 func (b *bff) logout(publicURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if p, ok := principal.From(r.Context()); ok && p.SessionID != "" {
-			if err := b.sessions.Delete(r.Context(), p.SessionID, p.ID); err != nil {
+		var sess Session
+		if c, err := r.Cookie(SessionCookie); err == nil && b.keys.Open(SessionCookie, c.Value, &sess) == nil && sess.SID != "" {
+			if err := b.sessions.Delete(r.Context(), sess.SID, sess.PID); err != nil {
 				slog.WarnContext(r.Context(), "session record not deleted at logout", "error", err)
 			}
 		}

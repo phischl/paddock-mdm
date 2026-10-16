@@ -189,7 +189,6 @@ func NewHandler(d Deps) http.Handler {
 		Middlewares:      []adminapi.MiddlewareFunc{s.csrf, limitBody},
 		ErrorHandlerFunc: s.rejected,
 	})
-	api.Handle("POST /api/auth/logout", s.csrf(s.bff.logout(d.PublicURL)))
 	api.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { httpx.WriteProblem(w, r, problem.NotFound) })
 	authenticated := s.session(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		api.ServeHTTP(w, r)
@@ -201,6 +200,8 @@ func NewHandler(d Deps) http.Handler {
 	root.HandleFunc("GET /api/auth/callback", s.bff.callback)
 	root.HandleFunc("GET /api/auth/stepup", s.bff.stepUpStart)
 	root.HandleFunc("GET /api/auth/stepup/callback", s.bff.stepUpCallback)
+	// Outside the session middleware: signing out works while the session store is unreachable (plan M8s decision 15).
+	root.Handle("POST /api/auth/logout", noStore(s.csrf(s.bff.logout(d.PublicURL))))
 	root.Handle("/api/", noStore(authenticated))
 	root.Handle("/", d.Static)
 
