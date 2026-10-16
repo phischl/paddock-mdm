@@ -274,6 +274,10 @@ func normalize(doc *declarative.Document) {
 		l := loginSettingsOf(*doc.Settings.Login)
 		*doc.Settings.Login = loginDocOf(loginsettings.Normalize(l))
 	}
+	// The stored roots are sorted; an unsorted document must not show a change on every apply.
+	if doc.Settings != nil && doc.Settings.ManagedFiles != nil {
+		doc.Settings.ManagedFiles.OperatorRoots = sortedRoots(doc.Settings.ManagedFiles.OperatorRoots)
+	}
 }
 
 // configState is the current configuration and the IDs behind its natural keys.
