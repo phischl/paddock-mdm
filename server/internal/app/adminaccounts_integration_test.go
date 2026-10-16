@@ -174,8 +174,8 @@ func TestAdminAccountsReconcile(t *testing.T) {
 		"renamed in the directory":                         {renamed, "org_admin", false, ""},
 		"moved to auditors":                                {moved, "org_auditor", false, "success system role_changed 2 [org_admin] [org_auditor]"},
 		"in no role group, its username used by another":   {removed, "org_admin", true, "success system removed 2 [org_admin] []"},
-		"deactivated":        {inactive, "org_auditor", true, "success system deactivated 2 [org_auditor] []"},
-		"in two role groups": {twice, "org_operator", true, "success system removed 2 [org_operator] []"},
+		"deactivated":                                      {inactive, "org_auditor", true, "success system deactivated 2 [org_auditor] []"},
+		"in two role groups":                               {twice, "org_operator", true, "success system removed 2 [org_operator] []"},
 	} {
 		role, disabled := state(c.id)
 		events := event(c.id)

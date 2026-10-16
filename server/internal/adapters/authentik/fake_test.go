@@ -23,14 +23,14 @@ type fakeAuthentik struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	groups   map[string]*fakeGroup // pk → group
-	users    map[int]*fakeUser
+	groups map[string]*fakeGroup // pk → group
+	users  map[int]*fakeUser
 	// afterUserPage runs after every page of a user listing (membership changing during a listing).
 	afterUserPage func()
-	objects  map[string]map[string]map[string]any // collection → pk → object (flows, mappings, providers, …)
-	tokens   map[string][]int                     // "refresh_tokens"/"access_tokens" → owning user pks
-	sessions map[int]int                          // user pk → number of sessions
-	nextPK   int
+	objects       map[string]map[string]map[string]any // collection → pk → object (flows, mappings, providers, …)
+	tokens        map[string][]int                     // "refresh_tokens"/"access_tokens" → owning user pks
+	sessions      map[int]int                          // user pk → number of sessions
+	nextPK        int
 	// deactivations counts PATCHes with is_active false.
 	deactivations int
 
