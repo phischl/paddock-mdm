@@ -995,7 +995,8 @@
       "hint": "Directories such as /etc/myapp/ or /opt/vendor/, with a trailing slash.",
       "confirmTitle": "Change the operator roots",
       "confirm": "Save {count, plural, one {# operator root} other {# operator roots}}? You confirm your identity next.",
-      "saved": "The operator roots were saved."
+      "saved": "The operator roots were saved.",
+      "warning": "Operator roots are a trust decision: a program that runs as root and executes or sources files below a root (configuration it evaluates, includes it runs) makes that root root-equivalent, and Paddock cannot detect it. Add only directories of plain application configuration."
     }
   },
   "users": {

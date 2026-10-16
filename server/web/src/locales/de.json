@@ -995,7 +995,8 @@
       "hint": "Verzeichnisse wie /etc/myapp/ oder /opt/vendor/, mit abschließendem Schrägstrich.",
       "confirmTitle": "Operator-Wurzeln ändern",
       "confirm": "{count, plural, one {# Operator-Wurzel} other {# Operator-Wurzeln}} speichern? Anschließend bestätigen Sie Ihre Identität.",
-      "saved": "Die Operator-Wurzeln wurden gespeichert."
+      "saved": "Die Operator-Wurzeln wurden gespeichert.",
+      "warning": "Operator-Wurzeln sind eine Vertrauensentscheidung: Ein Programm, das als root läuft und Dateien unterhalb einer Wurzel ausführt oder einliest (Konfiguration, die es auswertet, Includes, die es ausführt), macht diese Wurzel root-gleichwertig, und Paddock kann das nicht erkennen. Fügen Sie nur Verzeichnisse reiner Anwendungskonfiguration hinzu."
     }
   },
   "users": {

@@ -53,6 +53,7 @@ describe('ManagedFileSettings (ADR 0034 amendment 2026-10-16)', () => {
   it('confirms, steps up and saves the roots after the return', async () => {
     setOperatorRoots.mockResolvedValueOnce('step_up_required')
     const w = await mountSettings()
+    expect(w.find('[data-testid="roots-warning"]').text()).toContain('trust decision')
     const field = document.querySelector('#operator-roots') as HTMLTextAreaElement
     expect(field.value).toBe('/etc/myapp/')
     field.value = '/etc/myapp/\n/opt/vendor/\n'

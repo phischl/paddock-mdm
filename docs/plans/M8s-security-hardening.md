@@ -215,6 +215,11 @@ Supersedes the *TierOrdinary* rule of decision 7 and the role rule of decision 9
     `path`, `mount`, `automount`, `swap`, `target`, `slice` and `scope` join `deniedDirs`; the same directories below
     `/usr/local/lib/systemd/system/` lie outside the allowed roots and are denied already. The agent's `ValidatePath`
     refuses them too (defence in depth).
+7h-ter. (Architect decision 2026-10-16.) Denied also covers `/etc/systemd/system.control/` and
+    `/etc/systemd/system.attached/`; the never-operator list is extended by `/etc/dhcp/`, `/etc/openvpn/`,
+    `/etc/netplan/`, `/etc/wpa_supplicant/`, `/etc/sssd/`, `/etc/samba/`, `/etc/ldap/`, `/etc/openldap/`,
+    `/etc/audisp/`, `/etc/skel/`, `/etc/csh*`, `/etc/tcsh*`, `/etc/ksh*` and `/etc/php*`; the code suffixes are
+    extended by `.pm`, `.php`, `.bash`, `.zsh`, `.mjs` and `.cjs`.
 
 
 ### 3.2b Amendment 2026-10-16 — root equivalence over the combination of grants
@@ -239,6 +244,9 @@ Supersedes the per-profile reading of decisions 1–3.
 7k. Acceptance: two profiles that are each restricted but combine into root, assigned by an operator or a token →
     403; by an admin without step-up → `step_up_required`; with step-up → success and `effective_class: full` in
     the audit params. Adding a user to a Paddock group that carries such a combination follows the same rule.
+7g-bis. (Architect decision 2026-10-16.) Growth is evaluated for devices in every state and for empty and global group
+    subjects through a synthetic member; approve, quarantine release and enrolment take the guard and the advisory
+    lock.
 
 ### 3.3 Server-side sessions (SEC-2, part 2 and 4)
 

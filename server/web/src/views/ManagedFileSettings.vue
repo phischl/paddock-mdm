@@ -66,6 +66,14 @@ onMounted(async () => {
     <p class="summary">
       {{ t('managedFiles.roots.intro') }}
     </p>
+    <v-alert
+      type="warning"
+      variant="tonal"
+      class="conflict"
+      data-testid="roots-warning"
+    >
+      {{ t('managedFiles.roots.warning') }}
+    </v-alert>
     <p
       v-if="problem"
       class="form-error"
