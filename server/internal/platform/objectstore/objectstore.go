@@ -239,22 +239,6 @@ func (s *Store) Size(ctx context.Context, key string) (size int64, found bool, e
 	return aws.ToInt64(out.ContentLength), true, nil
 }
 
-// Delete removes the current version of an object; a missing object is not an error. In a versioned bucket the
-// version itself is removed rather than hidden behind a delete marker, so that its bytes are freed and an earlier
-// version of the key becomes current again.
-func (s *Store) Delete(ctx context.Context, key string) error {
-	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &s.bucket, Key: &key})
-	if err != nil {
-		var notFound *types.NotFound
-		if errors.As(err, &notFound) {
-			return nil
-		}
-		return err
-	}
-	_, err = s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &key, VersionId: out.VersionId})
-	return err
-}
-
 // Presigner computes presigned GET and PUT URLs locally (no network call) for a public endpoint, e.g.
 // https://bundles.<domain>, through which the object store is reachable (architecture §7.3).
 type Presigner struct {

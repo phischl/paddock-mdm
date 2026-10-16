@@ -58,8 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   devices, create API tokens or grant root-equivalent rights until then. The development stack keeps a TOTP step-up
   through its development blueprint.
 - The upload URL of an escrowed LUKS header now binds the announced size: the object store refuses a body of another
-  size, and the worker checks the stored object's size before reading it, deletes an object of another size and
-  records `device.header_object_rejected`.
+  size, and the worker checks the stored object's size before reading it. An object of another size fails the escrow
+  without being read and is recorded as `device.header_object_rejected`; it stays in the bucket for the operator
+  (`docs/operations/disk-recovery.md`). A header the worker cannot check no longer holds up the others.
 - Caddy bounds the request bodies it forwards on every site: admin 2 MiB (agent release uploads 130 MiB), auth
   16 MiB, device 2 MiB, bundles 1 MiB (escrow uploads 33 MiB), Fleet's device paths 64 MiB. A larger body is refused
   with 413.

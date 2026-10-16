@@ -11,9 +11,8 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/s3test"
 )
 
-// TestSizeAndDelete: Size reports a stored object's length and a missing key as not found; Delete removes the
-// current version so that the previous one is current again, and a missing key is not an error (plan M8s decision 30).
-func TestSizeAndDelete(t *testing.T) {
+// TestSize: Size reports the length of the current version and a missing key as not found (plan M8s decision 30).
+func TestSize(t *testing.T) {
 	ctx := context.Background()
 	r := s3test.StartVersioned(t, "paddock-escrow")
 	store := objectstore.New(r.Endpoint, s3test.RootUser, s3test.RootPassword, r.Bucket)
@@ -28,21 +27,6 @@ func TestSizeAndDelete(t *testing.T) {
 	}
 	if size, found, err := store.Size(ctx, key); err != nil || !found || size != int64(len("second version")) {
 		t.Fatalf("size %d found %v, %v", size, found, err)
-	}
-	if err := store.Delete(ctx, key); err != nil {
-		t.Fatal(err)
-	}
-	if size, found, err := store.Size(ctx, key); err != nil || !found || size != int64(len("first")) {
-		t.Fatalf("after delete: size %d found %v, %v", size, found, err)
-	}
-	if err := store.Delete(ctx, key); err != nil {
-		t.Fatal(err)
-	}
-	if _, found, err := store.Size(ctx, key); err != nil || found {
-		t.Fatalf("after the second delete: found %v, %v", found, err)
-	}
-	if err := store.Delete(ctx, key); err != nil {
-		t.Fatalf("missing key: %v", err)
 	}
 }
 

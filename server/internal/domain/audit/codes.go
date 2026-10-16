@@ -973,7 +973,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceHeaderObjectRejected: {
 		Code: CodeDeviceHeaderObjectRejected, Emitted: true,
-		Description: "The worker found an escrowed LUKS header object whose size differs from the announced size, deleted it and marked the escrow failed (actor: the device).",
+		Description: "The worker found an escrowed LUKS header object whose size differs from the announced size and marked the escrow failed without reading it; the object stays for the operator (actor: the device).",
 		Params:      []string{"generation", "volume", "declared_size", "object_size"},
 		Outcomes:    []Outcome{OutcomeFailure},
 	},

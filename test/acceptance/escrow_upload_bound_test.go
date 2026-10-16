@@ -17,8 +17,9 @@ import (
 
 // TestEscrowUploadBound is gate S14 of plan M8s (decisions 29–31): the presigned URL of a header binds its announced
 // size, so N+1 bytes are refused and leave no object; an object of another size that reaches the bucket anyway (as
-// with a store that ignored the signed length) is deleted by the worker, the escrow fails and the rejection is audited
-// once; exactly N bytes are stored; and the edge refuses a body above 33 MiB on the escrow path.
+// with a store that ignored the signed length) fails the escrow unread and is audited once, and the read-only worker
+// leaves it in place for the operator; exactly N bytes are stored; and the edge refuses a body above 33 MiB on the
+// escrow path.
 func TestEscrowUploadBound(t *testing.T) {
 	alice := login(t, env.Alice)
 	org := orgOf(t, alice)
@@ -44,8 +45,8 @@ func TestEscrowUploadBound(t *testing.T) {
 	if status := waitEscrow(t, d, id, 2*time.Minute); status != escrow.StatusFailed {
 		t.Fatalf("object of another size: %s", status)
 	}
-	if n := escrowVersions(t, key); n != 0 {
-		t.Fatalf("the worker left %d versions of the object of another size", n)
+	if n := escrowVersions(t, key); n != 1 {
+		t.Fatalf("%d versions of the object of another size, want it left in place", n)
 	}
 	ev := expectOneIndexEvent(t, idx, org, "code = 'device.header_object_rejected' AND actor->>'id' = $1", d.DeviceID,
 		"device.header_object_rejected", "failure", auditPollTimeout)

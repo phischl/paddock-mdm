@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -19,12 +20,11 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
 
-// HeaderObjects reads, sizes and deletes sealed LUKS headers in the escrow bucket paddock-escrow (objectstore.Store);
-// found is false when the object does not exist.
+// HeaderObjects reads and sizes sealed LUKS headers in the escrow bucket paddock-escrow (objectstore.Store); found is
+// false when the object does not exist. The worker's credential is read-only: it never deletes.
 type HeaderObjects interface {
 	GetIfExists(ctx context.Context, key string) (data []byte, found bool, err error)
 	Size(ctx context.Context, key string) (size int64, found bool, err error)
-	Delete(ctx context.Context, key string) error
 }
 
 // HeaderUploadWindow is how long a header may stay pending: the device has the 10 minutes of its presigned PUT, and
@@ -199,7 +199,8 @@ type HeaderOutcome struct {
 
 // VerifyHeaders checks the pending headers of the caller's organization: a header whose object exists with the
 // announced size and SHA-256 is stored, a mismatching object or one that did not arrive within HeaderUploadWindow
-// fails; the others stay pending. It returns the finished headers.
+// fails; the others stay pending. It returns the finished headers. A header that cannot be checked is logged and
+// skipped until the next round, so that it never holds up the others; the error then names how many failed.
 func (e *Escrow) VerifyHeaders(ctx context.Context) ([]HeaderOutcome, error) {
 	var pending []pgstore.EscrowSecret
 	if err := e.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
@@ -210,34 +211,45 @@ func (e *Escrow) VerifyHeaders(ctx context.Context) ([]HeaderOutcome, error) {
 		return nil, err
 	}
 	var out []HeaderOutcome
+	var errs []error
 	for _, h := range pending {
-		status, objectSize, err := e.check(ctx, h)
+		o, finished, err := e.verifyHeader(ctx, h)
 		if err != nil {
-			return out, fmt.Errorf("header %s: %w", h.ID, err)
-		}
-		if status == statusPending {
+			slog.WarnContext(ctx, "escrowed LUKS header not checked; retrying next round", "escrow_id", h.ID, "error", err)
+			errs = append(errs, fmt.Errorf("header %s: %w", h.ID, err))
 			continue
 		}
-		var finished bool
-		if objectSize >= 0 {
-			finished, err = e.rejectObject(ctx, h, objectSize)
-		} else {
-			finished, err = e.finish(ctx, h.ID, status)
-		}
-		if err != nil {
-			return out, err
-		}
 		if finished {
-			slog.InfoContext(ctx, "escrowed LUKS header verified", "device_id", h.DeviceID, "escrow_id", h.ID, "generation", h.Generation, "status", status)
-			out = append(out, HeaderOutcome{EscrowID: h.ID, DeviceID: h.DeviceID, Status: status})
+			slog.InfoContext(ctx, "escrowed LUKS header verified", "device_id", h.DeviceID, "escrow_id", h.ID, "generation", h.Generation, "status", o.Status)
+			out = append(out, o)
 		}
+	}
+	if len(errs) > 0 {
+		return out, fmt.Errorf("%d of %d pending headers not checked: %w", len(errs), len(pending), errors.Join(errs...))
 	}
 	return out, nil
 }
 
+// verifyHeader checks one pending header and records its final status; finished is false while it stays pending or
+// when another round finished it first.
+func (e *Escrow) verifyHeader(ctx context.Context, h pgstore.EscrowSecret) (HeaderOutcome, bool, error) {
+	status, objectSize, err := e.check(ctx, h)
+	if err != nil || status == statusPending {
+		return HeaderOutcome{}, false, err
+	}
+	var finished bool
+	if objectSize >= 0 {
+		finished, err = e.rejectObject(ctx, h, objectSize)
+	} else {
+		finished, err = e.finish(ctx, h.ID, status)
+	}
+	return HeaderOutcome{EscrowID: h.ID, DeviceID: h.DeviceID, Status: status}, finished, err
+}
+
 // check returns the status of one pending header. The object's size is checked before it is read (plan M8s decision
-// 30): an object of another size than announced is deleted unread, and its size is returned for the audit event;
-// objectSize is -1 otherwise.
+// 30): an object of another size than announced is never read and fails the header, and its size is returned for the
+// audit event; objectSize is -1 otherwise. The object stays: the presigned PUT binds the size, so it came from outside
+// the device path and is the operator's to examine and remove (docs/operations/disk-recovery.md).
 func (e *Escrow) check(ctx context.Context, h pgstore.EscrowSecret) (status string, objectSize int64, err error) {
 	if h.ObjectKey == nil || h.Sha256 == nil || h.Size == nil {
 		return escrow.StatusFailed, -1, nil
@@ -247,9 +259,6 @@ func (e *Escrow) check(ctx context.Context, h pgstore.EscrowSecret) (status stri
 		return "", -1, err
 	}
 	if found && size != *h.Size {
-		if err := e.headers.Delete(ctx, *h.ObjectKey); err != nil {
-			return "", -1, fmt.Errorf("delete object of another size: %w", err)
-		}
 		return escrow.StatusFailed, size, nil
 	}
 	var data []byte
