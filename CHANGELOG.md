@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- API tokens stop working once their creator's account is disabled or no longer has a role that may create the
+  token's role; such a use is refused with 401 and recorded as `api_token.use_denied` with reason `creator_inactive`.
+  A token that must outlive its creator needs a creator who keeps the role.
 - The worker follows administrator accounts to the identity provider every identity sync interval
   (`PADDOCK_IDENTITY_SYNC_INTERVAL`, default 5 minutes): an administrator moved to another role group takes the new
   role, one removed from every role group or deactivated is disabled, and every portal session of the account ends

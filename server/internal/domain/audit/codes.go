@@ -869,10 +869,10 @@ var registry = map[Code]Definition{
 	},
 	CodeAPITokenUseDenied: {
 		Code: CodeAPITokenUseDenied, Emitted: true,
-		Description: "A request authenticated with a revoked or expired API token was refused (actor: anonymous, with the token's name).",
+		Description: "A request authenticated with a revoked or expired API token, or a token whose creator was disabled or lost the required role, was refused (actor: anonymous, with the token's name).",
 		Params:      []string{"name", "reason"},
 		Outcomes:    []Outcome{OutcomeDenied},
-		Note:        "reason is revoked or expired. Unknown or malformed secrets are not recorded.",
+		Note:        "reason is revoked, expired or creator_inactive. Unknown or malformed secrets are not recorded.",
 	},
 	CodeOrganizationRecompileRequested: {
 		Code: CodeOrganizationRecompileRequested, Emitted: true,

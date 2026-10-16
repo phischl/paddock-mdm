@@ -256,3 +256,42 @@ func firstParam(events []env.IndexEvent, name string) any {
 	}
 	return events[0].Params[name]
 }
+
+// TestAPITokenCreatorInactive is the gate of PDK-184: an API token stops working once the worker round moved its
+// creator to a role that may not hold the token's role, and its refused use is recorded with reason creator_inactive.
+func TestAPITokenCreatorInactive(t *testing.T) {
+	alice := login(t, env.Alice)
+	org := orgOf(t, alice)
+	idx := auditIndex(t)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := steppedUpTempUser(t, "pdk184", env.RoleGroup("acme", "operators"))
+	res := postAPIToken(t, u.Portal, apiTokenName("creator"), "org_operator", 2*time.Hour)
+	expectStatus(t, res, http.StatusCreated, "")
+	var created apiTokenCreated
+	if err := res.JSON(&created); err != nil {
+		t.Fatal(err)
+	}
+	token := tokenPortal(t, created.Secret)
+	if status := meStatus(t, token); status != http.StatusOK {
+		t.Fatalf("token of an active operator: %d", status)
+	}
+	if err := ak.MoveGroup(testContext(t, time.Minute), u.username, env.RoleGroup("acme", "operators"), env.RoleGroup("acme", "auditors")); err != nil {
+		t.Fatal(err)
+	}
+	waitUnauthenticated(t, token, accountRoundTimeout)
+	for deadline := time.Now().Add(auditPollTimeout); ; time.Sleep(time.Second) {
+		events, err := idx.Events(testContext(t, time.Minute), org, "code = 'api_token.use_denied' AND target->>'id' = $1", created.Token.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) > 0 && events[len(events)-1].Params["reason"] == "creator_inactive" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("use_denied events %+v, want reason creator_inactive", events)
+		}
+	}
+}

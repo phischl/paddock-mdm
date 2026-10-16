@@ -229,7 +229,7 @@
     "api_token": {
       "created": "{actor} hat das API-Token {name} ({role}) angelegt",
       "revoked": "{actor} hat das API-Token {name} widerrufen",
-      "use_denied": "Eine Anfrage mit dem {reason, select, revoked {widerrufenen} expired {abgelaufenen} other {ungültigen}} API-Token {name} wurde abgelehnt"
+      "use_denied": "Eine Anfrage mit dem API-Token {name} wurde abgelehnt: {reason, select, revoked {das Token ist widerrufen} expired {das Token ist abgelaufen} creator_inactive {sein Ersteller ist deaktiviert oder hat die nötige Rolle verloren} other {{reason}}}"
     },
     "device": {
       "enrolled": "Das Gerät {hostname} hat sich registriert",
