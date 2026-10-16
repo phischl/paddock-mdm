@@ -178,6 +178,39 @@ containers run without capabilities and cannot gain privileges; the step-up acce
     'managed-file-edit', …)`), show the tier as a chip (`managedFiles.tier.*`) and explain a 403 `forbidden` with
     the problem detail inline (existing alert pattern).
 
+
+### 3.2a Amendment 2026-10-16 — operator roots (ADR 0034 amendment of the same date)
+
+Supersedes the *TierOrdinary* rule of decision 7 and the role rule of decision 9 where they conflict.
+
+7a. `policy.Classify` MUST become `Classify(path, mode string, operatorRoots []string) (Tier, error)` with the order:
+    malformed → error; outside the allowed roots → denied; denied catalog → denied; sensitive catalog → sensitive;
+    not below any of `operatorRoots` → sensitive; below an operator root but with an execute bit, a suffix of
+    `.so`, `.so.*`, `.py`, `.pth`, `.sh`, `.pl`, `.rb`, `.lua`, `.js`, or any path component ending in `.d` →
+    sensitive; otherwise ordinary. `ValidatePath` (agent, denied only) is unchanged.
+7b. `policy.ValidateOperatorRoot(root string) error` MUST refuse: a root not of the form `/etc/<name>/…`,
+    `/usr/local/etc/<name>/…` or `/opt/<name>/…` (trailing slash, normalized); a root that is, contains or lies below
+    a denied or sensitive catalog entry; and the never-operator prefixes `/etc/apt/`, `/etc/dpkg/`, `/etc/dnf/`,
+    `/etc/yum*`, `/etc/pacman*`, `/etc/default/`, `/etc/grub*`, `/etc/python*`, `/etc/perl*`, `/etc/ruby*`,
+    `/etc/zsh/`, `/etc/fish/`, `/etc/bash*`, `/etc/profile*`, `/etc/lightdm/`, `/etc/gdm*`, `/etc/sddm*`,
+    `/etc/xdg/`, `/etc/X11/`, `/etc/audit/`, `/etc/selinux/`, `/etc/apparmor*`, `/etc/firewalld/`, `/etc/nftables*`,
+    `/etc/iptables/`, `/etc/ufw/`, `/etc/NetworkManager/`, `/etc/ssl/`, `/etc/ca-certificates*`, `/etc/pki/`,
+    `/etc/ssh/`, `/etc/pam.d/`, `/etc/security/`, `/etc/himmelblau/`, `/etc/sudoers*`, `/etc/systemd/`, `/etc/cron*`,
+    `/etc/polkit-1/`, `/etc/dbus-1/`, `/etc/udev/`, `/etc/modprobe.d/`, `/etc/sysctl*`, `/etc/paddock/`, `/opt/paddock/`.
+7c. Operator roots are an organization setting `managed_file_operator_roots text[] NOT NULL DEFAULT '{}'` (in the
+    PDK-169 migration 00045 if it is not yet merged, else the next free number), exposed as
+    `GET|PUT /api/v1/settings/managed-files` (`{operator_roots: []}`), `PUT` for `org_admin` with step-up, refused
+    for API tokens (`step_up_required`, token detail), audited as `settings.managed_files_changed` with the old and
+    new list (add the code to the registry). The declarative document gains the same section with the same rule.
+    The portal settings page shows the list with the step-up dialog.
+7d. `app.validateFile` and the declarative path MUST classify with the organization's roots. A change to the roots
+    never re-classifies existing definitions by itself; the review (§3.5) lists definitions whose tier rose.
+7e. Fuzz target: `FuzzClassify` MUST assert properties, not re-implement the function: denied is never returned for
+    a path the agent's `ValidatePath` accepts and vice versa; ordinary is never returned for a path outside every
+    operator root; ordinary is never returned with an execute bit.
+7f. Documents: `install.md` and `upgrade.md` state the binding order "agents first, then the server" for M8s;
+    RR-36 and the ADR 0013 note say the same.
+
 ### 3.3 Server-side sessions (SEC-2, part 2 and 4)
 
 12. New package `server/internal/sessions` (no new dependency; `github.com/valkey-io/valkey-go` is already used):

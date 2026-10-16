@@ -136,3 +136,26 @@ changes). They are decided here, once, and implemented by plan M8s.
 - Amended documents: architecture §9.6; plan M4a decision 7; plan M2a decision 8; ADR 0003 (Valkey holds session
   records); ADR 0007 (step-up provider emits the Paddock groups claim; WebAuthn-only step-up); ADR 0013 (agent-side
   policy tightening during a rollout).
+
+## Amendment 2026-10-16 — operator roots instead of an ordinary tier by default
+
+The review of the implementation showed that "ordinary unless catalogued" (decision 2) keeps missing root-equivalent
+paths below `/etc/`, `/usr/local/etc/` and `/opt/` (package-manager, boot-loader, interpreter, shell, display-manager
+and audit plug-in configuration, shared objects and scripts of vendor software). A deny or sensitive catalog over
+those roots can never be complete. Decision 2 is therefore narrowed:
+
+- **Sensitive is the default.** Every path that is not denied is *sensitive* (organization administrator with a
+  fresh step-up) unless it lies below an **operator root**.
+- **Operator roots** are a per-organization list of directory prefixes, empty by default, set only by an
+  organization administrator with a fresh step-up (audited, never through an API token). A root MUST be a directory
+  below `/etc/<name>/`, `/usr/local/etc/<name>/` or `/opt/<name>/`, MUST NOT be or contain a denied or catalogued
+  sensitive path, and MUST NOT be one of the never-operator directories of the plan (package managers, boot loader,
+  interpreters, login shells, display managers, audit, MAC frameworks, firewall, network connections, trust
+  anchors, PAM and identity configuration).
+- **Below an operator root** a file is *ordinary* (operator, no step-up) unless it has an execute bit, a script or
+  shared-object suffix, or a `.d` directory component; those stay *sensitive*.
+- The agent is unchanged: it enforces *denied* only. Existing definitions keep working on devices; only who may
+  change them narrows (fail safe).
+
+The upgrade order becomes binding: agents first, then the server. A pre-M8s agent removes a file that leaves its
+bundle, so a server that stops shipping denied files must not reach devices before their agents know `left_denied_file`.
