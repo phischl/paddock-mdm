@@ -178,6 +178,46 @@ func TestCaddyfilesEdge(t *testing.T) {
 	if proxies != 4 {
 		t.Errorf("found %d proxies to Paddock roles, want 4 (admin_site, device. in the three Caddyfiles)", proxies)
 	}
+	// Plan M8s decision 31: every proxy to a role or an upstream is preceded by a request body limit in its block.
+	limited := 0
+	for _, name := range []string{"Caddyfile", "Caddyfile.prod", "Caddyfile.lab", "guards.caddy"} {
+		lines := strings.Split(read(name), "\n")
+		for i, line := range lines {
+			m := upstreamProxy.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			limited++
+			if !requestBodyBefore(lines, i) {
+				t.Errorf("%s:%d: reverse_proxy %s has no request_body before it in its block", name, i+1, m[1])
+			}
+		}
+	}
+	if limited != 17 {
+		t.Errorf("found %d proxies to roles and upstreams, want 17 (2 in the guards, 5 in each Caddyfile)", limited)
+	}
+}
+
+// upstreamProxy matches a reverse_proxy to a Paddock role or an upstream the edge publishes.
+var upstreamProxy = regexp.MustCompile(`^\t*reverse_proxy (paddock-api|paddock-gateway|rustfs|fleet|authentik-server):`)
+
+// requestBodyBefore reports whether a request_body directive precedes line i at its indentation in the same block.
+func requestBodyBefore(lines []string, i int) bool {
+	depth := len(lines[i]) - len(strings.TrimLeft(lines[i], "\t"))
+	for j := i - 1; j >= 0; j-- {
+		l := lines[j]
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		d := len(l) - len(strings.TrimLeft(l, "\t"))
+		if d < depth {
+			return false
+		}
+		if d == depth && strings.HasPrefix(strings.TrimSpace(l), "request_body") {
+			return true
+		}
+	}
+	return false
 }
 
 // TestProductionEdge renders the production control plane: Caddy publishes 80 and 443 only, runs the entrypoint with

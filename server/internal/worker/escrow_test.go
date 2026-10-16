@@ -74,6 +74,20 @@ type fakeObjects struct {
 	objects map[string][]byte
 }
 
+func (f *fakeObjects) Size(_ context.Context, key string) (int64, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	data, ok := f.objects[key]
+	return int64(len(data)), ok, nil
+}
+
+func (f *fakeObjects) Delete(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.objects, key)
+	return nil
+}
+
 func (f *fakeObjects) GetIfExists(_ context.Context, key string) ([]byte, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -165,6 +179,24 @@ func TestEscrowLUKS(t *testing.T) {
 		if got := status(id); got != want {
 			t.Errorf("header %s: %s, want %s", id, got, want)
 		}
+	}
+	// Plan M8s decision 30: the object of another size than announced is deleted unread and audited once.
+	if _, found, _ := objects.Size(ctx, escrow.HeaderObjectKey(f.org.String(), device.String(), "", 2)); found {
+		t.Error("the object of another size was not deleted")
+	}
+	rejected := func() (n int, params string) {
+		t.Helper()
+		if err := f.super.QueryRow(ctx, `SELECT count(*), coalesce(max(outcome || ' ' || coalesce(error_code, '') || ' ' ||
+			(params ->> 'generation') || ' [' || (params ->> 'volume') || '] ' || (params ->> 'declared_size') || ' ' ||
+			(params ->> 'object_size') || ' ' || (actor ->> 'type')), '') FROM action
+			WHERE organization_id = $1 AND code = 'device.header_object_rejected'`, f.org).Scan(&n, &params); err != nil {
+			t.Fatal(err)
+		}
+		return n, params
+	}
+	want := fmt.Sprintf("failure invalid_request 2 [] %d %d device", len(object)+1, len(object))
+	if n, params := rejected(); n != 1 || params != want {
+		t.Fatalf("%d events %q, want 1 %q", n, params, want)
 	}
 	objects.put(escrow.HeaderObjectKey(f.org.String(), device.String(), "", 4), object)
 	if err := e.Round(ctx); err != nil || status(waiting) != escrow.StatusStored {

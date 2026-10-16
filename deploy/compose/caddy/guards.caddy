@@ -7,6 +7,21 @@
 	handle @admin_denied {
 		respond 403
 	}
+	# Request body limits at the edge (plan M8s decision 31): agent release uploads up to agentrelease.MaxArtifactBytes
+	# plus slack, everything else well above the api's own 256 KiB and 1 MiB limits.
+	@artifacts {
+		method PUT
+		path /api/platform/v1/agent-releases/*
+	}
+	request_body @artifacts {
+		max_size 130MiB
+	}
+	@other {
+		not path /api/platform/v1/agent-releases/*
+	}
+	request_body @other {
+		max_size 2MiB
+	}
 	reverse_proxy paddock-api:8080 {
 		header_up X-Paddock-Client-IP {client_ip}
 	}
@@ -30,6 +45,9 @@
 	}
 	handle @denied_api {
 		respond 403
+	}
+	request_body {
+		max_size 16MiB
 	}
 	reverse_proxy authentik-server:9000
 }

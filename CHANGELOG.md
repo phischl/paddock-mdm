@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The upload URL of an escrowed LUKS header now binds the announced size: the object store refuses a body of another
+  size, and the worker checks the stored object's size before reading it, deletes an object of another size and
+  records `device.header_object_rejected`.
+- Caddy bounds the request bodies it forwards on every site: admin 2 MiB (agent release uploads 130 MiB), auth
+  16 MiB, device 2 MiB, bundles 1 MiB (escrow uploads 33 MiB), Fleet's device paths 64 MiB. A larger body is refused
+  with 413.
 - Containers run with tighter defaults: the Paddock roles drop every Linux capability and may not gain privileges,
   Caddy keeps only the capability to bind 80 and 443, and every service of every Compose file set has a process limit
   (`pids_limit`). `./paddock check` adds the item `container hardening`, which fails when an edit removes one of these

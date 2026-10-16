@@ -21,6 +21,9 @@ auth.{$PADDOCK_DOMAIN} {
 }
 
 device.{$PADDOCK_DOMAIN} {
+	request_body {
+		max_size 2MiB
+	}
 	reverse_proxy paddock-gateway:8081 {
 		header_up X-Paddock-Client-IP {client_ip}
 	}
@@ -35,6 +38,9 @@ bundles.{$PADDOCK_DOMAIN} {
 		path /packages/*
 	}
 	handle @packages {
+		request_body {
+			max_size 1MiB
+		}
 		rewrite * /paddock-agent-artifacts{path}
 		reverse_proxy rustfs:9000
 	}
@@ -43,6 +49,9 @@ bundles.{$PADDOCK_DOMAIN} {
 		path /paddock-bundles/* /paddock-agent-artifacts/*
 	}
 	handle @read {
+		request_body {
+			max_size 1MiB
+		}
 		reverse_proxy rustfs:9000
 	}
 	# Devices upload escrowed LUKS headers with presigned PUTs (plan M4b decision 10); the signature fixes the key.
@@ -51,6 +60,10 @@ bundles.{$PADDOCK_DOMAIN} {
 		path /paddock-escrow/org/*
 	}
 	handle @escrow {
+		# A sealed LUKS header is at most 32 MiB (escrow.MaxHeaderObject); the presigned URL binds its exact size.
+		request_body {
+			max_size 33MiB
+		}
 		reverse_proxy rustfs:9000
 	}
 	handle {
@@ -66,6 +79,9 @@ fleet.{$PADDOCK_DOMAIN} {
 	}
 	@device path /api/osquery/* /api/v1/osquery/* /api/fleet/orbit/*
 	handle @device {
+		request_body {
+			max_size 64MiB
+		}
 		reverse_proxy fleet:8080
 	}
 	handle {

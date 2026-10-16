@@ -27,9 +27,10 @@ func TestPresignGetIsLocalAndForThePublicHost(t *testing.T) {
 	}
 }
 
+// TestPresignPutFixesTheKey: the signature covers the key and the announced size (plan M8s decision 29).
 func TestPresignPutFixesTheKey(t *testing.T) {
 	p := NewPresigner("https://bundles.example.org:8443", "AKIDEXAMPLE", "secret", "paddock-escrow")
-	raw, err := p.PresignPut(context.Background(), "org/o/devices/d/luks-header/2.bin", 10*time.Minute)
+	raw, err := p.PresignPut(context.Background(), "org/o/devices/d/luks-header/2.bin", 4096, 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +41,8 @@ func TestPresignPutFixesTheKey(t *testing.T) {
 	if u.Host != "bundles.example.org:8443" || u.Path != "/paddock-escrow/org/o/devices/d/luks-header/2.bin" {
 		t.Fatalf("url %s", raw)
 	}
-	if q := u.Query(); q.Get("X-Amz-Expires") != "600" || q.Get("X-Amz-Signature") == "" || !strings.Contains(q.Get("X-Amz-SignedHeaders"), "host") {
+	if q := u.Query(); q.Get("X-Amz-Expires") != "600" || q.Get("X-Amz-Signature") == "" || !strings.Contains(q.Get("X-Amz-SignedHeaders"), "host") ||
+		!strings.Contains(q.Get("X-Amz-SignedHeaders"), "content-length") {
 		t.Fatalf("query %v", q)
 	}
 }

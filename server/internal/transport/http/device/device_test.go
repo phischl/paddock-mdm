@@ -78,8 +78,9 @@ func (fakePresigner) PresignGet(_ context.Context, key string, ttl time.Duration
 	return "https://bundles.test/paddock-bundles/" + key + "?X-Amz-Expires=" + strconv.Itoa(int(ttl.Seconds())), nil
 }
 
-func (fakePresigner) PresignPut(_ context.Context, key string, ttl time.Duration) (string, error) {
-	return "https://bundles.test/paddock-escrow/" + key + "?X-Amz-Expires=" + strconv.Itoa(int(ttl.Seconds())), nil
+func (fakePresigner) PresignPut(_ context.Context, key string, size int64, ttl time.Duration) (string, error) {
+	return "https://bundles.test/paddock-escrow/" + key + "?X-Amz-Expires=" + strconv.Itoa(int(ttl.Seconds())) +
+		"&size=" + strconv.FormatInt(size, 10), nil
 }
 
 type env struct {
@@ -852,7 +853,7 @@ func TestEscrowHeader(t *testing.T) {
 		UploadURL string `json:"upload_url"`
 	}
 	if err := json.Unmarshal(r.body, &accepted); err != nil || r.status != http.StatusAccepted || accepted.EscrowID != escrowID.String() ||
-		accepted.UploadURL != "https://bundles.test/paddock-escrow/"+key+"?X-Amz-Expires=600" {
+		accepted.UploadURL != "https://bundles.test/paddock-escrow/"+key+"?X-Amz-Expires=600&size=1234567" {
 		t.Fatalf("header: %d %s", r.status, r.body)
 	}
 	var in ingest.Escrow
@@ -900,7 +901,7 @@ func TestEscrowHeaderVolume(t *testing.T) {
 		UploadURL string `json:"upload_url"`
 	}
 	if err := json.Unmarshal(r.body, &accepted); err != nil || r.status != http.StatusAccepted ||
-		accepted.UploadURL != "https://bundles.test/paddock-escrow/"+key+"?X-Amz-Expires=600" {
+		accepted.UploadURL != "https://bundles.test/paddock-escrow/"+key+"?X-Amz-Expires=600&size=100" {
 		t.Fatalf("header: %d %s", r.status, r.body)
 	}
 	var in ingest.Escrow

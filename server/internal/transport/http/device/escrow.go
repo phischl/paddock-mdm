@@ -45,7 +45,7 @@ func (g *gateway) escrowUpload(w http.ResponseWriter, r *http.Request) {
 			volume = msg.Volume.String()
 		}
 		msg.ObjectKey = escrow.HeaderObjectKey(msg.OrganizationID.String(), msg.DeviceID.String(), volume, msg.Generation)
-		if accepted.UploadURL, err = g.d.Escrow.PresignPut(r.Context(), msg.ObjectKey, HeaderUploadTTL); err != nil {
+		if accepted.UploadURL, err = g.d.Escrow.PresignPut(r.Context(), msg.ObjectKey, msg.Size, HeaderUploadTTL); err != nil {
 			g.fail(w, r, err)
 			return
 		}
