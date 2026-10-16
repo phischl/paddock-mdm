@@ -173,12 +173,51 @@ func requireTokenGroups(ctx context.Context, q *pgstore.Queries, rec Recorder, g
 	return nil
 }
 
-// loadGuardIdentity is LoadIdentity plus the device groups of the usable auto-approve enrollment tokens, the future
-// devices that the guards judge (plan M8s decision 7g-sexies).
+// loadGuardIdentity reads what the root-grant guards evaluate, and nothing more: users and their groups, profiles and
+// assignments, the device groups of every device (active ones separately for HighestClass) and the device groups of
+// the usable auto-approve enrollment tokens (plan M8s decision 7g-sexies). It skips the login settings, login
+// assignments and seen users that LoadIdentity also reads, because every guarded change reads it twice under the
+// organization's privilege lock.
 func loadGuardIdentity(ctx context.Context, q *pgstore.Queries) (*Identity, error) {
-	id, err := LoadIdentity(ctx, q)
+	id := &Identity{Users: map[uuid.UUID]pgstore.AppUser{}, userGroups: map[uuid.UUID][]uuid.UUID{},
+		groupUsers: map[uuid.UUID][]uuid.UUID{}, deviceGroups: map[uuid.UUID][]uuid.UUID{}, memberGroups: map[uuid.UUID][]uuid.UUID{}}
+	users, err := q.ListAllAppUsers(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("load users: %w", err)
+	}
+	for _, u := range users {
+		id.Users[u.ID] = u
+	}
+	members, err := q.ListAllUserGroupMembers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load group members: %w", err)
+	}
+	for _, m := range members {
+		id.userGroups[m.UserID] = append(id.userGroups[m.UserID], m.GroupID)
+		id.groupUsers[m.GroupID] = append(id.groupUsers[m.GroupID], m.UserID)
+	}
+	if id.Profiles, err = loadProfiles(ctx, q); err != nil {
 		return nil, err
+	}
+	if id.Assignments, err = loadAssignments(ctx, q); err != nil {
+		return nil, err
+	}
+	active, err := q.ListActiveDeviceIDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load devices: %w", err)
+	}
+	for _, d := range active {
+		id.deviceGroups[d] = []uuid.UUID{}
+	}
+	dgm, err := q.ListAllDeviceGroupMembers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load device group members: %w", err)
+	}
+	for _, m := range dgm {
+		id.memberGroups[m.DeviceID] = append(id.memberGroups[m.DeviceID], m.DeviceGroupID)
+		if _, ok := id.deviceGroups[m.DeviceID]; ok {
+			id.deviceGroups[m.DeviceID] = append(id.deviceGroups[m.DeviceID], m.DeviceGroupID)
+		}
 	}
 	if id.tokenGroups, err = q.ListAutoApproveTokenGroups(ctx); err != nil {
 		return nil, fmt.Errorf("load auto-approve token groups: %w", err)
