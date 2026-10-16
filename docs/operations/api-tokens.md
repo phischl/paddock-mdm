@@ -15,8 +15,12 @@ are managed on the portal page *API tokens* or through `/api/v1/api-tokens`.
   auditors. A role above the creator's is refused (403 `forbidden`).
 - **Step-up for every creation.** A token lets its holder act without MFA until it expires, so creating one needs a
   step-up of the last 5 minutes, like revealing a password ([step-up.md](step-up.md)). A token never has a step-up, so
-  a token cannot create tokens (403 `step_up_required`). For the same reason, a token cannot assign a full permission
-  profile or change a profile to full, also not through `PUT /api/v1/config`. Make those changes in the portal.
+  a token cannot create tokens (403 `step_up_required`). For the same reason a token cannot make any change that needs
+  a step-up ([step-up.md](step-up.md)): changes that would grant root in effect, alone or in combination, managed
+  files on sensitive paths, operator roots, confirmations of the security review — also not through
+  `PUT /api/v1/config`. Such a request answers 403 `step_up_required` with the detail `this change needs an
+  interactive administrator: API tokens cannot complete a step-up`. Pipelines use the two-step flow of
+  [paddockctl.md](paddockctl.md#ci-example).
 - **Expiry is required:** between 1 hour and 365 days after creation (portal default: 90 days). Expired tokens stay
   listed with status *expired*.
 - **The secret is shown once.** It has the form `pdk_` and 43 characters (32 random bytes). Paddock stores only its

@@ -51,9 +51,36 @@ Deleting a definition never needs a step-up.
 | --- | --- |
 | `PUT /api/v1/settings/managed-files` | always (organization administrators only) |
 
-An API token cannot complete a step-up (ADR 0034 decision 3): a request made with a token that needs one answers 403
-`step_up_required` with the detail `this change needs an interactive administrator: API tokens cannot complete a
-step-up`. A pipeline applies such changes in a second, interactive step.
+These actions always need a fresh step-up, whatever their content:
+
+| Action | Who |
+| --- | --- |
+| `POST /api/v1/devices/{id}/local-admin/reveal` | organization administrators |
+| `POST /api/v1/devices/{id}/disk/recovery-key`, `POST /api/v1/devices/{id}/disk/header` | organization administrators |
+| `POST /api/v1/devices/{id}/lock`, `POST /api/v1/devices/{id}/destroy` | organization administrators |
+| `POST /api/v1/revocation-requests/{id}/approve`, `…/reject`, `…/cancel` | organization administrators |
+| `POST /api/v1/permission-profiles/{id}/confirm-root-grant` | organization administrators (security review) |
+| `POST /api/v1/managed-files/{id}/confirm-sensitive` | organization administrators (security review) |
+| `PUT /api/v1/settings/dms` | organization administrators, when the dead man's switch is enabled |
+| `POST /api/v1/api-tokens` | organization administrators and operators |
+| `POST`, `PATCH`, `DELETE /api/platform/v1/ip-allowlist…` | platform administrators |
+| `POST /api/platform/v1/sessions/end-all` | platform administrators |
+
+In general: every change that would grant a user root on a device in effect, on its own or in combination with
+other grants, needs an organization administrator with a fresh step-up; the tables above name the requests where
+this applies.
+
+**API tokens** (ADR 0034 decision 3): a request authenticated with an API token never satisfies a step-up. Such a
+request is refused with 403 `step_up_required` and the detail `this change needs an interactive administrator: API
+tokens cannot complete a step-up`, recorded as one denied audit event. The GitOps flow is two-step: CI applies
+everything else; an administrator applies root-equivalent changes from the portal (`docs/operations/paddockctl.md`).
+
+**Factor.** The shipped step-up flow accepts WebAuthn authenticators only (security key or platform authenticator).
+Every administrator, including every new one, enrols a WebAuthn authenticator in Authentik's user settings
+(`https://auth.<domain>/if/user/` → MFA devices) before the first step-up. The portal login's MFA stage still offers
+TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot complete a step-up. Paddock checks
+`mfa` in the token's `amr`, which does not tell WebAuthn from TOTP; only the Authentik stage enforces the factor
+(residual risk RR-38).
 
 ## How it works
 

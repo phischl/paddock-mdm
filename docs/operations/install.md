@@ -260,36 +260,48 @@ restore drill are in the same document.
 ## 12. Upgrade
 
 Upgrades extract the new bundle next to the running one and take over its `.env` and `.secrets/`:
-`docs/operations/upgrade.md`. Before upgrading to a version whose step-up accepts WebAuthn only, every administrator
-enrols a WebAuthn authenticator (`docs/operations/step-up.md`, "Before upgrading to WebAuthn-only step-up"). Agent releases are separate: `docs/operations/agent-releases.md`.
+`docs/operations/upgrade.md`. Agent releases are separate: `docs/operations/agent-releases.md`.
 
-**Release with the managed-file path tiers (ADR 0034): agents first, then the server.** From this release on the
-server no longer ships managed files on denied paths. An agent of this release keeps such a file on the device
-unchanged and stops tracking it (`left_denied_file`); an agent older than this release deletes every unchanged file
-that leaves its bundle, so it would delete those files at its next check-in after the server upgrade, without any
-operator action. Before you upgrade the control plane, upload the agent release of the new version to the running
-server and roll it out to every device (`docs/operations/agent-releases.md`); upgrade the server only when no device
-runs an older agent. A device that is offline during the rollout and returns after the server upgrade with an older
-agent loses its unchanged files on denied paths (residual risk RR-36).
+**Release with the managed-file path tiers, server-side sessions and WebAuthn-only step-up (ADR 0034).** Four steps,
+in this order:
 
-After the upgrade of the server, run the security review once on the control plane:
+1. **Before the upgrade, every administrator enrols a WebAuthn authenticator** (security key or platform
+   authenticator) in Authentik's user settings, `https://auth.<domain>/if/user/` → MFA devices. From this release
+   the step-up accepts WebAuthn only; an administrator with TOTP only can still sign in but cannot reveal keys, lock or
+   destroy devices, create API tokens or grant root-equivalent rights (`docs/operations/step-up.md`). The same
+   applies to every administrator added later.
+2. **Agents first, then the server.** From this release on the server no longer ships managed files on denied paths.
+   An agent of this release keeps such a file on the device unchanged and stops tracking it (`left_denied_file`); an
+   agent older than this release deletes every unchanged file that leaves its bundle, so it would delete those files
+   at its next check-in after the server upgrade, without any operator action. Before you upgrade the control plane,
+   upload the agent release of the new version to the running server and roll it out to every device
+   (`docs/operations/agent-releases.md`); upgrade the server only when no device runs an older agent. A device that is
+   offline during the rollout and returns after the server upgrade with an older agent loses its unchanged files on
+   denied paths (residual risk RR-36).
+3. **Upgrade the server; every administrator signs in again.** Portal sessions now also live in Valkey, and the
+   session cookies of earlier versions are no longer accepted. While Valkey is unreachable the portal answers 503
+   `session_store_unavailable`; devices and API tokens are not affected (residual risk RR-35).
+4. **Run the security review once** on the control plane:
 
-```sh
-docker compose … run --rm --no-deps paddock-worker admin security-review
-```
+   ```sh
+   ./paddock compose run --rm --no-deps paddock-worker admin security-review
+   ```
 
-It prints one line per organization (`<slug>: root_grants=<n> sensitive_files=<n> denied_files=<n>`) and records
-`organization.security_review_required` in every organization with something to review. Organization administrators
-then open the banner on the overview (`/security-review`): they confirm existing root grants and files on sensitive
-paths with a step-up, and delete the definitions on denied paths they no longer need. Root grants and files on
-sensitive paths keep working while they await review. Files on denied paths are no longer shipped; they stay on the
-devices unchanged only on agents of this release or newer (see the upgrade order above).
+   It prints one line per organization (`<slug>: root_grants=<n> sensitive_files=<n> denied_files=<n>`) and records
+   `organization.security_review_required` in every organization with something to review. Organization
+   administrators then open the banner on the overview (`/security-review`): they confirm existing root grants and
+   files on sensitive paths with a step-up, and delete the definitions on denied paths they no longer need. Root
+   grants and files on sensitive paths keep working while they await review. Files on denied paths are no longer
+   shipped; they stay on the devices unchanged only on agents of this release or newer (step 2). Operators manage
+   files without a step-up only below the organization's operator roots, which are empty after the upgrade; an
+   organization administrator sets them in the portal under *Configuration* → *Operator roots* (residual risk RR-37).
 
 ## 13. Residual risks you must record in your ISMS
 
 Paddock leaves risks that only your organization can accept, mitigate or transfer, for example the young WORM
 implementation of the bundled RustFS (ADR 0017) and the custody of the OpenBao unseal shares. Record each risk of
-`docs/compliance/residual-risks.md` in your ISMS's risk register with an owner and a decision.
+`docs/compliance/residual-risks.md` in your ISMS's risk register with an owner and a decision. Among them: the step-up
+factor is enforced by Authentik only, because the ID token's `amr` does not tell WebAuthn from TOTP (RR-38).
 
 ## Appendix: installing from source
 

@@ -69,9 +69,10 @@ portal.
   group and path, unit or package; assignments by profile, subject and device group. Renaming a key deletes the old
   item and creates a new one. `device_group: null` means every device of the organization; `subject` is
   `{type: global}`, `{type: group, slug: …}` or `{type: user, username: …}`.
-- **The rules of the portal apply unchanged.** Deleting device groups and changing settings need `org_admin`. Assigning
-  a full profile or changing a profile to full needs a step-up, which a token never has; make those changes in the
-  portal. Paths and units are checked as in the portal. One refused item aborts the whole apply, and the error names
+- **The rules of the portal apply unchanged.** Deleting device groups and changing settings need `org_admin`. Every
+  change that needs a step-up in the portal needs one here ([step-up.md](step-up.md)), which a token never has:
+  changes that would grant root in effect, alone or in combination, managed files on sensitive paths and operator
+  roots. Paths and units are checked as in the portal. One refused item aborts the whole apply, and the error names
   the document path (`/managed_files/2: …`). Nothing is applied. A dry run checks exactly the same and changes
   nothing.
 - **Deleting a device group deletes everything scoped to it**: its managed files, units, package holds and profile
@@ -109,6 +110,18 @@ jobs:
 ```
 
 Start from `paddockctl get config > paddock.yml` so that the first apply changes nothing.
+
+**Two-step flow for changes that need a step-up.** A token never satisfies a step-up, so an apply whose plan contains
+such a change is refused as a whole with 403 `step_up_required` (detail: `this change needs an interactive
+administrator: API tokens cannot complete a step-up`), and the dry run on the pull request shows the same refusal.
+Split the change:
+
+1. An organization administrator makes the change in the portal, with a step-up.
+2. The pull request then commits the same definition to `paddock.yml`. CI's next apply finds that item unchanged,
+   needs no step-up for it and applies everything else.
+
+Everything that needs no step-up — device groups, ordinary managed files, units, holds, settings without operator
+roots, assignments that grant no root — stays fully automated.
 
 ## Restore commands
 
