@@ -193,6 +193,12 @@ func TestCaddyfilesEdge(t *testing.T) {
 			}
 		}
 	}
+	// body_limit answers a declared Content-Length above the limit with 413 before the upstream sees the request, and
+	// bounds the body with request_body (an upstream that answers without reading the body would hide the limit).
+	if g := read("guards.caddy"); !strings.Contains(g, "(body_limit) {") || !strings.Contains(g, "max_size {args[0]}") ||
+		!strings.Contains(g, "int({http.request.header.Content-Length}) > {args[1]}") {
+		t.Error("guards.caddy has no body_limit snippet with a Content-Length check and request_body")
+	}
 	if limited != 17 {
 		t.Errorf("found %d proxies to roles and upstreams, want 17 (2 in the guards, 5 in each Caddyfile)", limited)
 	}
@@ -213,7 +219,7 @@ func requestBodyBefore(lines []string, i int) bool {
 		if d < depth {
 			return false
 		}
-		if d == depth && strings.HasPrefix(strings.TrimSpace(l), "request_body") {
+		if d == depth && (strings.HasPrefix(strings.TrimSpace(l), "request_body") || strings.HasPrefix(strings.TrimSpace(l), "import body_limit ")) {
 			return true
 		}
 	}
