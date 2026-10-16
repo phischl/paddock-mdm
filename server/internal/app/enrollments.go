@@ -87,6 +87,7 @@ func (e *Enrollments) Enroll(ctx context.Context, req ingest.Enroll) (EnrollResu
 				}
 				if newDeviceGains(before, []uuid.UUID{tok.DeviceGroupID.UUID}) {
 					state = device.StatePending
+					rec.SetParam("auto_approve_withheld", "root_grant")
 				}
 			}
 		}

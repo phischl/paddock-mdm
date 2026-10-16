@@ -220,9 +220,16 @@ func TestAutoApproveIntoRootGrantIsPending(t *testing.T) {
 			t.Fatalf("%s: %v", q.sql, err)
 		}
 	}
-	res, err := h.enroll(newRequest(t, h.org, h.token(t, 5, true, time.Now().Add(time.Hour))))
+	req := newRequest(t, h.org, h.token(t, 5, true, time.Now().Add(time.Hour)))
+	res, err := h.enroll(req)
 	if err != nil || res.State != "pending" {
 		t.Fatalf("auto-approve into a root grant = %+v, %v", res, err)
+	}
+	var withheld string
+	if err := h.super.QueryRow(ctx, `SELECT payload->'params'->>'auto_approve_withheld' FROM outbox
+		WHERE payload->>'correlation_id' = $1 AND payload->>'code' = 'device.enrolled'`, req.EnrollmentID.String()).Scan(&withheld); err != nil ||
+		withheld != "root_grant" {
+		t.Fatalf("auto_approve_withheld = %q, %v", withheld, err)
 	}
 	res, err = plain.enroll(newRequest(t, plain.org, plain.token(t, 5, true, time.Now().Add(time.Hour))))
 	if err != nil || res.State != "active" {

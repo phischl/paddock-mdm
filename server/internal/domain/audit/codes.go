@@ -227,9 +227,9 @@ var registry = map[Code]Definition{
 	CodeDeviceEnrolled: {
 		Code: CodeDeviceEnrolled, Emitted: true,
 		Description: "A device enrolled with an enrollment token (actor: the device), or its enrollment was rejected.",
-		Params:      []string{"hostname", "state", "key_protection", "enrolled_with"},
+		Params:      []string{"hostname", "state", "key_protection", "enrolled_with", "auto_approve_withheld"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
-		Note:        "enrolled_with is the ID of the enrollment token. A failure carries the rejection reason as error_code: invalid_token, token_revoked, token_expired, token_exhausted or invalid_request.",
+		Note:        "enrolled_with is the ID of the enrollment token. auto_approve_withheld is root_grant when an auto-approve token's device would have given someone root and the device was enrolled pending instead (plan M8s decision 7g-sexies). A failure carries the rejection reason as error_code: invalid_token, token_revoked, token_expired, token_exhausted or invalid_request.",
 	},
 	CodeDeviceApproved: {
 		Code: CodeDeviceApproved, Emitted: true,
