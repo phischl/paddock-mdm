@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
@@ -23,12 +25,18 @@ type AdminAccounts struct {
 	org      *db.OrgPool
 	platform *db.PlatformPool
 	dir      ports.UserDirectory
-	sessions SessionRevoker
+	sessions AccountSessions
+}
+
+// AccountSessions counts and ends the portal sessions of an account (sessions.Store).
+type AccountSessions interface {
+	SessionRevoker
+	CountAccount(ctx context.Context, accountID uuid.UUID) (int, error)
 }
 
 // NewAdminAccounts creates the use case.
 func NewAdminAccounts(runner *ActionRunner, org *db.OrgPool, platform *db.PlatformPool, dir ports.UserDirectory,
-	sessions SessionRevoker) *AdminAccounts {
+	sessions AccountSessions) *AdminAccounts {
 	return &AdminAccounts{runner: runner, org: org, platform: platform, dir: dir, sessions: sessions}
 }
 
@@ -188,18 +196,27 @@ func (a *AdminAccounts) ReconcilePlatform(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// revokePlatformAdmin ends the sessions of adm and records them; with no session to end nothing is recorded. The
-// sessions end before the event's transaction, so a failing record is logged by the caller with the sessions already
-// ended (fail safe).
+// revokePlatformAdmin ends the sessions of adm and records them; with no session to end nothing is recorded, so a
+// removed administrator is recorded once.
 func (a *AdminAccounts) revokePlatformAdmin(ctx context.Context, adm pgstore.PlatformAdmin, reason string) error {
-	n, err := a.sessions.RevokeAccount(ctx, adm.ID)
-	if err != nil || n == 0 {
+	open, err := a.sessions.CountAccount(ctx, adm.ID)
+	if err != nil || open == 0 {
 		return err
 	}
 	spec := ActionSpec{
 		Code:   audit.CodeAdminSessionsRevoked,
 		Target: &audit.Target{Type: "platform_admin", ID: adm.ID.String(), Display: adm.Username},
-		Params: map[string]any{"reason": reason, "sessions": n, "old_role": string(principal.RolePlatform), "new_role": ""},
+		Params: map[string]any{"reason": reason, "old_role": string(principal.RolePlatform), "new_role": ""},
 	}
-	return a.runner.RunTx(ctx, ScopePlatform, spec, func(context.Context, *pgstore.Queries, Recorder) error { return nil })
+	return a.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, _ *pgstore.Queries, rec Recorder) error {
+		// The sessions end inside the event's transaction, as on the organization path: a failing revocation fails the
+		// transaction and records the failure, and the next round counts the sessions again and retries. A commit that
+		// fails after the revocation leaves the sessions ended (fail safe) and the round reports the error.
+		n, err := a.sessions.RevokeAccount(ctx, adm.ID)
+		if err != nil {
+			return fmt.Errorf("revoke sessions: %w", err)
+		}
+		rec.SetParam("sessions", n)
+		return nil
+	})
 }

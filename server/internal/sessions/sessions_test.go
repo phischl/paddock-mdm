@@ -56,11 +56,17 @@ func TestStore(t *testing.T) {
 	if _, err := s.Create(ctx, otherID, other, time.Hour); err != nil {
 		t.Fatal(err)
 	}
+	if n, err := s.CountAccount(ctx, account); err != nil || n != 2 {
+		t.Fatalf("count: %d %v", n, err)
+	}
 	if n, err := s.RevokeAccount(ctx, account); err != nil || n != 2 {
 		t.Fatalf("revoke: %d %v", n, err)
 	}
 	if n, err := s.RevokeAccount(ctx, account); err != nil || n != 0 {
 		t.Fatalf("second revoke: %d %v", n, err)
+	}
+	if n, err := s.CountAccount(ctx, account); err != nil || n != 0 {
+		t.Fatalf("count after revoke: %d %v", n, err)
 	}
 	if _, _, found, err := s.Get(ctx, otherID); err != nil || !found {
 		t.Fatalf("another account's session: found %v %v", found, err)

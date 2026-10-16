@@ -155,6 +155,24 @@ redis.call('DEL', KEYS[1])
 return n
 `)
 
+// countScript counts the sessions of the set whose record still exists.
+var countScript = valkey.NewLuaScript(`
+local n = 0
+for _, sid in ipairs(redis.call('SMEMBERS', KEYS[1])) do
+  n = n + redis.call('EXISTS', 'sess:' .. sid)
+end
+return n
+`)
+
+// CountAccount returns how many sessions of the account exist.
+func (s *Store) CountAccount(ctx context.Context, accountID uuid.UUID) (int, error) {
+	n, err := countScript.Exec(ctx, s.c, []string{accountKey(accountID)}, nil).AsInt64()
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	return int(n), nil
+}
+
 // RevokeAccount deletes every session of the account and returns how many existed.
 func (s *Store) RevokeAccount(ctx context.Context, accountID uuid.UUID) (int, error) {
 	n, err := revokeScript.Exec(ctx, s.c, []string{accountKey(accountID)}, nil).AsInt64()

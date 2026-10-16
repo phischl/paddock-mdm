@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -24,11 +25,26 @@ type revoker struct {
 	mu      sync.Mutex
 	revoked map[uuid.UUID]int
 	open    map[uuid.UUID]int
+	// failOnce makes the next revocation of an account fail.
+	failOnce map[uuid.UUID]bool
+}
+
+func (r *revoker) CountAccount(_ context.Context, id uuid.UUID) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.open == nil {
+		return 2, nil
+	}
+	return r.open[id], nil
 }
 
 func (r *revoker) RevokeAccount(_ context.Context, id uuid.UUID) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.failOnce[id] {
+		delete(r.failOnce, id)
+		return 0, errors.New("session store down")
+	}
 	r.revoked[id]++
 	if r.open == nil {
 		return 2, nil
@@ -207,11 +223,12 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 		return id
 	}
 	suffix := uuid.NewString()[:8]
-	kept, removed, inactive := admin("root-"+suffix), admin("gone-"+suffix), admin("off-"+suffix)
+	kept, removed, inactive, flaky := admin("root-"+suffix), admin("gone-"+suffix), admin("off-"+suffix), admin("flaky-"+suffix)
 	dir := newDirectory()
 	dir.roleGroups = map[string][]ports.IdentityUser{organization.PlatformAdminsGroup(): {
 		{PK: "1", Username: "root-" + suffix, Active: true}, {PK: "2", Username: "off-" + suffix, Active: false}}}
-	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{kept: 1, removed: 2, inactive: 1}}
+	sessions := &revoker{revoked: map[uuid.UUID]int{}, open: map[uuid.UUID]int{kept: 1, removed: 2, inactive: 1, flaky: 1},
+		failOnce: map[uuid.UUID]bool{flaky: true}}
 	corr := "corr-" + t.Name()
 	accounts := app.NewAdminAccounts(app.NewActionRunner(worker, platform, func(context.Context) string { return corr }), worker, platform, dir, sessions)
 	sys := httpx.WithRequestID(principal.With(ctx, principal.Principal{Kind: principal.KindSystem, Display: "worker"}), corr)
@@ -221,13 +238,17 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 		t.Fatalf("directory down: %v, %d revocations", err, sessions.revoked[removed])
 	}
 	dir.fail = nil
-	for round := 1; round <= 2; round++ {
+	// The first round fails to end the flaky administrator's session (recorded as failed); the next round retries.
+	if err := accounts.ReconcilePlatform(sys); err == nil {
+		t.Fatal("a failing revocation did not fail the round")
+	}
+	for round := 2; round <= 3; round++ {
 		if err := accounts.ReconcilePlatform(sys); err != nil {
 			t.Fatal(err)
 		}
 	}
 	event := func(id uuid.UUID) []string {
-		rows, err := super.Query(ctx, `SELECT outcome || ' ' || (params->>'reason') || ' ' || (params->>'sessions') || ' ' ||
+		rows, err := super.Query(ctx, `SELECT outcome || ' ' || (params->>'reason') || ' ' || coalesce(params->>'sessions', '-') || ' ' ||
 			(organization_id = $2)::text FROM action WHERE code = 'admin.sessions_revoked' AND target->>'id' = $1`, id.String(), uuid.Nil)
 		if err != nil {
 			t.Fatal(err)
@@ -237,6 +258,9 @@ func TestAdminAccountsReconcilePlatform(t *testing.T) {
 			t.Fatal(err)
 		}
 		return out
+	}
+	if got := event(flaky); len(got) != 2 || !slices.Contains(got, "success removed 1 true") || slices.Contains(got, "success removed 0 true") {
+		t.Fatalf("flaky administrator: events %v, want the failure and the retried success", got)
 	}
 	for name, c := range map[string]struct {
 		id    uuid.UUID
