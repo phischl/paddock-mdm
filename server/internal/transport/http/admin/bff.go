@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -241,19 +242,34 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	res := organization.ResolveRole(claims.Groups)
 	now := b.now()
 	sid := sessions.NewID()
+	var opened uuid.UUID // the account whose session record exists, once it does
 	openSession := func(ctx context.Context, p principal.Principal) error {
-		_, err := b.sessions.Create(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
-			Org: p.OrganizationID, CreatedAt: now.Unix()}, SessionAbsolute)
-		return err
+		if _, err := b.sessions.Create(ctx, sid, sessions.Record{AccountID: p.ID, Kind: string(p.Kind), Role: string(p.Role),
+			Org: p.OrganizationID, CreatedAt: now.Unix()}, SessionAbsolute); err != nil {
+			return err
+		}
+		opened = p.ID
+		return nil
+	}
+	// A record whose cookie never reaches the browser is removed, so that no revocation counts or records it later.
+	discard := func() {
+		if opened == uuid.Nil {
+			return
+		}
+		if err := b.sessions.Delete(ctx, sid, opened); err != nil {
+			slog.WarnContext(ctx, "session record of a failed login not deleted", "error", err)
+		}
 	}
 	result, err := b.accounts.Login(ctx,
 		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip, OpenSession: openSession},
 		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs})
 	if errors.Is(err, problem.Forbidden) {
+		discard()
 		denied(w, r, app.ReasonNotAuthorized)
 		return
 	}
 	if err != nil {
+		discard()
 		slog.ErrorContext(ctx, "login failed", "error", err)
 		denied(w, r, app.ReasonLoginFailed)
 		return
@@ -261,6 +277,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	p := result.Principal
 	value, err := b.keys.Seal(SessionCookie, NewSession(p, sid, result.Locale, now))
 	if err != nil {
+		discard()
 		slog.ErrorContext(ctx, "session cookie", "error", err)
 		denied(w, r, app.ReasonLoginFailed)
 		return
