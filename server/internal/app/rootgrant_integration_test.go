@@ -462,10 +462,14 @@ func TestSpreadingAnApprovedCombination(t *testing.T) {
 		if _, err := w.super.Exec(context.Background(), "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'empty')", scoped, w.org); err != nil {
 			t.Fatal(err)
 		}
-		a, err := w.privileges.CreateAssignment(w.ctx(w.operator), app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectUser,
-			SubjectID: &w.two, DeviceGroupID: &scoped})
+		in := app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectUser, SubjectID: &w.two, DeviceGroupID: &scoped}
+		// A stand-in device in the device group judges it although it has no devices (plan M8s decision 7g-sexies).
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), in); !errors.Is(err, problem.Forbidden) {
+			t.Fatalf("operator, the pair for user two in a device group without devices = %v", err)
+		}
+		a, err := w.privileges.CreateAssignment(w.ctx(w.steppedUp), in)
 		if err != nil {
-			t.Fatalf("the pair for user two in a device group without devices = %v", err)
+			t.Fatal(err)
 		}
 		if _, err := w.privileges.UpdateAssignmentScope(w.ctx(w.operator), a.ID, nil); !errors.Is(err, problem.Forbidden) {
 			t.Fatalf("operator re-scoping to every device = %v", err)
@@ -490,12 +494,15 @@ func TestSpreadingAnApprovedCombination(t *testing.T) {
 		if _, err := w.super.Exec(context.Background(), "INSERT INTO device_group (id, organization_id, name) VALUES ($1, $2, 'd')", d, w.org); err != nil {
 			t.Fatal(err)
 		}
-		// Spreading into a device group without devices passes both checks ...
-		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGroup,
-			SubjectID: &w.groupA, DeviceGroupID: &d}); err != nil {
+		// Spreading into a device group without devices is judged through its stand-in device (7g-sexies) ...
+		spread := app.NewAssignment{ProfileID: w.runner, SubjectType: privilege.SubjectGroup, SubjectID: &w.groupA, DeviceGroupID: &d}
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.operator), spread); !errors.Is(err, problem.Forbidden) {
 			t.Fatalf("operator spreading into an empty device group = %v", err)
 		}
-		// ... a token that enrolls devices into it does not.
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.steppedUp), spread); err != nil {
+			t.Fatal(err)
+		}
+		// ... and so is a token that enrolls devices into it.
 		pool, err := db.NewOrgPool(context.Background(), pgtest.SharedPaddock(t).API, db.Options{})
 		if err != nil {
 			t.Fatal(err)

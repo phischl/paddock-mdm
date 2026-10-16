@@ -195,7 +195,8 @@ func newDeviceGains(before *Identity, groups []uuid.UUID) bool {
 	return subjectsGain(before, &after)
 }
 
-// subjectsGain reports whether a real user gains a root witness on a device: every device in any state with its
+// subjectsGain reports whether a real or future user gains a root witness on a device (future users and devices are
+// the stand-ins of plan M8s decision 7g-sexies): every device in any state with its
 // device groups before and after the change (a new device, or one in fresh because it becomes active, starts without
 // groups), and a device in no group. Users with the same groups and no assignment of their own share one evaluation.
 func subjectsGain(before, after *Identity, fresh ...uuid.UUID) bool {
@@ -217,10 +218,20 @@ func subjectsGain(before, after *Identity, fresh ...uuid.UUID) bool {
 	for _, device := range fresh {
 		add(nil, after.memberGroups[device])
 	}
-	// Future devices: a device that a usable auto-approve token enrolls into its group.
+	// Future devices: a device in each device group that a usable auto-approve token enrolls into or an assignment
+	// names (plan M8s decision 7g-sexies).
+	var subjectGroups []uuid.UUID
 	for _, id := range []*Identity{before, after} {
 		for _, g := range id.tokenGroups {
 			add([]uuid.UUID{g}, []uuid.UUID{g})
+		}
+		for _, a := range id.Assignments {
+			if a.DeviceGroupID != uuid.Nil {
+				add([]uuid.UUID{a.DeviceGroupID}, []uuid.UUID{a.DeviceGroupID})
+			}
+			if a.SubjectType == privilege.SubjectGroup && !slices.Contains(subjectGroups, a.SubjectID) {
+				subjectGroups = append(subjectGroups, a.SubjectID)
+			}
 		}
 	}
 
@@ -257,11 +268,17 @@ func subjectsGain(before, after *Identity, fresh ...uuid.UUID) bool {
 			}
 		}
 	}
-	// A future user: no groups and no assignment of its own, so only what is granted to everyone applies.
+	// Future users: one with no groups and no assignment of its own, and one member of each group an assignment names.
 	future := uuid.New()
-	for _, c := range contexts {
-		if privilege.RootGrantGrows(effectiveWith(before, future, nil, c.before), effectiveWith(after, future, nil, c.after)) {
-			return true
+	memberships := [][]uuid.UUID{nil}
+	for _, g := range subjectGroups {
+		memberships = append(memberships, []uuid.UUID{g})
+	}
+	for _, groups := range memberships {
+		for _, c := range contexts {
+			if privilege.RootGrantGrows(effectiveWith(before, future, groups, c.before), effectiveWith(after, future, groups, c.after)) {
+				return true
+			}
 		}
 	}
 	return false
