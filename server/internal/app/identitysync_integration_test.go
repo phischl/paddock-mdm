@@ -82,13 +82,20 @@ func (d *directory) UserMembership(_ context.Context, username, uid string) (por
 	d.directReads[uid]++
 	var u ports.IdentityUser
 	var groups []string
+	other := false
 	for name, members := range d.roleGroups {
 		for _, m := range members {
-			if m.UID == uid && m.Username == username {
+			switch {
+			case m.UID == uid && m.Username == username:
 				u = m
 				groups = append(groups, name)
+			case m.Username == username:
+				other = true
 			}
 		}
+	}
+	if len(groups) == 0 && other {
+		return u, nil, false, ports.ErrIdentityMismatch
 	}
 	return u, groups, len(groups) > 0, d.fail
 }
