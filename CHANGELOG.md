@@ -52,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Managed files on paths outside the denied catalog are sensitive by default: an operator manages files without a
   step-up only below the organization's operator roots (new setting, empty by default: portal Configuration →
   Operator roots, `GET|PUT /api/v1/settings/managed-files`, declarative `settings.managed_files`, audited as
-  `settings.managed_files_changed`), and not for executables, scripts, shared objects or `.d` directories there.
+  `settings.managed_files_changed`), and not for executables, scripts, compiled bytecode, Java archives, shared
+  objects or `.d` directories there.
   Package-manager, boot-loader, interpreter, shell, display-manager, audit, firewall, network, directory-client,
   trust-anchor, PAM, identity, new-user skeleton, service-environment and container-runtime directories can never be
   operator roots, below `/etc/` and

@@ -62,6 +62,8 @@ var classifyVectors = []struct {
 	{"/etc/myapp/rc.zsh", "0644", TierSensitive},
 	{"/opt/myapp/app.mjs", "0644", TierSensitive},
 	{"/opt/myapp/app.cjs", "0644", TierSensitive},
+	{"/opt/myapp/lib/__pycache__/x.cpython-312.pyc", "0644", TierSensitive},
+	{"/opt/myapp/lib/plugin.jar", "0644", TierSensitive},
 	{"/etc/systemd/system/timer.d/x.conf", "0644", TierDenied},
 	{"/etc/systemd/system/scope.d/x.conf", "0644", TierDenied},
 	{"/usr/local/lib/systemd/system/service.d/x.conf", "0644", TierDenied},

@@ -126,7 +126,7 @@ func denied(p string) bool {
 }
 
 // codeSuffixes are file names that interpreters or the loader run or load (plan M8s decision 7a).
-var codeSuffixes = []string{".so", ".py", ".pth", ".sh", ".pl", ".pm", ".rb", ".lua", ".js", ".mjs", ".cjs", ".php", ".bash", ".zsh"}
+var codeSuffixes = []string{".so", ".py", ".pth", ".sh", ".pl", ".pm", ".rb", ".lua", ".js", ".mjs", ".cjs", ".php", ".bash", ".zsh", ".pyc", ".jar"}
 
 func codeSuffix(p string) bool {
 	name := path.Base(p)
