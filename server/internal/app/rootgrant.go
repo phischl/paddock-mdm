@@ -247,7 +247,12 @@ func subjectsGain(before, after *Identity, fresh ...uuid.UUID) bool {
 	for _, id := range []*Identity{before, after} {
 		for user := range id.Users {
 			b, a := before.userGroups[user], after.userGroups[user]
+			// A user created by the change is judged from nothing, so it never shares an evaluation with an existing one.
+			_, existed := before.Users[user]
 			key := idsKey(b) + "→" + idsKey(a)
+			if !existed {
+				key = "new:" + key
+			}
 			if direct[user] {
 				key = user.String()
 			}
@@ -255,7 +260,6 @@ func subjectsGain(before, after *Identity, fresh ...uuid.UUID) bool {
 				continue
 			}
 			seen[key] = true
-			_, existed := before.Users[user]
 			for _, c := range contexts {
 				was := effectiveWith(before, user, b, c.before)
 				if !existed {

@@ -658,3 +658,32 @@ type creatingDirectory struct{ *directory }
 func (creatingDirectory) CreateUser(context.Context, string, ports.NewIdentityUser) (string, error) {
 	return "pk-" + uuid.NewString(), nil
 }
+
+// TestNewUserNextToAPlainUser: an organization that already has a user without groups and without assignments of its
+// own still judges a new user from nothing (regression: both shared one evaluation, and the new user was skipped).
+func TestNewUserNextToAPlainUser(t *testing.T) {
+	w := newCombinationWorld(t)
+	ctx := context.Background()
+	plain := uuid.Must(uuid.NewV7())
+	if _, err := w.super.Exec(ctx, `INSERT INTO app_user (id, organization_id, authentik_pk, username, source) VALUES ($1, $2, $3, $4, 'local')`,
+		plain, w.org, "q"+plain.String()[24:], "plain-"+plain.String()[24:]+"@x.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.super.Exec(ctx, "UPDATE organization SET domains = '{x.test}' WHERE id = $1", w.org); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []uuid.UUID{w.writer, w.runner} {
+		if _, err := w.privileges.CreateAssignment(w.ctx(w.steppedUp), app.NewAssignment{ProfileID: p, SubjectType: privilege.SubjectGlobal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pool, err := db.NewOrgPool(ctx, pgtest.SharedPaddock(t).API, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	users := app.NewUsers(w.privilegesHarness.runner, pool, creatingDirectory{newDirectory()})
+	if _, err := users.Create(w.ctx(w.operator), app.NewUser{Username: "new-" + uuid.NewString()[:6] + "@x.test", DisplayName: "New"}); !errors.Is(err, problem.Forbidden) {
+		t.Fatalf("operator creating a user who becomes root next to a plain user = %v", err)
+	}
+}
