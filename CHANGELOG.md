@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   specific proxies, never `private_ranges`); every other production item applies unchanged. Guide:
   `docs/operations/lab-install.md`.
 
+- Audit codes `admin.sessions_revoked`, `platform.sessions_ended`, `permission_profile.root_grant_confirmed`,
+  `managed_file.sensitive_confirmed`, `organization.security_review_required` and `device.header_object_rejected`
+  (plan M8s), the parameter `effective_class` of the permission-profile and profile-assignment events, the parameter
+  `tier` of `managed_file.created` and `managed_file.updated`, and the problem code `session_store_unavailable`
+  (503) in the registry, the portal's messages and `docs/compliance/audit-codes.md`.
+
 - `SECURITY.md`: supported versions, how to report a vulnerability privately, response targets, scope and how to
   verify releases.
 

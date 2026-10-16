@@ -27,6 +27,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Configuration (navigation group) | Konfiguration | |
 | Danger zone | Gefahrenbereich | Lock, Destroy and Retire on the device page. |
 | Dead man's switch | Totmannschalter | Its period is the *Frist*. |
+| Denied path | Gesperrter Pfad | Managed files on it are refused and not shipped. |
 | Density | Dichte (Kompakt / Komfortabel) | |
 | Destroy (revocation) | Vernichtung; Gerät vernichten | Irreversible: erases every keyslot and the escrow. |
 | Device | Gerät | |
@@ -66,10 +67,14 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Reveal (password, key) | Anzeigen | Every reveal is audited. |
 | Revocation (Lock, Destroy, self-lock) | Widerruf | Page *Widerrufe*. |
 | Rollout, wave | Rollout, Welle | |
+| Root grant | Root-Berechtigung | A permission profile that is effectively Full. |
 | Root-equivalent | root-gleichwertig | |
 | Rotate (password) | Rotieren; Rotation | |
 | Security (navigation group) | Sicherheit | |
+| Security review | Sicherheitsprüfung | Review of root grants and files on sensitive or denied paths. |
 | Security updates overdue | Sicherheitsupdates überfällig | |
+| Sensitive path | Sensibler Pfad | Managed files on it need an organization administrator with a step-up. |
+| Session (portal) | Sitzung | |
 | Self-lock (dead man's switch) | Selbstsperre | |
 | Severity | Schweregrad | Kritisch, Hoch, Mittel, Niedrig, Unbekannt. |
 | Sign in / sign out | Anmelden / Abmelden | |

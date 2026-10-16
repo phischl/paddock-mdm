@@ -176,7 +176,8 @@
     "ip_not_allowed": "Ihre Adresse steht nicht auf der IP-Freigabeliste.",
     "ip_allowlist_unavailable": "Das Portal startet und kann die IP-Freigabeliste noch nicht prüfen. Versuchen Sie es gleich noch einmal.",
     "lockout_confirmation_required": "Diese Änderung würde Ihre eigene Adresse aus der Freigabeliste entfernen.",
-    "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten."
+    "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten.",
+    "session_store_unavailable": "Das Portal erreicht seinen Sitzungsspeicher nicht. Versuchen Sie es gleich noch einmal."
   },
   "audit": {
     "title": "Audit-Protokoll",
@@ -203,12 +204,14 @@
       "unknown": "Unbekannt"
     },
     "admin": {
-      "login": "{actor} hat sich angemeldet"
+      "login": "{actor} hat sich angemeldet",
+      "sessions_revoked": "{reason, select, step_up_role_mismatch {Die Sitzungen von {target} wurden beendet: die Rolle bei der Identitätsbestätigung stimmte nicht überein} role_changed {Die Sitzungen von {target} wurden beendet: die Rolle hat sich von {old_role} zu {new_role} geändert} deactivated {Die Sitzungen von {target} wurden beendet: das Konto wurde deaktiviert} other {Die Sitzungen von {target} wurden beendet: das Konto hat keine Rolle mehr}}"
     },
     "organization": {
       "created": "{actor} hat die Organisation {slug} angelegt",
       "domains_changed": "{actor} hat die Domains von {slug} festgelegt",
-      "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)"
+      "recompile_requested": "{actor} hat für jedes Gerät ein neues Bundle angefordert (Wiederherstellung)",
+      "security_review_required": "Eine Sicherheitsprüfung ist erforderlich: {root_grant_profiles, number} Root-Berechtigungen, {sensitive_files, number} sensible Dateien und {denied_files, number} Dateien auf gesperrten Pfaden"
     },
     "device_group": {
       "created": "{actor} hat die Gerätegruppe {name} angelegt",
@@ -272,7 +275,8 @@
       "updates_run": "Das Gerät {target} hat seine {kind, select, security {Sicherheitsupdates} regular {regulären Updates} other {Updates ({kind})}} abgeschlossen: {result, select, ok {{upgraded, number} Pakete aktualisiert} timeout {Zeitüberschreitung} other {fehlgeschlagen}}",
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
-      "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert"
+      "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",
+      "header_object_rejected": "Der hinterlegte LUKS-Header von {hostname} wurde abgewiesen: seine Größe weicht von der angekündigten ab"
     },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
@@ -302,7 +306,8 @@
       "osv_imported": "Die Schwachstellendaten von Ubuntu wurden aus einer Datei importiert ({entries, number} Einträge)",
       "ip_allowlist_changed": "{action, select, added {{actor} hat {cidr} ({label}) zur IP-Freigabeliste hinzugefügt} updated {{actor} hat den Eintrag {previous_cidr} der IP-Freigabeliste zu {cidr} ({label}) geändert} other {{actor} hat {cidr} ({label}) aus der IP-Freigabeliste entfernt}}",
       "ip_allowlist_denied": "{aggregated, select, true {{count, number} Anfragen von {ip} wurden durch die IP-Freigabeliste abgewiesen} other {Eine Anfrage von {ip} wurde durch die IP-Freigabeliste abgewiesen}}",
-      "ip_allowlist_disabled": "{method, select, env {Die IP-Freigabeliste wird auf der API umgangen (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} hat die IP-Freigabeliste abgeschaltet: {entries_removed, number} Einträge entfernt}}"
+      "ip_allowlist_disabled": "{method, select, env {Die IP-Freigabeliste wird auf der API umgangen (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} hat die IP-Freigabeliste abgeschaltet: {entries_removed, number} Einträge entfernt}}",
+      "sessions_ended": "{actor} hat alle Portal-Sitzungen beendet"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -314,7 +319,8 @@
     "managed_file": {
       "created": "{actor} hat die verwaltete Datei {path} definiert",
       "updated": "{actor} hat die verwaltete Datei {path} geändert",
-      "deleted": "{actor} hat die verwaltete Datei {path} gelöscht"
+      "deleted": "{actor} hat die verwaltete Datei {path} gelöscht",
+      "sensitive_confirmed": "{actor} hat die verwaltete Datei {path} auf einem sensiblen Pfad bestätigt"
     },
     "managed_unit": {
       "created": "{actor} hat die verwaltete Unit {unit} definiert",
@@ -350,7 +356,8 @@
     "permission_profile": {
       "created": "{actor} hat das Berechtigungsprofil {name} angelegt",
       "updated": "{actor} hat das Berechtigungsprofil {name} geändert",
-      "deleted": "{actor} hat das Berechtigungsprofil {name} gelöscht"
+      "deleted": "{actor} hat das Berechtigungsprofil {name} gelöscht",
+      "root_grant_confirmed": "{actor} hat die Root-Berechtigung des Berechtigungsprofils {name} bestätigt"
     },
     "profile_assignment": {
       "created": "{actor} hat das Berechtigungsprofil {profile} zugewiesen",
