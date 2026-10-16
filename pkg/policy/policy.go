@@ -158,7 +158,8 @@ var neverOperator = []string{
 
 // ValidateOperatorRoot checks one operator root (plan M8s decision 7b): a normalized directory of the form
 // /etc/<name>/…, /usr/local/etc/<name>/… or /opt/<name>/… with a trailing slash that neither is, contains nor lies
-// below a denied or sensitive catalog entry, and lies outside the never-operator directories.
+// below a denied or sensitive catalog entry, and lies outside the never-operator directories, below /etc/ and
+// /usr/local/etc/ alike.
 func ValidateOperatorRoot(root string) error {
 	dir := strings.TrimSuffix(root, "/")
 	if !strings.HasSuffix(root, "/") || !wellFormed(dir) || dir+"/" != root {
@@ -178,12 +179,20 @@ func ValidateOperatorRoot(root string) error {
 		}
 	}
 	for _, never := range neverOperator {
-		if prefix, ok := strings.CutSuffix(never, "*"); ok {
-			if strings.HasPrefix(root, prefix) {
+		// Software built for /usr/local reads the same configuration below /usr/local/etc/, so every /etc/ entry
+		// applies there as well (plan M8s decision 7h-ter).
+		entries := []string{never}
+		if rest, ok := strings.CutPrefix(never, "/etc/"); ok {
+			entries = append(entries, "/usr/local/etc/"+rest)
+		}
+		for _, entry := range entries {
+			if prefix, ok := strings.CutSuffix(entry, "*"); ok {
+				if strings.HasPrefix(root, prefix) {
+					return ErrOperatorRoot
+				}
+			} else if related(entry) {
 				return ErrOperatorRoot
 			}
-		} else if related(never) {
-			return ErrOperatorRoot
 		}
 	}
 	return nil

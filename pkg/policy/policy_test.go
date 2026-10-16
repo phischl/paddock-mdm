@@ -123,7 +123,7 @@ func TestClassify(t *testing.T) {
 }
 
 func TestValidateOperatorRoot(t *testing.T) {
-	for _, ok := range []string{"/etc/myapp/", "/etc/myapp/conf/", "/usr/local/etc/tool/", "/opt/vendor/", "/etc/paddock-gates/",
+	for _, ok := range []string{"/etc/myapp/", "/etc/myapp/conf/", "/usr/local/etc/tool/", "/usr/local/etc/myapp/conf/", "/opt/vendor/", "/etc/paddock-gates/",
 		"/opt/paddock-gates/", "/etc/shellsx/"} {
 		if err := ValidateOperatorRoot(ok); err != nil {
 			t.Errorf("%s refused: %v", ok, err)
@@ -138,6 +138,10 @@ func TestValidateOperatorRoot(t *testing.T) {
 		"/etc/dhcp/", "/etc/openvpn/", "/etc/netplan/", "/etc/wpa_supplicant/", "/etc/sssd/", "/etc/samba/", "/etc/ldap/",
 		"/etc/openldap/", "/etc/audisp/", "/etc/skel/", "/etc/csh.login.d/", "/etc/tcsh/", "/etc/ksh/", "/etc/php/8.3/",
 		"/etc/systemd/system.control/",
+		"/usr/local/etc/ssh/", "/usr/local/etc/sudoers.d/", "/usr/local/etc/pam.d/", "/usr/local/etc/security/",
+		"/usr/local/etc/systemd/", "/usr/local/etc/cron.d/", "/usr/local/etc/profile.d/", "/usr/local/etc/bash_completion.d/",
+		"/usr/local/etc/zsh/", "/usr/local/etc/python3.12/", "/usr/local/etc/php/", "/usr/local/etc/apt/",
+		"/usr/local/etc/default/", "/usr/local/etc/X11/", "/usr/local/etc/openvpn/", "/usr/local/etc/skel/",
 	} {
 		if err := ValidateOperatorRoot(bad); !errors.Is(err, ErrOperatorRoot) {
 			t.Errorf("%q accepted", bad)

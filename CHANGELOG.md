@@ -54,7 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Operator roots, `GET|PUT /api/v1/settings/managed-files`, declarative `settings.managed_files`, audited as
   `settings.managed_files_changed`), and not for executables, scripts, shared objects or `.d` directories there.
   Package-manager, boot-loader, interpreter, shell, display-manager, audit, firewall, network, directory-client,
-  trust-anchor, PAM, identity and new-user skeleton directories can never be operator roots. Existing definitions keep working; the security review lists
+  trust-anchor, PAM, identity and new-user skeleton directories can never be operator roots, below `/etc/` and
+  `/usr/local/etc/` alike. Existing definitions keep working; the security review lists
   those that now need a confirmation.
 
 - Granting root in effect needs an organization administrator with a step-up also when it happens indirectly: a
