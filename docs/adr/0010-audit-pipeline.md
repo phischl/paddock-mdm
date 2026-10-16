@@ -22,3 +22,10 @@ offsite replica. Optional SIEM forwarding.
 ## Consequences
 + The portal gate (exactly one event, also on failure) is structurally supported.
 − Production audit bucket must be created correctly once (Object Lock cannot be added later).
+
+## Amendment 2026-10-15 — outbound integrations
+
+The "optional SIEM forwarding" of the decision is specified in ADR 0031 (notifications, the audit cursor feed and
+the SIEM forward): the source is the committed index in commit order (`audit_event.commit_seq`, assigned by the
+audit writer under a per-organization row lock), never the queue; the forward runs in a new control-plane role
+`notifier`, not in the audit domain. Nothing else in this decision changes.
