@@ -276,7 +276,7 @@ Supersedes the per-profile reading of decisions 1–3.
     quarantine-release changes keep (b) (they cannot change the union); enrollment-token creation runs (a) as in
     7g-quater and (b) with a synthetic new device in the token's device groups against every real user. Spreading to
     a group that is still empty passes both; a later membership change in Paddock is caught by (b), a later directory
-    sync is the accepted residual risk RR-38.
+    sync is the accepted residual risk RR-39.
 
 ### 3.3 Server-side sessions (SEC-2, part 2 and 4)
 
