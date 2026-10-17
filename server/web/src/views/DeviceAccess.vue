@@ -5,12 +5,14 @@ import TimeCell from '../components/TimeCell.vue'
 import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { reportText } from '../lib/devices'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /** The Login & sudo tab of a device (plan M7c decision 29): login assignment, effective sudo rights, latest reports. */
 const page = inject(deviceDetailKey)
 if (!page) throw new Error('DeviceAccess outside the device frame')
 const { device, users, userGroups, loginUsers, loginGroups, loginSaved, sudo, saveLogin, toggleSuspension } = page
 const { t } = useI18n()
+const { pending, run } = usePending()
 const session = useSessionStore()
 const d = computed(() => device.value!)
 </script>
@@ -51,7 +53,7 @@ const d = computed(() => device.value!)
         <form
           class="form groups-form"
           novalidate
-          @submit.prevent="saveLogin"
+          @submit.prevent="run(saveLogin)"
         >
           <p class="summary">
             {{ t('devices.login.assignmentHint') }}
@@ -94,6 +96,8 @@ const d = computed(() => device.value!)
             </v-btn>
             <v-btn
               type="submit"
+              :loading="pending"
+              :disabled="pending"
               color="primary"
               data-testid="save-login-assignment"
             >

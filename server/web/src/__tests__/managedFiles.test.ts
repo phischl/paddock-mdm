@@ -68,7 +68,25 @@ async function createFile(w: VueWrapper, path: string): Promise<void> {
   await flushPromises()
 }
 
+function submitButton(): HTMLButtonElement {
+  return document.querySelector('.v-dialog form button[type="submit"]') as HTMLButtonElement
+}
+
 describe('ManagedFiles', () => {
+  it('disables the submit button and shows progress while the create request runs (plan M8x decision 27)', async () => {
+    let resolve: (v: string | null) => void = () => {}
+    saveManagedFile.mockReturnValueOnce(new Promise((r) => { resolve = r }))
+    const w = await mountList()
+    await createFile(w, '/etc/myapp/app.conf')
+    expect(saveManagedFile).toHaveBeenCalledTimes(1)
+    expect(submitButton().hasAttribute('disabled')).toBe(true)
+    expect(submitButton().querySelector('[role="progressbar"]')).not.toBeNull()
+    resolve('invalid_request')
+    await flushPromises()
+    expect(submitButton().hasAttribute('disabled')).toBe(false)
+    expect(submitButton().querySelector('[role="progressbar"]')).toBeNull()
+  })
+
   it('shows the tier of every file', async () => {
     const w = await mountList()
     expect(w.find('[data-testid="managed-file-tier"]').text()).toBe('Sensitive')

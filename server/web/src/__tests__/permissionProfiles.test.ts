@@ -62,7 +62,35 @@ async function mountList(): Promise<{ w: VueWrapper; path: () => string }> {
   return { w: wrapper, path: () => router.currentRoute.value.fullPath }
 }
 
+function submitButton(): HTMLButtonElement {
+  return document.querySelector('.v-dialog form button[type="submit"]') as HTMLButtonElement
+}
+
 describe('PermissionProfiles', () => {
+  it('disables the submit button and shows progress while the create request runs (plan M8x decision 27)', async () => {
+    let resolve: (v: PermissionProfile | string) => void = () => {}
+    createProfile.mockReturnValueOnce(new Promise((r) => { resolve = r }))
+    const { w } = await mountList()
+    await w.find('[data-testid="create-profile"]').trigger('click')
+    await flushPromises()
+    const name = document.querySelector('#create-profile-name') as HTMLInputElement
+    name.value = 'logs'
+    name.dispatchEvent(new Event('input'))
+    const commands = document.querySelector('#create-profile-commands') as HTMLTextAreaElement
+    commands.value = '/usr/bin/journalctl'
+    commands.dispatchEvent(new Event('input'))
+    await flushPromises()
+    ;(document.querySelector('.v-dialog form') as HTMLFormElement).dispatchEvent(new Event('submit'))
+    await flushPromises()
+    expect(createProfile).toHaveBeenCalledTimes(1)
+    expect(submitButton().hasAttribute('disabled')).toBe(true)
+    expect(submitButton().querySelector('[role="progressbar"]')).not.toBeNull()
+    resolve('invalid_request')
+    await flushPromises()
+    expect(submitButton().hasAttribute('disabled')).toBe(false)
+    expect(submitButton().querySelector('[role="progressbar"]')).toBeNull()
+  })
+
   it('shows the effective class of a root-equivalent restricted profile', async () => {
     const { w } = await mountList()
     expect(w.find('[data-testid="profile-effective-class"]').text()).toBe('Full (effective)')

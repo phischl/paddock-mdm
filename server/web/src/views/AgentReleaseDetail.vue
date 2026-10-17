@@ -5,8 +5,10 @@ import { useI18n } from 'vue-i18n'
 import { useAgentReleasePage } from '../lib/agentReleasePage'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
+import { usePending } from '../composables/usePending'
 
 const { t, n, locale } = useI18n()
+const { pending, run: runPending } = usePending()
 const route = useRoute()
 const problemText = useProblemText()
 const { detail, problem, actions, load, run } = useAgentReleasePage(() => String(route.params.version))
@@ -36,7 +38,9 @@ onMounted(load)
             :key="action"
             :color="action === 'halt' ? 'error' : 'primary'"
             :data-testid="'rollout-' + action"
-            @click="run(action)"
+            :loading="pending"
+            :disabled="pending"
+            @click="runPending(() => run(action))"
           >
             {{ t('agentReleases.actions.' + action + '.label') }}
           </v-btn>

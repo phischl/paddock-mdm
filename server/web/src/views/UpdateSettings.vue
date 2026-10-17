@@ -7,12 +7,14 @@ import { useProblemText } from '../lib/problems'
 import { getUpdateSettings, saveUpdateSettings, validateSettings } from '../lib/updates'
 import { hasErrors } from '../lib/validation'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /**
  * The organization's update settings (plan M5b decisions 1 and 9): when devices install security updates, when they
  * run regular updates, and after how many hours of silence a device is stale.
  */
 const { t, locale } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const session = useSessionStore()
 
@@ -68,7 +70,7 @@ onMounted(async () => {
       v-if="form"
       class="form settings-form"
       novalidate
-      @submit.prevent="save"
+      @submit.prevent="run(save)"
     >
       <fieldset :disabled="!session.canDelete">
         <legend>{{ t('updates.settings.security') }}</legend>
@@ -151,6 +153,8 @@ onMounted(async () => {
         >{{ t('updates.settings.saved') }}</span>
         <v-btn
           type="submit"
+          :loading="pending"
+          :disabled="pending"
           color="primary"
           data-testid="save-update-settings"
         >

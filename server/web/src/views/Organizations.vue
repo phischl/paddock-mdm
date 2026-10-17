@@ -10,8 +10,10 @@ import { hasErrors, parseDomains, validateDomains, validateOrganization } from '
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { organizationStatus } from '../lib/status'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
 
@@ -169,7 +171,7 @@ async function saveDomains(): Promise<void> {
           <form
             class="form"
             novalidate
-            @submit.prevent="submit"
+            @submit.prevent="run(submit)"
           >
             <v-text-field
               id="org-slug"
@@ -218,6 +220,8 @@ async function saveDomains(): Promise<void> {
               </v-btn>
               <v-btn
                 type="submit"
+                :loading="pending"
+                :disabled="pending"
                 color="primary"
               >
                 {{ t('common.create') }}
@@ -242,7 +246,7 @@ async function saveDomains(): Promise<void> {
           <form
             class="form"
             novalidate
-            @submit.prevent="saveDomains"
+            @submit.prevent="run(saveDomains)"
           >
             <v-textarea
               id="org-edit-domains"
@@ -272,6 +276,8 @@ async function saveDomains(): Promise<void> {
               </v-btn>
               <v-btn
                 type="submit"
+                :loading="pending"
+                :disabled="pending"
                 color="primary"
                 data-testid="save-domains"
               >

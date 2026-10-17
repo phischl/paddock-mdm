@@ -14,8 +14,10 @@ import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
 import { tokenStatus } from '../lib/status'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const confirm = useConfirm()
 const session = useSessionStore()
@@ -184,7 +186,8 @@ async function onRevoke(token: EnrollmentToken): Promise<void> {
           <EnrollmentTokenForm
             :groups="groups"
             :problem="problem"
-            @submit="onCreate"
+            :pending="pending"
+            @submit="run(() => onCreate($event))"
             @cancel="close"
           />
         </v-card-text>

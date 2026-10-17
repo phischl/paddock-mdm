@@ -11,9 +11,11 @@ import { useManagedPage } from '../lib/managedPage'
 import { useProblemText } from '../lib/problems'
 import { deletePackageHold, listPackageHolds, savePackageHold, type HoldInput } from '../lib/updates'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /** Package holds (plan M5b decision 2): held packages are left out of every update and refused by install now. */
 const { t } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
@@ -110,7 +112,9 @@ const columns = computed<ListColumn[]>(() => [
             :aria-label="t('managed.deleteLabel', { name: item.package })"
             color="error"
             size="small"
-            @click="remove(item)"
+            :loading="pending"
+            :disabled="pending"
+            @click="run(() => remove(item))"
           >
             {{ t('common.delete') }}
           </v-btn>
@@ -130,7 +134,8 @@ const columns = computed<ListColumn[]>(() => [
             :groups="groups"
             :initial="target"
             :problem="problem"
-            @submit="submit"
+            :pending="pending"
+            @submit="run(() => submit($event))"
             @cancel="open = false"
           />
         </v-card-text>

@@ -7,8 +7,8 @@ import { useProblemText } from '../lib/problems'
 import { hasErrors } from '../lib/validation'
 
 const props = withDefaults(
-  defineProps<{ groups: { id: string; name: string }[]; initial?: ManagedFile | null; problem?: string }>(),
-  { initial: null, problem: '' },
+  defineProps<{ groups: { id: string; name: string }[]; initial?: ManagedFile | null; problem?: string; pending?: boolean }>(),
+  { initial: null, problem: '', pending: false },
 )
 const emit = defineEmits<{ submit: [input: FileInput]; cancel: [] }>()
 
@@ -104,6 +104,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
       >
         {{ initial ? t('common.save') : t('common.create') }}

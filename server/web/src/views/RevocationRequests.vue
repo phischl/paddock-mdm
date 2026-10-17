@@ -13,12 +13,14 @@ import { listRevocations, revocationFilters, reviewRevocation, reviewVerbs, type
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 import { revocationStatus } from '../lib/status'
+import { usePending } from '../composables/usePending'
 
 /**
  * The organization's revocation requests (plan M4c decision 18): a Destroy waits here for a second administrator, who
  * approves or rejects it after a step-up and with the typed hostname; its requester can cancel it.
  */
 const { t } = useI18n()
+const { pending, run } = usePending()
 const router = useRouter()
 const confirm = useConfirm()
 const problemText = useProblemText()
@@ -82,7 +84,7 @@ async function review(verb: ReviewVerb, p: Pending): Promise<void> {
   await list.value?.reload()
 }
 
-onMounted(resume)
+onMounted(() => run(resume))
 </script>
 
 <template>
@@ -161,6 +163,8 @@ onMounted(resume)
             :color="verb === 'approve' ? 'error' : undefined"
             :variant="verb === 'approve' ? 'flat' : 'outlined'"
             :data-testid="'revocation-' + verb"
+            :loading="pending"
+            :disabled="pending"
             @click="start(verb, item)"
           >
             {{ t('revocations.review.' + verb + '.label') }}

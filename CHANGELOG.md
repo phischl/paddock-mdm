@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.
+- Every portal button that sends a request shows a progress indicator and is disabled until the answer arrives, so a
+  second click no longer sends the request twice.
 
 ### Changed
 

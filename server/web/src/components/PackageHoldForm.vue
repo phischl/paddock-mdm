@@ -7,8 +7,8 @@ import { validateHold, type HoldInput } from '../lib/updates'
 import { hasErrors } from '../lib/validation'
 
 const props = withDefaults(
-  defineProps<{ groups: { id: string; name: string }[]; initial?: PackageHold | null; problem?: string }>(),
-  { initial: null, problem: '' },
+  defineProps<{ groups: { id: string; name: string }[]; initial?: PackageHold | null; problem?: string; pending?: boolean }>(),
+  { initial: null, problem: '', pending: false },
 )
 const emit = defineEmits<{ submit: [input: HoldInput]; cancel: [] }>()
 
@@ -92,6 +92,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
         data-testid="save-hold"
       >

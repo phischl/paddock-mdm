@@ -5,7 +5,9 @@ import { validityDays, type TokenInput } from '../lib/enrollmentTokens'
 import { useProblemText } from '../lib/problems'
 import { validateDeviceGroup } from '../lib/validation'
 
-const props = withDefaults(defineProps<{ groups: { id: string; name: string }[]; problem?: string }>(), { problem: '' })
+const props = withDefaults(defineProps<{ groups: { id: string; name: string }[]; problem?: string; pending?: boolean }>(), {
+  problem: '', pending: false,
+})
 const emit = defineEmits<{ submit: [input: TokenInput]; cancel: [] }>()
 
 const { t } = useI18n()
@@ -90,6 +92,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
       >
         {{ t('common.create') }}

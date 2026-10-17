@@ -20,7 +20,7 @@ const problemText = useProblemText()
 const text = ref('')
 const touched = ref(false)
 const problem = ref<{ problem: string; detail?: string } | null>(null)
-const busy = ref(false)
+const pending = ref(false)
 const packages = computed(() => parsePackages(text.value))
 const error = computed(() => {
   if (packages.value.length === 0 || packages.value.length > maxInstallPackages) return t('updates.installNow.countInvalid', { max: maxInstallPackages })
@@ -36,9 +36,9 @@ async function submit(): Promise<void> {
   touched.value = true
   problem.value = null
   if (error.value) return
-  busy.value = true
+  pending.value = true
   problem.value = await props.install(packages.value)
-  busy.value = false
+  pending.value = false
   if (problem.value) return
   text.value = ''
   touched.value = false
@@ -92,7 +92,8 @@ async function submit(): Promise<void> {
             <v-btn
               type="submit"
               color="primary"
-              :loading="busy"
+              :loading="pending"
+              :disabled="pending"
               data-testid="install-submit"
             >
               {{ t('updates.installNow.submit') }}

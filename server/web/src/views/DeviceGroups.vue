@@ -10,8 +10,10 @@ import { listDeviceGroups } from '../lib/deviceGroups'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
@@ -115,7 +117,8 @@ const columns = computed<ListColumn[]>(() => [
             id-prefix="create-group"
             :submit-label="t('common.create')"
             :problem="createProblem"
-            @submit="onCreate"
+            :pending="pending"
+            @submit="run(() => onCreate($event))"
             @cancel="createOpen = false"
           />
         </v-card-text>
@@ -138,7 +141,8 @@ const columns = computed<ListColumn[]>(() => [
             :initial-description="editTarget.description"
             :submit-label="t('common.save')"
             :problem="editProblem"
-            @submit="onEdit"
+            :pending="pending"
+            @submit="run(() => onEdit($event))"
             @cancel="closeEdit"
           />
         </v-card-text>

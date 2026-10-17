@@ -10,8 +10,10 @@ import { searchText, type ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { createUserGroup, groupSlugPattern, groupSourceFilter, listUpstreamGroups, listUserGroups, slugFrom } from '../lib/userGroups'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const router = useRouter()
 const problemText = useProblemText()
 const session = useSessionStore()
@@ -149,7 +151,7 @@ async function submit(): Promise<void> {
           <form
             class="form"
             novalidate
-            @submit.prevent="submit"
+            @submit.prevent="run(submit)"
           >
             <v-autocomplete
               v-if="importing"
@@ -199,6 +201,8 @@ async function submit(): Promise<void> {
               </v-btn>
               <v-btn
                 type="submit"
+                :loading="pending"
+                :disabled="pending"
                 color="primary"
               >
                 {{ t(importing ? 'userGroups.importAction' : 'common.create') }}

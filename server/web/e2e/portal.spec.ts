@@ -192,6 +192,28 @@ test('platform admin sees the organizations page', async ({ page }) => {
   expect(csp).toEqual([])
 })
 
+// Plan M8x decision 27: a submitting button shows its loading state and refuses a second click. The create request
+// is held until the check ran; organizations cannot be deleted, so the slug is unique per run.
+test('the organization create button is disabled while its request runs', async ({ page }) => {
+  const slug = `e2e-p-${Date.now().toString(36)}`
+  await login(page, 'platform-admin@paddock.test', 'dev_platform_admin_password')
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => { release = r })
+  await page.route('**/api/platform/v1/organizations', async (route) => {
+    if (route.request().method() === 'POST') await held
+    await route.continue()
+  })
+  await page.getByTestId('create-organization').click()
+  const create = page.getByRole('dialog', { name: 'New organization' })
+  await create.getByLabel('Slug').fill(slug)
+  await create.getByLabel('Name').fill(`E2E ${slug}`)
+  const submit = create.getByRole('button', { name: 'Create' })
+  await submit.click()
+  await expect(submit).toBeDisabled()
+  release()
+  await expect(create).toBeHidden()
+})
+
 test('login denied page is accessible', async ({ page }) => {
   const csp = watchCSP(page)
   const res = await page.goto('/login-denied?reason=not_authorized')

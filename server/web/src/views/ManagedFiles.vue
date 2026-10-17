@@ -15,8 +15,10 @@ import { useProblemText } from '../lib/problems'
 import type { Status } from '../lib/status'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const router = useRouter()
 const problemText = useProblemText()
 const session = useSessionStore()
@@ -167,7 +169,8 @@ const columns = computed<ListColumn[]>(() => [
             :groups="groups"
             :initial="target"
             :problem="problem"
-            @submit="submit"
+            :pending="pending"
+            @submit="run(() => submit($event))"
             @cancel="open = false"
           />
         </v-card-text>

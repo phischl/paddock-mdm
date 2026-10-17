@@ -9,12 +9,14 @@ import { useProblemText } from '../lib/problems'
 import { dmsMaxPeriod, dmsMinPeriod, dmsWarnBelow, getDMS, parseWarnDays, saveDMS } from '../lib/revocations'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /**
  * The organization's dead man's switch (plan M4c decisions 15 and 18): on, the period and the warning lead times.
  * Turning it on, or changing it while on, needs a step-up and a confirmation that names the consequence.
  */
 const { t, locale } = useI18n()
+const { pending, run } = usePending()
 const router = useRouter()
 const confirm = useConfirm()
 const problemText = useProblemText()
@@ -132,7 +134,7 @@ onMounted(async () => {
       v-if="loaded"
       class="form settings-form"
       novalidate
-      @submit.prevent="save"
+      @submit.prevent="run(save)"
     >
       <fieldset :disabled="!session.canDelete || !session.me?.revocation_enabled">
         <legend>{{ t('dms.title') }}</legend>
@@ -192,6 +194,8 @@ onMounted(async () => {
         >{{ t('dms.saved') }}</span>
         <v-btn
           type="submit"
+          :loading="pending"
+          :disabled="pending"
           color="primary"
           data-testid="save-dms"
         >

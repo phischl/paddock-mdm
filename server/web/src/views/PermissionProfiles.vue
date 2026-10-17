@@ -12,8 +12,10 @@ import type { ListColumn } from '../lib/listQuery'
 import { classFilter, createProfile, listProfiles, type ProfileInput } from '../lib/profiles'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const router = useRouter()
 const confirm = useConfirm()
 const session = useSessionStore()
@@ -140,7 +142,8 @@ onMounted(async () => {
             id-prefix="create-profile"
             :submit-label="t('common.create')"
             :problem="problem"
-            @submit="onCreate"
+            :pending="pending"
+            @submit="run(() => onCreate($event))"
             @cancel="open = false"
           />
         </v-card-text>

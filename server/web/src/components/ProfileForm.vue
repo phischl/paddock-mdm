@@ -6,8 +6,8 @@ import { commandLines, lectures, privilegeClasses, type ProfileInput } from '../
 import { useProblemText } from '../lib/problems'
 
 const props = withDefaults(
-  defineProps<{ initial?: ProfileInput; submitLabel: string; problem?: string; idPrefix?: string }>(),
-  { initial: undefined, problem: '', idPrefix: 'profile' },
+  defineProps<{ initial?: ProfileInput; submitLabel: string; problem?: string; idPrefix?: string; pending?: boolean }>(),
+  { initial: undefined, problem: '', idPrefix: 'profile', pending: false },
 )
 const emit = defineEmits<{ submit: [input: ProfileInput]; cancel: [] }>()
 
@@ -109,6 +109,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
       >
         {{ submitLabel }}
