@@ -18,8 +18,9 @@ to do when they are not.
 
 After M8e an organization administrator encrypts an adopted, unencrypted Ubuntu device from the portal: after a
 step-up, a typed hostname and a backup acknowledgement, the device prepares itself, the recovery key is escrowed
-before a single byte is encrypted, the user restarts the device once and chooses the boot PIN (or none, under
-`tpm_only`), and the remaining encryption runs in the background while the user works — resumable after a power
+before a single byte is encrypted, the users of the device see a desktop notification asking for a restart, the
+administrator can still cancel from the portal until that restart, the user restarts the device once and chooses
+the boot PIN (or none, under `tpm_only`), and the remaining encryption runs in the background while the user works — resumable after a power
 cut, with the progress visible on the device page. The result is a device that is indistinguishable from one
 installed with the Paddock autoinstall: `compliant`, TPM2 + PIN or TPM2 plus a recovery key, header escrowed.
 Paddock never starts the conversion on its own initiative.
@@ -85,7 +86,9 @@ Paddock never starts the conversion on its own initiative.
   and `plain` (ext4 directly on one partition).
 - Phases of a conversion (server and agent use the same words): `requested` (command issued, not delivered),
   `prepared` (escrow stored, initrd built, waiting for the restart), `encrypting` (the init step succeeded, the
-  background phase runs or is paused), `completed`, `failed`, `cancelled`.
+  background phase runs or is paused), `completed`, `failed`, `cancelled` (the command was cancelled before
+  delivery, or the device aborted the conversion on an administrator's or an operator's request before the
+  restart).
 
 ### 3.2 Eligibility and preflight (agent; PDK-242)
 
@@ -181,6 +184,17 @@ Paddock never starts the conversion on its own initiative.
        Reason   string   `json:"reason,omitempty"`  // invalid_params, revocation_pending, uninstall_pending, not_eligible
        Reasons  []string `json:"reasons,omitempty"` // the preflight reasons for not_eligible
    }
+   // TypeEncryptDiskAbort cancels a conversion the device has received but not executed at a restart (§3.9).
+   const TypeEncryptDiskAbort = "encrypt_disk_abort" // lifetime 7 days
+   // EncryptDiskAbortParams name the conversion to abort.
+   type EncryptDiskAbortParams struct {
+       ConversionID string `json:"conversion_id"`
+   }
+   // EncryptDiskAbortResult is the command result of encrypt_disk_abort.
+   type EncryptDiskAbortResult struct {
+       Aborted bool   `json:"aborted"`
+       Reason  string `json:"reason,omitempty"` // when not aborted: invalid_params, unknown_conversion, not_abortable
+   }
    ```
 
 6. Migration `disk_conversion` (next free number after M8d's):
@@ -193,6 +207,7 @@ Paddock never starts the conversion on its own initiative.
      phase text NOT NULL CHECK (phase IN ('requested','prepared','encrypting','completed','failed','cancelled')),
      layout text CHECK (layout IN ('lvm','plain')), luks_uuid uuid, data_bytes bigint,
      failure_stage text, failure_reason text, phase_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz,
+     abort_command_id uuid REFERENCES device_command (id), abort_refused_reason text,
      FOREIGN KEY (organization_id, device_id) REFERENCES device (organization_id, id)
    );
    CREATE INDEX device_disk_conversion_device_idx ON device_disk_conversion (organization_id, device_id, requested_at DESC);
@@ -232,32 +247,46 @@ Paddock never starts the conversion on its own initiative.
      request → 409 (detail `a lock or destroy is pending for this device`);
    - inserts the row (`phase = requested`, `id = uuidv7`) and issues the command (`issueCommand`, type
      `encrypt_disk`, params `{conversion_id}`).
-8. `POST /api/v1/devices/{id}/encrypt/cancel` (`x-paddock-audit: device.encrypt_cancelled`, `RolesAdmin`, no
-   step-up, 200 `Device`, 404, 409 `invalid_state`): allowed while the latest conversion is `requested` and its
-   command's status is `pending`, `failed` or `expired` (409 detail `the device already received the command`
-   otherwise, `no conversion is open` without one); sets the command `cancelled` (as M8d decision 38, same cache
-   removal) and the row `cancelled` (`finished_at = now()`). Params `hostname`, `command_id`, `conversion_id`.
-9. Device events (`pkg/protocol`, closed set gains four; each carries `conversion_id`):
+8. `POST /api/v1/devices/{id}/encrypt/cancel` (`x-paddock-audit: device.encrypt_cancelled`, `ActionSpec{AllowedRoles:
+   RolesAdmin, RequiresStepUp: true}`, body `DeviceEncryptCancelRequest{confirm_hostname (required)}`, 200
+   `Device`, 403 `step_up_required|forbidden`, 404, 409 `invalid_state`, 422 `invalid_request`), use case
+   `app.DiskConversions.Cancel`, params `hostname`, `command_id`, `conversion_id`, `mode`:
+   - no open conversion → 409 (detail `no conversion is open`); `confirm_hostname` mismatch → 422;
+   - phase `requested` and the `encrypt_disk` command's status `pending`, `failed` or `expired` → `mode:
+     command_cancelled`: the command becomes `cancelled` (as M8d decision 38, same cache removal) and the row
+     `cancelled` (`finished_at = now()`);
+   - phase `requested` with the command `delivered` or `succeeded`, or phase `prepared`, and no open abort
+     (`abort_command_id IS NULL` or that command `failed`/`expired`) → `mode: abort_sent`: issues the command
+     `encrypt_disk_abort` with params `{conversion_id}` (decision 5), stores `abort_command_id`, clears
+     `abort_refused_reason`; the row keeps its phase until the device answers (decision 9);
+   - an open abort command (`pending` or `delivered`) → 409 (detail `a cancellation is already on its way`);
+   - phase `encrypting` → 409 (detail `the device already started the encryption; it cannot be cancelled`);
+     `completed`, `failed`, `cancelled` → 409 (detail `no conversion is open`).
+9. Device events (`pkg/protocol`, closed set gains five; each carries `conversion_id`):
 
    ```go
    EventDiskConversionPrepared  = "disk.conversion_prepared"  // data: {conversion_id, layout, volume, data_bytes}
    EventDiskConversionStarted   = "disk.conversion_started"   // data: {conversion_id, volume, init_s}
    EventDiskConversionCompleted = "disk.conversion_completed" // data: {conversion_id, volume, data_bytes, duration_s}
    EventDiskConversionFailed    = "disk.conversion_failed"    // data: {conversion_id, stage, reason, volume}
+   EventDiskConversionAborted   = "disk.conversion_aborted"   // data: {conversion_id, by}  by: admin | operator
    ```
 
-   `eventCodes` maps them to `device.disk_conversion_prepared | _started | _completed | _failed`;
-   `audit.deviceEventParams` gains `conversion_id`, `layout`, `data_bytes`, `duration_s`, `init_s`. The claim of
-   `eventEntry` updates the row named by `conversion_id` (query `UpdateDiskConversionPhase`): `prepared` sets
-   `layout`, `luks_uuid`, `data_bytes`; `started` sets `encrypting`; `completed` sets `completed` and `finished_at`;
-   `failed` sets `failed`, `failure_stage`, `failure_reason`, `finished_at`. An event for a row of another device
+   (the closed set gains five.) `eventCodes` maps them to `device.disk_conversion_prepared | _started |
+   _completed | _failed | _aborted`; `audit.deviceEventParams` gains `conversion_id`, `layout`, `data_bytes`,
+   `duration_s`, `init_s`, `by`. The claim of `eventEntry` updates the row named by `conversion_id` (query
+   `UpdateDiskConversionPhase`): `prepared` sets `layout`, `luks_uuid`, `data_bytes`; `started` sets
+   `encrypting`; `completed` sets `completed` and `finished_at`; `failed` sets `failed`, `failure_stage`,
+   `failure_reason`, `finished_at`; `aborted` sets `cancelled` and `finished_at`. The result of an
+   `encrypt_disk_abort` command with `{aborted: false, reason}` stores `abort_refused_reason = reason` and
+   leaves the phase (the command-result path of `app/commands.go`, keyed on `abort_command_id`). An event for a row of another device
    or an unknown row is recorded as an audit event and changes no row. The command result `{accepted: false}` sets
    the row `failed` with stage `preflight` and the result's reason (in the existing command-result path of
    `app/commands.go`, keyed on the command id). A `failed` row with stage `preflight`, `prepare` or `init` leaves
    the device unencrypted; a new request is possible at once.
 10. `Device` (API) gains `disk_conversion` (nullable `DeviceDiskConversion{id, phase, requested_at, command_id,
     command_status, layout, luks_uuid, data_bytes, done_bytes, eta_s, paused_reason, progress_at, failure_stage,
-    failure_reason, finished_at, reason}`): the latest row, with `done_bytes`, `eta_s`, `paused_reason`,
+    failure_reason, finished_at, reason, abort_command_id, abort_command_status, abort_refused_reason}`): the latest row, with `done_bytes`, `eta_s`, `paused_reason`,
     `progress_at` read from `device_status.health → disk → conversion` on read (ADR 0028) when the row is
     `encrypting`. `DiskEncryption` (`GET /devices/{id}/disk`) gains the same object as `conversion`. `DiskState`
     (`DiskHealth` in the admin and device contracts) gains `conversion` (`DiskConversionHealth`) and the enum
@@ -316,10 +345,11 @@ Paddock never starts the conversion on its own initiative.
 14. `paddockd encrypt-abort` (new subcommand, root only, for the operator at the device while the phase is
     `prepared` and the device has not restarted): removes `91-paddock-encrypt.conf` and the module directory,
     `/var/lib/paddock/encrypt/`, the conversion key and the two disk-setup files, runs `dracut -f
-    --regenerate-all`, sets `state.Conversion.Phase = "failed"`, `FailureStage = "prepare"`, `FailureReason =
-    "aborted"` and emits `disk.conversion_failed` through the running agent's spool (the subcommand writes the
-    event with the next `event_seq` into the spool file under the agent's lock, as `paddockd uninstall` does in
-    M8d decision 40 step 10). It refuses in any other phase (exit 2, message on stderr).
+    --regenerate-all` (all of this is `encrypt.Abort(ctx, deps)`, shared with decision 27), sets
+    `state.Conversion.Phase = "cancelled"` and emits `disk.conversion_aborted{conversion_id, by: operator}`
+    through the running agent's spool (the subcommand writes the event with the next `event_seq` into the spool
+    file under the agent's lock, as `paddockd uninstall` does in M8d decision 40 step 10). It refuses in any
+    other phase (exit 2, message on stderr).
 
 ### 3.5 The init step (dracut module; PDK-244)
 
@@ -482,16 +512,48 @@ Paddock never starts the conversion on its own initiative.
     *Umwandlungsschlüssel* (conversion key), *Umwandlung* (conversion). `CHANGELOG.md` `[Unreleased]`: one
     operator-visible line per ticket.
 
+### 3.9 Cancel after delivery and the restart notification (maintainer decisions 2026-10-17; PDK-243, PDK-246, PDK-247)
+
+27. Command handler `encryptDiskAbortCommand` (`agent/internal/agent/encrypt.go`) for `encrypt_disk_abort`:
+    params without a UUID → `failed {aborted: false, reason: invalid_params}`; no `state.Conversion` or another
+    `ID` → `failed {reason: unknown_conversion}`; phase `encrypting`, `completed`, `failed` or `cancelled` →
+    `failed {reason: not_abortable}`; phase `preparing` → sets `state.Conversion.AbortRequested = true` and
+    returns `Deferred` — the conversion worker checks the flag before every step of decision 13 and, when set,
+    runs `encrypt.Abort` instead of the next step and posts `succeeded {aborted: true}`; phase `prepared` → runs
+    `encrypt.Abort` at once and returns `succeeded {aborted: true}`. `encrypt.Abort` emits
+    `disk.conversion_aborted{conversion_id, by: admin}` when called from the handler. An abort that arrives after
+    the restart (the device is `encrypting`) is refused with `not_abortable`; the device never undoes an
+    initialised header.
+28. Restart notification (`agent/internal/encrypt/notify.go`): while `state.Conversion.Phase == "prepared"`, the
+    agent notifies every graphical user session — `sessions.List` entries with `Class` `user` whose
+    `loginctl show-session <id> -p Type` is `wayland` or `x11` (the `Type` property is added to `sessions.Session`)
+    — once when the session is first seen with the conversion `prepared` (this covers a login and the agent's
+    start) and again every 4 hours per session (`state.Conversion.Notified map[string]time.Time` keyed by the
+    session ID, pruned with the session). It runs, bounded by 30 s:
+
+    ```
+    systemd-run --quiet --wait --collect --uid=<uid> --gid=<gid> --setenv=XDG_RUNTIME_DIR=/run/user/<uid>
+      --unit=paddock-notify-<session id>-<unix time> --
+      busctl --user call org.freedesktop.Notifications /org/freedesktop/Notifications org.freedesktop.Notifications
+        Notify susssasa{sv}i Paddock 0 drive-harddisk "<summary>" "<body>" 0 1 urgency y 1 0
+    ```
+
+    (`uid` and `gid` from `sessions.Session.UID` and the user's primary group; `expire_timeout 0` keeps the
+    notification in GNOME's list until the user dismisses it; `urgency` 1 = normal.) The summary and the body are
+    the texts of §6.7 in the device's language: German when `LANG` in `/etc/default/locale` starts with `de`,
+    English otherwise; the body's PIN sentence is appended only under unlock mode `tpm_pin`. Without a graphical
+    session nothing runs; a non-zero exit or timeout is logged at info level once per session and 4 hours, never
+    reported as an event; the agent never restarts the device. The notification stops with the phase.
+
 ## 4. Non-goals
 
 - Layouts without a separate `/boot`, carving a `/boot` out of free space, moving partitions, xfs, btrfs, ZFS, md
   RAID, several physical volumes, BIOS boot, devices without TPM 2.0, LUKS1 or already encrypted (`unmanaged`)
   devices: all stay "reinstall needed" (ADR 0039 decision 2).
 - Encrypting other volumes than the root volume (swap partitions, data partitions): never in M8e.
-- Restarting the device from Paddock, prompting the user on the desktop, or scheduling the restart: the restart is
-  the user's or the administrator's action outside Paddock (open point 1).
-- Cancelling a conversion after the device received the command from the portal (open point 3);
-  `paddockd encrypt-abort` at the device covers the `prepared` phase.
+- Restarting the device from Paddock or scheduling the restart: the notification of decision 28 asks; the
+  restart stays the user's action.
+- Cancelling a conversion after the restart: once the header exists there is nothing to cancel (decision 27).
 - A GRUB password, Plymouth for dracut on 24.04, kernel command line measurement (RR-44 stands).
 - Any change to `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, `pkg/revocation/`, the device API path
   version, `docs/adr/0001…0037`, M8d's migrations once merged.
@@ -530,8 +592,10 @@ DeviceDiskConversion: {id: uuid, phase: enum[requested,prepared,encrypting,compl
                        reason: string, command_id: uuid, command_status: string, layout: string nullable (lvm|plain),
                        luks_uuid: uuid nullable, data_bytes: integer int64 nullable, done_bytes: integer int64 nullable,
                        eta_s: integer nullable, paused_reason: string nullable, progress_at: date-time nullable,
-                       failure_stage: string nullable, failure_reason: string nullable, finished_at: date-time nullable}
+                       failure_stage: string nullable, failure_reason: string nullable, finished_at: date-time nullable,
+                       abort_command_id: uuid nullable, abort_command_status: string nullable, abort_refused_reason: string nullable}
 DeviceEncryptRequest: {confirm_hostname (required), reason (required, 2–500), backup_confirmed (boolean, required)}
+DeviceEncryptCancelRequest: {confirm_hostname (required)}
 DiskEncryption:       + conversion (DeviceDiskConversion, nullable)
 DiskState / DiskHealth: + conversion (DiskConversionHealth); state enum + encrypting
 DiskConversionHealth: {eligible: boolean, reasons: [string], release: string, layout: string, phase: string, data_bytes, done_bytes: integer int64,
@@ -540,7 +604,7 @@ AttentionKind:        + disk_conversion_failed
 
 # operations
 POST /api/v1/devices/{id}/encrypt         x-paddock-audit: device.encrypt_requested  200 Device · 403 step_up_required|forbidden · 404 · 409 invalid_state · 422 invalid_request
-POST /api/v1/devices/{id}/encrypt/cancel  x-paddock-audit: device.encrypt_cancelled  200 Device · 403 · 404 · 409 invalid_state
+POST /api/v1/devices/{id}/encrypt/cancel  x-paddock-audit: device.encrypt_cancelled  200 Device · 403 step_up_required|forbidden · 404 · 409 invalid_state · 422 invalid_request
 GET  /api/v1/devices                      filter disk_state accepts encrypting
 ```
 
@@ -553,11 +617,12 @@ Both `POST` routes go into `privileged`; `TestOpenAPISpec` MUST pass unchanged i
 Conversion *DiskConversion `json:"conversion,omitempty"` // §3.2 decision 3
 // DiskStates gains, directly after DiskNotEncrypted:
 DiskEncrypting = "encrypting"
-// Event types (closed set gains four; data as in §3.3 decision 9):
+// Event types (closed set gains five; data as in §3.3 decision 9):
 EventDiskConversionPrepared  = "disk.conversion_prepared"
 EventDiskConversionStarted   = "disk.conversion_started"
 EventDiskConversionCompleted = "disk.conversion_completed"
 EventDiskConversionFailed    = "disk.conversion_failed"
+EventDiskConversionAborted   = "disk.conversion_aborted"
 ```
 
 ### 6.3 Agent state and files
@@ -577,6 +642,8 @@ type DiskConversion struct {
     InitrdRegenerated    bool       `json:"initrd_regenerated,omitempty"`
     ResumeFailures       int        `json:"resume_failures,omitempty"`
     FailureStage, FailureReason string
+    AbortRequested       bool                 `json:"abort_requested,omitempty"` // decision 27, while preparing
+    Notified             map[string]time.Time `json:"notified,omitempty"`        // decision 28, by session ID
 }
 ```
 
@@ -631,11 +698,12 @@ block the boot). The key file is referenced by path only; the script never echoe
 | Code | Description | Params |
 | --- | --- | --- |
 | `device.encrypt_requested` | An organization administrator asked, with a step-up and a backup acknowledgement, to encrypt the disk of an unencrypted device in place; the device prepares itself and converts at its next restart. | `hostname`, `reason`, `backup_confirmed`, `command_id`, `conversion_id` |
-| `device.encrypt_cancelled` | An organization administrator cancelled an in-place encryption before the device received the command. | `hostname`, `command_id`, `conversion_id` |
+| `device.encrypt_cancelled` | An organization administrator cancelled an in-place encryption with a step-up: the undelivered command was withdrawn, or the device was sent a signed abort that it executes only before its restart. | `hostname`, `command_id`, `conversion_id`, `mode` (command_cancelled, abort_sent) |
 | `device.disk_conversion_prepared` | The device escrowed the conversion key and built the initrd for its in-place encryption; it waits for a restart (actor: the device). | `conversion_id`, `layout`, `volume`, `data_bytes` |
 | `device.disk_conversion_started` | The device initialised LUKS2 on its root partition at the restart and encrypts the remaining data in the background (actor: the device). | `conversion_id`, `volume`, `init_s` |
 | `device.disk_conversion_completed` | The device finished encrypting its root partition; the recovery key, the TPM unlock and the header escrow follow as for a newly installed device (actor: the device). | `conversion_id`, `volume`, `data_bytes`, `duration_s` |
 | `device.disk_conversion_failed` | The in-place encryption of a device failed or was skipped at the named stage; stages preflight, prepare and init leave the device unencrypted, stage resume leaves it bootable with the encryption unfinished (actor: the device). | `conversion_id`, `stage`, `reason`, `volume` |
+| `device.disk_conversion_aborted` | The device abandoned a prepared in-place encryption before its restart on an administrator's cancel from the portal or an operator's command at the device; the disk is unchanged and the device unencrypted (actor: the device). | `conversion_id`, `by` |
 
 Message keys `audit.<code>` in `en.json` and `de.json`.
 
@@ -685,15 +753,30 @@ Message keys `audit.<code>` in `en.json` and `de.json`.
 | `devices.disk.convert.reasons.root_reference_unsupported` | fstab or the kernel command line refer to root by a device path | fstab oder die Kernel-Kommandozeile verweisen über einen Gerätepfad auf root |
 | `devices.disk.convert.reasons.already_encrypted` | the root volume is already encrypted | das Root-Volume ist bereits verschlüsselt |
 | `devices.disk.convert.reasons.dm_crypt_missing` | the kernel has no dm-crypt | der Kernel hat kein dm-crypt |
-| `devices.disk.convert.cancel.label` | Cancel request | Anforderung zurückziehen |
-| `devices.disk.convert.cancel.title` | Cancel the encryption | Verschlüsselung zurückziehen |
-| `devices.disk.convert.cancel.confirm` | Cancel the encryption of {hostname}? Only possible while the device has not received the command. | Verschlüsselung von {hostname} zurückziehen? Nur möglich, solange das Gerät den Befehl nicht erhalten hat. |
-| `devices.disk.convert.cancelled` | Request cancelled. | Anforderung zurückgezogen. |
+| `devices.disk.convert.cancel.label` | Cancel encryption | Verschlüsselung abbrechen |
+| `devices.disk.convert.cancel.title` | Cancel the encryption of {hostname} | Verschlüsselung von {hostname} abbrechen |
+| `devices.disk.convert.cancel.confirm` | Possible until the device restarts. If the device has already prepared itself, it receives a signed cancellation at its next check-in and discards the preparation; the stored recovery key stays in Paddock. Type the hostname to confirm. | Möglich, bis das Gerät neu startet. Hat sich das Gerät bereits vorbereitet, erhält es beim nächsten Check-in einen signierten Abbruch und verwirft die Vorbereitung; der hinterlegte Wiederherstellungsschlüssel bleibt in Paddock. Geben Sie den Hostnamen zur Bestätigung ein. |
+| `devices.disk.convert.cancel.confirmLabel` | Cancel encryption | Verschlüsselung abbrechen |
+| `devices.disk.convert.cancelled` | Encryption cancelled. | Verschlüsselung abgebrochen. |
+| `devices.disk.convert.cancelSent` | Cancellation sent {at}; the device confirms it at its next check-in unless it has already restarted. | Abbruch gesendet {at}; das Gerät bestätigt ihn beim nächsten Check-in, sofern es nicht bereits neu gestartet hat. |
+| `devices.disk.convert.cancelRefused` | The device refused the cancellation: {reason}. | Das Gerät hat den Abbruch abgelehnt: {reason}. |
+| `devices.disk.convert.abortReasons.not_abortable` | it had already restarted and started the encryption | es hatte bereits neu gestartet und die Verschlüsselung begonnen |
+| `devices.disk.convert.abortReasons.unknown_conversion` | it knows no such request | es kennt keine solche Anforderung |
+| `devices.disk.convert.phases.cancelled` | Encryption cancelled on {at}; the disk is unchanged. | Verschlüsselung am {at} abgebrochen; die Festplatte ist unverändert. |
+| `problems.conversion_not_cancellable` | The device already started the encryption; it cannot be cancelled. | Das Gerät hat die Verschlüsselung bereits begonnen; sie kann nicht abgebrochen werden. |
 | `attention.kinds.disk_conversion_failed` | In-place encryption failed | Nachträgliche Verschlüsselung fehlgeschlagen |
 | `devices.disk.notEncrypted.reinstall` | (unchanged) | (unverändert) |
 
 `devices.disk.notEncrypted.conversionPlanned` is removed from both catalogs. The first revealed generation of the
 recovery key on a converted device is the conversion key; the reveal dialog is unchanged.
+
+### 6.7 Desktop notification texts (binding; plain text, shown by the agent, decision 28)
+
+| Part | English (`LANG` not `de*`) | German (`LANG` = `de*`) |
+| --- | --- | --- |
+| summary | Disk encryption is ready — please restart | Festplattenverschlüsselung bereit — bitte neu starten |
+| body | Your IT department has switched on disk encryption for this device. It starts at the next restart, which takes a few minutes longer than usual. Save your work and restart when it suits you; keep the device on mains power during the restart. | Ihre IT-Abteilung hat die Festplattenverschlüsselung für dieses Gerät eingeschaltet. Sie beginnt beim nächsten Neustart, der einige Minuten länger dauert als üblich. Speichern Sie Ihre Arbeit und starten Sie neu, wenn es Ihnen passt; lassen Sie das Gerät während des Neustarts am Netzteil. |
+| body, appended under `tpm_pin` | At the restart you will be asked to choose a boot PIN that you type every time the device starts. | Beim Neustart werden Sie gebeten, eine Boot-PIN zu wählen, die Sie bei jedem Start des Geräts eingeben. |
 
 ## 7. Host and operator notes (binding figures for the documents)
 
@@ -707,18 +790,23 @@ recovery key on a converted device is the conversion key; the reveal dialog is u
   Plymouth splash is gone (as on autoinstalled 24.04 devices).
 - A failed conversion at stage `preflight`, `prepare` or `init` leaves an unencrypted device and can be requested
   again at once; at stage `resume` the device works on dm-crypt and the helper retries after the next restart.
+- Cancel from the portal works until the device restarts: before delivery the command is withdrawn at once;
+  afterwards a signed abort reaches the device at its next check-in (≤ 6 minutes) and is refused when the device
+  has restarted in between. The desktop notification repeats at every login and every 4 hours until the restart
+  or the cancel.
 
 ## 8. Steps (tickets, in order)
 
-1. **PDK-241 — Server: conversion model, command, API, events, bundle field.** §3.3 (decisions 5–11), §6.1, §6.2,
-   §6.5. Verify: `make gen` no diff; `go test ./server/internal/app/ ./pkg/command/ ./pkg/protocol/
+1. **PDK-241 — Server: conversion model, commands, API, events, bundle field.** §3.3 (decisions 5–11), §6.1, §6.2,
+   §6.5, the cancel semantics of decision 8 and the abort command type. Verify: `make gen` no diff; `go test ./server/internal/app/ ./pkg/command/ ./pkg/protocol/
    ./server/internal/compiler/`; `make acceptance T=TestDiskConversion`; the isolation gate.
 2. **PDK-242 — Agent: preflight, eligibility in health, reencrypt-aware metadata.** §3.2 (decisions 1–4).
    Verify: `go test ./agent/internal/encrypt/ ./agent/internal/luks/ ./agent/internal/reconcile/` (table tests
    with recorded `lsblk`/`lvm`/`findmnt` outputs for `lvm`, `plain`, `direct`, raid, btrfs, two PVs, swap LV at
    the tail).
-3. **PDK-243 — Agent: command handler, preparation, abort.** §3.4 (decisions 12–14), §6.3. Verify: `go test
-   ./agent/...` (fake system for every step, idempotent re-run, escrow failure, dracut failure).
+3. **PDK-243 — Agent: command handlers, preparation, abort, restart notification.** §3.4 (decisions 12–14),
+   §3.9 (decisions 27–28), §6.3, §6.7. Verify: `go test ./agent/...` (fake system for every step, idempotent
+   re-run, escrow failure, dracut failure, abort in every phase, the notification's command line and timing).
 4. **PDK-244 — Dracut module and init script.** §3.5 (decisions 15–17), §6.4. Verify: `go test
    ./agent/internal/encrypt/` (the embedded files exist, `shellcheck -s sh` on the script in `make lint` — stop
    condition S4 when shellcheck is absent); the script's stage logic tested with a fake toolchain (`PATH` with
@@ -726,7 +814,7 @@ recovery key on a converted device is the conversion key; the reveal dialog is u
 5. **PDK-245 — Agent: boot result, resume helper, progress, initrd regeneration, completion.** §3.6 (decisions
    18–23). Verify: `go test ./agent/...` (progress parsing from recorded `--progress-json` lines, pause/resume on
    battery, result handling, phase transitions).
-6. **PDK-246 — Portal.** §3.7, §6.6. Verify: `make web`; component tests over visible text; `make e2e`.
+6. **PDK-246 — Portal.** §3.7, §6.6 (with the cancel-after-delivery states of decision 8). Verify: `make web`; component tests over visible text; `make e2e`.
 7. **PDK-247 — System gates and runbook.** §9 S-IE1 … S-IE3, the throwaway VM templates, `docs/operations/
    in-place-encryption.md`. Verify: `PADDOCK_SYSTEM_VMS=paddock-ie-2404,paddock-ie-2604 make system-test
    T='TestInPlaceEncryption'`.
@@ -749,7 +837,7 @@ org_auditor; "event" = exactly one audit event found with `expectOneEvent`):
 
 | # | Given / When / Then | Role sees |
 | --- | --- | --- |
-| A1 `TestDiskConversion` | A devicesim reporting `disk{state: not_encrypted, boot_separate: true, conversion{eligible: true, layout: lvm}}`: A without step-up → 403 `step_up_required`; with step-up and wrong hostname → 422; `backup_confirmed: false` → 422 (detail `backup_confirmed must be true`); valid → 200, `disk_conversion{phase: requested, command_status: pending}`, event `device.encrypt_requested` with `backup_confirmed: true`, the device's commands list has type `encrypt_disk` with params `{conversion_id}`; a second request → 409; a device reporting `eligible: false, reasons: [no_separate_boot]` → 409 with the reason in the detail; O → 403; cancel → 200, command `cancelled`, row `cancelled`, event `device.encrypt_cancelled`; request again, devicesim checks in (delivered) → cancel 409; devicesim posts the result `{accepted: true}` and the events `disk.conversion_prepared{layout, volume, data_bytes}` → row `prepared` with them; `disk.conversion_started{init_s}` → `encrypting`; a check-in with `conversion{phase: encrypting, done_bytes: 50, data_bytes: 100, eta_s: 60}` → `GET /devices/{id}` shows `done_bytes: 50`, `eta_s: 60`; `disk.conversion_completed` → `completed`, `finished_at`; a new request after a `failed` row (devicesim posts `{accepted: false, reason: not_eligible, reasons: [low_free_space]}`) succeeds; a `disk.conversion_failed{stage: init, reason: on_battery}` → row `failed`, attention `disk_conversion_failed` detail `init:on_battery`; an uninstall pending → 409; a Lock pending → 409; globex → 404 on both routes. | A, O, U |
+| A1 `TestDiskConversion` | A devicesim reporting `disk{state: not_encrypted, boot_separate: true, conversion{eligible: true, layout: lvm}}`: A without step-up → 403 `step_up_required`; with step-up and wrong hostname → 422; `backup_confirmed: false` → 422 (detail `backup_confirmed must be true`); valid → 200, `disk_conversion{phase: requested, command_status: pending}`, event `device.encrypt_requested` with `backup_confirmed: true`, the device's commands list has type `encrypt_disk` with params `{conversion_id}`; a second request → 409; a device reporting `eligible: false, reasons: [no_separate_boot]` → 409 with the reason in the detail; O → 403; cancel → 200, command `cancelled`, row `cancelled`, event `device.encrypt_cancelled`; request again, devicesim checks in (delivered) → cancel 409; devicesim posts the result `{accepted: true}` and the events `disk.conversion_prepared{layout, volume, data_bytes}` → row `prepared` with them; `disk.conversion_started{init_s}` → `encrypting`; a check-in with `conversion{phase: encrypting, done_bytes: 50, data_bytes: 100, eta_s: 60}` → `GET /devices/{id}` shows `done_bytes: 50`, `eta_s: 60`; `disk.conversion_completed` → `completed`, `finished_at`; a new request after a `failed` row (devicesim posts `{accepted: false, reason: not_eligible, reasons: [low_free_space]}`) succeeds; a `disk.conversion_failed{stage: init, reason: on_battery}` → row `failed`, attention `disk_conversion_failed` detail `init:on_battery`; cancel after delivery: a new request, devicesim checks in (delivered), cancel without step-up → 403, with step-up and the hostname → 200 `mode: abort_sent`, `abort_command_id` set, the commands list has `encrypt_disk_abort{conversion_id}`, event `device.encrypt_cancelled{mode: abort_sent}`; a second cancel → 409 (`a cancellation is already on its way`); devicesim posts `disk.conversion_aborted{by: admin}` → row `cancelled`; a further request, prepared, cancel, devicesim answers the abort with `{aborted: false, reason: not_abortable}` and posts `disk.conversion_started` → `abort_refused_reason: not_abortable`, phase `encrypting`, cancel → 409; an uninstall pending → 409; a Lock pending → 409; globex → 404 on both routes. | A, O, U |
 | A2 `TestDiskConversionBundle` | `boot_pin_min_length` 10 on the organization → the v2 bundle's `disk.boot_pin_min_length` is 10; the default → 8. | A |
 | A3 `TestListContractM8e` | `GET /devices?disk_state=encrypting` lists a devicesim reporting that state; the list contract tests pass unchanged. | — |
 
@@ -762,8 +850,8 @@ take the VM name, the SSH port (2229, 2230) and the ISO; the VMs are built from
 
 | # | Gate | Content |
 | --- | --- | --- |
-| S-IE1 `TestInPlaceEncryptionLVM` | 26.04, `lvm`, `tpm_pin`; power cut after the init before the reactivation; power cut in the background phase | After `Install`: health `disk.conversion.eligible: true, layout: lvm` within one full pass; the request through the API → within 10 min `device.disk_conversion_prepared{layout: lvm}`, `GET /devices/{id}/disk` shows one stored recovery key (generation 1), `lsinitrd` of the running kernel lists `paddock-encrypt-init.service` and `etc/paddock/encrypt-key`, `/etc/crypttab` is unchanged. The test sets `paddock.encrypt.testdelay=open:60` in `GRUB_CMDLINE_LINUX` of `/etc/default/grub` and runs `update-grub` (over SSH), then `sudo systemctl reboot`. Boot 1: the console shows `paddock-encrypt: init done` (screenshot polling every 5 s); the test calls `VM.PowerOff` during the following sleep. Boot 2 (parameter still set; the `open` path does not sleep): the console shows the PIN dialogue (screenshot contains "Paddock disk encryption setup") → `AnswerDiskSetup`; SSH back; `lsblk` shows `crypto_LUKS` on the partition and root on `dm_crypt-0`; journal lines `paddock-encrypt: header found, opening`; `device.disk_conversion_started`; health state `encrypting` with `done_bytes` increasing between two check-ins. The test removes the parameter (`/etc/default/grub`, `update-grub`), waits until `done_bytes` is between 10 % and 90 % of `data_bytes`, and calls `VM.PowerOff`. Boot 3: `RebootWithPIN` → SSH; `done_bytes` ≥ the last value within 5 min and increasing; `device.disk_conversion_completed`; then `compliant` within 15 min with tokens `[recovery, tpm2+pin]`, two stored recovery-key generations, the header stored, `/var/lib/paddock/install-passphrase` gone, the revealed generation 1 no longer opening the disk (`Opens`), the revealed generation 2 opening it; `lsinitrd` shows `etc/crypttab` with the LUKS UUID and no `paddock-encrypt`; `cryptsetup luksDump` lists no `reencrypt` keyslot and no requirement; `RebootWithPIN` works; `/boot` is mounted; the root file system is smaller than before the conversion by 64 MiB (`findmnt -bno SIZE /` before and after). |
-| S-IE2 `TestInPlaceEncryptionPlain` | 24.04, `plain`, `tpm_only`; abort; power cut after the shrink before the init | The organization set to `tpm_only` for the run (restored on cleanup). After `Install`: eligibility `layout: plain`. Part A (abort): the request → `prepared` (dracut installed: `dpkg -l dracut` installed, `initramfs-tools` gone; `lsinitrd` lists the module); `sudo paddockd encrypt-abort` → `device.disk_conversion_failed{stage: prepare, reason: aborted}`, `lsinitrd` no longer lists the module, `/var/lib/paddock/install-passphrase` gone, `sudo systemctl reboot` boots unencrypted (SSH back, `lsblk` without `crypto_LUKS`), health `eligible: true` again, attention `disk_conversion_failed` detail `prepare:aborted`. Part B: a new request → `prepared`; the test sets `paddock.encrypt.testdelay=init:120` (`/etc/default/grub`, `update-grub`), then `sudo systemctl reboot`. Boot 1: the console shows `paddock-encrypt: shrink done`; the test calls `VM.PowerOff` during the following sleep. Boot 2 (parameter still set): the console shows `paddock-encrypt: file system already at target`, then after the sleep `paddock-encrypt: init done`; no PIN dialogue; SSH back on dm-crypt; `device.disk_conversion_started`; `encrypting`. The test removes the parameter and reboots once more (boot 3, the `open` path): SSH back within the normal boot time, the reencryption resumes (`done_bytes` increasing); `device.disk_conversion_completed`; `compliant` with tokens `[recovery, tpm2]` and `unlock_mode: tpm_only`; a reboot unlocks without input; the revealed generation 1 no longer opens the disk, generation 2 does; `lsinitrd` as in S-IE1. |
+| S-IE1 `TestInPlaceEncryptionLVM` | 26.04, `lvm`, `tpm_pin`; power cut after the init before the reactivation; power cut in the background phase | After `Install`: health `disk.conversion.eligible: true, layout: lvm` within one full pass; the request through the API → within 10 min `device.disk_conversion_prepared{layout: lvm}`, `GET /devices/{id}/disk` shows one stored recovery key (generation 1), `lsinitrd` of the running kernel lists `paddock-encrypt-init.service` and `etc/paddock/encrypt-key`, `/etc/crypttab` is unchanged; the throwaway template logs the test user in automatically (GDM `AutomaticLogin`), so within 2 minutes of `prepared` a screenshot contains "Disk encryption is ready" and the journal has one `paddock-notify-` transient unit per graphical session; `systemctl list-units 'paddock-notify-*'` shows none left running. The test sets `paddock.encrypt.testdelay=open:60` in `GRUB_CMDLINE_LINUX` of `/etc/default/grub` and runs `update-grub` (over SSH), then `sudo systemctl reboot`. Boot 1: the console shows `paddock-encrypt: init done` (screenshot polling every 5 s); the test calls `VM.PowerOff` during the following sleep. Boot 2 (parameter still set; the `open` path does not sleep): the console shows the PIN dialogue (screenshot contains "Paddock disk encryption setup") → `AnswerDiskSetup`; SSH back; `lsblk` shows `crypto_LUKS` on the partition and root on `dm_crypt-0`; journal lines `paddock-encrypt: header found, opening`; `device.disk_conversion_started`; health state `encrypting` with `done_bytes` increasing between two check-ins. The test removes the parameter (`/etc/default/grub`, `update-grub`), waits until `done_bytes` is between 10 % and 90 % of `data_bytes`, and calls `VM.PowerOff`. Boot 3: `RebootWithPIN` → SSH; `done_bytes` ≥ the last value within 5 min and increasing; `device.disk_conversion_completed`; then `compliant` within 15 min with tokens `[recovery, tpm2+pin]`, two stored recovery-key generations, the header stored, `/var/lib/paddock/install-passphrase` gone, the revealed generation 1 no longer opening the disk (`Opens`), the revealed generation 2 opening it; `lsinitrd` shows `etc/crypttab` with the LUKS UUID and no `paddock-encrypt`; `cryptsetup luksDump` lists no `reencrypt` keyslot and no requirement; `RebootWithPIN` works; `/boot` is mounted; the root file system is smaller than before the conversion by 64 MiB (`findmnt -bno SIZE /` before and after). |
+| S-IE2 `TestInPlaceEncryptionPlain` | 24.04, `plain`, `tpm_only`; abort; power cut after the shrink before the init | The organization set to `tpm_only` for the run (restored on cleanup). After `Install`: eligibility `layout: plain`. Part A (aborts): the request → `prepared` (dracut installed: `dpkg -l dracut` installed, `initramfs-tools` gone; `lsinitrd` lists the module); `sudo paddockd encrypt-abort` → `device.disk_conversion_aborted{by: operator}`, row `cancelled`, `lsinitrd` no longer lists the module, `/var/lib/paddock/install-passphrase` gone, `sudo systemctl reboot` boots unencrypted (SSH back, `lsblk` without `crypto_LUKS`), health `eligible: true` again. Then a second request → `prepared`; the portal cancel through the API with step-up and the hostname → 200 `mode: abort_sent`; within 10 min `device.disk_conversion_aborted{by: admin}`, row `cancelled`, the abort command `succeeded` with `{aborted: true}`, the module gone from the initrd, the key file gone, the escrowed recovery key generation 1 still listed as stored, a reboot boots unencrypted, health eligible again. Part B: a new request → `prepared`; the test sets `paddock.encrypt.testdelay=init:120` (`/etc/default/grub`, `update-grub`), then `sudo systemctl reboot`. Boot 1: the console shows `paddock-encrypt: shrink done`; the test calls `VM.PowerOff` during the following sleep. Boot 2 (parameter still set): the console shows `paddock-encrypt: file system already at target`, then after the sleep `paddock-encrypt: init done`; no PIN dialogue; SSH back on dm-crypt; `device.disk_conversion_started`; `encrypting`. The test removes the parameter and reboots once more (boot 3, the `open` path): SSH back within the normal boot time, the reencryption resumes (`done_bytes` increasing); `device.disk_conversion_completed`; `compliant` with tokens `[recovery, tpm2]` and `unlock_mode: tpm_only`; a reboot unlocks without input; the revealed generation 1 no longer opens the disk, generation 2 does; `lsinitrd` as in S-IE1. |
 | S-IE3 `TestInPlaceEncryptionNotEligible` | base VMs `paddock-u2404` and `paddock-u2604` (LUKS) | After `Install` on the base VM, health reports `disk.state: unmanaged` or the M4b flow's state, `conversion` absent or `eligible: false` with `already_encrypted`; `POST /devices/{id}/encrypt` → 409 `invalid_state` with `already_encrypted` in the detail. Runs inside `TestDiskGates`' VM loop (`forEachVM`), not on a throwaway VM. |
 
 The console lines the gates wait for are binding output of the init script (§6.4): `paddock-encrypt: shrink done`,
@@ -787,6 +875,8 @@ Regression: `make acceptance`, `make e2e`, `make system-test VM=all` (every exis
 | AC7 | Given a failing precondition at any stage before the LUKS header exists (battery, fsck, busy volume group, escrow not stored, dracut), then the device stays unencrypted and bootable, reports the stage and the reason, and the portal shows them with the runbook link. | L31 | Org admin, user at device |
 | AC8 | Given a device on battery, then the background encryption pauses and the page says so; given mains power again, it resumes. | L31 | Org admin |
 | AC9 | Given any bundle or policy change without an administrator's request, then no device ever starts a conversion. | contract 8 | Auditor |
+| AC10 | Given a prepared device with a graphical session, then the signed-in user sees the desktop notification asking for a restart (in the device's language, with the PIN sentence under `tpm_pin`) at login and every 4 hours, and the device never restarts on its own. | maintainer Q1 | User at device |
+| AC11 | Given a conversion the device has received but not executed at a restart, when an administrator cancels from the portal with a step-up, then the device discards its preparation, reports it, the row is `cancelled` and the disk is unchanged; given a device that already restarted, then the cancel is refused and the page says so. | maintainer Q2 | Org admin, auditor |
 
 ## 11. Stop conditions
 
@@ -832,8 +922,8 @@ Residual risks (`docs/compliance/residual-risks.md`, numbered after RR-55, which
   that the reencryption has not reached yet is readable as plaintext from the partition without any key, and
   the already encrypted part only with the PIN, the TPM of this device or an escrowed key. Mitigation: the PIN
   dialogue at the conversion boot and the regeneration minutes later, the background phase at disk speed,
-  `encrypting` visible on the device page and the attention list, `encrypt-abort` for a device that will not be
-  restarted soon. Record: devices in `encrypting` or `prepared` for longer than a day; the rule that a converted
+  `encrypting` visible on the device page and the attention list, the portal cancel or `encrypt-abort` for a
+  device that will not be restarted soon, the desktop notification that asks for the restart. Record: devices in `encrypting` or `prepared` for longer than a day; the rule that a converted
   laptop is not taken off premises before `compliant`.
 - **RR-58 24.04 switches to dracut irreversibly.** initramfs-tools is removed; kernel updates use dracut; no
   Plymouth splash. Mitigation: the dialogue says so; the same stack as autoinstalled 24.04 devices. Record: the
@@ -850,13 +940,12 @@ Residual risks (`docs/compliance/residual-risks.md`, numbered after RR-55, which
 
 Open points (default chosen):
 
-1. Should Paddock prompt the user to restart (desktop notification, login notice) or offer *Restart now*?
-   **Default: no** — the administrator informs the user; the portal shows "waiting for the restart". A later
-   ticket can add the hint through the existing login-notice mechanism.
+1. Restart prompt: **decided by the maintainer on 2026-10-17 — yes, a desktop notification** (decision 28), no
+   *Restart now*; the restart stays the user's action.
 2. Should the battery pause be a setting (for example "continue on battery above 50 %")? **Default: no** — fixed
    behaviour, mains only; revisit with lab feedback.
-3. Cancel after delivery from the portal (a second signed command)? **Default: no** — `paddockd encrypt-abort`
-   at the device while `prepared`; after the init there is nothing to cancel.
+3. Cancel after delivery: **decided by the maintainer on 2026-10-17 — yes, through the signed command
+   `encrypt_disk_abort`** until the restart (decisions 8 and 27); `paddockd encrypt-abort` at the device stays.
 4. Should devices without a TPM be convertible to a passphrase-only LUKS (the user chooses a passphrase at the
    conversion boot)? **Default: no** — they would be `tpm_missing` forever and the keyfile in the initrd would be
    the only unlock path.

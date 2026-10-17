@@ -31,6 +31,7 @@ after a power cut. This ADR records the verification of that direction and the d
 | `resize2fs` shrinks an unmounted file system only; online resizing is growing only. `pvresize --setphysicalvolumesize` "will refuse to shrink a PV if it has allocated extents beyond the new end". XFS: "Only shrinking the last AG without removing it is implemented". | man pages resize2fs(8), pvresize(8), xfs_growfs(8). |
 | Subiquity's guided `lvm` layout always creates a separate ext4 `/boot` (`guided_lvm`: `FileSystemSpec(fstype="ext4", mount="/boot")`); the guided `direct` layout creates only the root partition. The `lvm` layout sizes the root LV by `sizing-policy` (`scaled` default: half of the VG between 20 and 200 GiB; `all`). | `subiquity/server/controllers/storage.py` (main); Subiquity autoinstall reference, "storage". |
 | Dracut hook order: cmdline, pre-udev, pre-trigger, udev trigger, main loop (initqueue, initqueue/settled, initqueue/finished), pre-mount, mount, pre-pivot, cleanup; modules install hooks with `inst_hook` and files with `inst_simple`/`inst_multiple`. | dracut.modules(7). |
+| Desktop notification from root to a user's session: GNOME Shell 46 serves `org.freedesktop.Notifications` (`Notify susssasa{sv}i`) on the user bus `/run/user/<uid>/bus` (socket mode 0666 in a 0700 runtime directory); `busctl` and `systemd-run` ship in the `systemd` package; `systemd-stdio-bridge`, which `busctl --machine=<user>@.host` needs, is not installed on Ubuntu Desktop 24.04. | `busctl --user introspect org.freedesktop.Notifications …` and `GetServerInformation` (`"gnome-shell" "GNOME" "46.0" "1.2"`), `dpkg -S` on Ubuntu 24.04.5; busctl(1) v255 `--machine=`. |
 
 Corrections to the ticket's direction:
 
@@ -111,11 +112,22 @@ Corrections to the ticket's direction:
    no header while the `reencrypt` keyslot exists.
 7. **Server and portal.** Table `device_disk_conversion` (one row per request, phases `requested → prepared →
    encrypting → completed | failed | cancelled`), endpoints `POST /api/v1/devices/{id}/encrypt` and
-   `…/encrypt/cancel` (cancel before delivery only), the conversion in `GET /devices/{id}` and `…/disk`, the
-   *Encrypt this device* dialogue with the checklist and the typed hostname, a progress panel on the disk card,
-   attention kind `disk_conversion_failed`. Audit codes `device.encrypt_requested`, `device.encrypt_cancelled`,
+   `…/encrypt/cancel` (step-up; cancels the undelivered command, or — once the device received the command —
+   issues the signed command `encrypt_disk_abort`, which the agent executes only while it is still preparing or
+   `prepared`, never after the restart), the conversion in `GET /devices/{id}` and `…/disk`, the *Encrypt this
+   device* dialogue with the checklist and the typed hostname, a progress panel on the disk card, attention kind
+   `disk_conversion_failed`. Audit codes `device.encrypt_requested`, `device.encrypt_cancelled`,
    `device.disk_conversion_prepared`, `device.disk_conversion_started`, `device.disk_conversion_completed`,
-   `device.disk_conversion_failed`.
+   `device.disk_conversion_failed`, `device.disk_conversion_aborted`. `paddockd encrypt-abort` at the device
+   stays for the operator (maintainer decision 2026-10-17).
+9. **Restart notification (maintainer decision 2026-10-17).** While a conversion is `prepared`, the agent shows a
+   desktop notification to every graphical user session on the device ("Disk encryption is ready — please
+   restart"), at the start of every new graphical session and every 4 hours per session; it never restarts the
+   device. Mechanism: a transient unit as the session's user (`systemd-run --uid=<uid> --gid=<gid>
+   --setenv=XDG_RUNTIME_DIR=/run/user/<uid> …`) runs `busctl --user call org.freedesktop.Notifications
+   /org/freedesktop/Notifications org.freedesktop.Notifications Notify …` on the user bus — only tools of the
+   `systemd` package, no `libnotify-bin`, no `--machine=` (needs `systemd-stdio-bridge`, absent on Ubuntu
+   Desktop). Without a graphical session nothing is shown; a failure is logged, never reported as an event.
 8. **Gates.** Two throwaway VMs installed unencrypted from the stock ISOs (26.04 `lvm` layout, 24.04 plain root
    with a separate `/boot`), the full flow on each, a hard power-off during the background reencryption, and hard
    power-offs during the init step at the two stage boundaries the dev-only kernel parameter
@@ -125,7 +137,8 @@ Corrections to the ticket's direction:
 
 ## Consequences
 
-+ An adopted fleet can be encrypted from the portal with minutes of downtime per device; the result is
++ An adopted fleet can be encrypted from the portal with minutes of downtime per device; the user is told on
+  the desktop to restart and an administrator can still cancel from the portal until the restart; the result is
   indistinguishable from an autoinstalled device (same unlock stack, keyslots, escrows, runbooks); every step is
   idempotent and the failure modes are reported.
 − The shrink is not crash-safe for seconds (RR-56); the conversion key lies in the initrd on the unencrypted
