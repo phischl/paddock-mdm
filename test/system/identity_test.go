@@ -53,16 +53,16 @@ func TestIdentityGates(t *testing.T) {
 		requireBreakGlass(t, s)
 		vm.Fresh()
 		w := newIdentityWorld(t, s, Install(t, s, vm, debDir(s)))
-		if !t.Run("L1 login", func(t *testing.T) { gateL1(t, w) }) {
+		if !t.Run("L1 login", func(t *testing.T) { w.Bind(t); gateL1(t, w) }) {
 			t.FailNow()
 		}
-		t.Run("L6 PIN past the access-token lifetime", func(t *testing.T) { gateL6(t, w) })
-		t.Run("P3 effective profile", func(t *testing.T) { gateP3(t, w) })
-		t.Run("L2 identity gate", func(t *testing.T) { gateL2(t, w) })
-		t.Run("L3 login suspension", func(t *testing.T) { gateL3(t, w) })
-		t.Run("L4 fail safe", func(t *testing.T) { gateL4(t, w) })
-		t.Run("L5 PAM order", func(t *testing.T) { gateL5(t, w) })
-		t.Run("P4 sudoers hygiene", func(t *testing.T) { gateP4(t, w) })
+		t.Run("L6 PIN past the access-token lifetime", func(t *testing.T) { w.Bind(t); gateL6(t, w) })
+		t.Run("P3 effective profile", func(t *testing.T) { w.Bind(t); gateP3(t, w) })
+		t.Run("L2 identity gate", func(t *testing.T) { w.Bind(t); gateL2(t, w) })
+		t.Run("L3 login suspension", func(t *testing.T) { w.Bind(t); gateL3(t, w) })
+		t.Run("L4 fail safe", func(t *testing.T) { w.Bind(t); gateL4(t, w) })
+		t.Run("L5 PAM order", func(t *testing.T) { w.Bind(t); gateL5(t, w) })
+		t.Run("P4 sudoers hygiene", func(t *testing.T) { w.Bind(t); gateP4(t, w) })
 	})
 }
 
@@ -807,9 +807,13 @@ func gateP4(t *testing.T, w *identityWorld) {
 	// Never the last administrator (ADR 0008 amendment 2026-10-17): with a bundle that names no break-glass account,
 	// no member of sudo is removed; each is reported with reason last_admin. Once the real bundle is back, the foreign
 	// member is removed again.
-	member := "systest-" + unique()
-	w.Must("sudo useradd -M -s /usr/sbin/nologin " + member + " && sudo gpasswd -a " + member + " sudo >/dev/null")
-	defer w.Must("sudo userdel " + member + " 2>/dev/null || true")
+	// The foreign member is the base system's local account daemon, not a new one: with Himmelblau active, NSS answers
+	// for every unknown short name (cn_name_mapping plus a lookup-only token from the existence probe, 4.0.4 and
+	// 4.0.6), so useradd refuses any new name as existing (exit 9). daemon is in /etc/passwd of every Ubuntu
+	// release, files answers before himmelblau, and the agent treats any non-break-glass member alike.
+	const member = "daemon"
+	w.Must("grep -q '^" + member + ":' /etc/passwd && ! id -nG " + member + " | grep -qw sudo && sudo gpasswd -a " + member + " sudo >/dev/null")
+	defer w.Must("sudo gpasswd -d " + member + " sudo >/dev/null 2>&1 || true")
 	restoreBreakGlass := w.forgeBundle(t, func(s *bundle.SudoSpec) { s.BreakGlassAccounts = nil })
 	w.WaitEvent(t, "device.tamper_sudo_group_member", 4*time.Minute, func(p map[string]any) bool {
 		return p["username"] == member && p["group"] == "sudo" && p["removed"] == false && p["reason"] == "last_admin"
