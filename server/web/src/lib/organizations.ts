@@ -27,11 +27,20 @@ export async function listOrganizations(p: ListParams): Promise<Page<Organizatio
   )
 }
 
-/** Creates an organization; returns null on success, otherwise the problem code. */
-export async function createOrganization(slug: string, name: string): Promise<string | null> {
-  const { error } = await api.POST('/api/platform/v1/organizations', {
+/** Creates an organization; returns the created organization, otherwise the problem code. */
+export async function createOrganization(slug: string, name: string): Promise<Organization | string> {
+  const { data, error } = await api.POST('/api/platform/v1/organizations', {
     params: { header: { 'X-Paddock-CSRF': '1' } },
     body: { slug: slug.trim(), name: name.trim() },
+  })
+  return data ?? problemCode(error)
+}
+
+/** Replaces the domains of an organization; returns null on success, otherwise the problem code. */
+export async function updateOrganizationDomains(id: string, domains: string[]): Promise<string | null> {
+  const { error } = await api.PATCH('/api/platform/v1/organizations/{id}', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
+    body: { domains },
   })
   return error ? problemCode(error) : null
 }

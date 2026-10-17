@@ -146,7 +146,8 @@
     "modeInvalid": "Enter four octal digits without special bits, for example 0644.",
     "ownerInvalid": "Owner and group are lowercase user and group names.",
     "contentTooLarge": "The content can have at most 64 KiB.",
-    "unitInvalid": "Enter a unit name ending in .service, .timer, .socket or .path."
+    "unitInvalid": "Enter a unit name ending in .service, .timer, .socket or .path.",
+    "domainsInvalid": "Enter lowercase DNS names, one per line, at most 20 without duplicates."
   },
   "problems": {
     "name_taken": "An item with this name already exists.",
@@ -396,6 +397,11 @@
     "createTitle": "New organization",
     "slug": "Slug",
     "status": "Status",
+    "domains": "Domains (one per line)",
+    "domainsHint": "Lowercase DNS names of the organization's users, for example example.org; the first is the primary domain of the device login. Without a domain, login management, the login component and the managed local administrator stay off.",
+    "editDomains": "Domains",
+    "editDomainsTitle": "Domains of {name}",
+    "createdWithoutDomains": "The organization was created, but its domains were not saved. Save them with \"Domains\" in the list.",
     "statuses": {
       "provisioning": "Provisioning",
       "active": "Active",

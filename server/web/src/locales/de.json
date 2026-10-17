@@ -146,7 +146,8 @@
     "modeInvalid": "Geben Sie vier Oktalziffern ohne Sonderbits ein, zum Beispiel 0644.",
     "ownerInvalid": "Besitzer und Gruppe sind Benutzer- und Gruppennamen in Kleinbuchstaben.",
     "contentTooLarge": "Der Inhalt darf höchstens 64 KiB groß sein.",
-    "unitInvalid": "Geben Sie einen Unit-Namen ein, der auf .service, .timer, .socket oder .path endet."
+    "unitInvalid": "Geben Sie einen Unit-Namen ein, der auf .service, .timer, .socket oder .path endet.",
+    "domainsInvalid": "Geben Sie DNS-Namen in Kleinbuchstaben ein, einen pro Zeile, höchstens 20 ohne Dopplungen."
   },
   "problems": {
     "name_taken": "Ein Eintrag mit diesem Namen existiert bereits.",
@@ -396,6 +397,11 @@
     "createTitle": "Neue Organisation",
     "slug": "Slug",
     "status": "Status",
+    "domains": "Domains (eine pro Zeile)",
+    "domainsHint": "DNS-Namen der Benutzer der Organisation in Kleinbuchstaben, zum Beispiel example.org; die erste ist die primäre Domain der Geräteanmeldung. Ohne Domain bleiben Anmeldeverwaltung, Anmeldekomponente und verwalteter lokaler Administrator aus.",
+    "editDomains": "Domains",
+    "editDomainsTitle": "Domains von {name}",
+    "createdWithoutDomains": "Die Organisation wurde angelegt, ihre Domains wurden aber nicht gespeichert. Speichern Sie sie über „Domains“ in der Liste.",
     "statuses": {
       "provisioning": "Wird eingerichtet",
       "active": "Aktiv",

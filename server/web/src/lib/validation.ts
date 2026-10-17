@@ -28,6 +28,22 @@ export function validateOrganization(slug: string, name: string): OrganizationEr
   return errors
 }
 
+/** The server's domain rule (organization.ValidateDomains), repeated for the form; the server stays authoritative. */
+const domainPattern = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/
+
+/** The domains of a text area: one per line, trimmed and lower-cased, blank lines dropped. */
+export function parseDomains(text: string): string[] {
+  return text.split('\n').map((l) => l.trim().toLowerCase()).filter((l) => l !== '')
+}
+
+/** Validates the domains of a text area; returns '' or the message key. */
+export function validateDomains(text: string): '' | 'validation.domainsInvalid' {
+  const domains = parseDomains(text)
+  const valid = domains.length <= 20 && new Set(domains).size === domains.length &&
+    domains.every((d) => d.length <= 253 && domainPattern.test(d))
+  return valid ? '' : 'validation.domainsInvalid'
+}
+
 export function hasErrors(errors: object): boolean {
   return Object.values(errors).some(Boolean)
 }

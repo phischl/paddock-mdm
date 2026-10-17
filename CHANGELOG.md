@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
+  *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
+  records `organization.created` and `organization.domains_changed`.
+
 ### Changed
 
 - Every portal sign-in now runs Paddock's own login flow and is refused without a second factor; the default brand's
