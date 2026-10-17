@@ -182,3 +182,15 @@ keeps its import allow list (standard library and `jcs` only). No other dependen
   (`/usr/share/doc/paddock/what-is-collected`, AUD-11 e); legal hold (AUD-18) would suspend the purges per
   organization. Re-evaluate when the first customer's contractual period differs from 400 days or when an
   erasure request cannot be answered by restriction.
+
+## Amendment 2026-10-17 (ADR 0037, plan M8d) — login history and hardware facts
+
+Two rows join the retention matrix of decision 1:
+
+| Store | Data class | Content (personal data) | Retention | Legal basis (GDPR) | Purge (role, event) | Configurable |
+| --- | --- | --- | --- | --- | --- | --- |
+| `device_login_event` (ADR 0037 decision 6) | Employee login history | Username, device, time of every session start | `login_history_days` (7–365, default 90) after the login; **off by default** (`login_history_enabled`); disabling deletes every row at once | Art. 6(1)(f) with the organization's works council agreement; Art. 88 | Worker, every 6 h; `retention.purged` (store `device_login_event`, per organization, only when rows were deleted); until M10's retention round exists, its own round with the same lock pattern | **Now** (`settings.login`) |
+| Hardware facts in `device_inventory_ref` (ADR 0037 decision 7) | Device data (asset) | Vendor, model, serial number, CPU, memory size, disk size | As the inventory of the device: while active, and `retired_inventory_days` after retirement (same row as the inventory reference) | Art. 6(1)(f) (asset management, theft reports) | The inventory purge of retired devices (M10, `device.inventory_purged`) | With `retired_inventory_days` |
+
+`device_user_seen` is unchanged (fixed 365 days, lock coverage). An uninstall (ADR 0037 decision 4) retires the
+device; the escrowed secrets of the retired device stay as in the row "Escrowed secrets of retired devices".
