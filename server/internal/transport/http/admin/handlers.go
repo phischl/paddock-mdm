@@ -108,7 +108,12 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 		Locale: adminapi.MeLocale(me.Locale), Theme: adminapi.MeTheme(me.Theme), RevocationEnabled: h.revocations.Enabled(),
 	}
 	if me.Organization != nil {
-		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name}
+		domains := me.Organization.Domains
+		if domains == nil {
+			domains = []string{}
+		}
+		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name,
+			Domains: domains}
 	}
 	if me.APIToken != nil {
 		out.ApiToken = &adminapi.MeApiToken{Id: me.APIToken.ID, Name: me.APIToken.Name, ExpiresAt: me.APIToken.ExpiresAt.UTC()}

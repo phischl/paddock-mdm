@@ -2135,6 +2135,8 @@ export interface components {
             id: string;
             slug: string;
             name: string;
+            /** @description DNS domains of the organization's users; the first is the primary domain of the device login. */
+            domains: string[];
         };
         Me: {
             /** Format: uuid */

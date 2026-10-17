@@ -3759,11 +3759,15 @@ components:
         end_session_url: { type: string }
     MeOrganization:
       type: object
-      required: [id, slug, name]
+      required: [id, slug, name, domains]
       properties:
         id: { type: string, format: uuid }
         slug: { type: string }
         name: { type: string }
+        domains:
+          type: array
+          description: DNS domains of the organization's users; the first is the primary domain of the device login.
+          items: { type: string }
     Me:
       type: object
       required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip]

@@ -806,6 +806,9 @@
     "group": "Registrierte Geräte hinzufügen zu",
     "noGroup": "Keine Gerätegruppe",
     "autoApprove": "Registrierte Geräte automatisch freigeben",
+    "noDomainWarning": "Diese Organisation hat keine Domain: Ihre Geräte erhalten keine Anmeldeverwaltung und keinen verwalteten lokalen Administrator. Tragen Sie die vorhandenen lokalen Administratorkonten eines Geräts als Notfallkonten ein, bevor Sie es registrieren. Ohne Notfallkonto in der Gruppe sudo behält der Agent die vorhandenen Mitglieder und meldet sie; er entfernt sie, sobald ein Notfallkonto oder der verwaltete lokale Administrator Mitglied ist.",
+    "breakGlassHint": "Mit diesem Token registrierte Geräte behalten nur den verwalteten lokalen Administrator ({username}) und die Notfallkonten in der Gruppe sudo; jedes andere Mitglied wird beim ersten Anwenden entfernt und gemeldet. Tragen Sie die vorhandenen lokalen Administratoren eines Geräts als Notfallkonten ein, bevor Sie es registrieren.",
+    "breakGlassLink": "Notfallkonten",
     "status": "Status",
     "statuses": {
       "active": "Aktiv",
@@ -1181,7 +1184,7 @@
     },
     "sessionActionHint": "Was Geräte mit den offenen Sitzungen eines gesperrten Benutzers tun.",
     "breakGlass": "Notfallkonten",
-    "breakGlassHint": "Lokale Konten, eines pro Zeile, die Paddock nie einschränkt.",
+    "breakGlassHint": "Lokale Konten, eines pro Zeile, die Paddock nie einschränkt: nie durch eine Sperre abgewiesen, nie durch eine Aussetzung beendet, nie aus sudo entfernt. Tragen Sie die vorhandenen lokalen Administratoren eines Geräts ein, bevor Sie es registrieren; eine sudo-Gruppe ohne Notfallkonto behält ihre Mitglieder.",
     "notice": "Anmeldehinweis",
     "noticeHint": "Wird auf dem Anmeldebildschirm, auf Textkonsolen und vor SSH-Anmeldungen jedes Geräts angezeigt. Leer lassen für keinen Hinweis.",
     "privileges": "Rechte",

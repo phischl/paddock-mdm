@@ -806,6 +806,9 @@
     "group": "Add enrolled devices to",
     "noGroup": "No device group",
     "autoApprove": "Approve enrolled devices automatically",
+    "noDomainWarning": "This organization has no domain: its devices get no login management and no managed local administrator. Add the existing local administrator accounts of a device as break-glass accounts before you enroll it. Without a break-glass account in the sudo group, the agent keeps the present members and reports them; it removes them once a break-glass account or the managed local administrator is a member.",
+    "breakGlassHint": "Devices enrolled with this token keep only the managed local administrator ({username}) and the break-glass accounts in the sudo group; every other member is removed at the first apply and reported. Add the existing local administrators of a device as break-glass accounts before you enroll it.",
+    "breakGlassLink": "Break-glass accounts",
     "status": "Status",
     "statuses": {
       "active": "Active",
@@ -1181,7 +1184,7 @@
     },
     "sessionActionHint": "What devices do with the open sessions of a locked user.",
     "breakGlass": "Break-glass accounts",
-    "breakGlassHint": "Local accounts, one per line, that Paddock never restricts.",
+    "breakGlassHint": "Local accounts, one per line, that Paddock never restricts: never denied by a lock, never ended by a suspension, never removed from sudo. Add the existing local administrators of a device before you enroll it; a sudo group without a break-glass account keeps its members.",
     "notice": "Login notice",
     "noticeHint": "Shown at the login screen, on text consoles and before SSH logins of every device. Leave empty for no notice.",
     "privileges": "Privileges",

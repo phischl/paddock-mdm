@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Devices install Himmelblau 4.0.6 by default (`PADDOCK_HIMMELBLAU_VERSION`, previously 4.0.4): a device code
   that expired at the login screen no longer ends in `PAM_SYSTEM_ERR`. The device-login guide lists the messages of the
   login screen and what they mean.
+- The dialog that creates an enrollment token explains which members of the sudo group a device keeps and links to
+  the break-glass accounts; for an organization without a domain it warns that its devices get no login management
+  and no managed local administrator. `GET /api/v1/me` names the organization's `domains`.
 
 ### Fixed
 
