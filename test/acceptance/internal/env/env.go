@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/authflow"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
@@ -87,6 +88,9 @@ func (p *Portal) StepUp(ctx context.Context, user, returnTo string) (string, err
 	// parallel step-ups overwrite each other's and Paddock refuses all but one with stepup=failed.
 	p.stepUpMu.Lock()
 	defer p.stepUpMu.Unlock()
+	if err := p.awaitStepUpMaxAge(ctx); err != nil {
+		return "", err
+	}
 	password, err := Password(user)
 	if err != nil {
 		return "", err
@@ -198,6 +202,39 @@ func (r Response) ProblemCode() string {
 	}
 	_ = json.Unmarshal(r.Body, &p)
 	return p.Code
+}
+
+// awaitStepUpMaxAge waits until the session's last step-up is older than the maximum auth age (GET /api/v1/me,
+// development only). Within it Authentik answers a new step-up with the earlier login instead of running the step-up
+// flow, and the api refuses that token as not re-authenticated (stepup.go, checkStepUp).
+func (p *Portal) awaitStepUpMaxAge(ctx context.Context) error {
+	res, err := p.Do(ctx, http.MethodGet, "/api/v1/me", nil)
+	if err != nil {
+		return err
+	}
+	var me struct {
+		StepUp *struct {
+			At                *time.Time `json:"at"`
+			MaxAuthAgeSeconds int        `json:"max_auth_age_seconds"`
+		} `json:"step_up"`
+	}
+	if res.Status != http.StatusOK || json.Unmarshal(res.Body, &me) != nil || me.StepUp == nil {
+		return fmt.Errorf("GET /api/v1/me without step_up (needs PADDOCK_ENV=development): HTTP %d %s", res.Status, res.Body)
+	}
+	if me.StepUp.At == nil {
+		return nil
+	}
+	// The server stores whole seconds; two more cover the rounding and Authentik's login event before the callback.
+	wait := time.Until(me.StepUp.At.Add(time.Duration(me.StepUp.MaxAuthAgeSeconds)*time.Second + 2*time.Second))
+	if wait <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(wait):
+		return nil
+	}
 }
 
 // Do calls the admin API. Mutating requests carry X-Paddock-CSRF: 1 unless noCSRF is set.
@@ -467,13 +504,19 @@ func (a *Authentik) AddToGroup(ctx context.Context, username, group string) erro
 	return a.do(ctx, http.MethodPost, "/core/groups/"+g+"/add_user/", map[string]any{"pk": user}, nil)
 }
 
-// CreateUser creates an internal user with a password and returns its pk.
+// CreateUser creates an internal user with a password and returns its pk; the username is also its email.
 func (a *Authentik) CreateUser(ctx context.Context, username, password string, groups ...string) (int, error) {
+	return a.CreateUserWithEmail(ctx, username, username, password, groups...)
+}
+
+// CreateUserWithEmail is CreateUser with a separate email, for a username that is no email address (Authentik
+// validates the email).
+func (a *Authentik) CreateUserWithEmail(ctx context.Context, username, email, password string, groups ...string) (int, error) {
 	var u struct {
 		PK int `json:"pk"`
 	}
 	if err := a.do(ctx, http.MethodPost, "/core/users/", map[string]any{
-		"username": username, "name": username, "email": username, "is_active": true, "type": "internal",
+		"username": username, "name": username, "email": email, "is_active": true, "type": "internal",
 	}, &u); err != nil {
 		return 0, err
 	}

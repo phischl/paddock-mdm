@@ -119,7 +119,7 @@ func TestIdentitySyncDomainMatch(t *testing.T) {
 	}
 	ctx := testContext(t, syncRound+time.Minute)
 	name := "lab" + uniqueSuffix()
-	pk, err := ak.CreateUser(ctx, name, "pw-"+uuid.NewString(), env.RootGroup("acme"))
+	pk, err := ak.CreateUserWithEmail(ctx, name, name+"@other.test", "pw-"+uuid.NewString(), env.RootGroup("acme"))
 	t.Cleanup(func() {
 		if pk != 0 {
 			_ = ak.DeleteUser(context.Background(), pk)
