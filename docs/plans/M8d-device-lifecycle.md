@@ -1039,3 +1039,173 @@ language, for example "Devices can be removed from Paddock from the portal in tw
 device retires itself after reporting the removal." The upgrade note of the release says: server first, then the
 agents (every change is additive; older agents ignore the new bundle fields; the new event types are only sent to
 servers that carry this release).
+
+## 14. Amendment 2026-10-17 — component versions per device (PDK-235, PDK-236) and the upstream version watch (PDK-237)
+
+Decided in ADR 0037, amendment 2026-10-17. Supplements §3; the decision numbering continues.
+
+### 14.1 Component versions reported by the agent, targets, outdated flag (PDK-235)
+
+52. `health.Report` gains `Components map[string]string json:"components,omitempty"` with exactly these keys and
+    sources, refreshed once per check-in (`refreshComponents`): `paddockd` = `buildinfo.Version`;
+    `paddock_supervisor` = output of `/usr/sbin/paddock-supervisor version` (decision 32's `SupervisorVersion` is
+    folded into this map — do not add both fields); `paddock_revoke` = `Sys.PackageVersion("paddock-revoke")`;
+    `himmelblau` = `Sys.PackageVersion("himmelblau")`; `fleetd` = `Sys.PackageVersion("fleet-osquery")`. A component
+    that is not installed is reported as `""` (key present); a lookup that fails keeps the last value.
+    `api/openapi/device.yaml` documents the field (additive, ADR 0013). Package versions are Debian versions
+    (`4.0.6-1`); the agent never normalizes them.
+53. Migration `component_targets`:
+
+    ```sql
+    CREATE TABLE component_target (
+      component text PRIMARY KEY CHECK (component IN ('paddockd','paddock_supervisor','paddock_revoke','himmelblau','fleetd')),
+      version text NOT NULL, source text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    GRANT SELECT, INSERT, UPDATE, DELETE ON component_target TO paddock_compiler, paddock_worker;
+    CREATE FUNCTION paddock_component_targets() RETURNS SETOF component_target
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$ SELECT * FROM component_target $$;
+    REVOKE ALL ON FUNCTION paddock_component_targets() FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION paddock_component_targets() TO paddock_api, paddock_worker;
+    ALTER TABLE device_status ADD COLUMN components_outdated text[] NOT NULL DEFAULT '{}';
+    CREATE INDEX device_status_org_outdated_idx ON device_status (organization_id) WHERE cardinality(components_outdated) > 0;
+    ```
+
+    The table is platform-wide (no `organization_id`, like `agent_release`). The compiler upserts `himmelblau`
+    (`version = cfg.HimmelblauVersion`, `source = "PADDOCK_HIMMELBLAU_VERSION"`) at start. The worker's rollout
+    round upserts, after `EvaluateRollouts`, from the current release (completed rollout, not halted): `paddockd`
+    and `paddock_supervisor` (= the release version, `source = "agent_release"`), `paddock_revoke` (= the release
+    version only when the release has a `paddock-revoke` package, else the row is deleted), `fleetd` (= the
+    `package_version` of the newest published release with a `fleet-osquery` package, `source = "agent_release"`).
+    Without a completed rollout the four rows are deleted.
+54. The worker's heartbeat materialization computes `components_outdated` in Go
+    (`server/internal/domain/components/components.go`, `Outdated(installed, targets map[string]string) []string`,
+    sorted): a component is outdated when it is installed (`""` is never outdated — it is *missing*, reported
+    separately), a target exists, and `installed` is older: `paddockd`, `paddock_supervisor`, `paddock_revoke` by
+    `semver.Compare` on the Debian version with `~` mapped to `-` (`0.1.0~alpha.4` = `0.1.0-alpha.4`); `himmelblau`
+    and `fleetd` by the rule of `reconcile.login.installed`: not outdated when `installed == target` or `installed`
+    has the prefix `target + "-"`, otherwise compared as dotted integers of the part before the first `-`. Targets
+    are read once per heartbeat batch through `paddock_component_targets()`.
+55. API: `Device` gains `components` (required array of `DeviceComponent{name, installed (string, "" = not
+    installed), expected (string, nullable), status (enum ok|outdated|missing|unknown)}`; `unknown` when the agent
+    reported no `components` at all), computed by the api from `device_status.health` and the targets. Device list:
+    filter `component_outdated` (boolean: `cardinality(components_outdated) > 0`); `ListDevicesRow` gains
+    `components_outdated`. Platform: `GET /api/platform/v1/component-targets` → `{items: [{component, version,
+    source, updated_at}]}` (tag `platform`, platform administrators; no list contract: at most five rows).
+
+### 14.2 Portal (PDK-236)
+
+56. `DeviceOverview.vue` gets the panel *Components* (`devices.components.title`) directly below the hardware facts
+    with one row per component (`devices.components.names.*`): installed version (`mono`), expected version,
+    `StatusChip` (`devices.components.status.*`) and the hint `devices.components.hint`; `Devices.vue` gets the column
+    *Components* (`devices.components.column`: `ok` or `devices.components.outdatedCount`) and the filter
+    `component_outdated` (`devices.componentFilter`); `AgentReleases.vue` gets the card *Rollout targets*
+    (`agentReleases.targets.title`: one line per target with its source; `agentReleases.targets.himmelblauHint`;
+    `agentReleases.targets.none` when empty). Decision 33's identity row `devices.supervisorVersion` is dropped in
+    favour of the panel. Texts (binding):
+
+    | Key | English | German |
+    | --- | --- | --- |
+    | `devices.components.title` | Components | Komponenten |
+    | `devices.components.column` | Components | Komponenten |
+    | `devices.components.installed` | Installed | Installiert |
+    | `devices.components.expected` | Expected | Erwartet |
+    | `devices.components.names.paddockd` | Agent (paddockd) | Agent (paddockd) |
+    | `devices.components.names.paddock_supervisor` | Supervisor | Supervisor |
+    | `devices.components.names.paddock_revoke` | Revocation module (paddock-revoke) | Widerrufsmodul (paddock-revoke) |
+    | `devices.components.names.himmelblau` | Himmelblau | Himmelblau |
+    | `devices.components.names.fleetd` | fleetd (osquery) | fleetd (osquery) |
+    | `devices.components.status.ok` | Up to date | Aktuell |
+    | `devices.components.status.outdated` | Outdated | Veraltet |
+    | `devices.components.status.missing` | Not installed | Nicht installiert |
+    | `devices.components.status.unknown` | Not reported | Nicht gemeldet |
+    | `devices.components.outdatedCount` | {count, plural, one {# outdated} other {# outdated}} | {count, plural, one {# veraltet} other {# veraltet}} |
+    | `devices.componentFilter` | Component outdated | Komponente veraltet |
+    | `devices.components.hint` | Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update. | Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach. |
+    | `agentReleases.targets.title` | Rollout targets | Rollout-Ziele |
+    | `agentReleases.targets.himmelblauHint` | Set with PADDOCK_HIMMELBLAU_VERSION of the compiler; devices install it with their next apply. | Gesetzt über PADDOCK_HIMMELBLAU_VERSION des Compilers; Geräte installieren sie beim nächsten Apply. |
+    | `agentReleases.targets.none` | No agent release has completed a rollout yet. | Noch kein Agent-Release hat einen Rollout abgeschlossen. |
+
+### 14.3 Upstream version watch (PDK-237)
+
+57. Tool `tools/upstreamwatch/` (Go, standard library only; module `github.com/phischl/paddock-mdm/tools/upstreamwatch`
+    added to `go.work`; no new dependency). Commands: `upstreamwatch check [--versions deploy/compose/versions.env]
+    [--compiler server/cmd/paddock-server/compiler.go] [--json]` prints one line per pin
+    `<name> <pinned> <latest> <patch|minor|major|digest|ok|unknown>` and exits 0 (a reporting tool);
+    `upstreamwatch issues --repo <owner/repo>` runs `check` and reconciles GitHub issues (decision 60) through
+    `gh api`.
+58. Pins and upstream sources (table `tools/upstreamwatch/pins.go`, one row per pin; the unit test
+    `TestEveryPinIsMapped` parses `versions.env` and the compiler default and fails on an unmapped pin):
+    - every `*_IMAGE` of `versions.env`: registry tag listing — Docker Hub
+      `https://hub.docker.com/v2/repositories/<ns>/<repo>/tags?page_size=100` (paginated; `library/` for official
+      images), ghcr.io, gcr.io and mcr.microsoft.com through the OCI distribution API `/v2/<repo>/tags/list` with an
+      anonymous bearer token from the `WWW-Authenticate` challenge. The latest tag is the highest tag with the same
+      *shape* as the pinned tag: every digit run of the pinned tag becomes `\d+`, everything else is literal
+      (`2.11.6` → `^\d+\.\d+\.\d+$`, `v4.92.3` → `^v\d+\.\d+\.\d+$`, `4.3.6-management` → `^\d+\.\d+\.\d+-management$`,
+      `1.27.2-trixie`, `v1.63.0-noble`, `qemu-v10.2.3-68`), ordered by the numeric fields. A floating tag (`nonroot`
+      of `RUNTIME_IMAGE`) compares the resolved manifest digest (`HEAD /v2/<repo>/manifests/<tag>`,
+      `Docker-Content-Digest`) with the pinned digest and reports `digest` when it differs.
+    - `PADDOCK_HIMMELBLAU_VERSION` default in `server/cmd/paddock-server/compiler.go` (regex
+      `"PADDOCK_HIMMELBLAU_VERSION", "([0-9.]+)"`): the directory listing `https://packages.himmelblau-idm.org/stable/`,
+      entries `^\d+\.\d+\.\d+/$`, highest version; reported as `himmelblau`.
+    - fleetd: the tag of `FLEETCTL_IMAGE` (`make fleetd-deb` builds fleetd with it), reported as `fleetctl`; Fleet's
+      server image is its own pin.
+    - `FLEET_CPE_DATABASE_URL` / `FLEET_CPE_TRANSLATIONS_URL`: the release tag `\d{12}` of `fleetdm/nvd` versus
+      `gh api repos/fleetdm/nvd/releases/latest`; reported as `fleet_nvd`.
+    - For images whose project publishes GitHub releases (`caddy`, `authentik`, `openbao`, `rustfs`, `valkey`,
+      `fleet`, `prometheus`, `syft`, `cosign`, `gitleaks`, `trivy`, `k6`, `nfpm`, `golangci-lint`, `buildkit`,
+      `binfmt`) the table names the repository and the release notes URL is `https://github.com/<repo>/releases/tag/<tag>`;
+      the registry listing stays the source of truth for "available" (a release whose image is not published yet
+      is not reported).
+    - `GITLEAKS_DEFAULT_CONFIG_BYTES/SHA256` are derived values and not pins; the gitleaks issue body says to update them.
+59. Classification: `patch` when only the last numeric field grew, `minor` when the middle one, `major` when the
+    first; `digest` for floating tags; `ok` when equal; `unknown` on any network or parse error (printed to stderr;
+    never fails the run).
+60. Issues (`issues` command): for every pin that is `patch|minor|major|digest`, list the open issues with label
+    `upstream` (`gh api repos/{repo}/issues?labels=upstream&state=open&per_page=100`, paginated) and match the title
+    prefix `upstream: <name> ` in Go; none → create (`gh api repos/{repo}/issues`) with title
+    `upstream: <name> <pinned> → <latest>`, label `upstream` (created once if missing), body: the pinned line
+    (`versions.env` or the compiler line), the latest version, the classification, the release-notes URL, and the
+    **gates to run before the bump** from the table (RustFS: WORM gate `TestWORM`; Authentik: `TestIdentityLockAuthentik`;
+    Fleet and fleetctl: inventory gates F0–F4; Postgres and Caddy: `make restore-drill`; gitleaks: update
+    `GITLEAKS_DEFAULT_CONFIG_BYTES/SHA256`; every other image: `make acceptance`; Himmelblau: `make system-test VM=all
+    T=TestIdentity`); an existing issue with another latest → edit title and body; a pin that is `ok` with an open
+    issue → comment `pinned <version> now` and close it. Never more than one open issue per pin. The tool never
+    creates branches or pull requests.
+61. Workflow `.github/workflows/upstream-watch.yml`: `schedule: - cron: "17 5 * * 1"` (weekly, Monday 05:17 UTC) and
+    `workflow_dispatch`; `permissions: {contents: read, issues: write}`; steps: checkout, Go (the same setup as
+    `ci.yml`), `go run ./tools/upstreamwatch issues --repo ${{ github.repository }}` with `GH_TOKEN: ${{ github.token }}`.
+    The job fails only when the tool cannot start, never on an outdated pin. `Makefile` target `upstream-check`
+    runs `go run ./tools/upstreamwatch check`.
+62. Tests: `tools/upstreamwatch/*_test.go` with fixtures under `testdata/` (a `versions.env`, Docker Hub and OCI tag
+    JSON, a GitHub release JSON, the Himmelblau index HTML): the shape matcher, the ordering, the classification,
+    the issue reconciliation against a fake of the `gh api` calls (interface `GitHub` with `List`, `Create`, `Edit`,
+    `Comment`, `Close`; no network in tests), and `TestEveryPinIsMapped`. `docs/operations/upgrade.md` gains the
+    section "Upstream version watch" (what the job checks, the label, what to do with an issue, the local run, why
+    issues and not pull requests).
+
+### 14.4 Steps, gates, risks, stop conditions (additions)
+
+- Steps: 16. **PDK-235** (decisions 52–55). Verify: `GOTOOLCHAIN=auto go test -count=1 ./agent/...
+  ./server/internal/domain/components/... ./server/internal/worker/...`; `make acceptance T=TestComponentVersions`.
+  17. **PDK-236** (decision 56). Verify: `make e2e`; `make acceptance T=TestComponentTargets`. 18. **PDK-237**
+  (decisions 57–62). Verify: `go test ./tools/upstreamwatch/...`; `make upstream-check` prints every pin of
+  `versions.env` plus `himmelblau`, `fleetctl` and `fleet_nvd`; a `workflow_dispatch` run on the branch opens the
+  Himmelblau issue while the pin is behind. PDK-235 SHOULD run after PDK-227 (it folds in `SupervisorVersion`);
+  PDK-237 is independent of every other ticket and MAY run first.
+- Acceptance: **A11 `TestComponentVersions`**: with the targets `paddockd`/`paddock_supervisor` = the current
+  release, `himmelblau` = the compiler's version (`4.0.4` in the development stack), a devicesim reports
+  `components{paddockd: <current>, paddock_supervisor: <current>, paddock_revoke: "", himmelblau: "4.0.3-1", fleetd: ""}`
+  → `GET /devices/{id}.components` shows `paddockd: ok`, `himmelblau: outdated`, `paddock_revoke: missing`,
+  `fleetd: missing`; `GET /devices?component_outdated=true` lists the device; a report with `himmelblau: "4.0.4-1"` →
+  `ok` and the device leaves the filter; a device without `components` → every status `unknown`. **A12
+  `TestComponentTargets`**: P reads `/api/platform/v1/component-targets` and sees `himmelblau` with
+  `source: PADDOCK_HIMMELBLAU_VERSION` and `paddockd` with the current release's version; an org admin → 403.
+- Residual risks: **RR-54 Component targets lag.** `components_outdated` is recomputed at the device's next
+  heartbeat (≤ 6 min) after a target changed; an offline device keeps its last evaluation. Mitigation: the device
+  page computes the status live from the targets; the list column follows at the next heartbeat. **RR-55 The upstream
+  watch depends on anonymous listings.** A blocked or changed registry listing or GitHub API turns a pin `unknown`
+  (visible in the job log, not as an issue). Mitigation: `make upstream-check` for a local run; the maintainer
+  reviews the job log when a known release is missing.
+- Stop conditions: **S12** a registry of `versions.env` refuses anonymous tag listing (report which; do not add a
+  secret without a decision). **S13** the label `upstream` cannot be created with `issues: write` (report; do not
+  widen the permissions).

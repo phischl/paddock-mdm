@@ -226,3 +226,48 @@ out, in its wave"; it does not start rollouts on publish (contract 6 keeps the h
 Follow-ups: plan `docs/plans/M8d-device-lifecycle.md` (PDK-220 … PDK-234); the setup wizard (M8g, PDK-200) surfaces
 the unlock mode default, the staleness presets and the update policy; M10's retention round absorbs the login-history
 purge; M9 may notify on `device.uninstalled` and `device.supervisor_update_failed` through the audit index.
+
+## Amendment 2026-10-17 — component versions per device, upstream version watch
+
+Two maintainer requests of the same day extend this decision.
+
+**I. Component versions and targets.** The device page shows no version of Himmelblau, fleetd, `paddock-supervisor`
+or `paddock-revoke`, and nothing says which version the organization expects. M8b (PDK-105) removed the architecture
+row "Himmelblau version and config hash (`tamper.login_component_changed`)" as unbuilt; nothing exists to reuse beyond
+`reconcile.OS.PackageVersion` (dpkg), the health report, `paddock_current_agent_version()` and
+`device_inventory_ref.fleetd_version` (Fleet's view, hourly).
+
+- Options: (a) tamper events per component — rejected: a version is a fact, not a tampering, and the login reconciler
+  already enforces the Himmelblau pin by installing it. (b) Compare in SQL against a floating target — rejected: Debian
+  and SemVer comparisons do not belong in SQL. (c) **Chosen:** the agent reports installed versions in its health
+  (`components`: `paddockd`, `paddock_supervisor`, `paddock_revoke`, `himmelblau`, `fleetd`); the server keeps one
+  platform table `component_target (component, version, source, updated_at)` written by the compiler at start
+  (`himmelblau` ← `PADDOCK_HIMMELBLAU_VERSION`) and by the worker's rollout round (`paddockd`, `paddock_supervisor`,
+  `paddock_revoke`, `fleetd` ← the current release's artifacts and packages); the worker's heartbeat materialization
+  compares in Go and stores `device_status.components_outdated` (names); the api reads the targets through the
+  `SECURITY DEFINER` function `paddock_component_targets()` and answers `Device.components` with installed, expected and
+  status; the device list filters on `components_outdated`; the platform page shows the targets. Single source of
+  truth for the Himmelblau target stays the compiler's environment variable; the api never reads it.
+
+**II. Upstream version watch.** Dependabot covers Go modules, npm and GitHub Actions, not the images pinned by tag
+and digest in `deploy/compose/versions.env`, the Himmelblau apt pin, the fleetd build version (`FLEETCTL_IMAGE`) or
+the Fleet NVD release URLs. Himmelblau sat at 4.0.4 while 4.0.6 was out (PDK-207 bumps it).
+
+- **Renovate** (rejected): a hosted or self-hosted bot that reads `versions.env` with a custom regex manager; it is a
+  new external dependency with write access to the repository, which `CLAUDE.md` forbids without a decision; its
+  digest pinning and grouping would duplicate what a small tool does.
+- **A bump PR per outdated pin** (rejected): resolving the new digest is mechanical, but every pin carries a gate a
+  person must run before merging (RustFS: WORM gate; Authentik: I2; Fleet: F0–F4; Caddy/Postgres: restore drill), so
+  a weekly bot PR would either sit open or be merged untested; it also needs a token with write access.
+- **One issue per outdated tool, updated in place** (chosen): a weekly GitHub Actions job runs a Go tool under
+  `tools/upstreamwatch/` (standard library only; `gh api` for GitHub releases and issues; plain HTTPS for registry tag
+  lists and the Himmelblau index). It compares every pin with upstream, classifies patch/minor/major, and opens one
+  issue per tool (label `upstream`, stable title `upstream: <tool> <pinned> → <latest>`), edits the existing issue
+  when the latest moves on, and closes it when the pin catches up. A patch release is visible as an issue within
+  seven days of its publication; `workflow_dispatch` runs it at once. The tool is also `make upstream-check` for a
+  local run. No repository write token: `issues: write` only.
+
+Consequences: + Administrators see per device which component is behind and what the platform expects; the
+maintainer learns of every upstream patch within a week without a new dependency. − One more platform table and
+health field; the watch depends on anonymous registry tag listings (Docker Hub, ghcr.io, gcr.io, mcr.microsoft.com)
+staying available. Tickets PDK-235, PDK-236, PDK-237.
