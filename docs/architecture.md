@@ -1278,6 +1278,13 @@ Crossing a level creates an alert and an audit event; returning resets it with a
 Silent disappearance rule (open question): a device crossing *critical* gets the status `presumed_lost`
 and appears on the "action required" list; the admin chooses Retire, Lock or Keep.
 
+> **Amendment 2026-10-17 (M8x):** the contact state has three tiers below the staleness alerts. *Online* (`ok`) is a
+> check-in within the last 15 minutes (three check-ins, `app.AgentSilence`); *No recent contact* (`unseen`) is none
+> for longer, below the organization's warning threshold; then *Silent* (`stale_warning`, `stale_critical`) and
+> *Presumed lost*. `paddock_device_contact` takes the reference time as an argument (migration 00049). The worker's
+> report of a stopped agent (`device.tamper_agent_not_running`) is the attention kind `agent_not_running` until
+> fleetd's policy passes again.
+
 ### 12.2 Managed local administrator (F16)
 
 ```mermaid

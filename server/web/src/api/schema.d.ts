@@ -2696,10 +2696,10 @@ export interface components {
             sort: string;
         };
         /**
-         * @description Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; ok otherwise. Devices that are not active report ok or never.
+         * @description Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; unseen = no check-in for more than 15 minutes, below the staleness warning threshold; ok otherwise (a check-in within the last 15 minutes). Devices that are not active report ok or never.
          * @enum {string}
          */
-        DeviceContact: "never" | "ok" | "stale_warning" | "stale_critical" | "presumed_lost";
+        DeviceContact: "never" | "ok" | "unseen" | "stale_warning" | "stale_critical" | "presumed_lost";
         /** @enum {string} */
         DeviceState: "pending" | "active" | "rejected" | "quarantined" | "retired";
         Device: {
@@ -3057,7 +3057,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running";
         Attention: {
             /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
             id: string;
@@ -3067,7 +3067,7 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported).
              */
             since: string;
             /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; otherwise empty. */
@@ -3168,8 +3168,10 @@ export interface components {
             quarantined: number;
             retired: number;
             rejected: number;
-            /** @description Active devices in contact (none of the buckets below). */
+            /** @description Active devices with a check-in within the last 15 minutes (none of the buckets below). */
             online: number;
+            /** @description Active devices without a check-in for more than 15 minutes and no open staleness alert (contact unseen). */
+            no_recent_contact: number;
             /** @description Active devices with an open stale_warning alert. */
             silent: number;
             /** @description Active devices with an open stale_critical alert. */

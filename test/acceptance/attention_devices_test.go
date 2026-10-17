@@ -125,3 +125,47 @@ func TestAttentionDevicesGate(t *testing.T) {
 		t.Fatalf("flat list %d rows, grouped %d conditions", flat, len(mine.Conditions))
 	}
 }
+
+// TestAttentionAgentNotRunning (PDK-295, plan M8x decisions 60 and 62): fleetd's reported failure of the policy
+// paddock_agent_running (inventory_policy_result with alerted_at, as the worker writes it with
+// device.tamper_agent_not_running) is listed as agent_not_running; it is gone once the policy passes again, and
+// another organization never sees it.
+func TestAttentionAgentNotRunning(t *testing.T) {
+	alice := login(t, env.Alice)
+	d := activeDevice(t, alice, namedGroup(t, alice, "agent not running"), "att-anr-"+uniqueSuffix())
+	ctx := testContext(t, time.Minute)
+	if _, _, err := d.Checkin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hostname := getDevice(t, alice, d.DeviceID).Hostname
+	db := ownerDB(t)
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_policy_result (device_id, organization_id, policy_key, passing, updated_at, alerted_at)
+		SELECT id, organization_id, 'paddock_agent_running', false, now(), now() FROM device WHERE id = $1`, d.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	q := url.Values{"q": {hostname}, "kind": {"agent_not_running"}, "page_size": {"10"}}
+	if n := listCount(t, alice, "/api/v1/attention", q); n != 1 {
+		t.Fatalf("agent_not_running rows for %s: %d, want 1", hostname, n)
+	}
+	_, grouped := attentionDevices(t, alice, q)
+	var kinds []string
+	for _, g := range grouped {
+		for _, c := range g.Conditions {
+			kinds = append(kinds, c.Kind)
+		}
+	}
+	if len(grouped) != 1 || !slices.Contains(kinds, "agent_not_running") {
+		t.Fatalf("grouped attention of %s: %+v", hostname, grouped)
+	}
+	if n := listCount(t, login(t, env.Carol), "/api/v1/attention", q); n != 0 {
+		t.Fatalf("carol sees agent_not_running of the acme device %s", hostname)
+	}
+
+	// The policy passes again: UpsertPolicyResult clears alerted_at.
+	if _, err := db.Exec(ctx, "UPDATE inventory_policy_result SET passing = true, alerted_at = NULL WHERE device_id = $1", d.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	if n := listCount(t, alice, "/api/v1/attention", q); n != 0 {
+		t.Fatalf("agent_not_running rows for %s after the policy passed: %d", hostname, n)
+	}
+}

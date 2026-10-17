@@ -290,7 +290,9 @@ defineExpose({ reload: load })
             :items="f.options.map((o) => ({ value: o.value, title: optionTitle(o) }))"
             multiple
             clearable
-            hide-details
+            :hint="f.hint ? t(f.hint) : undefined"
+            :persistent-hint="!!f.hint"
+            :hide-details="!f.hint"
             :data-testid="'list-filter-' + f.key"
             @update:model-value="(v: string[] | null) => update({ [f.key]: v ?? [] })"
           />
@@ -338,7 +340,9 @@ defineExpose({ reload: load })
               :items="f.options.map((o) => ({ value: o.value, title: optionTitle(o) }))"
               multiple
               clearable
-              hide-details
+              :hint="f.hint ? t(f.hint) : undefined"
+              :persistent-hint="!!f.hint"
+              :hide-details="!f.hint"
               :data-testid="'list-filter-' + f.key"
               @update:model-value="(v: string[] | null) => update({ [f.key]: v ?? [] })"
             />

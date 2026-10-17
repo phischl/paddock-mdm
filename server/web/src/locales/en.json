@@ -734,6 +734,7 @@
     "presumedLost": "Presumed lost since {at}",
     "contact": {
       "ok": "Online",
+      "unseen": "No recent contact",
       "stale_warning": "Silent",
       "stale_critical": "Silent (critical)",
       "presumed_lost": "Presumed lost",
@@ -759,6 +760,7 @@
       }
     },
     "contactFilter": "Contact",
+    "contactHint": "Online: a check-in within the last 15 minutes. No recent contact: none for more than 15 minutes, below the silence threshold of the organization.",
     "pane": "Filter devices",
     "breadcrumb": "Breadcrumb",
     "header": {
@@ -1463,7 +1465,8 @@
       "sudo_apply_failed": "Sudo configuration failed",
       "revocation_pending": "Lock or Destroy waiting",
       "revocation_expired": "Lock or Destroy expired",
-      "agent_rollback_pending": "Agent rollback pending"
+      "agent_rollback_pending": "Agent rollback pending",
+      "agent_not_running": "Agent not running"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1476,7 +1479,8 @@
       "sudo_apply_failed": "Open device",
       "revocation_pending": "Open device",
       "revocation_expired": "Open device",
-      "agent_rollback_pending": "Open device"
+      "agent_rollback_pending": "Open device",
+      "agent_not_running": "Open device"
     },
     "more": "+{count}",
     "empty": {
@@ -1559,7 +1563,7 @@
       "securityOverdue": "Security updates overdue",
       "rebootRequired": "Reboot required",
       "ofActive": "of {count} active",
-      "silentNote": "{count} of them critical",
+      "silentNote": "{count, number} without contact for more than 15 minutes, {critical, number} critical",
       "presumedLostNote": "retire, lock or keep",
       "notEncryptedNote": "{partial} partial · {notReported} not reported",
       "securityOverdueNote": "no successful run in 48 h",

@@ -734,6 +734,7 @@
     "presumedLost": "Vermutlich verloren seit {at}",
     "contact": {
       "ok": "Online",
+      "unseen": "Kein aktueller Kontakt",
       "stale_warning": "Ohne Kontakt",
       "stale_critical": "Ohne Kontakt (kritisch)",
       "presumed_lost": "Vermutlich verloren",
@@ -759,6 +760,7 @@
       }
     },
     "contactFilter": "Kontakt",
+    "contactHint": "Online: ein Check-in innerhalb der letzten 15 Minuten. Kein aktueller Kontakt: seit mehr als 15 Minuten keiner, unterhalb der Stille-Schwelle der Organisation.",
     "pane": "Geräte filtern",
     "breadcrumb": "Pfadnavigation",
     "header": {
@@ -1463,7 +1465,8 @@
       "sudo_apply_failed": "sudo-Konfiguration fehlgeschlagen",
       "revocation_pending": "Sperre oder Vernichtung wartet",
       "revocation_expired": "Sperre oder Vernichtung abgelaufen",
-      "agent_rollback_pending": "Agent-Rücksetzung ausstehend"
+      "agent_rollback_pending": "Agent-Rücksetzung ausstehend",
+      "agent_not_running": "Agent läuft nicht"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1476,7 +1479,8 @@
       "sudo_apply_failed": "Gerät öffnen",
       "revocation_pending": "Gerät öffnen",
       "revocation_expired": "Gerät öffnen",
-      "agent_rollback_pending": "Gerät öffnen"
+      "agent_rollback_pending": "Gerät öffnen",
+      "agent_not_running": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {
@@ -1559,7 +1563,7 @@
       "securityOverdue": "Sicherheitsupdates überfällig",
       "rebootRequired": "Neustart erforderlich",
       "ofActive": "von {count} aktiven",
-      "silentNote": "davon {count} kritisch",
+      "silentNote": "{count, number} seit mehr als 15 Minuten ohne Kontakt, {critical, number} kritisch",
       "presumedLostNote": "außer Betrieb nehmen, sperren oder behalten",
       "notEncryptedNote": "{partial} teilweise · {notReported} nicht gemeldet",
       "securityOverdueNote": "kein erfolgreicher Lauf in 48 h",

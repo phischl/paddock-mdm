@@ -49,6 +49,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Managed file / unit | Verwaltete Datei / Unit | |
 | Navigation | Navigation | Navigation drawer; *einblenden* / *ausblenden* to show or hide it. |
 | Never contacted | Nie verbunden | |
+| No recent contact | Kein aktueller Kontakt | No check-in for more than 15 minutes, below the organization's silence threshold. |
 | Not reported | Nicht gemeldet | |
 | Online | Online | |
 | Organization | Organisation | |

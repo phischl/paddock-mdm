@@ -4386,10 +4386,11 @@ components:
         sort: { type: string, description: Applied sort. }
     DeviceContact:
       type: string
-      enum: [never, ok, stale_warning, stale_critical, presumed_lost]
+      enum: [never, ok, unseen, stale_warning, stale_critical, presumed_lost]
       description: >-
         Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet;
-        ok otherwise. Devices that are not active report ok or never.
+        unseen = no check-in for more than 15 minutes, below the staleness warning threshold; ok otherwise (a check-in
+        within the last 15 minutes). Devices that are not active report ok or never.
     DeviceState:
       type: string
       enum: [pending, active, rejected, quarantined, retired]
@@ -4804,7 +4805,8 @@ components:
     AttentionKind:
       type: string
       enum: [stale_warning, stale_critical, presumed_lost, quarantined, disk_not_compliant, agent_outdated,
-             login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired, agent_rollback_pending]
+             login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired, agent_rollback_pending,
+             agent_not_running]
     Attention:
       type: object
       required: [id, kind, device_id, hostname, since, detail]
@@ -4813,7 +4815,7 @@ components:
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
         hostname: { type: string }
-        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report). }
+        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported). }
         detail:
           type: string
           description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; otherwise empty."
@@ -4920,7 +4922,7 @@ components:
           items: { $ref: "#/components/schemas/ManagedFile" }
     OverviewDevices:
       type: object
-      required: [total, active, pending, quarantined, retired, rejected, online, silent, silent_critical, presumed_lost, never_contacted]
+      required: [total, active, pending, quarantined, retired, rejected, online, no_recent_contact, silent, silent_critical, presumed_lost, never_contacted]
       properties:
         total: { type: integer, description: "pending + active + quarantined" }
         active: { type: integer }
@@ -4928,7 +4930,8 @@ components:
         quarantined: { type: integer }
         retired: { type: integer }
         rejected: { type: integer }
-        online: { type: integer, description: "Active devices in contact (none of the buckets below)." }
+        online: { type: integer, description: "Active devices with a check-in within the last 15 minutes (none of the buckets below)." }
+        no_recent_contact: { type: integer, description: "Active devices without a check-in for more than 15 minutes and no open staleness alert (contact unseen)." }
         silent: { type: integer, description: "Active devices with an open stale_warning alert." }
         silent_critical: { type: integer, description: "Active devices with an open stale_critical alert." }
         presumed_lost: { type: integer }

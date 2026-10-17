@@ -83,7 +83,9 @@ Every inventory round (`PADDOCK_INVENTORY_SYNC_INTERVAL`, default 5 minutes; one
    time Fleet saw the host, the installed packages, the matched CVEs and the policy results; what the host no longer
    reports is deleted. Fleet's host IDs appear only in `device_inventory_ref.external_id`;
 5. reports, once per failure, `device.tamper_agent_not_running` for every active device whose `paddock_agent_running`
-   policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch).
+   policy fails while it has not checked in for 15 minutes (fleetd's half of the mutual watch). The reported failure
+   stays on the attention page and on the device as *Agent not running* (kind `agent_not_running`) until the policy
+   passes again.
 
 Fleet free reports CVEs without CVSS score, severity or fixed version (Fleet Premium only). Paddock adds Ubuntu's
 priority, the fixed version and the CVSS vector from Ubuntu's OSV data when it stores a host's findings

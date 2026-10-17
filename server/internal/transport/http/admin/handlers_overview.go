@@ -16,7 +16,8 @@ func (h *handlers) GetOverview(ctx context.Context, _ adminapi.GetOverviewReques
 		GeneratedAt: o.GeneratedAt,
 		Devices: adminapi.OverviewDevices{
 			Total: int(o.Devices.Total), Active: int(o.Devices.Active), Pending: int(o.Devices.Pending), Quarantined: int(o.Devices.Quarantined),
-			Retired: int(o.Devices.Retired), Rejected: int(o.Devices.Rejected), Online: int(o.Devices.Online), Silent: int(o.Devices.Silent),
+			Retired: int(o.Devices.Retired), Rejected: int(o.Devices.Rejected), Online: int(o.Devices.Online),
+			NoRecentContact: int(o.Devices.NoRecentContact), Silent: int(o.Devices.Silent),
 			SilentCritical: int(o.Devices.SilentCritical), PresumedLost: int(o.Devices.PresumedLost), NeverContacted: int(o.Devices.NeverContacted),
 		},
 		Encryption: adminapi.OverviewEncryption{

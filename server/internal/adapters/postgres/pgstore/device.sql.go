@@ -24,7 +24,7 @@ SELECT count(*) FROM (
     AND ($2::text[] IS NULL OR state = ANY($2::text[]))
     AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
     AND ($4::text[] IS NULL
-         OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind) = ANY($4::text[]))
+         OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now()) = ANY($4::text[]))
     AND ($5::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
            device_status.login_state -> 'updates_security' IS NULL
            OR device_status.login_state -> 'updates_security' -> 'params' ->> 'result' IS DISTINCT FROM 'ok'
@@ -76,7 +76,7 @@ func (q *Queries) DeleteDeviceGroupMember(ctx context.Context, arg DeleteDeviceG
 }
 
 const deviceContact = `-- name: DeviceContact :one
-SELECT paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind)::text AS contact
+SELECT paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
 WHERE device.id = $1
@@ -428,7 +428,7 @@ const listDevices = `-- name: ListDevices :many
 
 SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
-       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind)::text AS contact
+       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
 WHERE ($1::text IS NULL
@@ -437,7 +437,7 @@ WHERE ($1::text IS NULL
   AND ($2::text[] IS NULL OR state = ANY($2::text[]))
   AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
   AND ($4::text[] IS NULL
-       OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind) = ANY($4::text[]))
+       OR paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now()) = ANY($4::text[]))
   -- security_updates=overdue (plan M7c amendment 2026-10-10): contacted, but no successful security run within the window.
   AND ($5::interval IS NULL OR (device_status.last_contact_at IS NOT NULL AND (
          device_status.login_state -> 'updates_security' IS NULL

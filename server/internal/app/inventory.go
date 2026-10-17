@@ -15,7 +15,8 @@ import (
 )
 
 // AgentSilence is how long a device must have been without check-in before a failing agent-running policy is reported
-// (plan M5a decision 8): a running agent checks in every few minutes.
+// (plan M5a decision 8): a running agent checks in every few minutes. The contact state "unseen" of
+// paddock_device_contact (migration 00049) uses the same 15 minutes as an SQL literal; change both together.
 const AgentSilence = 15 * time.Minute
 
 // InventorySync stores the inventory system's data of mapped devices (plan M5a decisions 6 to 8).

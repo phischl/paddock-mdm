@@ -58,27 +58,29 @@ SELECT count(*) FILTER (WHERE d.state IN ('pending', 'active', 'quarantined'))::
        count(*) FILTER (WHERE d.state = 'retired')::int AS retired,
        count(*) FILTER (WHERE d.state = 'rejected')::int AS rejected,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'ok')::int AS online,
+       count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'unseen')::int AS no_recent_contact,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'stale_warning')::int AS silent,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'stale_critical')::int AS silent_critical,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'presumed_lost')::int AS presumed_lost,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'never')::int AS never_contacted
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = d.id AND open_alert.cleared_at IS NULL
-CROSS JOIN LATERAL (SELECT paddock_device_contact(d.state, s.last_contact_at, s.presumed_lost_at, open_alert.kind) AS contact) c
+CROSS JOIN LATERAL (SELECT paddock_device_contact(d.state, s.last_contact_at, s.presumed_lost_at, open_alert.kind, now()) AS contact) c
 `
 
 type OverviewDevicesRow struct {
-	Total          int32
-	Active         int32
-	Pending        int32
-	Quarantined    int32
-	Retired        int32
-	Rejected       int32
-	Online         int32
-	Silent         int32
-	SilentCritical int32
-	PresumedLost   int32
-	NeverContacted int32
+	Total           int32
+	Active          int32
+	Pending         int32
+	Quarantined     int32
+	Retired         int32
+	Rejected        int32
+	Online          int32
+	NoRecentContact int32
+	Silent          int32
+	SilentCritical  int32
+	PresumedLost    int32
+	NeverContacted  int32
 }
 
 // The overview page (plan M7c decision 26): the numbers of the caller's organization, read in one transaction.
@@ -95,6 +97,7 @@ func (q *Queries) OverviewDevices(ctx context.Context) (OverviewDevicesRow, erro
 		&i.Retired,
 		&i.Rejected,
 		&i.Online,
+		&i.NoRecentContact,
 		&i.Silent,
 		&i.SilentCritical,
 		&i.PresumedLost,

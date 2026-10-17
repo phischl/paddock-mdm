@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clearer texts: a device's local administrator password that waits for the device's confirmation is no longer shown
   as "none yet"; permission profiles and device access explain that they apply to directory users only, never to
   local accounts; the password switch of a profile explains what it does.
+- The device list shows Online only for devices that checked in within the last 15 minutes and names a stopped agent
+  on the device and the attention page. A device without a check-in for longer shows *No recent contact* until the
+  organization's silence threshold applies (contact filter `unseen`, overview field `devices.no_recent_contact`, part
+  of the Silent tile); a stopped agent reported by fleetd is the attention kind `agent_not_running` until fleetd sees
+  it running again.
 
 ### Fixed
 
