@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enrols one when missing.
 - A step-up (identity confirmation) is refused when Authentik answered it without authenticating again, that is with
   a token whose authentication predates the step-up; the user is asked to confirm again instead of the earlier sign-in
-  counting as a step-up.
+  counting as a step-up. The portal's failure message suggests waiting a minute after a recent confirmation.
 
 ### Added
 

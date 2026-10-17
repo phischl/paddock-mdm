@@ -173,7 +173,7 @@
     "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\ ^ $ * ? [ ].",
     "setting_locked": "This setting cannot change any more: devices already use it.",
     "step_up_required": "Confirm your identity to continue.",
-    "step_up_failed": "The identity confirmation failed. Try again with your own account.",
+    "step_up_failed": "The identity confirmation failed. Try again with your own account. If you confirmed your identity less than a minute ago, wait a minute first.",
     "revocation_disabled": "Revocation is not enabled on this installation (pending acceptance).",
     "revocation_frozen": "You cannot request or approve revocations for 24 hours because you exceeded a revocation limit.",
     "revocation_rejected": "The revocation was rejected.",
