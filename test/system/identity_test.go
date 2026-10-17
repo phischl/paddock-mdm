@@ -442,16 +442,16 @@ func gateP3(t *testing.T, w *identityWorld) {
 	w.restrictedCommands = changed
 }
 
-// gateL2 is the identity gate: a lock in Paddock refuses the next online login; within one check-in (link toggle) the
-// user's GNOME session shows the lock screen and the real unlock with the PIN is refused; offline login with the cached
-// PIN is refused; the unlock in Paddock restores the login (device code and a new PIN); user.lock_applied is audited.
-// gateL6 (plan M8x decision 18): the Hello PIN keeps working after Himmelblau's background refresh has renewed the
-// access token. For eleven minutes, past the access token's ten, NSS lookups make Himmelblau refresh the cached user;
-// then the locked GNOME session unlocks with the PIN, a PAM PIN login succeeds, and Authentik saw no revoked refresh
-// token (suspicious_request) since the gate started.
+// gateL6 (plan M8x decision 18): the Hello PIN keeps working past the access token's lifetime. The agent's
+// cache_timeout keeps Himmelblau from refreshing the cached user in the background (with the default 300 s the NSS
+// lookups of the eleven minutes would rotate the refresh token behind the PIN, RR-40); then the locked GNOME session
+// unlocks with the PIN, a PAM PIN login succeeds, and Authentik saw no revoked refresh token (suspicious_request)
+// since the gate started.
 func gateL6(t *testing.T, w *identityWorld) {
-	t.Skip("expected to fail until Himmelblau re-seals a renewed refresh token: residual risk RR-40")
 	t0 := time.Now().UTC()
+	if !slices.Contains(strings.Split(w.Must("sudo cat /etc/himmelblau/himmelblau.conf"), "\n"), "cache_timeout = 2592000") {
+		t.Fatal("himmelblau.conf lacks the line cache_timeout = 2592000 (PDK-292)")
+	}
 	for end := t0.Add(11 * time.Minute); time.Now().Before(end); time.Sleep(time.Minute) {
 		w.Must("id " + w.dave.name + " >/dev/null; getent passwd " + w.dave.name + " >/dev/null; true")
 	}
@@ -495,6 +495,9 @@ func gateL6(t *testing.T, w *identityWorld) {
 	}
 }
 
+// gateL2 is the identity gate: a lock in Paddock refuses the next online login; within one check-in (link toggle) the
+// user's GNOME session shows the lock screen and the real unlock with the PIN is refused; offline login with the cached
+// PIN is refused; the unlock in Paddock restores the login (device code and a new PIN); user.lock_applied is audited.
 func gateL2(t *testing.T, w *identityWorld) {
 	sessions := w.UserSessions(w.dave.name)
 	if len(sessions) == 0 {
