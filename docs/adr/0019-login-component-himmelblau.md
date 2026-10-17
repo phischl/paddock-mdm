@@ -64,3 +64,9 @@ and in M3/M4 acceptance tests.
 - **Pinned version** becomes 4.0.6 (second device flow after an expired code, synthetic lookups no longer cached),
   subject to green identity and local-administrator gates on both VMs; otherwise 4.0.4 stays.
 - The system gate L6 (unlock with the PIN after more than the access-token lifetime) guards this behaviour.
+- **Himmelblau never manages the sudo group (lab finding L37, PDK-294).** Himmelblau's local-group task runs at every
+  authentication and, by default, every 300 s for every cached account; with `sudo_groups` unset it removes every
+  account from `local_sudo_group` (default `sudo`), which fought the agent's local administrator and the break-glass
+  accounts on the lab device. Decision: the agent renders `local_sudo_group = paddock-no-sudo` (a group that never
+  exists, so the removal is a silent no-op) and `local_groups_reconcile_interval = 0`, never `sudo_groups`;
+  `local_groups = users` stays. Paddock alone owns sudo (ADR 0008); Himmelblau's sudo mapping is never used.

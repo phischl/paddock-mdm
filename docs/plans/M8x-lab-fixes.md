@@ -544,6 +544,152 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
     `0.1.0-alpha.3` release commit did (`ed315b9`): version strings, CHANGELOG release heading, the PDK-203 line
     moved to `### Security` with the advisory link the maintainer provides (open point O2).
 
+### 3.17 Amendment 2026-10-17 — Himmelblau must never manage the sudo group (PDK-294, lab finding L37)
+
+Context (verified in the Himmelblau 4.0.4 and 4.0.6 sources; the lab's `auth.log` of device groot-XPS-13-9300): the
+agent renders `local_groups = users` (plan M3b decision 7, PoC M1) and nothing else about groups. Himmelblau then
+runs two things. (1) At every authentication the daemon submits `TaskRequest::LocalGroups(account, is_sudoer)`
+(`daemon.rs` 852), unconditionally; the task (`tasks_daemon.rs` 637–660) adds the account to every `local_groups`
+group with `gpasswd -a` and, unless `local_groups` contains `local_sudo_group` (default `sudo`), removes the
+account from `local_sudo_group` when `is_sudoer` is false (`remove_user_from_group`: `getent group <group>` first,
+`gpasswd -d` only for a member; a group that does not exist makes it a silent no-op at trace level). `is_sudoer` is
+true only for members of an Entra group listed in `sudo_groups`, which Paddock never renders, so every account is
+removed from `sudo`. (2) `reconcile_local_groups_periodically` (`daemon.rs` 381, every
+`local_groups_reconcile_interval` seconds, default 300, `0` disables it) runs the same task for every row of
+`get_unexpired_nssaccounts()` — Himmelblau's own sqlite `account_t` with `expiry > now`, **not** `/etc/passwd`. On
+4.0.4 a synthetic NSS lookup of any name was cached as an account (`UserTokenState::Update`), so local accounts the
+agent, GDM or AccountsService looked up (`paddock-admin`, `debian-gdm`, `groot`) became "accounts" and were removed
+from `sudo` every five minutes while their cache entry was unexpired; `groot` was removed once and not again because
+nobody looked him up afterwards and his entry expired after 300 s, while `paddock-admin` is looked up continuously.
+4.0.6 caches synthetic lookups no longer (`LookupOnly`), but directory users stay affected and the login-time task
+stays. With PDK-292's `cache_timeout` of 30 days every cached entry stays unexpired for 30 days, which would make the
+periodic removal permanent on 4.0.4 — PDK-294 ships in the same release. Both `local_sudo_group` and
+`local_groups_reconcile_interval` exist in 4.0.4 and 4.0.6 (`config.rs` tests at 1893 and 2226).
+
+54. `renderHimmelblauConf` MUST render, after `local_groups = users` and before `idmap_range`:
+
+    ```
+    local_sudo_group = paddock-no-sudo
+    local_groups_reconcile_interval = 0
+    ```
+
+    with the constants `himmelblauNoSudoGroup = "paddock-no-sudo"` (a group the agent never creates; Himmelblau's
+    removal from it is a no-op because `getent group paddock-no-sudo` fails, and an addition to it never happens
+    because `sudo_groups` is never rendered) and the why-comment: Paddock alone owns sudo (ADR 0008); Himmelblau's
+    local-group task would remove every account from `sudo` and its periodic reconciliation did so every five minutes
+    on the lab device. `sudo_groups` MUST NOT be rendered, ever; a unit test asserts its absence. `local_groups =
+    users` stays (plan M3b decision 7: directory users join `users` once at login; removing the line would change the
+    groups of new users silently and gains nothing once the periodic task is off).
+55. No new drift alert: `himmelblau.conf` is compared byte-for-byte at every apply and drift pass and rewritten
+    (`login.go` `fileIs`, then `restart`), and `/etc/himmelblau/` is a protected area whose change is reported as
+    `device.tamper_protected_file_changed`; a locally added `sudo_groups` line is therefore reverted and reported
+    already. The unit test of decision 54 covers the renderer; the existing drift test covers the revert.
+56. Gate: PDK-294 extends `gateL6` (PDK-207, decision 18) with: in (a) the two configuration lines are present; (f)
+    `getent group sudo` and `getent group users` captured before the eleven minutes equal the capture after them;
+    (g) `sudo journalctl --since "<t0>" -o cat` contains no line matching `removed by root from group sudo`; (h)
+    `paddockSQL` counts zero `device.tamper_local_admin_changed` events for the device since `t0`. The local
+    administrator gate `TestLocalAdminGates` LA2 stays as the positive test of the repair path.
+57. Documents: `docs/operations/device-login.md` *What the agent sets up* step 2 lists the two lines and the reason;
+    `docs/architecture.md` §9.3 gets the lines in the `Amendment 2026-10-17 (M8x)` block of PDK-218; ADR 0019
+    amendment (done); CHANGELOG `### Fixed`: "The login component no longer removes accounts from the sudo group or
+    re-adds them to local groups every five minutes; Paddock alone manages sudo." An upstream note to Himmelblau
+    ("LocalGroups task removes every account from local_sudo_group when sudo_groups is unset") is drafted by the
+    implementer in the maintainer's notes, not posted.
+
+### 3.18 Amendment 2026-10-17 — Contact state "Online" only within three check-ins (PDK-295, lab finding L36)
+
+Context (verified): `paddock_device_contact(state, last_contact_at, presumed_lost_at, open_alert_kind)`
+(migration `00043`, `IMMUTABLE`, inlined into `device.sql` lines 18, 27, 58, 70 and `overview.sql` line 19) answers
+`ok` for every active device without a staleness alert, whatever `last_contact_at` is; the alerts come from the
+worker's `Staleness.Evaluate` at the organization's thresholds (24 h warning, 168 h critical). The portal shows `ok`
+as "Online" (`devices.contact.ok`, `status.ts` → `ok`), the device header's state chip too (`e2e devices.spec.ts:74`
+expects `Online|Never contacted`), and the overview KPI "Online" counts `contact = 'ok'`. The agent checks in about
+every 5 minutes; `app.AgentSilence` is 15 minutes (`inventory.go:19`), the window after which fleetd's policy
+`paddock_agent_running` failing is recorded as `device.tamper_agent_not_running` and marked in
+`inventory_policy_result.alerted_at` (cleared when the policy passes again). That open finding appears nowhere but
+the audit log: `AttentionKind` has no kind for it (`admin.yaml` 4760, view `attention_condition` of `00039`).
+
+58. New contact value **`unseen`**: an active device with `last_contact_at < now - 15 minutes` and no staleness
+    alert and not presumed lost. Migration `000NN_device_contact_unseen.sql` (the next free number at implementation
+    time; stop condition S12) MUST replace the function with
+
+    ```sql
+    CREATE FUNCTION paddock_device_contact(state text, last_contact_at timestamptz, presumed_lost_at timestamptz,
+                                           open_alert_kind text, at timestamptz)
+    RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+      SELECT CASE
+        WHEN state <> 'active' THEN CASE WHEN last_contact_at IS NULL THEN 'never' ELSE 'ok' END
+        WHEN presumed_lost_at IS NOT NULL THEN 'presumed_lost'
+        WHEN open_alert_kind = 'stale_critical' THEN 'stale_critical'
+        WHEN open_alert_kind = 'stale_warning' THEN 'stale_warning'
+        WHEN last_contact_at IS NULL THEN 'never'
+        WHEN last_contact_at < at - interval '15 minutes' THEN 'unseen'
+        ELSE 'ok'
+      END
+    $$;
+    ```
+
+    (`DROP FUNCTION` of the four-argument form first; `IMMUTABLE` stays valid because `at` is a parameter.) Every
+    consumer passes `now()` as `at` (`device.sql` 18, 27, 58, 70; `overview.sql` 19). The 15 minutes are the one
+    figure of `app.AgentSilence` (three check-ins); the migration's comment names it, and `inventory.go` gets the
+    comment that the SQL literal mirrors the constant (stop condition S13 if either changes alone). Per-group
+    staleness thresholds (M8d, PDK-222) keep driving the alerts; the `unseen` boundary is independent of them, and
+    PDK-222's note "contact-state SQL function unchanged" now means "the five-argument function of PDK-295".
+59. API and portal: `DeviceContact` enum gains `unseen` (description: "no check-in for more than 15 minutes, below
+    the staleness warning threshold"); `deviceContacts` in `lib/devices.ts` gains it (filter option);
+    `status.ts::deviceStatus` maps `unseen` to `{ status: 'warn', label: 'devices.contact.unseen' }`; `Overview.devices`
+    gains `no_recent_contact` (integer, required; `overview.sql` FILTER `c.contact = 'unseen'`); the overview KPI
+    "Silent" value becomes `silent + no_recent_contact` and its link includes `unseen`
+    (`devices({ contact: ['unseen', 'stale_warning', 'stale_critical'] })`); the KPI "Online" keeps `contact = ok`.
+    e2e `devices.spec.ts:74` accepts `Online|No recent contact|Never contacted` (devicesim devices check in once).
+60. Attention kind **`agent_not_running`**: migration of decision 58 also replaces the view `attention_condition`
+    (whole, as `00040` did) with the branch
+
+    ```sql
+    UNION ALL
+    SELECT 'agent_not_running', d.id, d.hostname, r.alerted_at, '', 'agent_not_running:' || d.id::text
+    FROM inventory_policy_result r JOIN device d ON d.id = r.device_id
+    WHERE d.state = 'active' AND r.policy_key = 'paddock_agent_running' AND NOT r.passing AND r.alerted_at IS NOT NULL
+    ```
+
+    (the literal equals `inventory.PolicyAgentRunning`); `AttentionKind` enum, `attention.go` kinds list and the
+    portal keys `attention.kinds.agent_not_running` / `attention.action.agent_not_running` are added exactly as
+    `agent_rollback_pending` was; the device row's `AttentionChips` and the device header show it without further
+    change. `inventory.sql` MUST clear `alerted_at` when the policy passes again if it does not already (verify
+    `UpsertPolicyResult`; stop condition S14 if the pass path never resets it).
+61. Texts (verbatim):
+
+    | Key | English | German |
+    | --- | --- | --- |
+    | `devices.contact.unseen` | No recent contact | Kein aktueller Kontakt |
+    | `devices.contactHint` | Online: a check-in within the last 15 minutes. No recent contact: none for more than 15 minutes, below the silence threshold of the organization. | Online: ein Check-in innerhalb der letzten 15 Minuten. Kein aktueller Kontakt: seit mehr als 15 Minuten keiner, unterhalb der Stille-Schwelle der Organisation. |
+    | `attention.kinds.agent_not_running` | Agent not running | Agent läuft nicht |
+    | `attention.action.agent_not_running` | Open device | Gerät öffnen |
+    | `overview.kpi.silentNote` (existing note of the Silent KPI, reworded) | {count, number} without contact for more than 15 minutes, {critical, number} critical | {count, number} seit mehr als 15 Minuten ohne Kontakt, {critical, number} kritisch |
+
+    `devices.contactHint` is shown as the hint of the contact filter (`contactFilter.hint`) and in the device header's
+    state chip tooltip. If the existing Silent KPI note key differs from `overview.kpi.silentNote`, the implementer
+    rewords the existing key and records its name.
+62. Tests: migration integration test (an active device with `last_contact_at = now() - 16 min` → `unseen`; 14 min →
+    `ok`; a retired device → `ok`; with an open `stale_warning` alert → `stale_warning`); acceptance `TestOverview`
+    maps `unseen` to `no_recent_contact`; acceptance `TestAttention` (or the existing attention gate) inserts an
+    `inventory_policy_result` failure with `alerted_at` for a devicesim device and expects kind `agent_not_running`
+    with `GET /api/v1/attention?kind=agent_not_running`; component test `status.test.ts` for the mapping;
+    `TestIsolation` fixtures unchanged. Documents: `docs/operations/monitoring.md` (or the document that explains
+    staleness) gets the three-tier wording; the lab test plan step "Agent stoppen" expects "No recent contact" after
+    15 minutes and the attention item after fleetd's next report; CHANGELOG `### Changed`.
+
+### 3.19 Amendment 2026-10-17 — Denial reason for two roles in one organization (PDK-296, follow-up of PDK-211)
+
+63. `organization.ResolveRole` MUST distinguish `DenialMultipleRoles DenialReason = "multiple_roles"` (several role
+    groups of **one** organization, `len(res.Slugs) == 1 && matches > 1`) from `multiple_organizations`
+    (`len(res.Slugs) > 1`); `platform_and_organization` keeps precedence when `platform` is set. Texts:
+    `loginDenied.multiple_roles` EN "Your account holds several roles in one organization (administrator, operator
+    or auditor). Ask your administrator to keep exactly one of the memberships." / DE "Ihr Konto hat mehrere Rollen in
+    einer Organisation (Administrator, Operator oder Auditor). Bitten Sie Ihren Administrator, genau eine der
+    Mitgliedschaften zu behalten." `role_test.go` case "two roles in one organization"; `TestLoginGate` subtest; the
+    `admin.login` param documentation lists the fifth value.
+
 ## 4. Non-goals
 
 - Any change to `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, `pkg/revocation/`.
@@ -577,7 +723,9 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
 | `server/internal/app/users.go`, `server/internal/transport/http/admin/{handlers,handlers_identity}.go` | change | `domain_match`, `MeOrganization.domains`, `step_up_valid_until`, root-equivalence handler |
 | `api/openapi/admin.yaml`, generated Go/TS | change | §6.1 |
 | `server/cmd/paddock-server/compiler.go` | change | Himmelblau 4.0.6 |
-| `agent/internal/reconcile/login.go`, `login_test.go` | change | `cache_timeout` line (PDK-292) |
+| `agent/internal/reconcile/login.go`, `login_test.go` | change | `cache_timeout` line (PDK-292); `local_sudo_group`, `local_groups_reconcile_interval` lines (PDK-294) |
+| `server/migrations/paddock/000NN_device_contact_unseen.sql` (new), `queries/{device,overview,inventory}.sql`, `server/internal/app/attention.go`, `api/openapi/admin.yaml`, `server/web/src/lib/{devices,status,overview}.ts`, locales, `server/web/e2e/devices.spec.ts` | new/change | §3.18 (PDK-295) |
+| `server/internal/domain/organization/role.go`, `role_test.go`, locales | change | §3.19 (PDK-296) |
 | `server/web/src/composables/usePending.ts` (new), the 22 submit sites and the action views of decision 26 | new/change | §3.7 |
 | `server/web/src/views/{Organizations,LoginDenied,PermissionProfiles,PermissionProfileDetail,ManagedFiles,Users,UserDetail,EnrollmentTokens,DeviceAccess}.vue`, `App.vue` | change | §3.3–§3.14 |
 | `server/web/src/components/{ProfileForm,ManagedFileForm,LocalAdminCard,EnrollmentTokenForm,…}.vue` | change | hints, previews, states |
@@ -763,6 +911,16 @@ in use), Anmeldekomponente (login component) and Freigegebenes Verzeichnis (oper
     ./server/internal/prodcheck/`; `make bundle-test`.
 16. **PDK-218 — Documents and residual risks** (§3.16). Verify: `make lint`; links resolve.
 17. **PDK-219 — Regression and release 0.1.0-alpha.4** (§3.16). Verify: every command of decision 53 green.
+18. **PDK-294 — Himmelblau must never manage the sudo group** (§3.17, amendment). Verify: `go test ./agent/...`;
+    `make system-test VM=all T='TestIdentityGates|TestLocalAdminGates'` (gate L6 with (f)–(h)). Depends on
+    PDK-207 (gate L6 exists) and ships with PDK-292; PDK-219 runs after it.
+19. **PDK-295 — Contact state "Online" only within three check-ins; attention kind agent_not_running** (§3.18,
+    amendment). Verify: `go test ./server/...` (migration test); `make gen` no diff; `make acceptance
+    T='TestOverview|TestAttention|TestDevices'`; `make e2e` (devices); `make web`. Depends on no M8x ticket; PDK-219
+    runs after it.
+20. **PDK-296 — Denial reason for two roles in one organization** (§3.19, amendment). Verify: `go test
+    ./server/internal/domain/organization/ ./server/internal/app/`; `make acceptance T=TestLoginGate`. Depends on
+    PDK-211.
 
 PDK-203 first; PDK-204, PDK-206, PDK-292 and PDK-208 MAY run in parallel after it. PDK-205 depends on PDK-204
 (texts name its rule); PDK-207 on PDK-206 and PDK-292; PDK-212 on PDK-209 (the chip uses no pending state, but both
@@ -793,6 +951,9 @@ Roles: **A** = org_admin (`env.Alice` or a temp admin), **U** = org_auditor (`en
 | S15 | A synced user without `@` has `domain_match: false` and the chip "No organization domain"; `dave@acme.test` has `true`; the Users page of an organization without domains shows the banner. | A |
 | S16 | A 0600 release public key owned by uid 1000 fails `./paddock check` with the item `secret files readable by the Paddock services` naming the file; `chmod 644` makes it pass; `./paddock agent-release 1.0.0 <0700 dir>` exits 1 naming `chmod -R a+rX`. | O |
 | S17 | The full regression of decision 53 is green on `main` before the release commit. | all |
+| S18 | (VM, L6 extended) `himmelblau.conf` carries `local_sudo_group = paddock-no-sudo` and `local_groups_reconcile_interval = 0`; `getent group sudo` is identical before and after the eleven minutes; the journal has no "removed by root from group sudo"; no `device.tamper_local_admin_changed` since the login; `renderHimmelblauConf` never emits `sudo_groups` (unit). | D, A (audit) |
+| S19 | A devicesim device whose last check-in is 16 minutes old lists with `contact: unseen` ("No recent contact"), is counted in `overview.devices.no_recent_contact` and in the Silent KPI; 14 minutes old → `ok`; an open `paddock_agent_running` failure with `alerted_at` lists as attention kind `agent_not_running` and shows on the device row. | A, U |
+| S20 | A user in `paddock.acme.admins` and `paddock.acme.auditors` → `/login-denied?reason=multiple_roles`, event param `denial_reason=multiple_roles`. | S, U |
 
 ## 10. Freedoms
 
@@ -827,6 +988,13 @@ upstream issue; the fixture layout of the new prodcheck test; how `gateL6` struc
 - S10: a new Go module, npm package or container image seems necessary (none is expected).
 - S11: `wait-healthy.sh` cannot obtain container names from `compose ps --format` on the pinned Compose version
   (report the output; fall back to printing the service name only).
+- S12: the next migration number collides with an unmerged plan (M11 `00049_adoption.sql`, M8d device-group
+  policies): take the next free number on `main` at implementation time and report it; never renumber a merged file.
+- S13: `app.AgentSilence` and the SQL literal of decision 58 differ when PDK-295 starts (report; change both).
+- S14: `inventory_policy_result.alerted_at` is never reset when the policy passes again (report; the attention kind
+  would never clear — fix the pass path in the same ticket only if it is a one-line `UPDATE`, else stop).
+- S15: Himmelblau logs an error (not trace or debug) for `local_sudo_group = paddock-no-sudo` on the VMs (report the
+  line; do not create the group).
 
 ## 12. Risks and open points
 
