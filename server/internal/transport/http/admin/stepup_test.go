@@ -287,6 +287,38 @@ func TestStepUp(t *testing.T) {
 			t.Fatalf("authentication 2 s after the start: %s", res.Header().Get("Location"))
 		}
 	})
+	t.Run("step-up cookie without a start time", func(t *testing.T) {
+		// A cookie sealed before the start time existed (or without it) fails closed, also with a fresh token.
+		w := newStepUpWorld(t)
+		value, err := w.keys.Seal(admin.SessionCookie, w.session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := w.serve("/api/auth/stepup?return_to=%2Fdevices%2Fx", &http.Cookie{Name: admin.SessionCookie, Value: value})
+		state := cookieOf(start, admin.StepUpCookie)
+		if start.Code != http.StatusFound || state == nil {
+			t.Fatalf("start: %d", start.Code)
+		}
+		var st map[string]any
+		if err := w.keys.Open(admin.StepUpCookie, state.Value, &st); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := st["started"]; !ok {
+			t.Fatalf("step-up cookie without started: %v", st)
+		}
+		delete(st, "started")
+		if state.Value, err = w.keys.Seal(admin.StepUpCookie, st); err != nil {
+			t.Fatal(err)
+		}
+		loc, _ := url.Parse(start.Header().Get("Location"))
+		w.idp.mu.Lock()
+		w.idp.claims, w.idp.nonce = good(w), loc.Query().Get("nonce")
+		w.idp.mu.Unlock()
+		res := w.serve("/api/auth/stepup/callback?code=c&state="+url.QueryEscape(loc.Query().Get("state")), state)
+		if res.Header().Get("Location") != "/devices/x?stepup=failed" || cookieOf(res, admin.SessionCookie) != nil {
+			t.Fatalf("callback: %d %s", res.Code, res.Header().Get("Location"))
+		}
+	})
 	t.Run("shortened maximum auth age", func(t *testing.T) {
 		// The step-up started 20 s before the callback; its authentication 16 s before it is too old for max_age 15.
 		w := newStepUpWorldWith(t, 15*time.Second)
