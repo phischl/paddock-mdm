@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- While OpenBao was sealed at the start of `paddock-api`, the portal sign-in answered with an internal error. It now
+  shows *The server's key store is sealed*; `paddock-server healthcheck` and the timeout line of `./paddock up` name
+  the reason (`session keys not loaded: OpenBao is sealed or unreachable`).
 - The device code at the login screen expired after one minute; the device login provider now gives it ten minutes.
   A known issue of Himmelblau remains: after a background refresh the next Hello PIN login or unlock fails and the
   PIN must be enrolled again with the device code (residual risk RR-40, `docs/operations/device-login.md`).

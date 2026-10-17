@@ -479,6 +479,7 @@
     "not_authorized": "Ihr Konto ist für das Paddock-Portal nicht berechtigt. Bitten Sie Ihren Administrator, Sie genau einer Paddock-Administratorgruppe hinzuzufügen.",
     "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
     "mfa_required": "Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.",
+    "key_store_sealed": "Der Schlüsselspeicher des Servers ist versiegelt, deshalb kann das Portal keine Sitzungen starten. Ein Operator muss OpenBao entsiegeln (docs/operations/openbao.md, Abschnitt 2). Geräte arbeiten weiter.",
     "retry": "Erneut anmelden"
   },
   "notFound": {

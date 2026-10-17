@@ -146,6 +146,11 @@ func randomToken() string {
 
 // login starts the authorization code flow with PKCE (S256), state and nonce.
 func (b *bff) login(w http.ResponseWriter, r *http.Request) {
+	// No identity is known yet and the condition is operational, so the denial is not audited (plan M8x decision 28).
+	if !b.keys.Ready() {
+		denied(w, r, app.ReasonKeyStoreSealed)
+		return
+	}
 	returnTo := r.URL.Query().Get("return_to")
 	if returnTo == "" {
 		returnTo = "/"
@@ -206,6 +211,10 @@ var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFAReq
 // callback completes the login: state check, code exchange with PKCE, ID token verification (issuer, audience,
 // nonce, expiry), role resolution from the groups claim, admin.login audit event and session cookie.
 func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
+	if !b.keys.Ready() {
+		denied(w, r, app.ReasonKeyStoreSealed)
+		return
+	}
 	ctx := r.Context()
 	http.SetCookie(w, loginCookie("", -1))
 	var st loginState

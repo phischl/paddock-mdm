@@ -69,6 +69,8 @@ const (
 	ReasonNotAuthorized = "not_authorized"
 	ReasonLoginFailed   = "login_failed"
 	ReasonMFARequired   = "mfa_required" // the ID token carried no second factor (amr without "mfa")
+	// ReasonKeyStoreSealed: the session keys are not loaded because OpenBao was sealed or unreachable at the start.
+	ReasonKeyStoreSealed = "key_store_sealed"
 )
 
 // ErrLoginDenied is returned when the user may not use the portal; the denial is already audited.

@@ -222,7 +222,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 			return ops.Serve(ctx, common.OpsAddr, func(ctx context.Context) error {
 				var notReady error
 				if !keys.Ready() {
-					notReady = errors.New("session keys not loaded")
+					notReady = errors.New("session keys not loaded: OpenBao is sealed or unreachable (docs/operations/openbao.md section 2)")
 				}
 				if !oidc.Ready() || !stepUp.Ready() {
 					notReady = errors.Join(notReady, errors.New("oidc providers not discovered"))

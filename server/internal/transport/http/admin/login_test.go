@@ -181,3 +181,16 @@ func TestLoginRefusesATokenWithoutMFA(t *testing.T) {
 		}
 	})
 }
+
+// TestLoginNamesASealedKeyStore: while no session key is loaded (OpenBao sealed at the start) the sign-in and the
+// callback send the browser to /login-denied?reason=key_store_sealed instead of a 500 (plan M8x decision 28).
+func TestLoginNamesASealedKeyStore(t *testing.T) {
+	w := newLoginWorld(t, func(d *admin.Deps) { d.Keys = &admin.Keyring{} })
+	for _, path := range []string{"/api/auth/login?return_to=%2F", "/api/auth/callback?code=c&state=s"} {
+		rec := httptest.NewRecorder()
+		w.e.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://admin.test"+path, nil))
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login-denied?reason=key_store_sealed" {
+			t.Fatalf("%s: %d %q", path, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+}

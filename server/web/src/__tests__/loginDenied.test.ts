@@ -27,6 +27,11 @@ describe('login denied', () => {
     expect(w.get('a').attributes('href')).toBe('/api/auth/login')
   })
 
+  it('names a sealed key store (plan M8x decision 28)', async () => {
+    const w = await mountView('key_store_sealed')
+    expect(w.get('[data-testid="login-denied-message"]').text()).toContain('An operator must unseal OpenBao (docs/operations/openbao.md, section 2).')
+  })
+
   it('falls back to the generic text for an unknown reason', async () => {
     const w = await mountView('something_else')
     expect(w.get('[data-testid="login-denied-message"]').text()).toBe('The sign-in could not be completed.')
