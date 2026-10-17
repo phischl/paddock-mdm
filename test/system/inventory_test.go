@@ -28,11 +28,11 @@ func TestInventoryGates(t *testing.T) {
 		fleetd := vm.Together(t, "inventory", "fleetd release", func() string { return s.PublishFleetd() })
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
-		if !t.Run("F1 fleetd enrolled", func(t *testing.T) { gateF1(t, d, fleetd) }) {
+		if !t.Run("F1 fleetd enrolled", func(t *testing.T) { d.Bind(t); gateF1(t, d, fleetd) }) {
 			t.FailNow()
 		}
-		t.Run("F4 old package version", func(t *testing.T) { gateF4(t, d) })
-		t.Run("F2 mutual watch", func(t *testing.T) { gateF2(t, d) })
+		t.Run("F4 old package version", func(t *testing.T) { d.Bind(t); gateF4(t, d) })
+		t.Run("F2 mutual watch", func(t *testing.T) { d.Bind(t); gateF2(t, d) })
 	})
 }
 

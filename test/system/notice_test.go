@@ -17,6 +17,7 @@ func TestNoticeGate(t *testing.T) {
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
 		t.Run("N1 login notice", func(t *testing.T) {
+			vm.Bind(t)
 			vm.group.Exclusive(t, "login notice") // the notice is one setting of the organization
 			gateN1(t, d)
 		})

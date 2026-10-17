@@ -140,11 +140,11 @@ func TestLocalAdminGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
 		w := newLAWorld(t, Install(t, s, vm, debDir(s)))
-		if !t.Run("LA1 local administrator", func(t *testing.T) { gateLA1(t, w) }) {
+		if !t.Run("LA1 local administrator", func(t *testing.T) { w.Bind(t); gateLA1(t, w) }) {
 			t.FailNow()
 		}
-		t.Run("LA2 tamper", func(t *testing.T) { gateLA2(t, w) })
-		t.Run("LA3 hidden from the login screen", func(t *testing.T) { gateLA3(t, w) })
+		t.Run("LA2 tamper", func(t *testing.T) { w.Bind(t); gateLA2(t, w) })
+		t.Run("LA3 hidden from the login screen", func(t *testing.T) { w.Bind(t); gateLA3(t, w) })
 	})
 }
 

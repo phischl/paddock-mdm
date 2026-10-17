@@ -166,6 +166,7 @@ func TestRevocationRefusalGates(t *testing.T) {
 		_, other, _ := ed25519.GenerateKey(rand.Reader)
 
 		t.Run("refusals", func(t *testing.T) {
+			vm.Bind(t)
 			for name, c := range map[string]struct {
 				env    []byte
 				reason string
@@ -190,6 +191,7 @@ func TestRevocationRefusalGates(t *testing.T) {
 		})
 
 		t.Run("one revocation per 24 h", func(t *testing.T) {
+			vm.Bind(t)
 			code, out := executeRevoke(t, vm, revokeBinary, signer.sign(t, signer.key, nil))
 			want := `{"erased":true,"slots_before":2,"slots_after":0,"volumes":[{"device":"` + target.device +
 				`","slots_before":2,"slots_after":0,"erased":true}]}`
@@ -207,6 +209,7 @@ func TestRevocationRefusalGates(t *testing.T) {
 		})
 
 		t.Run("release build ignores the test target", func(t *testing.T) {
+			vm.Bind(t)
 			vm.Copy(filepath.Join(s.root, "bin", "revoke-release", "paddock-revoke"), "/tmp/paddock-revoke-release")
 			d.Must("chmod 0755 /tmp/paddock-revoke-release && sudo rm -f /var/lib/paddock/revoke/state.json")
 			expectRefused(t, vm, "/tmp/paddock-revoke-release", signer.sign(t, signer.key, nil), "test_target_present")
@@ -216,6 +219,7 @@ func TestRevocationRefusalGates(t *testing.T) {
 		})
 
 		t.Run("refusal reported", func(t *testing.T) {
+			vm.Bind(t)
 			d.Must("sudo systemctl start paddock-supervisor")
 			// An expired token in cmd:<device_id>, as a compromised Valkey could put it there.
 			env := signer.sign(t, signer.key, func(k *revocation.Token) {
@@ -328,7 +332,7 @@ func TestRevocationLockGate(t *testing.T) {
 		vm.FreshWithDisk()
 		d := Install(t, s, vm, debDir(s))
 		w := &diskWorld{Device: d, pin: randomDigits(t, 8)}
-		if !t.Run("root volume escrowed", func(t *testing.T) { gateDiskFlow(t, w) }) {
+		if !t.Run("root volume escrowed", func(t *testing.T) { w.Bind(t); gateDiskFlow(t, w) }) {
 			t.FailNow()
 		}
 		rootDev := vm.LUKSDevice() // before the target, which carries a copy of its header
@@ -412,6 +416,7 @@ func TestRevocationLockGate(t *testing.T) {
 		t.Logf("%s: confirmation stored %s, would-reboot %s", vm.Name, confirmed.ConfirmedAt.Format(time.RFC3339Nano), marker.Format(time.RFC3339Nano))
 
 		t.Run("restore from the escrow", func(t *testing.T) {
+			vm.Bind(t)
 			admin.stepUp(t)
 			body := map[string]any{"confirm_hostname": hostname}
 			var revealed struct {
@@ -493,6 +498,7 @@ func TestDeadMansSwitchGate(t *testing.T) {
 		})
 
 		t.Run("warnings, then the self-lock", func(t *testing.T) {
+			vm.Bind(t)
 			// The last ticket the device accepts before the stack goes away starts the count.
 			before, _ := dmsState(t, d)
 			Until(t, vm.Name+": fresh ticket", 2*time.Minute, 5*time.Second, d.Checkin, func() bool {
@@ -546,6 +552,7 @@ func TestDeadMansSwitchGate(t *testing.T) {
 		})
 
 		t.Run("switch off: nothing happens", func(t *testing.T) {
+			vm.Bind(t)
 			before := d.bundleVersion()
 			vm.Together(t, "R6", "switch off", func() string { setDMS(s, false); return "" })
 			Until(t, vm.Name+": self-lock token deleted", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {

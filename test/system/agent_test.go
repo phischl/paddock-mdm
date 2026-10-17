@@ -66,12 +66,12 @@ func TestAgentGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
-		if !t.Run("S1 enrollment and bundle", func(t *testing.T) { gateS1(t, d) }) {
+		if !t.Run("S1 enrollment and bundle", func(t *testing.T) { d.Bind(t); gateS1(t, d) }) {
 			t.FailNow()
 		}
-		t.Run("S2 configuration idempotency", func(t *testing.T) { gateS2(t, d) })
-		t.Run("S3 agent outage", func(t *testing.T) { gateS3(t, d) })
-		t.Run("S4 agent update", func(t *testing.T) { gateS4(t, d) })
+		t.Run("S2 configuration idempotency", func(t *testing.T) { d.Bind(t); gateS2(t, d) })
+		t.Run("S3 agent outage", func(t *testing.T) { d.Bind(t); gateS3(t, d) })
+		t.Run("S4 agent update", func(t *testing.T) { d.Bind(t); gateS4(t, d) })
 	})
 }
 
@@ -321,6 +321,7 @@ func releaseKey(t *testing.T, s *Stack) minisign.PrivateKey {
 // releases.
 func gateS4(t *testing.T, d *Device) {
 	t.Run("good release", func(t *testing.T) {
+		d.Bind(t)
 		v := release(t, d, "S4 good", 2, "good", nil)
 		d.WaitEvent(t, "device.agent_updated", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 		if got := d.AgentVersion(); got != v {
@@ -331,6 +332,7 @@ func gateS4(t *testing.T, d *Device) {
 	good, slot := d.AgentVersion(), d.Slot()
 
 	t.Run("probation failure", func(t *testing.T) {
+		d.Bind(t)
 		v := release(t, d, "S4 probation", 3, "probation", []string{"paddock_testbroken_probation"})
 		p := d.WaitEvent(t, "device.agent_rolled_back", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 		if p["from_version"] != good || d.AgentVersion() != good || d.Slot() != slot {
@@ -339,6 +341,7 @@ func gateS4(t *testing.T, d *Device) {
 	})
 
 	t.Run("self-test failure", func(t *testing.T) {
+		d.Bind(t)
 		v := release(t, d, "S4 selftest", 4, "selftest", []string{"paddock_testbroken_selftest"})
 		d.WaitEvent(t, "device.agent_update_failed", 10*time.Minute, func(p map[string]any) bool {
 			return p["version"] == v && p["outcome"] == "self_test_failed"
@@ -349,6 +352,7 @@ func gateS4(t *testing.T, d *Device) {
 	})
 
 	t.Run("downgrade", func(t *testing.T) {
+		d.Bind(t)
 		// AC4 of plan M4b.1: a correctly signed release older than the active one is refused, staged on the device
 		// directly as the agent would stage it (the server offers only newer releases).
 		v := version(1, "downgrade")
@@ -366,6 +370,7 @@ func gateS4(t *testing.T, d *Device) {
 	})
 
 	t.Run("bad signature", func(t *testing.T) {
+		d.Bind(t)
 		// The server refuses binaries that do not verify, so the forged release is staged on the device directly,
 		// exactly as the agent would stage a downloaded one, signed with a key the supervisor does not trust.
 		v := version(5, "forged")

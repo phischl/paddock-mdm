@@ -18,23 +18,26 @@ func TestDiskGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		t.Run("LUKS flow", func(t *testing.T) {
 			vm.Fresh()
+			vm.Bind(t)
 			d := Install(t, s, vm, debDir(s))
 			w := &diskWorld{Device: d, pin: randomDigits(t, 8)}
-			if !t.Run("D-24 TPM2+PIN and escrow", func(t *testing.T) { gateDiskFlow(t, w) }) {
+			if !t.Run("D-24 TPM2+PIN and escrow", func(t *testing.T) { w.Bind(t); gateDiskFlow(t, w) }) {
 				t.FailNow()
 			}
 			var key string
-			if !t.Run("D-ESC escrow and recovery", func(t *testing.T) { key = gateDESC(t, w) }) {
+			if !t.Run("D-ESC escrow and recovery", func(t *testing.T) { w.Bind(t); key = gateDESC(t, w) }) {
 				t.FailNow()
 			}
-			t.Run("D-TAMP keyslot tamper", func(t *testing.T) { gateDTAMP(t, w, key) })
+			t.Run("D-TAMP keyslot tamper", func(t *testing.T) { w.Bind(t); gateDTAMP(t, w, key) })
 		})
 		t.Run("D-SKIP skip the PIN", func(t *testing.T) {
 			vm.Fresh()
+			vm.Bind(t)
 			gateDSKIP(t, Install(t, s, vm, debDir(s)))
 		})
 		t.Run("D-KEEP foreign passphrase kept", func(t *testing.T) {
 			vm.Fresh()
+			vm.Bind(t)
 			gateDKEEP(t, Install(t, s, vm, debDir(s)))
 		})
 	})
