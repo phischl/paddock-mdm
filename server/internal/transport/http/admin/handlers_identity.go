@@ -72,15 +72,6 @@ func toUser(u pgstore.AppUser, domains []string) adminapi.User {
 	}
 }
 
-// singleUser answers one user with its domain_match; the domains are read after the use case ran.
-func (h *handlers) singleUser(ctx context.Context, u pgstore.AppUser) (adminapi.User, error) {
-	domains, err := h.users.OrganizationDomains(ctx)
-	if err != nil {
-		return adminapi.User{}, err
-	}
-	return toUser(u, domains), nil
-}
-
 func toUserRef(u pgstore.AppUser) adminapi.UserRef {
 	return adminapi.UserRef{Id: u.ID, Username: u.Username, DisplayName: u.DisplayName}
 }
@@ -128,11 +119,7 @@ func (h *handlers) UpdateUser(ctx context.Context, req adminapi.UpdateUserReques
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.singleUser(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.UpdateUser200JSONResponse(out), nil
+	return adminapi.UpdateUser200JSONResponse(toUser(u.User, u.Domains)), nil
 }
 
 func (h *handlers) DeleteUser(ctx context.Context, req adminapi.DeleteUserRequestObject) (adminapi.DeleteUserResponseObject, error) {
@@ -147,11 +134,7 @@ func (h *handlers) LockUser(ctx context.Context, req adminapi.LockUserRequestObj
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.singleUser(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.LockUser200JSONResponse(out), nil
+	return adminapi.LockUser200JSONResponse(toUser(u.User, u.Domains)), nil
 }
 
 func (h *handlers) UnlockUser(ctx context.Context, req adminapi.UnlockUserRequestObject) (adminapi.UnlockUserResponseObject, error) {
@@ -159,11 +142,7 @@ func (h *handlers) UnlockUser(ctx context.Context, req adminapi.UnlockUserReques
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.singleUser(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.UnlockUser200JSONResponse(out), nil
+	return adminapi.UnlockUser200JSONResponse(toUser(u.User, u.Domains)), nil
 }
 
 func (h *handlers) ListUserGroups(ctx context.Context, req adminapi.ListUserGroupsRequestObject) (adminapi.ListUserGroupsResponseObject, error) {

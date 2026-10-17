@@ -51,6 +51,8 @@ type fakeIdP struct {
 	// inactive are the deactivated users; failReactivation makes a lock fail after its deactivation.
 	inactive         map[string]bool
 	failReactivation bool
+	// onLock runs at the start of LockUser, after the use case's first transaction committed.
+	onLock func()
 }
 
 // fakePKs numbers the users of every fake identity provider of the test binary.
@@ -123,6 +125,9 @@ func (f *fakeIdP) UserActive(_ context.Context, pk string) (bool, error) {
 func (f *fakeIdP) LockUser(_ context.Context, _, pk string, reactivate bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onLock != nil {
+		f.onLock()
+	}
 	if err := f.err(); err != nil {
 		return err
 	}

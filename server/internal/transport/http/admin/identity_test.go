@@ -707,4 +707,57 @@ func TestUserDomainMatch(t *testing.T) {
 	if !locked.DomainMatch {
 		t.Fatal("lock answer: matching user does not match")
 	}
+	admin := e.session(e.acme, principal.RoleOrgAdmin)
+	var unlocked adminapi.User
+	e.do(call{method: "POST", path: "/api/v1/users/" + matching.String() + "/unlock", cookie: admin}).decode(t, &unlocked)
+	if !unlocked.DomainMatch {
+		t.Fatal("unlock answer: matching user does not match")
+	}
+	var plainLocked adminapi.User
+	e.do(call{method: "POST", path: "/api/v1/users/" + plain.String() + "/lock", cookie: admin}).decode(t, &plainLocked)
+	if plainLocked.Id != plain || plainLocked.DomainMatch {
+		t.Fatalf("lock answer: user without @ %+v", plainLocked)
+	}
+
+	var created adminapi.UserCreated
+	e.do(call{method: "POST", path: "/api/v1/users", cookie: admin,
+		body: map[string]any{"username": "eve-" + suffix + "@" + domain, "display_name": "Eve"}}).decode(t, &created)
+	var updated adminapi.User
+	e.do(call{method: "PATCH", path: "/api/v1/users/" + created.User.Id.String(), cookie: admin,
+		body: map[string]any{"display_name": "Eve E."}}).decode(t, &updated)
+	if updated.DisplayName != "Eve E." || !updated.DomainMatch {
+		t.Fatalf("update answer: %+v", updated)
+	}
+}
+
+// TestUserChangeAnswerReadsDomainsInItsTransaction: the answer of a lock carries the domains read in the lock's own
+// transaction, not a second read after Authentik was called (PDK-219 review 1 m2).
+func TestUserChangeAnswerReadsDomainsInItsTransaction(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	suffix := e.acme.String()[28:]
+	domain := "acme-" + suffix + ".test"
+	if _, err := e.super.Exec(ctx, "UPDATE organization SET domains = $2 WHERE id = $1", e.acme, []string{domain}); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.Must(uuid.NewV7())
+	if _, err := e.super.Exec(ctx, `INSERT INTO app_user (id, organization_id, authentik_pk, username, display_name, source)
+		VALUES ($1, $2, $3, $4, 'U', 'synced')`, id, e.acme, "9"+id.String()[30:], "frank-"+suffix+"@"+domain); err != nil {
+		t.Fatal(err)
+	}
+	e.idp.onLock = func() {
+		if _, err := e.super.Exec(ctx, "UPDATE organization SET domains = '{}' WHERE id = $1", e.acme); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { e.idp.onLock = nil })
+	var locked adminapi.User
+	res := e.do(call{method: "POST", path: "/api/v1/users/" + id.String() + "/lock", cookie: e.session(e.acme, principal.RoleOrgAdmin)})
+	if res.status != http.StatusOK {
+		t.Fatalf("lock: %d %s", res.status, res.body)
+	}
+	res.decode(t, &locked)
+	if !locked.DomainMatch {
+		t.Fatal("lock answer: domains were read after the Authentik call")
+	}
 }
