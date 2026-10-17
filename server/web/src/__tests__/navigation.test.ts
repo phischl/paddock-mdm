@@ -36,7 +36,7 @@ vi.mock('../api/client', async (original) => {
 const admin: Me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice Admin',
   role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: ['acme.test'] },
-  locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7',
+  locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
 }
 
 let wrapper: VueWrapper | null = null
@@ -340,6 +340,42 @@ describe('app bar', () => {
     await flushPromises()
     expect(localStorage.getItem('paddock.density')).toBe('comfortable')
     expect(document.documentElement.dataset.density).toBe('comfortable')
+  })
+})
+
+describe('app bar: organization name and step-up freshness (plan M8x decisions 34 and 35)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('names the whole organization name in the title of the shortened app bar entry', async () => {
+    const long = 'Acme Corporation of Very Long Names and Subsidiaries Worldwide'
+    const { w } = await mountApp({ ...admin, organization: { ...admin.organization!, name: long } })
+    const name = w.get('[data-testid="org-name"]')
+    expect(name.text()).toBe(long)
+    expect(name.attributes('title')).toBe(long)
+  })
+
+  it('shows no confirmation without a current step-up', async () => {
+    const { w } = await mountApp()
+    expect(w.find('[data-testid="stepup-chip"]').exists()).toBe(false)
+    await w.get('[data-testid="user-menu"]').trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="user-stepup"]')).not.toBeNull())
+    expect(document.querySelector('[data-testid="user-stepup"]')?.textContent?.trim()).toBe('No current identity confirmation')
+  })
+
+  it('shows the end of the step-up window and hides it at the expiry', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    vi.setSystemTime(new Date('2026-10-17T10:00:00Z'))
+    const until = '2026-10-17T10:00:05Z'
+    const time = new Date(until).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    const { w } = await mountApp({ ...admin, step_up_valid_until: until })
+    expect(w.get('[data-testid="stepup-chip"]').text()).toBe(`Confirmed until ${time}`)
+    await w.get('[data-testid="user-menu"]').trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="user-stepup"]')).not.toBeNull())
+    expect(document.querySelector('[data-testid="user-stepup"]')?.textContent?.trim()).toBe(`Identity confirmed until ${time}`)
+    vi.advanceTimersByTime(6000)
+    await flushPromises()
+    expect(w.find('[data-testid="stepup-chip"]').exists()).toBe(false)
+    expect(document.querySelector('[data-testid="user-stepup"]')?.textContent?.trim()).toBe('No current identity confirmation')
   })
 })
 

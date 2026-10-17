@@ -774,7 +774,7 @@ func TestMeStepUpIsDevelopmentOnly(t *testing.T) {
 
 	e := newEnv(t)
 	alice := e.steppedUp(e.session(e.acme, principal.RoleOrgAdmin), at)
-	if me := e.do(call{method: "GET", path: "/api/v1/me", cookie: alice}); me.status != http.StatusOK || strings.Contains(string(me.body), "step_up") {
+	if me := e.do(call{method: "GET", path: "/api/v1/me", cookie: alice}); me.status != http.StatusOK || strings.Contains(string(me.body), `"step_up":`) {
 		t.Fatalf("production /me: %d %s", me.status, me.body)
 	}
 

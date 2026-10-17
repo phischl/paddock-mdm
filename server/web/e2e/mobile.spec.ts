@@ -53,5 +53,16 @@ test('organization admin uses the portal on a phone', async ({ page }) => {
   await expect(page.getByTestId('device-pane')).toBeHidden()
   await expect(page.getByRole('link', { name: 'Back to devices' })).toBeVisible()
   await expectAccessible(page)
+
+  // Plan M8x decision 34: the organization name stays inside the viewport, shortened with an ellipsis, and names the
+  // whole name in its title.
+  const me = await (await page.request.get('/api/v1/me')).json() as { organization: { name: string } }
+  const orgName = page.getByTestId('org-name')
+  await expect(orgName).toHaveAttribute('title', me.organization.name)
+  const box = await orgName.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+  expect(await orgName.evaluate((el) => getComputedStyle(el).textOverflow)).toBe('ellipsis')
   expect(csp).toEqual([])
 })

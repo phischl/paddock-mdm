@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 )
@@ -39,5 +41,33 @@ func TestMeNamesTheOrganizationDomains(t *testing.T) {
 	}
 	if m := me(e.platformSession()); m.Organization != nil {
 		t.Fatalf("platform admin: %+v", m.Organization)
+	}
+}
+
+// TestMeNamesTheStepUpFreshness: step_up_valid_until is null before a step-up, the end of the window after one, and
+// null again once the window has passed (plan M8x decision 35).
+func TestMeNamesTheStepUpFreshness(t *testing.T) {
+	e := newEnv(t)
+	get := func(c *http.Cookie) adminapi.Me {
+		t.Helper()
+		var m adminapi.Me
+		if r := e.do(call{method: "GET", path: "/api/v1/me", cookie: c}); r.status != http.StatusOK {
+			t.Fatalf("GET /api/v1/me: %d", r.status)
+		} else {
+			r.decode(t, &m)
+		}
+		return m
+	}
+	alice := e.session(e.acme, principal.RoleOrgAdmin)
+	if m := get(alice); m.StepUpValidUntil != nil {
+		t.Fatalf("before a step-up: %v", m.StepUpValidUntil)
+	}
+	at := time.Now().Truncate(time.Second)
+	m := get(e.steppedUp(alice, at))
+	if m.StepUpValidUntil == nil || !m.StepUpValidUntil.Equal(at.Add(app.StepUpValidity)) {
+		t.Fatalf("after a step-up at %s: %v, want %s", at, m.StepUpValidUntil, at.Add(app.StepUpValidity))
+	}
+	if m := get(e.steppedUp(alice, time.Now().Add(-app.StepUpValidity-time.Second))); m.StepUpValidUntil != nil {
+		t.Fatalf("after the window: %v", m.StepUpValidUntil)
 	}
 }

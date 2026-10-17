@@ -3770,7 +3770,8 @@ components:
           items: { type: string }
     Me:
       type: object
-      required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip]
+      required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
+        step_up_valid_until]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -3796,6 +3797,13 @@ components:
             The client address the server resolved for this request (plan M7a decision 15): the peer, or the address
             Caddy forwarded in X-Paddock-Client-IP when the peer is a trusted proxy. The IP allow list is checked
             against it.
+        step_up_valid_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Until when the session's last step-up satisfies privileged actions (plan M8x decision 35); null without a
+            step-up or once it has expired. The portal shows it in the user menu.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
         api_token:

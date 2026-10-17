@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   records `organization.created` and `organization.domains_changed`.
 - Every portal button that sends a request shows a progress indicator and is disabled until the answer arrives, so a
   second click no longer sends the request twice.
+- The portal shows until when the last identity confirmation (step-up) is valid: a chip in the app bar and a line in
+  the user menu; `GET /api/v1/me` carries `step_up_valid_until`. A long organization name in the app bar is shortened
+  and shown in full on hover or tap.
 
 ### Changed
 

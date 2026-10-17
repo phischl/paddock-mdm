@@ -39,7 +39,10 @@
     },
     "shortcuts": "Tastenkürzel",
     "collapseNavigation": "Navigation einklappen",
-    "expandNavigation": "Navigation ausklappen"
+    "expandNavigation": "Navigation ausklappen",
+    "stepUpValidUntil": "Identität bestätigt bis {time}",
+    "stepUpNone": "Keine aktuelle Identitätsbestätigung",
+    "stepUpChip": "Bestätigt bis {time}"
   },
   "nav": {
     "deviceGroups": "Gerätegruppen",

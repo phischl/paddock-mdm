@@ -22,7 +22,10 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 
 /* App bar and navigation drawer. */
 .brand .app-name { font-weight: 600; }
-.brand .org-name { margin-left: 0.75rem; font-size: 13px; font-weight: 400; color: var(--pd-text-secondary); }
+.brand .org-name {
+  margin-left: 0.75rem; font-size: 13px; font-weight: 400; color: var(--pd-text-secondary);
+  display: inline-block; max-width: 45vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+}
 .user-button { text-transform: none; letter-spacing: normal; }
 .user-button .v-avatar { font-weight: 600; }
 .user-button-name { margin-left: 0.5rem; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

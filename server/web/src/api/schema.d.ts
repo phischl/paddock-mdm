@@ -2164,6 +2164,12 @@ export interface components {
              *     against it.
              */
             client_ip: string;
+            /**
+             * Format: date-time
+             * @description Until when the session's last step-up satisfies privileged actions (plan M8x decision 35); null without a
+             *     step-up or once it has expired. The portal shows it in the user menu.
+             */
+            step_up_valid_until: string | null;
             step_up?: components["schemas"]["MeStepUp"];
             api_token?: components["schemas"]["MeApiToken"];
         };

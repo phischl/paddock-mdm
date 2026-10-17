@@ -39,7 +39,10 @@
     },
     "shortcuts": "Keyboard shortcuts",
     "collapseNavigation": "Collapse the navigation",
-    "expandNavigation": "Expand the navigation"
+    "expandNavigation": "Expand the navigation",
+    "stepUpValidUntil": "Identity confirmed until {time}",
+    "stepUpNone": "No current identity confirmation",
+    "stepUpChip": "Confirmed until {time}"
   },
   "nav": {
     "deviceGroups": "Device groups",

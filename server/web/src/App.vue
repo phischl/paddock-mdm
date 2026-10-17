@@ -32,6 +32,18 @@ const isDark = computed(() => theme.current.value.dark)
 const logo = computed(() => (isDark.value ? '/paddock-symbol-dark.svg' : '/paddock-symbol-light.svg'))
 const mod = modifierLabel()
 
+// Step-up freshness (plan M8x decision 35): the end of the session's step-up window, hidden at its expiry by a 1 s
+// ticker. The step-up callback is a full navigation, so a new step-up arrives with a fresh GET /api/v1/me.
+const now = ref(Date.now())
+let ticker: ReturnType<typeof setInterval> | undefined
+onMounted(() => { ticker = setInterval(() => { now.value = Date.now() }, 1000) })
+onBeforeUnmount(() => clearInterval(ticker))
+const stepUpUntil = computed(() => {
+  const iso = session.me?.step_up_valid_until
+  if (!iso || Date.parse(iso) <= now.value) return null
+  return new Date(iso).toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+})
+
 // Drawer states (plan M7c decision 15): expanded by default from 1280 px, a rail by default between 600 and
 // 1279 px, both collapsible; a temporary drawer below 600 px that closes on every entry chosen.
 const display = useDisplay()
@@ -277,10 +289,21 @@ onBeforeUnmount(() => observer.disconnect())
               class="pd-brand-sep"
               aria-hidden="true"
             >/</span>
-            <span
-              class="org-name"
-              data-testid="org-name"
-            >{{ session.me.organization.name }}</span>
+            <v-tooltip
+              :text="session.me.organization.name"
+              location="bottom"
+              open-on-click
+              open-on-hover
+            >
+              <template #activator="{ props: tip }">
+                <span
+                  v-bind="tip"
+                  class="org-name"
+                  :title="session.me.organization.name"
+                  data-testid="org-name"
+                >{{ session.me.organization.name }}</span>
+              </template>
+            </v-tooltip>
           </template>
         </v-app-bar-title>
         <label
@@ -324,6 +347,13 @@ onBeforeUnmount(() => observer.disconnect())
             />
             {{ t('nav.attentionPill', { count: attention }) }}
           </RouterLink>
+          <v-chip
+            v-if="stepUpUntil && !mobile"
+            size="small"
+            data-testid="stepup-chip"
+          >
+            {{ t('app.stepUpChip', { time: stepUpUntil }) }}
+          </v-chip>
           <v-btn
             variant="text"
             size="small"
@@ -365,6 +395,9 @@ onBeforeUnmount(() => observer.disconnect())
                 </v-list-item-title>
                 <v-list-item-subtitle data-testid="user-role">
                   {{ roleLabel }}
+                </v-list-item-subtitle>
+                <v-list-item-subtitle data-testid="user-stepup">
+                  {{ stepUpUntil ? t('app.stepUpValidUntil', { time: stepUpUntil }) : t('app.stepUpNone') }}
                 </v-list-item-subtitle>
               </v-list-item>
               <v-menu submenu>
