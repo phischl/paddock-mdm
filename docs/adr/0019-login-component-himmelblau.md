@@ -40,3 +40,33 @@ code grants, device-code flow with **mandatory** MFA, `allow_console_password_on
 − M0 code must be migrated from `paddock:<slug>:<role>` to `paddock.<slug>.<role>` group names (plan M0.3).
 Follow-ups: file the upstream issues from the report; re-test TPM lockout and SSH/TTY deny-list paths on real hardware
 and in M3/M4 acceptance tests.
+
+## Amendment 2026-10-17 (M8x, lab findings L26, L29)
+- **Hello PIN past the access token (interim mitigation, agent-side).** Himmelblau 4.0.x (generic OIDC, identical
+  in 4.0.6 and `main`) re-seals the refresh token with the Hello key at every PIN login, but its cached-user refresh
+  (`unix_user_get`, run by any NSS lookup once the user's cache entry is older than `cache_timeout`, default 300 s)
+  rotates the token in memory only; Authentik revokes the old one, the next PIN login or unlock presents the stale
+  sealed token, gets `invalid_grant` and deletes the Hello key. No Authentik setting avoids it: a
+  `refresh_token_threshold` above zero omits the refresh token from the response and Himmelblau then denies every
+  PIN login. Decision: the agent renders `cache_timeout = 2592000` (30 days, equal to the device provider's
+  `refresh_token_validity`) into `himmelblau.conf`, so the background refresh can only run when the sealed token has
+  expired anyway; every PIN authentication re-seals the token and resets the cache expiry. Costs accepted:
+  Himmelblau's cached NSS attributes of a signed-in user refresh online at the next PIN authentication or after 30
+  days; a locked user (tokens revoked) leaves Himmelblau's NSS cache until the next login. Paddock's lock, suspension
+  and allow list do not depend on that cache. Rejected: `enable_hello = false` as the default (device code and
+  phone at every unlock; stays available per organization), a per-organization cache setting (the value follows
+  from the token validity), accepting the failure. The two 30-day figures move together. Residual (RR-40): after 30
+  days without a PIN authentication, after a lock, after three wrong PINs, and on agents older than 0.1.0-alpha.4
+  the user signs in with the device code again and sets a new PIN. The constant is removed once an upstream
+  release re-seals rotated tokens (issue draft in the maintainer's notes).
+- **Device code lifetime** is `access_code_validity: minutes=10` on the device provider (Authentik's default of one
+  minute was too short to approve the sign-in and set the PIN).
+- **Pinned version** becomes 4.0.6 (second device flow after an expired code, synthetic lookups no longer cached),
+  subject to green identity and local-administrator gates on both VMs; otherwise 4.0.4 stays.
+- The system gate L6 (unlock with the PIN after more than the access-token lifetime) guards this behaviour.
+- **Himmelblau never manages the sudo group (lab finding L37, PDK-294).** Himmelblau's local-group task runs at every
+  authentication and, by default, every 300 s for every cached account; with `sudo_groups` unset it removes every
+  account from `local_sudo_group` (default `sudo`), which fought the agent's local administrator and the break-glass
+  accounts on the lab device. Decision: the agent renders `local_sudo_group = paddock-no-sudo` (a group that never
+  exists, so the removal is a silent no-op) and `local_groups_reconcile_interval = 0`, never `sudo_groups`;
+  `local_groups = users` stays. Paddock alone owns sudo (ADR 0008); Himmelblau's sudo mapping is never used.

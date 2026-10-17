@@ -47,3 +47,15 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
   interval; a removed, demoted or deactivated administrator loses every session.
 - The step-up flow `paddock-stepup` validates with WebAuthn only in the shipped blueprint; TOTP for the step-up
   exists in the development blueprint alone.
+
+## Amendment 2026-10-17 (M8x, lab finding)
+- **Second factor on every portal path.** The portal requests its authorization with `prompt=login`, so every portal
+  sign-in runs `paddock-admin-login` (password and second factor) and an existing Authentik session never satisfies
+  it. The portal callback refuses an ID token whose `amr` lacks `mfa` (ADR 0034 amendment of the same date).
+- **Brand and default flow.** The worker keeps the default brand's `flow_authentication` at `paddock-admin-login`
+  next to the recovery and device-code flows; the portal blueprint binds a Paddock validation stage
+  (`paddock-default-login-mfa`, configure when missing, 5-minute threshold) at order 31 of Authentik's
+  `default-authentication-flow`, so a password-only session cannot be created through Authentik's own interfaces.
+  The development blueprint skips that stage like the login stage.
+- **Device provider tokens** (ADR 0019 amendment): `access_code_validity: minutes=10`; `refresh_token_threshold`
+  stays at Authentik's default `seconds=0` (a threshold above zero makes Himmelblau deny every PIN login).
