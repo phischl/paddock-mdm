@@ -78,25 +78,33 @@ lecture as the place for the usage policy on devices whose sudo is sudo-rs, whic
 
 ## Tokens of the device login
 
-| Token | Lifetime |
+| Token or cache | Lifetime |
 | --- | --- |
 | Device code (the code and QR code at the login screen) | 10 minutes |
 | Access token | 10 minutes |
-| Refresh token | 30 days |
+| Refresh token | 30 days, renewed at every PIN authentication |
+| Himmelblau's cache of a signed-in user (`cache_timeout`) | 30 days |
 
-The worker sets these values on the device provider of every organization (`access_code_validity`,
-`access_token_validity`, `refresh_token_validity`) and converges existing providers every 10 minutes. It also keeps
+The worker sets the token values on the device provider of every organization (`access_code_validity`,
+`access_token_validity`, `refresh_token_validity`) and converges existing providers every 10 minutes. It keeps
 `refresh_token_threshold` at zero: with a threshold Authentik leaves the refresh token out of its refresh response,
 and Himmelblau then refuses every PIN login.
 
-**Known issue: Hello PIN after a background refresh (residual risk RR-40).** Himmelblau 4.0.x seals the refresh token
-with the Hello key once, at PIN enrolment. While the user is signed in, Himmelblau refreshes the cached user in the
-background and Authentik renews the refresh token, which revokes the sealed one. The session itself stays up, but the
-next PIN login or screen unlock after such a refresh presents the stale sealed token, fails with *Your session has
-expired. Please sign in again.*, and Himmelblau deletes the Hello key: the user signs in with the device code again
-and sets a new PIN. The cause is upstream (Himmelblau's generic OIDC PIN path prefers the sealed token over the newer
-one); the upstream issue "Hello-sealed refresh token is not updated when a background refresh renews it" at
-`himmelblau-idm/himmelblau` is pending (link added once filed). No Authentik setting avoids it.
+The agent sets `cache_timeout = 2592000` (30 days) in `himmelblau.conf`. Himmelblau 4.0.x seals the refresh token
+with the Hello key at every PIN authentication and presents the sealed token at the next one; with its default
+`cache_timeout` of 300 s it would refresh a signed-in user in the background, Authentik would renew the refresh token
+and revoke the sealed one, and the next PIN login or unlock would fail with *Your session has expired. Please sign in
+again.* and lose the PIN. With the agent's value Himmelblau refreshes a signed-in user's cached attributes (name,
+shell, the groups `id` shows) online at the next PIN authentication or after 30 days. Paddock's lock, suspension and
+allow list do not depend on this cache. A locked user disappears from `getent passwd` until the user signs in again.
+`cache_timeout` and the refresh token's 30 days are one figure in two places (agent and device provider); they change
+together.
+
+**Expect a device-code sign-in after 30 days without a PIN authentication** (or earlier after a lock, three wrong
+PINs or a long offline period): the user signs in with the device code again and sets a new PIN (residual risk
+RR-40). Devices whose agent is older than 0.1.0-alpha.4 lose the PIN after a few minutes of use until the agent is
+updated. The upstream issue ("Hello-sealed refresh token is not updated when a background refresh renews it",
+`himmelblau-idm/himmelblau`) is linked here once posted.
 
 ## Messages at the login screen
 
