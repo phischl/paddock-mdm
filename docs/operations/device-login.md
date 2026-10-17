@@ -13,7 +13,7 @@ At the first bundle with login management (agents report bundle schema 2), the a
    configuration `himmelblaud` fails in a restart loop that keeps sshd down and the installation waiting. No
    Himmelblau package ships the file. It is removed again if the installation fails, but kept after a timeout, which
    may leave the packages half configured. It then installs Himmelblau `PADDOCK_HIMMELBLAU_VERSION` (setting of
-   `paddock-compiler`, default `4.0.4`) from the official repository
+   `paddock-compiler`, default `4.0.6`) from the official repository
    `https://packages.himmelblau-idm.org/stable/<version>/deb/ubuntu<release>/`. The repository signing key is built
    into the agent (fingerprint `E87F D8D4 63A5 E481 4B9C DBA9 0CC0 D400 2C42 5E03`) and written to
    `/etc/apt/keyrings/himmelblau.gpg`; the source is `/etc/apt/sources.list.d/paddock-himmelblau.list`. Only this
@@ -75,6 +75,18 @@ lecture as the place for the usage policy on devices whose sudo is sudo-rs, whic
   takes effect at once.
 - Users not in the device's login assignment (or not in the organization) are refused: Authentik refuses users of
   other organizations, the device refuses users outside its allow list.
+
+## Messages at the login screen
+
+The greeter and the lock screen show the texts of PAM and GNOME; Paddock cannot change them.
+
+| Message | Meaning and what to do |
+| --- | --- |
+| `PAM_SYSTEM_ERR` after a device code expired at the greeter | Himmelblau before 4.0.6 could not start a second device flow in the same greeter session. Type the username again; fixed in Himmelblau 4.0.6. |
+| `Sorry, password authentication didn't work` (GNOME lock screen) | GNOME's text for any refused PIN: the user is locked, the PIN is wrong, or the session expired. |
+| `Your session has expired. Please sign in again.` | The refresh token was revoked or expired: sign in with the device code and set a new PIN. |
+| `Failed to authenticate with Hello PIN.` | Wrong PIN; after three wrong PINs the device code is required. |
+| `authenticated user … does not match requested user` | The Authentik username is not `name@domain`: rename the user in the identity source, or add the domain to the organization. |
 
 ## Throttle of device-code logins
 

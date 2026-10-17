@@ -55,6 +55,7 @@ func TestIdentityGates(t *testing.T) {
 		if !t.Run("L1 login", func(t *testing.T) { gateL1(t, w) }) {
 			t.FailNow()
 		}
+		t.Run("L6 PIN past the access-token lifetime", func(t *testing.T) { gateL6(t, w) })
 		t.Run("P3 effective profile", func(t *testing.T) { gateP3(t, w) })
 		t.Run("L2 identity gate", func(t *testing.T) { gateL2(t, w) })
 		t.Run("L3 login suspension", func(t *testing.T) { gateL3(t, w) })
@@ -178,7 +179,7 @@ func newIdentityWorld(t *testing.T, s *Stack, d *Device) *identityWorld {
 	Until(t, "Himmelblau installed and configured", 15*time.Minute, 10*time.Second, d.Checkin, func() bool {
 		out, _ := d.SSH(context.Background(), nil, "dpkg-query -W -f='${Version}' himmelblau 2>/dev/null; echo; grep -h '^pam_allow_groups' /etc/himmelblau/himmelblau.conf 2>/dev/null; systemctl is-active himmelblaud")
 		lines := strings.Split(strings.TrimSpace(out), "\n")
-		return len(lines) == 3 && strings.HasPrefix(lines[0], "4.0.4-") && lines[1] == "pam_allow_groups = "+allow && lines[2] == "active"
+		return len(lines) == 3 && strings.HasPrefix(lines[0], "4.0.6-") && lines[1] == "pam_allow_groups = "+allow && lines[2] == "active"
 	})
 	d.WaitEvent(t, "device.login_applied", 5*time.Minute, func(p map[string]any) bool {
 		changed, _ := p["changed"].([]any)
@@ -444,6 +445,55 @@ func gateP3(t *testing.T, w *identityWorld) {
 // gateL2 is the identity gate: a lock in Paddock refuses the next online login; within one check-in (link toggle) the
 // user's GNOME session shows the lock screen and the real unlock with the PIN is refused; offline login with the cached
 // PIN is refused; the unlock in Paddock restores the login (device code and a new PIN); user.lock_applied is audited.
+// gateL6 (plan M8x decision 18): the Hello PIN keeps working after Himmelblau's background refresh has renewed the
+// access token. For eleven minutes, past the access token's ten, NSS lookups make Himmelblau refresh the cached user;
+// then the locked GNOME session unlocks with the PIN, a PAM PIN login succeeds, and Authentik saw no revoked refresh
+// token (suspicious_request) since the gate started.
+func gateL6(t *testing.T, w *identityWorld) {
+	t0 := time.Now().UTC()
+	for end := t0.Add(11 * time.Minute); time.Now().Before(end); time.Sleep(time.Minute) {
+		w.Must("id " + w.dave.name + " >/dev/null; getent passwd " + w.dave.name + " >/dev/null; true")
+	}
+	var seat Session
+	for _, s := range w.UserSessions(w.dave.name) {
+		if s.Seat == "seat0" {
+			seat = s
+		}
+	}
+	if seat.ID == "" {
+		t.Fatalf("%s has no seat0 session (L1)", w.dave.name)
+	}
+	w.Must("sudo loginctl lock-session " + seat.ID)
+	Until(t, "lock screen", time.Minute, 2*time.Second, nil, func() bool {
+		return w.Must("loginctl show-session "+seat.ID+" -p LockedHint --value") == "yes"
+	})
+	w.Shot(t, "20-locked")
+	w.Key(keySpace...)
+	time.Sleep(3 * time.Second)
+	w.Type(w.dave.pin)
+	unlocked := false
+	for end := time.Now().Add(time.Minute); time.Now().Before(end); time.Sleep(2 * time.Second) {
+		if w.Must("loginctl show-session "+seat.ID+" -p LockedHint --value") == "no" {
+			unlocked = true
+			break
+		}
+	}
+	w.Shot(t, "21-unlocked")
+	if !unlocked {
+		t.Errorf("the session of %s did not unlock with the PIN after the access token's lifetime", w.dave.name)
+	}
+	if exit := w.pamLogin(t, w.dave, false, time.Minute); exit != 0 {
+		t.Errorf("PIN login of %s after the access token's lifetime: pamtester exit %d", w.dave.name, exit)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	n, err := authentikSQL(ctx, "SELECT count(*) FROM authentik_events_event WHERE action = 'suspicious_request' AND created > '"+
+		t0.Format(time.RFC3339)+"'")
+	if err != nil || n != "0" {
+		t.Errorf("suspicious_request events since %s: %q %v, want 0 (a revoked refresh token was used)", t0.Format(time.RFC3339), n, err)
+	}
+}
+
 func gateL2(t *testing.T, w *identityWorld) {
 	sessions := w.UserSessions(w.dave.name)
 	if len(sessions) == 0 {

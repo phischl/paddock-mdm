@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every Authentik sign-in (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks
   for a second factor and enrols one when missing.
 
+- Devices install Himmelblau 4.0.6 by default (`PADDOCK_HIMMELBLAU_VERSION`, previously 4.0.4): a device code
+  that expired at the login screen no longer ends in `PAM_SYSTEM_ERR`. The device-login guide lists the messages of the
+  login screen and what they mean.
+
 ### Fixed
 
 - The agent no longer removes the last administrator of a device: a privileged local group (sudo, admin, wheel) that
