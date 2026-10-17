@@ -257,11 +257,12 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
 ### 3.4 Device code lifetime (PDK-206) and the Hello PIN past the access token (PDK-292) — ADR 0019 amendment 2026-10-17
 
 16. `ensureDeviceLogin` MUST set `"access_code_validity": "minutes=10"` on the device provider (unchanged:
-    `access_token_validity: minutes=10`, `refresh_token_validity: days=30`; **no** `refresh_token_threshold`: a
-    threshold above zero makes Himmelblau deny every PIN login, §2). The reconciliation every 10 minutes converges
-    existing providers. `adapter_test.go::TestDeviceLoginSettings` and the acceptance gate
-    `TestIdentityAuthentikProvisioning` MUST assert the value and MUST assert that `refresh_token_threshold` is
-    `seconds=0`.
+    `access_token_validity: minutes=10`, `refresh_token_validity: days=30`) and MUST set
+    `"refresh_token_threshold": "seconds=0"` explicitly, Authentik's default, so that the reconciliation every 10
+    minutes resets a value changed by hand: a threshold above zero makes Himmelblau deny every PIN login (§2). The
+    reconciliation converges existing providers. `adapter_test.go::TestDeviceLoginSettings` and the acceptance gate
+    `TestIdentityAuthentikProvisioning` MUST assert both values; the fake test also asserts that a threshold set by
+    hand is reset to `seconds=0`.
 16a. **Interim mitigation (PDK-292, agent).** Until Himmelblau re-seals a rotated refresh token upstream, the agent
     MUST render `cache_timeout = 2592000` (30 days, the device provider's `refresh_token_validity`) into
     `himmelblau.conf` in `renderHimmelblauConf`, as a fixed line after `idmap_range`, with the constant
@@ -699,8 +700,8 @@ the audit log: `AttentionKind` has no kind for it (`admin.yaml` 4760, view `atte
   one-liner install (L11), hardware facts (L12), auto-unseal (M8u), device lifecycle (M8d).
 - Report-only adoption (M11, PDK-160/161): referenced, not implemented.
 - An English rename of "operator roots".
-- Changing `refresh_token_validity` (30 days stays; open point O1) or setting `refresh_token_threshold` (breaks
-  Himmelblau's PIN login, §2).
+- Changing `refresh_token_validity` (30 days stays; open point O1) or setting `refresh_token_threshold` to any value
+  other than `seconds=0` (breaks Himmelblau's PIN login, §2).
 - Patching or forking Himmelblau; `enable_hello = false` as the default (the per-organization setting stays).
 
 ## 5. Affected files
@@ -971,7 +972,7 @@ upstream issue; the fixture layout of the new prodcheck test; how `gateL6` struc
 - S2: with `prompt=login` the acceptance login helper or the e2e `login` cannot complete the flow (report the flow
   executor's challenge; do not remove `prompt=login`).
 - S3: Authentik 2026.8.3 refuses `access_code_validity: minutes=10` in the provider PUT (report the response; never
-  set `refresh_token_threshold` as a substitute).
+  set `refresh_token_threshold` above zero as a substitute).
 - S4: a system gate regresses with Himmelblau 4.0.6 (sudo UID resolution before the first login, local administrator,
   notice): keep `4.0.4` as the default, keep gate L6, report.
 - S5: gate L6 fails with PDK-292 merged (the sealed token is still rejected, or Himmelblau refuses
