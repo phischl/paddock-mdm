@@ -480,6 +480,10 @@
     "login_failed": "The sign-in could not be completed.",
     "mfa_required": "Your sign-in did not include a second factor. Sign in again: the portal asks for your password and your authenticator.",
     "key_store_sealed": "The server's key store is sealed, so the portal cannot start sessions. An operator must unseal OpenBao (docs/operations/openbao.md, section 2). Devices keep working.",
+    "no_role": "Your account is not in any Paddock role group. Ask your administrator to add you to exactly one of the groups paddock.'<organization>'.admins, .operators or .auditors.",
+    "multiple_organizations": "Your account holds roles in several organizations. One account belongs to exactly one organization; ask your administrator to remove the other memberships or to create separate accounts.",
+    "platform_and_organization": "This account holds platform and organization roles. By design one account is either a platform administrator or a member of one organization: use separate accounts, or ask your administrator to remove one of the memberships.",
+    "organization_inactive": "Your organization is not active. Ask a platform administrator.",
     "retry": "Sign in again"
   },
   "notFound": {

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -28,13 +27,14 @@ func TestLoginGate(t *testing.T) {
 		// finds no admin role.
 		user, pw := tempUser(t, "member", env.RootGroup("acme"))
 		p, err := loginAs(t, user, pw)
-		if !errors.Is(err, authflow.ErrDenied) || p == nil || !strings.HasPrefix(p.Final, "/login-denied?reason=not_authorized") {
-			t.Fatalf("login = %v (final %q), want /login-denied?reason=not_authorized", err, finalOf(p))
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=no_role" {
+			t.Fatalf("login = %v (final %q), want /login-denied?reason=no_role", err, finalOf(p))
 		}
 		expectNoSession(t, p)
 		ev := expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", p.LoginRequestID, "admin.login", "denied", auditPollTimeout)
-		if ev.ActorDisplay != user {
-			t.Fatalf("denied login recorded for %q, want %q", ev.ActorDisplay, user)
+		if ev.ActorDisplay != user || ev.Params["denial_reason"] != "no_role" {
+			t.Fatalf("denied login recorded for %q with denial_reason %v, want %q and no_role", ev.ActorDisplay,
+				ev.Params["denial_reason"], user)
 		}
 	})
 
@@ -50,11 +50,29 @@ func TestLoginGate(t *testing.T) {
 	t.Run("user in admin groups of two organizations is denied", func(t *testing.T) {
 		user, pw := tempUser(t, "twoorgs", env.RoleGroup("acme", "admins"), env.RoleGroup("globex", "admins"))
 		p, err := loginAs(t, user, pw)
-		if !errors.Is(err, authflow.ErrDenied) || !strings.HasPrefix(p.Final, "/login-denied?reason=not_authorized") {
-			t.Fatalf("login = %v (final %q), want /login-denied?reason=not_authorized", err, finalOf(p))
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=multiple_organizations" {
+			t.Fatalf("login = %v (final %q), want /login-denied?reason=multiple_organizations", err, finalOf(p))
 		}
 		expectNoSession(t, p)
-		expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", p.LoginRequestID, "admin.login", "denied", auditPollTimeout)
+		ev := expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", p.LoginRequestID, "admin.login", "denied", auditPollTimeout)
+		if ev.Params["denial_reason"] != "multiple_organizations" {
+			t.Fatalf("denial_reason %v, want multiple_organizations", ev.Params["denial_reason"])
+		}
+	})
+
+	t.Run("platform admin with an organization role is denied", func(t *testing.T) {
+		user, pw := tempUser(t, "platorg", "paddock.platform.admins", env.RoleGroup("acme", "admins"))
+		p, err := loginAs(t, user, pw)
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=platform_and_organization" {
+			t.Fatalf("login = %v (final %q), want /login-denied?reason=platform_and_organization", err, finalOf(p))
+		}
+		expectNoSession(t, p)
+		// Exactly one named organization resolves: the denial is recorded in acme.
+		ev := expectOneIndexEvent(t, idx, orgOf(t, login(t, env.Alice)), "correlation_id = $1", p.LoginRequestID, "admin.login",
+			"denied", auditPollTimeout)
+		if ev.Params["denial_reason"] != "platform_and_organization" {
+			t.Fatalf("denial_reason %v, want platform_and_organization", ev.Params["denial_reason"])
+		}
 	})
 
 	t.Run("platform admin has no organization data", func(t *testing.T) {

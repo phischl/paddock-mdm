@@ -182,6 +182,41 @@ func TestLoginRefusesATokenWithoutMFA(t *testing.T) {
 	})
 }
 
+// TestLoginDeniedNamesTheReason: a refused login names why on /login-denied and in the audit param denial_reason
+// (plan M8x decision 31).
+func TestLoginDeniedNamesTheReason(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	ctx := context.Background()
+	mfa := []string{"pwd", "mfa"}
+	cases := map[string][]string{
+		"no_role":                   {"staff"},
+		"multiple_organizations":    {organization.RoleGroup(w.slug, organization.GroupAdmins), organization.RoleGroup("globex", organization.GroupAdmins)},
+		"platform_and_organization": {organization.PlatformAdminsGroup(), organization.RoleGroup(w.slug, organization.GroupAdmins)},
+		"organization_inactive":     {organization.RoleGroup("gone-"+uuid.NewString()[:8], organization.GroupAdmins)},
+	}
+	for reason, groups := range cases {
+		t.Run(reason, func(t *testing.T) {
+			username := "denied-" + uuid.NewString() + "@acme.test"
+			claims := w.adminClaims(username, mfa)
+			claims["groups"] = groups
+			res := w.login(ctx, claims)
+			if res.Code != http.StatusFound || res.Header().Get("Location") != "/login-denied?reason="+reason ||
+				cookieOf(res, admin.SessionCookie) != nil {
+				t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+			}
+			var n int
+			var outcome, param string
+			if err := w.e.super.QueryRow(ctx, `SELECT count(*), coalesce(max(outcome), ''), coalesce(max(params->>'denial_reason'), '')
+				FROM action WHERE code = 'admin.login' AND actor->>'display' = $1`, username).Scan(&n, &outcome, &param); err != nil {
+				t.Fatal(err)
+			}
+			if n != 1 || outcome != "denied" || param != reason {
+				t.Fatalf("audit: %d events, outcome %q, denial_reason %q", n, outcome, param)
+			}
+		})
+	}
+}
+
 // TestLoginNamesASealedKeyStore: while no session key is loaded (OpenBao sealed at the start) the sign-in and the
 // callback send the browser to /login-denied?reason=key_store_sealed instead of a 500 (plan M8x decision 28).
 func TestLoginNamesASealedKeyStore(t *testing.T) {

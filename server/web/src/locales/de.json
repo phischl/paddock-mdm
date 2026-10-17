@@ -480,6 +480,10 @@
     "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
     "mfa_required": "Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.",
     "key_store_sealed": "Der Schlüsselspeicher des Servers ist versiegelt, deshalb kann das Portal keine Sitzungen starten. Ein Operator muss OpenBao entsiegeln (docs/operations/openbao.md, Abschnitt 2). Geräte arbeiten weiter.",
+    "no_role": "Ihr Konto ist in keiner Paddock-Rollengruppe. Bitten Sie Ihren Administrator, Sie genau einer der Gruppen paddock.'<Organisation>'.admins, .operators oder .auditors hinzuzufügen.",
+    "multiple_organizations": "Ihr Konto hat Rollen in mehreren Organisationen. Ein Konto gehört zu genau einer Organisation; bitten Sie Ihren Administrator, die übrigen Mitgliedschaften zu entfernen oder getrennte Konten anzulegen.",
+    "platform_and_organization": "Dieses Konto hat Plattform- und Organisationsrollen. Ein Konto ist entweder Plattformadministrator oder Mitglied einer Organisation: Verwenden Sie getrennte Konten, oder bitten Sie Ihren Administrator, eine der Mitgliedschaften zu entfernen.",
+    "organization_inactive": "Ihre Organisation ist nicht aktiv. Wenden Sie sich an einen Plattformadministrator.",
     "retry": "Erneut anmelden"
   },
   "notFound": {

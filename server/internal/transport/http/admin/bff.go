@@ -301,10 +301,11 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := b.accounts.Login(ctx,
 		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip, OpenSession: openSession},
-		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs})
+		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs,
+			DenialReason: string(res.Reason)})
 	if errors.Is(err, problem.Forbidden) {
 		discard()
-		denied(w, r, app.ReasonNotAuthorized)
+		denied(w, r, denialReason(res, err))
 		return
 	}
 	if err != nil {
@@ -324,6 +325,18 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, sessionCookie(value, int(SessionAbsolute.Seconds())))
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, st.ReturnTo, http.StatusFound)
+}
+
+// denialReason is the reason /login-denied names for a refused login: the role resolution's, or the inactive
+// organization's (plan M8x decision 31); not_authorized when neither is known.
+func denialReason(res organization.RoleResolution, err error) string {
+	switch {
+	case res.Denied && res.Reason != "":
+		return string(res.Reason)
+	case problem.From(err).Detail == app.DenialOrganizationInactive:
+		return app.DenialOrganizationInactive
+	}
+	return app.ReasonNotAuthorized
 }
 
 // logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. It reads the

@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A refused portal sign-in names the reason: no Paddock role group, roles in several organizations, platform and
+  organization roles on one account, or an inactive organization. The audit event `admin.login` carries it as
+  `denial_reason`.
 - While OpenBao was sealed at the start of `paddock-api`, the portal sign-in answered with an internal error. It now
   shows *The server's key store is sealed*; `paddock-server healthcheck` and the timeout line of `./paddock up` name
   the reason (`session keys not loaded: OpenBao is sealed or unreachable`).
