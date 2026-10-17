@@ -42,6 +42,48 @@ var (
 	SpecProfileConfirmRootGrant = ActionSpec{Code: audit.CodePermissionProfileRootGrantConfirmed, AllowedRoles: RolesAdmin, RequiresStepUp: true}
 )
 
+// RootEquivalence is what a class and a command set grant in effect (plan M8x decision 40).
+type RootEquivalence struct {
+	EffectiveClass         privilege.Class
+	RootEquivalentCommands []string
+	Witnesses              []string
+}
+
+// PreviewRootEquivalence evaluates a class and a command set with the rules the server applies on save; it reads no
+// data and records nothing (a read-only preview for the profile form).
+func (p *Privileges) PreviewRootEquivalence(ctx context.Context, class privilege.Class, commands []string) (RootEquivalence, error) {
+	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+		return RootEquivalence{}, err
+	}
+	if class != privilege.ClassNone && class != privilege.ClassRestricted && class != privilege.ClassFull {
+		return RootEquivalence{}, problem.InvalidRequest.WithDetail(privilege.ErrInvalidClass.Error())
+	}
+	if len(commands) > privilege.MaxCommands {
+		return RootEquivalence{}, problem.InvalidRequest.WithDetail(fmt.Sprintf("at most %d commands", privilege.MaxCommands))
+	}
+	for _, c := range commands {
+		if len(c) > maxPreviewCommandLen {
+			return RootEquivalence{}, problem.InvalidRequest.WithDetail(fmt.Sprintf("a command has at most %d characters", maxPreviewCommandLen))
+		}
+	}
+	prof := privilege.NormalizeProfile(privilege.Profile{Class: class, Commands: commands})
+	out := RootEquivalence{
+		EffectiveClass:         privilege.EffectiveClass(prof),
+		RootEquivalentCommands: privilege.RootEquivalentCommands(prof.Commands),
+		Witnesses:              privilege.RootWitnesses(prof.Class, prof.Commands),
+	}
+	if out.RootEquivalentCommands == nil {
+		out.RootEquivalentCommands = []string{}
+	}
+	if out.Witnesses == nil {
+		out.Witnesses = []string{}
+	}
+	return out, nil
+}
+
+// maxPreviewCommandLen bounds one command of the root-equivalence preview (the API's maxLength).
+const maxPreviewCommandLen = 1024
+
 // ListProfiles returns one page of permission profiles.
 func (p *Privileges) ListProfiles(ctx context.Context, page ListPage, classes []string) (Listed[pgstore.PermissionProfile], error) {
 	var out Listed[pgstore.PermissionProfile]

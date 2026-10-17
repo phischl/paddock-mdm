@@ -1737,6 +1737,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/permission-profiles/root-equivalence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. Read-only preview of what a profile with this class and these
+         *     commands grants in effect, before it is saved (plan M8x decision 40): the effective class, the commands that
+         *     hand out root and the witnesses ("ALL", "cmd:<command>", "pair:<writer>|<command>"). It reads no data and
+         *     records no audit event; the server checks the same rules again when the profile is saved.
+         */
+        get: operations["previewRootEquivalence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/permission-profiles/{id}": {
         parameters: {
             query?: never;
@@ -3760,6 +3782,13 @@ export interface components {
         };
         /** @enum {string} */
         PrivilegeClass: "none" | "restricted" | "full";
+        RootEquivalence: {
+            effective_class: components["schemas"]["PrivilegeClass"];
+            /** @description The normalized commands that hand out root, alone or together with another command; sorted. */
+            root_equivalent_commands: string[];
+            /** @description Why the profile hands out root: "ALL", "cmd:<command>" or "pair:<writer>|<command>"; sorted. */
+            witnesses: string[];
+        };
         /** @enum {string} */
         Lecture: "always" | "once" | "never";
         /** @enum {string} */
@@ -7280,6 +7309,33 @@ export interface operations {
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    previewRootEquivalence: {
+        parameters: {
+            query: {
+                class: components["schemas"]["PrivilegeClass"];
+                /** @description Repeatable; at most 100 commands of at most 1024 characters each. */
+                command?: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective privilege of the class and commands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootEquivalence"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     getPermissionProfile: {

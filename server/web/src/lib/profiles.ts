@@ -1,6 +1,6 @@
 import {
   api, listPage, problemCode, type EffectiveSudo, type Lecture, type PermissionProfile, type PermissionProfileSort,
-  type PrivilegeClass, type ProfileAssignment, type ProfileAssignmentSort, type SubjectType,
+  type PrivilegeClass, type ProfileAssignment, type ProfileAssignmentSort, type RootEquivalence, type SubjectType,
 } from '../api/client'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
@@ -79,6 +79,12 @@ export async function updateProfile(id: string, input: ProfileInput): Promise<st
     params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } }, body: body(input),
   })
   return error ? problemCode(error) : null
+}
+
+/** What a class and commands grant in effect, before they are saved; null when the preview fails. */
+export async function previewRootEquivalence(cls: PrivilegeClass, commands: string[]): Promise<RootEquivalence | null> {
+  const { data } = await api.GET('/api/v1/permission-profiles/root-equivalence', { params: { query: { class: cls, command: commands } } })
+  return data ?? null
 }
 
 /** Loads a profile; the problem code on failure. */

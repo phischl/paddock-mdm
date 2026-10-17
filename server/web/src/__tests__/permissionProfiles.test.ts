@@ -8,7 +8,7 @@ import PermissionProfiles from '../views/PermissionProfiles.vue'
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import { pendingConfirm, settleConfirm } from '../composables/useConfirm'
-import type { PermissionProfile } from '../api/client'
+import type { PermissionProfile, PrivilegeClass, RootEquivalence } from '../api/client'
 import type { ProfileInput } from '../lib/profiles'
 import { useSessionStore } from '../stores/session'
 
@@ -19,11 +19,13 @@ const shell: PermissionProfile = {
   updated_at: '2026-10-01T00:00:00Z',
 }
 const createProfile = vi.fn<(input: ProfileInput) => Promise<PermissionProfile | string>>()
+const previewRootEquivalence = vi.fn<(cls: PrivilegeClass, commands: string[]) => Promise<RootEquivalence | null>>()
 
 vi.mock('../lib/profiles', async (original) => ({
   ...(await original<typeof import('../lib/profiles')>()),
   listProfiles: () => Promise.resolve({ items: [shell], page: 1, page_size: 25, total: 1, total_capped: false, sort: 'name' }),
   createProfile: (input: ProfileInput) => createProfile(input),
+  previewRootEquivalence: (cls: PrivilegeClass, commands: string[]) => previewRootEquivalence(cls, commands),
 }))
 
 let wrapper: VueWrapper | null = null
@@ -32,6 +34,8 @@ const assign = vi.fn()
 beforeEach(() => {
   sessionStorage.clear()
   createProfile.mockReset()
+  previewRootEquivalence.mockReset()
+  previewRootEquivalence.mockResolvedValue({ effective_class: 'restricted', root_equivalent_commands: [], witnesses: [] })
   assign.mockReset()
   Object.defineProperty(window, 'location', {
     value: { ...window.location, assign, href: 'https://admin.test/profiles', search: '' }, writable: true,
@@ -97,6 +101,41 @@ describe('PermissionProfiles', () => {
     await w.find('[data-testid="create-profile"]').trigger('click')
     await flushPromises()
     expect(document.querySelector('.v-dialog')?.textContent).toContain('When on, sudo asks the user to authenticate')
+  })
+
+  it('warns about root equivalence before submit (plan M8x decisions 41 and 42)', async () => {
+    const { w } = await mountList()
+    await w.find('[data-testid="create-profile"]').trigger('click')
+    await flushPromises()
+    const preview = () => document.querySelector('[data-testid="root-equivalent-preview"]')
+    const commands = document.querySelector('#create-profile-commands') as HTMLTextAreaElement
+    const type = async (text: string) => {
+      commands.value = text
+      commands.dispatchEvent(new Event('input'))
+      await flushPromises()
+    }
+
+    previewRootEquivalence.mockResolvedValue({
+      effective_class: 'full', root_equivalent_commands: ['/opt/x', '/usr/bin/tee /opt/x'], witnesses: ['pair:/usr/bin/tee /opt/x|/opt/x'],
+    })
+    await type('/usr/bin/tee /opt/x\n/opt/x')
+    expect(preview()).toBeNull()
+    await vi.waitFor(() => expect(preview()).not.toBeNull())
+    expect(previewRootEquivalence).toHaveBeenLastCalledWith('restricted', ['/usr/bin/tee /opt/x', '/opt/x'])
+    expect(preview()?.textContent).toContain('This profile grants root in effect through /opt/x, /usr/bin/tee /opt/x.')
+    expect(preview()?.textContent).toContain('/usr/bin/tee /opt/x together with /opt/x: the first writes what the second runs.')
+
+    previewRootEquivalence.mockResolvedValue({ effective_class: 'restricted', root_equivalent_commands: [], witnesses: [] })
+    await type('/usr/bin/systemctl restart nginx.service')
+    await vi.waitFor(() => expect(previewRootEquivalence).toHaveBeenLastCalledWith('restricted', ['/usr/bin/systemctl restart nginx.service']))
+    await flushPromises()
+    expect(preview()).toBeNull()
+
+    previewRootEquivalence.mockResolvedValue(null)
+    await type('/usr/bin/apt update')
+    await vi.waitFor(() => expect(previewRootEquivalence).toHaveBeenLastCalledWith('restricted', ['/usr/bin/apt update']))
+    await flushPromises()
+    expect(preview()).toBeNull()
   })
 
   it('shows the effective class of a root-equivalent restricted profile', async () => {

@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The portal shows until when the last identity confirmation (step-up) is valid: a chip in the app bar and a line in
   the user menu; `GET /api/v1/me` carries `step_up_valid_until`. A long organization name in the app bar is shortened
   and shown in full on hover or tap.
+- The permission profile form warns before saving when the class or the commands grant root in effect (also through
+  a pair of commands, one writing what the other runs), and says that saving then needs an organization
+  administrator with a step-up. New read-only endpoint `GET /api/v1/permission-profiles/root-equivalence`.
 - Clearer texts: a device's local administrator password that waits for the device's confirmation is no longer shown
   as "none yet"; permission profiles and device access explain that they apply to directory users only, never to
   local accounts; the password switch of a profile explains what it does.

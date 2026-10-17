@@ -331,6 +331,20 @@ func (h *handlers) ResumeDeviceLogins(ctx context.Context, req adminapi.ResumeDe
 	return adminapi.ResumeDeviceLogins200JSONResponse(toDeviceDetail(d)), nil
 }
 
+// PreviewRootEquivalence evaluates a class and commands before they are saved (plan M8x decision 40).
+func (h *handlers) PreviewRootEquivalence(ctx context.Context, req adminapi.PreviewRootEquivalenceRequestObject) (adminapi.PreviewRootEquivalenceResponseObject, error) {
+	var commands []string
+	if req.Params.Command != nil {
+		commands = *req.Params.Command
+	}
+	res, err := h.privileges.PreviewRootEquivalence(ctx, privilege.Class(req.Params.Class), commands)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.PreviewRootEquivalence200JSONResponse{EffectiveClass: adminapi.PrivilegeClass(res.EffectiveClass),
+		RootEquivalentCommands: res.RootEquivalentCommands, Witnesses: res.Witnesses}, nil
+}
+
 func (h *handlers) ListPermissionProfiles(ctx context.Context, req adminapi.ListPermissionProfilesRequestObject) (adminapi.ListPermissionProfilesResponseObject, error) {
 	params, err := listing.Parse(permissionProfileList, listing.Query{
 		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,

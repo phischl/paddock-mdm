@@ -2733,6 +2733,38 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/permission-profiles/root-equivalence:
+    get:
+      operationId: previewRootEquivalence
+      tags: [privileges]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. Read-only preview of what a profile with this class and these
+        commands grants in effect, before it is saved (plan M8x decision 40): the effective class, the commands that
+        hand out root and the witnesses ("ALL", "cmd:<command>", "pair:<writer>|<command>"). It reads no data and
+        records no audit event; the server checks the same rules again when the profile is saved.
+      parameters:
+        - name: class
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/PrivilegeClass" }
+        - name: command
+          in: query
+          description: Repeatable; at most 100 commands of at most 1024 characters each.
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 100
+            items: { type: string, maxLength: 1024 }
+      responses:
+        "200":
+          description: The effective privilege of the class and commands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RootEquivalence" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/permission-profiles/{id}:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -5597,6 +5629,19 @@ components:
     PrivilegeClass:
       type: string
       enum: [none, restricted, full]
+    RootEquivalence:
+      type: object
+      required: [effective_class, root_equivalent_commands, witnesses]
+      properties:
+        effective_class: { $ref: "#/components/schemas/PrivilegeClass" }
+        root_equivalent_commands:
+          type: array
+          description: The normalized commands that hand out root, alone or together with another command; sorted.
+          items: { type: string }
+        witnesses:
+          type: array
+          description: 'Why the profile hands out root: "ALL", "cmd:<command>" or "pair:<writer>|<command>"; sorted.'
+          items: { type: string }
     Lecture:
       type: string
       enum: [always, once, never]

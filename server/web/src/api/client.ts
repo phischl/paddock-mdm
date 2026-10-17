@@ -3,6 +3,7 @@ import type { components, paths } from './schema'
 import { ListError, type Page } from '../lib/listQuery'
 
 export type Me = components['schemas']['Me']
+export type RootEquivalence = components['schemas']['RootEquivalence']
 export type DeviceGroup = components['schemas']['DeviceGroup']
 export type Organization = components['schemas']['Organization']
 export type AuditEvent = components['schemas']['AuditEvent']
