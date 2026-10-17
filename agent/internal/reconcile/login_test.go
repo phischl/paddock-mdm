@@ -96,6 +96,7 @@ enable_hello = true
 hello_pin_min_length = 6
 local_groups = users
 idmap_range = 200000-999999999
+cache_timeout = 2592000
 `
 
 func TestLoginInstallsAndConfigures(t *testing.T) {
@@ -149,6 +150,25 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 	sys.Files["/etc/himmelblau/himmelblau.conf"].Data = []byte("[global]\npam_allow_groups = everyone\n")
 	if res := l.Apply(ctx, r); res.Status != reconcile.Changed || !slices.Contains(sys.TakeCalls(), "systemctl restart himmelblaud.service") {
 		t.Fatalf("drift %+v", res)
+	}
+
+	// A configuration without cache_timeout (an agent before PDK-292) or with a locally lowered value gets the
+	// Paddock value back with a restart: the default 300 s rotates the refresh token behind the Hello PIN (RR-40).
+	for _, conf := range []string{
+		strings.Replace(wantConf, "cache_timeout = 2592000\n", "", 1),
+		strings.Replace(wantConf, "cache_timeout = 2592000", "cache_timeout = 300", 1),
+	} {
+		sys.Files["/etc/himmelblau/himmelblau.conf"].Data = []byte(conf)
+		if changes, err := l.Plan(ctx, r); err != nil || !slices.Equal(changes, []string{"config"}) {
+			t.Fatalf("plan with %q: %v %v", conf, changes, err)
+		}
+		if res := l.Apply(ctx, r); res.Status != reconcile.Changed || !slices.Contains(sys.TakeCalls(), "systemctl restart himmelblaud.service") {
+			t.Fatalf("cache_timeout drift %+v", res)
+		}
+		if got := string(sys.Files["/etc/himmelblau/himmelblau.conf"].Data); got != wantConf ||
+			strings.Count(got, "cache_timeout = ") != 1 {
+			t.Fatalf("himmelblau.conf after the apply\n%s", got)
+		}
 	}
 }
 

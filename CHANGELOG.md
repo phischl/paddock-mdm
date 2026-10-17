@@ -21,7 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authentication flow and Authentik's default authentication flow ask for a second factor as well. After the upgrade
   every Authentik sign-in (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks
   for a second factor and enrols one when missing.
-
 - Devices install Himmelblau 4.0.6 by default (`PADDOCK_HIMMELBLAU_VERSION`, previously 4.0.4): a device code
   that expired at the login screen no longer ends in `PAM_SYSTEM_ERR`. The device-login guide lists the messages of the
   login screen and what they mean.
@@ -34,10 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - While OpenBao was sealed at the start of `paddock-api`, the portal sign-in answered with an internal error. It now
   shows *The server's key store is sealed*; `paddock-server healthcheck` and the timeout line of `./paddock up` name
   the reason (`session keys not loaded: OpenBao is sealed or unreachable`).
-- The device code at the login screen expired after one minute; the device login provider now gives it ten minutes.
-  A known issue of Himmelblau remains: after a background refresh the next Hello PIN login or unlock fails and the
-  PIN must be enrolled again with the device code (residual risk RR-40, `docs/operations/device-login.md`).
-
+- The device code at the login screen is valid for ten minutes (it expired after one minute).
+- The Hello PIN keeps working while a user stays signed in; the login component refreshes a signed-in user's cached
+  attributes at the next PIN sign-in or after 30 days. The fix is on the device (`cache_timeout` in
+  `himmelblau.conf`): **update the agents first**; a device with an older agent keeps losing the PIN after a few
+  minutes of use. After 30 days without a PIN sign-in the user signs in with the device code and sets a new PIN
+  (residual risk RR-40).
 - The agent no longer removes the last administrator of a device: a privileged local group (sudo, admin, wheel) that
   has no break-glass account as a member keeps all its members, and each is reported once as
   `device.tamper_sudo_group_member` with `removed=false` and `reason=last_admin`. The members are removed once a
