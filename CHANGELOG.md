@@ -71,7 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The agent no longer removes the last administrator of a device: a privileged local group (sudo, admin, wheel) that
   has no break-glass account as a member keeps all its members, and each is reported once as
   `device.tamper_sudo_group_member` with `removed=false` and `reason=last_admin`. The members are removed once a
-  break-glass account or the managed local administrator is a member. Configure break-glass accounts before the first
+  break-glass account or the managed local administrator is a member; such an account counts only if it exists on the
+  device and its password is not locked (`!` or `*` in `/etc/shadow`). Configure break-glass accounts before the first
   enrolment of a device whose administrators are not managed by Paddock.
 - The login component no longer removes accounts from the sudo group or re-adds them to local groups every five
   minutes; Paddock alone manages sudo.

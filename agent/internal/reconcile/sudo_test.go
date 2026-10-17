@@ -26,7 +26,8 @@ func sudoFixture(t *testing.T) (*fakesys.System, *reconcile.Sudo, *[]event) {
 	sys.Files["/etc/sudoers"] = &fakesys.File{Data: []byte(sudoersFile), Mode: 0o440}
 	sys.Files["/etc/sudoers.d/README"] = &fakesys.File{Data: []byte("# sudoers.d README\n"), Mode: 0o440}
 	sys.Files["/etc/sudoers.d/90-paddock"] = &fakesys.File{Data: []byte("paddock ALL=(ALL) NOPASSWD:ALL\n"), Mode: 0o440}
-	sys.Passwd = map[string]int{"dave@acme.test": 811622788, "erin@acme.test": 923001122}
+	sys.Passwd = map[string]int{"dave@acme.test": 811622788, "erin@acme.test": 923001122, "paddock": 1000, "paddock-admin": 1001}
+	sys.Files["/etc/shadow"] = &fakesys.File{Data: []byte(shadow("$y$j9T$x", "$y$j9T$x")), Mode: 0o640}
 	sys.Members = map[string][]string{"sudo": {"paddock"}, "admin": {}}
 	var events []event
 	emit := func(typ string, data any) {
@@ -37,6 +38,11 @@ func sudoFixture(t *testing.T) (*fakesys.System, *reconcile.Sudo, *[]event) {
 		events = append(events, event{typ, string(b)})
 	}
 	return sys, &reconcile.Sudo{Sys: sys, Events: &reconcile.Events{Emit: emit}}, &events
+}
+
+// shadow is an /etc/shadow with the break-glass accounts paddock and paddock-admin and the given password fields.
+func shadow(paddock, paddockAdmin string) string {
+	return "root:*:20000:0:99999:7:::\npaddock:" + paddock + ":20000:0:99999:7:::\npaddock-admin:" + paddockAdmin + ":20000:0:99999:7:::\n"
 }
 
 func restricted(username string, commands ...string) sudoers.Entry {
@@ -400,6 +406,51 @@ func TestPrivilegedGroupsNeverRemoveTheLastAdministrator(t *testing.T) {
 	want = []event{{protocol.EventTamperSudoGroupMember, `{"group":"sudo","username":"groot","removed":false,"reason":"last_admin"}`}}
 	if got := takeEvents(events2); !slices.Equal(got, want) {
 		t.Fatalf("events after groot returned %v", got)
+	}
+}
+
+// TestPrivilegedGroupsCountOnlyUsableBreakGlassAccounts: a break-glass name in a group counts only for an account that
+// getent passwd resolves and whose /etc/shadow entry is not locked; otherwise every member is kept as the last
+// administrator, and the break-glass name itself is never removed (PDK-219 external review finding 2).
+func TestPrivilegedGroupsCountOnlyUsableBreakGlassAccounts(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(sys *fakesys.System)
+	}{
+		{name: "nonexistent", setup: func(sys *fakesys.System) { delete(sys.Passwd, "paddock-admin") }},
+		{name: "no shadow entry", setup: func(sys *fakesys.System) {
+			sys.Files["/etc/shadow"].Data = []byte("paddock:$y$j9T$x:20000:0:99999:7:::\n")
+		}},
+		{name: "locked with passwd -l", setup: func(sys *fakesys.System) {
+			sys.Files["/etc/shadow"].Data = []byte(shadow("$y$j9T$x", "!$y$j9T$x"))
+		}},
+		{name: "no password set", setup: func(sys *fakesys.System) { sys.Files["/etc/shadow"].Data = []byte(shadow("$y$j9T$x", "!")) }},
+		{name: "disabled password", setup: func(sys *fakesys.System) { sys.Files["/etc/shadow"].Data = []byte(shadow("$y$j9T$x", "*")) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			sys, s, events := sudoFixture(t)
+			sys.Members["sudo"] = []string{"groot", "paddock-admin"}
+			tc.setup(sys)
+			r := sudoResourceWith(t, "paddock-admin")
+			if changes, err := s.Plan(ctx, r); err != nil || !slices.Contains(changes, "keep groot in sudo (last administrator)") {
+				t.Fatalf("plan %v %v", changes, err)
+			}
+			s.Apply(ctx, r)
+			for _, c := range sys.TakeCalls() {
+				if strings.HasPrefix(c, "gpasswd") {
+					t.Fatalf("gpasswd called: %s", c)
+				}
+			}
+			if !slices.Equal(sys.Members["sudo"], []string{"groot", "paddock-admin"}) {
+				t.Fatalf("sudo members %v", sys.Members["sudo"])
+			}
+			want := []event{{protocol.EventTamperSudoGroupMember, `{"group":"sudo","username":"groot","removed":false,"reason":"last_admin"}`}}
+			if got := takeEvents(events); !slices.Equal(got, want) {
+				t.Fatalf("events %v", got)
+			}
+		})
 	}
 }
 
