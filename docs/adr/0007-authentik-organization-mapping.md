@@ -49,9 +49,14 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
   exists in the development blueprint alone.
 
 ## Amendment 2026-10-17 (M8x, lab finding)
-- **Second factor on every portal path.** The portal requests its authorization with `prompt=login`, so every portal
-  sign-in runs `paddock-admin-login` (password and second factor) and an existing Authentik session never satisfies
-  it. The portal callback refuses an ID token whose `amr` lacks `mfa` (ADR 0034 amendment of the same date).
+- **Second factor on every portal path.** ~~The portal requests its authorization with `prompt=login`, so every
+  portal sign-in runs `paddock-admin-login` (password and second factor) and an existing Authentik session never
+  satisfies it.~~ Replaced the same day (CI of PR #82): the portal login sends **no** `prompt` — Authentik's
+  `prompt=login` handling (`last_login_uid`, never cleared) let a later step-up pass without running its flow (ADR
+  0034 amendment). An existing Authentik session satisfies the portal sign-in only if its ID token carries `mfa` in
+  `amr`, which the brand's authentication flow and the default-flow MFA stage below guarantee; the portal callback
+  refuses every token without it. PDK-190 (ending the Authentik session on *end all sessions*) is therefore open
+  again.
 - **Brand and default flow.** The worker keeps the default brand's `flow_authentication` at `paddock-admin-login`
   next to the recovery and device-code flows; the portal blueprint binds a Paddock validation stage
   (`paddock-default-login-mfa`, configure when missing, 5-minute threshold) at order 31 of Authentik's

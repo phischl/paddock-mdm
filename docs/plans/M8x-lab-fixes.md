@@ -116,9 +116,28 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
 
 ### 3.1 Portal login requires a second factor on every Authentik path (PDK-203; closes PDK-202)
 
-1. `bff.login` MUST add `oauth2.SetAuthURLParam("prompt", "login")` to `oauth.AuthCodeURL(...)`. Every portal
+1. ~~`bff.login` MUST add `oauth2.SetAuthURLParam("prompt", "login")` to `oauth.AuthCodeURL(...)`. Every portal
    sign-in runs the provider's authentication flow `paddock-admin-login`; an existing Authentik session never
-   satisfies it. (This also removes the symptom of PDK-190: after *end all sessions* the browser is prompted again.)
+   satisfies it. (This also removes the symptom of PDK-190: after *end all sessions* the browser is prompted again.)~~
+   **Replaced 2026-10-17 (architect, CI of PR #82):** `bff.login` MUST NOT send `prompt=login`. Authentik 2026.8.3
+   honours `prompt=login` through the session key `authentik/providers/oauth2/last_login_uid` (`authorize.py`
+   540–560), which it never clears: after a forced re-login the next step-up's `prompt=login` finds the stale key and
+   a login event younger than `max_age`, and Authentik issues the step-up token for that login event without running
+   `paddock-stepup` — a silent step-up pass within 60 s of a portal login that skips the WebAuthn-only factor; on a
+   fresh browser the login flow also ran twice. The rule becomes: an existing Authentik session MAY satisfy the
+   portal sign-in only if its ID token carries `mfa` in `amr`, which the brand's authentication flow (decision 4) and
+   the default-flow MFA stage (decision 5) guarantee for every session Authentik can create, and the callback
+   (decision 2) refuses every token without it. Consequence: the symptom of PDK-190 returns (after *end all
+   sessions* a browser with a live Authentik session signs in again without a prompt, with a second factor already in
+   that session); PDK-190 is relevant again and stays open.
+1a. **Defensive step-up check (architect, 2026-10-17).** `stepup.go::checkStepUp` MUST refuse a step-up ID token
+   whose `auth_time` is missing or earlier than the step-up start (`st.StartedAt`, unix seconds, compared in whole
+   seconds: `auth_time >= started_at`), in addition to the existing subject, `max_age` and `amr` checks; the refusal
+   is `stepup=failed` as today. The step-up start is recorded in the step-up state cookie when `/api/auth/stepup`
+   begins. This holds whatever Authentik does with `prompt`: a token for an older login event can never satisfy a
+   step-up. Unit test: a token with `auth_time = started_at - 1` → refused; `= started_at` → accepted; absent →
+   refused. Acceptance: `TestStepUp` passes; a new case starts a step-up and completes it with the executor in
+   under a second (equal-second boundary).
 2. `idClaims` MUST gain `AMR []string \`json:"amr"\``. After the nonce and subject checks and before
    `ResolveRole`, the callback MUST refuse a token whose `AMR` does not contain `"mfa"` unless
    `bff.loginMFAOptional` is true: it calls `b.accounts.RecordLoginFailure(ctx, ip, username,
@@ -186,11 +205,11 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
    `idp.claims` without `amr` → 302 to `/login-denied?reason=mfa_required`, no session cookie, no session record,
    exactly one row in `action` with code `admin.login`, outcome `denied`, error code `mfa_required`; with `amr:
    ["pwd","mfa"]` → 302 to `/` with the cookie; with `LoginMFAOptional: true` and no `amr` → success. (c)
-   `login_test.go::TestLoginStartsWithPromptLogin`: the `Location` of `GET /api/auth/login` contains
-   `prompt=login`. (d) Acceptance `TestAuthentikBrandFlows` passes with the third field; new
-   `TestLoginMFAPath` (`login_test.go`): the flow `default-authentication-flow` has a binding at order 31 whose stage
-   is named `paddock-default-login-mfa` with `not_configured_action == "configure"`, and `GET /api/auth/login`
-   redirects to a URL containing `prompt=login`.
+   (replaced 2026-10-17) `login_test.go::TestLoginStartsWithoutPrompt`: the `Location` of `GET /api/auth/login`
+   contains no `prompt` parameter; `stepup_test.go` covers the `auth_time >= started_at` rule of decision 1a. (d)
+   Acceptance `TestAuthentikBrandFlows` passes with the third field; new `TestLoginMFAPath` (`login_test.go`): the
+   flow `default-authentication-flow` has a binding at order 31 whose stage is named `paddock-default-login-mfa`
+   with `not_configured_action == "configure"`, and `GET /api/auth/login` redirects to a URL without `prompt`.
 8. Documents: `docs/operations/install.md` §12 and `docs/operations/upgrade.md` *Before you start*: "After this
    upgrade every Authentik sign-in — the portal, Authentik's own user and admin interfaces (`akadmin` included) and
    the device approval page — asks for a second factor and enrols one when missing." `docs/operations/device-login.md`
@@ -811,7 +830,8 @@ func checkSecretFilesReadableByServices(c Config) Result   // item "secret files
 | `himmelblau.conf` (agent) | `cache_timeout` | `2592000` (= `refresh_token_validity: days=30`) |
 | default brand | `flow_authentication` | flow `paddock-admin-login` (worker, every 10 min) |
 | flow `default-authentication-flow` | binding order 31 | stage `paddock-default-login-mfa` (configure, threshold 5 min) |
-| portal authorize request | `prompt` | `login` |
+| portal authorize request | `prompt` | none (replaced 2026-10-17: `prompt=login` broke the step-up, decision 1) |
+| step-up callback | `auth_time` | `>= step-up start` in whole seconds, missing refused (decision 1a) |
 
 ### 6.5 Audit registry changes
 
@@ -937,7 +957,7 @@ Roles: **A** = org_admin (`env.Alice` or a temp admin), **U** = org_auditor (`en
 
 | # | Given / When / Then | Role sees |
 | --- | --- | --- |
-| S1 | `GET /api/auth/login` → the `Location` contains `prompt=login`; the default brand's `flow_authentication` is `paddock-admin-login`; `default-authentication-flow` has the binding at order 31 to `paddock-default-login-mfa` with `not_configured_action: configure`. | P (Authentik API) |
+| S1 | `GET /api/auth/login` → the `Location` contains no `prompt` (replaced 2026-10-17); a step-up token with `auth_time` before the step-up start is refused (unit); the default brand's `flow_authentication` is `paddock-admin-login`; `default-authentication-flow` has the binding at order 31 to `paddock-default-login-mfa` with `not_configured_action: configure`. | P (Authentik API) |
 | S2 | (unit) An ID token without `mfa` in `amr` → `/login-denied?reason=mfa_required`, no cookie, one `admin.login` denied `mfa_required`; with `mfa` → session; with the development switch → session. `PADDOCK_LOGIN_MFA_OPTIONAL` in a production configuration fails `./paddock check` (`no development-only variables`). | A, O |
 | S3 | (VM, P4) A foreign member of `sudo` on a device whose bundle names no break-glass account stays a member; `device.tamper_sudo_group_member` arrives with `removed=false`, `reason=last_admin`; with a break-glass member present the foreign member is removed. | D, A (audit) |
 | S4 | The device provider of acme has `access_code_validity: minutes=10` and `refresh_token_threshold: seconds=0`; the agent's `himmelblau.conf` on a VM contains `cache_timeout = 2592000` and `renderHimmelblauConf` emits it (unit test). | P (Authentik API), D |
@@ -971,8 +991,9 @@ upstream issue; the fixture layout of the new prodcheck test; how `gateL6` struc
 
 - S1: Authentik's blueprint importer rejects the binding at order 31 on `default-authentication-flow` or the
   `last_auth_threshold` attribute (report the importer log; do not bind at order 30 and do not remove `configure`).
-- S2: with `prompt=login` the acceptance login helper or the e2e `login` cannot complete the flow (report the flow
-  executor's challenge; do not remove `prompt=login`).
+- S2: (withdrawn 2026-10-17 with decision 1; `prompt=login` is removed.) Instead: the step-up start cannot be
+  carried in the step-up state cookie, or Authentik's step-up token has no `auth_time` (report; do not relax
+  decision 1a).
 - S3: Authentik 2026.8.3 refuses `access_code_validity: minutes=10` in the provider PUT (report the response; never
   set `refresh_token_threshold` above zero as a substitute).
 - S4: a system gate regresses with Himmelblau 4.0.6 (sudo UID resolution before the first login, local administrator,
@@ -1001,8 +1022,12 @@ upstream issue; the fixture layout of the new prodcheck test; how `gateL6` struc
 
 ## 12. Risks and open points
 
-- **`prompt=login` on every portal sign-in** costs one password-plus-factor per portal session (8 h). Accepted for
-  an administrative console; the release notes say so.
+- ~~**`prompt=login` on every portal sign-in** costs one password-plus-factor per portal session (8 h).~~
+  Withdrawn 2026-10-17: `prompt=login` is not sent (decision 1). **Authentik's `prompt=login` quirk**
+  (`last_login_uid` never cleared) would have let a step-up pass silently within 60 s of a login; decision 1a's
+  `auth_time >= step-up start` check guards the step-up independently of Authentik's prompt handling. A live
+  Authentik session (with its second factor) signs in to the portal again after *end all sessions* until PDK-190 ends
+  the Authentik session too.
 - **Second factor on Authentik's own interfaces.** `akadmin` and every administrator enrol at the next login; a
   user without a phone cannot sign in anywhere. The upgrade note says it; the development stack skips the stage.
 - **Authentik upgrade** may re-apply its default blueprints: the Paddock stage at order 31 is a separate object and
