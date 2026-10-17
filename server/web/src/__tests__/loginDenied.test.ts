@@ -35,6 +35,7 @@ describe('login denied', () => {
   it.each([
     ['no_role', 'one of the groups paddock.<organization>.admins, .operators or .auditors.'],
     ['multiple_organizations', 'Your account holds roles in several organizations.'],
+    ['multiple_roles', 'Your account holds several roles in one organization (administrator, operator or auditor).'],
     ['platform_and_organization', 'This account holds platform and organization roles.'],
     ['organization_inactive', 'Your organization is not active. Ask a platform administrator.'],
     ['not_authorized', 'Your account is not authorized for the Paddock portal.'],

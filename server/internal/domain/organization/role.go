@@ -13,6 +13,7 @@ type DenialReason string
 const (
 	DenialNoRole                  DenialReason = "no_role"                   // no Paddock role group
 	DenialMultipleOrganizations   DenialReason = "multiple_organizations"    // role groups of several organizations
+	DenialMultipleRoles           DenialReason = "multiple_roles"            // several role groups of one organization
 	DenialPlatformAndOrganization DenialReason = "platform_and_organization" // platform admins plus an organization role
 )
 
@@ -77,8 +78,10 @@ func ResolveRole(groups []string) RoleResolution {
 		switch {
 		case platform && matches > 0:
 			res.Reason = DenialPlatformAndOrganization
-		case matches > 1:
+		case len(res.Slugs) > 1:
 			res.Reason = DenialMultipleOrganizations
+		case matches > 1:
+			res.Reason = DenialMultipleRoles
 		default:
 			res.Reason = DenialNoRole
 		}

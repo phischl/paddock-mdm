@@ -1004,7 +1004,7 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > **Amendment 2026-10-17 (M8x):** the login callback refuses an ID token without `mfa` in `amr`
 > (`/login-denied?reason=mfa_required`, audited as `admin.login` denied); the development stack alone may switch
 > this off (`PADDOCK_LOGIN_MFA_OPTIONAL`). A refused sign-in names its reason (`no_role`, `multiple_organizations`,
-> `platform_and_organization`, `organization_inactive`, `key_store_sealed`). `GET /api/v1/me` carries
+> `multiple_roles`, `platform_and_organization`, `organization_inactive`, `key_store_sealed`). `GET /api/v1/me` carries
 > `step_up_valid_until`, which the portal shows (ADR 0034 amendment 2026-10-17).
 
 ---

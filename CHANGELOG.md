@@ -51,8 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "permission denied". `./paddock check` now names such a file (item `secret files readable by the Paddock services`)
   with the `chmod 644` to run, and `./paddock agent-release` refuses a release directory the `paddock-api` service
   cannot read and names `chmod -R a+rX`.
-- A refused portal sign-in names the reason: no Paddock role group, roles in several organizations, platform and
-  organization roles on one account, or an inactive organization. The audit event `admin.login` carries it as
+- A refused portal sign-in names the reason: no Paddock role group, roles in several organizations, several roles
+  in one organization, platform and organization roles on one account, or an inactive organization. The audit event `admin.login` carries it as
   `denial_reason`.
 - While OpenBao was sealed at the start of `paddock-api`, the portal sign-in answered with an internal error. It now
   shows *The server's key store is sealed*; `paddock-server healthcheck` and the timeout line of `./paddock up` name

@@ -60,6 +60,21 @@ func TestLoginGate(t *testing.T) {
 		}
 	})
 
+	t.Run("user with two roles in one organization is denied", func(t *testing.T) {
+		user, pw := tempUser(t, "tworoles", env.RoleGroup("acme", "admins"), env.RoleGroup("acme", "auditors"))
+		p, err := loginAs(t, user, pw)
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=multiple_roles" {
+			t.Fatalf("login = %v (final %q), want /login-denied?reason=multiple_roles", err, finalOf(p))
+		}
+		expectNoSession(t, p)
+		// Exactly one named organization resolves: the denial is recorded in acme.
+		ev := expectOneIndexEvent(t, idx, orgOf(t, login(t, env.Alice)), "correlation_id = $1", p.LoginRequestID, "admin.login",
+			"denied", auditPollTimeout)
+		if ev.Params["denial_reason"] != "multiple_roles" {
+			t.Fatalf("denial_reason %v, want multiple_roles", ev.Params["denial_reason"])
+		}
+	})
+
 	t.Run("platform admin with an organization role is denied", func(t *testing.T) {
 		user, pw := tempUser(t, "platorg", "paddock.platform.admins", env.RoleGroup("acme", "admins"))
 		p, err := loginAs(t, user, pw)
