@@ -105,7 +105,8 @@ func TestLoginGate(t *testing.T) {
 	})
 }
 
-// TestLoginMFAPath (plan M8x decision 7d): every portal sign-in runs Paddock's login flow (prompt=login), and
+// TestLoginMFAPath (plan M8x decision 7d): the portal sign-in sends no prompt, so that Authentik never skips the flow of a
+// later step-up (an existing Authentik session may satisfy the sign-in, the callback still requires MFA in amr), and
 // Authentik's default authentication flow asks for a second factor at order 31, enrolling one when missing.
 func TestLoginMFAPath(t *testing.T) {
 	ctx := testContext(t, time.Minute)
@@ -124,7 +125,7 @@ func TestLoginMFAPath(t *testing.T) {
 	}
 	_ = res.Body.Close()
 	if loc, err := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusFound || err != nil ||
-		loc.Query().Get("prompt") != "login" {
+		loc.Query().Has("prompt") {
 		t.Fatalf("GET /api/auth/login: %d %q", res.StatusCode, res.Header.Get("Location"))
 	}
 

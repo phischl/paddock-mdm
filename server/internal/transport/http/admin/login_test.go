@@ -118,13 +118,15 @@ func TestLoginDiscardsTheSessionOfAFailedLogin(t *testing.T) {
 	}
 }
 
-// TestLoginStartsWithPromptLogin: the authorize request always asks Authentik to run the login flow again, so an
-// existing Authentik session never satisfies a portal sign-in (plan M8x decision 1).
-func TestLoginStartsWithPromptLogin(t *testing.T) {
+// TestLoginStartsWithoutPrompt: the authorize request carries no prompt. With prompt=login Authentik remembers the
+// login it forced away and then skips the flow of the next step-up; an existing Authentik session may satisfy the
+// sign-in, and TestLoginRefusesATokenWithoutMFA keeps one without a second factor out.
+func TestLoginStartsWithoutPrompt(t *testing.T) {
 	w := newLoginWorld(t, nil)
 	start := w.start()
 	loc, err := url.Parse(start.Header().Get("Location"))
-	if start.Code != http.StatusFound || err != nil || loc.Query().Get("prompt") != "login" {
+	if start.Code != http.StatusFound || err != nil || !strings.HasPrefix(loc.String(), w.idp.URL+"/authorize") ||
+		loc.Query().Has("prompt") || loc.Query().Has("max_age") {
 		t.Fatalf("login start: %d %s", start.Code, start.Header().Get("Location"))
 	}
 }

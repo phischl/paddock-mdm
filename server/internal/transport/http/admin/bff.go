@@ -175,10 +175,9 @@ func (b *bff) login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, loginCookie(value, int(LoginLifetime.Seconds())))
 	w.Header().Set("Cache-Control", "no-store")
-	// prompt=login: an existing Authentik session must never satisfy the portal sign-in; the provider's own flow with
-	// its second factor runs every time (plan M8x decision 1).
-	http.Redirect(w, r, oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier),
-		oauth2.SetAuthURLParam("prompt", "login")), http.StatusFound)
+	// No prompt=login: Authentik would remember the login it forced away and then skip the next step-up's flow
+	// (checkStepUp). An existing Authentik session may satisfy the sign-in; the callback still requires MFA in amr.
+	http.Redirect(w, r, oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
 }
 
 func denied(w http.ResponseWriter, r *http.Request, reason string) {

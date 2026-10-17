@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -40,7 +39,7 @@ func TestStepUpRoleMismatch(t *testing.T) {
 	stepUp := func(p principal.Principal, groups []string) string {
 		t.Helper()
 		w := newStepUpWorldFor(t, 0, p, e.accounts)
-		res := w.stepUp(map[string]any{"sub": p.Subject, "auth_time": time.Now().Unix() - 5, "amr": []string{"pwd", "mfa"},
+		res := w.stepUp(map[string]any{"sub": p.Subject, "auth_time": w.clock.Unix(), "amr": []string{"pwd", "mfa"},
 			"jti": uuid.NewString(), "groups": groups})
 		if res.Code != http.StatusFound {
 			t.Fatalf("callback: %d", res.Code)
