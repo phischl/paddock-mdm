@@ -293,7 +293,7 @@ func TestPrivilegedGroupsKeepOnlyBreakGlassAccounts(t *testing.T) {
 	ctx := context.Background()
 	sys, s, events := sudoFixture(t)
 	sys.Members["sudo"] = []string{"paddock", "eve", "dave@acme.test"}
-	sys.Members["admin"] = []string{"mallory"}
+	sys.Members["admin"] = []string{"paddock", "mallory"}
 	sys.FailCmd = "gpasswd -d mallory admin"
 	r := sudoResource(t)
 	if changes, _ := s.Plan(ctx, r); !slices.Contains(changes, "remove eve from sudo") || !slices.Contains(changes, "remove dave@acme.test from sudo") {
@@ -312,6 +312,94 @@ func TestPrivilegedGroupsKeepOnlyBreakGlassAccounts(t *testing.T) {
 	}
 	if got := takeEvents(events); !slices.Equal(got, want) {
 		t.Fatalf("events %v", got)
+	}
+}
+
+// sudoResourceWith is sudoResource with the given break-glass accounts.
+func sudoResourceWith(t *testing.T, breakGlass ...string) bundle.Resource {
+	t.Helper()
+	r, err := bundle.SudoResource(bundle.SudoSpec{
+		LectureText: "Be careful.\n", PrivilegedGroups: []string{"sudo", "admin", "wheel"},
+		SudoersDAllowlist: []string{"README", "90-paddock"}, BreakGlassAccounts: breakGlass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// TestPrivilegedGroupsRemoveForeignMembersBesideABreakGlassAccount: a foreign member of a group that has a
+// break-glass member is removed and reported without a reason (plan M8x decision 11a).
+func TestPrivilegedGroupsRemoveForeignMembersBesideABreakGlassAccount(t *testing.T) {
+	ctx := context.Background()
+	sys, s, events := sudoFixture(t)
+	sys.Members["sudo"] = []string{"groot", "paddock-admin"}
+	takeEvents(events)
+	if res := s.Apply(ctx, sudoResourceWith(t, "paddock-admin")); res.Status != reconcile.Changed {
+		t.Fatalf("apply %+v", res)
+	}
+	if !slices.Contains(sys.TakeCalls(), "gpasswd -d groot sudo") || !slices.Equal(sys.Members["sudo"], []string{"paddock-admin"}) {
+		t.Fatalf("sudo members %v", sys.Members["sudo"])
+	}
+	want := []event{{protocol.EventTamperSudoGroupMember, `{"group":"sudo","username":"groot","removed":true}`}}
+	if got := takeEvents(events); !slices.Equal(got, want) {
+		t.Fatalf("events %v", got)
+	}
+}
+
+// TestPrivilegedGroupsNeverRemoveTheLastAdministrator: a group without a break-glass member keeps every member; each
+// kept member is reported once with reason last_admin; once a break-glass account joins the group the foreign member
+// is removed (ADR 0008 amendment 2026-10-17, plan M8x decision 11b).
+func TestPrivilegedGroupsNeverRemoveTheLastAdministrator(t *testing.T) {
+	ctx := context.Background()
+	sys, s, events := sudoFixture(t)
+	sys.Members["sudo"] = []string{"groot"}
+	r := sudoResourceWith(t, "paddock-admin")
+	if changes, err := s.Plan(ctx, r); err != nil || !slices.Contains(changes, "keep groot in sudo (last administrator)") ||
+		slices.Contains(changes, "remove groot from sudo") {
+		t.Fatalf("plan %v %v", changes, err)
+	}
+	s.Apply(ctx, r) // records /etc/sudoers and writes the lecture
+	takeEvents(events)
+	for _, c := range sys.TakeCalls() {
+		if strings.HasPrefix(c, "gpasswd") {
+			t.Fatalf("gpasswd called: %s", c)
+		}
+	}
+	if !slices.Equal(sys.Members["sudo"], []string{"groot"}) {
+		t.Fatalf("sudo members %v", sys.Members["sudo"])
+	}
+
+	// A fresh daemon run reports the kept member once; drift passes do not repeat it.
+	_, s2, events2 := sudoFixture(t)
+	s2.Sys = sys
+	if res := s2.Apply(ctx, r); res.Status != reconcile.OK {
+		t.Fatalf("apply %+v", res)
+	}
+	want := []event{{protocol.EventTamperSudoGroupMember, `{"group":"sudo","username":"groot","removed":false,"reason":"last_admin"}`}}
+	if got := takeEvents(events2); !slices.Equal(got, want) {
+		t.Fatalf("events %v", got)
+	}
+	if res := s2.Apply(ctx, r); res.Status != reconcile.OK || len(takeEvents(events2)) != 0 {
+		t.Fatalf("second apply %+v", res)
+	}
+
+	// The break-glass account joins the group: the next apply removes groot.
+	sys.Members["sudo"] = append(sys.Members["sudo"], "paddock-admin")
+	if res := s2.Apply(ctx, r); res.Status != reconcile.Changed || !slices.Equal(sys.Members["sudo"], []string{"paddock-admin"}) {
+		t.Fatalf("apply after the break-glass account joined %+v, members %v", res, sys.Members["sudo"])
+	}
+	want = []event{{protocol.EventTamperSudoGroupMember, `{"group":"sudo","username":"groot","removed":true}`}}
+	if got := takeEvents(events2); !slices.Equal(got, want) {
+		t.Fatalf("events %v", got)
+	}
+
+	// groot comes back while the break-glass account is gone again: it is kept and reported again.
+	sys.Members["sudo"] = []string{"groot"}
+	s2.Apply(ctx, r)
+	want = []event{{protocol.EventTamperSudoGroupMember, `{"group":"sudo","username":"groot","removed":false,"reason":"last_admin"}`}}
+	if got := takeEvents(events2); !slices.Equal(got, want) {
+		t.Fatalf("events after groot returned %v", got)
 	}
 }
 

@@ -11,10 +11,16 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
-// groupMembers returns, per privileged group that exists on the device, the members that are no break-glass account
-// (plan M3b decision 15). Directory users that Himmelblau's local_groups added are members like any other.
-func (s *Sudo) groupMembers(ctx context.Context, spec bundle.SudoSpec) (map[string][]string, error) {
-	out := map[string][]string{}
+// privilegedGroup is one privileged local group as found on the device.
+type privilegedGroup struct {
+	Foreign       []string // members that are no break-glass account, in getent order
+	HasBreakGlass bool     // at least one break-glass account is a member
+}
+
+// groupMembers returns every privileged group that exists on the device (plan M3b decision 15). Directory users that
+// Himmelblau's local_groups added are members like any other.
+func (s *Sudo) groupMembers(ctx context.Context, spec bundle.SudoSpec) (map[string]privilegedGroup, error) {
+	out := map[string]privilegedGroup{}
 	for _, g := range spec.PrivilegedGroups {
 		line, exit, err := s.Sys.Getent(ctx, "group", g)
 		if err != nil {
@@ -23,28 +29,47 @@ func (s *Sudo) groupMembers(ctx context.Context, spec bundle.SudoSpec) (map[stri
 		if exit != 0 {
 			continue // the group does not exist here
 		}
+		var pg privilegedGroup
 		f := strings.Split(strings.TrimSpace(line), ":")
-		if len(f) < 4 || f[3] == "" {
-			continue
-		}
-		for _, m := range strings.Split(f[3], ",") {
-			if !slices.Contains(spec.BreakGlassAccounts, m) {
-				out[g] = append(out[g], m)
+		if len(f) >= 4 && f[3] != "" {
+			for _, m := range strings.Split(f[3], ",") {
+				if slices.Contains(spec.BreakGlassAccounts, m) {
+					pg.HasBreakGlass = true
+				} else {
+					pg.Foreign = append(pg.Foreign, m)
+				}
 			}
 		}
+		out[g] = pg
 	}
 	return out, nil
 }
 
-// cleanGroups removes the members (`gpasswd -d`) and reports each as tamper.sudo_group_member; removed is false for a
-// member gpasswd could not remove (e.g. one that another NSS source provides) or that it must not be given: gpasswd
-// reads "--" after -d as the user, so a name starting with '-' cannot be passed safely and is refused (plan M4a step
-// 0a).
-func (s *Sudo) cleanGroups(ctx context.Context, members map[string][]string) (bool, error) {
+// cleanGroups removes the foreign members of every group that has a break-glass member and keeps every member of
+// a group without one (never the last administrator, ADR 0008 amendment 2026-10-17); each kept member is reported
+// once per daemon run as tamper.sudo_group_member with removed=false and reason last_admin.
+//
+// A removal is reported as tamper.sudo_group_member; removed is false for a member gpasswd could not remove (e.g. one
+// that another NSS source provides) or that it must not be given: gpasswd reads "--" after -d as the user, so a name
+// starting with '-' cannot be passed safely and is refused (plan M4a step 0a).
+func (s *Sudo) cleanGroups(ctx context.Context, groups map[string]privilegedGroup) (bool, error) {
 	removed := false
 	var errs []error
-	for _, g := range sortedKeys(members) {
-		for _, m := range members[g] {
+	kept := map[string]bool{}
+	for _, g := range sortedKeys(groups) {
+		pg := groups[g]
+		if !pg.HasBreakGlass {
+			for _, m := range pg.Foreign {
+				key := g + "/" + m
+				kept[key] = true
+				if !s.kept[key] {
+					s.Events.emit(protocol.EventTamperSudoGroupMember, protocol.TamperSudoGroupMember{Group: g, Username: m,
+						Reason: protocol.SudoGroupMemberKeptLastAdmin})
+				}
+			}
+			continue
+		}
+		for _, m := range pg.Foreign {
 			var err error
 			if strings.HasPrefix(m, "-") {
 				err = fmt.Errorf("gpasswd -d %q %s: a name starting with '-' is refused", m, g)
@@ -64,5 +89,8 @@ func (s *Sudo) cleanGroups(ctx context.Context, members map[string][]string) (bo
 			removed = true
 		}
 	}
+	// Replacing the set forgets members that are gone or whose group gained a break-glass member, so that they are
+	// reported again if they are kept later.
+	s.kept = kept
 	return removed, errors.Join(errs...)
 }

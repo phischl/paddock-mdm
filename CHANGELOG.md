@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every Authentik sign-in (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks
   for a second factor and enrols one when missing.
 
+### Fixed
+
+- The agent no longer removes the last administrator of a device: a privileged local group (sudo, admin, wheel) that
+  has no break-glass account as a member keeps all its members, and each is reported once as
+  `device.tamper_sudo_group_member` with `removed=false` and `reason=last_admin`. The members are removed once a
+  break-glass account or the managed local administrator is a member. Configure break-glass accounts before the first
+  enrolment of a device whose administrators are not managed by Paddock.
+
 ## [0.1.0-alpha.3] - 2026-10-17
 
 Hardening release (milestone M8s) plus the lab installation profile (M8a). **Upgrade order: update the agents on the

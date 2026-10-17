@@ -218,6 +218,10 @@ var EventTypes = []string{
 	EventUpdatesRun,
 }
 
+// SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass
+// account is a member of the group (ADR 0008 amendment 2026-10-17).
+const SudoGroupMemberKeptLastAdmin = "last_admin"
+
 // Disk states of DiskHealth (plan M4b decision 8), from the least to the most complete.
 const (
 	DiskNotEncrypted  = "not_encrypted"   // the root file system is not on LUKS
@@ -352,11 +356,13 @@ type (
 	SudoUserUnresolved struct {
 		Username string `json:"username"`
 	}
-	// TamperSudoGroupMember: a member of a privileged local group that is no break-glass account.
+	// TamperSudoGroupMember: a member of a privileged local group that is no break-glass account. Reason is
+	// SudoGroupMemberKeptLastAdmin when the member was kept because no break-glass account is a member of the group.
 	TamperSudoGroupMember struct {
 		Group    string `json:"group"`
 		Username string `json:"username"`
 		Removed  bool   `json:"removed"`
+		Reason   string `json:"reason,omitempty"`
 	}
 	// TamperSudoersDFile: an unexpected file in /etc/sudoers.d was moved to quarantine.
 	TamperSudoersDFile struct {

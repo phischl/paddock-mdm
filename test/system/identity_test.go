@@ -725,6 +725,30 @@ func gateP4(t *testing.T, w *identityWorld) {
 		t.Errorf("90-paddock changed: %s → %s", before, after)
 	}
 
+	// Never the last administrator (ADR 0008 amendment 2026-10-17): with a bundle that names no break-glass account,
+	// no member of sudo is removed; each is reported with reason last_admin. Once the real bundle is back, the foreign
+	// member is removed again.
+	member := "systest-" + unique()
+	w.Must("sudo useradd -M -s /usr/sbin/nologin " + member + " && sudo gpasswd -a " + member + " sudo >/dev/null")
+	defer w.Must("sudo userdel " + member + " 2>/dev/null || true")
+	restoreBreakGlass := w.forgeBundle(t, func(s *bundle.SudoSpec) { s.BreakGlassAccounts = nil })
+	w.WaitEvent(t, "device.tamper_sudo_group_member", 4*time.Minute, func(p map[string]any) bool {
+		return p["username"] == member && p["group"] == "sudo" && p["removed"] == false && p["reason"] == "last_admin"
+	})
+	members := strings.Split(w.Must("getent group sudo | cut -d: -f4"), ",")
+	for _, m := range []string{member, "paddock", localAdmin} {
+		if !slices.Contains(members, m) {
+			t.Errorf("sudo members %q without break-glass accounts: %s was removed", members, m)
+		}
+	}
+	restoreBreakGlass()
+	w.WaitEvent(t, "device.tamper_sudo_group_member", 4*time.Minute, func(p map[string]any) bool {
+		return p["username"] == member && p["group"] == "sudo" && p["removed"] == true
+	})
+	if members := w.Must("getent group sudo | cut -d: -f4"); members != "paddock,"+localAdmin {
+		t.Errorf("sudo members %q after the bundle was restored, want only the break-glass accounts", members)
+	}
+
 	// A broken entry that only a test-only bundle can carry (the compiler checks every entry before signing): dave's
 	// command list gets a command the agent refuses for dave alone.
 	daveFile := "/etc/sudoers.d/" + sudoers.FileName(w.dave.name)

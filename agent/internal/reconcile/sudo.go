@@ -77,6 +77,9 @@ type Sudo struct {
 	// reported as unresolved, so that a drift pass does not repeat them.
 	failed     map[string]string
 	unresolved map[string]bool
+	// kept holds the members (group + "/" + username) kept because their group has no break-glass member, so that a
+	// drift pass does not report them again while the state is unchanged.
+	kept map[string]bool
 }
 
 // Type implements Reconciler.
@@ -116,7 +119,7 @@ type sudoPlan struct {
 	remove     []string         // stale paddock-u-* files
 	quarantine []string         // foreign files
 	sudoersSum string           // current SHA-256 of /etc/sudoers if it differs from the recorded one
-	members    map[string][]string
+	members    map[string]privilegedGroup
 }
 
 func (p sudoPlan) changes() []string {
@@ -142,9 +145,13 @@ func (p sudoPlan) changes() []string {
 	if p.sudoersSum != "" {
 		out = append(out, "check "+Sudoers)
 	}
-	for g, members := range p.members {
-		for _, m := range members {
-			out = append(out, "remove "+m+" from "+g)
+	for g, pg := range p.members {
+		for _, m := range pg.Foreign {
+			if pg.HasBreakGlass {
+				out = append(out, "remove "+m+" from "+g)
+			} else {
+				out = append(out, "keep "+m+" in "+g+" (last administrator)")
+			}
 		}
 	}
 	slices.Sort(out)
@@ -152,7 +159,7 @@ func (p sudoPlan) changes() []string {
 }
 
 func (s *Sudo) plan(ctx context.Context, spec bundle.SudoSpec) (sudoPlan, error) {
-	p := sudoPlan{write: map[string][]byte{}, users: map[string]string{}, members: map[string][]string{}, rejected: map[string]error{}}
+	p := sudoPlan{write: map[string][]byte{}, users: map[string]string{}, members: map[string]privilegedGroup{}, rejected: map[string]error{}}
 	var err error
 	if p.flavor, p.visudo, err = SudoFlavor(ctx, s.Sys); err != nil {
 		return p, err
