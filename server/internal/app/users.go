@@ -244,7 +244,7 @@ func (u *Users) Update(ctx context.Context, id uuid.UUID, displayName, email *st
 			}
 			o, err := q.GetOrganization(ctx, cur.OrganizationID)
 			if err != nil {
-				return err
+				return fmt.Errorf("organization: %w", err)
 			}
 			out, domains = cur, o.Domains
 			if displayName != nil {
