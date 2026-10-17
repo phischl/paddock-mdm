@@ -40,3 +40,17 @@ code grants, device-code flow with **mandatory** MFA, `allow_console_password_on
 − M0 code must be migrated from `paddock:<slug>:<role>` to `paddock.<slug>.<role>` group names (plan M0.3).
 Follow-ups: file the upstream issues from the report; re-test TPM lockout and SSH/TTY deny-list paths on real hardware
 and in M3/M4 acceptance tests.
+
+## Amendment 2026-10-17 (M8x, lab findings L26, L29)
+- **Refresh tokens are not rotated during their life.** Himmelblau 4.0.x seals the refresh token with the Hello key
+  once, at PIN enrolment, and refreshes cached users from an in-memory copy; Authentik's default
+  `refresh_token_threshold = seconds=0` renews (and revokes) the refresh token at every refresh, so the sealed
+  token was revoked ten minutes after every login and the next PIN login deleted the Hello key. The device
+  provider sets `refresh_token_threshold: days=1` (renewal only within the last day of the 30-day validity).
+  Residual: once per refresh-token lifetime the user signs in with the device code again and sets a new PIN (RR-40)
+  until Himmelblau re-seals a renewed token (upstream issue filed by PDK-206).
+- **Device code lifetime** is `access_code_validity: minutes=10` on the device provider (Authentik's default of one
+  minute was too short to approve the sign-in and set the PIN).
+- **Pinned version** becomes 4.0.6 (second device flow after an expired code, synthetic lookups no longer cached),
+  subject to green identity and local-administrator gates on both VMs; otherwise 4.0.4 stays.
+- The system gate L6 (unlock with the PIN after more than the access-token lifetime) guards this behaviour.

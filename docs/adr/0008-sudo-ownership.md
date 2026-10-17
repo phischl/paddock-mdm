@@ -22,3 +22,14 @@ is computed per (user, device) with the concept's merge rules.
 ## Consequences
 + The portal can always show the complete derivation.
 − Users who added themselves to `sudo` lose that membership at the next apply (documented, visible as finding).
+
+## Amendment 2026-10-17 (M8x, lab finding L15) — never remove the last administrator
+The first apply on an adopted laptop of an organization without a domain removed the only local administrator from
+`sudo`: no managed local administrator existed (it needs the login resource, which needs a domain) and no break-glass
+account was configured, so the device was left without any administrator. The rule "members of `sudo`, `admin`,
+`wheel` are exactly the break-glass accounts" is narrowed: the agent removes foreign members of a privileged group
+**only while at least one break-glass account (the managed local administrator included) is a member of that
+group**. A group without one keeps every member; each kept member is reported once as
+`device.tamper_sudo_group_member` with `removed=false` and `reason=last_admin`, so the administrator sees it and
+adds a break-glass account or lets the local administrator be created. Report-only adoption (ADR 0033, M11) runs
+before this rule for adopted devices; the rule applies to every enforced apply (fail safe, design contract 8).
