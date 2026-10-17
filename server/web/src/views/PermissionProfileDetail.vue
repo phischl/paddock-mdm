@@ -277,6 +277,12 @@ async function unassign(a: ProfileAssignment): Promise<void> {
       </v-table>
 
       <h2>{{ t('profiles.assignments') }}</h2>
+      <p
+        class="summary"
+        data-testid="assign-hint"
+      >
+        {{ t('profiles.assignHint') }}
+      </p>
       <form
         v-if="session.canWrite"
         class="form assign-form"

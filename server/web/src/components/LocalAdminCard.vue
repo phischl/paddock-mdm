@@ -101,6 +101,16 @@ onMounted(async () => {
 })
 onBeforeUnmount(hide)
 watch(() => props.refresh, load)
+
+// The active password row (plan M8x decision 37): a stored password that waits for the device is not "none".
+const activeText = computed(() => {
+  if (!state.value) return ''
+  if (state.value.active_generation !== null) return String(state.value.active_generation)
+  if (state.value.pending_generation !== null) {
+    return t('devices.localAdmin.pendingConfirmation', { generation: state.value.pending_generation })
+  }
+  return t('devices.localAdmin.none')
+})
 </script>
 
 <template>
@@ -160,7 +170,7 @@ watch(() => props.refresh, load)
               {{ t('devices.localAdmin.active') }}
             </dt>
             <dd data-testid="local-admin-active">
-              {{ state.active_generation ?? t('devices.localAdmin.none') }}
+              {{ activeText }}
             </dd>
           </div>
           <div v-if="state.pending_generation !== null">

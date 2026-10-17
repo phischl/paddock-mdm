@@ -74,6 +74,8 @@ function submit(): void {
       :id="idPrefix + '-password'"
       v-model="requirePassword"
       :label="t('profiles.requirePassword')"
+      :hint="t('profiles.requirePasswordHint')"
+      persistent-hint
       color="primary"
       inset
     />

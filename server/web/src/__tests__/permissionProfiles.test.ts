@@ -91,6 +91,14 @@ describe('PermissionProfiles', () => {
     expect(submitButton().querySelector('[role="progressbar"]')).toBeNull()
   })
 
+  it('explains whom profiles apply to and what the password switch does (plan M8x decisions 38 and 39)', async () => {
+    const { w } = await mountList()
+    expect(w.get('[data-testid="profiles-intro"]').text()).toContain('They never apply to local accounts')
+    await w.find('[data-testid="create-profile"]').trigger('click')
+    await flushPromises()
+    expect(document.querySelector('.v-dialog')?.textContent).toContain('When on, sudo asks the user to authenticate')
+  })
+
   it('shows the effective class of a root-equivalent restricted profile', async () => {
     const { w } = await mountList()
     expect(w.find('[data-testid="profile-effective-class"]').text()).toBe('Full (effective)')

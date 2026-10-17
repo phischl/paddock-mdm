@@ -77,6 +77,12 @@ onMounted(async () => {
         {{ t('profiles.create') }}
       </v-btn>
     </div>
+    <p
+      class="summary"
+      data-testid="profiles-intro"
+    >
+      {{ t('profiles.intro') }}
+    </p>
     <DataList
       :columns="columns"
       :fetch="listProfiles"
