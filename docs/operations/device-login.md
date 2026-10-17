@@ -179,7 +179,9 @@ Paddock alone grants sudo on its devices (architecture §10). Set in *Login & pr
   member of these groups is removed at the next apply and reported (`device.tamper_sudo_group_member`) — but never
   the last administrator: a group that has no break-glass account as a member keeps all its members, and each is
   reported once with `removed=false` and `reason=last_admin`. Once a break-glass account or the managed local
-  administrator is a member, the others are removed.
+  administrator is a member, the others are removed. A break-glass account counts as a member only if someone can
+  sign in with it: `getent passwd` resolves it and its `/etc/shadow` entry exists and does not start with `!` or
+  `*` (a locked account, or one without a password); otherwise the group keeps all its members.
 - **sudoers.d allow list**: the files in `/etc/sudoers.d` that are not Paddock's (for example `README` and the sudoers
   file of the break-glass account). Every other file is moved to `/var/lib/paddock/quarantine/sudoers.d/` and
   reported (`device.tamper_sudoers_d_file`).

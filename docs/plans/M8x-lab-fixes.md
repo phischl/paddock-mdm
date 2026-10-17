@@ -694,7 +694,8 @@ the audit log: `AttentionKind` has no kind for it (`admin.yaml` 4760, view `atte
 ## 4. Non-goals
 
 - Any change to `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, `pkg/revocation/`.
-- The bundle schema, the device API version, migrations (M8x adds none).
+- The bundle schema, the device API version. Migrations: only `00049_device_contact_unseen.sql` of §3.18 (PDK-295);
+  no other M8x ticket adds one.
 - Ending Authentik sessions on *end all sessions* (PDK-190 stays open; decision 1 removes its symptom).
 - WebAuthn-only login (PDK-181), the role switch (PDK-201), the getting-started wizard and guide (M8g), the
   one-liner install (L11), hardware facts (L12), auto-unseal (M8u), device lifecycle (M8d).
@@ -725,7 +726,7 @@ the audit log: `AttentionKind` has no kind for it (`admin.yaml` 4760, view `atte
 | `api/openapi/admin.yaml`, generated Go/TS | change | §6.1 |
 | `server/cmd/paddock-server/compiler.go` | change | Himmelblau 4.0.6 |
 | `agent/internal/reconcile/login.go`, `login_test.go` | change | `cache_timeout` line (PDK-292); `local_sudo_group`, `local_groups_reconcile_interval` lines (PDK-294) |
-| `server/migrations/paddock/000NN_device_contact_unseen.sql` (new), `queries/{device,overview,inventory}.sql`, `server/internal/app/attention.go`, `api/openapi/admin.yaml`, `server/web/src/lib/{devices,status,overview}.ts`, locales, `server/web/e2e/devices.spec.ts` | new/change | §3.18 (PDK-295) |
+| `server/migrations/paddock/00049_device_contact_unseen.sql` (new), `queries/{device,overview,inventory}.sql`, `server/internal/app/attention.go`, `api/openapi/admin.yaml`, `server/web/src/lib/{devices,status,overview}.ts`, locales, `server/web/e2e/devices.spec.ts` | new/change | §3.18 (PDK-295) |
 | `server/internal/domain/organization/role.go`, `role_test.go`, locales | change | §3.19 (PDK-296) |
 | `server/web/src/composables/usePending.ts` (new), the 22 submit sites and the action views of decision 26 | new/change | §3.7 |
 | `server/web/src/views/{Organizations,LoginDenied,PermissionProfiles,PermissionProfileDetail,ManagedFiles,Users,UserDetail,EnrollmentTokens,DeviceAccess}.vue`, `App.vue` | change | §3.3–§3.14 |
@@ -741,7 +742,8 @@ the audit log: `AttentionKind` has no kind for it (`admin.yaml` 4760, view `atte
 MUST NOT be touched: `agent/internal/revoke/`, `agent/cmd/paddock-revoke/`, `pkg/revocation/`, `pkg/bundle`,
 `api/openapi/device.yaml` (the protocol change of decision 10 is a Go struct field of `pkg/protocol` and the audit
 param registry; the device API document lists report events by name only — if it documents the payload fields, add
-`reason` there as an optional field), `server/migrations/`, `deploy/compose/compose.prod.yaml`,
+`reason` there as an optional field), `server/migrations/paddock/00001…00048` (PDK-295 adds `00049`),
+`deploy/compose/compose.prod.yaml`,
 `deploy/compose/compose.lab.yaml`, `deploy/compose/authentik/blueprints/paddock-stepup.yaml`, `paddock-device.yaml`,
 `paddock-recovery.yaml`, `docs/adr/0001…0033` except the amended ones, files of plans M8b–M11.
 
@@ -757,7 +759,7 @@ GET /api/v1/permission-profiles/root-equivalence   decision 40 (tag privileges, 
 RootEquivalence: {effective_class: PrivilegeClass, root_equivalent_commands: string[], witnesses: string[]}
 ```
 
-`OrganizationCreate` is unchanged. No new problem code. No migration.
+`OrganizationCreate` is unchanged. No new problem code. One migration, `00049_device_contact_unseen.sql` (§3.18).
 
 ### 6.2 Device protocol (`pkg/protocol`)
 

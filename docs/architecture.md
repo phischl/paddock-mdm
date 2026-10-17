@@ -1030,7 +1030,9 @@ finding on the device and the user.
 > **Amendment 2026-10-17 (M8x):** never the last administrator. A privileged group that has no break-glass account
 > as a member keeps every member; the agent reports each once per daemon run as `tamper.sudo_group_member` with
 > `removed=false` and `reason=last_admin`, and removes the foreign members once a break-glass account (or the managed
-> local administrator) is a member (ADR 0008 amendment 2026-10-17).
+> local administrator) is a member (ADR 0008 amendment 2026-10-17). A break-glass account counts as present only if
+> `getent passwd` resolves it and its `/etc/shadow` entry exists and does not start with `!` or `*`; a missing or
+> locked account does not unlock the cleanup (fail safe).
 
 ### 10.2 Effective profile
 
