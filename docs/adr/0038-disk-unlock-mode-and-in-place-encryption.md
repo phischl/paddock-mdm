@@ -101,3 +101,15 @@ Facts that bound the design:
   reinstall (RR-52).
 Follow-ups: plan M8d PDK-231 to PDK-233; milestone M8e (in-place encryption); the setup wizard (M8g) chooses the
 organization default; `docs/operations/disk-recovery.md` gains the mode conversion steps.
+
+## Amendment 2026-10-17 (ADR 0039)
+
+Decision 4 and option B3 are superseded by ADR 0039: the in-place encryption of M8e is not an offline conversion
+from a rescue system but a LUKS2 online reencryption initialised by a dracut unit during one restart and completed
+in the background (`cryptsetup reencrypt --encrypt --init-only --reduce-device-size 32M`, then `--resume-only`).
+The verification of the facts in the context section above was repeated there: ext4 is shrunk offline in the
+initrd, the free space at the end of the device comes from that shrink, and the keyslot operations of this ADR
+(TPM2 + PIN or TPM2 per unlock mode, recovery key, header escrow) run unchanged once the reencryption has
+completed — the PIN dialogue itself already runs at the conversion boot. The unlock mode decisions 1–3 and
+`health.disk.boot_separate` stand. The portal message of decision 4 is replaced by the *Encrypt this device*
+action for eligible devices and by the "reinstall needed" message with the reasons for the others.
