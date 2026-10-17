@@ -39,3 +39,11 @@ Consequence: a compromise of the GitHub repository together with the maintainer'
 signed agent. Accepted for the operational cost of offline signing; mitigated by the required approval, tag-only
 deployment, staged rollout with automatic stop, and the server-side and supervisor-side signature checks. Rotation
 stays as described above (new supervisor package, new public key).
+
+## Amendment 2026-10-17 — automatic unseal as an acknowledged option
+
+Shamir 3 of 5 with named custodians stays the seal. ADR 0035 adds a bundled option for installations that accept the
+risk: a platform administrator acknowledges a versioned disclaimer in the portal with a step-up, and the host
+operator starts a dedicated unsealer that holds three shares on the control-plane host and submits them while the
+setting is enabled. While it is on, the custodian threshold no longer gates the unseal (residual risk RR-43); it
+still gates rekeying and root-token generation. Nothing in OpenBao's seal configuration changes.
