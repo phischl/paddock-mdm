@@ -27,13 +27,15 @@ export async function stepUp(page: Page, start: () => Promise<void>, username: s
   // redirect started, so the flow page loaded in the browser and Authentik's UI ran the flow alongside the executor
   // API below, which broke the step-up now and then (PDK-047). follow() walks the redirects with the context's cookies.
   // The URL is taken in the handler: the request event can arrive before it, and an unroute in between would let the
-  // request through.
+  // request through. The held navigation gets an empty page, not a 204: a 204 never commits the navigation, and since
+  // Playwright 1.64 a click that started a navigation waits for it to commit, so start() would hang until the test
+  // timeout.
   const stepUpStart = /\/api\/auth\/stepup\?/
   let held!: (url: string) => void
   const startUrl = new Promise<string>((resolve) => (held = resolve))
   await page.route(stepUpStart, async (route) => {
     held(route.request().url())
-    await route.fulfill({ status: 204, body: '' })
+    await route.fulfill({ status: 200, contentType: 'text/html', body: '' })
   })
   await start()
   const url = await startUrl
