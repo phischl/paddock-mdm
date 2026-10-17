@@ -42,13 +42,23 @@ Follow-ups: file the upstream issues from the report; re-test TPM lockout and SS
 and in M3/M4 acceptance tests.
 
 ## Amendment 2026-10-17 (M8x, lab findings L26, L29)
-- **Refresh tokens are not rotated during their life.** Himmelblau 4.0.x seals the refresh token with the Hello key
-  once, at PIN enrolment, and refreshes cached users from an in-memory copy; Authentik's default
-  `refresh_token_threshold = seconds=0` renews (and revokes) the refresh token at every refresh, so the sealed
-  token was revoked ten minutes after every login and the next PIN login deleted the Hello key. The device
-  provider sets `refresh_token_threshold: days=1` (renewal only within the last day of the 30-day validity).
-  Residual: once per refresh-token lifetime the user signs in with the device code again and sets a new PIN (RR-40)
-  until Himmelblau re-seals a renewed token (upstream issue filed by PDK-206).
+- **Hello PIN past the access token (interim mitigation, agent-side).** Himmelblau 4.0.x (generic OIDC, identical
+  in 4.0.6 and `main`) re-seals the refresh token with the Hello key at every PIN login, but its cached-user refresh
+  (`unix_user_get`, run by any NSS lookup once the user's cache entry is older than `cache_timeout`, default 300 s)
+  rotates the token in memory only; Authentik revokes the old one, the next PIN login or unlock presents the stale
+  sealed token, gets `invalid_grant` and deletes the Hello key. No Authentik setting avoids it: a
+  `refresh_token_threshold` above zero omits the refresh token from the response and Himmelblau then denies every
+  PIN login. Decision: the agent renders `cache_timeout = 2592000` (30 days, equal to the device provider's
+  `refresh_token_validity`) into `himmelblau.conf`, so the background refresh can only run when the sealed token has
+  expired anyway; every PIN authentication re-seals the token and resets the cache expiry. Costs accepted:
+  Himmelblau's cached NSS attributes of a signed-in user refresh online at the next PIN authentication or after 30
+  days; a locked user (tokens revoked) leaves Himmelblau's NSS cache until the next login. Paddock's lock, suspension
+  and allow list do not depend on that cache. Rejected: `enable_hello = false` as the default (device code and
+  phone at every unlock; stays available per organization), a per-organization cache setting (the value follows
+  from the token validity), accepting the failure. The two 30-day figures move together. Residual (RR-40): after 30
+  days without a PIN authentication, after a lock, after three wrong PINs, and on agents older than 0.1.0-alpha.4
+  the user signs in with the device code again and sets a new PIN. The constant is removed once an upstream
+  release re-seals rotated tokens (issue draft in the maintainer's notes).
 - **Device code lifetime** is `access_code_validity: minutes=10` on the device provider (Authentik's default of one
   minute was too short to approve the sign-in and set the PIN).
 - **Pinned version** becomes 4.0.6 (second device flow after an expired code, synthetic lookups no longer cached),

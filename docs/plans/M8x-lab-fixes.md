@@ -48,19 +48,32 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
 - **Device login tokens (L26, L29).** `server/internal/adapters/authentik/devicelogin.go::ensureDeviceLogin` PUTs
   the device provider with `access_token_validity: minutes=10`, `refresh_token_validity: days=30` and no
   `access_code_validity` (Authentik default `minutes=1`, which is the device code's lifetime:
-  `device_backchannel.py` sets `expires = now + access_code_validity`) and no `refresh_token_threshold` (default
-  `seconds=0` = "always renew": every refresh issues a new refresh token and revokes the old one,
-  `views/token.py::create_refresh_response`, Authentik 2026.8.3). Himmelblau 4.0.4
-  (`src/common/src/idprovider/openidconnect.rs`) seals the refresh token with the Hello key once, at PIN enrolment
-  (`seal_data` in `unix_user_online_auth_step`), refreshes cached users from an in-memory refresh token
-  (`unix_user_get` → `acquire_token_by_refresh_token` → `token_validate` caches the new token in memory only) and,
-  at a PIN login, unseals the sealed token and uses it; a rejected token deletes the Hello key ("Your session has
-  expired. Please sign in again."). After the first background refresh (ten minutes after the login) the sealed
-  token is revoked, the next PIN login fails with `invalid_grant` and Authentik records `suspicious_request`
-  "Revoked refresh token was used". Himmelblau 4.0.6 (2026-10-15) does not change this logic (compare 4.0.4...4.0.6);
-  it resets the MFA polling state after a completed poll (PoC M1 upstream issue 4, `PAM_SYSTEM_ERR` after an expired
-  device code) and stops caching synthetic user lookups. The pin `PADDOCK_HIMMELBLAU_VERSION` defaults to `4.0.4`
-  (`server/cmd/paddock-server/compiler.go:36`); the repository serves `4.0.6` for `ubuntu24.04` and `ubuntu26.04`.
+  `device_backchannel.py` sets `expires = now + access_code_validity`). Authentik 2026.8.3 renews the refresh token
+  at every refresh and revokes the old one (`views/token.py::create_refresh_response`, default
+  `refresh_token_threshold = seconds=0`); a threshold above zero is **not** a fix: Authentik then omits
+  `refresh_token` from the refresh response until the token nears expiry, and Himmelblau 4.0.4–4.0.6 denies every
+  PIN login without one ("Authentication incomplete", `openidconnect.rs` 3322–3330). The mechanism, verified in the
+  lab against Authentik's refresh-token primary keys and in the Himmelblau source (4.0.4, 4.0.6 and `main` are
+  identical for generic OIDC; evidence in the maintainer's upstream note): every successful PIN login exchanges
+  the sealed refresh token and **re-seals the new one** with the Hello key; the cached-user refresh in
+  `unix_user_get` runs when the user's cache entry has expired (`cache_timeout`, default 300 s, reset by every
+  `set_cache_usertoken`, which every successful PAM authentication calls) and is triggered by any NSS lookup of the
+  user (`get_usertoken` → `refresh_usertoken`); that refresh rotates the token, keeps the new one in memory only,
+  and Authentik revokes the old one; the next PIN login or unlock prefers the stale sealed token, gets
+  `invalid_grant` (Authentik event `suspicious_request` "Revoked refresh token was used"), deletes the Hello key
+  and demands the device code and a new PIN. The session itself never ends; Authentik revokes no token family. No
+  Authentik setting changes this; Himmelblau's Okta provider on `main` handles the rotation correctly, the generic
+  OIDC provider does not. A PIN login therefore fails whenever more than `cache_timeout` passed since the user's
+  last successful PIN authentication while the device was online and anything looked the user up. Himmelblau
+  4.0.6 (2026-10-15) resets the MFA polling state after a completed poll (PoC M1 upstream issue 4, `PAM_SYSTEM_ERR`
+  after an expired device code) and stops caching synthetic user lookups. The pin `PADDOCK_HIMMELBLAU_VERSION`
+  defaults to `4.0.4` (`server/cmd/paddock-server/compiler.go:36`); the repository serves `4.0.6` for `ubuntu24.04`
+  and `ubuntu26.04`. The agent renders `himmelblau.conf` in `agent/internal/reconcile/login.go::renderHimmelblauConf`
+  with fixed lines (`idmap_range`, `local_groups`) next to the bundle's values; `cache_timeout` is not set, so the
+  default 300 s applies. `cache_timeout` also bounds Himmelblau's negative cache (`set_nxcache`) and the group cache.
+  Paddock's user lock does not depend on it: the agent writes the deny list and locks or ends sessions itself, and
+  Authentik revokes the user's tokens; the allow list (`pam_allow_groups`) is evaluated in the account phase after
+  an online authentication refreshed the user's claims.
 - **Organizations (L16).** `PATCH /api/platform/v1/organizations/{id}` (`OrganizationDomainsUpdate`, audited
   `organization.domains_changed`) exists; `OrganizationCreate` has `slug` and `name` only;
   `server/web/src/views/Organizations.vue` has a create dialog without domains and no edit dialog;
@@ -241,35 +254,74 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
 15. Tests: component test `enrollmentTokens.test.ts` (new) for both alerts; acceptance `TestMe` (or the existing
     `overview_test.go` me check) asserts `organization.domains` equals the acme domains.
 
-### 3.4 Device login tokens (PDK-206) — ADR 0019 amendment 2026-10-17
+### 3.4 Device code lifetime (PDK-206) and the Hello PIN past the access token (PDK-292) — ADR 0019 amendment 2026-10-17
 
-16. `ensureDeviceLogin` MUST set `"access_code_validity": "minutes=10"` and `"refresh_token_threshold": "days=1"`
-    on the device provider (unchanged: `access_token_validity: minutes=10`, `refresh_token_validity: days=30`).
-    The reconciliation every 10 minutes converges existing providers. `adapter_test.go::TestDeviceLoginSettings`
-    and the acceptance gate `TestIdentityAuthentikProvisioning` MUST assert both values.
+16. `ensureDeviceLogin` MUST set `"access_code_validity": "minutes=10"` on the device provider (unchanged:
+    `access_token_validity: minutes=10`, `refresh_token_validity: days=30`; **no** `refresh_token_threshold`: a
+    threshold above zero makes Himmelblau deny every PIN login, §2). The reconciliation every 10 minutes converges
+    existing providers. `adapter_test.go::TestDeviceLoginSettings` and the acceptance gate
+    `TestIdentityAuthentikProvisioning` MUST assert the value and MUST assert that `refresh_token_threshold` is
+    `seconds=0`.
+16a. **Interim mitigation (PDK-292, agent).** Until Himmelblau re-seals a rotated refresh token upstream, the agent
+    MUST render `cache_timeout = 2592000` (30 days, the device provider's `refresh_token_validity`) into
+    `himmelblau.conf` in `renderHimmelblauConf`, as a fixed line after `idmap_range`, with the constant
+
+    ```go
+    // himmelblauCacheTimeout keeps Himmelblau's cached-user refresh from rotating the refresh token behind the Hello
+    // PIN: Himmelblau 4.0.x re-seals the token only at a PIN login and presents the sealed one at the next, so a
+    // background rotation deletes the Hello key (ADR 0019 amendment 2026-10-17). Equal to the provider's refresh
+    // token validity (server/internal/adapters/authentik/devicelogin.go): the refresh can then only run when the
+    // sealed token has expired anyway. Remove when the upstream fix is pinned.
+    const himmelblauCacheTimeout = 2592000
+    ```
+
+    Rationale and the alternatives weighed: (a) a larger `cache_timeout` — chosen; with the value equal to the
+    refresh-token validity the background refresh can never revoke a sealed token that is still valid, because every
+    PIN authentication re-seals the token and resets the cache expiry; the cost is that Himmelblau's cached NSS
+    attributes (display name, shell, groups of `id`) of a user with an open session are refreshed online only at the
+    user's next PIN authentication or after 30 days instead of 300 s, and that a user whose refresh failed with
+    `invalid_grant` (a Paddock lock revokes the tokens) stays in Himmelblau's negative cache for up to 30 days or a
+    daemon restart, so `getent passwd` of a **locked** user answers nothing until the user signs in again (the agent
+    reports `device.sudo_user_unresolved` for such a user; a lock already removes the user's sudo entry). Paddock's
+    lock, suspension and allow list do not depend on the cache (§2), and a login's auth phase refreshes the claims
+    online before the account phase checks them, so no access decision becomes stale. (b) `enable_hello = false`
+    — rejected as the default: every login and every screen unlock would need the device code and the phone;
+    organizations that prefer it already have the setting *Login & privileges → Hello PIN* (`hello_enabled`).
+    (c) a per-organization setting for the cache timeout — rejected: the value follows from the provider's token
+    validity, nothing varies per organization, and a setting would outlive the workaround. (d) accept and document
+    only — rejected: a PIN that fails after every lunch break is the device finding with the highest priority.
+    The residual that stays (RR-40): a user who did not authenticate with the PIN for 30 days (refresh token
+    expired) signs in with the device code again and sets a new PIN; the same after a lock, three wrong PINs, or a
+    stale sealed token on devices whose agent is older than this release (the mitigation is agent-side: update the
+    agents first).
 17. Documents: `docs/operations/device-login.md` new section *Tokens of the device login* (binding content): the
-    device code lives ten minutes; the access token ten minutes; the refresh token 30 days and is renewed only within
-    its last day, because Himmelblau 4.0.x seals the refresh token with the Hello key once at PIN enrolment and would
-    present a revoked one after a renewal; once per refresh-token lifetime (30 days, or earlier after a lock, three
-    wrong PINs or a long offline period) the user signs in with the device code again and sets a new PIN. The
-    upstream issue the implementer files at `himmelblau-idm/himmelblau` ("Hello-sealed refresh token is not updated
-    when a background refresh renews it") is linked there. `docs/compliance/residual-risks.md` **RR-40** "Hello PIN
-    re-enrolment once per refresh-token lifetime" with that mitigation. `test/system/login.go` `pamOpts.approve`
-    comment: "the attempt fails once the code expires, about 10 minutes" (the gates' negative cases run into their
-    own 3-minute timeout, which stays).
+    device code lives ten minutes; the access token ten minutes; the refresh token 30 days, renewed at every PIN
+    authentication; Himmelblau refreshes a cached user's attributes online at the next PIN authentication or after
+    30 days (`cache_timeout`, set by the agent because Himmelblau 4.0.x would otherwise rotate the refresh token
+    behind the PIN and the next PIN login would fail); once per 30 days without a PIN authentication (or earlier
+    after a lock, three wrong PINs or a long offline period) the user signs in with the device code again and sets a
+    new PIN. The upstream issue (draft in the maintainer's notes; the maintainer posts it after a 4.0.6
+    reproduction) is linked there once posted. `docs/compliance/residual-risks.md` **RR-40** "Hello PIN re-enrolment
+    after 30 days without a PIN authentication, and on agents older than 0.1.0-alpha.4" with the mitigation of 16a.
+    `test/system/login.go` `pamOpts.approve` comment: "the attempt fails once the code expires, about 10 minutes" (the
+    gates' negative cases run into their own 3-minute timeout, which stays).
 
 ### 3.5 System gate for the PIN past the access-token lifetime, Himmelblau 4.0.6, login messages (PDK-207)
 
 18. `TestIdentityGates` MUST gain `L6 PIN past the access-token lifetime` (`gateL6`), run directly after `L1 login`
-    on each VM: (a) record `t0`; (b) for eleven minutes, every 60 s run `id <dave>` and `getent passwd <dave>` in
-    the guest (they trigger Himmelblau's cached-user refresh); (c) `sudo loginctl lock-session <seat0 session ID>`,
-    wait until `LockedHint=yes` (60 s); `w.Shot("20-locked")`; `w.Key(keySpace...)`, 3 s, `w.Type(dave.pin)`,
-    wait until `LockedHint=no` within 60 s, `w.Shot("21-unlocked")`; (d) `pamLogin(dave, false, time.Minute) == 0`;
+    on each VM: (a) record `t0`; assert that `/etc/himmelblau/himmelblau.conf` contains the line
+    `cache_timeout = 2592000`; (b) for eleven minutes, every 60 s run `id <dave>` and `getent passwd <dave>` in
+    the guest (with the default `cache_timeout` of 300 s they would trigger Himmelblau's cached-user refresh and the
+    rotation; the gate proves they no longer do); (c) `sudo loginctl lock-session <seat0 session ID>`, wait until
+    `LockedHint=yes` (60 s); `w.Shot("20-locked")`; `w.Key(keySpace...)`, 3 s, `w.Type(dave.pin)`, wait until
+    `LockedHint=no` within 60 s, `w.Shot("21-unlocked")`; (d) `pamLogin(dave, false, time.Minute) == 0`;
     (e) `authentikSQL("SELECT count(*) FROM authentik_events_event WHERE action = 'suspicious_request' AND created >
-    '<t0>'")` is `0`. A failure of (c), (d) or (e) fails the gate. The eleven minutes run in parallel on both VMs.
+    '<t0>'")` is `0`. A failure of (a), (c), (d) or (e) fails the gate. The eleven minutes run in parallel on both
+    VMs. The gate is expected to fail without PDK-292 (that run is recorded once in the result document as the
+    reproduction) and to pass with it, on 4.0.4 and on 4.0.6.
 19. `PADDOCK_HIMMELBLAU_VERSION` default MUST become `4.0.6` (`compiler.go:36` and the error text, `.env.example`
     comments, `docs/operations/device-login.md`, `docs/architecture.md` §9.3 if it names the version, CHANGELOG
-    `### Changed`). Order inside the ticket: gate L6 first against 4.0.4 (with PDK-206 merged it passes); then the
+    `### Changed`). Order inside the ticket: gate L6 first against 4.0.4 (with PDK-292 merged it passes); then the
     bump; then `make system-test VM=all T='TestIdentityGates|TestLocalAdminGates|TestNoticeGate'`. If any gate
     regresses with 4.0.6 (stop condition S4), the default stays `4.0.4` and the ticket reports the gate.
 20. `docs/operations/device-login.md` MUST gain the table *Messages at the login screen* (L19) with these rows:
@@ -501,7 +553,9 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
   one-liner install (L11), hardware facts (L12), auto-unseal (M8u), device lifecycle (M8d).
 - Report-only adoption (M11, PDK-160/161): referenced, not implemented.
 - An English rename of "operator roots".
-- Changing `refresh_token_validity` (30 days stays; open point O1).
+- Changing `refresh_token_validity` (30 days stays; open point O1) or setting `refresh_token_threshold` (breaks
+  Himmelblau's PIN login, §2).
+- Patching or forking Himmelblau; `enable_hello = false` as the default (the per-organization setting stays).
 
 ## 5. Affected files
 
@@ -523,6 +577,7 @@ sixteen smaller findings of the lab (loading states, readable errors, hints, Ger
 | `server/internal/app/users.go`, `server/internal/transport/http/admin/{handlers,handlers_identity}.go` | change | `domain_match`, `MeOrganization.domains`, `step_up_valid_until`, root-equivalence handler |
 | `api/openapi/admin.yaml`, generated Go/TS | change | §6.1 |
 | `server/cmd/paddock-server/compiler.go` | change | Himmelblau 4.0.6 |
+| `agent/internal/reconcile/login.go`, `login_test.go` | change | `cache_timeout` line (PDK-292) |
 | `server/web/src/composables/usePending.ts` (new), the 22 submit sites and the action views of decision 26 | new/change | §3.7 |
 | `server/web/src/views/{Organizations,LoginDenied,PermissionProfiles,PermissionProfileDetail,ManagedFiles,Users,UserDetail,EnrollmentTokens,DeviceAccess}.vue`, `App.vue` | change | §3.3–§3.14 |
 | `server/web/src/components/{ProfileForm,ManagedFileForm,LocalAdminCard,EnrollmentTokenForm,…}.vue` | change | hints, previews, states |
@@ -601,7 +656,8 @@ func checkSecretFilesReadableByServices(c Config) Result   // item "secret files
 | Object | Setting | Value |
 | --- | --- | --- |
 | device provider `paddock-device-<slug>` | `access_code_validity` | `minutes=10` |
-| device provider | `refresh_token_threshold` | `days=1` |
+| device provider | `refresh_token_threshold` | `seconds=0` (Authentik default; MUST stay: any other value breaks the PIN login) |
+| `himmelblau.conf` (agent) | `cache_timeout` | `2592000` (= `refresh_token_validity: days=30`) |
 | default brand | `flow_authentication` | flow `paddock-admin-login` (worker, every 10 min) |
 | flow `default-authentication-flow` | binding order 31 | stage `paddock-default-login-mfa` (configure, threshold 5 min) |
 | portal authorize request | `prompt` | `login` |
@@ -665,8 +721,10 @@ in use), Anmeldekomponente (login component) and Freigegebenes Verzeichnis (oper
 ## 7. Host and operator notes (binding figures for the documents)
 
 - After the upgrade every Authentik sign-in asks for a second factor; `akadmin` enrols one at its next login.
-- A Hello PIN now outlives the access token; once per 30 days (refresh-token lifetime) a device-code sign-in with a
-  new PIN is expected (RR-40).
+- A Hello PIN now outlives the access token on devices with an agent of this release (update the agents first);
+  after 30 days without a PIN authentication a device-code sign-in with a new PIN is expected (RR-40).
+- `cache_timeout` and `refresh_token_validity` are one figure (30 days) in two places (agent constant, device
+  provider); they move together.
 - The device code at the login screen is valid for 10 minutes.
 - Release public keys: `chmod 644`; release directories for `./paddock agent-release`: `chmod -R a+rX`.
 - A device whose sudo group has no break-glass member keeps its members and reports them; configure break-glass
@@ -682,8 +740,10 @@ in use), Anmeldekomponente (login component) and Freigegebenes Verzeichnis (oper
    no diff; `make system-test VM=all T=TestIdentityGates` (P4 case).
 3. **PDK-205 — Break-glass guidance before enrolment** (§3.3). Verify: `make typecheck`; `make web`; acceptance me
    check.
-4. **PDK-206 — Device provider token settings** (§3.4). Verify: `go test ./server/internal/adapters/authentik/`;
+4. **PDK-206 — Device code lifetime** (§3.4 decisions 16–17). Verify: `go test ./server/internal/adapters/authentik/`;
    `make acceptance T=TestIdentityAuthentikProvisioning`.
+4a. **PDK-292 — Agent renders `cache_timeout`** (§3.4 decision 16a). Verify: `go test ./agent/...`; the L6 gate of
+   PDK-207 once it exists (PDK-207 runs it against this change).
 5. **PDK-207 — System gate L6, Himmelblau 4.0.6, login messages** (§3.5). Verify: `make system-test VM=all
    T='TestIdentityGates|TestLocalAdminGates|TestNoticeGate'` on both VMs.
 6. **PDK-208 — Organization domains in the portal** (§3.6). Verify: `make web`; `make e2e`.
@@ -704,8 +764,9 @@ in use), Anmeldekomponente (login component) and Freigegebenes Verzeichnis (oper
 16. **PDK-218 — Documents and residual risks** (§3.16). Verify: `make lint`; links resolve.
 17. **PDK-219 — Regression and release 0.1.0-alpha.4** (§3.16). Verify: every command of decision 53 green.
 
-PDK-203 first; PDK-204, PDK-206 and PDK-208 MAY run in parallel after it. PDK-205 depends on PDK-204 (texts name
-its rule); PDK-207 on PDK-206; PDK-212 on PDK-209 (the chip uses no pending state, but both touch `App.vue`);
+PDK-203 first; PDK-204, PDK-206, PDK-292 and PDK-208 MAY run in parallel after it. PDK-205 depends on PDK-204
+(texts name its rule); PDK-207 on PDK-206 and PDK-292; PDK-212 on PDK-209 (the chip uses no pending state, but both
+touch `App.vue`);
 PDK-213, PDK-214, PDK-215, PDK-216 MAY run in parallel after PDK-209; PDK-218 after every other ticket but PDK-219.
 
 ## 9. Acceptance criteria (positive and negative per role)
@@ -718,8 +779,8 @@ Roles: **A** = org_admin (`env.Alice` or a temp admin), **U** = org_auditor (`en
 | S1 | `GET /api/auth/login` → the `Location` contains `prompt=login`; the default brand's `flow_authentication` is `paddock-admin-login`; `default-authentication-flow` has the binding at order 31 to `paddock-default-login-mfa` with `not_configured_action: configure`. | P (Authentik API) |
 | S2 | (unit) An ID token without `mfa` in `amr` → `/login-denied?reason=mfa_required`, no cookie, one `admin.login` denied `mfa_required`; with `mfa` → session; with the development switch → session. `PADDOCK_LOGIN_MFA_OPTIONAL` in a production configuration fails `./paddock check` (`no development-only variables`). | A, O |
 | S3 | (VM, P4) A foreign member of `sudo` on a device whose bundle names no break-glass account stays a member; `device.tamper_sudo_group_member` arrives with `removed=false`, `reason=last_admin`; with a break-glass member present the foreign member is removed. | D, A (audit) |
-| S4 | The device provider of acme has `access_code_validity: minutes=10` and `refresh_token_threshold: days=1`. | P (Authentik API) |
-| S5 | (VM, L6) After eleven minutes of cached-user lookups the locked GNOME session unlocks with the PIN, a PAM PIN login succeeds, and Authentik recorded no `suspicious_request` since the login. | S, D |
+| S4 | The device provider of acme has `access_code_validity: minutes=10` and `refresh_token_threshold: seconds=0`; the agent's `himmelblau.conf` on a VM contains `cache_timeout = 2592000` and `renderHimmelblauConf` emits it (unit test). | P (Authentik API), D |
+| S5 | (VM, L6) After eleven minutes of cached-user lookups the locked GNOME session unlocks with the PIN, a PAM PIN login succeeds, and Authentik recorded no `suspicious_request` since the login; the same gate fails on an agent without PDK-292 (recorded once as the reproduction). | S, D |
 | S6 | P creates an organization with a domain in the portal → the row shows the domain and the audit log has `organization.created` and `organization.domains_changed`; P edits the domains of a row → PATCH, row updated; a domain of another organization → the dialog shows the `domain_taken` text. | P |
 | S7 | While a create request is in flight, the submit button is disabled and shows a progress indicator (component tests for profiles and managed files; e2e for organizations). | A, P |
 | S8 | (unit) With an empty keyring `GET /api/auth/login` redirects to `/login-denied?reason=key_store_sealed`; the page shows the OpenBao text. `paddock-server healthcheck` against a sealed api prints `session keys not loaded: OpenBao is sealed or unreachable`. | A, O |
@@ -748,12 +809,13 @@ upstream issue; the fixture layout of the new prodcheck test; how `gateL6` struc
   `last_auth_threshold` attribute (report the importer log; do not bind at order 30 and do not remove `configure`).
 - S2: with `prompt=login` the acceptance login helper or the e2e `login` cannot complete the flow (report the flow
   executor's challenge; do not remove `prompt=login`).
-- S3: Authentik 2026.8.3 refuses `refresh_token_threshold` or `access_code_validity` in the provider PUT (report the
-  response; do not drop the other settings).
+- S3: Authentik 2026.8.3 refuses `access_code_validity: minutes=10` in the provider PUT (report the response; never
+  set `refresh_token_threshold` as a substitute).
 - S4: a system gate regresses with Himmelblau 4.0.6 (sudo UID resolution before the first login, local administrator,
   notice): keep `4.0.4` as the default, keep gate L6, report.
-- S5: gate L6 fails with PDK-206 merged and Himmelblau 4.0.4 (the sealed token is still rejected): report the
-  Himmelblau log lines and Authentik's events; do not weaken the gate.
+- S5: gate L6 fails with PDK-292 merged (the sealed token is still rejected, or Himmelblau refuses
+  `cache_timeout = 2592000`): report the Himmelblau log lines, the rendered configuration and Authentik's events; do
+  not weaken the gate and do not lower the value below 86400 without reporting.
 - S6: the organization row is not readable inside `InOrg` for `MeOrganization.domains` or `User.domain_match`
   (report the RLS policy; do not read with the platform pool).
 - S7: `TestOpenAPISpec` or the privileged-route table refuses a `GET` without `x-paddock-audit` (report; do not add an
@@ -775,14 +837,18 @@ upstream issue; the fixture layout of the new prodcheck test; how `gateL6` struc
 - **Authentik upgrade** may re-apply its default blueprints: the Paddock stage at order 31 is a separate object and
   survives; the worker keeps the brand's authentication flow every 10 minutes.
 - **Himmelblau 4.0.6** changes synthetic-user caching; the system gates decide (S4).
-- **Monthly PIN re-enrolment** (RR-40) until Himmelblau re-seals the refresh token; the upstream issue is filed by
-  PDK-206.
+- **PIN re-enrolment after 30 days without a PIN authentication** (RR-40) until Himmelblau re-seals a rotated
+  refresh token; the maintainer posts the upstream issue after a 4.0.6 reproduction. Devices with an older agent
+  keep failing after every background refresh until the agent is updated (agents first).
+- **Stale cached attributes for 30 days.** Himmelblau's NSS cache of a signed-in user (name, shell, `id` groups)
+  refreshes at the next PIN authentication; a locked user disappears from `getent passwd` until the next login.
+  No access decision depends on it (§2); documented in `device-login.md`.
 - **Two audit events for a create with domains** (`organization.created`, `organization.domains_changed`): accepted
   and documented; the M8g wizard may later ask for an atomic create (own decision).
 - **Last-administrator guard delays hygiene** on devices without any break-glass member: the members are reported,
   and the attention/audit trail shows them; administrators configure break-glass accounts to let the cleanup run.
-- O1 (open, default chosen): raise `refresh_token_validity` above 30 days to make the re-enrolment rarer? Default:
-  no; stays 30 days (ADR 0019 setting).
+- O1 (open, default chosen): raise `refresh_token_validity` (and with it `cache_timeout`) above 30 days to make
+  the re-enrolment rarer? Default: no; both stay 30 days (ADR 0019 setting).
 - O2 (open): the advisory ID for the PDK-203 security line of the release commit; the maintainer provides it to
   PDK-219 or the line stays in `### Changed`.
 - O3 (open, default chosen): the German navigation label is "Freigegebene Verzeichnisse" (short) with the page

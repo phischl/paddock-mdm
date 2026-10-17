@@ -57,5 +57,5 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
   (`paddock-default-login-mfa`, configure when missing, 5-minute threshold) at order 31 of Authentik's
   `default-authentication-flow`, so a password-only session cannot be created through Authentik's own interfaces.
   The development blueprint skips that stage like the login stage.
-- **Device provider tokens** (ADR 0019 amendment): `access_code_validity: minutes=10`,
-  `refresh_token_threshold: days=1`.
+- **Device provider tokens** (ADR 0019 amendment): `access_code_validity: minutes=10`; `refresh_token_threshold`
+  stays at Authentik's default `seconds=0` (a threshold above zero makes Himmelblau deny every PIN login).
