@@ -46,7 +46,7 @@ and German.
 </p>
 
 > [!WARNING]
-> **Alpha.** Paddock 0.1.0-alpha.2 is the first published pre-release (milestones M0–M7), meant for evaluation, not
+> **Alpha.** Paddock 0.1.0-alpha.3 is the current pre-release (milestones M0–M8a and the M8s hardening), meant for evaluation, not
 > for production fleets. There are no upgrade guarantees between alpha releases. Revocation (Lock, Destroy, dead
 > man's switch) stays disabled behind `PADDOCK_REVOCATION_ENABLED` until its code has passed the second-person review
 > and an installation has passed its hardware acceptance (`docs/operations/revocation-acceptance.md`).
