@@ -67,3 +67,8 @@ consumer cannot work with offset pages, the 10 000-row depth cap or the 92-day w
 `x-paddock-feed: { cursor: "after", limit: { default, max } }` instead of `x-paddock-list`, answer
 `{schema, events, next_after, latest}` (never `items`), and the contract test checks them against that rule. The
 portal does not render feeds; every portal list stays a `DataList` over a collection endpoint.
+
+## Amendment 2026-10-17 (M8x, lab finding L1) — loading state
+Every button that starts a request (submit buttons of forms and dialogs, action buttons of detail pages) shows a
+loading indicator and is disabled until the request returns (`usePending`); a second click while pending does
+nothing. A confirmation dialog closes on confirm; the button that opened it carries the loading state.

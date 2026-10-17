@@ -159,3 +159,11 @@ those roots can never be complete. Decision 2 is therefore narrowed:
 
 The upgrade order becomes binding: agents first, then the server. A pre-M8s agent removes a file that leaves its
 bundle, so a server that stops shipping denied files must not reach devices before their agents know `left_denied_file`.
+
+## Amendment 2026-10-17 (M8x, lab finding L9 / PDK-202) — second factor at login
+The login callback applies the step-up's rule to the sign-in itself: an ID token whose `amr` lacks `mfa` is refused
+(`admin.login` denied, error code `mfa_required`) and the portal requests `prompt=login`, so the SSO session of
+another flow never signs an administrator in. The development stack, whose login flow skips the validation stage,
+sets `PADDOCK_LOGIN_MFA_OPTIONAL=true` for the api; the variable is refused outside `PADDOCK_ENV=development` and
+is a production-check finding like `PADDOCK_STEPUP_*`. The portal exposes `step_up_valid_until` in `GET /api/v1/me`
+so that an administrator sees how long the current step-up satisfies privileged actions.
