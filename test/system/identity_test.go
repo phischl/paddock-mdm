@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -852,7 +853,7 @@ func gateP4(t *testing.T, w *identityWorld) {
 
 // forgeBundle replaces the device's cached bundle by a copy with a changed sudo resource, signed with a test key
 // that is added to the device's trust anchor, and restarts the agent, whose drift pass then applies it. The returned
-// function restores the original bundle and trust anchor.
+// function restores the original bundle and trust anchor; it runs once, at the latest when the test ends.
 func (w *identityWorld) forgeBundle(t *testing.T, change func(*bundle.SudoSpec)) func() {
 	t.Helper()
 	const cache, trust = "/var/lib/paddock/state/bundle.dsse", "/etc/paddock/trust.json"
@@ -903,14 +904,18 @@ func (w *identityWorld) forgeBundle(t *testing.T, change func(*bundle.SudoSpec))
 	}
 	tf.BundleKeys = append(tf.BundleKeys, protocol.BundleKey{KeyID: "systest:forged", PublicKey: base64.StdEncoding.EncodeToString(pub)})
 	trustJSON, _ := json.Marshal(tf)
-	w.Must("sudo systemctl stop paddock-supervisor")
-	w.MustIn(signed, "sudo tee "+cache+" >/dev/null && sudo chmod 0600 "+cache)
-	w.MustIn(trustJSON, "sudo tee "+trust+" >/dev/null && sudo chmod 0644 "+trust)
-	w.Must("sudo systemctl start paddock-supervisor")
-	return func() {
+	restore := sync.OnceFunc(func() {
 		w.Must("sudo systemctl stop paddock-supervisor")
 		w.MustIn([]byte(origBundle), "sudo tee "+cache+" >/dev/null && sudo chmod 0600 "+cache)
 		w.MustIn([]byte(origTrust), "sudo tee "+trust+" >/dev/null && sudo chmod 0644 "+trust)
 		w.Must("sudo systemctl start paddock-supervisor")
-	}
+	})
+	// Registered before the device changes: a gate that fails must not leave the forged bundle and the test key in the
+	// trust anchor for the gates after it.
+	t.Cleanup(restore)
+	w.Must("sudo systemctl stop paddock-supervisor")
+	w.MustIn(signed, "sudo tee "+cache+" >/dev/null && sudo chmod 0600 "+cache)
+	w.MustIn(trustJSON, "sudo tee "+trust+" >/dev/null && sudo chmod 0644 "+trust)
+	w.Must("sudo systemctl start paddock-supervisor")
+	return restore
 }
