@@ -120,7 +120,8 @@ Exchange these files between the hosts over a secure channel (for example `scp` 
 
 Copy the production release public keys (`docs/operations/agent-releases.md`, "Production key") to
 `.secrets/release-production/minisign.pub` and `.secrets/release-production/revoke-minisign.pub` on the control
-plane. Their secret keys never come to a server.
+plane and make them readable by the services (they run as uid 65532; `./paddock check` names a file they cannot
+read): `chmod 644 .secrets/release-production/*.pub`. Their secret keys never come to a server.
 
 Pull the images: `./paddock pull`.
 
@@ -243,8 +244,9 @@ publish them:
 ./paddock agent-release <version> <dir>
 ```
 
-It verifies every signature with the release public keys of `.secrets/release-production/` before anything is
-stored, uploads the files, publishes the release and prints it as JSON; the release then shows on the portal's
+`<dir>` and its files must be readable by the `paddock-api` service (uid 65532): `chmod -R a+rX <dir>`; the command
+refuses a directory it cannot read and names the files. It verifies every signature with the release public keys of
+`.secrets/release-production/` before anything is stored, uploads the files, publishes the release and prints it as JSON; the release then shows on the portal's
 *Agent releases* page, where its staged rollout starts.
 
 ## 11. Backups

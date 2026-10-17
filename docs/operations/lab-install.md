@@ -274,6 +274,7 @@ Run every command inside the bundle directory, as the user who runs Docker.
    ```sh
    mkdir -p .secrets/release-production
    cp <offline>/minisign.pub <offline>/revoke-minisign.pub .secrets/release-production/
+   chmod 644 .secrets/release-production/*.pub   # the services run as uid 65532
    ```
    The secret keys never come to the host. `./paddock check` refuses the development release key.
 8. **Check and start.** Your proxy must be running before `./paddock up`: the roles' readiness needs Authentik's
@@ -288,7 +289,8 @@ Run every command inside the bundle directory, as the user who runs Docker.
 ## 6. First administrator, organization and device
 
 As in production: `docs/operations/install.md` section 9 (first platform administrator, first organization, first
-device, IP allow list) and section 10 (first agent release with `./paddock agent-release`).
+device, IP allow list) and section 10 (first agent release with `./paddock agent-release`). The release directory and
+its files must be readable by the `paddock-api` service (uid 65532): `chmod -R a+rX <dir>`.
 
 ## 7. Backups
 
@@ -313,6 +315,8 @@ Every production item that applies to one host runs unchanged:
 - `no development-only variables`
 - `revocation path enabled only after its acceptance`
 - `secret files present, not empty and not world-readable`
+- `secret files readable by the Paddock services` (the Paddock images run as uid 65532: a secret file of a Paddock
+  service must have mode 644, or belong to uid 65532; the finding names the `chmod`)
 - `secrets the services reference are mounted`
 - `links between the hosts use TLS` (local service names pass; OpenBao is `https://` everywhere)
 - `container hardening` (the Paddock roles and Caddy drop every capability but Caddy's `NET_BIND_SERVICE` and may not

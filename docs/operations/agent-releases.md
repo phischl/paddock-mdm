@@ -75,7 +75,8 @@ variable `PADDOCK_RELEASE_KEY_PASSPHRASE`, so it never appears on a command line
    (`-ldflags "-X github.com/phischl/paddock-mdm/agent/internal/buildinfo.Version=<version>"`, `CGO_ENABLED=0`).
 2. Sign it (above; the release workflow does it for a tagged release).
 3. **Production:** put the signed files on the control-plane host (layout in `docs/operations/install.md` section 10)
-   and run `./paddock agent-release <version> <dir>` in the bundle directory. It runs
+   and run `./paddock agent-release <version> <dir>` in the bundle directory (`<dir>` and its files must be readable by
+   the `paddock-api` service, uid 65532: `chmod -R a+rX <dir>`). It runs
    `paddock-server admin agent-release` in the `paddock-api` service, which verifies every signature first, then
    creates the release, uploads every binary and package and publishes it through the same use cases and audit events
    as the API below, with the system actor `paddock-server admin`, and prints the release as JSON (steps 3–5 in one

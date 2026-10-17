@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A release public key or another secret file of a Paddock service with mode 0600 made the roles fail with
+  "permission denied". `./paddock check` now names such a file (item `secret files readable by the Paddock services`)
+  with the `chmod 644` to run, and `./paddock agent-release` refuses a release directory the `paddock-api` service
+  cannot read and names `chmod -R a+rX`.
 - A refused portal sign-in names the reason: no Paddock role group, roles in several organizations, platform and
   organization roles on one account, or an inactive organization. The audit event `admin.login` carries it as
   `denial_reason`.

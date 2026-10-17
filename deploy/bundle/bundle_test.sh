@@ -169,6 +169,18 @@ expect 0 "migrate-from into a fresh directory" "$work/q" migrate-from "$work/p"
 rm "$work/q/.env"
 expect 1 "migrate-from onto an existing .secrets/" "$work/q" migrate-from "$work/p"
 
+# agent-release refuses a release directory the paddock-api service (uid 65532) cannot read (plan M8x decision 50).
+mkdir -p "$work/release"
+echo x >"$work/release/paddockd"
+chmod 700 "$work/release"
+expect 1 "agent-release with a 0700 release directory" "$work/p" agent-release 1.0.0 "$work/release"
+if [[ "$out" == *"chmod -R a+rX $work/release"* && "$out" == *"$work/release"* ]]; then
+  pass "the release directory refusal names chmod -R a+rX"
+else
+  fail "the release directory refusal: $out"
+fi
+chmod 755 "$work/release"
+
 # The lab host (plan M8a decision 8): accepted with its own settings; the backup file only with PADDOCK_LAB_BACKUP=yes.
 cp -a "$bundle" "$work/l"
 sed 's/^PADDOCK_HOST=.*/PADDOCK_HOST=frobnicate/' "$work/l/.env.lab.example" >"$work/l/.env"
