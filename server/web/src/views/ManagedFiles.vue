@@ -79,6 +79,15 @@ const columns = computed<ListColumn[]>(() => [
       </v-btn>
     </div>
     <p
+      class="summary"
+      data-testid="operator-roots-hint"
+    >
+      {{ t('managed.files.operatorRootsHint') }}
+      <RouterLink to="/settings/managed-files">
+        {{ t('managed.files.operatorRootsLink') }}
+      </RouterLink>
+    </p>
+    <p
       v-if="pageProblem"
       class="form-error"
       role="alert"

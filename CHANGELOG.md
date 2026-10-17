@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clearer texts: a device's local administrator password that waits for the device's confirmation is no longer shown
   as "none yet"; permission profiles and device access explain that they apply to directory users only, never to
   local accounts; the password switch of a profile explains what it does.
+- Managed files: a path with characters outside ASCII shows a hint (it is still saved as given), and the page links
+  to the operator roots. The German portal calls operator roots „Freigegebene Verzeichnisse“.
 
 ### Changed
 

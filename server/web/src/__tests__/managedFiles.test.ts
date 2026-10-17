@@ -72,6 +72,32 @@ function submitButton(): HTMLButtonElement {
   return document.querySelector('.v-dialog form button[type="submit"]') as HTMLButtonElement
 }
 
+describe('ManagedFiles: non-ASCII paths and the operator roots (plan M8x decisions 43 and 44)', () => {
+  it('links to the operator roots', async () => {
+    const w = await mountList()
+    const hint = w.get('[data-testid="operator-roots-hint"]')
+    expect(hint.text()).toContain('Operators create and change files only below the operator roots')
+    expect(hint.get('a').attributes('href')).toBe('/settings/managed-files')
+    expect(hint.get('a').text()).toBe('Configure operator roots')
+  })
+
+  it('names a path outside ASCII and still submits it', async () => {
+    saveManagedFile.mockResolvedValue(null)
+    const w = await mountList()
+    await w.find('[data-testid="create-managed-file"]').trigger('click')
+    await flushPromises()
+    const field = document.querySelector('#file-path') as HTMLInputElement
+    field.value = '/etc/myapp/app.conf'
+    field.dispatchEvent(new Event('input'))
+    await flushPromises()
+    expect(document.querySelector('[data-testid="path-non-ascii"]')).toBeNull()
+    await createFile(w, '/etc/myapp/konfiguration-ä.conf')
+    expect(document.querySelector('[data-testid="path-non-ascii"]')?.textContent).toContain('The path contains characters outside ASCII.')
+    expect(saveManagedFile).toHaveBeenCalledTimes(1)
+    expect(saveManagedFile.mock.calls[0][1]).toMatchObject({ path: '/etc/myapp/konfiguration-ä.conf' })
+  })
+})
+
 describe('ManagedFiles', () => {
   it('disables the submit button and shows progress while the create request runs (plan M8x decision 27)', async () => {
     let resolve: (v: string | null) => void = () => {}

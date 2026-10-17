@@ -973,6 +973,9 @@
     "deleteLabel": "Delete {name}",
     "files": {
       "title": "Managed files",
+      "pathNonAscii": "The path contains characters outside ASCII. The device writes it as given; make sure the program that reads the file expects this name.",
+      "operatorRootsHint": "Operators create and change files only below the operator roots; every other path needs an organization administrator with a step-up.",
+      "operatorRootsLink": "Configure operator roots",
       "create": "Create managed file",
       "createTitle": "New managed file",
       "editTitle": "Edit managed file",

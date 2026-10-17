@@ -83,7 +83,7 @@
     "attentionPill": "{count, plural, one {# braucht Aufmerksamkeit} other {# brauchen Aufmerksamkeit}}",
     "shortcut": "Tastenkürzel: {keys}",
     "securityReview": "Sicherheitsprüfung",
-    "operatorRoots": "Operator-Wurzeln"
+    "operatorRoots": "Freigegebene Verzeichnisse"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -354,7 +354,7 @@
       "login_changed": "{actor} hat die Anmeldeeinstellungen geändert",
       "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
-      "managed_files_changed": "{actor} hat die Operator-Wurzeln der verwalteten Dateien geändert"
+      "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
@@ -973,6 +973,9 @@
     "deleteLabel": "{name} löschen",
     "files": {
       "title": "Verwaltete Dateien",
+      "pathNonAscii": "Der Pfad enthält Zeichen außerhalb von ASCII. Das Gerät schreibt ihn unverändert; stellen Sie sicher, dass das Programm, das die Datei liest, diesen Namen erwartet.",
+      "operatorRootsHint": "Operatoren legen Dateien nur unterhalb der freigegebenen Verzeichnisse an und ändern sie dort; jeder andere Pfad erfordert einen Organisationsadministrator mit Identitätsbestätigung.",
+      "operatorRootsLink": "Freigegebene Verzeichnisse festlegen",
       "create": "Verwaltete Datei anlegen",
       "createTitle": "Neue verwaltete Datei",
       "editTitle": "Verwaltete Datei bearbeiten",
@@ -1016,14 +1019,14 @@
     "tierColumn": "Pfadstufe",
     "sensitiveForbidden": "Dateien auf sensiblen Pfaden erfordern einen Organisationsadministrator. Bitten Sie einen, diese Datei anzulegen oder zu ändern.",
     "roots": {
-      "title": "Operator-Wurzeln der verwalteten Dateien",
+      "title": "Freigegebene Verzeichnisse für Operatoren",
       "intro": "Unterhalb dieser Verzeichnisse verwalten Operatoren Dateien ohne Identitätsbestätigung, außer ausführbaren Dateien, Skripten, Shared Objects und .d-Verzeichnissen. Jeder andere Pfad erfordert einen Organisationsadministrator mit Identitätsbestätigung. Das Ändern der Liste erfordert eine Identitätsbestätigung; bestehende Dateien behalten ihre Definitionen, und die Sicherheitsprüfung listet Dateien, die nun eine Bestätigung brauchen.",
-      "label": "Operator-Wurzeln (eine pro Zeile)",
+      "label": "Freigegebene Verzeichnisse (eines pro Zeile)",
       "hint": "Verzeichnisse wie /etc/myapp/ oder /opt/vendor/, mit abschließendem Schrägstrich.",
-      "confirmTitle": "Operator-Wurzeln ändern",
-      "confirm": "{count, plural, one {# Operator-Wurzel} other {# Operator-Wurzeln}} speichern? Anschließend bestätigen Sie Ihre Identität.",
-      "saved": "Die Operator-Wurzeln wurden gespeichert.",
-      "warning": "Operator-Wurzeln sind eine Vertrauensentscheidung: Ein Programm, das als root läuft und Dateien unterhalb einer Wurzel ausführt oder einliest (Konfiguration, die es auswertet, Includes, die es ausführt), macht diese Wurzel root-gleichwertig, und Paddock kann das nicht erkennen. Fügen Sie nur Verzeichnisse reiner Anwendungskonfiguration hinzu."
+      "confirmTitle": "Freigegebene Verzeichnisse ändern",
+      "confirm": "{count, plural, one {# freigegebenes Verzeichnis} other {# freigegebene Verzeichnisse}} speichern? Anschließend bestätigen Sie Ihre Identität.",
+      "saved": "Die freigegebenen Verzeichnisse wurden gespeichert.",
+      "warning": "Freigegebene Verzeichnisse sind eine Vertrauensentscheidung: Ein Programm, das als root läuft und Dateien unterhalb eines freigegebenen Verzeichnisses ausführt oder einliest (Konfiguration, die es auswertet, Includes, die es ausführt), macht dieses freigegebene Verzeichnis root-gleichwertig, und Paddock kann das nicht erkennen. Fügen Sie nur Verzeichnisse reiner Anwendungskonfiguration hinzu."
     }
   },
   "users": {

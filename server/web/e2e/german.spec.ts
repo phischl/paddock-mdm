@@ -31,6 +31,7 @@ test('organization admin switches the portal to German', async ({ page }) => {
     const nav = mainNav(page, 'Hauptnavigation')
     await expect(nav.getByRole('link', { name: 'Gerätegruppen' })).toBeVisible()
     await expect(nav.getByRole('link', { name: 'Audit-Protokoll' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Freigegebene Verzeichnisse' })).toBeVisible()
     await expectAccessible(page)
 
     // Stored as the English code admin.login, displayed in German.

@@ -59,6 +59,14 @@ function submit(): void {
       spellcheck="false"
       :error-messages="message(errors.path)"
     />
+    <v-alert
+      v-if="/[^\x20-\x7e]/.test(form.path)"
+      type="info"
+      variant="tonal"
+      data-testid="path-non-ascii"
+    >
+      {{ t('managed.files.pathNonAscii') }}
+    </v-alert>
     <div class="form-row">
       <v-text-field
         id="file-mode"

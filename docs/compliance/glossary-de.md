@@ -51,7 +51,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Not reported | Nicht gemeldet | |
 | Online | Online | |
 | Organization | Organisation | |
-| Operator root (managed files) | Operator-Wurzel | Directory below which operators manage files without a step-up. |
+| Operator root (managed files) | Freigegebenes Verzeichnis (für Operatoren) | Directory below which operators manage files without a step-up. |
 | Organization administrator | Organisationsadministrator | |
 | Overview (navigation group) | Übersicht | |
 | Overview (page) | Übersicht | The start page of administrators and operators. |
