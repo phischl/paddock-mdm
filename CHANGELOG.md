@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The device code at the login screen expired after one minute; the device login provider now gives it ten minutes.
+  A known issue of Himmelblau remains: after a background refresh the next Hello PIN login or unlock fails and the
+  PIN must be enrolled again with the device code (residual risk RR-40, `docs/operations/device-login.md`).
+
 - The agent no longer removes the last administrator of a device: a privileged local group (sudo, admin, wheel) that
   has no break-glass account as a member keeps all its members, and each is reported once as
   `device.tamper_sudo_group_member` with `removed=false` and `reason=last_admin`. The members are removed once a

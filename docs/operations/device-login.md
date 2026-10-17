@@ -76,6 +76,28 @@ lecture as the place for the usage policy on devices whose sudo is sudo-rs, whic
 - Users not in the device's login assignment (or not in the organization) are refused: Authentik refuses users of
   other organizations, the device refuses users outside its allow list.
 
+## Tokens of the device login
+
+| Token | Lifetime |
+| --- | --- |
+| Device code (the code and QR code at the login screen) | 10 minutes |
+| Access token | 10 minutes |
+| Refresh token | 30 days |
+
+The worker sets these values on the device provider of every organization (`access_code_validity`,
+`access_token_validity`, `refresh_token_validity`) and converges existing providers every 10 minutes. It also keeps
+`refresh_token_threshold` at zero: with a threshold Authentik leaves the refresh token out of its refresh response,
+and Himmelblau then refuses every PIN login.
+
+**Known issue: Hello PIN after a background refresh (residual risk RR-40).** Himmelblau 4.0.x seals the refresh token
+with the Hello key once, at PIN enrolment. While the user is signed in, Himmelblau refreshes the cached user in the
+background and Authentik renews the refresh token, which revokes the sealed one. The session itself stays up, but the
+next PIN login or screen unlock after such a refresh presents the stale sealed token, fails with *Your session has
+expired. Please sign in again.*, and Himmelblau deletes the Hello key: the user signs in with the device code again
+and sets a new PIN. The cause is upstream (Himmelblau's generic OIDC PIN path prefers the sealed token over the newer
+one); the upstream issue "Hello-sealed refresh token is not updated when a background refresh renews it" at
+`himmelblau-idm/himmelblau` is pending (link added once filed). No Authentik setting avoids it.
+
 ## Messages at the login screen
 
 The greeter and the lock screen show the texts of PAM and GNOME; Paddock cannot change them.
@@ -84,7 +106,7 @@ The greeter and the lock screen show the texts of PAM and GNOME; Paddock cannot 
 | --- | --- |
 | `PAM_SYSTEM_ERR` after a device code expired at the greeter | Himmelblau before 4.0.6 could not start a second device flow in the same greeter session. Type the username again; fixed in Himmelblau 4.0.6. |
 | `Sorry, password authentication didn't work` (GNOME lock screen) | GNOME's text for any refused PIN: the user is locked, the PIN is wrong, or the session expired. |
-| `Your session has expired. Please sign in again.` | The refresh token was revoked or expired: sign in with the device code and set a new PIN. |
+| `Your session has expired. Please sign in again.` | The refresh token was revoked or expired: sign in with the device code and set a new PIN (*Tokens of the device login*). |
 | `Failed to authenticate with Hello PIN.` | Wrong PIN; after three wrong PINs the device code is required. |
 | `authenticated user … does not match requested user` | The Authentik username is not `name@domain`: rename the user in the identity source, or add the domain to the organization. |
 

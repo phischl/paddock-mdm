@@ -87,7 +87,8 @@ func TestDeviceLoginSettings(t *testing.T) {
 	if provider["name"] != "paddock-device-acme" || provider["client_id"] != "paddock-device-acme" || provider["client_type"] != "public" ||
 		provider["authentication_flow"] != authFlow || provider["authorization_flow"] != authzFlow || provider["issuer_mode"] != "per_provider" ||
 		provider["sub_mode"] != "hashed_user_id" || provider["access_token_validity"] != "minutes=10" ||
-		provider["refresh_token_validity"] != "days=30" || len(grants) != 3 || len(provider["property_mappings"].([]any)) != 4 {
+		provider["refresh_token_validity"] != "days=30" || provider["access_code_validity"] != "minutes=10" ||
+		provider["refresh_token_threshold"] != "seconds=0" || len(grants) != 3 || len(provider["property_mappings"].([]any)) != 4 {
 		t.Fatalf("provider %v", provider)
 	}
 	if uris := provider["redirect_uris"].([]any); uris[0].(map[string]any)["url"] != authentik.DeviceRedirectURI {
@@ -96,6 +97,17 @@ func TestDeviceLoginSettings(t *testing.T) {
 	app := f.objects["applications"]["paddock-device-acme"]
 	if app["policy_engine_mode"] != "all" || app["provider"] != float64(intOf(provider["pk"])) {
 		t.Fatalf("application %v", app)
+	}
+
+	// A refresh-token threshold set by hand breaks every Hello PIN login (RR-40): the next reconciliation resets it.
+	provider["refresh_token_threshold"] = "days=1"
+	if _, err := client(srv).EnsureOrganization(context.Background(), "acme"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range f.objects["providers"] {
+		if p["refresh_token_threshold"] != "seconds=0" {
+			t.Fatalf("refresh_token_threshold %v after the reconciliation, want seconds=0", p["refresh_token_threshold"])
+		}
 	}
 	for _, p := range f.objects["policies"] {
 		if p["expression"] != authentik.AccessExpression("acme") {

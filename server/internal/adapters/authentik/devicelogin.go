@@ -128,6 +128,11 @@ func (c *Client) ensureDeviceLogin(ctx context.Context, slug string) error {
 		"redirect_uris": []map[string]string{{"matching_mode": "strict", "url": DeviceRedirectURI, "redirect_uri_type": "authorization"}},
 		"signing_key":   signing, "include_claims_in_id_token": true, "sub_mode": "hashed_user_id", "issuer_mode": "per_provider",
 		"access_token_validity": "minutes=10", "refresh_token_validity": "days=30",
+		// The device code lives ten minutes; Authentik's default access_code_validity of one minute let the code expire
+		// before a user had signed in on the second device (lab finding L29). refresh_token_threshold is pinned to zero
+		// and reset if changed by hand: with a threshold Authentik omits refresh_token from the refresh response, which
+		// Himmelblau 4.0.x treats as an incomplete authentication and refuses every PIN login (RR-40).
+		"access_code_validity": "minutes=10", "refresh_token_threshold": "seconds=0",
 		"property_mappings": append(mappings, groups),
 	})
 	if err != nil {
