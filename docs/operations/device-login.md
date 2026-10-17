@@ -26,7 +26,10 @@ At the first bundle with login management (agents report bundle schema 2), the a
 2. writes `/etc/himmelblau/himmelblau.conf` (issuer and client of the organization's device application, the device's
    allow list `pam_allow_groups`, Hello PIN settings, no console password login, the fixed UID range
    `idmap_range = 200000-999999999` — sudo-rs cannot handle longer numeric users, and changing the range would give
-   every directory user a new UID) and restarts `himmelblaud` and
+   every directory user a new UID, and `local_sudo_group = paddock-no-sudo` with `local_groups_reconcile_interval = 0`
+   — Paddock alone manages sudo: without these lines Himmelblau removes every account it knows from `sudo` at each
+   sign-in and every five minutes, because its own sudo groups are never configured; `paddock-no-sudo` is a group
+   that does not exist, so Himmelblau's removal from it does nothing) and restarts `himmelblaud` and
    `himmelblaud-tasks`, which read the allow list only at start. Local changes are reverted at the next drift pass;
 3. keeps the deny list `/etc/paddock/login-deny` of locked users (see below), an empty file when nobody is locked.
 

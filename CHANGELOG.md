@@ -68,6 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `device.tamper_sudo_group_member` with `removed=false` and `reason=last_admin`. The members are removed once a
   break-glass account or the managed local administrator is a member. Configure break-glass accounts before the first
   enrolment of a device whose administrators are not managed by Paddock.
+- The login component no longer removes accounts from the sudo group or re-adds them to local groups every five
+  minutes; Paddock alone manages sudo.
 
 ## [0.1.0-alpha.3] - 2026-10-17
 

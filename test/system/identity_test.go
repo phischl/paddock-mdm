@@ -446,12 +446,19 @@ func gateP3(t *testing.T, w *identityWorld) {
 // cache_timeout keeps Himmelblau from refreshing the cached user in the background (with the default 300 s the NSS
 // lookups of the eleven minutes would rotate the refresh token behind the PIN, RR-40); then the locked GNOME session
 // unlocks with the PIN, a PAM PIN login succeeds, and Authentik saw no revoked refresh token (suspicious_request)
-// since the gate started.
+// since the gate started. Plan M8x decision 56 (PDK-294): Himmelblau never touches sudo — its local sudo group is
+// one that does not exist and its periodic local-group reconciliation is off, so the groups sudo and users are
+// unchanged across the eleven minutes, no account is removed from sudo and the agent never had to repair the local
+// administrator's membership.
 func gateL6(t *testing.T, w *identityWorld) {
 	t0 := time.Now().UTC()
-	if !slices.Contains(strings.Split(w.Must("sudo cat /etc/himmelblau/himmelblau.conf"), "\n"), "cache_timeout = 2592000") {
-		t.Fatal("himmelblau.conf lacks the line cache_timeout = 2592000 (PDK-292)")
+	conf := strings.Split(w.Must("sudo cat /etc/himmelblau/himmelblau.conf"), "\n")
+	for _, line := range []string{"cache_timeout = 2592000", "local_sudo_group = paddock-no-sudo", "local_groups_reconcile_interval = 0"} {
+		if !slices.Contains(conf, line) {
+			t.Fatalf("himmelblau.conf lacks the line %s (PDK-292, PDK-294)", line)
+		}
 	}
+	groups := w.Must("getent group sudo; getent group users")
 	for end := t0.Add(11 * time.Minute); time.Now().Before(end); time.Sleep(time.Minute) {
 		w.Must("id " + w.dave.name + " >/dev/null; getent passwd " + w.dave.name + " >/dev/null; true")
 	}
@@ -492,6 +499,23 @@ func gateL6(t *testing.T, w *identityWorld) {
 		t0.Format(time.RFC3339)+"'")
 	if err != nil || n != "0" {
 		t.Errorf("suspicious_request events since %s: %q %v, want 0 (a revoked refresh token was used)", t0.Format(time.RFC3339), n, err)
+	}
+	if after := w.Must("getent group sudo; getent group users"); after != groups {
+		t.Errorf("groups sudo and users changed during the eleven minutes:\nbefore\n%s\nafter\n%s", groups, after)
+	}
+	since := strconv.FormatInt(t0.Unix(), 10)
+	if out := w.Must("sudo journalctl --since @" + since + " --no-pager -o cat | grep 'removed by root from group sudo' || true"); out != "" {
+		t.Errorf("an account was removed from sudo since %s:\n%s", t0.Format(time.RFC3339), out)
+	}
+	// Stop condition S15 of plan M8x: an error about the missing group is reported, never answered by creating it.
+	if out := w.Must("sudo journalctl -b -p err --no-pager -o cat | grep -F paddock-no-sudo || true"); out != "" {
+		t.Errorf("the journal reports an error for local_sudo_group = paddock-no-sudo (stop condition S15):\n%s", out)
+	}
+	w.Checkin()
+	n, err = paddockSQL(context.Background(), fmt.Sprintf("SELECT count(*) FROM action WHERE code = 'device.tamper_local_admin_changed' AND target->>'id' = '%s' AND started_at > '%s'",
+		w.ID, t0.Format(time.RFC3339)))
+	if err != nil || n != "0" {
+		t.Errorf("device.tamper_local_admin_changed since %s: %q %v, want 0 (the local administrator lost sudo)", t0.Format(time.RFC3339), n, err)
 	}
 }
 

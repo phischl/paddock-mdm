@@ -878,7 +878,9 @@ alternative does not change the schema version.
 > at zero (a threshold makes Himmelblau refuse every PIN login). The agent writes `cache_timeout = 2592000` (30 days,
 > the refresh token's validity) into `himmelblau.conf`: Himmelblau 4.0.x re-seals the refresh token only at a PIN
 > authentication, and its background refresh of a cached user would otherwise rotate the token behind the PIN (RR-40,
-> ADR 0019 amendment 2026-10-17).
+> ADR 0019 amendment 2026-10-17). It also writes `local_sudo_group = paddock-no-sudo` (a group that never exists) and
+> `local_groups_reconcile_interval = 0` and never `sudo_groups`: Paddock alone manages sudo, and Himmelblau's
+> local-group task would otherwise remove every account from `sudo` at each sign-in and every five minutes.
 
 ### 9.4 Login assignment and suspension (F15)
 

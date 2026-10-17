@@ -95,6 +95,8 @@ allow_console_password_only = false
 enable_hello = true
 hello_pin_min_length = 6
 local_groups = users
+local_sudo_group = paddock-no-sudo
+local_groups_reconcile_interval = 0
 idmap_range = 200000-999999999
 cache_timeout = 2592000
 `
@@ -168,6 +170,48 @@ func TestLoginInstallsAndConfigures(t *testing.T) {
 		if got := string(sys.Files["/etc/himmelblau/himmelblau.conf"].Data); got != wantConf ||
 			strings.Count(got, "cache_timeout = ") != 1 {
 			t.Fatalf("himmelblau.conf after the apply\n%s", got)
+		}
+	}
+
+	// A configuration without the sudo lines (an agent before PDK-294) or with a locally added sudo_groups line gets
+	// the Paddock configuration back with a restart: Himmelblau would otherwise remove every account from sudo.
+	for _, conf := range []string{
+		strings.Replace(wantConf, "local_sudo_group = paddock-no-sudo\nlocal_groups_reconcile_interval = 0\n", "", 1),
+		wantConf + "sudo_groups = paddock.acme\n",
+		strings.Replace(wantConf, "local_sudo_group = paddock-no-sudo", "local_sudo_group = sudo", 1),
+	} {
+		sys.Files["/etc/himmelblau/himmelblau.conf"].Data = []byte(conf)
+		if changes, err := l.Plan(ctx, r); err != nil || !slices.Equal(changes, []string{"config"}) {
+			t.Fatalf("plan with %q: %v %v", conf, changes, err)
+		}
+		if res := l.Apply(ctx, r); res.Status != reconcile.Changed || !slices.Contains(sys.TakeCalls(), "systemctl restart himmelblaud.service") {
+			t.Fatalf("sudo drift %+v", res)
+		}
+		if got := string(sys.Files["/etc/himmelblau/himmelblau.conf"].Data); got != wantConf {
+			t.Fatalf("himmelblau.conf after the apply\n%s", got)
+		}
+	}
+}
+
+func TestHimmelblauConfLeavesSudoToPaddock(t *testing.T) {
+	suspended := loginSpec()
+	suspended.Himmelblau.PamAllowGroups = nil
+	for _, spec := range []bundle.LoginSpec{loginSpec(), suspended} {
+		sys, l, _ := loginFixture(t)
+		if res := l.Apply(context.Background(), loginResource(t, spec)); res.Status != reconcile.Changed {
+			t.Fatalf("apply %+v", res)
+		}
+		got := string(sys.Files["/etc/himmelblau/himmelblau.conf"].Data)
+		if strings.Contains(got, "sudo_groups") {
+			t.Fatalf("sudo_groups rendered\n%s", got)
+		}
+		groups := strings.Index(got, "local_groups = users\n")
+		sudo := strings.Index(got, "local_sudo_group = paddock-no-sudo\n")
+		interval := strings.Index(got, "local_groups_reconcile_interval = 0\n")
+		idmap := strings.Index(got, "idmap_range = ")
+		if strings.Count(got, "local_sudo_group = ") != 1 || strings.Count(got, "local_groups_reconcile_interval = ") != 1 ||
+			groups < 0 || groups >= sudo || sudo >= interval || interval >= idmap {
+			t.Fatalf("sudo lines missing or misplaced\n%s", got)
 		}
 	}
 }
