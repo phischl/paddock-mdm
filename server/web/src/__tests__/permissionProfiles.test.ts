@@ -138,6 +138,30 @@ describe('PermissionProfiles', () => {
     expect(preview()).toBeNull()
   })
 
+  it('drops a preview still in flight when the commands are cleared (plan M8x decision 41)', async () => {
+    const { w } = await mountList()
+    await w.find('[data-testid="create-profile"]').trigger('click')
+    await flushPromises()
+    const preview = () => document.querySelector('[data-testid="root-equivalent-preview"]')
+    const commands = document.querySelector('#create-profile-commands') as HTMLTextAreaElement
+    const type = async (text: string) => {
+      commands.value = text
+      commands.dispatchEvent(new Event('input'))
+      await flushPromises()
+    }
+    let answer: (r: RootEquivalence) => void = () => {}
+    previewRootEquivalence.mockImplementation(() => new Promise((resolve) => { answer = resolve }))
+
+    await type('/usr/bin/tee /opt/x\n/opt/x')
+    await vi.waitFor(() => expect(previewRootEquivalence).toHaveBeenLastCalledWith('restricted', ['/usr/bin/tee /opt/x', '/opt/x']))
+    await type('')
+    answer({ effective_class: 'full', root_equivalent_commands: ['/opt/x'], witnesses: ['pair:/usr/bin/tee /opt/x|/opt/x'] })
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(preview()).toBeNull()
+    expect(previewRootEquivalence).toHaveBeenCalledTimes(1)
+  })
+
   it('shows the effective class of a root-equivalent restricted profile', async () => {
     const { w } = await mountList()
     expect(w.find('[data-testid="profile-effective-class"]').text()).toBe('Full (effective)')

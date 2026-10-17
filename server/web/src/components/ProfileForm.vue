@@ -37,9 +37,11 @@ let previewSeq = 0
 watch([cls, commands], () => {
   clearTimeout(previewTimer)
   preview.value = null
+  // Every change invalidates a request already in flight, also when no new one starts: its answer would show a root
+  // warning for commands that are gone.
+  const seq = ++previewSeq
   const lines = commandLines(commands.value)
   if (cls.value !== 'full' && !(cls.value === 'restricted' && lines.length > 0)) return
-  const seq = ++previewSeq
   previewTimer = setTimeout(async () => {
     const res = await previewRootEquivalence(cls.value, cls.value === 'full' ? [] : lines)
     if (seq === previewSeq) preview.value = res
