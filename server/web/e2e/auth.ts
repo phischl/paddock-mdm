@@ -79,7 +79,7 @@ async function runFlow(page: Page, flowPage: URL, username: string, secret: stri
         break
       case 'ak-stage-authenticator-validate':
         if (!totpKey) throw new Error(`login: flow ${slug} asks for MFA`)
-        answer = { component: challenge.component, code: totp(totpKey) }
+        answer = { component: challenge.component, code: await totp(totpKey) }
         break
       default:
         throw new Error(`login: unexpected stage ${challenge.component} in flow ${slug}`)
@@ -95,10 +95,21 @@ async function runFlow(page: Page, flowPage: URL, username: string, secret: stri
   throw new Error(`login: flow ${slug} did not finish`)
 }
 
-/** The current RFC 6238 code (SHA-1, 30 s, 6 digits) of a hex-encoded key. */
-function totp(hexKey: string): string {
+// Authentik rejects a code whose 30 s step was already used, so a step-up shortly after another one with the same key
+// (or a retry after a rejected code) waits for the next step, like the acceptance helper authflow.TOTP.
+const lastStep = new Map<string, number>()
+
+/** The RFC 6238 code (SHA-1, 30 s, 6 digits) of a hex-encoded key for the next unused time step. */
+async function totp(hexKey: string): Promise<string> {
+  let step = Math.floor(Date.now() / 30_000)
+  const last = lastStep.get(hexKey) ?? -1
+  if (step <= last) {
+    await new Promise((resolve) => setTimeout(resolve, (last + 1) * 30_000 + 1_000 - Date.now()))
+    step = Math.floor(Date.now() / 30_000)
+  }
+  lastStep.set(hexKey, step)
   const msg = Buffer.alloc(8)
-  msg.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)))
+  msg.writeBigUInt64BE(BigInt(step))
   const sum = createHmac('sha1', Buffer.from(hexKey, 'hex')).update(msg).digest()
   const offset = sum[sum.length - 1] & 0x0f
   return String((sum.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0')

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-10-17
+
+Hardening release (milestone M8s) plus the lab installation profile (M8a). **Upgrade order: update the agents on the
+devices first, then the server** (`docs/operations/upgrade.md`); every administrator enrols a WebAuthn authenticator
+before the upgrade.
+
+### Security
+
+- Granting root on devices required the administrator step-up only for profiles declared as full: restricted profiles
+  with root-equivalent commands, combinations of grants, and managed files on root-equivalent paths could be created
+  or assigned by operators and API tokens without it. Fixed by the effective-privilege step-up and the managed-file
+  path tiers below (GHSA-qg7r-3q9c-w6jf, high).
+- Portal sessions survived logout, role removal and deactivation for up to 8 hours, and API tokens outlived their
+  creator's rights. Fixed by server-side sessions and the token creator check below (GHSA-7whf-c2cp-cx8m, medium).
+- The escrow upload did not bind its size and the edge had no body limits. Fixed by the size-bound upload and the edge
+  limits below (GHSA-j64g-m99w-9jv7, low).
+
 ### Added
 
 - Security review of existing data (ADR 0034): `GET /api/v1/security-review` lists effectively Full permission
@@ -813,6 +830,7 @@ acceptance.
   in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
-[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/phischl/paddock-mdm/tree/1ab53f4499a354981a06240627ea97a15d9bdc54
