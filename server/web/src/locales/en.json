@@ -472,6 +472,7 @@
     "title": "Access denied",
     "not_authorized": "Your account is not authorized for the Paddock portal. Ask your administrator to add you to exactly one Paddock administrator group.",
     "login_failed": "The sign-in could not be completed.",
+    "mfa_required": "Your sign-in did not include a second factor. Sign in again: the portal asks for your password and your authenticator.",
     "retry": "Sign in again"
   },
   "notFound": {

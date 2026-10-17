@@ -63,12 +63,14 @@ func newFake(t *testing.T) (*fakeAuthentik, *httptest.Server) {
 	}
 	// Objects of Authentik's defaults and of the Paddock blueprints.
 	for _, slug := range []string{"paddock-device-authentication", "paddock-device-authorization", "default-provider-invalidation-flow",
-		"paddock-recovery", "paddock-device-code"} {
+		"paddock-recovery", "paddock-device-code", "paddock-admin-login", "default-authentication-flow"} {
 		f.put("flows", map[string]any{"pk": uuid.NewString(), "slug": slug, "name": slug})
 	}
-	// The default brand as a fresh Authentik creates it: no recovery and no device-code flow.
+	// The default brand as a fresh Authentik creates it: no recovery and no device-code flow, Authentik's default
+	// authentication flow.
 	brand := f.fixture("get_core_brands.json")["results"].([]any)[0].(map[string]any)
 	brand["brand_uuid"], brand["flow_recovery"], brand["flow_device_code"] = uuid.NewString(), nil, nil
+	brand["flow_authentication"] = f.flowPK("default-authentication-flow")
 	f.brands = []map[string]any{brand}
 	f.put("certificatekeypairs", map[string]any{"pk": uuid.NewString(), "name": "authentik Self-signed Certificate"})
 	for _, scope := range []string{"openid", "email", "profile", "offline_access"} {

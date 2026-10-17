@@ -515,9 +515,9 @@ func (a *Authentik) DeleteUser(ctx context.Context, pk int) error {
 // IsNotFound reports whether err is an Authentik 404.
 func IsNotFound(err error) bool { return err != nil && strings.Contains(err.Error(), "HTTP 404") }
 
-// BrandFlowMismatches checks that the default brand uses Paddock's recovery flow (paddock-recovery) and device-code
-// flow (paddock-device-code), which paddock-server's worker sets (plan M3.1 decision 5); it returns one description
-// per flow that is not set as expected.
+// BrandFlowMismatches checks that the default brand uses Paddock's recovery flow (paddock-recovery), device-code
+// flow (paddock-device-code) and authentication flow (paddock-admin-login), which paddock-server's worker sets (plan
+// M3.1 decision 5, plan M8x decision 4); it returns one description per flow that is not set as expected.
 func (a *Authentik) BrandFlowMismatches(ctx context.Context) ([]string, error) {
 	var page struct {
 		Results []map[string]any `json:"results"`
@@ -529,7 +529,8 @@ func (a *Authentik) BrandFlowMismatches(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("%d default brands", len(page.Results))
 	}
 	var out []string
-	for _, f := range []struct{ field, slug string }{{"flow_recovery", "paddock-recovery"}, {"flow_device_code", "paddock-device-code"}} {
+	for _, f := range []struct{ field, slug string }{{"flow_recovery", "paddock-recovery"}, {"flow_device_code", "paddock-device-code"},
+		{"flow_authentication", "paddock-admin-login"}} {
 		var flow struct {
 			PK string `json:"pk"`
 		}

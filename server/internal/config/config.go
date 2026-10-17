@@ -222,6 +222,25 @@ func LoadDevStepUp(l *Loader, c Common) DevStepUp {
 	return d
 }
 
+// LoadDevLoginMFAOptional reads PADDOCK_LOGIN_MFA_OPTIONAL: true lets a portal sign-in without a second factor pass,
+// so that the development users without an authenticator can sign in (plan M8x decision 3). Any value outside
+// PADDOCK_ENV=development is a configuration error, so production always requires the second factor.
+func LoadDevLoginMFAOptional(l *Loader, c Common) bool {
+	const name = "PADDOCK_LOGIN_MFA_OPTIONAL"
+	v, ok := l.get(name)
+	switch {
+	case !ok:
+		return false
+	case !c.Development():
+		l.Invalid(name, "only allowed with PADDOCK_ENV=development")
+	case v == "true":
+		return true
+	case v != "false":
+		l.Invalid(name, fmt.Sprintf("not true or false: %q", v))
+	}
+	return false
+}
+
 // StalenessUnit reads PADDOCK_STALENESS_UNIT, the unit of the organizations' staleness thresholds (plan M5b decision
 // 9): "hour" (default) or, with PADDOCK_ENV=development only, "minute" for the acceptance gate U4.
 func StalenessUnit(l *Loader, c Common) time.Duration {

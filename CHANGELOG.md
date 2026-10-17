@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Every portal sign-in now runs Paddock's own login flow and is refused without a second factor; the default brand's
+  authentication flow and Authentik's default authentication flow ask for a second factor as well. After the upgrade
+  every Authentik sign-in (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks
+  for a second factor and enrols one when missing.
+
 ## [0.1.0-alpha.3] - 2026-10-17
 
 Hardening release (milestone M8s) plus the lab installation profile (M8a). **Upgrade order: update the agents on the

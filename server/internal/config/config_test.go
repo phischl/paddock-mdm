@@ -75,6 +75,33 @@ func TestDevStepUp(t *testing.T) {
 	}
 }
 
+// TestDevLoginMFAOptional: the portal second factor can be made optional in development only; in production the
+// variable fails the start whatever its value.
+func TestDevLoginMFAOptional(t *testing.T) {
+	const name = "PADDOCK_LOGIN_MFA_OPTIONAL"
+	for v, want := range map[string]bool{"true": true, "false": false} {
+		l := NewLoaderFrom(map[string]string{name: v})
+		if got := LoadDevLoginMFAOptional(l, Common{Env: "development"}); got != want || l.Err() != nil {
+			t.Fatalf("development %q: %v, %v", v, got, l.Err())
+		}
+	}
+	l := NewLoaderFrom(nil)
+	if LoadDevLoginMFAOptional(l, Common{Env: "production"}) || l.Err() != nil {
+		t.Fatalf("unset: %v", l.Err())
+	}
+	for _, v := range []string{"true", "false"} {
+		l = NewLoaderFrom(map[string]string{name: v})
+		if LoadDevLoginMFAOptional(l, Common{Env: "production"}) || l.Err() == nil ||
+			!strings.Contains(l.Err().Error(), name+": only allowed with PADDOCK_ENV=development") {
+			t.Fatalf("production %q: %v", v, l.Err())
+		}
+	}
+	l = NewLoaderFrom(map[string]string{name: "yes"})
+	if LoadDevLoginMFAOptional(l, Common{Env: "development"}) || l.Err() == nil {
+		t.Fatal("development \"yes\" accepted")
+	}
+}
+
 // TestRevocationEnabled: the revocation feature flag is off unless set to true; anything but true or false fails the
 // start (plan M4c decision 1).
 func TestRevocationEnabled(t *testing.T) {

@@ -33,6 +33,14 @@ entries:
       order: 0
     attrs:
       target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 30]]
+  # The same skip for the second factor Paddock adds to Authentik's default authentication flow (plan M8x decision 5).
+  # Order 1 keeps the identifiers of the two bindings of this policy apart.
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-mfa
+      order: 1
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, default-authentication-flow]]], [order, 31]]
 
   # The step-up validates with WebAuthn only; the test users have scripted TOTP authenticators. The WebAuthn stage at
   # order 30 is skipped like the login's, and a stage that also accepts TOTP takes its place at order 31.

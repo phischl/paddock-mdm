@@ -3,6 +3,7 @@ package acceptance
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/authflow"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // platformOrg is the platform pseudo-organization of the audit log.
@@ -68,6 +70,71 @@ func TestLoginGate(t *testing.T) {
 		res := call(t, alice, http.MethodGet, "/api/platform/v1/organizations", nil)
 		expectStatus(t, res, http.StatusForbidden, "forbidden")
 	})
+}
+
+// TestLoginMFAPath (plan M8x decision 7d): every portal sign-in runs Paddock's login flow (prompt=login), and
+// Authentik's default authentication flow asks for a second factor at order 31, enrolling one when missing.
+func TestLoginMFAPath(t *testing.T) {
+	ctx := testContext(t, time.Minute)
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, stack.AdminURL()+"/api/auth/login", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if loc, err := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusFound || err != nil ||
+		loc.Query().Get("prompt") != "login" {
+		t.Fatalf("GET /api/auth/login: %d %q", res.StatusCode, res.Header.Get("Location"))
+	}
+
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flows struct {
+		Results []struct {
+			PK string `json:"pk"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/instances/?slug=default-authentication-flow", &flows); err != nil || len(flows.Results) != 1 {
+		t.Fatalf("flow default-authentication-flow: %+v %v", flows, err)
+	}
+	var bindings struct {
+		Results []struct {
+			Order int    `json:"order"`
+			Stage string `json:"stage"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	stage := ""
+	for _, b := range bindings.Results {
+		if b.Order == 31 {
+			stage = b.Stage
+		}
+	}
+	if stage == "" {
+		t.Fatalf("no stage binding at order 31: %+v", bindings.Results)
+	}
+	var v struct {
+		Name                string `json:"name"`
+		NotConfiguredAction string `json:"not_configured_action"`
+	}
+	if err := ak.Get(ctx, "/stages/authenticator/validate/"+stage+"/", &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Name != "paddock-default-login-mfa" || v.NotConfiguredAction != "configure" {
+		t.Fatalf("order 31 stage %+v, want paddock-default-login-mfa with not_configured_action configure", v)
+	}
 }
 
 func finalOf(p *env.Portal) string {

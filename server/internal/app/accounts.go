@@ -68,6 +68,7 @@ type LoginResult struct {
 const (
 	ReasonNotAuthorized = "not_authorized"
 	ReasonLoginFailed   = "login_failed"
+	ReasonMFARequired   = "mfa_required" // the ID token carried no second factor (amr without "mfa")
 )
 
 // ErrLoginDenied is returned when the user may not use the portal; the denial is already audited.
@@ -215,12 +216,13 @@ func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []s
 	return err
 }
 
-// RecordLoginFailure audits a login that failed before the identity was known (state, code exchange, token).
-func (a *Accounts) RecordLoginFailure(ctx context.Context, ip, reason string, cause error) {
+// RecordLoginFailure audits a login that failed before a role was resolved (state, code exchange, token, missing
+// second factor). A non-empty username becomes the anonymous actor's display.
+func (a *Accounts) RecordLoginFailure(ctx context.Context, ip, username, reason string, cause error) {
 	sys := principal.Principal{Kind: principal.KindSystem, IP: ip}
 	spec := ActionSpec{
 		Code:   audit.CodeAdminLogin,
-		Actor:  &audit.Actor{Type: audit.ActorAnonymous, IP: ip},
+		Actor:  &audit.Actor{Type: audit.ActorAnonymous, Display: username, IP: ip},
 		Params: map[string]any{"reason": reason},
 	}
 	_ = a.runner.RunTx(principal.With(ctx, sys), ScopePlatform, spec, func(context.Context, *pgstore.Queries, Recorder) error {

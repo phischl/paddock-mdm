@@ -18,6 +18,8 @@ once and asks for one security review afterwards: follow the four steps in `docs
   `Schema: unchanged` or `Schema: migrations NNNNN–NNNNN` (both databases); that line decides how a rollback works.
 - A server upgrade never requires an agent upgrade: the server supports agents of its own and the two previous minor
   versions (ADR 0013). Upload an agent release only to a server of the same or a newer minor version.
+- From 0.1.0-alpha.4: after this upgrade every Authentik sign-in — the portal, Authentik's own user and admin interfaces
+  (`akadmin` included) and the device approval page — asks for a second factor and enrols one when missing.
 
 ## Upgrade (each host)
 

@@ -472,6 +472,7 @@
     "title": "Zugriff verweigert",
     "not_authorized": "Ihr Konto ist für das Paddock-Portal nicht berechtigt. Bitten Sie Ihren Administrator, Sie genau einer Paddock-Administratorgruppe hinzuzufügen.",
     "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
+    "mfa_required": "Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.",
     "retry": "Erneut anmelden"
   },
   "notFound": {

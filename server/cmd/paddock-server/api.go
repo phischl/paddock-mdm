@@ -80,6 +80,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		}
 	}
 	devStepUp := config.LoadDevStepUp(l, common)
+	loginMFAOptional := config.LoadDevLoginMFAOptional(l, common)
 	if devStepUp.Window > 0 {
 		runnerOpts = append(runnerOpts, app.WithStepUpWindow(devStepUp.Window))
 	}
@@ -203,6 +204,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		// Development only: LoadDevStepUp refuses the variables in production.
 		StepUpMaxAuthAge: devStepUp.MaxAuthAge,
 		ExposeStepUp:     common.Development(),
+		LoginMFAOptional: loginMFAOptional,
 		TrustedProxies:   common.TrustedProxies,
 	})
 	srv := newHTTPServer(httpAddr, handler)

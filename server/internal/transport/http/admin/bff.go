@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -132,6 +134,8 @@ type bff struct {
 	tokenTTL time.Duration
 	sessions SessionStore
 	roles    StepUpAccounts
+	// loginMFAOptional accepts a portal ID token without "mfa" in amr (development only, PADDOCK_LOGIN_MFA_OPTIONAL).
+	loginMFAOptional bool
 }
 
 func randomToken() string {
@@ -166,7 +170,10 @@ func (b *bff) login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, loginCookie(value, int(LoginLifetime.Seconds())))
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
+	// prompt=login: an existing Authentik session must never satisfy the portal sign-in; the provider's own flow with
+	// its second factor runs every time (plan M8x decision 1).
+	http.Redirect(w, r, oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier),
+		oauth2.SetAuthURLParam("prompt", "login")), http.StatusFound)
 }
 
 func denied(w http.ResponseWriter, r *http.Request, reason string) {
@@ -180,10 +187,21 @@ type idClaims struct {
 	Name              string   `json:"name"`
 	Email             string   `json:"email"`
 	Groups            []string `json:"groups"`
+	AMR               []string `json:"amr"`
+}
+
+// hasMFA reports whether the authentication methods name a second factor.
+func (c idClaims) hasMFA() bool {
+	return slices.Contains(c.AMR, "mfa")
 }
 
 // errLoginFailed is the audit error code of logins that fail after the state check (code exchange, ID token).
 var errLoginFailed = &problem.Error{Code: app.ReasonLoginFailed, Status: http.StatusBadGateway}
+
+// errMFARequired is the audit error code of a login whose ID token carried no second factor. It also wraps
+// problem.Forbidden, so that the runner records the refusal as denied rather than failed.
+var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFARequired, Status: http.StatusForbidden},
+	problem.Forbidden)
 
 // callback completes the login: state check, code exchange with PKCE, ID token verification (issuer, audience,
 // nonce, expiry), role resolution from the groups claim, admin.login audit event and session cookie.
@@ -219,7 +237,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	token, err := oauth.Exchange(ctx, q.Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		slog.WarnContext(ctx, "code exchange failed", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, app.ReasonLoginFailed, errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, errLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -234,13 +252,19 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || claims.Subject == "" {
 		slog.WarnContext(ctx, "ID token rejected", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, app.ReasonLoginFailed, errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, errLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
 	username := claims.PreferredUsername
 	if username == "" {
 		username = claims.Email
+	}
+	if !b.loginMFAOptional && !claims.hasMFA() {
+		slog.WarnContext(ctx, "ID token without a second factor refused")
+		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonMFARequired, errMFARequired)
+		denied(w, r, app.ReasonMFARequired)
+		return
 	}
 	res := organization.ResolveRole(claims.Groups)
 	now := b.now()

@@ -262,6 +262,9 @@ restore drill are in the same document.
 Upgrades extract the new bundle next to the running one and take over its `.env` and `.secrets/`:
 `docs/operations/upgrade.md`. Agent releases are separate: `docs/operations/agent-releases.md`.
 
+**Release 0.1.0-alpha.4 and later: second factor on every sign-in.** After this upgrade every Authentik sign-in — the portal, Authentik's own user and admin interfaces (`akadmin` included) and
+the device approval page — asks for a second factor and enrols one when missing.
+
 **Release with the managed-file path tiers, server-side sessions and WebAuthn-only step-up (ADR 0034).** Four steps,
 in this order:
 

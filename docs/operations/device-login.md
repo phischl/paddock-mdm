@@ -95,9 +95,12 @@ docker compose up -d authentik-server authentik-worker
 
 ## Authentik brand flows
 
-`paddock-worker` sets the recovery flow (`paddock-recovery`, the one-time links of new local users) and the device-code
-flow (`paddock-device-code`, the `/device` page with mandatory MFA) of Authentik's default brand at start and every 10
-minutes, and resets them if they were changed in Authentik. Until the flows are set — on a fresh installation until
+`paddock-worker` sets the recovery flow (`paddock-recovery`, the one-time links of new local users), the device-code
+flow (`paddock-device-code`, the `/device` page with mandatory MFA) and the authentication flow (`paddock-admin-login`,
+password and second factor) of Authentik's default brand at start and every 10 minutes, and resets them if they were
+changed in Authentik. Authentik's own `default-authentication-flow` also asks for a second factor (stage
+`paddock-default-login-mfa` at order 31, from the portal blueprint), and every portal sign-in runs
+`paddock-admin-login` again even when an Authentik session exists. Until the flows are set — on a fresh installation until
 Authentik has applied the Paddock blueprints — creating a local user fails with 502 `upstream_unavailable`.
 
 ## Locks
