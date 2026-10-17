@@ -47,12 +47,18 @@ type UserQuery struct {
 }
 
 // List returns one page of users.
-func (u *Users) List(ctx context.Context, query UserQuery) (Listed[pgstore.AppUser], error) {
-	var out Listed[pgstore.AppUser]
-	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+func (u *Users) List(ctx context.Context, query UserQuery) (UserList, error) {
+	var out UserList
+	p, err := RequireOrg(ctx, RolesRead)
+	if err != nil {
 		return out, err
 	}
-	err := u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	err = u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		org, err := q.GetOrganization(ctx, p.OrganizationID)
+		if err != nil {
+			return fmt.Errorf("organization: %w", err)
+		}
+		out.Domains = org.Domains
 		if query.GroupID != nil {
 			if _, err := q.GetUserGroup(ctx, *query.GroupID); err != nil {
 				return notFound(err)
@@ -78,22 +84,56 @@ func (u *Users) List(ctx context.Context, query UserQuery) (Listed[pgstore.AppUs
 	return out, err
 }
 
-// UserDetail is a user with its groups.
+// UserList is one page of users with the domains of their organization (for User.domain_match).
+type UserList struct {
+	Listed[pgstore.AppUser]
+	Domains []string
+}
+
+// UserDetail is a user with its groups and the domains of its organization.
 type UserDetail struct {
-	User   pgstore.AppUser
-	Groups []pgstore.UserGroup
+	User    pgstore.AppUser
+	Groups  []pgstore.UserGroup
+	Domains []string
+}
+
+// OrganizationDomains returns the domains of the caller's organization (for User.domain_match of an answer that
+// carries a single user).
+func (u *Users) OrganizationDomains(ctx context.Context) ([]string, error) {
+	p, err := RequireOrg(ctx, RolesRead)
+	if err != nil {
+		return nil, err
+	}
+	var domains []string
+	err = u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		org, err := q.GetOrganization(ctx, p.OrganizationID)
+		if err != nil {
+			return fmt.Errorf("organization: %w", err)
+		}
+		domains = org.Domains
+		return nil
+	})
+	return domains, err
 }
 
 // Get returns one user; missing and foreign users are both not_found.
 func (u *Users) Get(ctx context.Context, id uuid.UUID) (UserDetail, error) {
-	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+	p, err := RequireOrg(ctx, RolesRead)
+	if err != nil {
 		return UserDetail{}, err
 	}
 	var out UserDetail
-	err := u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	err = u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
-		out, err = loadUserDetail(ctx, q, id)
-		return err
+		if out, err = loadUserDetail(ctx, q, id); err != nil {
+			return err
+		}
+		org, err := q.GetOrganization(ctx, p.OrganizationID)
+		if err != nil {
+			return fmt.Errorf("organization: %w", err)
+		}
+		out.Domains = org.Domains
+		return nil
 	})
 	return out, err
 }
@@ -117,6 +157,8 @@ type NewUser struct {
 type CreatedUser struct {
 	User         pgstore.AppUser
 	RecoveryLink string
+	// Domains are the organization's domains the username was checked against.
+	Domains []string
 }
 
 // Create creates a local user in Authentik (no password, member of paddock.<slug>, attribute paddock_managed) and
@@ -139,7 +181,7 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 			if err != nil {
 				return err
 			}
-			slug = o.Slug
+			slug, out.Domains = o.Slug, o.Domains
 			if err := user.ValidateLocalUsername(in.Username, o.Domains); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}

@@ -9,6 +9,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/domain/loginsettings"
 	"github.com/phischl/paddock-mdm/server/internal/domain/privilege"
+	"github.com/phischl/paddock-mdm/server/internal/domain/user"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
 )
@@ -58,16 +59,26 @@ func (h *handlers) users2page(ctx context.Context, group *uuid.UUID, q listing.Q
 	}
 	items := make([]adminapi.User, len(res.Items))
 	for i, u := range res.Items {
-		items[i] = toUser(u)
+		items[i] = toUser(u, res.Domains)
 	}
 	return listing.NewPage(items, params, res.Count), nil
 }
 
-func toUser(u pgstore.AppUser) adminapi.User {
+func toUser(u pgstore.AppUser, domains []string) adminapi.User {
 	return adminapi.User{
 		Id: u.ID, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Source: adminapi.IdentitySource(u.Source),
 		Locked: u.Locked, LockIncomplete: u.LockIncomplete, LockedAt: utcPtr(u.LockedAt), CreatedAt: u.CreatedAt.UTC(), UpdatedAt: u.UpdatedAt.UTC(),
+		DomainMatch: user.DomainMatch(u.Username, domains),
 	}
+}
+
+// singleUser answers one user with its domain_match; the domains are read after the use case ran.
+func (h *handlers) singleUser(ctx context.Context, u pgstore.AppUser) (adminapi.User, error) {
+	domains, err := h.users.OrganizationDomains(ctx)
+	if err != nil {
+		return adminapi.User{}, err
+	}
+	return toUser(u, domains), nil
 }
 
 func toUserRef(u pgstore.AppUser) adminapi.UserRef {
@@ -89,7 +100,7 @@ func (h *handlers) CreateUser(ctx context.Context, req adminapi.CreateUserReques
 	}
 	loc := "/api/v1/users/" + created.User.ID.String()
 	return adminapi.CreateUser201JSONResponse{
-		Body:    adminapi.UserCreated{User: toUser(created.User), RecoveryLink: created.RecoveryLink},
+		Body:    adminapi.UserCreated{User: toUser(created.User, created.Domains), RecoveryLink: created.RecoveryLink},
 		Headers: adminapi.CreateUser201ResponseHeaders{Location: &loc},
 	}, nil
 }
@@ -99,11 +110,12 @@ func (h *handlers) GetUser(ctx context.Context, req adminapi.GetUserRequestObjec
 	if err != nil {
 		return nil, err
 	}
-	u := toUser(d.User)
+	u := toUser(d.User, d.Domains)
 	out := adminapi.UserDetail{
 		Id: u.Id, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Source: u.Source, Locked: u.Locked,
 		LockIncomplete: u.LockIncomplete, LockedAt: u.LockedAt, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
-		Groups: make([]adminapi.UserGroupRef, len(d.Groups)),
+		DomainMatch: u.DomainMatch,
+		Groups:      make([]adminapi.UserGroupRef, len(d.Groups)),
 	}
 	for i, g := range d.Groups {
 		out.Groups[i] = toUserGroupRef(g)
@@ -116,7 +128,11 @@ func (h *handlers) UpdateUser(ctx context.Context, req adminapi.UpdateUserReques
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.UpdateUser200JSONResponse(toUser(u)), nil
+	out, err := h.singleUser(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UpdateUser200JSONResponse(out), nil
 }
 
 func (h *handlers) DeleteUser(ctx context.Context, req adminapi.DeleteUserRequestObject) (adminapi.DeleteUserResponseObject, error) {
@@ -131,7 +147,11 @@ func (h *handlers) LockUser(ctx context.Context, req adminapi.LockUserRequestObj
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.LockUser200JSONResponse(toUser(u)), nil
+	out, err := h.singleUser(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.LockUser200JSONResponse(out), nil
 }
 
 func (h *handlers) UnlockUser(ctx context.Context, req adminapi.UnlockUserRequestObject) (adminapi.UnlockUserResponseObject, error) {
@@ -139,7 +159,11 @@ func (h *handlers) UnlockUser(ctx context.Context, req adminapi.UnlockUserReques
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.UnlockUser200JSONResponse(toUser(u)), nil
+	out, err := h.singleUser(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UnlockUser200JSONResponse(out), nil
 }
 
 func (h *handlers) ListUserGroups(ctx context.Context, req adminapi.ListUserGroupsRequestObject) (adminapi.ListUserGroupsResponseObject, error) {

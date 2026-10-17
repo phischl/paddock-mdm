@@ -86,6 +86,14 @@ async function copy(): Promise<void> {
         {{ t('users.create') }}
       </v-btn>
     </div>
+    <v-alert
+      v-if="(session.me?.organization?.domains.length ?? 1) === 0"
+      type="warning"
+      variant="tonal"
+      data-testid="org-no-domains"
+    >
+      {{ t('users.orgNoDomains') }}
+    </v-alert>
     <DataList
       ref="list"
       :columns="columns"
@@ -112,6 +120,12 @@ async function copy(): Promise<void> {
         <RouterLink :to="{ name: 'user', params: { id: item.id } }">
           {{ item.username }}
         </RouterLink>
+        <StatusChip
+          v-if="!item.domain_match"
+          status="warn"
+          :label="t('users.noDomain')"
+          :data-testid="'no-domain-' + item.id"
+        />
       </template>
       <template #[`item.source`]="{ item }: { item: User }">
         <StatusChip

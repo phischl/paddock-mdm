@@ -29,6 +29,23 @@ func TestValidateLocalUsername(t *testing.T) {
 	}
 }
 
+// TestDomainMatch: only the part after the last '@' counts, compared with the organization's domains (plan M8x
+// decision 46).
+func TestDomainMatch(t *testing.T) {
+	domains := []string{"acme.test", "corp.example"}
+	for name, want := range map[string]bool{
+		"dave@acme.test": true, "a@b@corp.example": true, "Dave@ACME.TEST": true,
+		"lab1234": false, "dave@other.test": false, "dave@sub.acme.test": false, "acme.test": false, "dave@": false,
+	} {
+		if got := DomainMatch(name, domains); got != want {
+			t.Errorf("DomainMatch(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if DomainMatch("dave@acme.test", nil) {
+		t.Error("a match without domains")
+	}
+}
+
 func TestValidateEmailAndName(t *testing.T) {
 	if ValidateEmail("") != nil || ValidateEmail("dave@acme.test") != nil {
 		t.Error("valid email refused")

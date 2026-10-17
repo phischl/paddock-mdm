@@ -5396,10 +5396,16 @@ components:
       enum: [local, synced]
     User:
       type: object
-      required: [id, username, display_name, email, source, locked, lock_incomplete, locked_at, created_at, updated_at]
+      required: [id, username, display_name, email, source, locked, lock_incomplete, locked_at, created_at, updated_at,
+        domain_match]
       properties:
         id: { type: string, format: uuid }
         username: { type: string, description: "UPN, lowercase, e.g. dave@acme.test." }
+        domain_match:
+          type: boolean
+          description: |
+            The part of the username after its last @ is one of the organization's domains (plan M8x decision 46). A
+            user without it cannot sign in on devices: the login component accepts name@domain only.
         display_name: { type: string }
         email: { type: string }
         source: { $ref: "#/components/schemas/IdentitySource" }

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -105,4 +107,43 @@ func TestIdentitySync(t *testing.T) {
 	// The members of an imported group follow upstream only.
 	res = call(t, alice, http.MethodPost, "/api/v1/user-groups/"+group+"/members", map[string]string{"user_id": id})
 	expectStatus(t, res, http.StatusConflict, "attribute_owned_upstream")
+}
+
+// TestIdentitySyncDomainMatch (plan M8x decision 48): a synced user whose Authentik username has no organization
+// domain is listed with domain_match false; dave@acme.test with true.
+func TestIdentitySyncDomainMatch(t *testing.T) {
+	alice := login(t, env.Alice)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(t, syncRound+time.Minute)
+	name := "lab" + uniqueSuffix()
+	pk, err := ak.CreateUser(ctx, name, "pw-"+uuid.NewString(), env.RootGroup("acme"))
+	t.Cleanup(func() {
+		if pk != 0 {
+			_ = ak.DeleteUser(context.Background(), pk)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := func(id string) bool {
+		t.Helper()
+		res := call(t, alice, http.MethodGet, "/api/v1/users/"+id, nil)
+		expectStatus(t, res, http.StatusOK, "")
+		var u struct {
+			DomainMatch *bool `json:"domain_match"`
+		}
+		if err := res.JSON(&u); err != nil || u.DomainMatch == nil {
+			t.Fatalf("user %s: %s (%v)", id, res.Body, err)
+		}
+		return *u.DomainMatch
+	}
+	if match(waitSyncedUser(t, alice, name)) {
+		t.Fatalf("%s without @ has domain_match true", name)
+	}
+	if !match(waitSyncedUser(t, alice, env.Dave)) {
+		t.Fatalf("%s has domain_match false", env.Dave)
+	}
 }

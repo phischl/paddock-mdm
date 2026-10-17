@@ -3617,6 +3617,11 @@ export interface components {
             id: string;
             /** @description UPN, lowercase, e.g. dave@acme.test. */
             username: string;
+            /**
+             * @description The part of the username after its last @ is one of the organization's domains (plan M8x decision 46). A
+             *     user without it cannot sign in on devices: the login component accepts name@domain only.
+             */
+            domain_match: boolean;
             display_name: string;
             email: string;
             source: components["schemas"]["IdentitySource"];

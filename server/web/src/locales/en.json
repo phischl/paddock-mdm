@@ -1031,6 +1031,9 @@
   },
   "users": {
     "title": "Users",
+    "noDomain": "No organization domain",
+    "noDomainDetail": "The username {username} does not end with one of the organization's domains ({domains}). The user cannot sign in on devices: the login component accepts name@domain only. Rename the user in the identity source, or let a platform administrator add the domain to the organization.",
+    "orgNoDomains": "This organization has no domain yet. Local users cannot be created and no user can sign in on devices until a platform administrator adds one under Platform → Organizations.",
     "create": "Create local user",
     "createTitle": "New local user",
     "editTitle": "Edit user",

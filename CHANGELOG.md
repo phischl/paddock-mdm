@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local accounts; the password switch of a profile explains what it does.
 - Managed files: a path with characters outside ASCII shows a hint (it is still saved as given), and the page links
   to the operator roots. The German portal calls operator roots „Freigegebene Verzeichnisse“.
+- Users whose username does not end with one of the organization's domains are marked "No organization domain"
+  (they cannot sign in on devices), the user page explains why, and the Users page of an organization without a
+  domain shows a banner. Users in the API carry `domain_match`.
 
 ### Changed
 

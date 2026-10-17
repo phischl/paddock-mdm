@@ -1031,6 +1031,9 @@
   },
   "users": {
     "title": "Benutzer",
+    "noDomain": "Keine Organisationsdomain",
+    "noDomainDetail": "Der Benutzername {username} endet nicht auf eine der Domains der Organisation ({domains}). Der Benutzer kann sich nicht an Geräten anmelden: Die Anmeldekomponente akzeptiert nur name@domain. Benennen Sie den Benutzer in der Identitätsquelle um, oder lassen Sie einen Plattformadministrator die Domain der Organisation hinzufügen.",
+    "orgNoDomains": "Diese Organisation hat noch keine Domain. Lokale Benutzer können nicht angelegt werden und niemand kann sich an Geräten anmelden, bis ein Plattformadministrator unter Plattform → Organisationen eine hinzufügt.",
     "create": "Lokalen Benutzer anlegen",
     "createTitle": "Neuer lokaler Benutzer",
     "editTitle": "Benutzer bearbeiten",

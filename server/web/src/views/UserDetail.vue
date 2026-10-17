@@ -190,6 +190,15 @@ async function saveEdit(): Promise<void> {
         </template>
       </v-alert>
       <v-alert
+        v-if="!user.domain_match"
+        type="warning"
+        variant="tonal"
+        class="conflict"
+        data-testid="no-domain-detail"
+      >
+        {{ t('users.noDomainDetail', { username: user.username, domains: (session.me?.organization?.domains ?? []).join(', ') }) }}
+      </v-alert>
+      <v-alert
         v-if="user.source === 'synced'"
         type="info"
         variant="tonal"
