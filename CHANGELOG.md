@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Every portal sign-in now runs Paddock's own login flow and is refused without a second factor; the default brand's
+  authentication flow and Authentik's default authentication flow ask for a second factor as well. After the upgrade
+  every Authentik sign-in (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks
+  for a second factor and enrols one when missing.
+
 ### Added
 
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
@@ -20,9 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The permission profile form warns before saving when the class or the commands grant root in effect (also through
   a pair of commands, one writing what the other runs), and says that saving then needs an organization
   administrator with a step-up. New read-only endpoint `GET /api/v1/permission-profiles/root-equivalence`.
-- Clearer texts: a device's local administrator password that waits for the device's confirmation is no longer shown
-  as "none yet"; permission profiles and device access explain that they apply to directory users only, never to
-  local accounts; the password switch of a profile explains what it does.
 - Managed files: a path with characters outside ASCII shows a hint (it is still saved as given), and the page links
   to the operator roots. The German portal calls operator roots „Freigegebene Verzeichnisse“.
 - Users whose username does not end with one of the organization's domains are marked "No organization domain"
@@ -31,16 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Every portal sign-in now runs Paddock's own login flow and is refused without a second factor; the default brand's
-  authentication flow and Authentik's default authentication flow ask for a second factor as well. After the upgrade
-  every Authentik sign-in (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks
-  for a second factor and enrols one when missing.
 - Devices install Himmelblau 4.0.6 by default (`PADDOCK_HIMMELBLAU_VERSION`, previously 4.0.4): a device code
   that expired at the login screen no longer ends in `PAM_SYSTEM_ERR`. The device-login guide lists the messages of the
   login screen and what they mean.
 - The dialog that creates an enrollment token explains which members of the sudo group a device keeps and links to
   the break-glass accounts; for an organization without a domain it warns that its devices get no login management
   and no managed local administrator. `GET /api/v1/me` names the organization's `domains`.
+- Clearer texts: a device's local administrator password that waits for the device's confirmation is no longer shown
+  as "none yet"; permission profiles and device access explain that they apply to directory users only, never to
+  local accounts; the password switch of a profile explains what it does.
 
 ### Fixed
 

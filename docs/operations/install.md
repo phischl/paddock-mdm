@@ -213,11 +213,15 @@ session on the server. A platform administrator ends every portal session at onc
    `.secrets/authentik_bootstrap_password`. Create the platform administrator's user, enroll a WebAuthn
    authenticator for it (step-up requires one) and add it to the group `paddock.platform.admins`. Then deactivate
    `akadmin` or give it a new password held by the custodians.
-2. Sign in to `https://admin.<domain>` as the platform administrator and create the first organization (*Platform* →
-   *Organizations*), with the e-mail domains of its users. Connect its identity source
+2. Sign in to `https://admin.<domain>` as the platform administrator (every sign-in asks for the second factor and
+   enrols one when missing) and create the first organization (*Platform* → *Organizations*) **with the domains of its
+   users** (the create dialog takes them; *Domains* in the list changes them). Without a domain the organization's
+   devices get no login management and no managed local administrator. Connect its identity source
    (`docs/operations/identity-sources.md`) and make its first administrator a member of `paddock.<slug>.admins`.
 3. Publish the first agent release (section 10).
-4. As the organization administrator, create an enrollment token and install the first device with the autoinstall
+4. As the organization administrator, **set the break-glass accounts first** (*Login & privileges*: the existing
+   local administrator accounts of the devices, `docs/operations/device-login.md`, *Break-glass accounts and sudo*).
+   Then create an enrollment token and install the first device with the autoinstall
    (`docs/operations/autoinstall.md`) or the packages under `https://bundles.<domain>/packages/`.
 5. Set the IP allow list (optional, recommended): as the platform administrator open *Platform* → *IP allow list*,
    add your own address with *Use my address* first (the server refuses a first entry that would lock you out), then

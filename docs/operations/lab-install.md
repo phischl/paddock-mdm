@@ -288,8 +288,8 @@ Run every command inside the bundle directory, as the user who runs Docker.
 
 ## 6. First administrator, organization and device
 
-As in production: `docs/operations/install.md` section 9 (first platform administrator, first organization, first
-device, IP allow list) and section 10 (first agent release with `./paddock agent-release`). The release directory and
+As in production: `docs/operations/install.md` section 9 (first platform administrator, first organization with its
+domains, the break-glass accounts before the first device, IP allow list; every sign-in asks for a second factor) and section 10 (first agent release with `./paddock agent-release`). The release directory and
 its files must be readable by the `paddock-api` service (uid 65532): `chmod -R a+rX <dir>`.
 
 ## 7. Backups

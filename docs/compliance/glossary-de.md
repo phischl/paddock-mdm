@@ -45,6 +45,7 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Issue (revocation) | Ausstellen | The revocation issuer is the *Widerrufsaussteller*. |
 | Keyboard shortcut | Tastenkürzel | |
 | Local administrator | Lokaler Administrator | |
+| Login component | Anmeldekomponente | Himmelblau on the device: the device-code and Hello PIN sign-in. |
 | Managed file / unit | Verwaltete Datei / Unit | |
 | Navigation | Navigation | Navigation drawer; *einblenden* / *ausblenden* to show or hide it. |
 | Never contacted | Nie verbunden | |

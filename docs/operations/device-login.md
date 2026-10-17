@@ -173,13 +173,18 @@ Paddock alone grants sudo on its devices (architecture §10). Set in *Login & pr
 
 - **break-glass accounts**: the local administrator accounts of your devices (for example `paddock-admin`). They are
   never denied by a lock, never ended by a suspension, and stay members of `sudo`, `admin` and `wheel`. Every other
-  member of these groups is removed at the next apply and reported (`device.tamper_sudo_group_member`).
+  member of these groups is removed at the next apply and reported (`device.tamper_sudo_group_member`) — but never
+  the last administrator: a group that has no break-glass account as a member keeps all its members, and each is
+  reported once with `removed=false` and `reason=last_admin`. Once a break-glass account or the managed local
+  administrator is a member, the others are removed.
 - **sudoers.d allow list**: the files in `/etc/sudoers.d` that are not Paddock's (for example `README` and the sudoers
   file of the break-glass account). Every other file is moved to `/var/lib/paddock/quarantine/sudoers.d/` and
   reported (`device.tamper_sudoers_d_file`).
 
-**Configure both before devices get an agent of this release**; otherwise the first apply takes sudo away from your
-local administrator.
+**Configure both before devices get an agent of this release**, and **add the existing local administrators of a
+device as break-glass accounts before you enroll it**; otherwise the first apply takes sudo away from them as soon as
+the managed local administrator is a member of `sudo`. An organization without a domain gets no managed local
+administrator: there the break-glass accounts are the only way to keep a device's administrators.
 
 Users with a permission profile get a file `/etc/sudoers.d/paddock-u-<hash>` that names their numeric UID. The agent
 writes it for the sudo implementation behind `/usr/bin/sudo` — classic sudo, or sudo-rs, the default of Ubuntu 26.04 —

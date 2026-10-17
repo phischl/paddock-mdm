@@ -108,6 +108,10 @@ TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot c
   administrator signs in again with the current role. A token without `groups`, or a platform session whose groups
   name an organization, is only refused.
 
+The portal shows how long the last step-up stays valid: a chip *Confirmed until …* in the app bar and the line
+*Identity confirmed until …* in the user menu (*No current identity confirmation* otherwise), from
+`step_up_valid_until` of `GET /api/v1/me`; both disappear when the window ends.
+
 `max_age` is 60, not 0: Authentik ignores `max_age=0` and forces a new login for `prompt=login` only once per
 Authentik login, so a second step-up would otherwise receive a token of the first one. With `max_age=60`, a step-up
 within 60 s of the previous one reuses it (its `auth_time` is still accepted), any later one authenticates again.
