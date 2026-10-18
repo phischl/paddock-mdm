@@ -31,10 +31,21 @@ export function isPortalLocale(value: string): value is PortalLocale {
   return (portalLocales as readonly string[]).includes(value)
 }
 
-export function createPortalI18n() {
+/** The portal locale a browser asks for: the first of languages whose primary subtag is a portal locale, else en. */
+export function browserLocale(languages: readonly string[]): PortalLocale {
+  for (const language of languages) {
+    const primary = language.split('-')[0]?.toLowerCase() ?? ''
+    if (isPortalLocale(primary)) {
+      return primary
+    }
+  }
+  return 'en'
+}
+
+export function createPortalI18n(initial: PortalLocale = 'en') {
   return createI18n<[MessageSchema], string, false>({
     legacy: false,
-    locale: 'en',
+    locale: initial,
     fallbackLocale: 'en',
     messages: { en: { ...en, $vuetify: vuetifyEn }, de: { ...de, $vuetify: vuetifyDe } },
     messageCompiler,
@@ -43,8 +54,12 @@ export function createPortalI18n() {
   })
 }
 
-/** The portal's i18n instance, shared with Vuetify's locale adapter. */
-export const i18n = createPortalI18n()
+/**
+ * The portal's i18n instance, shared with Vuetify's locale adapter. It starts in the browser's language, so that
+ * public pages without a session (the sign-in refusal) speak it; the account's stored language replaces it once
+ * GET /api/v1/me has answered (stores/session.ts).
+ */
+export const i18n = createPortalI18n(browserLocale(navigator.languages ?? [navigator.language]))
 
 /** Switches the portal to locale; an unknown locale falls back to English. */
 export function applyLocale(locale: string): void {
