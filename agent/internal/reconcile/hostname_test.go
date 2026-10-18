@@ -138,6 +138,47 @@ func TestHostnameHostsFile(t *testing.T) {
 	}
 }
 
+// TestHostnameHostsRename: a rename from lap renames the old names on the first 127.0.1.1 line and keeps the domain
+// and other aliases; an unknown layout gets the name as its first host name; a missing line is inserted. The pass
+// after the rename plans nothing (coordinator decision on review 1 finding 3).
+func TestHostnameHostsRename(t *testing.T) {
+	for _, c := range []struct{ name, before, want string }{
+		{name: "fqdn and short", before: "127.0.0.1 localhost\n127.0.1.1 lap.corp.example lap\n",
+			want: "127.0.0.1 localhost\n127.0.1.1 lap-0421.corp.example lap-0421\n"},
+		{name: "fqdn, short and alias", before: "127.0.1.1\tlap.corp.example\tlap  mail # x\r\n",
+			want: "127.0.1.1\tlap-0421.corp.example\tlap-0421  mail # x\r\n"},
+		{name: "plain short", before: "127.0.0.1 localhost\n127.0.1.1 lap\n", want: "127.0.0.1 localhost\n127.0.1.1 lap-0421\n"},
+		{name: "fqdn only", before: "127.0.1.1 lap.corp.example\n", want: "127.0.1.1 lap-0421.corp.example lap-0421\n"},
+		{name: "unknown layout", before: "127.0.1.1 workstation.corp.example workstation\n",
+			want: "127.0.1.1 lap-0421 workstation\n"},
+		{name: "missing line", before: "127.0.0.1 localhost\n::1 ip6-localhost\n",
+			want: "127.0.0.1 localhost\n127.0.1.1\tlap-0421\n::1 ip6-localhost\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sys, h, _ := hostnameFixture(t)
+			sys.Hostnames = fakesys.Hostnames{Static: "lap", Transient: "lap"}
+			sys.Files[reconcile.HostsFile] = &fakesys.File{Data: []byte(c.before), Mode: 0o644}
+			r := hostnameResource(t, "lap-0421")
+			if res := h.Apply(context.Background(), r); res.Status != reconcile.Changed {
+				t.Fatalf("apply %+v", res)
+			}
+			if got := string(sys.Files[reconcile.HostsFile].Data); got != c.want {
+				t.Fatalf("hosts %q, want %q", got, c.want)
+			}
+			if changes, err := h.Plan(context.Background(), r); err != nil || len(changes) != 0 {
+				t.Fatalf("plan after the rename %v, %v", changes, err)
+			}
+		})
+	}
+	t.Run("in sync with the debian layout", func(t *testing.T) {
+		sys, h, _ := hostnameFixture(t)
+		sys.Files[reconcile.HostsFile] = &fakesys.File{Data: []byte("127.0.1.1 lap-0421.corp.example lap-0421\n"), Mode: 0o644}
+		if changes, err := h.Plan(context.Background(), hostnameResource(t, "lap-0421")); err != nil || len(changes) != 0 {
+			t.Fatalf("plan %v, %v", changes, err)
+		}
+	})
+}
+
 // TestHostnameHostsSymlink: a symlinked /etc/hosts is left alone and not planned, so drift passes stay quiet; it is
 // logged once while it stays a symlink and again after it was a regular file in between (review 1 finding 4).
 func TestHostnameHostsSymlink(t *testing.T) {

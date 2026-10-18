@@ -579,9 +579,12 @@ Open points (default chosen):
   restart stays pending in `reconcile.HostnameState`, which the applier keeps for the agent's lifetime; while it is
   pending and the names are in sync, `Plan` lists `systemctl restart avahi-daemon.service`, so the next pass (drift
   or bundle) retries it. An agent restart forgets a pending restart; Avahi then follows at the next rename or reboot.
-- **`/etc/hosts` keeps names and aliases.** Decision 13 is refined: the reconciler replaces only the first host name
-  (field 1) of the first `127.0.1.1` line; the separators, further names and aliases, a comment and the line ending
-  stay. A `127.0.1.1` line without a host name gets `\t<name>` after the address.
+- **`/etc/hosts` keeps the domain and aliases.** Decision 13 is refined: on the first `127.0.1.1` line, a host name
+  equal to the device's old static or transient name becomes the new name, `<old>.<domain>` becomes
+  `<new>.<domain>` (Debian's `<fqdn> <short>` layout), and every other alias stays; when only `<old>.<domain>`
+  matched, the new short name follows it. When no host name matches (an unknown layout), the first host name
+  becomes the new name. Separators, a comment and the line ending stay; a `127.0.1.1` line without a host name gets
+  `\t<name>` after the address. The line is in sync when any of its host names is the name.
 - **Symlinked `/etc/hosts`.** When `/etc/hosts` is not a regular file (a symlink), `Plan` leaves it out of the plan
   instead of planning a write that fails at every drift pass; the agent logs it once while it stays so (state in
   `reconcile.HostnameState`), and RR-70 covers the stale `127.0.1.1` line this leaves.

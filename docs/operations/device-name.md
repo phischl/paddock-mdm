@@ -26,8 +26,9 @@ without a reboot and without a logout. The agent:
    page and NetworkManager see the change at once); an empty pretty hostname counts as in sync;
 2. restarts `avahi-daemon.service` when it is running, because Avahi reads the host name only at startup and would
    keep announcing the old one; a failed restart is retried at the next pass;
-3. keeps the line `127.0.1.1 <name>` in `/etc/hosts` so that sudo resolves the host without a warning: it replaces
-   the first host name of the first `127.0.1.1` line and keeps further names and aliases, inserts a line after the
+3. keeps the line `127.0.1.1 <name>` in `/etc/hosts` so that sudo resolves the host without a warning: on the first
+   `127.0.1.1` line it renames the old short name and the old `<name>.<domain>` (keeping the domain) and keeps every
+   other alias, or sets the first host name when the old name is not on the line; it inserts a line after the
    `127.0.0.1` line when there is none, or creates the file with both lines; every other line stays as it is. A
    symlinked `/etc/hosts` is left alone and logged once (RR-70).
 

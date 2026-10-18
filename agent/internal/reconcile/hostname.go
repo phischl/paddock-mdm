@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -49,9 +50,16 @@ func (h *Hostname) Type() string { return bundle.TypeHostname }
 
 // Plan implements Reconciler.
 func (h *Hostname) Plan(ctx context.Context, r bundle.Resource) ([]string, error) {
+	changes, _, err := h.plan(ctx, r)
+	return changes, err
+}
+
+// plan is Plan that also returns the device's current static and transient name, the old names Apply looks for on
+// the 127.0.1.1 line of /etc/hosts.
+func (h *Hostname) plan(ctx context.Context, r bundle.Resource) ([]string, []string, error) {
 	name, err := hostnameOf(r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out, exit, err := h.Sys.Hostnamectl(ctx, "--json=short")
 	if err == nil && exit != 0 {
@@ -62,7 +70,7 @@ func (h *Hostname) Plan(ctx context.Context, r bundle.Resource) ([]string, error
 		err = json.Unmarshal([]byte(out), &names)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("hostnamed unavailable: %w", err)
+		return nil, nil, fmt.Errorf("hostnamed unavailable: %w", err)
 	}
 	var changes []string
 	// hostnamectl clears the pretty name when it sets a valid host name (systemd set_hostname, ADR 0041 amendment
@@ -75,7 +83,7 @@ func (h *Hostname) Plan(ctx context.Context, r bundle.Resource) ([]string, error
 	if h.HostsManaged == nil || !h.HostsManaged() {
 		data, _, err := h.Sys.ReadFile(HostsFile)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("read %s: %w", HostsFile, err)
+			return nil, nil, fmt.Errorf("read %s: %w", HostsFile, err)
 		}
 		if err == nil && data == nil {
 			h.skipHosts(ctx)
@@ -88,14 +96,20 @@ func (h *Hostname) Plan(ctx context.Context, r bundle.Resource) ([]string, error
 			}
 		}
 	}
-	return changes, nil
+	return changes, []string{names.StaticHostname, names.Hostname}, nil
 }
 
 // Apply implements Reconciler. A refused rename leaves /etc/hosts and Avahi alone; after a rename avahi-daemon is
 // restarted whether or not /etc/hosts can be written, and both errors are reported. The device keeps working with
 // whatever name it has (contract 8).
 func (h *Hostname) Apply(ctx context.Context, r bundle.Resource) Result {
-	return apply(ctx, r, h.Plan, func(changes []string) error {
+	var old []string
+	plan := func(ctx context.Context, r bundle.Resource) ([]string, error) {
+		changes, names, err := h.plan(ctx, r)
+		old = names
+		return changes, err
+	}
+	return apply(ctx, r, plan, func(changes []string) error {
 		name, err := hostnameOf(r)
 		if err != nil {
 			return err
@@ -115,7 +129,7 @@ func (h *Hostname) Apply(ctx context.Context, r bundle.Resource) Result {
 			case c == "systemctl restart "+avahiUnit:
 				errs = append(errs, h.restartAvahi(ctx))
 			case strings.HasPrefix(c, "write "+HostsFile):
-				errs = append(errs, h.writeHosts(name))
+				errs = append(errs, h.writeHosts(old, name))
 			default:
 				return fmt.Errorf("unknown change %q", c)
 			}
@@ -156,7 +170,7 @@ func (h *Hostname) setAvahiPending(pending bool) {
 	}
 }
 
-func (h *Hostname) writeHosts(name string) error {
+func (h *Hostname) writeHosts(old []string, name string) error {
 	data, _, err := h.Sys.ReadFile(HostsFile)
 	exists := err == nil
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -165,7 +179,7 @@ func (h *Hostname) writeHosts(name string) error {
 	if exists && data == nil {
 		return fmt.Errorf("%s is not a regular file", HostsFile)
 	}
-	if err := h.Sys.WriteFileAtomic(HostsFile, hostsWithName(data, exists, name), 0o644, 0, 0); err != nil {
+	if err := h.Sys.WriteFileAtomic(HostsFile, hostsWithName(data, exists, old, name), 0o644, 0, 0); err != nil {
 		return fmt.Errorf("write %s: %w", HostsFile, err)
 	}
 	return nil
@@ -182,20 +196,21 @@ func hostnameOf(r bundle.Resource) (string, error) {
 	return s.Name, nil
 }
 
-// hostsHasName reports whether a line of /etc/hosts maps 127.0.1.1 to name as its first host name.
+// hostsHasName reports whether a 127.0.1.1 line of /etc/hosts lists name among its host names.
 func hostsHasName(data []byte, name string) bool {
 	for line := range strings.Lines(string(data)) {
-		if f := strings.Fields(line); len(f) >= 2 && f[0] == hostsLoopIP && f[1] == name {
+		line, _, _ = strings.Cut(line, "#")
+		if f := strings.Fields(line); len(f) >= 2 && f[0] == hostsLoopIP && slices.Contains(f[1:], name) {
 			return true
 		}
 	}
 	return false
 }
 
-// hostsWithName returns /etc/hosts with the first host name of its first 127.0.1.1 line replaced by name and every
-// other byte kept, further names and aliases included; without such a line the entry "127.0.1.1\t<name>" follows the
-// first 127.0.0.1 line or ends the file. A missing file becomes the two loopback lines.
-func hostsWithName(data []byte, exists bool, name string) []byte {
+// hostsWithName returns /etc/hosts with the old names on its first 127.0.1.1 line renamed to name (withName) and
+// every other byte kept; without such a line the entry "127.0.1.1\t<name>" follows the first 127.0.0.1 line or ends
+// the file. A missing file becomes the two loopback lines.
+func hostsWithName(data []byte, exists bool, old []string, name string) []byte {
 	entry := hostsLoopIP + "\t" + name
 	if !exists {
 		return []byte(hostsLocalIP + "\tlocalhost\n" + entry + "\n")
@@ -208,7 +223,7 @@ func hostsWithName(data []byte, exists bool, name string) []byte {
 			continue
 		}
 		if f[0] == hostsLoopIP {
-			lines[i] = withFirstName(line, name)
+			lines[i] = withName(line, old, name)
 			return []byte(strings.Join(lines, ""))
 		}
 		if f[0] == hostsLocalIP && local < 0 {
@@ -229,22 +244,78 @@ func hostsWithName(data []byte, exists bool, name string) []byte {
 	return []byte(strings.Join(lines, ""))
 }
 
-// withFirstName returns a 127.0.1.1 line with its first host name set to name; the separators, the further names,
-// a comment and the line ending stay. A line without a host name gets name after the address.
-func withFirstName(line, name string) string {
+// withName renames a 127.0.1.1 line from the old names to name, keeping the Debian layout "<fqdn> <short>": a host
+// name equal to an old name becomes name, "<old>.<domain>" becomes "<name>.<domain>", every other alias stays. When
+// only a "<old>.<domain>" matched, name follows it so that the short name resolves. When nothing matched (an unknown
+// layout), the first host name becomes name; a line without one gets name after the address. Separators, a comment
+// and the line ending stay.
+func withName(line string, old []string, name string) string {
 	start := strings.Index(line, hostsLoopIP) + len(hostsLoopIP)
-	head, after := line[:start], line[start:]
-	body := strings.TrimLeft(after, " \t")
-	sep := after[:len(after)-len(body)]
-	if sep == "" {
-		sep = "\t"
+	head, rest := line[:start], line[start:]
+	comment := ""
+	if i := strings.IndexByte(rest, '#'); i >= 0 {
+		rest, comment = rest[:i], rest[i:]
 	}
-	end := strings.IndexAny(body, " \t\r\n#")
-	if end < 0 {
-		end = len(body)
+	var spans [][2]int
+	for i := 0; i < len(rest); {
+		if strings.IndexByte(" \t\r\n", rest[i]) >= 0 {
+			i++
+			continue
+		}
+		j := i
+		for j < len(rest) && strings.IndexByte(" \t\r\n", rest[j]) < 0 {
+			j++
+		}
+		spans = append(spans, [2]int{i, j})
+		i = j
 	}
-	if end == 0 && strings.HasPrefix(body, "#") {
-		return head + sep + name + " " + body
+	if len(spans) == 0 {
+		tail := strings.TrimLeft(rest, " \t")
+		lead := rest[:len(rest)-len(tail)]
+		if lead == "" {
+			lead = "\t"
+		}
+		if comment != "" && tail == "" {
+			tail = " "
+		}
+		return head + lead + name + tail + comment
 	}
-	return head + sep + name + body[end:]
+	renamed := make([]string, len(spans))
+	matched, short, fqdn := false, false, -1
+	for k, sp := range spans {
+		f := rest[sp[0]:sp[1]]
+		renamed[k] = f
+		for _, o := range old {
+			if o == "" {
+				continue
+			}
+			if f == o {
+				renamed[k], matched, short = name, true, true
+				break
+			}
+			if strings.HasPrefix(f, o+".") {
+				renamed[k], matched = name+f[len(o):], true
+				if fqdn < 0 {
+					fqdn = k
+				}
+				break
+			}
+		}
+	}
+	if !matched {
+		renamed[0] = name
+	} else if !short {
+		renamed[fqdn] += " " + name
+	}
+	var b strings.Builder
+	b.WriteString(head)
+	prev := 0
+	for k, sp := range spans {
+		b.WriteString(rest[prev:sp[0]])
+		b.WriteString(renamed[k])
+		prev = sp[1]
+	}
+	b.WriteString(rest[prev:])
+	b.WriteString(comment)
+	return b.String()
 }

@@ -81,7 +81,7 @@ func (d *Device) checkinTick() func() {
 
 func hasHostsLine(hosts, name string) bool {
 	for line := range strings.Lines(hosts) {
-		if f := strings.Fields(line); len(f) >= 2 && f[0] == "127.0.1.1" && f[1] == name {
+		if f := strings.Fields(line); len(f) >= 2 && f[0] == "127.0.1.1" && slices.Contains(f[1:], name) {
 			return true
 		}
 	}
