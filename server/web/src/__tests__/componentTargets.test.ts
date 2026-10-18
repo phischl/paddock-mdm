@@ -49,6 +49,7 @@ describe('rollout targets (PDK-236)', () => {
     expect(row('paddockd')).toEqual(['Agent (paddockd)', '0.1.0 (agent_release)'])
     expect(text('rollout-targets-none')).toBeUndefined()
     expect(text('rollout-targets')).toContain('Set with PADDOCK_HIMMELBLAU_VERSION of the compiler')
+    expect(text('rollout-targets-hint')).toContain('Target = last completed release.')
   })
 
   it('says so while no release completed a rollout', async () => {
@@ -64,5 +65,6 @@ describe('component list helpers', () => {
     expect(componentStatus('ok').status).toBe('ok')
     expect(componentStatus('missing').status).toBe('neutral')
     expect(componentFilter.kind === 'enum' && componentFilter.key).toBe('component_outdated')
+    expect(componentFilter.hint).toBe('devices.components.targetHint')
   })
 })

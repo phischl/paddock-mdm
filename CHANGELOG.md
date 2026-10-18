@@ -122,7 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status, and `GET /api/v1/devices?component_outdated=true` finds devices with an outdated component.
 - The device page shows the panel *Components* (installed and expected version of the agent, the supervisor,
   paddock-revoke, Himmelblau and fleetd with their status), the device list a *Components* column and the filter
-  *Component outdated*, and the platform's *Agent releases* page the card *Rollout targets*.
+  *Component outdated*, and the platform's *Agent releases* page the card *Rollout targets*. The target is the last
+  completed release (a running rollout does not move it), and a component newer than its target counts as up to
+  date; all three places say so.
 
 ### Changed
 

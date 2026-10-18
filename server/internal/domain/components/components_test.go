@@ -22,6 +22,8 @@ func TestOutdated(t *testing.T) {
 		{"no target", map[string]string{Revoke: "0.0.1"}, []string{}},
 		{"sorted", map[string]string{Paddockd: "0.0.9", Fleetd: "1.42.9", Himmelblau: "4.0.0"}, []string{Fleetd, Himmelblau, Paddockd}},
 		{"newer agent", map[string]string{Paddockd: "0.1.0"}, []string{}},
+		// PDK-333: the target is the last completed release; a supervisor from a running rollout is newer, not outdated.
+		{"supervisor of a running rollout", map[string]string{Supervisor: "0.1.0~alpha.5", Paddockd: "0.1.0-alpha.5"}, []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Outdated(tc.installed, targets); !slices.Equal(got, tc.want) {
@@ -41,5 +43,12 @@ func TestStatus(t *testing.T) {
 	}
 	if got := Status(Paddockd, nil, targets); got != StatusUnknown {
 		t.Fatalf("without a report: %s", got)
+	}
+	// PDK-333: newer than the target (the last completed release) is ok, never outdated.
+	release := map[string]string{Supervisor: "0.1.0-alpha.4", Himmelblau: "4.0.4"}
+	for name, version := range map[string]string{Supervisor: "0.1.0~alpha.5", Himmelblau: "4.1.0"} {
+		if got := Status(name, map[string]string{name: version}, release); got != StatusOK {
+			t.Errorf("%s %s newer than its target: %s, want ok", name, version, got)
+		}
 	}
 }

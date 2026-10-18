@@ -23,7 +23,7 @@ export const contactFilter: ListFilter = {
 /** The security update filter (plan M7c amendment 2026-10-10): the overview's "Security updates overdue" links to it. */
 /** The component filter of the device list (plan M8d decision 56). */
 export const componentFilter: ListFilter = {
-  kind: 'enum', key: 'component_outdated', label: 'devices.componentFilter',
+  kind: 'enum', key: 'component_outdated', label: 'devices.componentFilter', hint: 'devices.components.targetHint',
   options: [{ value: 'true', title: 'devices.components.status.outdated' }],
 }
 

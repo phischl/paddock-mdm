@@ -67,6 +67,12 @@ const columns: ListColumn[] = [
         <p class="pd-type-caption pd-muted">
           {{ t('agentReleases.targets.himmelblauHint') }}
         </p>
+        <p
+          class="pd-type-caption pd-muted"
+          data-testid="rollout-targets-hint"
+        >
+          {{ t('devices.components.targetHint') }}
+        </p>
       </div>
     </section>
     <DataList

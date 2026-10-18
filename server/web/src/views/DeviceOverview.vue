@@ -292,6 +292,12 @@ async function copyId(): Promise<void> {
           <p class="pd-type-caption pd-muted">
             {{ t('devices.components.hint') }}
           </p>
+          <p
+            class="pd-type-caption pd-muted"
+            data-testid="components-target-hint"
+          >
+            {{ t('devices.components.targetHint') }}
+          </p>
         </div>
       </section>
 

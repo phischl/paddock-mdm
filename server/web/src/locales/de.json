@@ -987,7 +987,8 @@
         "unknown": "Nicht gemeldet"
       },
       "outdatedCount": "{count, plural, one {# veraltet} other {# veraltet}}",
-      "hint": "Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach."
+      "hint": "Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach.",
+      "targetHint": "Ziel = letztes abgeschlossenes Release. Ein laufender Rollout verschiebt es nicht; eine Komponente, die neuer als ihr Ziel ist, gilt als aktuell."
     },
     "componentFilter": "Komponente veraltet"
   },

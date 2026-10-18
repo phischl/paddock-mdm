@@ -127,6 +127,8 @@ describe('device overview components (PDK-236)', () => {
     expect(cells('fleetd')).toEqual(['fleetd (osquery)', '–', '1.43.0', 'Not installed'])
     expect(document.querySelector('[data-testid="device-components"]')?.textContent)
       .toContain('Expected versions come from the current agent release')
+    expect(document.querySelector('[data-testid="components-target-hint"]')?.textContent)
+      .toContain('a component newer than its target counts as up to date')
   })
 
   it('shows Not reported for an agent that reports no components', async () => {

@@ -987,7 +987,8 @@
         "unknown": "Not reported"
       },
       "outdatedCount": "{count, plural, one {# outdated} other {# outdated}}",
-      "hint": "Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update."
+      "hint": "Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update.",
+      "targetHint": "Target = last completed release. A running rollout does not move it; a component newer than its target counts as up to date."
     },
     "componentFilter": "Component outdated"
   },
