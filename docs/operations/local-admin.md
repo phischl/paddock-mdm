@@ -63,7 +63,9 @@ the PAM service (`sshd`, `login`, `gdm-password`, …) and the time — no termi
   `local_admin.revealed` event with the generations (never the passwords).
 
 While a rotation waits for its confirmation, the server keeps both generations, so a reveal never misses the
-password that is valid on the device.
+password that is valid on the device. Before the device confirmed its first password, the portal shows *none
+confirmed yet — password 1 is stored and waits for the device's confirmation at its next check-in (within about 5
+minutes)*, not *none yet*.
 
 ## Keys and credentials
 

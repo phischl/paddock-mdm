@@ -4,8 +4,8 @@ import { useI18n } from 'vue-i18n'
 import { expiryBounds, rolesFor, validateApiToken, type ApiTokenInput } from '../lib/apiTokens'
 import { useProblemText } from '../lib/problems'
 
-const props = withDefaults(defineProps<{ creatorRole: string | null; problem?: string; now?: Date }>(), {
-  problem: '', now: () => new Date(),
+const props = withDefaults(defineProps<{ creatorRole: string | null; problem?: string; now?: Date; pending?: boolean }>(), {
+  problem: '', now: () => new Date(), pending: false,
 })
 const emit = defineEmits<{ submit: [input: ApiTokenInput]; cancel: [] }>()
 
@@ -75,6 +75,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
       >
         {{ t('common.create') }}

@@ -10,8 +10,10 @@ import { useProblemText } from '../lib/problems'
 import { createUser, listUsers, userFilters } from '../lib/users'
 import { useSessionStore } from '../stores/session'
 import { userLockStatus } from '../lib/status'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const session = useSessionStore()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
@@ -84,6 +86,14 @@ async function copy(): Promise<void> {
         {{ t('users.create') }}
       </v-btn>
     </div>
+    <v-alert
+      v-if="(session.me?.organization?.domains.length ?? 1) === 0"
+      type="warning"
+      variant="tonal"
+      data-testid="org-no-domains"
+    >
+      {{ t('users.orgNoDomains') }}
+    </v-alert>
     <DataList
       ref="list"
       :columns="columns"
@@ -110,6 +120,12 @@ async function copy(): Promise<void> {
         <RouterLink :to="{ name: 'user', params: { id: item.id } }">
           {{ item.username }}
         </RouterLink>
+        <StatusChip
+          v-if="!item.domain_match"
+          status="warn"
+          :label="t('users.noDomain')"
+          :data-testid="'no-domain-' + item.id"
+        />
       </template>
       <template #[`item.source`]="{ item }: { item: User }">
         <StatusChip
@@ -140,7 +156,7 @@ async function copy(): Promise<void> {
           <form
             class="form"
             novalidate
-            @submit.prevent="submit"
+            @submit.prevent="run(submit)"
           >
             <v-text-field
               id="user-username"
@@ -182,6 +198,8 @@ async function copy(): Promise<void> {
               </v-btn>
               <v-btn
                 type="submit"
+                :loading="pending"
+                :disabled="pending"
                 color="primary"
               >
                 {{ t('common.create') }}

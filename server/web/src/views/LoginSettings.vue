@@ -6,8 +6,10 @@ import { formatDateTime } from '../lib/format'
 import { getLoginSettings, lines, saveLoginSettings } from '../lib/loginSettings'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 const { t, locale } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const session = useSessionStore()
 const sessionActions: SessionAction[] = ['lock_screen', 'terminate']
@@ -83,7 +85,7 @@ async function save(): Promise<void> {
       v-if="loaded"
       class="form settings-form"
       novalidate
-      @submit.prevent="save"
+      @submit.prevent="run(save)"
     >
       <fieldset :disabled="!session.canDelete">
         <legend>{{ t('loginSettings.login') }}</legend>
@@ -206,6 +208,8 @@ async function save(): Promise<void> {
         >{{ t('loginSettings.saved') }}</span>
         <v-btn
           type="submit"
+          :loading="pending"
+          :disabled="pending"
           color="primary"
           data-testid="save-login-settings"
         >

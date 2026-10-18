@@ -141,9 +141,12 @@ export interface ListFilterOption {
   title?: string
 }
 
-/** Declarative filter of a list: a repeatable enum (multi-select) or a date range (two query keys). Labels are message keys. */
+/**
+ * Declarative filter of a list: a repeatable enum (multi-select) or a date range (two query keys). Labels and the
+ * optional hint below an enum filter are message keys.
+ */
 export type ListFilter =
-  | { kind: 'enum'; key: string; label: string; options: ListFilterOption[] }
+  | { kind: 'enum'; key: string; label: string; options: ListFilterOption[]; hint?: string }
   | { kind: 'dateRange'; from: string; to: string; fromLabel: string; toLabel: string }
 
 /** The query keys of the filters. */

@@ -226,3 +226,29 @@ func TestStepUpFactor(t *testing.T) {
 		t.Errorf("order 31 (development) validates %v, want [webauthn totp]", got)
 	}
 }
+
+// TestStepUpValidUntilInMe (plan M8x decision 36): GET /api/v1/me names the end of the session's step-up window for the
+// portal's freshness indicator: null in a new session, within the next 300 s after a step-up.
+func TestStepUpValidUntilInMe(t *testing.T) {
+	p := login(t, env.Alice)
+	validUntil := func() *time.Time {
+		t.Helper()
+		var me struct {
+			ValidUntil *time.Time `json:"step_up_valid_until"`
+		}
+		res := call(t, p, http.MethodGet, "/api/v1/me", nil)
+		expectStatus(t, res, http.StatusOK, "")
+		if err := res.JSON(&me); err != nil {
+			t.Fatal(err)
+		}
+		return me.ValidUntil
+	}
+	if v := validUntil(); v != nil {
+		t.Fatalf("new session: step_up_valid_until %v, want null", v)
+	}
+	stepUp(t, p, env.Alice, true)
+	now := time.Now()
+	if v := validUntil(); v == nil || v.Before(now.Add(-expirySlack)) || v.After(now.Add(300*time.Second+expirySlack)) {
+		t.Fatalf("after a step-up: step_up_valid_until %v, want within [now, now+300 s]", v)
+	}
+}

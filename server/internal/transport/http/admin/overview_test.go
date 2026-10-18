@@ -17,7 +17,7 @@ import (
 // fleet seeds acme with one device per overview bucket (plan M7c decision 26) and one device in two buckets, which
 // must count once, in the more severe one. The worker's tables are written directly, as devices_test.go does.
 type fleet struct {
-	online, silent, silentCritical, presumedLost, lostAndSilent, never, pending, retired, quarantined uuid.UUID
+	online, unseen, silent, silentCritical, presumedLost, lostAndSilent, never, pending, retired, quarantined uuid.UUID
 }
 
 func (e *env) seedFleet(t *testing.T) fleet {
@@ -25,7 +25,7 @@ func (e *env) seedFleet(t *testing.T) fleet {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	f := fleet{
-		online: e.insertDevice(e.acme, "ov-online", "active"), silent: e.insertDevice(e.acme, "ov-silent", "active"),
+		online: e.insertDevice(e.acme, "ov-online", "active"), unseen: e.insertDevice(e.acme, "ov-unseen", "active"), silent: e.insertDevice(e.acme, "ov-silent", "active"),
 		silentCritical: e.insertDevice(e.acme, "ov-silent-critical", "active"), presumedLost: e.insertDevice(e.acme, "ov-lost", "active"),
 		lostAndSilent: e.insertDevice(e.acme, "ov-lost-and-silent", "active"), never: e.insertDevice(e.acme, "ov-never", "active"),
 		pending: e.insertDevice(e.acme, "ov-pending", "pending"), retired: e.insertDevice(e.acme, "ov-retired", "retired"),
@@ -53,6 +53,9 @@ func (e *env) seedFleet(t *testing.T) fleet {
 	recent := now.Add(-2 * time.Hour).Format(time.RFC3339)
 	old := now.Add(-72 * time.Hour).Format(time.RFC3339)
 	status(f.online, `{"disk":{"state":"compliant"},"reboot_required":true}`, `{"updates_security":{"occurred_at":"`+recent+`","params":{"result":"ok"}}}`, &v191, &now, nil)
+	// No check-in for more than 15 minutes and no staleness alert: no recent contact (plan M8x decision 58).
+	unseen := now.Add(-20 * time.Minute)
+	status(f.unseen, `{"disk":{"state":"compliant"}}`, `{"updates_security":{"occurred_at":"`+recent+`","params":{"result":"ok"}}}`, &v191, &unseen, nil)
 	status(f.silent, `{"disk":{"state":"not_encrypted"}}`, `{"updates_security":{"occurred_at":"`+old+`","params":{"result":"ok"}}}`, &v191, &now, nil)
 	alert(f.silent, "stale_warning")
 	status(f.silentCritical, `{"disk":{"state":"escrow_pending"}}`, `{"updates_security":{"occurred_at":"`+recent+`","params":{"result":"failed"}}}`, nil, &now, nil)
@@ -81,14 +84,14 @@ func TestOverview(t *testing.T) {
 	if r.status != http.StatusOK {
 		t.Fatalf("overview: %d %s", r.status, r.body)
 	}
-	want := adminapi.OverviewDevices{Total: 8, Active: 6, Pending: 1, Quarantined: 1, Retired: 1, Rejected: 0, Online: 1, Silent: 1, SilentCritical: 1, PresumedLost: 2, NeverContacted: 1}
+	want := adminapi.OverviewDevices{Total: 9, Active: 7, Pending: 1, Quarantined: 1, Retired: 1, Rejected: 0, Online: 1, NoRecentContact: 1, Silent: 1, SilentCritical: 1, PresumedLost: 2, NeverContacted: 1}
 	if o.Devices != want {
 		t.Fatalf("devices %+v, want %+v", o.Devices, want)
 	}
-	if o.Encryption != (adminapi.OverviewEncryption{Encrypted: 2, NotEncrypted: 1, Partial: 1, NotReported: 2}) {
+	if o.Encryption != (adminapi.OverviewEncryption{Encrypted: 3, NotEncrypted: 1, Partial: 1, NotReported: 2}) {
 		t.Fatalf("encryption %+v", o.Encryption)
 	}
-	if o.Vulnerabilities.ByHighestSeverity != (adminapi.OverviewSeverityBuckets{Critical: 2, High: 0, Medium: 0, Low: 0, Unknown: 1, None: 4}) {
+	if o.Vulnerabilities.ByHighestSeverity != (adminapi.OverviewSeverityBuckets{Critical: 2, High: 0, Medium: 0, Low: 0, Unknown: 1, None: 5}) {
 		t.Fatalf("buckets %+v", o.Vulnerabilities.ByHighestSeverity)
 	}
 	if len(o.Vulnerabilities.Top) != 3 || o.Vulnerabilities.Top[0].Cve != "CVE-2026-0001" || o.Vulnerabilities.Top[0].Devices != 2 ||
@@ -103,7 +106,7 @@ func TestOverview(t *testing.T) {
 	if o.Updates.Agent.CurrentVersion != nil || o.Updates.Agent.OnCurrent != 0 || o.Updates.Agent.Outdated != 0 || o.Updates.Agent.Ahead != 0 || o.Updates.Agent.Unknown != 2 {
 		t.Fatalf("agent %+v", o.Updates.Agent)
 	}
-	if len(o.Updates.OsReleases) != 1 || o.Updates.OsReleases[0].Release != "unknown" || o.Updates.OsReleases[0].Devices != 6 {
+	if len(o.Updates.OsReleases) != 1 || o.Updates.OsReleases[0].Release != "unknown" || o.Updates.OsReleases[0].Devices != 7 {
 		t.Fatalf("os releases %+v", o.Updates.OsReleases)
 	}
 	var attention adminapi.AttentionPage
@@ -141,7 +144,7 @@ func TestDeviceContact(t *testing.T) {
 		got[d.Hostname] = d.Contact
 	}
 	want := map[string]adminapi.DeviceContact{
-		"ov-online": adminapi.DeviceContactOk, "ov-silent": adminapi.DeviceContactStaleWarning, "ov-silent-critical": adminapi.DeviceContactStaleCritical, "ov-lost": adminapi.DeviceContactPresumedLost,
+		"ov-online": adminapi.DeviceContactOk, "ov-unseen": adminapi.DeviceContactUnseen, "ov-silent": adminapi.DeviceContactStaleWarning, "ov-silent-critical": adminapi.DeviceContactStaleCritical, "ov-lost": adminapi.DeviceContactPresumedLost,
 		"ov-lost-and-silent": adminapi.DeviceContactPresumedLost, "ov-never": adminapi.DeviceContactNever, "ov-pending": adminapi.DeviceContactNever, "ov-retired": adminapi.DeviceContactNever,
 		"ov-quarantined": adminapi.DeviceContactOk,
 	}
@@ -334,7 +337,8 @@ func TestOverviewKPIsEqualListTotals(t *testing.T) {
 		path  string
 	}{
 		{"online", o.Devices.Online, "/api/v1/devices?state=active&contact=ok"},
-		{"silent", o.Devices.Silent + o.Devices.SilentCritical, "/api/v1/devices?state=active&contact=stale_warning&contact=stale_critical"},
+		{"silent", o.Devices.NoRecentContact + o.Devices.Silent + o.Devices.SilentCritical,
+			"/api/v1/devices?state=active&contact=unseen&contact=stale_warning&contact=stale_critical"},
 		{"presumed lost", o.Devices.PresumedLost, "/api/v1/devices?state=active&contact=presumed_lost"},
 		{"encrypted", o.Encryption.Encrypted, "/api/v1/devices?state=active&disk_state=compliant"},
 		{"not encrypted", o.Encryption.NotEncrypted, "/api/v1/devices?state=active&disk_state=not_encrypted"},
@@ -345,7 +349,7 @@ func TestOverviewKPIsEqualListTotals(t *testing.T) {
 			t.Errorf("%s: overview %d, list %s total %d", kpi.name, kpi.value, kpi.path, got)
 		}
 	}
-	if o.Vulnerabilities.CriticalHighCves != 2 || o.Updates.SecurityOverdue != 4 || o.Encryption.Encrypted != 2 {
+	if o.Vulnerabilities.CriticalHighCves != 2 || o.Updates.SecurityOverdue != 4 || o.Encryption.Encrypted != 3 {
 		t.Fatalf("fixture numbers: CVEs %d, overdue %d, encrypted %d", o.Vulnerabilities.CriticalHighCves, o.Updates.SecurityOverdue, o.Encryption.Encrypted)
 	}
 	if r := e.do(call{method: "GET", path: "/api/v1/devices?security_updates=late", cookie: alice, skipReqCheck: true}); r.status != http.StatusBadRequest {

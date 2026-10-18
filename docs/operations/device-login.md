@@ -13,7 +13,7 @@ At the first bundle with login management (agents report bundle schema 2), the a
    configuration `himmelblaud` fails in a restart loop that keeps sshd down and the installation waiting. No
    Himmelblau package ships the file. It is removed again if the installation fails, but kept after a timeout, which
    may leave the packages half configured. It then installs Himmelblau `PADDOCK_HIMMELBLAU_VERSION` (setting of
-   `paddock-compiler`, default `4.0.4`) from the official repository
+   `paddock-compiler`, default `4.0.6`) from the official repository
    `https://packages.himmelblau-idm.org/stable/<version>/deb/ubuntu<release>/`. The repository signing key is built
    into the agent (fingerprint `E87F D8D4 63A5 E481 4B9C DBA9 0CC0 D400 2C42 5E03`) and written to
    `/etc/apt/keyrings/himmelblau.gpg`; the source is `/etc/apt/sources.list.d/paddock-himmelblau.list`. Only this
@@ -26,7 +26,10 @@ At the first bundle with login management (agents report bundle schema 2), the a
 2. writes `/etc/himmelblau/himmelblau.conf` (issuer and client of the organization's device application, the device's
    allow list `pam_allow_groups`, Hello PIN settings, no console password login, the fixed UID range
    `idmap_range = 200000-999999999` — sudo-rs cannot handle longer numeric users, and changing the range would give
-   every directory user a new UID) and restarts `himmelblaud` and
+   every directory user a new UID, and `local_sudo_group = paddock-no-sudo` with `local_groups_reconcile_interval = 0`
+   — Paddock alone manages sudo: without these lines Himmelblau removes every account it knows from `sudo` at each
+   sign-in and every five minutes, because its own sudo groups are never configured; `paddock-no-sudo` is a group
+   that does not exist, so Himmelblau's removal from it does nothing) and restarts `himmelblaud` and
    `himmelblaud-tasks`, which read the allow list only at start. Local changes are reverted at the next drift pass;
 3. keeps the deny list `/etc/paddock/login-deny` of locked users (see below), an empty file when nobody is locked.
 
@@ -76,6 +79,48 @@ lecture as the place for the usage policy on devices whose sudo is sudo-rs, whic
 - Users not in the device's login assignment (or not in the organization) are refused: Authentik refuses users of
   other organizations, the device refuses users outside its allow list.
 
+## Tokens of the device login
+
+| Token or cache | Lifetime |
+| --- | --- |
+| Device code (the code and QR code at the login screen) | 10 minutes |
+| Access token | 10 minutes |
+| Refresh token | 30 days, renewed at every PIN authentication |
+| Himmelblau's cache of a signed-in user (`cache_timeout`) | 30 days |
+
+The worker sets the token values on the device provider of every organization (`access_code_validity`,
+`access_token_validity`, `refresh_token_validity`) and converges existing providers every 10 minutes. It keeps
+`refresh_token_threshold` at zero: with a threshold Authentik leaves the refresh token out of its refresh response,
+and Himmelblau then refuses every PIN login.
+
+The agent sets `cache_timeout = 2592000` (30 days) in `himmelblau.conf`. Himmelblau 4.0.x seals the refresh token
+with the Hello key at every PIN authentication and presents the sealed token at the next one; with its default
+`cache_timeout` of 300 s it would refresh a signed-in user in the background, Authentik would renew the refresh token
+and revoke the sealed one, and the next PIN login or unlock would fail with *Your session has expired. Please sign in
+again.* and lose the PIN. With the agent's value Himmelblau refreshes a signed-in user's cached attributes (name,
+shell, the groups `id` shows) online at the next PIN authentication or after 30 days. Paddock's lock, suspension and
+allow list do not depend on this cache. A locked user disappears from `getent passwd` until the user signs in again.
+`cache_timeout` and the refresh token's 30 days are one figure in two places (agent and device provider); they change
+together.
+
+**Expect a device-code sign-in after 30 days without a PIN authentication** (or earlier after a lock, three wrong
+PINs or a long offline period): the user signs in with the device code again and sets a new PIN (residual risk
+RR-40). Devices whose agent is older than 0.1.0-alpha.4 lose the PIN after a few minutes of use until the agent is
+updated. The upstream issue ("Hello-sealed refresh token is not updated when a background refresh renews it",
+`himmelblau-idm/himmelblau`) is linked here once posted.
+
+## Messages at the login screen
+
+The greeter and the lock screen show the texts of PAM and GNOME; Paddock cannot change them.
+
+| Message | Meaning and what to do |
+| --- | --- |
+| `PAM_SYSTEM_ERR` after a device code expired at the greeter | Himmelblau before 4.0.6 could not start a second device flow in the same greeter session. Type the username again; fixed in Himmelblau 4.0.6. |
+| `Sorry, password authentication didn't work` (GNOME lock screen) | GNOME's text for any refused PIN: the user is locked, the PIN is wrong, or the session expired. |
+| `Your session has expired. Please sign in again.` | The refresh token was revoked or expired: sign in with the device code and set a new PIN (*Tokens of the device login*). |
+| `Failed to authenticate with Hello PIN.` | Wrong PIN; after three wrong PINs the device code is required. |
+| `authenticated user … does not match requested user` | The Authentik username is not `name@domain`: rename the user in the identity source, or add the domain to the organization. |
+
 ## Throttle of device-code logins
 
 Every device-code login (the code and QR code at the login screen) starts one device authorization at Authentik.
@@ -95,9 +140,12 @@ docker compose up -d authentik-server authentik-worker
 
 ## Authentik brand flows
 
-`paddock-worker` sets the recovery flow (`paddock-recovery`, the one-time links of new local users) and the device-code
-flow (`paddock-device-code`, the `/device` page with mandatory MFA) of Authentik's default brand at start and every 10
-minutes, and resets them if they were changed in Authentik. Until the flows are set — on a fresh installation until
+`paddock-worker` sets the recovery flow (`paddock-recovery`, the one-time links of new local users), the device-code
+flow (`paddock-device-code`, the `/device` page with mandatory MFA) and the authentication flow (`paddock-admin-login`,
+password and second factor) of Authentik's default brand at start and every 10 minutes, and resets them if they were
+changed in Authentik. Authentik's own `default-authentication-flow` also asks for a second factor (stage
+`paddock-default-login-mfa` at order 31, from the portal blueprint), and every portal sign-in runs
+`paddock-admin-login` again even when an Authentik session exists. Until the flows are set — on a fresh installation until
 Authentik has applied the Paddock blueprints — creating a local user fails with 502 `upstream_unavailable`.
 
 ## Locks
@@ -128,13 +176,20 @@ Paddock alone grants sudo on its devices (architecture §10). Set in *Login & pr
 
 - **break-glass accounts**: the local administrator accounts of your devices (for example `paddock-admin`). They are
   never denied by a lock, never ended by a suspension, and stay members of `sudo`, `admin` and `wheel`. Every other
-  member of these groups is removed at the next apply and reported (`device.tamper_sudo_group_member`).
+  member of these groups is removed at the next apply and reported (`device.tamper_sudo_group_member`) — but never
+  the last administrator: a group that has no break-glass account as a member keeps all its members, and each is
+  reported once with `removed=false` and `reason=last_admin`. Once a break-glass account or the managed local
+  administrator is a member, the others are removed. A break-glass account counts as a member only if someone can
+  sign in with it: `getent passwd` resolves it and its `/etc/shadow` entry exists and does not start with `!` or
+  `*` (a locked account, or one without a password); otherwise the group keeps all its members.
 - **sudoers.d allow list**: the files in `/etc/sudoers.d` that are not Paddock's (for example `README` and the sudoers
   file of the break-glass account). Every other file is moved to `/var/lib/paddock/quarantine/sudoers.d/` and
   reported (`device.tamper_sudoers_d_file`).
 
-**Configure both before devices get an agent of this release**; otherwise the first apply takes sudo away from your
-local administrator.
+**Configure both before devices get an agent of this release**, and **add the existing local administrators of a
+device as break-glass accounts before you enroll it**; otherwise the first apply takes sudo away from them as soon as
+the managed local administrator is a member of `sudo`. An organization without a domain gets no managed local
+administrator: there the break-glass accounts are the only way to keep a device's administrators.
 
 Users with a permission profile get a file `/etc/sudoers.d/paddock-u-<hash>` that names their numeric UID. The agent
 writes it for the sudo implementation behind `/usr/bin/sudo` — classic sudo, or sudo-rs, the default of Ubuntu 26.04 —

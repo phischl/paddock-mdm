@@ -47,12 +47,18 @@ type UserQuery struct {
 }
 
 // List returns one page of users.
-func (u *Users) List(ctx context.Context, query UserQuery) (Listed[pgstore.AppUser], error) {
-	var out Listed[pgstore.AppUser]
-	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+func (u *Users) List(ctx context.Context, query UserQuery) (UserList, error) {
+	var out UserList
+	p, err := RequireOrg(ctx, RolesRead)
+	if err != nil {
 		return out, err
 	}
-	err := u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	err = u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		org, err := q.GetOrganization(ctx, p.OrganizationID)
+		if err != nil {
+			return fmt.Errorf("organization: %w", err)
+		}
+		out.Domains = org.Domains
 		if query.GroupID != nil {
 			if _, err := q.GetUserGroup(ctx, *query.GroupID); err != nil {
 				return notFound(err)
@@ -78,22 +84,44 @@ func (u *Users) List(ctx context.Context, query UserQuery) (Listed[pgstore.AppUs
 	return out, err
 }
 
-// UserDetail is a user with its groups.
+// UserList is one page of users with the domains of their organization (for User.domain_match).
+type UserList struct {
+	Listed[pgstore.AppUser]
+	Domains []string
+}
+
+// UserDetail is a user with its groups and the domains of its organization.
 type UserDetail struct {
-	User   pgstore.AppUser
-	Groups []pgstore.UserGroup
+	User    pgstore.AppUser
+	Groups  []pgstore.UserGroup
+	Domains []string
+}
+
+// ChangedUser is a user after a change, with the domains of its organization read in the transaction of the change
+// (for User.domain_match).
+type ChangedUser struct {
+	User    pgstore.AppUser
+	Domains []string
 }
 
 // Get returns one user; missing and foreign users are both not_found.
 func (u *Users) Get(ctx context.Context, id uuid.UUID) (UserDetail, error) {
-	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+	p, err := RequireOrg(ctx, RolesRead)
+	if err != nil {
 		return UserDetail{}, err
 	}
 	var out UserDetail
-	err := u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+	err = u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
 		var err error
-		out, err = loadUserDetail(ctx, q, id)
-		return err
+		if out, err = loadUserDetail(ctx, q, id); err != nil {
+			return err
+		}
+		org, err := q.GetOrganization(ctx, p.OrganizationID)
+		if err != nil {
+			return fmt.Errorf("organization: %w", err)
+		}
+		out.Domains = org.Domains
+		return nil
 	})
 	return out, err
 }
@@ -117,6 +145,8 @@ type NewUser struct {
 type CreatedUser struct {
 	User         pgstore.AppUser
 	RecoveryLink string
+	// Domains are the organization's domains the username was checked against.
+	Domains []string
 }
 
 // Create creates a local user in Authentik (no password, member of paddock.<slug>, attribute paddock_managed) and
@@ -139,7 +169,7 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 			if err != nil {
 				return err
 			}
-			slug = o.Slug
+			slug, out.Domains = o.Slug, o.Domains
 			if err := user.ValidateLocalUsername(in.Username, o.Domains); err != nil {
 				return problem.InvalidRequest.WithDetail(err.Error())
 			}
@@ -201,17 +231,22 @@ func (u *Users) Create(ctx context.Context, in NewUser) (CreatedUser, error) {
 
 // Update changes display name and email of a local user (audited: user.updated). The upstream attributes of synced
 // users are read-only (409 attribute_owned_upstream).
-func (u *Users) Update(ctx context.Context, id uuid.UUID, displayName, email *string) (pgstore.AppUser, error) {
+func (u *Users) Update(ctx context.Context, id uuid.UUID, displayName, email *string) (ChangedUser, error) {
 	spec := SpecUserUpdate
 	spec.Target = &audit.Target{Type: "user", ID: id.String()}
 	var out pgstore.AppUser
+	var domains []string
 	err := u.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 			cur, err := u.localUser(ctx, q, rec, id)
 			if err != nil {
 				return err
 			}
-			out = cur
+			o, err := q.GetOrganization(ctx, cur.OrganizationID)
+			if err != nil {
+				return fmt.Errorf("organization: %w", err)
+			}
+			out, domains = cur, o.Domains
 			if displayName != nil {
 				out.DisplayName = strings.TrimSpace(*displayName)
 			}
@@ -239,7 +274,7 @@ func (u *Users) Update(ctx context.Context, id uuid.UUID, displayName, email *st
 			out, err = q.UpdateAppUser(ctx, pgstore.UpdateAppUserParams{ID: id, DisplayName: out.DisplayName, Email: out.Email})
 			return err
 		})
-	return out, err
+	return ChangedUser{User: out, Domains: domains}, err
 }
 
 // Delete deletes a local user in Authentik and Paddock, with its memberships and assignments (audited:
@@ -306,20 +341,20 @@ func (u *Users) localUser(ctx context.Context, q *pgstore.Queries, rec Recorder,
 // Authentik succeeded; locking a locked user repeats the Authentik part (ADR 0007 amendment). The lock reactivates
 // the user only if it was active before (plan M4b.1 decision 1); the retry of an incomplete lock uses the state read by
 // the interrupted attempt, which may have deactivated the user already.
-func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error) {
+func (u *Users) Lock(ctx context.Context, id uuid.UUID) (ChangedUser, error) {
 	spec := SpecUserLock
 	spec.Target = &audit.Target{Type: "user", ID: id.String()}
 	var out pgstore.AppUser
-	var slug string
+	var org pgstore.Organization
 	var reactivate *bool
 	read := false
 	err := u.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-			cur, s, err := u.lockable(ctx, q, rec, id)
+			cur, o, err := u.lockable(ctx, q, rec, id)
 			if err != nil {
 				return err
 			}
-			slug = s
+			org = o
 			if cur.Locked && cur.LockIncomplete {
 				reactivate = cur.LockReactivate
 			}
@@ -338,7 +373,7 @@ func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error)
 				}
 				reactivate, read = &active, true
 			}
-			return u.dir.LockUser(ctx, slug, out.AuthentikPk, *reactivate)
+			return u.dir.LockUser(ctx, org.Slug, out.AuthentikPk, *reactivate)
 		},
 		func(ctx context.Context, q *pgstore.Queries, _ Recorder, externalErr error) error {
 			// Stored even if the lock failed afterwards: its retry must not read the state the lock left behind.
@@ -355,26 +390,26 @@ func (u *Users) Lock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error)
 			out, err = q.CompleteAppUserLock(ctx, id)
 			return err
 		})
-	return out, err
+	return ChangedUser{User: out, Domains: org.Domains}, err
 }
 
 // Unlock removes the user from paddock.<slug>.locked and, once that succeeded, marks it unlocked and recompiles its
 // devices on the priority lane (audited: user.unlocked). It activates the user only to complete an interrupted lock of
 // a user that was active before; a user deactivated elsewhere stays inactive (plan M4b.1 decision 2).
-func (u *Users) Unlock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, error) {
+func (u *Users) Unlock(ctx context.Context, id uuid.UUID) (ChangedUser, error) {
 	spec := SpecUserUnlock
 	spec.Target = &audit.Target{Type: "user", ID: id.String()}
 	var out pgstore.AppUser
-	var slug string
+	var org pgstore.Organization
 	err := u.runner.RunExternal(ctx, ScopeOrg, spec,
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
-			cur, s, err := u.lockable(ctx, q, rec, id)
-			out, slug = cur, s
+			cur, o, err := u.lockable(ctx, q, rec, id)
+			out, org = cur, o
 			return err
 		},
 		func(ctx context.Context) error {
 			activate := out.LockIncomplete && out.LockReactivate != nil && *out.LockReactivate
-			return u.dir.UnlockUser(ctx, slug, out.AuthentikPk, activate)
+			return u.dir.UnlockUser(ctx, org.Slug, out.AuthentikPk, activate)
 		},
 		func(ctx context.Context, q *pgstore.Queries, rec Recorder, externalErr error) error {
 			if externalErr != nil {
@@ -387,20 +422,20 @@ func (u *Users) Unlock(ctx context.Context, id uuid.UUID) (pgstore.AppUser, erro
 			rec.PriorityStateChanged(statechange.ScopeUser, id)
 			return nil
 		})
-	return out, err
+	return ChangedUser{User: out, Domains: org.Domains}, err
 }
 
-func (u *Users) lockable(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID) (pgstore.AppUser, string, error) {
+func (u *Users) lockable(ctx context.Context, q *pgstore.Queries, rec Recorder, id uuid.UUID) (pgstore.AppUser, pgstore.Organization, error) {
 	cur, err := q.LockAppUser(ctx, id)
 	if err != nil {
-		return cur, "", notFound(err)
+		return cur, pgstore.Organization{}, notFound(err)
 	}
 	rec.SetTarget(audit.Target{Type: "user", ID: id.String(), Display: cur.Username})
 	rec.SetParam("username", cur.Username)
 	rec.SetParam("source", cur.Source)
 	if cur.AuthentikPk == "" {
-		return cur, "", problem.InvalidState.WithDetail("the user is not provisioned in Authentik")
+		return cur, pgstore.Organization{}, problem.InvalidState.WithDetail("the user is not provisioned in Authentik")
 	}
 	o, err := q.GetOrganization(ctx, cur.OrganizationID)
-	return cur, o.Slug, err
+	return cur, o, err
 }

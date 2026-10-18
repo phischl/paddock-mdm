@@ -92,6 +92,7 @@ async function rotate(): Promise<void> {
           <StatusChip
             :status="state.status"
             :label="t(state.label)"
+            :title="d.state === 'active' ? t('devices.contactHint') : undefined"
           >
             <span data-testid="device-state">{{ t(state.label) }}</span>
           </StatusChip>

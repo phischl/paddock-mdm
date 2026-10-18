@@ -184,7 +184,7 @@ var registry = map[Code]Definition{
 	CodeAdminLogin: {
 		Code: CodeAdminLogin, Emitted: true,
 		Description: "An administrator signed in to the portal, or a sign-in was rejected.",
-		Params:      []string{"role", "organization_slug", "reason"},
+		Params:      []string{"role", "organization_slug", "reason", "denial_reason"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 		Note:        "Platform administrators and rejected sign-ins without a resolvable organization are recorded in the platform pseudo-organization.",
 	},
@@ -358,7 +358,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceTamperSudoGroupMember: {
 		Code: CodeDeviceTamperSudoGroupMember, Emitted: true,
-		Description: "A device found a member of a privileged local group (sudo, admin, wheel) that is not a break-glass account and removed it (actor: the device).",
+		Description: "A device found a member of a privileged local group (sudo, admin, wheel) that is not a break-glass account and removed it, or kept it because no break-glass account is a member of that group (reason last_admin) (actor: the device).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 	},

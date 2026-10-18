@@ -24,7 +24,7 @@ import (
 type pamOpts struct {
 	pin, password string
 	// approve is called with the device code Himmelblau shows; nil never approves (the attempt fails once the code
-	// expires, about 60 s).
+	// expires, about 10 minutes).
 	approve func(code string) error
 	timeout time.Duration
 }

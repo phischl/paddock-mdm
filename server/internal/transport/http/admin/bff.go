@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -132,6 +134,8 @@ type bff struct {
 	tokenTTL time.Duration
 	sessions SessionStore
 	roles    StepUpAccounts
+	// loginMFAOptional accepts a portal ID token without "mfa" in amr (development only, PADDOCK_LOGIN_MFA_OPTIONAL).
+	loginMFAOptional bool
 }
 
 func randomToken() string {
@@ -142,6 +146,11 @@ func randomToken() string {
 
 // login starts the authorization code flow with PKCE (S256), state and nonce.
 func (b *bff) login(w http.ResponseWriter, r *http.Request) {
+	// No identity is known yet and the condition is operational, so the denial is not audited (plan M8x decision 28).
+	if !b.keys.Ready() {
+		denied(w, r, app.ReasonKeyStoreSealed)
+		return
+	}
 	returnTo := r.URL.Query().Get("return_to")
 	if returnTo == "" {
 		returnTo = "/"
@@ -166,6 +175,8 @@ func (b *bff) login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, loginCookie(value, int(LoginLifetime.Seconds())))
 	w.Header().Set("Cache-Control", "no-store")
+	// No prompt=login: Authentik would remember the login it forced away and then skip the next step-up's flow
+	// (checkStepUp). An existing Authentik session may satisfy the sign-in; the callback still requires MFA in amr.
 	http.Redirect(w, r, oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
 }
 
@@ -180,14 +191,29 @@ type idClaims struct {
 	Name              string   `json:"name"`
 	Email             string   `json:"email"`
 	Groups            []string `json:"groups"`
+	AMR               []string `json:"amr"`
+}
+
+// hasMFA reports whether the authentication methods name a second factor.
+func (c idClaims) hasMFA() bool {
+	return slices.Contains(c.AMR, "mfa")
 }
 
 // errLoginFailed is the audit error code of logins that fail after the state check (code exchange, ID token).
 var errLoginFailed = &problem.Error{Code: app.ReasonLoginFailed, Status: http.StatusBadGateway}
 
+// errMFARequired is the audit error code of a login whose ID token carried no second factor. It also wraps
+// problem.Forbidden, so that the runner records the refusal as denied rather than failed.
+var errMFARequired = fmt.Errorf("%w (%w)", &problem.Error{Code: app.ReasonMFARequired, Status: http.StatusForbidden},
+	problem.Forbidden)
+
 // callback completes the login: state check, code exchange with PKCE, ID token verification (issuer, audience,
 // nonce, expiry), role resolution from the groups claim, admin.login audit event and session cookie.
 func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
+	if !b.keys.Ready() {
+		denied(w, r, app.ReasonKeyStoreSealed)
+		return
+	}
 	ctx := r.Context()
 	http.SetCookie(w, loginCookie("", -1))
 	var st loginState
@@ -219,7 +245,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	token, err := oauth.Exchange(ctx, q.Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		slog.WarnContext(ctx, "code exchange failed", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, app.ReasonLoginFailed, errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, errLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
@@ -234,13 +260,19 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || claims.Subject == "" {
 		slog.WarnContext(ctx, "ID token rejected", "error", err)
-		b.accounts.RecordLoginFailure(ctx, ip, app.ReasonLoginFailed, errLoginFailed)
+		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, errLoginFailed)
 		denied(w, r, app.ReasonLoginFailed)
 		return
 	}
 	username := claims.PreferredUsername
 	if username == "" {
 		username = claims.Email
+	}
+	if !b.loginMFAOptional && !claims.hasMFA() {
+		slog.WarnContext(ctx, "ID token without a second factor refused")
+		b.accounts.RecordLoginFailure(ctx, ip, username, app.ReasonMFARequired, errMFARequired)
+		denied(w, r, app.ReasonMFARequired)
+		return
 	}
 	res := organization.ResolveRole(claims.Groups)
 	now := b.now()
@@ -268,10 +300,11 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := b.accounts.Login(ctx,
 		app.LoginIdentity{Subject: claims.Subject, Username: username, Name: claims.Name, IP: ip, OpenSession: openSession},
-		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs})
+		app.LoginRole{Platform: res.Platform, Slug: res.Slug, Role: res.Role, Denied: res.Denied, Slugs: res.Slugs,
+			DenialReason: string(res.Reason)})
 	if errors.Is(err, problem.Forbidden) {
 		discard()
-		denied(w, r, app.ReasonNotAuthorized)
+		denied(w, r, denialReason(res, err))
 		return
 	}
 	if err != nil {
@@ -291,6 +324,18 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, sessionCookie(value, int(SessionAbsolute.Seconds())))
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, st.ReturnTo, http.StatusFound)
+}
+
+// denialReason is the reason /login-denied names for a refused login: the role resolution's, or the inactive
+// organization's (plan M8x decision 31); not_authorized when neither is known.
+func denialReason(res organization.RoleResolution, err error) string {
+	switch {
+	case res.Denied && res.Reason != "":
+		return string(res.Reason)
+	case problem.From(err).Detail == app.DenialOrganizationInactive:
+		return app.DenialOrganizationInactive
+	}
+	return app.ReasonNotAuthorized
 }
 
 // logout ends the session on the server, clears the cookie and returns the Authentik end-session URL. It reads the

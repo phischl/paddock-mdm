@@ -14,8 +14,10 @@ import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
 import { tokenStatus } from '../lib/status'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const confirm = useConfirm()
 const router = useRouter()
@@ -213,7 +215,8 @@ async function onRevoke(token: ApiToken): Promise<void> {
           <ApiTokenForm
             :creator-role="session.role"
             :problem="problem"
-            @submit="(input: ApiTokenInput) => create(input, true)"
+            :pending="pending"
+            @submit="(input: ApiTokenInput) => run(() => create(input, true))"
             @cancel="close"
           />
         </v-card-text>

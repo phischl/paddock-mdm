@@ -843,6 +843,13 @@ membership a worker copies from the upstream group (read-only in Paddock). The m
 claim-safe name, because upstream names may contain `:` or spaces, which Himmelblau drops. Both kinds can
 be targets of profile and login assignments. *(Decided 2026-10-04, plan M3a.)*
 
+> **Amendment 2026-10-17 (M8x):** every portal sign-in sends `prompt=login`, so an existing Authentik session never
+> satisfies it and the flow `paddock-admin-login` (password and second factor) runs each time. The worker keeps the
+> default brand's authentication flow at `paddock-admin-login` (next to the recovery and device-code flows), and the
+> portal blueprint binds the stage `paddock-default-login-mfa` (WebAuthn or TOTP, enrolled when missing) at order 31
+> of Authentik's `default-authentication-flow`, so no password-only session can be created through Authentik's own
+> interfaces (ADR 0007 amendment 2026-10-17).
+
 ### 9.3 Himmelblau configuration
 
 **Decided after PoC M1: Himmelblau 4.x in OIDC mode** (ADR [0019](adr/0019-login-component-himmelblau.md)).
@@ -865,6 +872,15 @@ Binding consequences of the PoC:
 
 The bundle keeps the `login.provider` discriminator (`himmelblau` only in v1) so that a future
 alternative does not change the schema version.
+
+> **Amendment 2026-10-17 (M8x):** the pinned Himmelblau version is 4.0.6 (`PADDOCK_HIMMELBLAU_VERSION`). The device
+> provider gives the device code ten minutes (`access_code_validity: minutes=10`) and keeps `refresh_token_threshold`
+> at zero (a threshold makes Himmelblau refuse every PIN login). The agent writes `cache_timeout = 2592000` (30 days,
+> the refresh token's validity) into `himmelblau.conf`: Himmelblau 4.0.x re-seals the refresh token only at a PIN
+> authentication, and its background refresh of a cached user would otherwise rotate the token behind the PIN (RR-40,
+> ADR 0019 amendment 2026-10-17). It also writes `local_sudo_group = paddock-no-sudo` (a group that never exists) and
+> `local_groups_reconcile_interval = 0` and never `sudo_groups`: Paddock alone manages sudo, and Himmelblau's
+> local-group task would otherwise remove every account from `sudo` at each sign-in and every five minutes.
 
 ### 9.4 Login assignment and suspension (F15)
 
@@ -985,6 +1001,12 @@ token never satisfies a step-up. Sessions have a server-side record in Valkey (`
 whose `groups` claim resolves to another role, a role change or a deactivation found by the worker, and the platform
 action "end all sessions" end them immediately. The step-up flow validates with WebAuthn only.
 
+> **Amendment 2026-10-17 (M8x):** the login callback refuses an ID token without `mfa` in `amr`
+> (`/login-denied?reason=mfa_required`, audited as `admin.login` denied); the development stack alone may switch
+> this off (`PADDOCK_LOGIN_MFA_OPTIONAL`). A refused sign-in names its reason (`no_role`, `multiple_organizations`,
+> `multiple_roles`, `platform_and_organization`, `organization_inactive`, `key_store_sealed`). `GET /api/v1/me` carries
+> `step_up_valid_until`, which the portal shows (ADR 0034 amendment 2026-10-17).
+
 ---
 
 ## 10. Permission profiles and sudo
@@ -1004,6 +1026,13 @@ to map no directory group onto a local sudo-granting group. The agent's `sudo` r
 **A user in a sudo-granting group without a Paddock profile** is therefore removed from the group at
 the next apply and receives exactly the effective profile (possibly None). The portal shows the
 finding on the device and the user.
+
+> **Amendment 2026-10-17 (M8x):** never the last administrator. A privileged group that has no break-glass account
+> as a member keeps every member; the agent reports each once per daemon run as `tamper.sudo_group_member` with
+> `removed=false` and `reason=last_admin`, and removes the foreign members once a break-glass account (or the managed
+> local administrator) is a member (ADR 0008 amendment 2026-10-17). A break-glass account counts as present only if
+> `getent passwd` resolves it and its `/etc/shadow` entry exists and does not start with `!` or `*`; a missing or
+> locked account does not unlock the cleanup (fail safe).
 
 ### 10.2 Effective profile
 
@@ -1250,6 +1279,13 @@ The worker materializes `device_status` (`last_contact_at`, `applied_bundle_vers
 Crossing a level creates an alert and an audit event; returning resets it with an event.
 Silent disappearance rule (open question): a device crossing *critical* gets the status `presumed_lost`
 and appears on the "action required" list; the admin chooses Retire, Lock or Keep.
+
+> **Amendment 2026-10-17 (M8x):** the contact state has three tiers below the staleness alerts. *Online* (`ok`) is a
+> check-in within the last 15 minutes (three check-ins, `app.AgentSilence`); *No recent contact* (`unseen`) is none
+> for longer, below the organization's warning threshold; then *Silent* (`stale_warning`, `stale_critical`) and
+> *Presumed lost*. `paddock_device_contact` takes the reference time as an argument (migration 00049). The worker's
+> report of a stopped agent (`device.tamper_agent_not_running`) is the attention kind `agent_not_running` until
+> fleetd's policy passes again.
 
 ### 12.2 Managed local administrator (F16)
 

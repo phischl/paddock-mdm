@@ -473,6 +473,13 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/permission-profiles": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
 		return "/api/v1/permission-profiles", map[string]any{"name": "acme-iso " + uniqueSuffix(), "class": "none"}
 	}},
+	// The preview evaluates only the class and commands it is given and reads no organization data (plan M8x decision
+	// 40), so it has no globex resource to address: alice previews globex's profile commands and the answer must
+	// still carry no globex ID.
+	"GET /api/v1/permission-profiles/root-equivalence": {kind: isoOwn, request: func(*testing.T, *isolationWorld) (string, any) {
+		return "/api/v1/permission-profiles/root-equivalence?" + url.Values{"class": {"restricted"},
+			"command": {"/usr/bin/systemctl restart globex.service"}}.Encode(), nil
+	}},
 	"GET /api/v1/permission-profiles/{id}":    itemFixture(func(w *isolationWorld) string { return "/api/v1/permission-profiles/" + w.globexProfile }, nil),
 	"PATCH /api/v1/permission-profiles/{id}":  itemFixture(func(w *isolationWorld) string { return "/api/v1/permission-profiles/" + w.globexProfile }, map[string]any{"class": "full"}),
 	"DELETE /api/v1/permission-profiles/{id}": itemFixture(func(w *isolationWorld) string { return "/api/v1/permission-profiles/" + w.globexProfile }, nil),

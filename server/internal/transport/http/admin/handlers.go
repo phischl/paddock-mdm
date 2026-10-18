@@ -55,6 +55,8 @@ type handlers struct {
 	now func() time.Time
 	// stepUpTiming is exposed in GET /api/v1/me in development only (nil otherwise).
 	stepUpTiming *stepUpTiming
+	// stepUpWindow is how long a step-up satisfies a privileged action (step_up_valid_until of GET /api/v1/me).
+	stepUpWindow time.Duration
 }
 
 // stepUpTiming is the step-up window of the action runner and the maximum auth age of the step-up callback.
@@ -70,6 +72,7 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 	out := h.toMe(me)
 	p, _ := principal.From(ctx)
 	out.ClientIp = p.IP
+	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	if h.stepUpTiming != nil {
 		out.StepUp = &adminapi.MeStepUp{
 			WindowSeconds:     int(h.stepUpTiming.window.Seconds()),
@@ -99,7 +102,20 @@ func (h *handlers) UpdateMe(ctx context.Context, req adminapi.UpdateMeRequestObj
 	// The portal replaces its session with this answer; without the address the IP allow list page would lose it.
 	p, _ := principal.From(ctx)
 	out.ClientIp = p.IP
+	out.StepUpValidUntil = h.stepUpValidUntil(p)
 	return adminapi.UpdateMe200JSONResponse(out), nil
+}
+
+// stepUpValidUntil is the end of the principal's step-up window, nil without a step-up or once the window has passed.
+func (h *handlers) stepUpValidUntil(p principal.Principal) *time.Time {
+	if p.StepUpAt.IsZero() {
+		return nil
+	}
+	until := p.StepUpAt.Add(h.stepUpWindow).UTC()
+	if !until.After(h.now()) {
+		return nil
+	}
+	return &until
 }
 
 func (h *handlers) toMe(me app.Me) adminapi.Me {
@@ -108,7 +124,12 @@ func (h *handlers) toMe(me app.Me) adminapi.Me {
 		Locale: adminapi.MeLocale(me.Locale), Theme: adminapi.MeTheme(me.Theme), RevocationEnabled: h.revocations.Enabled(),
 	}
 	if me.Organization != nil {
-		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name}
+		domains := me.Organization.Domains
+		if domains == nil {
+			domains = []string{}
+		}
+		out.Organization = &adminapi.MeOrganization{Id: me.Organization.ID, Slug: me.Organization.Slug, Name: me.Organization.Name,
+			Domains: domains}
 	}
 	if me.APIToken != nil {
 		out.ApiToken = &adminapi.MeApiToken{Id: me.APIToken.ID, Name: me.APIToken.Name, ExpiresAt: me.APIToken.ExpiresAt.UTC()}

@@ -1737,6 +1737,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/permission-profiles/root-equivalence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. Read-only preview of what a profile with this class and these
+         *     commands grants in effect, before it is saved (plan M8x decision 40): the effective class, the commands that
+         *     hand out root and the witnesses ("ALL", "cmd:<command>", "pair:<writer>|<command>"). It reads no data and
+         *     records no audit event; the server checks the same rules again when the profile is saved.
+         */
+        get: operations["previewRootEquivalence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/permission-profiles/{id}": {
         parameters: {
             query?: never;
@@ -2135,6 +2157,8 @@ export interface components {
             id: string;
             slug: string;
             name: string;
+            /** @description DNS domains of the organization's users; the first is the primary domain of the device login. */
+            domains: string[];
         };
         Me: {
             /** Format: uuid */
@@ -2162,6 +2186,12 @@ export interface components {
              *     against it.
              */
             client_ip: string;
+            /**
+             * Format: date-time
+             * @description Until when the session's last step-up satisfies privileged actions (plan M8x decision 35); null without a
+             *     step-up or once it has expired. The portal shows it in the user menu.
+             */
+            step_up_valid_until: string | null;
             step_up?: components["schemas"]["MeStepUp"];
             api_token?: components["schemas"]["MeApiToken"];
         };
@@ -2666,10 +2696,10 @@ export interface components {
             sort: string;
         };
         /**
-         * @description Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; ok otherwise. Devices that are not active report ok or never.
+         * @description Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet; unseen = no check-in for more than 15 minutes, below the staleness warning threshold; ok otherwise (a check-in within the last 15 minutes). Devices that are not active report ok or never.
          * @enum {string}
          */
-        DeviceContact: "never" | "ok" | "stale_warning" | "stale_critical" | "presumed_lost";
+        DeviceContact: "never" | "ok" | "unseen" | "stale_warning" | "stale_critical" | "presumed_lost";
         /** @enum {string} */
         DeviceState: "pending" | "active" | "rejected" | "quarantined" | "retired";
         Device: {
@@ -3027,7 +3057,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running";
         Attention: {
             /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
             id: string;
@@ -3037,7 +3067,7 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported).
              */
             since: string;
             /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; otherwise empty. */
@@ -3138,8 +3168,10 @@ export interface components {
             quarantined: number;
             retired: number;
             rejected: number;
-            /** @description Active devices in contact (none of the buckets below). */
+            /** @description Active devices with a check-in within the last 15 minutes (none of the buckets below). */
             online: number;
+            /** @description Active devices without a check-in for more than 15 minutes and no open staleness alert (contact unseen). */
+            no_recent_contact: number;
             /** @description Active devices with an open stale_warning alert. */
             silent: number;
             /** @description Active devices with an open stale_critical alert. */
@@ -3587,6 +3619,11 @@ export interface components {
             id: string;
             /** @description UPN, lowercase, e.g. dave@acme.test. */
             username: string;
+            /**
+             * @description The part of the username after its last @ is one of the organization's domains (plan M8x decision 46). A
+             *     user without it cannot sign in on devices: the login component accepts name@domain only.
+             */
+            domain_match: boolean;
             display_name: string;
             email: string;
             source: components["schemas"]["IdentitySource"];
@@ -3752,6 +3789,13 @@ export interface components {
         };
         /** @enum {string} */
         PrivilegeClass: "none" | "restricted" | "full";
+        RootEquivalence: {
+            effective_class: components["schemas"]["PrivilegeClass"];
+            /** @description The normalized commands that hand out root, alone or together with another command; sorted. */
+            root_equivalent_commands: string[];
+            /** @description Why the profile hands out root: "ALL", "cmd:<command>" or "pair:<writer>|<command>"; sorted. */
+            witnesses: string[];
+        };
         /** @enum {string} */
         Lecture: "always" | "once" | "never";
         /** @enum {string} */
@@ -7272,6 +7316,33 @@ export interface operations {
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+        };
+    };
+    previewRootEquivalence: {
+        parameters: {
+            query: {
+                class: components["schemas"]["PrivilegeClass"];
+                /** @description Repeatable; at most 100 commands of at most 1024 characters each. */
+                command?: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective privilege of the class and commands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RootEquivalence"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     getPermissionProfile: {

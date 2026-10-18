@@ -33,6 +33,8 @@ export function deviceStatus(d: { state: DeviceState; contact: DeviceContact }):
           return { status: 'critical', label: 'devices.contact.stale_critical' }
         case 'stale_warning':
           return { status: 'warn', label: 'devices.contact.stale_warning' }
+        case 'unseen':
+          return { status: 'warn', label: 'devices.contact.unseen' }
         case 'never':
           return { status: 'neutral', label: 'devices.contact.never' }
         case 'ok':
@@ -88,6 +90,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'disk_not_compliant':
     case 'agent_outdated':
     case 'agent_rollback_pending':
+    case 'agent_not_running':
     case 'login_apply_failed':
     case 'sudo_apply_failed':
       return { status: 'warn', label }

@@ -14,6 +14,7 @@ import { healthRows } from '../lib/deviceHealth'
 import { formatDateTime } from '../lib/format'
 import { listDeviceVulnerabilities } from '../lib/inventory'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /**
  * The Overview tab of a device (plan M7c decision 29): health and compliance, disk encryption and updates on the
@@ -23,6 +24,7 @@ const page = inject(deviceDetailKey)
 if (!page) throw new Error('DeviceOverview outside the device frame')
 const { device, groups, selectedGroups, saved, diskState, updates, conditions, refresh, saveGroups } = page
 const { t, locale } = useI18n()
+const { pending, run } = usePending()
 const session = useSessionStore()
 const findings = ref<VulnerabilityFinding[]>([])
 const findingCount = ref(0)
@@ -212,7 +214,7 @@ async function copyId(): Promise<void> {
         <form
           class="form pd-panel-body"
           novalidate
-          @submit.prevent="saveGroups"
+          @submit.prevent="run(saveGroups)"
         >
           <v-autocomplete
             v-model="selectedGroups"
@@ -234,6 +236,8 @@ async function copyId(): Promise<void> {
             >{{ t('devices.groupsSaved') }}</span>
             <v-btn
               type="submit"
+              :loading="pending"
+              :disabled="pending"
               color="primary"
               data-testid="save-device-groups"
             >

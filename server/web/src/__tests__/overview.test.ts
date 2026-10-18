@@ -15,7 +15,7 @@ function overviewOf(over: Partial<Overview> = {}): Overview {
   return {
     generated_at: '2026-10-10T12:30:05Z',
     devices: {
-      total: 12, active: 10, pending: 1, quarantined: 1, retired: 2, rejected: 0, online: 6, silent: 1, silent_critical: 1,
+      total: 12, active: 10, pending: 1, quarantined: 1, retired: 2, rejected: 0, online: 6, no_recent_contact: 2, silent: 1, silent_critical: 1,
       presumed_lost: 1, never_contacted: 1,
     },
     encryption: { encrypted: 7, not_encrypted: 1, partial: 1, not_reported: 1 },
@@ -105,7 +105,7 @@ describe('overview helpers (plan M7c decision 28)', () => {
     // The same paths as TestOverviewKPIsEqualListTotals, which asserts the totals against the server.
     expect(byKey).toEqual({
       online: { value: 6, to: { path: '/devices', query: { state: 'active', contact: 'ok' } } },
-      silent: { value: 2, to: { path: '/devices', query: { state: 'active', contact: ['stale_warning', 'stale_critical'] } } },
+      silent: { value: 4, to: { path: '/devices', query: { state: 'active', contact: ['unseen', 'stale_warning', 'stale_critical'] } } },
       'presumed-lost': { value: 1, to: { path: '/devices', query: { state: 'active', contact: 'presumed_lost' } } },
       encrypted: { value: 7, to: { path: '/devices', query: { state: 'active', disk_state: 'compliant' } } },
       'not-encrypted': { value: 1, to: { path: '/devices', query: { state: 'active', disk_state: 'not_encrypted' } } },
@@ -113,6 +113,13 @@ describe('overview helpers (plan M7c decision 28)', () => {
       'security-overdue': { value: 4, to: { path: '/devices', query: { state: 'active', security_updates: 'overdue' } } },
       'reboot-required': { value: 2, to: undefined },
     })
+  })
+
+  it('counts no recent contact as silent and names the critical part (plan M8x decision 59)', () => {
+    const silent = kpiCells(overviewOf()).find((c) => c.key === 'silent')
+    expect(silent?.noteValues).toEqual({ count: 4, critical: 1 })
+    const i18n = createPortalI18n()
+    expect(i18n.global.t('overview.kpi.silentNote', { count: 4, critical: 1 })).toBe('4 without contact for more than 15 minutes, 1 critical')
   })
 
   it('orders the severity segments and links every level but none', () => {

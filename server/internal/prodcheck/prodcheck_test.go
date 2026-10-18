@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -140,14 +141,14 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 14 {
-		t.Fatalf("expected 14 items:\n%s", out)
+	if strings.Count(out, "PASS") != 15 {
+		t.Fatalf("expected 15 items:\n%s", out)
 	}
 }
 
 func TestDevelopmentVariableFailsNamingIt(t *testing.T) {
 	for _, name := range []string{"PADDOCK_STEPUP_WINDOW", "PADDOCK_STEPUP_MAX_AUTH_AGE", "PADDOCK_STALENESS_UNIT",
-		"PADDOCK_TEST_EXTERNAL_DELAY", "PADDOCK_REAPER_THRESHOLD", "PADDOCK_OSV_SYNC_INTERVAL"} {
+		"PADDOCK_TEST_EXTERNAL_DELAY", "PADDOCK_REAPER_THRESHOLD", "PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL"} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
 			f.setEnv("paddock-api", name, "30s")
@@ -220,8 +221,11 @@ func TestSecretFiles(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok {
-			t.Fatalf("0600 files must pass:\n%s", out)
+		// Private to every user of the host, so the world-readable item passes; the Paddock images' user (uid 65532)
+		// cannot read an operator's 0600 file either, which TestSecretFilesReadableByServices covers.
+		_, out := run(t, f.cfg, prodcheck.Options{})
+		if !strings.Contains(out, "PASS  secret files present, not empty and not world-readable") {
+			t.Fatalf("0600 files must pass the world-readable item:\n%s", out)
 		}
 	})
 	t.Run("unused secrets are not checked", func(t *testing.T) {
@@ -231,6 +235,35 @@ func TestSecretFiles(t *testing.T) {
 			t.Fatalf("unused secret must not fail:\n%s", out)
 		}
 	})
+}
+
+// TestSecretFilesReadableByServices: a secret of a Paddock service that the image's user (uid 65532) cannot read fails
+// with the file, its mode and owner and the chmod to run; 0644 passes (plan M8x decision 49, lab finding L4).
+func TestSecretFilesReadableByServices(t *testing.T) {
+	const item = "secret files readable by the Paddock services"
+	f := newFixture(t)
+	key := f.cfg.Secrets["release_public_key"].File
+	if err := os.Chmod(key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ok, out := run(t, f.cfg, prodcheck.Options{})
+	if ok {
+		t.Fatalf("a 0600 release key passed:\n%s", out)
+	}
+	failItem(t, out, item, "release_public_key is not readable by the service user (uid 65532): "+key+" has mode 0600, owner uid "+
+		strconv.Itoa(os.Getuid())+"; run chmod 644 "+key)
+	if err := os.Chmod(key, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ok, out := run(t, f.cfg, prodcheck.Options{}); !ok || !strings.Contains(out, "PASS  "+item) {
+		t.Fatalf("0644 must pass:\n%s", out)
+	}
+	// A missing file is a finding, not a pass.
+	sec := f.cfg.Secrets["release_public_key"]
+	sec.File = filepath.Join(f.dir, "gone.pub")
+	f.cfg.Secrets["release_public_key"] = sec
+	_, out = run(t, f.cfg, prodcheck.Options{})
+	failItem(t, out, item, "release_public_key: cannot check")
 }
 
 func TestPublishedPorts(t *testing.T) {
@@ -485,6 +518,7 @@ var labItems = []string{
 	"no development-only variables",
 	"revocation path enabled only after its acceptance",
 	"secret files present, not empty and not world-readable",
+	"secret files readable by the Paddock services",
 	"secrets the services reference are mounted",
 	"only Caddy's HTTP port published, on the bind address",
 	"links between the hosts use TLS",

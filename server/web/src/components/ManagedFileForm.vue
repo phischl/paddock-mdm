@@ -7,8 +7,8 @@ import { useProblemText } from '../lib/problems'
 import { hasErrors } from '../lib/validation'
 
 const props = withDefaults(
-  defineProps<{ groups: { id: string; name: string }[]; initial?: ManagedFile | null; problem?: string }>(),
-  { initial: null, problem: '' },
+  defineProps<{ groups: { id: string; name: string }[]; initial?: ManagedFile | null; problem?: string; pending?: boolean }>(),
+  { initial: null, problem: '', pending: false },
 )
 const emit = defineEmits<{ submit: [input: FileInput]; cancel: [] }>()
 
@@ -59,6 +59,14 @@ function submit(): void {
       spellcheck="false"
       :error-messages="message(errors.path)"
     />
+    <v-alert
+      v-if="/[^\x20-\x7e]/.test(form.path)"
+      type="info"
+      variant="tonal"
+      data-testid="path-non-ascii"
+    >
+      {{ t('managed.files.pathNonAscii') }}
+    </v-alert>
     <div class="form-row">
       <v-text-field
         id="file-mode"
@@ -104,6 +112,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
       >
         {{ initial ? t('common.save') : t('common.create') }}

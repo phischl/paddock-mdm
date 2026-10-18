@@ -14,7 +14,7 @@ const problemText = useProblemText()
 const confirm = useConfirm()
 const router = useRouter()
 const problem = ref('')
-const busy = ref(false)
+const pending = ref(false)
 
 onMounted(async () => {
   const resumed = resumeStepUp<null>(stepUpAction, stepUpAction)
@@ -30,9 +30,9 @@ onMounted(async () => {
 /** Ends every session; the own session ends too, so the browser goes back to the login. */
 async function run(stepUp: boolean): Promise<void> {
   problem.value = ''
-  busy.value = true
+  pending.value = true
   const res = await endAllSessions()
-  busy.value = false
+  pending.value = false
   if (typeof res === 'number') {
     window.location.assign('/')
     return
@@ -74,7 +74,8 @@ async function onEndAll(): Promise<void> {
     </p>
     <v-btn
       color="error"
-      :loading="busy"
+      :loading="pending"
+      :disabled="pending"
       data-testid="end-all-sessions"
       @click="onEndAll"
     >

@@ -12,8 +12,9 @@ const props = withDefaults(
     initialDescription?: string
     problem?: string
     idPrefix?: string
+    pending?: boolean
   }>(),
-  { initialName: '', initialDescription: '', problem: '', idPrefix: 'device-group' },
+  { initialName: '', initialDescription: '', problem: '', idPrefix: 'device-group', pending: false },
 )
 const emit = defineEmits<{
   submit: [form: DeviceGroupInput]
@@ -77,6 +78,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
       >
         {{ submitLabel }}

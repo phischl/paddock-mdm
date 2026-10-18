@@ -56,6 +56,8 @@ type LoginRole struct {
 	Role     principal.Role
 	Denied   bool
 	Slugs    []string
+	// DenialReason is the organization.DenialReason of a denied role; it becomes the audit param denial_reason.
+	DenialReason string
 }
 
 // LoginResult is the outcome of a login.
@@ -68,15 +70,25 @@ type LoginResult struct {
 const (
 	ReasonNotAuthorized = "not_authorized"
 	ReasonLoginFailed   = "login_failed"
+	ReasonMFARequired   = "mfa_required" // the ID token carried no second factor (amr without "mfa")
+	// ReasonKeyStoreSealed: the session keys are not loaded because OpenBao was sealed or unreachable at the start.
+	ReasonKeyStoreSealed = "key_store_sealed"
 )
 
 // ErrLoginDenied is returned when the user may not use the portal; the denial is already audited.
 var ErrLoginDenied = problem.Forbidden.WithDetail(ReasonNotAuthorized)
 
+// DenialOrganizationInactive is the denial reason of a role in an unknown or inactive organization.
+const DenialOrganizationInactive = "organization_inactive"
+
+// ErrOrganizationInactive is returned when the role's organization is unknown or not active; the denial is already
+// audited.
+var ErrOrganizationInactive = problem.Forbidden.WithDetail(DenialOrganizationInactive)
+
 // Login records admin.login and upserts the account (plan M0 §6.7). On denial it returns ErrLoginDenied.
 func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) (LoginResult, error) {
 	if role.Denied {
-		return LoginResult{}, a.recordDenied(ctx, id, role.Slugs)
+		return LoginResult{}, a.recordDenied(ctx, id, role.Slugs, role.DenialReason)
 	}
 	if role.Platform {
 		return a.loginPlatform(ctx, id)
@@ -86,7 +98,10 @@ func (a *Accounts) Login(ctx context.Context, id LoginIdentity, role LoginRole) 
 		return LoginResult{}, err
 	}
 	if orgID == uuid.Nil { // unknown or inactive organization
-		return LoginResult{}, a.recordDenied(ctx, id, nil)
+		if err := a.recordDenied(ctx, id, nil, DenialOrganizationInactive); !errors.Is(err, ErrLoginDenied) {
+			return LoginResult{}, err
+		}
+		return LoginResult{}, ErrOrganizationInactive
 	}
 	p := principal.Principal{
 		Kind: principal.KindAdmin, Subject: id.Subject, Display: id.Username, Role: role.Role, OrganizationID: orgID, IP: id.IP,
@@ -184,7 +199,7 @@ func (id LoginIdentity) openSession(ctx context.Context, p principal.Principal) 
 
 // recordDenied audits a rejected login: in the organization when exactly one named organization resolves,
 // otherwise in the platform pseudo-organization. The actor is anonymous with the preferred_username.
-func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []string) error {
+func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []string, denialReason string) error {
 	var resolved []uuid.UUID
 	for _, s := range slugs {
 		orgID, err := a.org.ResolveSlug(ctx, s)
@@ -204,7 +219,7 @@ func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []s
 	spec := ActionSpec{
 		Code:   audit.CodeAdminLogin,
 		Actor:  &audit.Actor{Type: audit.ActorAnonymous, Display: id.Username, IP: id.IP},
-		Params: map[string]any{"reason": ReasonNotAuthorized},
+		Params: map[string]any{"reason": ReasonNotAuthorized, "denial_reason": denialReason},
 	}
 	err := a.runner.RunTx(principal.With(ctx, sys), scope, spec, func(context.Context, *pgstore.Queries, Recorder) error {
 		return ErrLoginDenied
@@ -215,12 +230,13 @@ func (a *Accounts) recordDenied(ctx context.Context, id LoginIdentity, slugs []s
 	return err
 }
 
-// RecordLoginFailure audits a login that failed before the identity was known (state, code exchange, token).
-func (a *Accounts) RecordLoginFailure(ctx context.Context, ip, reason string, cause error) {
+// RecordLoginFailure audits a login that failed before a role was resolved (state, code exchange, token, missing
+// second factor). A non-empty username becomes the anonymous actor's display.
+func (a *Accounts) RecordLoginFailure(ctx context.Context, ip, username, reason string, cause error) {
 	sys := principal.Principal{Kind: principal.KindSystem, IP: ip}
 	spec := ActionSpec{
 		Code:   audit.CodeAdminLogin,
-		Actor:  &audit.Actor{Type: audit.ActorAnonymous, IP: ip},
+		Actor:  &audit.Actor{Type: audit.ActorAnonymous, Display: username, IP: ip},
 		Params: map[string]any{"reason": reason},
 	}
 	_ = a.runner.RunTx(principal.With(ctx, sys), ScopePlatform, spec, func(context.Context, *pgstore.Queries, Recorder) error {

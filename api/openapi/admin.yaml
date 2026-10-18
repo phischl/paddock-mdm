@@ -2733,6 +2733,38 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
+  /api/v1/permission-profiles/root-equivalence:
+    get:
+      operationId: previewRootEquivalence
+      tags: [privileges]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. Read-only preview of what a profile with this class and these
+        commands grants in effect, before it is saved (plan M8x decision 40): the effective class, the commands that
+        hand out root and the witnesses ("ALL", "cmd:<command>", "pair:<writer>|<command>"). It reads no data and
+        records no audit event; the server checks the same rules again when the profile is saved.
+      parameters:
+        - name: class
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/PrivilegeClass" }
+        - name: command
+          in: query
+          description: Repeatable; at most 100 commands of at most 1024 characters each.
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 100
+            items: { type: string, maxLength: 1024 }
+      responses:
+        "200":
+          description: The effective privilege of the class and commands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RootEquivalence" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/v1/permission-profiles/{id}:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -3759,14 +3791,19 @@ components:
         end_session_url: { type: string }
     MeOrganization:
       type: object
-      required: [id, slug, name]
+      required: [id, slug, name, domains]
       properties:
         id: { type: string, format: uuid }
         slug: { type: string }
         name: { type: string }
+        domains:
+          type: array
+          description: DNS domains of the organization's users; the first is the primary domain of the device login.
+          items: { type: string }
     Me:
       type: object
-      required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip]
+      required: [id, username, display_name, role, organization, locale, theme, revocation_enabled, client_ip,
+        step_up_valid_until]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -3792,6 +3829,13 @@ components:
             The client address the server resolved for this request (plan M7a decision 15): the peer, or the address
             Caddy forwarded in X-Paddock-Client-IP when the peer is a trusted proxy. The IP allow list is checked
             against it.
+        step_up_valid_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            Until when the session's last step-up satisfies privileged actions (plan M8x decision 35); null without a
+            step-up or once it has expired. The portal shows it in the user menu.
         step_up:
           $ref: "#/components/schemas/MeStepUp"
         api_token:
@@ -4342,10 +4386,11 @@ components:
         sort: { type: string, description: Applied sort. }
     DeviceContact:
       type: string
-      enum: [never, ok, stale_warning, stale_critical, presumed_lost]
+      enum: [never, ok, unseen, stale_warning, stale_critical, presumed_lost]
       description: >-
         Derived like the attention conditions stale_warning, stale_critical and presumed_lost; never = no check-in yet;
-        ok otherwise. Devices that are not active report ok or never.
+        unseen = no check-in for more than 15 minutes, below the staleness warning threshold; ok otherwise (a check-in
+        within the last 15 minutes). Devices that are not active report ok or never.
     DeviceState:
       type: string
       enum: [pending, active, rejected, quarantined, retired]
@@ -4760,7 +4805,8 @@ components:
     AttentionKind:
       type: string
       enum: [stale_warning, stale_critical, presumed_lost, quarantined, disk_not_compliant, agent_outdated,
-             login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired, agent_rollback_pending]
+             login_apply_failed, sudo_apply_failed, revocation_pending, revocation_expired, agent_rollback_pending,
+             agent_not_running]
     Attention:
       type: object
       required: [id, kind, device_id, hostname, since, detail]
@@ -4769,7 +4815,7 @@ components:
         kind: { $ref: "#/components/schemas/AttentionKind" }
         device_id: { type: string, format: uuid }
         hostname: { type: string }
-        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report). }
+        since: { type: string, format: date-time, description: When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported). }
         detail:
           type: string
           description: "disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; otherwise empty."
@@ -4876,7 +4922,7 @@ components:
           items: { $ref: "#/components/schemas/ManagedFile" }
     OverviewDevices:
       type: object
-      required: [total, active, pending, quarantined, retired, rejected, online, silent, silent_critical, presumed_lost, never_contacted]
+      required: [total, active, pending, quarantined, retired, rejected, online, no_recent_contact, silent, silent_critical, presumed_lost, never_contacted]
       properties:
         total: { type: integer, description: "pending + active + quarantined" }
         active: { type: integer }
@@ -4884,7 +4930,8 @@ components:
         quarantined: { type: integer }
         retired: { type: integer }
         rejected: { type: integer }
-        online: { type: integer, description: "Active devices in contact (none of the buckets below)." }
+        online: { type: integer, description: "Active devices with a check-in within the last 15 minutes (none of the buckets below)." }
+        no_recent_contact: { type: integer, description: "Active devices without a check-in for more than 15 minutes and no open staleness alert (contact unseen)." }
         silent: { type: integer, description: "Active devices with an open stale_warning alert." }
         silent_critical: { type: integer, description: "Active devices with an open stale_critical alert." }
         presumed_lost: { type: integer }
@@ -5352,10 +5399,16 @@ components:
       enum: [local, synced]
     User:
       type: object
-      required: [id, username, display_name, email, source, locked, lock_incomplete, locked_at, created_at, updated_at]
+      required: [id, username, display_name, email, source, locked, lock_incomplete, locked_at, created_at, updated_at,
+        domain_match]
       properties:
         id: { type: string, format: uuid }
         username: { type: string, description: "UPN, lowercase, e.g. dave@acme.test." }
+        domain_match:
+          type: boolean
+          description: |
+            The part of the username after its last @ is one of the organization's domains (plan M8x decision 46). A
+            user without it cannot sign in on devices: the login component accepts name@domain only.
         display_name: { type: string }
         email: { type: string }
         source: { $ref: "#/components/schemas/IdentitySource" }
@@ -5585,6 +5638,19 @@ components:
     PrivilegeClass:
       type: string
       enum: [none, restricted, full]
+    RootEquivalence:
+      type: object
+      required: [effective_class, root_equivalent_commands, witnesses]
+      properties:
+        effective_class: { $ref: "#/components/schemas/PrivilegeClass" }
+        root_equivalent_commands:
+          type: array
+          description: The normalized commands that hand out root, alone or together with another command; sorted.
+          items: { type: string }
+        witnesses:
+          type: array
+          description: 'Why the profile hands out root: "ALL", "cmd:<command>" or "pair:<writer>|<command>"; sorted.'
+          items: { type: string }
     Lecture:
       type: string
       enum: [always, once, never]

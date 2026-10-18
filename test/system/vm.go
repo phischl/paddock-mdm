@@ -195,6 +195,15 @@ func (v *VM) SSH(ctx context.Context, stdin []byte, command string) (string, err
 	return out.String(), err
 }
 
+// Bind makes the VM's helpers (Must, Copy, …) report to the subtest t until t ends; then they report to the test they
+// reported to before. Every subtest that uses them binds itself first: FailNow on the per-VM parent test from inside
+// a subtest panics and aborts the remaining gates of that VM.
+func (v *VM) Bind(t *testing.T) {
+	prev := v.t
+	v.t = t
+	t.Cleanup(func() { v.t = prev })
+}
+
 // Must runs a command and fails the test on error.
 func (v *VM) Must(command string) string {
 	v.t.Helper()

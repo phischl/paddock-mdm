@@ -113,6 +113,8 @@ type stepUpWorld struct {
 	sessions *fakeSessions
 	// onAuthorize runs while the browser is at the provider, between the step-up start and the callback.
 	onAuthorize func()
+	// clock is Paddock's time (Deps.Now); onAuthorize may advance it.
+	clock time.Time
 }
 
 func newStepUpWorld(t *testing.T) *stepUpWorld {
@@ -161,10 +163,12 @@ func newStepUpWorldFor(t *testing.T, maxAuthAge time.Duration, p principal.Princ
 	}
 	sessions := newFakeSessions()
 	sessions.records["sid-alice"] = sessionsRecord(p)
-	return &stepUpWorld{t: t, idp: idp, keys: keys, session: admin.NewSession(p, "sid-alice", "en", time.Now()), maxAge: maxAge, tokens: tokens,
-		handler: admin.NewHandler(admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
-			StepUpTokens: tokens, StepUpAccounts: roles, Sessions: sessions, PublicURL: "https://admin.test",
-			StepUpMaxAuthAge: maxAuthAge}), sessions: sessions}
+	w := &stepUpWorld{t: t, idp: idp, keys: keys, maxAge: maxAge, tokens: tokens, sessions: sessions, clock: time.Now()}
+	w.session = admin.NewSession(p, "sid-alice", "en", w.clock)
+	w.handler = admin.NewHandler(admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
+		StepUpTokens: tokens, StepUpAccounts: roles, Sessions: sessions, PublicURL: "https://admin.test",
+		StepUpMaxAuthAge: maxAuthAge, Now: func() time.Time { return w.clock }})
+	return w
 }
 
 func (w *stepUpWorld) serve(path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -219,20 +223,19 @@ func (w *stepUpWorld) stepUp(claims map[string]any) *httptest.ResponseRecorder {
 }
 
 func TestStepUp(t *testing.T) {
-	now := time.Now().Unix()
-	good := map[string]any{"sub": "sub-alice", "auth_time": now - 5, "amr": []string{"pwd", "mfa"}, "jti": "jti-1",
-		"groups": []string{"paddock.acme", "paddock.acme.admins"}}
-	with := func(k string, v any) map[string]any {
-		c := map[string]any{}
-		for key, val := range good {
-			c[key] = val
-		}
+	// good are the claims of a step-up that authenticated at the step-up's start (Paddock's clock in w).
+	good := func(w *stepUpWorld) map[string]any {
+		return map[string]any{"sub": "sub-alice", "auth_time": w.clock.Unix(), "amr": []string{"pwd", "mfa"}, "jti": "jti-1",
+			"groups": []string{"paddock.acme", "paddock.acme.admins"}}
+	}
+	with := func(w *stepUpWorld, k string, v any) map[string]any {
+		c := good(w)
 		c[k] = v
 		return c
 	}
 	t.Run("fresh step-up of the session's user", func(t *testing.T) {
 		w := newStepUpWorld(t)
-		res := w.stepUp(good)
+		res := w.stepUp(good(w))
 		if res.Code != http.StatusFound || res.Header().Get("Location") != "/devices/x" {
 			t.Fatalf("callback: %d %s", res.Code, res.Header().Get("Location"))
 		}
@@ -253,17 +256,20 @@ func TestStepUp(t *testing.T) {
 			t.Fatalf("kept step-up token %q, %v", raw, ok)
 		}
 	})
-	for name, claims := range map[string]map[string]any{
-		"another user":       with("sub", "sub-carol"),
-		"old authentication": with("auth_time", now-61),
-		"no auth_time":       with("auth_time", 0),
-		"without MFA":        with("amr", []string{"pwd"}),
-		"without jti":        with("jti", ""),
-		"without groups":     with("groups", nil),
+	for name, claims := range map[string]func(w *stepUpWorld) map[string]any{
+		"another user":       func(w *stepUpWorld) map[string]any { return with(w, "sub", "sub-carol") },
+		"old authentication": func(w *stepUpWorld) map[string]any { return with(w, "auth_time", w.clock.Unix()-61) },
+		"no auth_time":       func(w *stepUpWorld) map[string]any { return with(w, "auth_time", 0) },
+		"without MFA":        func(w *stepUpWorld) map[string]any { return with(w, "amr", []string{"pwd"}) },
+		"without jti":        func(w *stepUpWorld) map[string]any { return with(w, "jti", "") },
+		"without groups":     func(w *stepUpWorld) map[string]any { return with(w, "groups", nil) },
+		// The login event the session started from, one second before the step-up: what Authentik sends when it skips
+		// the step-up flow (stepup.go, checkStepUp).
+		"authentication before the step-up": func(w *stepUpWorld) map[string]any { return with(w, "auth_time", w.clock.Unix()-1) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newStepUpWorld(t)
-			res := w.stepUp(claims)
+			res := w.stepUp(claims(w))
 			if res.Code != http.StatusFound || res.Header().Get("Location") != "/devices/x?stepup=failed" {
 				t.Fatalf("callback: %d %s", res.Code, res.Header().Get("Location"))
 			}
@@ -272,11 +278,59 @@ func TestStepUp(t *testing.T) {
 			}
 		})
 	}
+	t.Run("authentication during the step-up", func(t *testing.T) {
+		w := newStepUpWorld(t)
+		start := w.clock
+		w.onAuthorize = func() { w.clock = w.clock.Add(3 * time.Second) }
+		claims := with(w, "auth_time", start.Add(2*time.Second).Unix())
+		if res := w.stepUp(claims); res.Header().Get("Location") != "/devices/x" || cookieOf(res, admin.SessionCookie) == nil {
+			t.Fatalf("authentication 2 s after the start: %s", res.Header().Get("Location"))
+		}
+	})
+	t.Run("step-up cookie without a start time", func(t *testing.T) {
+		// A cookie sealed before the start time existed (or without it) fails closed, also with a fresh token.
+		w := newStepUpWorld(t)
+		value, err := w.keys.Seal(admin.SessionCookie, w.session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := w.serve("/api/auth/stepup?return_to=%2Fdevices%2Fx", &http.Cookie{Name: admin.SessionCookie, Value: value})
+		state := cookieOf(start, admin.StepUpCookie)
+		if start.Code != http.StatusFound || state == nil {
+			t.Fatalf("start: %d", start.Code)
+		}
+		var st map[string]any
+		if err := w.keys.Open(admin.StepUpCookie, state.Value, &st); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := st["started"]; !ok {
+			t.Fatalf("step-up cookie without started: %v", st)
+		}
+		delete(st, "started")
+		if state.Value, err = w.keys.Seal(admin.StepUpCookie, st); err != nil {
+			t.Fatal(err)
+		}
+		loc, _ := url.Parse(start.Header().Get("Location"))
+		w.idp.mu.Lock()
+		w.idp.claims, w.idp.nonce = good(w), loc.Query().Get("nonce")
+		w.idp.mu.Unlock()
+		res := w.serve("/api/auth/stepup/callback?code=c&state="+url.QueryEscape(loc.Query().Get("state")), state)
+		if res.Header().Get("Location") != "/devices/x?stepup=failed" || cookieOf(res, admin.SessionCookie) != nil {
+			t.Fatalf("callback: %d %s", res.Code, res.Header().Get("Location"))
+		}
+	})
 	t.Run("shortened maximum auth age", func(t *testing.T) {
-		if res := newStepUpWorldWith(t, 15*time.Second).stepUp(with("auth_time", now-16)); res.Header().Get("Location") != "/devices/x?stepup=failed" {
+		// The step-up started 20 s before the callback; its authentication 16 s before it is too old for max_age 15.
+		w := newStepUpWorldWith(t, 15*time.Second)
+		start := w.clock
+		w.onAuthorize = func() { w.clock = w.clock.Add(20 * time.Second) }
+		if res := w.stepUp(with(w, "auth_time", start.Add(4*time.Second).Unix())); res.Header().Get("Location") != "/devices/x?stepup=failed" {
 			t.Fatalf("16 s old login with max_age 15: %s", res.Header().Get("Location"))
 		}
-		if res := newStepUpWorldWith(t, 15*time.Second).stepUp(good); res.Header().Get("Location") != "/devices/x" {
+		w = newStepUpWorldWith(t, 15*time.Second)
+		start = w.clock
+		w.onAuthorize = func() { w.clock = w.clock.Add(20 * time.Second) }
+		if res := w.stepUp(with(w, "auth_time", start.Add(15*time.Second).Unix())); res.Header().Get("Location") != "/devices/x" {
 			t.Fatalf("5 s old login with max_age 15: %s", res.Header().Get("Location"))
 		}
 	})
@@ -294,7 +348,7 @@ func TestStepUp(t *testing.T) {
 	t.Run("session ended during the step-up", func(t *testing.T) {
 		w := newStepUpWorld(t)
 		w.onAuthorize = func() { delete(w.sessions.records, "sid-alice") }
-		if res := w.stepUp(good); res.Header().Get("Location") != "/devices/x?stepup=failed" || cookieOf(res, admin.SessionCookie) != nil {
+		if res := w.stepUp(good(w)); res.Header().Get("Location") != "/devices/x?stepup=failed" || cookieOf(res, admin.SessionCookie) != nil {
 			t.Fatalf("callback for an ended session: %s", res.Header().Get("Location"))
 		}
 	})

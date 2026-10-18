@@ -8,6 +8,7 @@ import { useProblemText } from '../lib/problems'
 import { confirmReviewItem, getSecurityReview, type ReviewConfirmation } from '../lib/securityReview'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /**
  * The review of existing data (ADR 0034 decision 7): root grants and files on sensitive paths that existed before the
@@ -16,6 +17,7 @@ import { useSessionStore } from '../stores/session'
  * table, so plain tables instead of DataList.
  */
 const { t } = useI18n()
+const { pending: confirming, run: runPending } = usePending()
 const router = useRouter()
 const confirm = useConfirm()
 const problemText = useProblemText()
@@ -107,7 +109,9 @@ onMounted(async () => {
                 size="small"
                 variant="tonal"
                 :aria-label="t('securityReview.confirmLabel', { name: item.profile.name })"
-                @click="onConfirm({ kind: 'profile', id: item.profile.id }, item.profile.name)"
+                :loading="confirming"
+                :disabled="confirming"
+                @click="runPending(() => onConfirm({ kind: 'profile', id: item.profile.id }, item.profile.name))"
               >
                 {{ t('securityReview.confirm') }}
               </v-btn>
@@ -146,7 +150,9 @@ onMounted(async () => {
                 size="small"
                 variant="tonal"
                 :aria-label="t('securityReview.confirmLabel', { name: f.path })"
-                @click="onConfirm({ kind: 'file', id: f.id }, f.path)"
+                :loading="confirming"
+                :disabled="confirming"
+                @click="runPending(() => onConfirm({ kind: 'file', id: f.id }, f.path))"
               >
                 {{ t('securityReview.confirm') }}
               </v-btn>

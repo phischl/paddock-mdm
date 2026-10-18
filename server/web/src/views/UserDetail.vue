@@ -13,8 +13,10 @@ import { userLockStatus } from '../lib/status'
 import { allUserGroups } from '../lib/userGroups'
 import { deleteUser, getEffectiveProfile, getUser, setLocked, updateUser } from '../lib/users'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 const { t, locale } = useI18n()
+const { pending, run } = usePending()
 const route = useRoute()
 const router = useRouter()
 const confirm = useConfirm()
@@ -145,7 +147,9 @@ async function saveEdit(): Promise<void> {
             v-if="session.canDelete"
             :color="user.locked ? 'primary' : 'error'"
             data-testid="lock-user"
-            @click="toggleLock"
+            :loading="pending"
+            :disabled="pending"
+            @click="run(toggleLock)"
           >
             {{ t(user.locked ? 'users.unlock' : 'users.lock') }}
           </v-btn>
@@ -154,7 +158,9 @@ async function saveEdit(): Promise<void> {
             color="error"
             variant="outlined"
             data-testid="delete-user"
-            @click="onDelete"
+            :loading="pending"
+            :disabled="pending"
+            @click="run(onDelete)"
           >
             {{ t('common.delete') }}
           </v-btn>
@@ -175,11 +181,22 @@ async function saveEdit(): Promise<void> {
           <v-btn
             variant="tonal"
             data-testid="retry-lock"
-            @click="retryLock"
+            :loading="pending"
+            :disabled="pending"
+            @click="run(retryLock)"
           >
             {{ t('users.retryLock') }}
           </v-btn>
         </template>
+      </v-alert>
+      <v-alert
+        v-if="!user.domain_match"
+        type="warning"
+        variant="tonal"
+        class="conflict"
+        data-testid="no-domain-detail"
+      >
+        {{ t('users.noDomainDetail', { username: user.username, domains: (session.me?.organization?.domains ?? []).join(', ') }) }}
       </v-alert>
       <v-alert
         v-if="user.source === 'synced'"
@@ -267,7 +284,7 @@ async function saveEdit(): Promise<void> {
           <form
             class="form"
             novalidate
-            @submit.prevent="saveEdit"
+            @submit.prevent="run(saveEdit)"
           >
             <v-text-field
               id="edit-user-name"
@@ -299,6 +316,8 @@ async function saveEdit(): Promise<void> {
               </v-btn>
               <v-btn
                 type="submit"
+                :loading="pending"
+                :disabled="pending"
                 color="primary"
               >
                 {{ t('common.save') }}

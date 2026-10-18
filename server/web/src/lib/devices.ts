@@ -12,11 +12,11 @@ export const stateFilter: ListFilter = {
   options: deviceStates.map((value) => ({ value, title: 'devices.states.' + value })),
 }
 
-export const deviceContacts: DeviceContact[] = ['ok', 'stale_warning', 'stale_critical', 'presumed_lost', 'never']
+export const deviceContacts: DeviceContact[] = ['ok', 'unseen', 'stale_warning', 'stale_critical', 'presumed_lost', 'never']
 
 /** The contact filter of the device list (plan M7c §12 open point 1): the overview's KPI cells link to it. */
 export const contactFilter: ListFilter = {
-  kind: 'enum', key: 'contact', label: 'devices.contactFilter',
+  kind: 'enum', key: 'contact', label: 'devices.contactFilter', hint: 'devices.contactHint',
   options: deviceContacts.map((value) => ({ value, title: 'devices.contact.' + value })),
 }
 

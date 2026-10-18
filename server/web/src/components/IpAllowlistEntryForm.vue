@@ -11,7 +11,8 @@ const props = withDefaults(defineProps<{
   problem?: string
   /** The server's detail of the last problem (e.g. the canonical form of a CIDR). */
   problemDetail?: string
-}>(), { initial: null, problem: '', problemDetail: '' })
+  pending?: boolean
+}>(), { initial: null, problem: '', problemDetail: '', pending: false })
 const emit = defineEmits<{ submit: [input: IpAllowlistInput]; cancel: [] }>()
 
 const { t } = useI18n()
@@ -81,6 +82,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
       >
         {{ initial ? t('common.save') : t('common.create') }}

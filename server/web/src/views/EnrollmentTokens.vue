@@ -8,13 +8,16 @@ import EnrollmentTokenForm from '../components/EnrollmentTokenForm.vue'
 import type { EnrollmentToken, EnrollmentTokenCreated } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { allGroups } from '../lib/devices'
+import { getLoginSettings } from '../lib/loginSettings'
 import { configText, createEnrollmentToken, listEnrollmentTokens, revokeEnrollmentToken, type TokenInput } from '../lib/enrollmentTokens'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
 import { tokenStatus } from '../lib/status'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const confirm = useConfirm()
 const session = useSessionStore()
@@ -30,6 +33,9 @@ const pageProblem = ref('')
 // The one-time answer: shown once in the dialog and dropped when it closes.
 const created = ref<EnrollmentTokenCreated | null>(null)
 const copied = ref(false)
+// The managed local administrator named in the break-glass hint, loaded once when the dialog first opens.
+const localAdmin = ref<string | null>(null)
+const noDomain = computed(() => (session.me?.organization?.domains.length ?? 0) === 0)
 
 const columns = computed<ListColumn[]>(() => [
   { key: 'name', title: 'common.name', sortable: true },
@@ -45,6 +51,12 @@ function openCreate(): void {
   created.value = null
   copied.value = false
   open.value = true
+  if (localAdmin.value === null) void loadLocalAdmin()
+}
+
+async function loadLocalAdmin(): Promise<void> {
+  const res = await getLoginSettings()
+  if (typeof res !== 'string') localAdmin.value = res.local_admin_username
 }
 
 function close(): void {
@@ -160,10 +172,22 @@ async function onRevoke(token: EnrollmentToken): Promise<void> {
     >
       <v-card :title="t('tokens.createTitle')">
         <v-card-text v-if="!created">
+          <v-alert
+            :type="noDomain ? 'warning' : 'info'"
+            variant="tonal"
+            class="mb-4"
+            data-testid="break-glass-guidance"
+          >
+            <p>{{ noDomain ? t('tokens.noDomainWarning') : t('tokens.breakGlassHint', { username: localAdmin ?? '…' }) }}</p>
+            <RouterLink to="/settings/login">
+              {{ t('tokens.breakGlassLink') }}
+            </RouterLink>
+          </v-alert>
           <EnrollmentTokenForm
             :groups="groups"
             :problem="problem"
-            @submit="onCreate"
+            :pending="pending"
+            @submit="run(() => onCreate($event))"
             @cancel="close"
           />
         </v-card-text>

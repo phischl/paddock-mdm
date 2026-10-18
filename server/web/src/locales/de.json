@@ -39,7 +39,10 @@
     },
     "shortcuts": "Tastenkürzel",
     "collapseNavigation": "Navigation einklappen",
-    "expandNavigation": "Navigation ausklappen"
+    "expandNavigation": "Navigation ausklappen",
+    "stepUpValidUntil": "Identität bestätigt bis {time}",
+    "stepUpNone": "Keine aktuelle Identitätsbestätigung",
+    "stepUpChip": "Bestätigt bis {time}"
   },
   "nav": {
     "deviceGroups": "Gerätegruppen",
@@ -80,7 +83,7 @@
     "attentionPill": "{count, plural, one {# braucht Aufmerksamkeit} other {# brauchen Aufmerksamkeit}}",
     "shortcut": "Tastenkürzel: {keys}",
     "securityReview": "Sicherheitsprüfung",
-    "operatorRoots": "Operator-Wurzeln"
+    "operatorRoots": "Freigegebene Verzeichnisse"
   },
   "roles": {
     "org_admin": "Organisationsadministrator",
@@ -146,7 +149,8 @@
     "modeInvalid": "Geben Sie vier Oktalziffern ohne Sonderbits ein, zum Beispiel 0644.",
     "ownerInvalid": "Besitzer und Gruppe sind Benutzer- und Gruppennamen in Kleinbuchstaben.",
     "contentTooLarge": "Der Inhalt darf höchstens 64 KiB groß sein.",
-    "unitInvalid": "Geben Sie einen Unit-Namen ein, der auf .service, .timer, .socket oder .path endet."
+    "unitInvalid": "Geben Sie einen Unit-Namen ein, der auf .service, .timer, .socket oder .path endet.",
+    "domainsInvalid": "Geben Sie DNS-Namen in Kleinbuchstaben ein, einen pro Zeile, höchstens 20 ohne Dopplungen."
   },
   "problems": {
     "name_taken": "Ein Eintrag mit diesem Namen existiert bereits.",
@@ -169,7 +173,7 @@
     "invalid_command": "Ein Befehl ist nicht erlaubt: Verwenden Sie einen absoluten Pfad mit optionalen Argumenten, ohne ALL, !, # und die Zeichen , : = \\ ^ $ * ? [ ].",
     "setting_locked": "Diese Einstellung kann nicht mehr geändert werden: Geräte verwenden sie bereits.",
     "step_up_required": "Bestätigen Sie Ihre Identität, um fortzufahren.",
-    "step_up_failed": "Die Identitätsbestätigung ist fehlgeschlagen. Versuchen Sie es erneut mit Ihrem eigenen Konto.",
+    "step_up_failed": "Die Identitätsbestätigung ist fehlgeschlagen. Versuchen Sie es erneut mit Ihrem eigenen Konto. Haben Sie Ihre Identität vor weniger als einer Minute bestätigt, warten Sie zuerst eine Minute.",
     "revocation_disabled": "Der Widerruf ist in dieser Installation nicht aktiviert (Abnahme ausstehend).",
     "revocation_frozen": "Sie können 24 Stunden lang keine Widerrufe anfordern oder freigeben, weil Sie ein Widerrufslimit überschritten haben.",
     "revocation_rejected": "Der Widerruf wurde abgelehnt.",
@@ -350,7 +354,7 @@
       "login_changed": "{actor} hat die Anmeldeeinstellungen geändert",
       "dms_changed": "{actor} hat {enabled, select, true {den Totmannschalter mit einer Frist von {period_days, number} Tagen eingeschaltet} other {den Totmannschalter ausgeschaltet}}",
       "updates_changed": "{actor} hat die Update-Einstellungen geändert",
-      "managed_files_changed": "{actor} hat die Operator-Wurzeln der verwalteten Dateien geändert"
+      "managed_files_changed": "{actor} hat die freigegebenen Verzeichnisse für Operatoren der verwalteten Dateien geändert"
     },
     "package_hold": {
       "created": "{actor} hält das Paket {package} zurück",
@@ -396,6 +400,11 @@
     "createTitle": "Neue Organisation",
     "slug": "Slug",
     "status": "Status",
+    "domains": "Domains (eine pro Zeile)",
+    "domainsHint": "DNS-Namen der Benutzer der Organisation in Kleinbuchstaben, zum Beispiel example.org; die erste ist die primäre Domain der Geräteanmeldung. Ohne Domain bleiben Anmeldeverwaltung, Anmeldekomponente und verwalteter lokaler Administrator aus.",
+    "editDomains": "Domains",
+    "editDomainsTitle": "Domains von {name}",
+    "createdWithoutDomains": "Die Organisation wurde angelegt, ihre Domains wurden aber nicht gespeichert. Speichern Sie sie über „Domains“ in der Liste.",
     "statuses": {
       "provisioning": "Wird eingerichtet",
       "active": "Aktiv",
@@ -472,6 +481,13 @@
     "title": "Zugriff verweigert",
     "not_authorized": "Ihr Konto ist für das Paddock-Portal nicht berechtigt. Bitten Sie Ihren Administrator, Sie genau einer Paddock-Administratorgruppe hinzuzufügen.",
     "login_failed": "Die Anmeldung konnte nicht abgeschlossen werden.",
+    "mfa_required": "Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.",
+    "key_store_sealed": "Der Schlüsselspeicher des Servers ist versiegelt, deshalb kann das Portal keine Sitzungen starten. Ein Operator muss OpenBao entsiegeln (docs/operations/openbao.md, Abschnitt 2). Geräte arbeiten weiter.",
+    "no_role": "Ihr Konto ist in keiner Paddock-Rollengruppe. Bitten Sie Ihren Administrator, Sie genau einer der Gruppen paddock.'<Organisation>'.admins, .operators oder .auditors hinzuzufügen.",
+    "multiple_organizations": "Ihr Konto hat Rollen in mehreren Organisationen. Ein Konto gehört zu genau einer Organisation; bitten Sie Ihren Administrator, die übrigen Mitgliedschaften zu entfernen oder getrennte Konten anzulegen.",
+    "multiple_roles": "Ihr Konto hat mehrere Rollen in einer Organisation (Administrator, Operator oder Auditor). Bitten Sie Ihren Administrator, genau eine der Mitgliedschaften zu behalten.",
+    "platform_and_organization": "Dieses Konto hat Plattform- und Organisationsrollen. Ein Konto ist entweder Plattformadministrator oder Mitglied einer Organisation: Verwenden Sie getrennte Konten, oder bitten Sie Ihren Administrator, eine der Mitgliedschaften zu entfernen.",
+    "organization_inactive": "Ihre Organisation ist nicht aktiv. Wenden Sie sich an einen Plattformadministrator.",
     "retry": "Erneut anmelden"
   },
   "notFound": {
@@ -533,7 +549,7 @@
       "title": "Anmeldung",
       "agentTooOld": "Der Agent auf diesem Gerät ist für die Anmeldeverwaltung zu alt: Anmeldungen und sudo-Rechte werden erst nach seinem Update verwaltet.",
       "suspendedHint": "Verzeichnisanmeldungen sind auf diesem Gerät ausgesetzt. Notfallkonten funktionieren weiterhin.",
-      "assignmentHint": "Wer sich anmelden darf. Lassen Sie beide Felder leer, um allen Benutzern der Organisation die Anmeldung zu erlauben.",
+      "assignmentHint": "Nur diese Verzeichnisbenutzer und Gruppen können sich an diesem Gerät anmelden; Berechtigungsprofile gelten nur für sie, nie für lokale Konten.",
       "users": "Benutzer",
       "groups": "Gruppen",
       "saved": "Anmeldezuweisung gespeichert.",
@@ -585,6 +601,7 @@
       "active": "Aktives Passwort",
       "pending": "Wartet auf das Gerät",
       "none": "noch keines",
+      "pendingConfirmation": "noch keines bestätigt — Passwort {generation, number} ist gespeichert und wartet auf die Bestätigung des Geräts beim nächsten Check-in (innerhalb von etwa 5 Minuten)",
       "lastRotated": "Letzte Rotation",
       "nextRotation": "Nächste Rotation",
       "overdue": "Die Rotation ist überfällig: Das Gerät hat den Server seit dem Fälligkeitstermin nicht erreicht.",
@@ -717,6 +734,7 @@
     "presumedLost": "Vermutlich verloren seit {at}",
     "contact": {
       "ok": "Online",
+      "unseen": "Kein aktueller Kontakt",
       "stale_warning": "Ohne Kontakt",
       "stale_critical": "Ohne Kontakt (kritisch)",
       "presumed_lost": "Vermutlich verloren",
@@ -742,6 +760,7 @@
       }
     },
     "contactFilter": "Kontakt",
+    "contactHint": "Online: ein Check-in innerhalb der letzten 15 Minuten. Kein aktueller Kontakt: seit mehr als 15 Minuten keiner, unterhalb der Stille-Schwelle der Organisation.",
     "pane": "Geräte filtern",
     "breadcrumb": "Pfadnavigation",
     "header": {
@@ -805,6 +824,9 @@
     "group": "Registrierte Geräte hinzufügen zu",
     "noGroup": "Keine Gerätegruppe",
     "autoApprove": "Registrierte Geräte automatisch freigeben",
+    "noDomainWarning": "Diese Organisation hat keine Domain: Ihre Geräte erhalten keine Anmeldeverwaltung und keinen verwalteten lokalen Administrator. Tragen Sie die vorhandenen lokalen Administratorkonten eines Geräts als Notfallkonten ein, bevor Sie es registrieren. Ohne Notfallkonto in der Gruppe sudo behält der Agent die vorhandenen Mitglieder und meldet sie; er entfernt sie, sobald ein Notfallkonto oder der verwaltete lokale Administrator Mitglied ist.",
+    "breakGlassHint": "Mit diesem Token registrierte Geräte behalten nur den verwalteten lokalen Administrator ({username}) und die Notfallkonten in der Gruppe sudo; jedes andere Mitglied wird beim ersten Anwenden entfernt und gemeldet. Tragen Sie die vorhandenen lokalen Administratoren eines Geräts als Notfallkonten ein, bevor Sie es registrieren.",
+    "breakGlassLink": "Notfallkonten",
     "status": "Status",
     "statuses": {
       "active": "Aktiv",
@@ -954,6 +976,9 @@
     "deleteLabel": "{name} löschen",
     "files": {
       "title": "Verwaltete Dateien",
+      "pathNonAscii": "Der Pfad enthält Zeichen außerhalb von ASCII. Das Gerät schreibt ihn unverändert; stellen Sie sicher, dass das Programm, das die Datei liest, diesen Namen erwartet.",
+      "operatorRootsHint": "Operatoren legen Dateien nur unterhalb der freigegebenen Verzeichnisse an und ändern sie dort; jeder andere Pfad erfordert einen Organisationsadministrator mit Identitätsbestätigung.",
+      "operatorRootsLink": "Freigegebene Verzeichnisse festlegen",
       "create": "Verwaltete Datei anlegen",
       "createTitle": "Neue verwaltete Datei",
       "editTitle": "Verwaltete Datei bearbeiten",
@@ -997,18 +1022,21 @@
     "tierColumn": "Pfadstufe",
     "sensitiveForbidden": "Dateien auf sensiblen Pfaden erfordern einen Organisationsadministrator. Bitten Sie einen, diese Datei anzulegen oder zu ändern.",
     "roots": {
-      "title": "Operator-Wurzeln der verwalteten Dateien",
+      "title": "Freigegebene Verzeichnisse für Operatoren",
       "intro": "Unterhalb dieser Verzeichnisse verwalten Operatoren Dateien ohne Identitätsbestätigung, außer ausführbaren Dateien, Skripten, Shared Objects und .d-Verzeichnissen. Jeder andere Pfad erfordert einen Organisationsadministrator mit Identitätsbestätigung. Das Ändern der Liste erfordert eine Identitätsbestätigung; bestehende Dateien behalten ihre Definitionen, und die Sicherheitsprüfung listet Dateien, die nun eine Bestätigung brauchen.",
-      "label": "Operator-Wurzeln (eine pro Zeile)",
+      "label": "Freigegebene Verzeichnisse (eines pro Zeile)",
       "hint": "Verzeichnisse wie /etc/myapp/ oder /opt/vendor/, mit abschließendem Schrägstrich.",
-      "confirmTitle": "Operator-Wurzeln ändern",
-      "confirm": "{count, plural, one {# Operator-Wurzel} other {# Operator-Wurzeln}} speichern? Anschließend bestätigen Sie Ihre Identität.",
-      "saved": "Die Operator-Wurzeln wurden gespeichert.",
-      "warning": "Operator-Wurzeln sind eine Vertrauensentscheidung: Ein Programm, das als root läuft und Dateien unterhalb einer Wurzel ausführt oder einliest (Konfiguration, die es auswertet, Includes, die es ausführt), macht diese Wurzel root-gleichwertig, und Paddock kann das nicht erkennen. Fügen Sie nur Verzeichnisse reiner Anwendungskonfiguration hinzu."
+      "confirmTitle": "Freigegebene Verzeichnisse ändern",
+      "confirm": "{count, plural, one {# freigegebenes Verzeichnis} other {# freigegebene Verzeichnisse}} speichern? Anschließend bestätigen Sie Ihre Identität.",
+      "saved": "Die freigegebenen Verzeichnisse wurden gespeichert.",
+      "warning": "Freigegebene Verzeichnisse sind eine Vertrauensentscheidung: Ein Programm, das als root läuft und Dateien unterhalb eines freigegebenen Verzeichnisses ausführt oder einliest (Konfiguration, die es auswertet, Includes, die es ausführt), macht dieses freigegebene Verzeichnis root-gleichwertig, und Paddock kann das nicht erkennen. Fügen Sie nur Verzeichnisse reiner Anwendungskonfiguration hinzu."
     }
   },
   "users": {
     "title": "Benutzer",
+    "noDomain": "Keine Organisationsdomain",
+    "noDomainDetail": "Der Benutzername {username} endet nicht auf eine der Domains der Organisation ({domains}). Der Benutzer kann sich nicht an Geräten anmelden: Die Anmeldekomponente akzeptiert nur name@domain. Benennen Sie den Benutzer in der Identitätsquelle um, oder lassen Sie einen Plattformadministrator die Domain der Organisation hinzufügen.",
+    "orgNoDomains": "Diese Organisation hat noch keine Domain. Lokale Benutzer können nicht angelegt werden und niemand kann sich an Geräten anmelden, bis ein Plattformadministrator unter Plattform → Organisationen eine hinzufügt.",
     "create": "Lokalen Benutzer anlegen",
     "createTitle": "Neuer lokaler Benutzer",
     "editTitle": "Benutzer bearbeiten",
@@ -1083,6 +1111,7 @@
   },
   "profiles": {
     "title": "Berechtigungsprofile",
+    "intro": "Berechtigungsprofile gewähren Verzeichnisbenutzern sudo-Rechte, die sich über die Anmeldekomponente an Geräten anmelden. Für lokale Konten wie Notfallkonten oder den verwalteten lokalen Administrator gelten sie nie. Welche Verzeichnisbenutzer sich an einem Gerät anmelden dürfen, legen Sie im Reiter „Zugang“ des Geräts fest.",
     "create": "Profil anlegen",
     "createTitle": "Neues Berechtigungsprofil",
     "editTitle": "Berechtigungsprofil bearbeiten",
@@ -1102,6 +1131,10 @@
     "commandsHint": "Ein absoluter Befehl pro Zeile, mit optionalen Argumenten.",
     "commandsRequired": "Geben Sie mindestens einen Befehl ein.",
     "requirePassword": "Nach dem Passwort fragen",
+    "requirePasswordHint": "Wenn aktiv, verlangt sudo vor dem ersten Befehl einer Sitzung und nach Ablauf des Timeouts eine Authentifizierung; wenn inaktiv, laufen die Befehle ohne Abfrage. Lassen Sie die Option aktiv, außer für Profile, deren Befehle unbeaufsichtigt laufen müssen.",
+    "fullPreview": "Die Klasse „vollständig“ gewährt root für jeden Befehl. Zum Speichern braucht es einen Organisationsadministrator mit frischer Identitätsbestätigung.",
+    "rootEquivalentPreview": "Dieses Profil gewährt faktisch root durch {commands}. Zum Speichern braucht es einen Organisationsadministrator mit frischer Identitätsbestätigung.",
+    "rootEquivalentPair": "{writer} zusammen mit {command}: Der erste schreibt, was der zweite ausführt.",
     "timeout": "Passwort gemerkt für (Minuten)",
     "timeoutInvalid": "Geben Sie 0 bis 60 Minuten ein.",
     "lecture": "Hinweis",
@@ -1125,6 +1158,7 @@
     "scalars": "Einstellungen",
     "scalarFacts": "Passwortabfrage: {password, select, true {ja} other {nein}}; gemerkt für {timeout, number} min; Hinweis: {lecture}",
     "assignments": "Zuweisungen",
+    "assignHint": "Zuweisungen gelten für Verzeichnisbenutzer und Benutzergruppen; lokale Konten des Geräts sind nie betroffen.",
     "subjectType": "Zugewiesen an",
     "subjectTypes": {
       "global": "Alle",
@@ -1180,7 +1214,7 @@
     },
     "sessionActionHint": "Was Geräte mit den offenen Sitzungen eines gesperrten Benutzers tun.",
     "breakGlass": "Notfallkonten",
-    "breakGlassHint": "Lokale Konten, eines pro Zeile, die Paddock nie einschränkt.",
+    "breakGlassHint": "Lokale Konten, eines pro Zeile, die Paddock nie einschränkt: nie durch eine Sperre abgewiesen, nie durch eine Aussetzung beendet, nie aus sudo entfernt. Tragen Sie die vorhandenen lokalen Administratoren eines Geräts ein, bevor Sie es registrieren; eine sudo-Gruppe ohne Notfallkonto behält ihre Mitglieder.",
     "notice": "Anmeldehinweis",
     "noticeHint": "Wird auf dem Anmeldebildschirm, auf Textkonsolen und vor SSH-Anmeldungen jedes Geräts angezeigt. Leer lassen für keinen Hinweis.",
     "privileges": "Rechte",
@@ -1431,7 +1465,8 @@
       "sudo_apply_failed": "sudo-Konfiguration fehlgeschlagen",
       "revocation_pending": "Sperre oder Vernichtung wartet",
       "revocation_expired": "Sperre oder Vernichtung abgelaufen",
-      "agent_rollback_pending": "Agent-Rücksetzung ausstehend"
+      "agent_rollback_pending": "Agent-Rücksetzung ausstehend",
+      "agent_not_running": "Agent läuft nicht"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1444,7 +1479,8 @@
       "sudo_apply_failed": "Gerät öffnen",
       "revocation_pending": "Gerät öffnen",
       "revocation_expired": "Gerät öffnen",
-      "agent_rollback_pending": "Gerät öffnen"
+      "agent_rollback_pending": "Gerät öffnen",
+      "agent_not_running": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {
@@ -1527,7 +1563,7 @@
       "securityOverdue": "Sicherheitsupdates überfällig",
       "rebootRequired": "Neustart erforderlich",
       "ofActive": "von {count} aktiven",
-      "silentNote": "davon {count} kritisch",
+      "silentNote": "{count, number} seit mehr als 15 Minuten ohne Kontakt, {critical, number} kritisch",
       "presumedLostNote": "außer Betrieb nehmen, sperren oder behalten",
       "notEncryptedNote": "{partial} teilweise · {notReported} nicht gemeldet",
       "securityOverdueNote": "kein erfolgreicher Lauf in 48 h",

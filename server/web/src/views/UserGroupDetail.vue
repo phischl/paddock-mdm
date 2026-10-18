@@ -11,8 +11,10 @@ import { addMember, deleteUserGroup, getUserGroup, removeMember, renameUserGroup
 import { allUsers, listGroupMembers, userFilters } from '../lib/users'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const route = useRoute()
 const router = useRouter()
 const confirm = useConfirm()
@@ -126,7 +128,9 @@ async function onDelete(): Promise<void> {
             v-if="session.canDelete"
             color="error"
             data-testid="delete-user-group"
-            @click="onDelete"
+            :loading="pending"
+            :disabled="pending"
+            @click="run(onDelete)"
           >
             {{ t('common.delete') }}
           </v-btn>
@@ -162,7 +166,7 @@ async function onDelete(): Promise<void> {
         v-if="session.canWrite && local"
         class="form groups-form"
         novalidate
-        @submit.prevent="add"
+        @submit.prevent="run(add)"
       >
         <v-autocomplete
           v-model="newMember"
@@ -173,8 +177,9 @@ async function onDelete(): Promise<void> {
         <div class="form-actions">
           <v-btn
             type="submit"
+            :loading="pending"
+            :disabled="pending || !newMember"
             color="primary"
-            :disabled="!newMember"
             data-testid="add-member-submit"
           >
             {{ t('userGroups.add') }}
@@ -204,7 +209,9 @@ async function onDelete(): Promise<void> {
             :aria-label="t('userGroups.removeLabel', { username: item.username })"
             color="error"
             size="small"
-            @click="remove(item)"
+            :loading="pending"
+            :disabled="pending"
+            @click="run(() => remove(item))"
           >
             {{ t('userGroups.remove') }}
           </v-btn>
@@ -222,7 +229,7 @@ async function onDelete(): Promise<void> {
           <form
             class="form"
             novalidate
-            @submit.prevent="rename"
+            @submit.prevent="run(rename)"
           >
             <v-text-field
               id="rename-group"
@@ -240,6 +247,8 @@ async function onDelete(): Promise<void> {
               </v-btn>
               <v-btn
                 type="submit"
+                :loading="pending"
+                :disabled="pending"
                 color="primary"
               >
                 {{ t('common.save') }}

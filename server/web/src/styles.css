@@ -22,7 +22,10 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 
 /* App bar and navigation drawer. */
 .brand .app-name { font-weight: 600; }
-.brand .org-name { margin-left: 0.75rem; font-size: 13px; font-weight: 400; color: var(--pd-text-secondary); }
+.brand .org-name {
+  margin-left: 0.75rem; font-size: 13px; font-weight: 400; color: var(--pd-text-secondary);
+  display: inline-block; max-width: 45vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+}
 .user-button { text-transform: none; letter-spacing: normal; }
 .user-button .v-avatar { font-weight: 600; }
 .user-button-name { margin-left: 0.5rem; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -56,7 +59,8 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 .form-error { color: var(--pd-status-critical-fg); font-weight: 600; }
 .form-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
 .filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; }
-.filters .v-input { flex: 0 1 14rem; }
+/* A filter's hint shows below it while it has the focus; the other filters keep their place. */
+.filters .v-input { flex: 0 1 14rem; align-self: flex-start; }
 
 .table { margin-bottom: 0.75rem; }
 .list-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }

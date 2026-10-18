@@ -33,7 +33,7 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 	secretKey := l.SecretFile("PADDOCK_BUNDLES_S3_SECRET_KEY_FILE")
 	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
 	visudo := l.String("PADDOCK_VISUDO", "/usr/sbin/visudo")
-	himmelblau := l.String("PADDOCK_HIMMELBLAU_VERSION", "4.0.4")
+	himmelblau := l.String("PADDOCK_HIMMELBLAU_VERSION", "4.0.6")
 	revocationEnabled := config.RevocationEnabled(l)
 	// fleetd enrollment of v2 bundles (plan M5a decision 4); without both, bundles have no inventory section.
 	fleetURL := l.String("PADDOCK_FLEET_PUBLIC_URL", "")
@@ -50,7 +50,7 @@ func serveCompiler(ctx context.Context, l *config.Loader, common config.Common) 
 		return err
 	}
 	if !bundle.ValidHimmelblauVersion(himmelblau) {
-		return fmt.Errorf("PADDOCK_HIMMELBLAU_VERSION %q is not a release number such as 4.0.4", himmelblau)
+		return fmt.Errorf("PADDOCK_HIMMELBLAU_VERSION %q is not a release number such as 4.0.6", himmelblau)
 	}
 	// Every sudo entry is checked with visudo before signing (plan M3a decision 16); without it the compiler must
 	// not run.

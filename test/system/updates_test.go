@@ -21,11 +21,11 @@ func TestUpdatesGates(t *testing.T) {
 		// never unmasks a timer itself: a masked timer is the device owner's decision and reported as an error.
 		vm.Must("sudo systemctl unmask apt-daily.timer apt-daily-upgrade.timer")
 		d := Install(t, s, vm, debDir(s))
-		if !t.Run("U1 holds", func(t *testing.T) { gateU1(t, d) }) {
+		if !t.Run("U1 holds", func(t *testing.T) { d.Bind(t); gateU1(t, d) }) {
 			t.FailNow()
 		}
-		t.Run("U2 install now", func(t *testing.T) { gateU2(t, d) })
-		t.Run("U3 scheduled runs", func(t *testing.T) { gateU3(t, d) })
+		t.Run("U2 install now", func(t *testing.T) { d.Bind(t); gateU2(t, d) })
+		t.Run("U3 scheduled runs", func(t *testing.T) { d.Bind(t); gateU3(t, d) })
 	})
 }
 

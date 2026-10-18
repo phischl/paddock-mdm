@@ -19,8 +19,10 @@ import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '.
 import { allUserGroups } from '../lib/userGroups'
 import { allUsers } from '../lib/users'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 const { t, locale } = useI18n()
+const { pending, run } = usePending()
 const route = useRoute()
 const router = useRouter()
 const confirm = useConfirm()
@@ -275,11 +277,17 @@ async function unassign(a: ProfileAssignment): Promise<void> {
       </v-table>
 
       <h2>{{ t('profiles.assignments') }}</h2>
+      <p
+        class="summary"
+        data-testid="assign-hint"
+      >
+        {{ t('profiles.assignHint') }}
+      </p>
       <form
         v-if="session.canWrite"
         class="form assign-form"
         novalidate
-        @submit.prevent="assign"
+        @submit.prevent="run(assign)"
       >
         <v-select
           v-model="subjectType"
@@ -311,6 +319,8 @@ async function unassign(a: ProfileAssignment): Promise<void> {
         <div class="form-actions">
           <v-btn
             type="submit"
+            :loading="pending"
+            :disabled="pending"
             color="primary"
             data-testid="assign-submit"
           >
@@ -369,7 +379,8 @@ async function unassign(a: ProfileAssignment): Promise<void> {
             }"
             :submit-label="t('common.save')"
             :problem="editProblem"
-            @submit="onEdit"
+            :pending="pending"
+            @submit="run(() => onEdit($event))"
             @cancel="editOpen = false"
           />
         </v-card-text>

@@ -38,6 +38,8 @@ const (
 type stepUpState struct {
 	loginState
 	Session Session `json:"session"`
+	// Started is the step-up's start (unix); its ID token must have authenticated no earlier (checkStepUp).
+	Started int64 `json:"started"`
 }
 
 func stepUpCookie(value string, maxAge int) *http.Cookie {
@@ -91,10 +93,11 @@ func (b *bff) stepUpStart(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteProblem(w, r, problem.UpstreamUnavailable.WithDetail("identity provider not reachable"))
 		return
 	}
+	now := b.now()
 	st := stepUpState{loginState: loginState{
 		State: randomToken(), Verifier: oauth2.GenerateVerifier(), Nonce: randomToken(), ReturnTo: returnTo,
-		Exp: b.now().Add(StepUpLifetime).Unix(),
-	}, Session: sess}
+		Exp: now.Add(StepUpLifetime).Unix(),
+	}, Session: sess, Started: now.Unix()}
 	value, err := b.keys.Seal(StepUpCookie, st)
 	if err != nil {
 		httpx.WriteProblem(w, r, err)
@@ -159,7 +162,7 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, raw, err := b.stepUpToken(r, st)
 	if err == nil {
-		err = checkStepUp(claims, st.Session, now, b.maxAuthAge)
+		err = checkStepUp(claims, st.Session, st.Started, now, b.maxAuthAge)
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "step-up rejected", "error", err, "account_id", st.Session.PID)
@@ -227,14 +230,22 @@ func (b *bff) stepUpToken(r *http.Request, st stepUpState) (stepUpClaims, string
 	return claims, raw, nil
 }
 
-// checkStepUp checks that the step-up authenticated the session's own user just now, with MFA.
-func checkStepUp(c stepUpClaims, sess Session, now time.Time, maxAuthAge time.Duration) error {
+// checkStepUp checks that the step-up authenticated the session's own user just now, after its start (unix), with
+// MFA.
+func checkStepUp(c stepUpClaims, sess Session, started int64, now time.Time, maxAuthAge time.Duration) error {
 	if c.Subject == "" || c.Subject != sess.Sub {
 		return errors.New("the step-up authenticated another user")
 	}
 	age := now.Sub(time.Unix(c.AuthTime, 0))
 	if c.AuthTime == 0 || age > maxAuthAge || age < -maxAuthAge {
 		return errors.New("auth_time missing or not fresh")
+	}
+	// Authentik skips the step-up flow and hands out the session's current login when an earlier forced login left
+	// its last_login_uid behind (providers/oauth2/views/authorize.py, lines 540-560 in 2026.8.3): prompt=login only
+	// re-authenticates when that key is unset or names the current login. Such a token predates the step-up; a cookie
+	// without a start time fails closed.
+	if started == 0 || c.AuthTime < started {
+		return errors.New("the step-up did not re-authenticate")
 	}
 	if !slices.Contains(c.AMR, "mfa") {
 		return errors.New("the step-up did not use MFA")

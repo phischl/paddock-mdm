@@ -9,6 +9,7 @@ import { getLocalAdmin, revealLocalAdmin, rotationOverdue } from '../lib/localAd
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /**
  * The managed local administrator of a device (plan M4a decision 20): state and generations, and
@@ -23,6 +24,7 @@ const emit = defineEmits<{ changed: [] }>()
 const hideAfter = 60
 
 const { t, locale } = useI18n()
+const { pending, run } = usePending()
 const router = useRouter()
 const confirm = useConfirm()
 const problemText = useProblemText()
@@ -95,10 +97,20 @@ async function copy(generation: number, password: string): Promise<void> {
 
 onMounted(async () => {
   await load()
-  await resume()
+  await run(resume)
 })
 onBeforeUnmount(hide)
 watch(() => props.refresh, load)
+
+// The active password row (plan M8x decision 37): a stored password that waits for the device is not "none".
+const activeText = computed(() => {
+  if (!state.value) return ''
+  if (state.value.active_generation !== null) return String(state.value.active_generation)
+  if (state.value.pending_generation !== null) {
+    return t('devices.localAdmin.pendingConfirmation', { generation: state.value.pending_generation })
+  }
+  return t('devices.localAdmin.none')
+})
 </script>
 
 <template>
@@ -158,7 +170,7 @@ watch(() => props.refresh, load)
               {{ t('devices.localAdmin.active') }}
             </dt>
             <dd data-testid="local-admin-active">
-              {{ state.active_generation ?? t('devices.localAdmin.none') }}
+              {{ activeText }}
             </dd>
           </div>
           <div v-if="state.pending_generation !== null">
@@ -185,6 +197,8 @@ watch(() => props.refresh, load)
             v-if="session.canDelete && state.active_generation !== null"
             color="error"
             data-testid="local-admin-reveal"
+            :loading="pending"
+            :disabled="pending"
             @click="reveal"
           >
             {{ t('devices.localAdmin.reveal.label') }}

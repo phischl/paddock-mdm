@@ -39,7 +39,10 @@
     },
     "shortcuts": "Keyboard shortcuts",
     "collapseNavigation": "Collapse the navigation",
-    "expandNavigation": "Expand the navigation"
+    "expandNavigation": "Expand the navigation",
+    "stepUpValidUntil": "Identity confirmed until {time}",
+    "stepUpNone": "No current identity confirmation",
+    "stepUpChip": "Confirmed until {time}"
   },
   "nav": {
     "deviceGroups": "Device groups",
@@ -146,7 +149,8 @@
     "modeInvalid": "Enter four octal digits without special bits, for example 0644.",
     "ownerInvalid": "Owner and group are lowercase user and group names.",
     "contentTooLarge": "The content can have at most 64 KiB.",
-    "unitInvalid": "Enter a unit name ending in .service, .timer, .socket or .path."
+    "unitInvalid": "Enter a unit name ending in .service, .timer, .socket or .path.",
+    "domainsInvalid": "Enter lowercase DNS names, one per line, at most 20 without duplicates."
   },
   "problems": {
     "name_taken": "An item with this name already exists.",
@@ -169,7 +173,7 @@
     "invalid_command": "A command is not allowed: use an absolute path with optional arguments, without ALL, !, # and the characters , : = \\ ^ $ * ? [ ].",
     "setting_locked": "This setting cannot change any more: devices already use it.",
     "step_up_required": "Confirm your identity to continue.",
-    "step_up_failed": "The identity confirmation failed. Try again with your own account.",
+    "step_up_failed": "The identity confirmation failed. Try again with your own account. If you confirmed your identity less than a minute ago, wait a minute first.",
     "revocation_disabled": "Revocation is not enabled on this installation (pending acceptance).",
     "revocation_frozen": "You cannot request or approve revocations for 24 hours because you exceeded a revocation limit.",
     "revocation_rejected": "The revocation was rejected.",
@@ -396,6 +400,11 @@
     "createTitle": "New organization",
     "slug": "Slug",
     "status": "Status",
+    "domains": "Domains (one per line)",
+    "domainsHint": "Lowercase DNS names of the organization's users, for example example.org; the first is the primary domain of the device login. Without a domain, login management, the login component and the managed local administrator stay off.",
+    "editDomains": "Domains",
+    "editDomainsTitle": "Domains of {name}",
+    "createdWithoutDomains": "The organization was created, but its domains were not saved. Save them with \"Domains\" in the list.",
     "statuses": {
       "provisioning": "Provisioning",
       "active": "Active",
@@ -472,6 +481,13 @@
     "title": "Access denied",
     "not_authorized": "Your account is not authorized for the Paddock portal. Ask your administrator to add you to exactly one Paddock administrator group.",
     "login_failed": "The sign-in could not be completed.",
+    "mfa_required": "Your sign-in did not include a second factor. Sign in again: the portal asks for your password and your authenticator.",
+    "key_store_sealed": "The server's key store is sealed, so the portal cannot start sessions. An operator must unseal OpenBao (docs/operations/openbao.md, section 2). Devices keep working.",
+    "no_role": "Your account is not in any Paddock role group. Ask your administrator to add you to exactly one of the groups paddock.'<organization>'.admins, .operators or .auditors.",
+    "multiple_organizations": "Your account holds roles in several organizations. One account belongs to exactly one organization; ask your administrator to remove the other memberships or to create separate accounts.",
+    "multiple_roles": "Your account holds several roles in one organization (administrator, operator or auditor). Ask your administrator to keep exactly one of the memberships.",
+    "platform_and_organization": "This account holds platform and organization roles. By design one account is either a platform administrator or a member of one organization: use separate accounts, or ask your administrator to remove one of the memberships.",
+    "organization_inactive": "Your organization is not active. Ask a platform administrator.",
     "retry": "Sign in again"
   },
   "notFound": {
@@ -533,7 +549,7 @@
       "title": "Login",
       "agentTooOld": "The agent on this device is too old for login management: logins and sudo rights are not managed until it is updated.",
       "suspendedHint": "Directory logins are suspended on this device. Break-glass accounts still work.",
-      "assignmentHint": "Who may log in. Leave both empty to allow every user of the organization.",
+      "assignmentHint": "Only these directory users and groups can sign in on this device; permission profiles apply to them only, never to local accounts.",
       "users": "Users",
       "groups": "Groups",
       "saved": "Login assignment saved.",
@@ -585,6 +601,7 @@
       "active": "Active password",
       "pending": "Waiting for the device",
       "none": "none yet",
+      "pendingConfirmation": "none confirmed yet — password {generation, number} is stored and waits for the device's confirmation at its next check-in (within about 5 minutes)",
       "lastRotated": "Last rotation",
       "nextRotation": "Next rotation",
       "overdue": "The rotation is overdue: the device has not reached the server since it was due.",
@@ -717,6 +734,7 @@
     "presumedLost": "Presumed lost since {at}",
     "contact": {
       "ok": "Online",
+      "unseen": "No recent contact",
       "stale_warning": "Silent",
       "stale_critical": "Silent (critical)",
       "presumed_lost": "Presumed lost",
@@ -742,6 +760,7 @@
       }
     },
     "contactFilter": "Contact",
+    "contactHint": "Online: a check-in within the last 15 minutes. No recent contact: none for more than 15 minutes, below the silence threshold of the organization.",
     "pane": "Filter devices",
     "breadcrumb": "Breadcrumb",
     "header": {
@@ -805,6 +824,9 @@
     "group": "Add enrolled devices to",
     "noGroup": "No device group",
     "autoApprove": "Approve enrolled devices automatically",
+    "noDomainWarning": "This organization has no domain: its devices get no login management and no managed local administrator. Add the existing local administrator accounts of a device as break-glass accounts before you enroll it. Without a break-glass account in the sudo group, the agent keeps the present members and reports them; it removes them once a break-glass account or the managed local administrator is a member.",
+    "breakGlassHint": "Devices enrolled with this token keep only the managed local administrator ({username}) and the break-glass accounts in the sudo group; every other member is removed at the first apply and reported. Add the existing local administrators of a device as break-glass accounts before you enroll it.",
+    "breakGlassLink": "Break-glass accounts",
     "status": "Status",
     "statuses": {
       "active": "Active",
@@ -954,6 +976,9 @@
     "deleteLabel": "Delete {name}",
     "files": {
       "title": "Managed files",
+      "pathNonAscii": "The path contains characters outside ASCII. The device writes it as given; make sure the program that reads the file expects this name.",
+      "operatorRootsHint": "Operators create and change files only below the operator roots; every other path needs an organization administrator with a step-up.",
+      "operatorRootsLink": "Configure operator roots",
       "create": "Create managed file",
       "createTitle": "New managed file",
       "editTitle": "Edit managed file",
@@ -1009,6 +1034,9 @@
   },
   "users": {
     "title": "Users",
+    "noDomain": "No organization domain",
+    "noDomainDetail": "The username {username} does not end with one of the organization's domains ({domains}). The user cannot sign in on devices: the login component accepts name@domain only. Rename the user in the identity source, or let a platform administrator add the domain to the organization.",
+    "orgNoDomains": "This organization has no domain yet. Local users cannot be created and no user can sign in on devices until a platform administrator adds one under Platform → Organizations.",
     "create": "Create local user",
     "createTitle": "New local user",
     "editTitle": "Edit user",
@@ -1083,6 +1111,7 @@
   },
   "profiles": {
     "title": "Permission profiles",
+    "intro": "Permission profiles grant sudo rights to directory users who sign in on devices through the login component. They never apply to local accounts such as break-glass accounts or the managed local administrator. Which directory users may sign in on a device is set on the device's Access tab.",
     "create": "Create profile",
     "createTitle": "New permission profile",
     "editTitle": "Edit permission profile",
@@ -1102,6 +1131,10 @@
     "commandsHint": "One absolute command per line, with optional arguments.",
     "commandsRequired": "Enter at least one command.",
     "requirePassword": "Ask for the password",
+    "requirePasswordHint": "When on, sudo asks the user to authenticate before the first command of a session and again after the timeout; when off, the commands run without a prompt. Keep it on except for profiles whose commands must run unattended.",
+    "fullPreview": "Class full grants root for every command. Saving needs an organization administrator with a fresh identity confirmation (step-up).",
+    "rootEquivalentPreview": "This profile grants root in effect through {commands}. Saving needs an organization administrator with a fresh identity confirmation (step-up).",
+    "rootEquivalentPair": "{writer} together with {command}: the first writes what the second runs.",
     "timeout": "Password remembered for (minutes)",
     "timeoutInvalid": "Enter 0 to 60 minutes.",
     "lecture": "Lecture",
@@ -1125,6 +1158,7 @@
     "scalars": "Settings",
     "scalarFacts": "Password asked: {password, select, true {yes} other {no}}; remembered for {timeout, number} min; lecture: {lecture}",
     "assignments": "Assignments",
+    "assignHint": "Assignments target directory users and user groups; local accounts of the device are never affected.",
     "subjectType": "Assigned to",
     "subjectTypes": {
       "global": "Everyone",
@@ -1180,7 +1214,7 @@
     },
     "sessionActionHint": "What devices do with the open sessions of a locked user.",
     "breakGlass": "Break-glass accounts",
-    "breakGlassHint": "Local accounts, one per line, that Paddock never restricts.",
+    "breakGlassHint": "Local accounts, one per line, that Paddock never restricts: never denied by a lock, never ended by a suspension, never removed from sudo. Add the existing local administrators of a device before you enroll it; a sudo group without a break-glass account keeps its members.",
     "notice": "Login notice",
     "noticeHint": "Shown at the login screen, on text consoles and before SSH logins of every device. Leave empty for no notice.",
     "privileges": "Privileges",
@@ -1431,7 +1465,8 @@
       "sudo_apply_failed": "Sudo configuration failed",
       "revocation_pending": "Lock or Destroy waiting",
       "revocation_expired": "Lock or Destroy expired",
-      "agent_rollback_pending": "Agent rollback pending"
+      "agent_rollback_pending": "Agent rollback pending",
+      "agent_not_running": "Agent not running"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1444,7 +1479,8 @@
       "sudo_apply_failed": "Open device",
       "revocation_pending": "Open device",
       "revocation_expired": "Open device",
-      "agent_rollback_pending": "Open device"
+      "agent_rollback_pending": "Open device",
+      "agent_not_running": "Open device"
     },
     "more": "+{count}",
     "empty": {
@@ -1527,7 +1563,7 @@
       "securityOverdue": "Security updates overdue",
       "rebootRequired": "Reboot required",
       "ofActive": "of {count} active",
-      "silentNote": "{count} of them critical",
+      "silentNote": "{count, number} without contact for more than 15 minutes, {critical, number} critical",
       "presumedLostNote": "retire, lock or keep",
       "notEncryptedNote": "{partial} partial · {notReported} not reported",
       "securityOverdueNote": "no successful run in 48 h",

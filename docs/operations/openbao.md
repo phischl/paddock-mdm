@@ -79,7 +79,7 @@ the stored shares.
 
 | Function | Effect while sealed |
 | --- | --- |
-| Portal login and sessions | `api` cannot load the session keys after its own restart; it stays not ready (`/readyz` 503) until OpenBao is unsealed. A running `api` keeps the keys it loaded and keeps working; key reloads (every 10 min) fail and are logged. |
+| Portal login and sessions | `api` cannot load the session keys after its own restart; it stays not ready (`/readyz` 503) until OpenBao is unsealed: the sign-in page shows *The server's key store is sealed* until OpenBao is unsealed; `./paddock up` names the reason in its timeout line. A running `api` keeps the keys it loaded and keeps working; key reloads (every 10 min) fail and are logged. |
 | Bundles and commands | The compiler cannot sign new bundles and the worker cannot sign new commands; devices keep their last bundle and receive commands once OpenBao is unsealed (commands that expired meanwhile are never delivered). |
 | Daily audit seal | The sealer cannot sign; the 00:15 UTC run fails (`paddock_audit_seal_total{result="error"}`) and catches up on the next successful run, because it seals every unsealed day up to yesterday. |
 | Audit event ingestion | Continues: the audit writer needs OpenBao only for signing and readiness. Events wait in RabbitMQ if the writer is restarted while OpenBao is sealed (it reports not ready but keeps consuming once running). |

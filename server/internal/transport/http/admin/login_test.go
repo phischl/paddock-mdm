@@ -15,9 +15,16 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 )
 
-// TestLoginDiscardsTheSessionOfAFailedLogin: when a login fails after its session record was created (here: the
-// browser goes away while the login commits), the record is deleted, also though the request's context ended.
-func TestLoginDiscardsTheSessionOfAFailedLogin(t *testing.T) {
+// loginWorld is the portal login against a fake identity provider.
+type loginWorld struct {
+	t    *testing.T
+	e    *env
+	idp  *fakeStepUpIdP
+	slug string // slug of acme
+}
+
+func newLoginWorld(t *testing.T, deps func(*admin.Deps)) *loginWorld {
+	t.Helper()
 	idp := newFakeStepUpIdP(t)
 	oidc := admin.NewOIDC(admin.OIDCConfig{Issuer: idp.URL, ClientID: "paddock-portal", ClientSecret: "s",
 		PublicURL: "https://admin.test", RedirectPath: "/api/auth/callback"})
@@ -27,37 +34,69 @@ func TestLoginDiscardsTheSessionOfAFailedLogin(t *testing.T) {
 	if !oidc.Ready() {
 		t.Fatal("discovery failed")
 	}
-	e := newEnvWith(t, func(d *admin.Deps) { d.OIDC = oidc })
-	var slug string
-	if err := e.super.QueryRow(context.Background(), "SELECT slug FROM organization WHERE id = $1", e.acme).Scan(&slug); err != nil {
+	e := newEnvWith(t, func(d *admin.Deps) {
+		d.OIDC = oidc
+		if deps != nil {
+			deps(d)
+		}
+	})
+	w := &loginWorld{t: t, e: e, idp: idp}
+	if err := e.super.QueryRow(context.Background(), "SELECT slug FROM organization WHERE id = $1", e.acme).Scan(&w.slug); err != nil {
 		t.Fatal(err)
 	}
+	return w
+}
 
-	login := func(ctx context.Context) *httptest.ResponseRecorder {
-		t.Helper()
-		start := httptest.NewRecorder()
-		e.handler.ServeHTTP(start, httptest.NewRequest(http.MethodGet, "https://admin.test/api/auth/login?return_to=%2F", nil))
-		loc, err := url.Parse(start.Header().Get("Location"))
-		if start.Code != http.StatusFound || err != nil {
-			t.Fatalf("login start: %d %v", start.Code, err)
-		}
-		idp.mu.Lock()
-		idp.claims = map[string]any{"aud": "paddock-portal", "sub": "sub-" + uuid.NewString(), "preferred_username": "erin@acme.test",
-			"groups": []string{organization.RoleGroup(slug, organization.GroupAdmins)}}
-		idp.nonce = loc.Query().Get("nonce")
-		idp.mu.Unlock()
-		req := httptest.NewRequestWithContext(ctx, http.MethodGet,
-			"https://admin.test/api/auth/callback?code=c&state="+url.QueryEscape(loc.Query().Get("state")), nil)
-		for _, c := range start.Result().Cookies() {
-			req.AddCookie(c)
-		}
-		rec := httptest.NewRecorder()
-		e.handler.ServeHTTP(rec, req)
-		return rec
+// start runs GET /api/auth/login and returns the response.
+func (w *loginWorld) start() *httptest.ResponseRecorder {
+	w.t.Helper()
+	start := httptest.NewRecorder()
+	w.e.handler.ServeHTTP(start, httptest.NewRequest(http.MethodGet, "https://admin.test/api/auth/login?return_to=%2F", nil))
+	return start
+}
+
+// login runs the authorization code flow; the identity provider issues an ID token with claims.
+func (w *loginWorld) login(ctx context.Context, claims map[string]any) *httptest.ResponseRecorder {
+	w.t.Helper()
+	start := w.start()
+	loc, err := url.Parse(start.Header().Get("Location"))
+	if start.Code != http.StatusFound || err != nil {
+		w.t.Fatalf("login start: %d %v", start.Code, err)
 	}
+	w.idp.mu.Lock()
+	w.idp.claims = claims
+	w.idp.nonce = loc.Query().Get("nonce")
+	w.idp.mu.Unlock()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet,
+		"https://admin.test/api/auth/callback?code=c&state="+url.QueryEscape(loc.Query().Get("state")), nil)
+	for _, c := range start.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	w.e.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+// adminClaims are the claims of an organization administrator of acme; amr names the authentication methods (nil
+// leaves the claim out).
+func (w *loginWorld) adminClaims(username string, amr []string) map[string]any {
+	c := map[string]any{"aud": "paddock-portal", "sub": "sub-" + uuid.NewString(), "preferred_username": username,
+		"groups": []string{organization.RoleGroup(w.slug, organization.GroupAdmins)}}
+	if amr != nil {
+		c["amr"] = amr
+	}
+	return c
+}
+
+// TestLoginDiscardsTheSessionOfAFailedLogin: when a login fails after its session record was created (here: the
+// browser goes away while the login commits), the record is deleted, also though the request's context ended.
+func TestLoginDiscardsTheSessionOfAFailedLogin(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	e := w.e
 
 	// The login works and leaves exactly its record.
-	if res := login(context.Background()); res.Code != http.StatusFound || cookieOf(res, admin.SessionCookie) == nil {
+	if res := w.login(context.Background(), w.adminClaims("erin@acme.test", []string{"pwd", "mfa"})); res.Code != http.StatusFound ||
+		cookieOf(res, admin.SessionCookie) == nil {
 		t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
 	}
 	before := len(e.sessions.records)
@@ -66,7 +105,7 @@ func TestLoginDiscardsTheSessionOfAFailedLogin(t *testing.T) {
 	created := false
 	// The browser goes away after the record exists, so the login cannot commit.
 	e.sessions.afterCreate = func() { created = true; gone() }
-	res := login(ctx)
+	res := w.login(ctx, w.adminClaims("erin@acme.test", []string{"pwd", "mfa"}))
 	e.sessions.afterCreate = nil
 	if !created {
 		t.Fatal("the failed login never created its session record")
@@ -76,5 +115,120 @@ func TestLoginDiscardsTheSessionOfAFailedLogin(t *testing.T) {
 	}
 	if after := len(e.sessions.records); after != before {
 		t.Fatalf("%d session records after the failed login, want %d", after, before)
+	}
+}
+
+// TestLoginStartsWithoutPrompt: the authorize request carries no prompt. With prompt=login Authentik remembers the
+// login it forced away and then skips the flow of the next step-up; an existing Authentik session may satisfy the
+// sign-in, and TestLoginRefusesATokenWithoutMFA keeps one without a second factor out.
+func TestLoginStartsWithoutPrompt(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	start := w.start()
+	loc, err := url.Parse(start.Header().Get("Location"))
+	if start.Code != http.StatusFound || err != nil || !strings.HasPrefix(loc.String(), w.idp.URL+"/authorize") ||
+		loc.Query().Has("prompt") || loc.Query().Has("max_age") {
+		t.Fatalf("login start: %d %s", start.Code, start.Header().Get("Location"))
+	}
+}
+
+// TestLoginRefusesATokenWithoutMFA: an ID token without "mfa" in amr is refused with mfa_required and exactly one
+// audited denial naming the user; with "mfa" the session starts; the development switch lets a token without it pass
+// (plan M8x decisions 2, 3 and 7b).
+func TestLoginRefusesATokenWithoutMFA(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	ctx := context.Background()
+	events := func(username string) (n int, outcome, errCode, reason string) {
+		t.Helper()
+		if err := w.e.super.QueryRow(ctx, `SELECT count(*), coalesce(max(outcome), ''), coalesce(max(error_code), ''),
+			coalesce(max(params->>'reason'), '') FROM action WHERE code = 'admin.login' AND actor->>'display' = $1`,
+			username).Scan(&n, &outcome, &errCode, &reason); err != nil {
+			t.Fatal(err)
+		}
+		return n, outcome, errCode, reason
+	}
+
+	for name, amr := range map[string][]string{"no amr": nil, "password only": {"pwd"}} {
+		t.Run(name, func(t *testing.T) {
+			username := "mfa-" + uuid.NewString() + "@acme.test"
+			before := len(w.e.sessions.records)
+			res := w.login(ctx, w.adminClaims(username, amr))
+			if res.Code != http.StatusFound || res.Header().Get("Location") != "/login-denied?reason=mfa_required" {
+				t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+			}
+			if cookieOf(res, admin.SessionCookie) != nil {
+				t.Fatal("session cookie set without a second factor")
+			}
+			if after := len(w.e.sessions.records); after != before {
+				t.Fatalf("%d session records, want %d", after, before)
+			}
+			if n, outcome, errCode, reason := events(username); n != 1 || outcome != "denied" || errCode != "mfa_required" ||
+				reason != "mfa_required" {
+				t.Fatalf("audit: %d events, outcome %q, error code %q, reason %q", n, outcome, errCode, reason)
+			}
+		})
+	}
+
+	t.Run("with mfa", func(t *testing.T) {
+		res := w.login(ctx, w.adminClaims("mfa-"+uuid.NewString()+"@acme.test", []string{"pwd", "mfa"}))
+		if res.Code != http.StatusFound || res.Header().Get("Location") != "/" || cookieOf(res, admin.SessionCookie) == nil {
+			t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+		}
+	})
+
+	t.Run("development switch", func(t *testing.T) {
+		dev := newLoginWorld(t, func(d *admin.Deps) { d.LoginMFAOptional = true })
+		res := dev.login(ctx, dev.adminClaims("mfa-"+uuid.NewString()+"@acme.test", nil))
+		if res.Code != http.StatusFound || res.Header().Get("Location") != "/" || cookieOf(res, admin.SessionCookie) == nil {
+			t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+		}
+	})
+}
+
+// TestLoginDeniedNamesTheReason: a refused login names why on /login-denied and in the audit param denial_reason
+// (plan M8x decision 31).
+func TestLoginDeniedNamesTheReason(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	ctx := context.Background()
+	mfa := []string{"pwd", "mfa"}
+	cases := map[string][]string{
+		"no_role":                   {"staff"},
+		"multiple_organizations":    {organization.RoleGroup(w.slug, organization.GroupAdmins), organization.RoleGroup("globex", organization.GroupAdmins)},
+		"multiple_roles":            {organization.RoleGroup(w.slug, organization.GroupAdmins), organization.RoleGroup(w.slug, organization.GroupAuditors)},
+		"platform_and_organization": {organization.PlatformAdminsGroup(), organization.RoleGroup(w.slug, organization.GroupAdmins)},
+		"organization_inactive":     {organization.RoleGroup("gone-"+uuid.NewString()[:8], organization.GroupAdmins)},
+	}
+	for reason, groups := range cases {
+		t.Run(reason, func(t *testing.T) {
+			username := "denied-" + uuid.NewString() + "@acme.test"
+			claims := w.adminClaims(username, mfa)
+			claims["groups"] = groups
+			res := w.login(ctx, claims)
+			if res.Code != http.StatusFound || res.Header().Get("Location") != "/login-denied?reason="+reason ||
+				cookieOf(res, admin.SessionCookie) != nil {
+				t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+			}
+			var n int
+			var outcome, param string
+			if err := w.e.super.QueryRow(ctx, `SELECT count(*), coalesce(max(outcome), ''), coalesce(max(params->>'denial_reason'), '')
+				FROM action WHERE code = 'admin.login' AND actor->>'display' = $1`, username).Scan(&n, &outcome, &param); err != nil {
+				t.Fatal(err)
+			}
+			if n != 1 || outcome != "denied" || param != reason {
+				t.Fatalf("audit: %d events, outcome %q, denial_reason %q", n, outcome, param)
+			}
+		})
+	}
+}
+
+// TestLoginNamesASealedKeyStore: while no session key is loaded (OpenBao sealed at the start) the sign-in and the
+// callback send the browser to /login-denied?reason=key_store_sealed instead of a 500 (plan M8x decision 28).
+func TestLoginNamesASealedKeyStore(t *testing.T) {
+	w := newLoginWorld(t, func(d *admin.Deps) { d.Keys = &admin.Keyring{} })
+	for _, path := range []string{"/api/auth/login?return_to=%2F", "/api/auth/callback?code=c&state=s"} {
+		rec := httptest.NewRecorder()
+		w.e.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://admin.test"+path, nil))
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login-denied?reason=key_store_sealed" {
+			t.Fatalf("%s: %d %q", path, rec.Code, rec.Header().Get("Location"))
+		}
 	}
 }

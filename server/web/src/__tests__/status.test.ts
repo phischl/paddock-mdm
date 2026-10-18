@@ -13,12 +13,13 @@ const resolve = (key: string): unknown => key.split('.').reduce<unknown>((o, k) 
 
 // Every enum value is listed, so a new value fails to compile here before it can slip through a mapping.
 const deviceStates = ['pending', 'active', 'rejected', 'quarantined', 'retired'] as const satisfies readonly DeviceState[]
-const contacts = ['never', 'ok', 'stale_warning', 'stale_critical', 'presumed_lost'] as const satisfies readonly DeviceContact[]
+const contacts = ['never', 'ok', 'unseen', 'stale_warning', 'stale_critical', 'presumed_lost'] as const satisfies readonly DeviceContact[]
 const diskStates = ['not_encrypted', 'unmanaged', 'tpm_missing', 'tpm_pin_missing', 'escrow_pending', 'compliant'] as const satisfies readonly DiskState[]
 const outcomes = ['success', 'failure', 'denied', 'unknown'] as const satisfies readonly AuditOutcome[]
 const kinds = [
   'stale_warning', 'stale_critical', 'presumed_lost', 'quarantined', 'disk_not_compliant', 'agent_outdated', 'login_apply_failed',
   'sudo_apply_failed', 'revocation_pending', 'revocation_expired', 'agent_rollback_pending',
+  'agent_not_running',
 ] as const satisfies readonly AttentionKind[]
 const commands = ['pending', 'delivered', 'succeeded', 'failed', 'expired', 'cancelled'] as const satisfies readonly DeviceCommandStatus[]
 const revocations = ['requested', 'approved', 'issued', 'delivered', 'confirmed', 'failed', 'rejected', 'cancelled', 'expired'] as const satisfies readonly RevocationStatus[]
@@ -28,7 +29,7 @@ describe('status mappings (plan M7c decision 19)', () => {
   it('maps every device state and contact, the contact only for active devices', () => {
     const want: Record<DeviceContact, [Status, string]> = {
       presumed_lost: ['critical', 'Presumed lost'], stale_critical: ['critical', 'Silent (critical)'], stale_warning: ['warn', 'Silent'],
-      never: ['neutral', 'Never contacted'], ok: ['ok', 'Online'],
+      never: ['neutral', 'Never contacted'], ok: ['ok', 'Online'], unseen: ['warn', 'No recent contact'],
     }
     for (const contact of contacts) {
       const v = deviceStatus({ state: 'active', contact })
@@ -67,7 +68,7 @@ describe('status mappings (plan M7c decision 19)', () => {
     const kindStatus: Record<AttentionKind, Status> = {
       presumed_lost: 'critical', stale_critical: 'critical', quarantined: 'critical', revocation_expired: 'critical',
       stale_warning: 'warn', disk_not_compliant: 'warn', agent_outdated: 'warn', login_apply_failed: 'warn', sudo_apply_failed: 'warn',
-      agent_rollback_pending: 'warn', revocation_pending: 'info',
+      agent_rollback_pending: 'warn', agent_not_running: 'warn', revocation_pending: 'info',
     }
     for (const kind of kinds) {
       expect(attentionStatus(kind), kind).toEqual({ status: kindStatus[kind], label: 'attention.kinds.' + kind })

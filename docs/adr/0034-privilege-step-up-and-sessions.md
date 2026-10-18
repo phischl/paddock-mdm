@@ -162,8 +162,20 @@ bundle, so a server that stops shipping denied files must not reach devices befo
 
 ## Amendment 2026-10-17 (M8x, lab finding L9 / PDK-202) — second factor at login
 The login callback applies the step-up's rule to the sign-in itself: an ID token whose `amr` lacks `mfa` is refused
-(`admin.login` denied, error code `mfa_required`) and the portal requests `prompt=login`, so the SSO session of
-another flow never signs an administrator in. The development stack, whose login flow skips the validation stage,
-sets `PADDOCK_LOGIN_MFA_OPTIONAL=true` for the api; the variable is refused outside `PADDOCK_ENV=development` and
-is a production-check finding like `PADDOCK_STEPUP_*`. The portal exposes `step_up_valid_until` in `GET /api/v1/me`
-so that an administrator sees how long the current step-up satisfies privileged actions.
+(`admin.login` denied, error code `mfa_required`); an existing Authentik session satisfies the portal sign-in only
+with such a token (the brand's authentication flow and the default-flow MFA stage of ADR 0007 make every session
+carry one). The development stack, whose login flow skips the validation stage, sets
+`PADDOCK_LOGIN_MFA_OPTIONAL=true` for the api; the variable is refused outside `PADDOCK_ENV=development` and is a
+production-check finding like `PADDOCK_STEPUP_*`. The portal exposes `step_up_valid_until` in `GET /api/v1/me` so
+that an administrator sees how long the current step-up satisfies privileged actions.
+
+## Amendment 2026-10-17 (M8x, CI of PR #82) — step-up `auth_time` must not precede the step-up start
+The portal login briefly requested `prompt=login`. Authentik 2026.8.3 honours `prompt=login` through the session
+key `authentik/providers/oauth2/last_login_uid` (`authorize.py` 540–560) and never clears it: after a forced
+re-login, the next step-up's `prompt=login` found the stale key and a login event younger than `max_age`, and
+Authentik issued the step-up token for that login event without running `paddock-stepup` — a silent step-up pass
+within 60 s of a portal login that skipped the WebAuthn-only factor (and a login flow that ran twice on a fresh
+browser). Decisions: (A) the portal login sends no `prompt` (ADR 0007 amendment of the same date); (B) the step-up
+callback refuses an ID token whose `auth_time` is missing or earlier than the step-up start, compared in whole
+seconds (`auth_time >= started_at`), next to the existing subject, `max_age` and `amr` checks. (B) holds whatever
+Authentik does with `prompt`: a token for a login event older than the step-up start never satisfies a step-up.

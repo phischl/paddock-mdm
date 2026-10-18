@@ -5,47 +5,97 @@ import DataList from '../components/DataList.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import type { Organization } from '../api/client'
-import { createOrganization, listOrganizations, organizationFilters } from '../lib/organizations'
-import { hasErrors, validateOrganization } from '../lib/validation'
+import { createOrganization, listOrganizations, organizationFilters, updateOrganizationDomains } from '../lib/organizations'
+import { hasErrors, parseDomains, validateDomains, validateOrganization } from '../lib/validation'
 import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { organizationStatus } from '../lib/status'
+import { usePending } from '../composables/usePending'
 
 const { t } = useI18n()
+const { pending, run } = usePending()
 const problemText = useProblemText()
 const list = ref<{ reload: () => Promise<void> } | null>(null)
 
 const open = ref(false)
 const slug = ref('')
 const name = ref('')
+const domains = ref('')
 const touched = ref(false)
 const problem = ref('')
+// Set when the organization exists but the PATCH of its domains failed (plan M8x decision 21).
+const domainsNotSaved = ref(false)
 const errors = computed(() => validateOrganization(slug.value, name.value))
 const slugError = computed(() => (touched.value && errors.value.slug ? t(errors.value.slug) : ''))
 const nameError = computed(() => (touched.value && errors.value.name ? t(errors.value.name) : ''))
+const domainsError = computed(() => {
+  const key = validateDomains(domains.value)
+  return touched.value && key ? t(key) : ''
+})
+
+// The domains dialog of one row.
+const editing = ref<Organization | null>(null)
+const editDomains = ref('')
+const editTouched = ref(false)
+const editProblem = ref('')
+const editError = computed(() => {
+  const key = validateDomains(editDomains.value)
+  return editTouched.value && key ? t(key) : ''
+})
 
 const columns: ListColumn[] = [
   { key: 'slug', title: 'organizations.slug', sortable: true },
   { key: 'name', title: 'common.name', sortable: true },
+  { key: 'domains', title: 'organizations.editDomains' },
   { key: 'status', title: 'organizations.status', sortable: true },
   { key: 'created_at', title: 'common.createdAt', sortable: true },
+  { key: 'actions', title: 'common.actions' },
 ]
 
 function openCreate(): void {
   slug.value = ''
   name.value = ''
+  domains.value = ''
   touched.value = false
   problem.value = ''
+  domainsNotSaved.value = false
   open.value = true
 }
 
 async function submit(): Promise<void> {
   touched.value = true
-  if (hasErrors(errors.value)) return
-  problem.value = (await createOrganization(slug.value, name.value)) ?? ''
+  if (hasErrors(errors.value) || validateDomains(domains.value)) return
+  problem.value = ''
+  domainsNotSaved.value = false
+  const res = await createOrganization(slug.value, name.value)
+  if (typeof res === 'string') {
+    problem.value = res
+  } else if (parseDomains(domains.value).length > 0) {
+    const failed = await updateOrganizationDomains(res.id, parseDomains(domains.value))
+    if (failed) {
+      problem.value = failed
+      domainsNotSaved.value = true
+    }
+  }
   // A failed provisioning still stores the organization (status provisioning_failed).
   void list.value?.reload()
   if (!problem.value) open.value = false
+}
+
+function openDomains(org: Organization): void {
+  editing.value = org
+  editDomains.value = org.domains.join('\n')
+  editTouched.value = false
+  editProblem.value = ''
+}
+
+async function saveDomains(): Promise<void> {
+  editTouched.value = true
+  if (!editing.value || validateDomains(editDomains.value)) return
+  editProblem.value = (await updateOrganizationDomains(editing.value.id, parseDomains(editDomains.value))) ?? ''
+  if (editProblem.value) return
+  editing.value = null
+  void list.value?.reload()
 }
 </script>
 
@@ -55,6 +105,7 @@ async function submit(): Promise<void> {
       <h1>{{ t('organizations.title') }}</h1>
       <v-btn
         color="primary"
+        data-testid="create-organization"
         @click="openCreate"
       >
         {{ t('organizations.create') }}
@@ -82,6 +133,13 @@ async function submit(): Promise<void> {
           {{ t('organizations.create') }}
         </v-btn>
       </template>
+      <template #[`item.domains`]="{ item }: { item: Organization }">
+        <span
+          class="org-domains"
+          :title="item.domains.join(', ')"
+          :data-testid="'org-domains-text-' + item.slug"
+        >{{ item.domains.join(', ') }}</span>
+      </template>
       <template #[`item.status`]="{ item }: { item: Organization }">
         <StatusChip
           :status="organizationStatus(item.status).status"
@@ -90,6 +148,16 @@ async function submit(): Promise<void> {
       </template>
       <template #[`item.created_at`]="{ item }: { item: Organization }">
         <TimeCell :iso="item.created_at" />
+      </template>
+      <template #[`item.actions`]="{ item }: { item: Organization }">
+        <v-btn
+          size="small"
+          variant="tonal"
+          :data-testid="'org-domains-' + item.slug"
+          @click="openDomains(item)"
+        >
+          {{ t('organizations.editDomains') }}
+        </v-btn>
       </template>
     </DataList>
 
@@ -103,7 +171,7 @@ async function submit(): Promise<void> {
           <form
             class="form"
             novalidate
-            @submit.prevent="submit"
+            @submit.prevent="run(submit)"
           >
             <v-text-field
               id="org-slug"
@@ -121,13 +189,27 @@ async function submit(): Promise<void> {
               :error-messages="nameError ? [nameError] : []"
               :aria-invalid="!!nameError"
             />
-            <p
+            <v-textarea
+              id="org-domains"
+              v-model="domains"
+              :label="t('organizations.domains')"
+              :hint="t('organizations.domainsHint')"
+              persistent-hint
+              rows="2"
+              autocomplete="off"
+              :error-messages="domainsError ? [domainsError] : []"
+              :aria-invalid="!!domainsError"
+            />
+            <div
               v-if="problem"
               class="form-error"
               role="alert"
             >
-              {{ problemText(problem) }}
-            </p>
+              <p>{{ problemText(problem) }}</p>
+              <p v-if="domainsNotSaved">
+                {{ t('organizations.createdWithoutDomains') }}
+              </p>
+            </div>
             <div class="form-actions">
               <v-btn
                 type="button"
@@ -138,6 +220,8 @@ async function submit(): Promise<void> {
               </v-btn>
               <v-btn
                 type="submit"
+                :loading="pending"
+                :disabled="pending"
                 color="primary"
               >
                 {{ t('common.create') }}
@@ -147,5 +231,73 @@ async function submit(): Promise<void> {
         </v-card-text>
       </v-card>
     </v-dialog>
+
+    <v-dialog
+      :model-value="editing !== null"
+      max-width="32rem"
+      :aria-label="editing ? t('organizations.editDomainsTitle', { name: editing.name }) : ''"
+      @update:model-value="(v: boolean) => { if (!v) editing = null }"
+    >
+      <v-card
+        v-if="editing"
+        :title="t('organizations.editDomainsTitle', { name: editing.name })"
+      >
+        <v-card-text>
+          <form
+            class="form"
+            novalidate
+            @submit.prevent="run(saveDomains)"
+          >
+            <v-textarea
+              id="org-edit-domains"
+              v-model="editDomains"
+              :label="t('organizations.domains')"
+              :hint="t('organizations.domainsHint')"
+              persistent-hint
+              rows="2"
+              autocomplete="off"
+              :error-messages="editError ? [editError] : []"
+              :aria-invalid="!!editError"
+            />
+            <p
+              v-if="editProblem"
+              class="form-error"
+              role="alert"
+            >
+              {{ problemText(editProblem) }}
+            </p>
+            <div class="form-actions">
+              <v-btn
+                type="button"
+                variant="tonal"
+                @click="editing = null"
+              >
+                {{ t('common.cancel') }}
+              </v-btn>
+              <v-btn
+                type="submit"
+                :loading="pending"
+                :disabled="pending"
+                color="primary"
+                data-testid="save-domains"
+              >
+                {{ t('common.save') }}
+              </v-btn>
+            </div>
+          </form>
+        </v-card-text>
+      </v-card>
+    </v-dialog>
   </section>
 </template>
+
+<style scoped>
+.org-domains {
+  display: inline-block;
+  max-width: 20rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+</style>

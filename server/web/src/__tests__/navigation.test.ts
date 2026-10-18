@@ -35,8 +35,8 @@ vi.mock('../api/client', async (original) => {
 
 const admin: Me = {
   id: '00000000-0000-0000-0000-000000000001', username: 'alice@acme.test', display_name: 'Alice Admin',
-  role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme' },
-  locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7',
+  role: 'org_admin', organization: { id: '00000000-0000-0000-0000-0000000000aa', slug: 'acme', name: 'Acme', domains: ['acme.test'] },
+  locale: 'en', theme: 'system', revocation_enabled: false, client_ip: '198.51.100.7', step_up_valid_until: null,
 }
 
 let wrapper: VueWrapper | null = null
@@ -267,6 +267,18 @@ describe('navigation drawer', () => {
     expect(localStorage.getItem('paddock.navigation.collapsed')).toBe('false')
   })
 
+  it('gives every rail tooltip an accessible name before it is ever shown', async () => {
+    resize(1279)
+    const { w } = await mountApp()
+    const links = drawer(w).findAll('a.pd-nav-item')
+    expect(links.length).toBeGreaterThan(0)
+    for (const link of links) {
+      const tooltip = document.getElementById(link.attributes('aria-describedby')!)
+      expect(tooltip?.getAttribute('role')).toBe('tooltip')
+      expect(tooltip?.getAttribute('aria-label')).toBe(link.attributes('aria-label'))
+    }
+  })
+
   it('is a temporary drawer behind a hamburger button below 600 px', async () => {
     resize(599)
     const { w, router } = await mountApp()
@@ -340,6 +352,51 @@ describe('app bar', () => {
     await flushPromises()
     expect(localStorage.getItem('paddock.density')).toBe('comfortable')
     expect(document.documentElement.dataset.density).toBe('comfortable')
+  })
+})
+
+describe('app bar: organization name and step-up freshness (plan M8x decisions 34 and 35)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('names the whole organization name in the title of the shortened app bar entry', async () => {
+    const long = 'Acme Corporation of Very Long Names and Subsidiaries Worldwide'
+    const { w } = await mountApp({ ...admin, organization: { ...admin.organization!, name: long } })
+    const name = w.get('[data-testid="org-name"]')
+    expect(name.text()).toBe(long)
+    expect(name.attributes('title')).toBe(long)
+  })
+
+  it('gives the organization name tooltip an accessible name before it is ever shown', async () => {
+    const { w } = await mountApp()
+    const describedBy = w.get('[data-testid="org-name"]').attributes('aria-describedby')
+    const tooltip = document.getElementById(describedBy!)
+    expect(tooltip?.getAttribute('role')).toBe('tooltip')
+    expect(tooltip?.getAttribute('aria-label')).toBe('Acme')
+  })
+
+  it('shows no confirmation without a current step-up', async () => {
+    const { w } = await mountApp()
+    expect(w.find('[data-testid="stepup-chip"]').exists()).toBe(false)
+    await w.get('[data-testid="user-menu"]').trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="user-stepup"]')).not.toBeNull())
+    expect(document.querySelector('[data-testid="user-stepup"]')?.textContent?.trim()).toBe('No current identity confirmation')
+  })
+
+  it('shows the end of the step-up window and hides it at the expiry', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    vi.setSystemTime(new Date('2026-10-17T10:00:00Z'))
+    const until = '2026-10-17T10:00:05Z'
+    const time = new Intl.DateTimeFormat('en', { timeStyle: 'short' }).format(new Date(until))
+    expect(time).toMatch(/^\d{1,2}:\d{2}\s[AP]M$/)
+    const { w } = await mountApp({ ...admin, step_up_valid_until: until })
+    expect(w.get('[data-testid="stepup-chip"]').text()).toBe(`Confirmed until ${time}`)
+    await w.get('[data-testid="user-menu"]').trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="user-stepup"]')).not.toBeNull())
+    expect(document.querySelector('[data-testid="user-stepup"]')?.textContent?.trim()).toBe(`Identity confirmed until ${time}`)
+    vi.advanceTimersByTime(6000)
+    await flushPromises()
+    expect(w.find('[data-testid="stepup-chip"]').exists()).toBe(false)
+    expect(document.querySelector('[data-testid="user-stepup"]')?.textContent?.trim()).toBe('No current identity confirmation')
   })
 })
 

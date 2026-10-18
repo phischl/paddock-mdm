@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -211,6 +212,11 @@ func runHealthcheck(ctx context.Context, common config.Common) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		// The body names the reason (for example a sealed OpenBao); Docker shows it as the health check output.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		if reason := strings.TrimSpace(string(body)); reason != "" {
+			return fmt.Errorf("readyz: %s: %s", resp.Status, reason)
+		}
 		return fmt.Errorf("readyz: %s", resp.Status)
 	}
 	return nil

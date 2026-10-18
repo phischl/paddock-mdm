@@ -53,6 +53,20 @@ var himmelblauUnits = []string{"himmelblaud.service", "himmelblaud-tasks.service
 // UIDs of every device (plan M3b, answer to question 2).
 const himmelblauIDMapRange = "200000-999999999"
 
+// himmelblauCacheTimeout keeps Himmelblau's cached-user refresh from rotating the refresh token behind the Hello
+// PIN: Himmelblau 4.0.x re-seals the token only at a PIN login and presents the sealed one at the next, so a
+// background rotation deletes the Hello key (ADR 0019 amendment 2026-10-17). Equal to the provider's refresh
+// token validity (server/internal/adapters/authentik/devicelogin.go): the refresh can then only run when the
+// sealed token has expired anyway. Remove when the upstream fix is pinned.
+const himmelblauCacheTimeout = 2592000
+
+// himmelblauNoSudoGroup is Himmelblau's local_sudo_group, a group the agent never creates. Paddock alone owns sudo
+// (ADR 0008): Himmelblau's local-group task removes every account from local_sudo_group unless it is in an Entra
+// sudo group (sudo_groups, never rendered), and its periodic reconciliation did so every five minutes on the lab
+// device. Removal from a missing group is a no-op (getent fails first); an addition never happens without
+// sudo_groups (plan M8x decision 54).
+const himmelblauNoSudoGroup = "paddock-no-sudo"
+
 // restartWait bounds the wait for himmelblaud to become active after a restart.
 const restartWait = 30 * time.Second
 
@@ -615,7 +629,8 @@ func (l *Login) fileIs(path string, want []byte) bool {
 	return uid == 0 && gid == 0
 }
 
-// renderHimmelblauConf renders himmelblau.conf as in PoC M1 (plan M3b decision 7) plus the fixed idmap_range.
+// renderHimmelblauConf renders himmelblau.conf as in PoC M1 (plan M3b decision 7) plus the fixed local sudo group,
+// the disabled local-group reconciliation, idmap_range and cache_timeout. sudo_groups is never rendered.
 // pam_allow_groups is always written: empty denies everyone (suspension), a missing line would allow everyone.
 func renderHimmelblauConf(s bundle.LoginSpec) []byte {
 	h := s.Himmelblau
@@ -625,7 +640,9 @@ func renderHimmelblauConf(s bundle.LoginSpec) []byte {
 	b.WriteString(strings.TrimSpace("pam_allow_groups = "+strings.Join(h.PamAllowGroups, ",")) + "\n")
 	fmt.Fprintf(&b, "allow_console_password_only = false\nenable_hello = %t\nhello_pin_min_length = %d\nlocal_groups = users\n",
 		h.EnableHello, h.HelloPinMinLength)
+	fmt.Fprintf(&b, "local_sudo_group = %s\nlocal_groups_reconcile_interval = 0\n", himmelblauNoSudoGroup)
 	fmt.Fprintf(&b, "idmap_range = %s\n", himmelblauIDMapRange)
+	fmt.Fprintf(&b, "cache_timeout = %d\n", himmelblauCacheTimeout)
 	return b.Bytes()
 }
 

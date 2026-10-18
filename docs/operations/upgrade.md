@@ -18,6 +18,11 @@ once and asks for one security review afterwards: follow the four steps in `docs
   `Schema: unchanged` or `Schema: migrations NNNNN–NNNNN` (both databases); that line decides how a rollback works.
 - A server upgrade never requires an agent upgrade: the server supports agents of its own and the two previous minor
   versions (ADR 0013). Upload an agent release only to a server of the same or a newer minor version.
+- From 0.1.0-alpha.4: after this upgrade every Authentik sign-in — the portal, Authentik's own user and admin interfaces
+  (`akadmin` included) and the device approval page — asks for a second factor and enrols one when missing.
+- From 0.1.0-alpha.4: the fix that keeps the Hello PIN working while a user stays signed in is on the device (the
+  agent writes `cache_timeout` into `himmelblau.conf`). Roll out the agent release first; devices with an older agent
+  keep losing the PIN after a few minutes of use (residual risk RR-40).
 
 ## Upgrade (each host)
 

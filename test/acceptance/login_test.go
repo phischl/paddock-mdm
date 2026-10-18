@@ -3,7 +3,7 @@ package acceptance
 import (
 	"errors"
 	"net/http"
-	"strings"
+	"net/url"
 	"testing"
 	"time"
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/authflow"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // platformOrg is the platform pseudo-organization of the audit log.
@@ -26,13 +27,14 @@ func TestLoginGate(t *testing.T) {
 		// finds no admin role.
 		user, pw := tempUser(t, "member", env.RootGroup("acme"))
 		p, err := loginAs(t, user, pw)
-		if !errors.Is(err, authflow.ErrDenied) || p == nil || !strings.HasPrefix(p.Final, "/login-denied?reason=not_authorized") {
-			t.Fatalf("login = %v (final %q), want /login-denied?reason=not_authorized", err, finalOf(p))
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=no_role" {
+			t.Fatalf("login = %v (final %q), want /login-denied?reason=no_role", err, finalOf(p))
 		}
 		expectNoSession(t, p)
 		ev := expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", p.LoginRequestID, "admin.login", "denied", auditPollTimeout)
-		if ev.ActorDisplay != user {
-			t.Fatalf("denied login recorded for %q, want %q", ev.ActorDisplay, user)
+		if ev.ActorDisplay != user || ev.Params["denial_reason"] != "no_role" {
+			t.Fatalf("denied login recorded for %q with denial_reason %v, want %q and no_role", ev.ActorDisplay,
+				ev.Params["denial_reason"], user)
 		}
 	})
 
@@ -48,11 +50,44 @@ func TestLoginGate(t *testing.T) {
 	t.Run("user in admin groups of two organizations is denied", func(t *testing.T) {
 		user, pw := tempUser(t, "twoorgs", env.RoleGroup("acme", "admins"), env.RoleGroup("globex", "admins"))
 		p, err := loginAs(t, user, pw)
-		if !errors.Is(err, authflow.ErrDenied) || !strings.HasPrefix(p.Final, "/login-denied?reason=not_authorized") {
-			t.Fatalf("login = %v (final %q), want /login-denied?reason=not_authorized", err, finalOf(p))
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=multiple_organizations" {
+			t.Fatalf("login = %v (final %q), want /login-denied?reason=multiple_organizations", err, finalOf(p))
 		}
 		expectNoSession(t, p)
-		expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", p.LoginRequestID, "admin.login", "denied", auditPollTimeout)
+		ev := expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", p.LoginRequestID, "admin.login", "denied", auditPollTimeout)
+		if ev.Params["denial_reason"] != "multiple_organizations" {
+			t.Fatalf("denial_reason %v, want multiple_organizations", ev.Params["denial_reason"])
+		}
+	})
+
+	t.Run("user with two roles in one organization is denied", func(t *testing.T) {
+		user, pw := tempUser(t, "tworoles", env.RoleGroup("acme", "admins"), env.RoleGroup("acme", "auditors"))
+		p, err := loginAs(t, user, pw)
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=multiple_roles" {
+			t.Fatalf("login = %v (final %q), want /login-denied?reason=multiple_roles", err, finalOf(p))
+		}
+		expectNoSession(t, p)
+		// Exactly one named organization resolves: the denial is recorded in acme.
+		ev := expectOneIndexEvent(t, idx, orgOf(t, login(t, env.Alice)), "correlation_id = $1", p.LoginRequestID, "admin.login",
+			"denied", auditPollTimeout)
+		if ev.Params["denial_reason"] != "multiple_roles" {
+			t.Fatalf("denial_reason %v, want multiple_roles", ev.Params["denial_reason"])
+		}
+	})
+
+	t.Run("platform admin with an organization role is denied", func(t *testing.T) {
+		user, pw := tempUser(t, "platorg", "paddock.platform.admins", env.RoleGroup("acme", "admins"))
+		p, err := loginAs(t, user, pw)
+		if !errors.Is(err, authflow.ErrDenied) || p == nil || p.Final != "/login-denied?reason=platform_and_organization" {
+			t.Fatalf("login = %v (final %q), want /login-denied?reason=platform_and_organization", err, finalOf(p))
+		}
+		expectNoSession(t, p)
+		// Exactly one named organization resolves: the denial is recorded in acme.
+		ev := expectOneIndexEvent(t, idx, orgOf(t, login(t, env.Alice)), "correlation_id = $1", p.LoginRequestID, "admin.login",
+			"denied", auditPollTimeout)
+		if ev.Params["denial_reason"] != "platform_and_organization" {
+			t.Fatalf("denial_reason %v, want platform_and_organization", ev.Params["denial_reason"])
+		}
 	})
 
 	t.Run("platform admin has no organization data", func(t *testing.T) {
@@ -68,6 +103,72 @@ func TestLoginGate(t *testing.T) {
 		res := call(t, alice, http.MethodGet, "/api/platform/v1/organizations", nil)
 		expectStatus(t, res, http.StatusForbidden, "forbidden")
 	})
+}
+
+// TestLoginMFAPath (plan M8x decision 7d): the portal sign-in sends no prompt, so that Authentik never skips the flow of a
+// later step-up (an existing Authentik session may satisfy the sign-in, the callback still requires MFA in amr), and
+// Authentik's default authentication flow asks for a second factor at order 31, enrolling one when missing.
+func TestLoginMFAPath(t *testing.T) {
+	ctx := testContext(t, time.Minute)
+	client, err := env.NewHTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, stack.AdminURL()+"/api/auth/login", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if loc, err := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusFound || err != nil ||
+		loc.Query().Has("prompt") {
+		t.Fatalf("GET /api/auth/login: %d %q", res.StatusCode, res.Header.Get("Location"))
+	}
+
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flows struct {
+		Results []struct {
+			PK string `json:"pk"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/instances/?slug=default-authentication-flow", &flows); err != nil || len(flows.Results) != 1 {
+		t.Fatalf("flow default-authentication-flow: %+v %v", flows, err)
+	}
+	var bindings struct {
+		Results []struct {
+			Order int    `json:"order"`
+			Stage string `json:"stage"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &bindings); err != nil {
+		t.Fatal(err)
+	}
+	stage := ""
+	for _, b := range bindings.Results {
+		if b.Order == 31 {
+			stage = b.Stage
+		}
+	}
+	if stage == "" {
+		t.Fatalf("no stage binding at order 31: %+v", bindings.Results)
+	}
+	var v struct {
+		Name                string `json:"name"`
+		NotConfiguredAction string `json:"not_configured_action"`
+	}
+	if err := ak.Get(ctx, "/stages/authenticator/validate/"+stage+"/", &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.Name != "paddock-default-login-mfa" || v.NotConfiguredAction != "configure" {
+		t.Fatalf("order 31 stage %+v, want paddock-default-login-mfa with not_configured_action configure", v)
+	}
 }
 
 func finalOf(p *env.Portal) string {

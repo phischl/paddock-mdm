@@ -10,13 +10,14 @@ SELECT count(*) FILTER (WHERE d.state IN ('pending', 'active', 'quarantined'))::
        count(*) FILTER (WHERE d.state = 'retired')::int AS retired,
        count(*) FILTER (WHERE d.state = 'rejected')::int AS rejected,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'ok')::int AS online,
+       count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'unseen')::int AS no_recent_contact,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'stale_warning')::int AS silent,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'stale_critical')::int AS silent_critical,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'presumed_lost')::int AS presumed_lost,
        count(*) FILTER (WHERE d.state = 'active' AND c.contact = 'never')::int AS never_contacted
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = d.id AND open_alert.cleared_at IS NULL
-CROSS JOIN LATERAL (SELECT paddock_device_contact(d.state, s.last_contact_at, s.presumed_lost_at, open_alert.kind) AS contact) c;
+CROSS JOIN LATERAL (SELECT paddock_device_contact(d.state, s.last_contact_at, s.presumed_lost_at, open_alert.kind, now()) AS contact) c;
 
 -- name: OverviewEncryption :one
 SELECT count(*) FILTER (WHERE s.health -> 'disk' ->> 'state' = 'compliant')::int AS encrypted,

@@ -120,7 +120,8 @@ Exchange these files between the hosts over a secure channel (for example `scp` 
 
 Copy the production release public keys (`docs/operations/agent-releases.md`, "Production key") to
 `.secrets/release-production/minisign.pub` and `.secrets/release-production/revoke-minisign.pub` on the control
-plane. Their secret keys never come to a server.
+plane and make them readable by the services (they run as uid 65532; `./paddock check` names a file they cannot
+read): `chmod 644 .secrets/release-production/*.pub`. Their secret keys never come to a server.
 
 Pull the images: `./paddock pull`.
 
@@ -212,11 +213,15 @@ session on the server. A platform administrator ends every portal session at onc
    `.secrets/authentik_bootstrap_password`. Create the platform administrator's user, enroll a WebAuthn
    authenticator for it (step-up requires one) and add it to the group `paddock.platform.admins`. Then deactivate
    `akadmin` or give it a new password held by the custodians.
-2. Sign in to `https://admin.<domain>` as the platform administrator and create the first organization (*Platform* →
-   *Organizations*), with the e-mail domains of its users. Connect its identity source
+2. Sign in to `https://admin.<domain>` as the platform administrator (every sign-in asks for the second factor and
+   enrols one when missing) and create the first organization (*Platform* → *Organizations*) **with the domains of its
+   users** (the create dialog takes them; *Domains* in the list changes them). Without a domain the organization's
+   devices get no login management and no managed local administrator. Connect its identity source
    (`docs/operations/identity-sources.md`) and make its first administrator a member of `paddock.<slug>.admins`.
 3. Publish the first agent release (section 10).
-4. As the organization administrator, create an enrollment token and install the first device with the autoinstall
+4. As the organization administrator, **set the break-glass accounts first** (*Login & privileges*: the existing
+   local administrator accounts of the devices, `docs/operations/device-login.md`, *Break-glass accounts and sudo*).
+   Then create an enrollment token and install the first device with the autoinstall
    (`docs/operations/autoinstall.md`) or the packages under `https://bundles.<domain>/packages/`.
 5. Set the IP allow list (optional, recommended): as the platform administrator open *Platform* → *IP allow list*,
    add your own address with *Use my address* first (the server refuses a first entry that would lock you out), then
@@ -243,8 +248,9 @@ publish them:
 ./paddock agent-release <version> <dir>
 ```
 
-It verifies every signature with the release public keys of `.secrets/release-production/` before anything is
-stored, uploads the files, publishes the release and prints it as JSON; the release then shows on the portal's
+`<dir>` and its files must be readable by the `paddock-api` service (uid 65532): `chmod -R a+rX <dir>`; the command
+refuses a directory it cannot read and names the files. It verifies every signature with the release public keys of
+`.secrets/release-production/` before anything is stored, uploads the files, publishes the release and prints it as JSON; the release then shows on the portal's
 *Agent releases* page, where its staged rollout starts.
 
 ## 11. Backups
@@ -261,6 +267,9 @@ restore drill are in the same document.
 
 Upgrades extract the new bundle next to the running one and take over its `.env` and `.secrets/`:
 `docs/operations/upgrade.md`. Agent releases are separate: `docs/operations/agent-releases.md`.
+
+**Release 0.1.0-alpha.4 and later: second factor on every sign-in.** After this upgrade every Authentik sign-in — the portal, Authentik's own user and admin interfaces (`akadmin` included) and
+the device approval page — asks for a second factor and enrols one when missing.
 
 **Release with the managed-file path tiers, server-side sessions and WebAuthn-only step-up (ADR 0034).** Four steps,
 in this order:

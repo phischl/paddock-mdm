@@ -1,6 +1,6 @@
 -- The attention list (plan M5b decision 11) over the view attention_condition. Kinds: stale_warning, stale_critical,
 -- presumed_lost, quarantined, disk_not_compliant, agent_outdated, login_apply_failed, sudo_apply_failed,
--- revocation_pending, revocation_expired, agent_rollback_pending.
+-- revocation_pending, revocation_expired, agent_rollback_pending, agent_not_running.
 
 -- name: ListAttention :many
 SELECT * FROM attention_condition

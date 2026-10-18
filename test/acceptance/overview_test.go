@@ -23,6 +23,7 @@ type overview struct {
 	} `json:"updates"`
 	Devices struct {
 		Total, Active, Pending, Quarantined, Online, Silent int
+		NoRecentContact                                     int `json:"no_recent_contact"`
 		SilentCritical                                      int `json:"silent_critical"`
 		PresumedLost                                        int `json:"presumed_lost"`
 		NeverContacted                                      int `json:"never_contacted"`
@@ -101,7 +102,7 @@ func TestOverviewGate(t *testing.T) {
 	if want := listCount(t, alice, "/api/v1/devices", url.Values{"state": {"active"}, "page_size": {"10"}}); o.Devices.Active != want {
 		t.Fatalf("devices.active %d, device list %d", o.Devices.Active, want)
 	}
-	for contact, got := range map[string]int{"ok": o.Devices.Online, "stale_warning": o.Devices.Silent, "stale_critical": o.Devices.SilentCritical,
+	for contact, got := range map[string]int{"ok": o.Devices.Online, "unseen": o.Devices.NoRecentContact, "stale_warning": o.Devices.Silent, "stale_critical": o.Devices.SilentCritical,
 		"presumed_lost": o.Devices.PresumedLost, "never": o.Devices.NeverContacted} {
 		if want := listCount(t, alice, "/api/v1/devices", url.Values{"state": {"active"}, "contact": {contact}, "page_size": {"10"}}); got != want {
 			t.Fatalf("devices.%s %d, device list %d", contact, got, want)
@@ -122,7 +123,8 @@ func TestOverviewGate(t *testing.T) {
 			t.Fatalf("%s: overview %d, list %d", name, kpi.value, want)
 		}
 	}
-	if sum := o.Devices.Online + o.Devices.Silent + o.Devices.SilentCritical + o.Devices.PresumedLost + o.Devices.NeverContacted; sum != o.Devices.Active {
+	if sum := o.Devices.Online + o.Devices.NoRecentContact + o.Devices.Silent + o.Devices.SilentCritical + o.Devices.PresumedLost +
+		o.Devices.NeverContacted; sum != o.Devices.Active {
 		t.Fatalf("contact buckets %d, active %d", sum, o.Devices.Active)
 	}
 	b := o.Vulnerabilities.ByHighestSeverity
@@ -281,4 +283,48 @@ func listTotalOf(t *testing.T, res env.Response) int {
 		t.Fatal(err)
 	}
 	return page.Total
+}
+
+// TestOverviewNoRecentContact (PDK-295, plan M8x decisions 58 and 62): an active device whose last check-in is more
+// than 15 minutes old, below the staleness thresholds, has the contact state unseen: the contact filter unseen lists
+// it, ok does not, and the overview counts it in no_recent_contact. A check-in makes it ok again.
+func TestOverviewNoRecentContact(t *testing.T) {
+	alice := login(t, env.Alice)
+	d := activeDevice(t, alice, namedGroup(t, alice, "no recent contact"), "ov-unseen-"+uniqueSuffix())
+	ctx := testContext(t, time.Minute)
+	if _, _, err := d.Checkin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hostname := waitDevice(t, alice, d.DeviceID, time.Minute, func(s deviceState) bool { return s.LastContactAt != nil }).Hostname
+	contactOf := func() string {
+		t.Helper()
+		v, _ := getDeviceDetail(t, alice, d.DeviceID)["contact"].(string)
+		return v
+	}
+	listed := func(contact string) int {
+		t.Helper()
+		return listCount(t, alice, "/api/v1/devices", url.Values{"q": {hostname}, "contact": {contact}, "page_size": {"10"}})
+	}
+	if c := contactOf(); c != "ok" || listed("ok") != 1 || listed("unseen") != 0 {
+		t.Fatalf("after the check-in: contact %q, want ok", c)
+	}
+	db := ownerDB(t)
+	for _, ago := range []string{"16 minutes", "14 minutes"} {
+		if _, err := db.Exec(ctx, "UPDATE device_status SET last_contact_at = now() - $2::interval WHERE device_id = $1", d.DeviceID, ago); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]string{"16 minutes": "unseen", "14 minutes": "ok"}[ago]
+		if c := contactOf(); c != want || listed(want) != 1 {
+			t.Fatalf("last contact %s ago: contact %q, want %s", ago, c, want)
+		}
+		if ago == "16 minutes" {
+			if listed("ok") != 0 {
+				t.Fatalf("last contact 16 minutes ago: listed as ok")
+			}
+			o, _ := getOverview(t, alice)
+			if o.Devices.NoRecentContact < 1 {
+				t.Fatalf("overview no_recent_contact %d, want at least this device", o.Devices.NoRecentContact)
+			}
+		}
+	}
 }

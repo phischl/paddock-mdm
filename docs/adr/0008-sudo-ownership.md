@@ -33,3 +33,6 @@ group**. A group without one keeps every member; each kept member is reported on
 `device.tamper_sudo_group_member` with `removed=false` and `reason=last_admin`, so the administrator sees it and
 adds a break-glass account or lets the local administrator be created. Report-only adoption (ADR 0033, M11) runs
 before this rule for adopted devices; the rule applies to every enforced apply (fail safe, design contract 8).
+A break-glass account counts as a member only if it is usable: `getent passwd` resolves it and its `/etc/shadow`
+entry exists and does not start with `!` or `*` (locked, or no password set); a missing or locked break-glass
+account keeps the group's members — the fail-safe direction (fix round 1 of PDK-204).

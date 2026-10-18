@@ -149,6 +149,7 @@ test: ## Unit and integration tests (requires Docker)
 	go test -count=1 -tags paddock_revoke_testtarget ./agent/internal/revoke/
 	bash $(COMPOSE_DIR)/scripts/restore-drill-guard_test.sh
 	bash $(COMPOSE_DIR)/scripts/load-guard_test.sh
+	bash $(COMPOSE_DIR)/scripts/wait-healthy_test.sh
 	bash $(COMPOSE_DIR)/scripts/openbao-restore_test.sh
 	bash $(COMPOSE_DIR)/scripts/rustfs-alias_test.sh
 	bash $(COMPOSE_DIR)/scripts/secrets-argv_test.sh

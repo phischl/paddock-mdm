@@ -39,6 +39,7 @@ export interface KpiCell {
  */
 export function kpiCells(o: Overview): KpiCell[] {
   const active = o.devices.active
+  const silent = o.devices.no_recent_contact + o.devices.silent + o.devices.silent_critical
   const devices = (query: Record<string, string | string[]>): RouteLocationRaw => ({ path: '/devices', query: { state: 'active', ...query } })
   return [
     {
@@ -46,8 +47,9 @@ export function kpiCells(o: Overview): KpiCell[] {
       status: 'ok', to: devices({ contact: 'ok' }),
     },
     {
-      key: 'silent', label: 'overview.kpi.silent', value: o.devices.silent + o.devices.silent_critical, note: 'overview.kpi.silentNote',
-      noteValues: { count: o.devices.silent_critical }, status: 'warn', to: devices({ contact: ['stale_warning', 'stale_critical'] }),
+      key: 'silent', label: 'overview.kpi.silent', value: silent, note: 'overview.kpi.silentNote',
+      noteValues: { count: silent, critical: o.devices.silent_critical }, status: 'warn',
+      to: devices({ contact: ['unseen', 'stale_warning', 'stale_critical'] }),
     },
     {
       key: 'presumed-lost', label: 'overview.kpi.presumedLost', value: o.devices.presumed_lost, note: 'overview.kpi.presumedLostNote',

@@ -113,6 +113,13 @@ describe('device header band (plan M7c decision 29)', () => {
     expect(w.text()).toContain('agent 1.9.1')
   })
 
+  it('names no recent contact and explains the contact states in the state chip tooltip (plan M8x decision 61)', async () => {
+    const { w } = await mountHeader(deviceOf({ contact: 'unseen' }))
+    expect(w.find('[data-testid="device-state"]').text()).toBe('No recent contact')
+    expect(w.findAll('.pd-chip')[0].attributes('title')).toBe(
+      'Online: a check-in within the last 15 minutes. No recent contact: none for more than 15 minutes, below the silence threshold of the organization.')
+  })
+
   it('offers Install updates and Rotate for an active device, never Retire, Lock or Destroy', async () => {
     await mountHeader(deviceOf(), 'org_admin', ['retire'])
     expect(buttons()).toEqual(['install-now', 'local-admin-rotate'])

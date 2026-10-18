@@ -6,6 +6,17 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 )
 
+// DenialReason says why ResolveRole denied the portal (plan M8x decision 31); the portal names it on /login-denied.
+type DenialReason string
+
+// Denial reasons of ResolveRole.
+const (
+	DenialNoRole                  DenialReason = "no_role"                   // no Paddock role group
+	DenialMultipleOrganizations   DenialReason = "multiple_organizations"    // role groups of several organizations
+	DenialMultipleRoles           DenialReason = "multiple_roles"            // several role groups of one organization
+	DenialPlatformAndOrganization DenialReason = "platform_and_organization" // platform admins plus an organization role
+)
+
 // RoleResolution is the result of mapping the groups claim to a portal role (plan M0 §6.7).
 type RoleResolution struct {
 	Platform bool
@@ -15,6 +26,8 @@ type RoleResolution struct {
 	// Slugs are the distinct organizations named by role groups; a denial is recorded in the organization when
 	// exactly one of them resolves to an active organization.
 	Slugs []string
+	// Reason is set when Denied.
+	Reason DenialReason
 }
 
 // ResolveRole maps Authentik groups to the portal role:
@@ -62,6 +75,16 @@ func ResolveRole(groups []string) RoleResolution {
 		res.Slug, res.Role = res.Slugs[0], role
 	default:
 		res.Denied = true
+		switch {
+		case platform && matches > 0:
+			res.Reason = DenialPlatformAndOrganization
+		case len(res.Slugs) > 1:
+			res.Reason = DenialMultipleOrganizations
+		case matches > 1:
+			res.Reason = DenialMultipleRoles
+		default:
+			res.Reason = DenialNoRole
+		}
 	}
 	return res
 }

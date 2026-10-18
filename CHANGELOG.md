@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Every portal sign-in is now refused without a second factor; the default brand's authentication flow and
+  Authentik's default authentication flow ask for a second factor as well. After the upgrade every Authentik sign-in
+  (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks for a second factor and
+  enrols one when missing.
+- A step-up (identity confirmation) is refused when Authentik answered it without authenticating again, that is with
+  a token whose authentication predates the step-up; the user is asked to confirm again instead of the earlier sign-in
+  counting as a step-up. The portal's failure message suggests waiting a minute after a recent confirmation.
+
+### Added
+
+- A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
+  *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
+  records `organization.created` and `organization.domains_changed`.
+- Every portal button that sends a request shows a progress indicator and is disabled until the answer arrives, so a
+  second click no longer sends the request twice.
+- The portal shows until when the last identity confirmation (step-up) is valid: a chip in the app bar and a line in
+  the user menu; `GET /api/v1/me` carries `step_up_valid_until`. A long organization name in the app bar is shortened
+  and shown in full on hover or tap.
+- The permission profile form warns before saving when the class or the commands grant root in effect (also through
+  a pair of commands, one writing what the other runs), and says that saving then needs an organization
+  administrator with a step-up. New read-only endpoint `GET /api/v1/permission-profiles/root-equivalence`.
+- Managed files: a path with characters outside ASCII shows a hint (it is still saved as given), and the page links
+  to the operator roots. The German portal calls operator roots „Freigegebene Verzeichnisse“.
+- Users whose username does not end with one of the organization's domains are marked "No organization domain"
+  (they cannot sign in on devices), the user page explains why, and the Users page of an organization without a
+  domain shows a banner. Users in the API carry `domain_match`.
+
+### Changed
+
+- A portal sign-in reuses an existing Authentik session that was authenticated with a second factor instead of asking
+  for the password again; a session without a second factor is still refused.
+- Devices install Himmelblau 4.0.6 by default (`PADDOCK_HIMMELBLAU_VERSION`, previously 4.0.4): a device code
+  that expired at the login screen no longer ends in `PAM_SYSTEM_ERR`. The device-login guide lists the messages of the
+  login screen and what they mean.
+- The dialog that creates an enrollment token explains which members of the sudo group a device keeps and links to
+  the break-glass accounts; for an organization without a domain it warns that its devices get no login management
+  and no managed local administrator. `GET /api/v1/me` names the organization's `domains`.
+- Clearer texts: a device's local administrator password that waits for the device's confirmation is no longer shown
+  as "none yet"; permission profiles and device access explain that they apply to directory users only, never to
+  local accounts; the password switch of a profile explains what it does.
+- The device list shows Online only for devices that checked in within the last 15 minutes and names a stopped agent
+  on the device and the attention page. A device without a check-in for longer shows *No recent contact* until the
+  organization's silence threshold applies (contact filter `unseen`, overview field `devices.no_recent_contact`, part
+  of the Silent tile); a stopped agent reported by fleetd is the attention kind `agent_not_running` until fleetd sees
+  it running again.
+
+### Fixed
+
+- A release public key or another secret file of a Paddock service with mode 0600 made the roles fail with
+  "permission denied". `./paddock check` now names such a file (item `secret files readable by the Paddock services`)
+  with the `chmod 644` to run, and `./paddock agent-release` refuses a release directory the `paddock-api` service
+  cannot read and names `chmod -R a+rX`.
+- A refused portal sign-in names the reason: no Paddock role group, roles in several organizations, several roles
+  in one organization, platform and organization roles on one account, or an inactive organization. The audit event `admin.login` carries it as
+  `denial_reason`.
+- While OpenBao was sealed at the start of `paddock-api`, the portal sign-in answered with an internal error. It now
+  shows *The server's key store is sealed*; `paddock-server healthcheck` and the timeout line of `./paddock up` name
+  the reason (`session keys not loaded: OpenBao is sealed or unreachable`).
+- The device code at the login screen is valid for ten minutes (it expired after one minute).
+- The Hello PIN keeps working while a user stays signed in; the login component refreshes a signed-in user's cached
+  attributes at the next PIN sign-in or after 30 days. The fix is on the device (`cache_timeout` in
+  `himmelblau.conf`): **update the agents first**; a device with an older agent keeps losing the PIN after a few
+  minutes of use. After 30 days without a PIN sign-in the user signs in with the device code and sets a new PIN
+  (residual risk RR-40).
+- The agent no longer removes the last administrator of a device: a privileged local group (sudo, admin, wheel) that
+  has no break-glass account as a member keeps all its members, and each is reported once as
+  `device.tamper_sudo_group_member` with `removed=false` and `reason=last_admin`. The members are removed once a
+  break-glass account or the managed local administrator is a member; such an account counts only if it exists on the
+  device and its password is not locked (`!` or `*` in `/etc/shadow`). Configure break-glass accounts before the first
+  enrolment of a device whose administrators are not managed by Paddock.
+- The login component no longer removes accounts from the sudo group or re-adds them to local groups every five
+  minutes; Paddock alone manages sudo.
+
 ## [0.1.0-alpha.3] - 2026-10-17
 
 Hardening release (milestone M8s) plus the lab installation profile (M8a). **Upgrade order: update the agents on the

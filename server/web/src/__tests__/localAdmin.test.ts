@@ -34,12 +34,49 @@ describe('step-up resume', () => {
   })
 })
 
+// The state getLocalAdmin answers; a test may replace it.
+let current: typeof state | Omit<typeof state, 'active_generation' | 'pending_generation'> & {
+  active_generation: number | null; pending_generation: number | null
+} = state
 const reveal = vi.fn(async (...args: [string, string]) => (args.length ? { passwords: [{ generation: 2, state: 'active' as const, password: 'S3cret-Pass' }] } : { passwords: [] }))
 vi.mock('../lib/localAdmin', async (original) => ({
   ...(await original<typeof import('../lib/localAdmin')>()),
-  getLocalAdmin: () => Promise.resolve(state),
+  getLocalAdmin: () => Promise.resolve(current),
   revealLocalAdmin: (id: string, hostname: string) => reveal(id, hostname),
 }))
+
+describe('local administrator card: active password row (plan M8x decision 37)', () => {
+  afterEach(() => { current = state })
+
+  async function activeRow(active: number | null, pending: number | null): Promise<string> {
+    current = { ...state, active_generation: active, pending_generation: pending }
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', organization: null } as never
+    sessionStorage.clear()
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/devices/:id', component: { render: () => null } }] })
+    await router.push('/devices/d1')
+    const App = () => h(VApp, null, { default: () => h(LocalAdminCard, { deviceId: 'd1', hostname: 'lt-1', refresh: 0 }) })
+    const wrapper = mount(App, { global: { plugins: [createPortalI18n(), vuetify, router, pinia] } })
+    await flushPromises()
+    const text = wrapper.get('[data-testid="local-admin-active"]').text()
+    wrapper.unmount()
+    return text
+  }
+
+  it('shows the generation of the confirmed password', async () => {
+    expect(await activeRow(2, null)).toBe('2')
+  })
+
+  it('names a stored password that waits for the device', async () => {
+    expect(await activeRow(null, 1)).toBe(
+      "none confirmed yet — password 1 is stored and waits for the device's confirmation at its next check-in (within about 5 minutes)")
+  })
+
+  it('says none yet without any password', async () => {
+    expect(await activeRow(null, null)).toBe('none yet')
+  })
+})
 
 describe('local administrator card', () => {
   beforeEach(() => {

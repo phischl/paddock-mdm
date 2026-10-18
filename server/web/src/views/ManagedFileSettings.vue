@@ -7,12 +7,14 @@ import { getOperatorRoots, setOperatorRoots } from '../lib/managedConfig'
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /**
  * The operator roots of the managed files (ADR 0034 amendment 2026-10-16): below them operators manage files without
  * a step-up; every other path needs an organization administrator with a step-up. Changing them needs a step-up.
  */
 const { t } = useI18n()
+const { pending, run } = usePending()
 const router = useRouter()
 const confirm = useConfirm()
 const problemText = useProblemText()
@@ -93,7 +95,7 @@ onMounted(async () => {
     <form
       class="form"
       novalidate
-      @submit.prevent="onSave"
+      @submit.prevent="run(onSave)"
     >
       <v-textarea
         id="operator-roots"
@@ -111,6 +113,8 @@ onMounted(async () => {
       >
         <v-btn
           type="submit"
+          :loading="pending"
+          :disabled="pending"
           color="primary"
           data-testid="save-roots"
         >

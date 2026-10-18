@@ -21,7 +21,8 @@ import (
 // case, that a cleared alert or another organization's alert changes nothing, that the function is never executed as
 // a call (the per-row sub-executor cost about 385 ms at 10 000 devices, docs/operations/capacity.md), and that a
 // second open alert for a device is rejected by device_alert_open_idx, which keeps the join free of duplicate rows.
-// Everything runs as paddock_api in one transaction that is rolled back.
+// Everything runs as paddock_api in one transaction that is rolled back. Migration 00049 (PDK-295, plan M8x decision
+// 58): an active device without a check-in for more than 15 minutes and without an open alert is unseen, not ok.
 func TestDeviceContactJoin(t *testing.T) {
 	env := pgtest.SharedPaddock(t)
 	ctx := context.Background()
@@ -84,7 +85,12 @@ func TestDeviceContactJoin(t *testing.T) {
 	cleared := device(acme, "cleared", "active", true, &contacted, nil)
 	alert(acme, cleared, "stale_warning", true)
 	alert(acme, cleared, "stale_critical", true)
-	want[cleared] = "ok"
+	want[cleared] = "unseen"
+	// now() is the start of the transaction, before these times: 14 minutes ago is within, 16 minutes beyond the 15.
+	recent, unseen := time.Now().Add(-14*time.Minute), time.Now().Add(-16*time.Minute)
+	want[device(acme, "recent", "active", true, &recent, nil)] = "ok"
+	want[device(acme, "unseen", "active", true, &unseen, nil)] = "unseen"
+	want[device(acme, "retiredu", "retired", true, &unseen, nil)] = "ok"
 	want[device(acme, "nostatus", "active", false, nil, nil)] = "never"
 	want[device(acme, "nocontact", "active", true, nil, nil)] = "never"
 	want[device(acme, "pending", "pending", true, nil, nil)] = "never"
@@ -101,7 +107,8 @@ func TestDeviceContactJoin(t *testing.T) {
 		counts   map[string]int64
 		all      int
 	}
-	filters := map[string][]string{"warning": {"stale_warning"}, "lost or critical": {"presumed_lost", "stale_critical"}}
+	filters := map[string][]string{"warning": {"stale_warning"}, "lost or critical": {"presumed_lost", "stale_critical"},
+		"no recent contact": {"unseen"}}
 	calls := func() int64 {
 		t.Helper()
 		var n int64
@@ -163,8 +170,8 @@ func TestDeviceContactJoin(t *testing.T) {
 	}
 	check := func(label string, got read) {
 		t.Helper()
-		wantOverview := pgstore.OverviewDevicesRow{Total: 8, Active: 6, Pending: 1, Quarantined: 1, Retired: 2,
-			Online: 1, Silent: 1, SilentCritical: 1, PresumedLost: 1, NeverContacted: 2}
+		wantOverview := pgstore.OverviewDevicesRow{Total: 10, Active: 8, Pending: 1, Quarantined: 1, Retired: 3,
+			Online: 1, NoRecentContact: 2, Silent: 1, SilentCritical: 1, PresumedLost: 1, NeverContacted: 2}
 		if got.overview != wantOverview {
 			t.Errorf("%s: overview %+v, want %+v", label, got.overview, wantOverview)
 		}
@@ -176,7 +183,7 @@ func TestDeviceContactJoin(t *testing.T) {
 				t.Errorf("%s: device %s contact %q, want %q", label, id, got.contact[id], c)
 			}
 		}
-		wantLists := map[string][]string{"warning": {"warn"}, "lost or critical": {"critical", "lost"}}
+		wantLists := map[string][]string{"warning": {"warn"}, "lost or critical": {"critical", "lost"}, "no recent contact": {"cleared", "unseen"}}
 		for name, hosts := range wantLists {
 			sort.Strings(got.lists[name])
 			if len(got.lists[name]) != len(hosts) || got.counts[name] != int64(len(hosts)) {
@@ -219,7 +226,7 @@ func TestDeviceContactJoin(t *testing.T) {
 	var strict bool
 	var volatility, parallel string
 	if err := tx.QueryRow(ctx, `SELECT proisstrict, provolatile::text, proparallel::text FROM pg_proc
-		WHERE oid = 'paddock_device_contact(text, timestamptz, timestamptz, text)'::regprocedure`).Scan(&strict, &volatility, &parallel); err != nil {
+		WHERE oid = 'paddock_device_contact(text, timestamptz, timestamptz, text, timestamptz)'::regprocedure`).Scan(&strict, &volatility, &parallel); err != nil {
 		t.Fatal(err)
 	}
 	if strict || volatility != "i" || parallel != "s" {

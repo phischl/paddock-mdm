@@ -17,6 +17,7 @@ import type { ListColumn } from '../lib/listQuery'
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, stepUpRequired, withoutStepUpParam } from '../lib/stepUp'
 import { useSessionStore } from '../stores/session'
+import { usePending } from '../composables/usePending'
 
 /** One write of the page; it is kept across a step-up and repeated once (plan M7a decision 25). */
 type Operation =
@@ -27,6 +28,7 @@ type Operation =
 const stepUpAction = 'ip-allowlist'
 
 const { t } = useI18n()
+const { pending, run: runPending } = usePending()
 const problemText = useProblemText()
 const confirm = useConfirm()
 const router = useRouter()
@@ -144,10 +146,10 @@ async function perform(operation: Operation): Promise<string | null> {
   }
 }
 
-function submit(input: IpAllowlistInput): void {
+async function submit(input: IpAllowlistInput): Promise<void> {
   problem.value = ''
   const editing = dialog.value?.editing
-  void run(editing ? { op: 'update', id: editing.id, cidr: editing.cidr, input } : { op: 'create', input }, true)
+  await run(editing ? { op: 'update', id: editing.id, cidr: editing.cidr, input } : { op: 'create', input }, true)
 }
 
 async function onRemove(entry: IpAllowlistEntry): Promise<void> {
@@ -159,7 +161,7 @@ async function onRemove(entry: IpAllowlistEntry): Promise<void> {
     destructive: true,
   })
   if (!confirmed) return
-  await run({ op: 'delete', id: entry.id, cidr: entry.cidr }, true)
+  await runPending(() => run({ op: 'delete', id: entry.id, cidr: entry.cidr }, true))
 }
 </script>
 
@@ -252,6 +254,8 @@ async function onRemove(entry: IpAllowlistEntry): Promise<void> {
           :aria-label="t('ipAllowlist.removeLabel', { cidr: item.cidr })"
           color="error"
           size="small"
+          :loading="pending"
+          :disabled="pending"
           @click="onRemove(item)"
         >
           {{ t('ipAllowlist.remove') }}
@@ -273,7 +277,8 @@ async function onRemove(entry: IpAllowlistEntry): Promise<void> {
             :client-ip="clientIp"
             :initial="dialog?.editing ? { cidr: dialog.editing.cidr, label: dialog.editing.label } : null"
             :problem="problem"
-            @submit="submit"
+            :pending="pending"
+            @submit="runPending(() => submit($event))"
             @cancel="closeDialog"
           />
         </v-card-text>

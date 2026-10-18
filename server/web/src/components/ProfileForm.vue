@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { Lecture, PrivilegeClass } from '../api/client'
-import { commandLines, lectures, privilegeClasses, type ProfileInput } from '../lib/profiles'
+import type { Lecture, PrivilegeClass, RootEquivalence } from '../api/client'
+import { commandLines, lectures, previewRootEquivalence, privilegeClasses, type ProfileInput } from '../lib/profiles'
 import { useProblemText } from '../lib/problems'
 
 const props = withDefaults(
-  defineProps<{ initial?: ProfileInput; submitLabel: string; problem?: string; idPrefix?: string }>(),
-  { initial: undefined, problem: '', idPrefix: 'profile' },
+  defineProps<{ initial?: ProfileInput; submitLabel: string; problem?: string; idPrefix?: string; pending?: boolean }>(),
+  { initial: undefined, problem: '', idPrefix: 'profile', pending: false },
 )
 const emit = defineEmits<{ submit: [input: ProfileInput]; cancel: [] }>()
 
@@ -27,6 +27,36 @@ const commandsError = computed(() =>
 const timeoutError = computed(() => {
   const n = Number(timeout.value)
   return touched.value && !(Number.isInteger(n) && n >= 0 && n <= 60) ? t('profiles.timeoutInvalid') : ''
+})
+
+// Root equivalence before submit (plan M8x decision 41): 300 ms after the last change the server evaluates the class
+// and commands with the rules of the save; a failed preview shows nothing, the save still checks.
+const preview = ref<RootEquivalence | null>(null)
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+let previewSeq = 0
+watch([cls, commands], () => {
+  clearTimeout(previewTimer)
+  preview.value = null
+  // Every change invalidates a request already in flight, also when no new one starts: its answer would show a root
+  // warning for commands that are gone.
+  const seq = ++previewSeq
+  const lines = commandLines(commands.value)
+  if (cls.value !== 'full' && !(cls.value === 'restricted' && lines.length > 0)) return
+  previewTimer = setTimeout(async () => {
+    const res = await previewRootEquivalence(cls.value, cls.value === 'full' ? [] : lines)
+    if (seq === previewSeq) preview.value = res
+  }, 300)
+}, { immediate: true })
+onBeforeUnmount(() => clearTimeout(previewTimer))
+const pairs = computed(() => (preview.value?.witnesses ?? []).filter((w) => w.startsWith('pair:')).map((w) => {
+  const [writer, command] = w.slice('pair:'.length).split('|')
+  return { writer, command }
+}))
+const previewText = computed(() => {
+  const p = preview.value
+  if (!p || p.witnesses.length === 0) return ''
+  if (cls.value === 'full') return t('profiles.fullPreview')
+  return t('profiles.rootEquivalentPreview', { commands: p.root_equivalent_commands.join(', ') })
 })
 
 function submit(): void {
@@ -70,10 +100,26 @@ function submit(): void {
       rows="4"
       :error-messages="commandsError ? [commandsError] : []"
     />
+    <v-alert
+      v-if="previewText"
+      type="warning"
+      variant="tonal"
+      data-testid="root-equivalent-preview"
+    >
+      <p>{{ previewText }}</p>
+      <p
+        v-for="pair in cls === 'full' ? [] : pairs"
+        :key="pair.writer + '|' + pair.command"
+      >
+        {{ t('profiles.rootEquivalentPair', pair) }}
+      </p>
+    </v-alert>
     <v-switch
       :id="idPrefix + '-password'"
       v-model="requirePassword"
       :label="t('profiles.requirePassword')"
+      :hint="t('profiles.requirePasswordHint')"
+      persistent-hint
       color="primary"
       inset
     />
@@ -109,6 +155,8 @@ function submit(): void {
       </v-btn>
       <v-btn
         type="submit"
+        :loading="pending"
+        :disabled="pending"
         color="primary"
       >
         {{ submitLabel }}

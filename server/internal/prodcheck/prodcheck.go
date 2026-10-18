@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // Hosts of the two-host topology (architecture §4.1) and the single lab host (ADR 0029).
@@ -126,7 +127,7 @@ type Result struct {
 // where the role would refuse or ignore it, because it shows that development overrides leaked into the host.
 var devOnly = []string{
 	"PADDOCK_STEPUP_WINDOW", "PADDOCK_STEPUP_MAX_AUTH_AGE", "PADDOCK_STALENESS_UNIT", "PADDOCK_REAPER_THRESHOLD",
-	"PADDOCK_OSV_SYNC_INTERVAL",
+	"PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL",
 }
 
 // releaseKeyVars name the minisign public keys of agent and revocation releases.
@@ -143,6 +144,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		checkDevVariables(c),
 		checkRevocation(c),
 		checkSecretFiles(c),
+		checkSecretFilesReadableByServices(c),
 		checkMountedReferences(c),
 	}
 	lab := o.Host == HostLab
@@ -314,6 +316,44 @@ func checkSecretFiles(c Config) Result {
 		}
 	}
 	return result("secret files present, not empty and not world-readable", f)
+}
+
+// serviceUID is the user of the Paddock images (USER nonroot in deploy/compose/Dockerfile).
+const serviceUID = 65532
+
+// checkSecretFilesReadableByServices: Compose bind-mounts every secret file by path with its own mode and owner, so a
+// secret of a Paddock service must be readable by others or owned by the image's user; a 0600 file of the operator
+// makes the role fail with "permission denied" (plan M8x decision 49). Third-party images run as other users and are
+// not checked.
+func checkSecretFilesReadableByServices(c Config) Result {
+	var f []string
+	for _, name := range sortedServices(c) {
+		if !strings.HasPrefix(name, "paddock-") {
+			continue
+		}
+		for _, ref := range c.Services[name].Secrets {
+			sec, ok := c.Secrets[ref.Source]
+			if !ok || sec.File == "" {
+				continue
+			}
+			fi, err := os.Stat(sec.File)
+			if err != nil {
+				f = append(f, fmt.Sprintf("%s: %s: cannot check (%s): %v", name, ref.Source, sec.File, err))
+				continue
+			}
+			mode := fi.Mode().Perm()
+			uid := -1
+			if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+				uid = int(st.Uid)
+			}
+			if mode&0o004 != 0 || (uid == serviceUID && mode&0o400 != 0) {
+				continue
+			}
+			f = append(f, fmt.Sprintf("%s: %s is not readable by the service user (uid %d): %s has mode %04o, owner uid %d; run chmod 644 %s",
+				name, ref.Source, serviceUID, sec.File, mode, uid, sec.File))
+		}
+	}
+	return result("secret files readable by the Paddock services", f)
 }
 
 // worldReadable reports whether any local user can read the file: it is readable by others and every directory above

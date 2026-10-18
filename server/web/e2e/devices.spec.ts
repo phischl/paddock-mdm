@@ -71,7 +71,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await expect(approve.getByRole('button', { name: 'Cancel' })).toBeFocused()
   await approve.getByRole('button', { name: 'Approve' }).click()
   // Plan M7c decision 29: the state chip of an active device names its contact state.
-  await expect(page.getByTestId('device-state')).toHaveText(/^(Online|Never contacted)$/)
+  await expect(page.getByTestId('device-state')).toHaveText(/^(Online|No recent contact|Never contacted)$/)
 
   // Group membership and a managed file for the group.
   const res = await page.request.post('/api/v1/device-groups', { headers: { 'X-Paddock-CSRF': '1' }, data: { name: groupName } })

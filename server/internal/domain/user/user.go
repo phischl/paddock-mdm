@@ -48,6 +48,13 @@ func ValidateLocalUsername(username string, domains []string) error {
 	return nil
 }
 
+// DomainMatch reports whether the part of username after its last '@' is one of the organization's domains; only
+// such users can sign in on devices, whose login component accepts name@domain (plan M8x decision 46).
+func DomainMatch(username string, domains []string) bool {
+	i := strings.LastIndex(username, "@")
+	return i >= 0 && slices.Contains(domains, strings.ToLower(username[i+1:]))
+}
+
 // ValidateDisplayName checks the display name.
 func ValidateDisplayName(name string) error {
 	if n := utf8.RuneCountInString(name); n < 1 || n > 200 {

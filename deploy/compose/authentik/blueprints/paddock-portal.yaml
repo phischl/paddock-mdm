@@ -74,6 +74,28 @@ entries:
     attrs:
       evaluate_on_plan: true
       re_evaluate_policies: true
+  # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17): a user without an
+  # authenticator must enrol one; a user who just validated one in the stage at order 30 is not asked twice.
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: default-flow-mfa
+    identifiers:
+      name: paddock-default-login-mfa
+    attrs:
+      device_classes: [webauthn, totp]
+      not_configured_action: configure
+      last_auth_threshold: minutes=5
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+        - !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
+  - model: authentik_flows.flowstagebinding
+    id: default-flow-mfa-binding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      stage: !KeyOf default-flow-mfa
+      order: 31
+    attrs:
+      evaluate_on_plan: true
+      re_evaluate_policies: true
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf login-flow

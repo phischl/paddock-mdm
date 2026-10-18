@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,15 +53,16 @@ func TestIdentityGates(t *testing.T) {
 		requireBreakGlass(t, s)
 		vm.Fresh()
 		w := newIdentityWorld(t, s, Install(t, s, vm, debDir(s)))
-		if !t.Run("L1 login", func(t *testing.T) { gateL1(t, w) }) {
+		if !t.Run("L1 login", func(t *testing.T) { w.Bind(t); gateL1(t, w) }) {
 			t.FailNow()
 		}
-		t.Run("P3 effective profile", func(t *testing.T) { gateP3(t, w) })
-		t.Run("L2 identity gate", func(t *testing.T) { gateL2(t, w) })
-		t.Run("L3 login suspension", func(t *testing.T) { gateL3(t, w) })
-		t.Run("L4 fail safe", func(t *testing.T) { gateL4(t, w) })
-		t.Run("L5 PAM order", func(t *testing.T) { gateL5(t, w) })
-		t.Run("P4 sudoers hygiene", func(t *testing.T) { gateP4(t, w) })
+		t.Run("L6 PIN past the access-token lifetime", func(t *testing.T) { w.Bind(t); gateL6(t, w) })
+		t.Run("P3 effective profile", func(t *testing.T) { w.Bind(t); gateP3(t, w) })
+		t.Run("L2 identity gate", func(t *testing.T) { w.Bind(t); gateL2(t, w) })
+		t.Run("L3 login suspension", func(t *testing.T) { w.Bind(t); gateL3(t, w) })
+		t.Run("L4 fail safe", func(t *testing.T) { w.Bind(t); gateL4(t, w) })
+		t.Run("L5 PAM order", func(t *testing.T) { w.Bind(t); gateL5(t, w) })
+		t.Run("P4 sudoers hygiene", func(t *testing.T) { w.Bind(t); gateP4(t, w) })
 	})
 }
 
@@ -178,7 +180,7 @@ func newIdentityWorld(t *testing.T, s *Stack, d *Device) *identityWorld {
 	Until(t, "Himmelblau installed and configured", 15*time.Minute, 10*time.Second, d.Checkin, func() bool {
 		out, _ := d.SSH(context.Background(), nil, "dpkg-query -W -f='${Version}' himmelblau 2>/dev/null; echo; grep -h '^pam_allow_groups' /etc/himmelblau/himmelblau.conf 2>/dev/null; systemctl is-active himmelblaud")
 		lines := strings.Split(strings.TrimSpace(out), "\n")
-		return len(lines) == 3 && strings.HasPrefix(lines[0], "4.0.4-") && lines[1] == "pam_allow_groups = "+allow && lines[2] == "active"
+		return len(lines) == 3 && strings.HasPrefix(lines[0], "4.0.6-") && lines[1] == "pam_allow_groups = "+allow && lines[2] == "active"
 	})
 	d.WaitEvent(t, "device.login_applied", 5*time.Minute, func(p map[string]any) bool {
 		changed, _ := p["changed"].([]any)
@@ -434,11 +436,88 @@ func gateP3(t *testing.T, w *identityWorld) {
 	changed := append(slices.Clone(w.restrictedCommands), "/usr/bin/uptime")
 	w.s.Call(http.MethodPatch, "/api/v1/permission-profiles/"+w.restrictedID, map[string]any{"commands": changed}, http.StatusOK)
 	start := time.Now()
-	Until(t, "profile change on the device", 3*time.Minute, 5*time.Second, nil, func() bool {
+	Until(t, "profile change on the device", nextCheckinBound, 5*time.Second, nil, func() bool {
 		return slices.Equal(w.sudoList(w.dave.name), changed)
 	})
 	t.Logf("profile change on the device after %s (one check-in)", time.Since(start).Round(time.Second))
 	w.restrictedCommands = changed
+}
+
+// gateL6 (plan M8x decision 18): the Hello PIN keeps working past the access token's lifetime. The agent's
+// cache_timeout keeps Himmelblau from refreshing the cached user in the background (with the default 300 s the NSS
+// lookups of the eleven minutes would rotate the refresh token behind the PIN, RR-40); then the locked GNOME session
+// unlocks with the PIN, a PAM PIN login succeeds, and Authentik saw no revoked refresh token (suspicious_request)
+// since the gate started. Plan M8x decision 56 (PDK-294): Himmelblau never touches sudo — its local sudo group is
+// one that does not exist and its periodic local-group reconciliation is off, so the groups sudo and users are
+// unchanged across the eleven minutes, no account is removed from sudo and the agent never had to repair the local
+// administrator's membership.
+func gateL6(t *testing.T, w *identityWorld) {
+	t0 := time.Now().UTC()
+	conf := strings.Split(w.Must("sudo cat /etc/himmelblau/himmelblau.conf"), "\n")
+	for _, line := range []string{"cache_timeout = 2592000", "local_sudo_group = paddock-no-sudo", "local_groups_reconcile_interval = 0"} {
+		if !slices.Contains(conf, line) {
+			t.Fatalf("himmelblau.conf lacks the line %s (PDK-292, PDK-294)", line)
+		}
+	}
+	groups := w.Must("getent group sudo; getent group users")
+	for end := t0.Add(11 * time.Minute); time.Now().Before(end); time.Sleep(time.Minute) {
+		w.Must("id " + w.dave.name + " >/dev/null; getent passwd " + w.dave.name + " >/dev/null; true")
+	}
+	var seat Session
+	for _, s := range w.UserSessions(w.dave.name) {
+		if s.Seat == "seat0" {
+			seat = s
+		}
+	}
+	if seat.ID == "" {
+		t.Fatalf("%s has no seat0 session (L1)", w.dave.name)
+	}
+	w.Must("sudo loginctl lock-session " + seat.ID)
+	Until(t, "lock screen", time.Minute, 2*time.Second, nil, func() bool {
+		return w.Must("loginctl show-session "+seat.ID+" -p LockedHint --value") == "yes"
+	})
+	w.Shot(t, "20-locked")
+	w.Key(keySpace...)
+	time.Sleep(3 * time.Second)
+	w.Type(w.dave.pin)
+	unlocked := false
+	for end := time.Now().Add(time.Minute); time.Now().Before(end); time.Sleep(2 * time.Second) {
+		if w.Must("loginctl show-session "+seat.ID+" -p LockedHint --value") == "no" {
+			unlocked = true
+			break
+		}
+	}
+	w.Shot(t, "21-unlocked")
+	if !unlocked {
+		t.Errorf("the session of %s did not unlock with the PIN after the access token's lifetime", w.dave.name)
+	}
+	if exit := w.pamLogin(t, w.dave, false, time.Minute); exit != 0 {
+		t.Errorf("PIN login of %s after the access token's lifetime: pamtester exit %d", w.dave.name, exit)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	n, err := authentikSQL(ctx, "SELECT count(*) FROM authentik_events_event WHERE action = 'suspicious_request' AND created > '"+
+		t0.Format(time.RFC3339)+"'")
+	if err != nil || n != "0" {
+		t.Errorf("suspicious_request events since %s: %q %v, want 0 (a revoked refresh token was used)", t0.Format(time.RFC3339), n, err)
+	}
+	if after := w.Must("getent group sudo; getent group users"); after != groups {
+		t.Errorf("groups sudo and users changed during the eleven minutes:\nbefore\n%s\nafter\n%s", groups, after)
+	}
+	since := strconv.FormatInt(t0.Unix(), 10)
+	if out := w.Must("sudo journalctl --since @" + since + " --no-pager -o cat | grep 'removed by root from group sudo' || true"); out != "" {
+		t.Errorf("an account was removed from sudo since %s:\n%s", t0.Format(time.RFC3339), out)
+	}
+	// Stop condition S15 of plan M8x: an error about the missing group is reported, never answered by creating it.
+	if out := w.Must("sudo journalctl -b -p err --no-pager -o cat | grep -F paddock-no-sudo || true"); out != "" {
+		t.Errorf("the journal reports an error for local_sudo_group = paddock-no-sudo (stop condition S15):\n%s", out)
+	}
+	w.Checkin()
+	n, err = paddockSQL(context.Background(), fmt.Sprintf("SELECT count(*) FROM action WHERE code = 'device.tamper_local_admin_changed' AND target->>'id' = '%s' AND started_at > '%s'",
+		w.ID, t0.Format(time.RFC3339)))
+	if err != nil || n != "0" {
+		t.Errorf("device.tamper_local_admin_changed since %s: %q %v, want 0 (the local administrator lost sudo)", t0.Format(time.RFC3339), n, err)
+	}
 }
 
 // gateL2 is the identity gate: a lock in Paddock refuses the next online login; within one check-in (link toggle) the
@@ -725,6 +804,34 @@ func gateP4(t *testing.T, w *identityWorld) {
 		t.Errorf("90-paddock changed: %s → %s", before, after)
 	}
 
+	// Never the last administrator (ADR 0008 amendment 2026-10-17): with a bundle that names no break-glass account,
+	// no member of sudo is removed; each is reported with reason last_admin. Once the real bundle is back, the foreign
+	// member is removed again.
+	// The foreign member is the base system's local account daemon, not a new one: with Himmelblau active, NSS answers
+	// for every unknown short name (cn_name_mapping plus a lookup-only token from the existence probe, 4.0.4 and
+	// 4.0.6), so useradd refuses any new name as existing (exit 9). daemon is in /etc/passwd of every Ubuntu
+	// release, files answers before himmelblau, and the agent treats any non-break-glass member alike.
+	const member = "daemon"
+	w.Must("grep -q '^" + member + ":' /etc/passwd && ! id -nG " + member + " | grep -qw sudo && sudo gpasswd -a " + member + " sudo >/dev/null")
+	defer w.Must("sudo gpasswd -d " + member + " sudo >/dev/null 2>&1 || true")
+	restoreBreakGlass := w.forgeBundle(t, func(s *bundle.SudoSpec) { s.BreakGlassAccounts = nil })
+	w.WaitEvent(t, "device.tamper_sudo_group_member", 4*time.Minute, func(p map[string]any) bool {
+		return p["username"] == member && p["group"] == "sudo" && p["removed"] == false && p["reason"] == "last_admin"
+	})
+	members := strings.Split(w.Must("getent group sudo | cut -d: -f4"), ",")
+	for _, m := range []string{member, "paddock", localAdmin} {
+		if !slices.Contains(members, m) {
+			t.Errorf("sudo members %q without break-glass accounts: %s was removed", members, m)
+		}
+	}
+	restoreBreakGlass()
+	w.WaitEvent(t, "device.tamper_sudo_group_member", 4*time.Minute, func(p map[string]any) bool {
+		return p["username"] == member && p["group"] == "sudo" && p["removed"] == true
+	})
+	if members := w.Must("getent group sudo | cut -d: -f4"); members != "paddock,"+localAdmin {
+		t.Errorf("sudo members %q after the bundle was restored, want only the break-glass accounts", members)
+	}
+
 	// A broken entry that only a test-only bundle can carry (the compiler checks every entry before signing): dave's
 	// command list gets a command the agent refuses for dave alone.
 	daveFile := "/etc/sudoers.d/" + sudoers.FileName(w.dave.name)
@@ -750,7 +857,7 @@ func gateP4(t *testing.T, w *identityWorld) {
 
 // forgeBundle replaces the device's cached bundle by a copy with a changed sudo resource, signed with a test key
 // that is added to the device's trust anchor, and restarts the agent, whose drift pass then applies it. The returned
-// function restores the original bundle and trust anchor.
+// function restores the original bundle and trust anchor; it runs once, at the latest when the test ends.
 func (w *identityWorld) forgeBundle(t *testing.T, change func(*bundle.SudoSpec)) func() {
 	t.Helper()
 	const cache, trust = "/var/lib/paddock/state/bundle.dsse", "/etc/paddock/trust.json"
@@ -801,14 +908,18 @@ func (w *identityWorld) forgeBundle(t *testing.T, change func(*bundle.SudoSpec))
 	}
 	tf.BundleKeys = append(tf.BundleKeys, protocol.BundleKey{KeyID: "systest:forged", PublicKey: base64.StdEncoding.EncodeToString(pub)})
 	trustJSON, _ := json.Marshal(tf)
-	w.Must("sudo systemctl stop paddock-supervisor")
-	w.MustIn(signed, "sudo tee "+cache+" >/dev/null && sudo chmod 0600 "+cache)
-	w.MustIn(trustJSON, "sudo tee "+trust+" >/dev/null && sudo chmod 0644 "+trust)
-	w.Must("sudo systemctl start paddock-supervisor")
-	return func() {
+	restore := sync.OnceFunc(func() {
 		w.Must("sudo systemctl stop paddock-supervisor")
 		w.MustIn([]byte(origBundle), "sudo tee "+cache+" >/dev/null && sudo chmod 0600 "+cache)
 		w.MustIn([]byte(origTrust), "sudo tee "+trust+" >/dev/null && sudo chmod 0644 "+trust)
 		w.Must("sudo systemctl start paddock-supervisor")
-	}
+	})
+	// Registered before the device changes: a gate that fails must not leave the forged bundle and the test key in the
+	// trust anchor for the gates after it.
+	t.Cleanup(restore)
+	w.Must("sudo systemctl stop paddock-supervisor")
+	w.MustIn(signed, "sudo tee "+cache+" >/dev/null && sudo chmod 0600 "+cache)
+	w.MustIn(trustJSON, "sudo tee "+trust+" >/dev/null && sudo chmod 0644 "+trust)
+	w.Must("sudo systemctl start paddock-supervisor")
+	return restore
 }

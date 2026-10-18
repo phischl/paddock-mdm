@@ -103,6 +103,8 @@ func TestIdentityAuthentikProvisioning(t *testing.T) {
 			GrantTypes         []string `json:"grant_types"`
 			PropertyMappings   []string `json:"property_mappings"`
 			AuthenticationFlow string   `json:"authentication_flow"`
+			AccessCode         string   `json:"access_code_validity"`
+			RefreshThreshold   string   `json:"refresh_token_threshold"`
 		} `json:"results"`
 	}
 	if err := ak.Get(ctx, "/providers/oauth2/?name="+client, &providers); err != nil || len(providers.Results) != 1 {
@@ -110,7 +112,8 @@ func TestIdentityAuthentikProvisioning(t *testing.T) {
 	}
 	p := providers.Results[0]
 	if p.ClientType != "public" || len(p.PropertyMappings) != 4 || !slices.Contains(p.GrantTypes, "urn:ietf:params:oauth:grant-type:device_code") ||
-		!slices.Contains(p.GrantTypes, "refresh_token") {
+		!slices.Contains(p.GrantTypes, "refresh_token") || p.AccessCode != "minutes=10" ||
+		p.RefreshThreshold != "seconds=0" {
 		t.Fatalf("provider %+v", p)
 	}
 	var app struct {

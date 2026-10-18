@@ -102,6 +102,9 @@ services:
       # production).
       PADDOCK_STEPUP_WINDOW: ${PADDOCK_STEPUP_WINDOW:-30s}
       PADDOCK_STEPUP_MAX_AUTH_AGE: ${PADDOCK_STEPUP_MAX_AUTH_AGE:-15s}
+      # The development users sign in without an authenticator (the dev blueprint skips the MFA stages); production
+      # refuses a portal sign-in without a second factor (development only; refused in production).
+      PADDOCK_LOGIN_MFA_OPTIONAL: "true"
       PADDOCK_REVOCATION_ENABLED: ${PADDOCK_REVOCATION_ENABLED:-true}
       # Shorter denial window of the IP allow list so that gate A1 sees the summary event (plan M7a decision 20;
       # development only, refused in production).

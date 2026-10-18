@@ -54,3 +54,18 @@ for (const theme of ['light', 'dark'] as const) {
     }
   })
 }
+
+// Between 600 and 1279 px the drawer starts as a rail, whose eagerly rendered tooltips the 1280 px runs above never
+// show to axe (aria-tooltip-name).
+test('the portal is accessible with the navigation as a rail', async ({ page }) => {
+  const csp = watchCSP(page)
+  await page.setViewportSize({ width: 960, height: 900 })
+  await login(page, 'alice@acme.test', 'dev_alice_password')
+  for (const path of ['/', '/devices']) {
+    await page.goto(path)
+    await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    await expect(page.getByTestId('nav-drawer')).toHaveClass(/v-navigation-drawer--rail/)
+    await expectAccessible(page)
+  }
+  expect(csp).toEqual([])
+})
