@@ -65,14 +65,12 @@ func TestComponentTargets(t *testing.T) {
 	haltRunningRollouts(t, root)
 	t.Cleanup(func() { haltRunningRollouts(t, root) })
 	v := gateRelease(t, root, true, true)
+	// Threshold 1: a completed rollout cannot be halted by hand, so the cleanup retracts it by a failure report.
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/rollout", map[string]any{
-		"waves": []int{100}, "min_wave_minutes": 1, "failure_threshold_min": 1000, "failure_threshold_percent": 100,
+		"waves": []int{100}, "min_wave_minutes": 1, "failure_threshold_min": 1, "failure_threshold_percent": 0,
 	}), http.StatusCreated, "")
-	t.Cleanup(func() {
-		if rolloutStatus(t, root, v) != "halted" {
-			expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/rollout/halt", nil), http.StatusOK, "")
-		}
-	})
+	d := activeDevice(t, alice, "", "a12-"+uniqueSuffix())
+	t.Cleanup(func() { retractRelease(t, root, d, v) })
 	waitRolloutStatus(t, root, v, "completed", 4*time.Minute)
 	eventually(t, "the targets of the current release", 3*time.Minute, func() bool { return componentTargets(t, root)["paddockd"].Version == v })
 	got := componentTargets(t, root)

@@ -34,6 +34,7 @@ func TestUpdateNow(t *testing.T) {
 	root, alice, bob := login(t, env.PlatformAdmin), login(t, env.Alice), login(t, env.Bob)
 	haltRunningRollouts(t, root)
 	t.Cleanup(func() { haltRunningRollouts(t, root) })
+	requireNoCompletedRollout(t, root)
 	d := activeDevice(t, alice, "", "a6-"+uniqueSuffix())
 	d.Arch = protocol.ArchAMD64
 	path := "/api/v1/devices/" + d.DeviceID + "/update-agent"

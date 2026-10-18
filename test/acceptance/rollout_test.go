@@ -57,6 +57,46 @@ func reportUpdateFailed(t *testing.T, d *devicesim.Device, version string, seq i
 	}
 }
 
+// retractRelease halts the rollout of a gate's release so it does not stay the current release of real devices. A
+// running rollout is halted by hand; a completed one cannot be (409), so d, a device of the organization, reports
+// agent.update_failed and the worker halts it — the rollout must have been started with failure_threshold_min 1 and
+// failure_threshold_percent 0 (the TestCurrentReleaseAutoStop pattern).
+func retractRelease(t *testing.T, root *env.Portal, d *devicesim.Device, version string) {
+	t.Helper()
+	switch rolloutStatus(t, root, version) {
+	case "halted", "":
+		return
+	case "running":
+		expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+version+"/rollout/halt", nil), http.StatusOK, "")
+		return
+	}
+	// A high event seq keeps clear of the seqs a gate sent itself: the worker skips a redelivered (device, seq).
+	reportUpdateFailed(t, d, version, 9999)
+	waitRolloutStatus(t, root, version, "halted", 3*time.Minute)
+}
+
+// requireNoCompletedRollout fails when a release's rollout is completed: that release is the current one of every
+// device, so a gate that needs a device without an offer would fail for another gate's leftover (retractRelease).
+func requireNoCompletedRollout(t *testing.T, root *env.Portal) {
+	t.Helper()
+	res := call(t, root, http.MethodGet, "/api/platform/v1/agent-releases?page_size=100", nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var page struct {
+		Items []struct {
+			Version       string `json:"version"`
+			RolloutStatus string `json:"rollout_status"`
+		} `json:"items"`
+	}
+	if err := res.JSON(&page); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range page.Items {
+		if r.RolloutStatus == "completed" {
+			t.Fatalf("the rollout of %s is completed: a gate left it as the current release instead of retracting it (retractRelease)", r.Version)
+		}
+	}
+}
+
 // TestCurrentReleaseAutoStop is the integration test of plan M2.1 decision 1: a completed rollout (the current
 // release) halts when a device reports agent.update_failed, and the device is no longer offered the release.
 func TestCurrentReleaseAutoStop(t *testing.T) {
