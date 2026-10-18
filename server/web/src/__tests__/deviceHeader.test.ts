@@ -22,6 +22,12 @@ vi.mock('../lib/localAdmin', async (original) => ({
   },
 }))
 
+const agentUpdate = vi.fn<(id: string) => Promise<{ problem: string; detail?: string } | null>>()
+vi.mock('../lib/devices', async (original) => ({
+  ...(await original<typeof import('../lib/devices')>()),
+  requestAgentUpdate: (id: string) => agentUpdate(id),
+}))
+
 const now = '2026-10-10T12:00:00Z'
 function deviceOf(over: Partial<DeviceDetail> = {}): DeviceDetail {
   return {
@@ -122,7 +128,7 @@ describe('device header band (plan M7c decision 29)', () => {
 
   it('offers Install updates and Rotate for an active device, never Retire, Lock or Destroy', async () => {
     await mountHeader(deviceOf(), 'org_admin', ['retire'])
-    expect(buttons()).toEqual(['install-now', 'local-admin-rotate'])
+    expect(buttons()).toEqual(['install-now', 'update-agent', 'local-admin-rotate'])
     expect(document.querySelector('[data-testid="install-now"]')?.textContent?.trim()).toBe('Install updates…')
   })
 
@@ -144,5 +150,32 @@ describe('device header band (plan M7c decision 29)', () => {
     expect(rotated).toEqual(['d1'])
     expect(changed).toHaveBeenCalled()
     expect(w.find('[role="status"]').text()).toBe('The device rotates the password with its next check-in.')
+  })
+
+  it('asks before Update agent now, sends the request and shows the open request (PDK-226)', async () => {
+    agentUpdate.mockResolvedValue(null)
+    const { w, changed } = await mountHeader(deviceOf(), 'org_operator')
+    await w.find('[data-testid="update-agent"]').trigger('click')
+    await flushPromises()
+    expect(pendingConfirm.value?.options.title).toBe('Update the agent now')
+    expect(pendingConfirm.value?.options.destructive).toBeFalsy()
+    expect(pendingConfirm.value?.options.message).toContain('to acme-lt-0142 at its next check-in')
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(agentUpdate).toHaveBeenCalledWith('d1')
+    expect(changed).toHaveBeenCalled()
+    wrapper?.unmount()
+    await mountHeader(deviceOf({ agent_update_requested_version: '2.0.0', agent_update_requested_at: now } as Partial<DeviceDetail>))
+    expect(document.querySelector('[data-testid="update-agent-requested"]')?.textContent).toContain('Update to 2.0.0 requested')
+  })
+
+  it('names the refusal of a device that already runs the release', async () => {
+    agentUpdate.mockResolvedValue({ problem: 'invalid_state', detail: 'the device already runs 2.0.0' })
+    const { w } = await mountHeader(deviceOf(), 'org_admin')
+    await w.find('[data-testid="update-agent"]').trigger('click')
+    await flushPromises()
+    settleConfirm({ reason: '' })
+    await flushPromises()
+    expect(w.find('[role="status"]').text()).toBe('The device already runs the offered release.')
   })
 })

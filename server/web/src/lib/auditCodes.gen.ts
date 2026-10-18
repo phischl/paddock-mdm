@@ -21,6 +21,7 @@ export const auditCodes = [
   'device.agent_rollback_failed',
   'device.agent_rolled_back',
   'device.agent_update_failed',
+  'device.agent_update_requested',
   'device.agent_updated',
   'device.approved',
   'device.bundle_applied',

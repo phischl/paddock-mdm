@@ -44,7 +44,7 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 		if err := q.UpsertDeviceStatus(ctx, pgstore.UpsertDeviceStatusParams{
 			DeviceID: hb.DeviceID, OrganizationID: hb.OrganizationID, LastContactAt: &at,
 			AppliedBundleVersion: &hb.AppliedBundleVersion, AgentVersion: &hb.AgentVersion, LastSeq: hb.Seq, Health: health,
-			SchemaVersions: versions,
+			SchemaVersions: versions, Arch: hb.Arch,
 		}); err != nil {
 			return err
 		}
@@ -206,6 +206,12 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 				err = q.InsertAgentUpdateReport(ctx, pgstore.InsertAgentUpdateReportParams{
 					DeviceID: deviceID, OrganizationID: org, Version: version, Outcome: outcome,
 				})
+			}
+		}
+		// The device's report of a requested version ends the update-now request (plan M8d decision 29).
+		if _, isUpdate := updateOutcomes[ev.Type]; isUpdate && err == nil {
+			if version, ok := spec.Params["version"].(string); ok {
+				_, err = q.ClearAgentUpdateRequest(ctx, pgstore.ClearAgentUpdateRequestParams{DeviceID: deviceID, Version: &version})
 			}
 		}
 		if area := loginStateArea(ev.Type, spec.Params); area != "" && err == nil {

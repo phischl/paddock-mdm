@@ -142,3 +142,21 @@ SELECT k.key_id, k.public_key, k.status AS key_status, d.id AS device_id, d.stat
 FROM device_identity_key k JOIN device d ON d.id = k.device_id
 WHERE d.state <> 'pending' AND (sqlc.narg(device_id)::uuid IS NULL OR d.id = sqlc.narg(device_id)::uuid)
 ORDER BY k.key_id;
+
+-- Update now (plan M8d decisions 26 and 29).
+
+-- name: SetAgentUpdateRequest :exec
+UPDATE device SET agent_update_requested_version = @version, agent_update_requested_at = now() WHERE id = @id;
+
+-- name: ClearAgentUpdateRequest :execrows
+-- The device reported the outcome of the requested version.
+UPDATE device SET agent_update_requested_version = NULL, agent_update_requested_at = NULL
+WHERE id = @device_id AND agent_update_requested_version = @version;
+
+-- name: ExpireAgentUpdateRequests :execrows
+UPDATE device SET agent_update_requested_version = NULL, agent_update_requested_at = NULL
+WHERE agent_update_requested_at < @before::timestamptz;
+
+-- name: ListAgentUpdateRequests :many
+SELECT id, agent_update_requested_version, agent_update_requested_at FROM device
+WHERE agent_update_requested_at IS NOT NULL ORDER BY id;

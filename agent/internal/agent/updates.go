@@ -51,8 +51,6 @@ func (a *Agent) sweepStaging() {
 	}
 }
 
-// handleUpdate stages an offered release and asks the supervisor to install it. The agent never replaces itself.
-// Under the manual update policy only a requested offer is staged (plan M8d decision 23).
 // updatePolicy is the agent update policy of the applied bundle ("" = automatic).
 func (a *Agent) updatePolicy() string {
 	if a.current == nil {
@@ -67,13 +65,19 @@ func (a *Agent) updatesAllowed() bool {
 	return a.updatePolicy() != bundle.UpdatePolicyManual || a.updateRequested
 }
 
+// handleUpdate stages an offered release and asks the supervisor to install it. The agent never replaces itself.
+// Under the manual update policy only a requested offer is staged (plan M8d decision 23). A fresh update-now
+// request — requested_at after the last handled one — overrides the policy and a failed version once (decision 28).
 func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 	a.sweepStaging()
 	a.updateRequested = offer != nil && offer.Requested
-	if offer == nil || offer.Version == buildinfo.Version || offer.Version == a.st.FailedUpdateVersion || update.Pending(a.d.Layout) {
+	fresh := a.updateRequested && offer.RequestedAt != nil &&
+		(a.st.UpdateRequestHandledAt == nil || offer.RequestedAt.After(*a.st.UpdateRequestHandledAt))
+	if offer == nil || offer.Version == buildinfo.Version || (offer.Version == a.st.FailedUpdateVersion && !fresh) ||
+		update.Pending(a.d.Layout) {
 		return
 	}
-	if a.updatePolicy() == bundle.UpdatePolicyManual && !offer.Requested {
+	if a.updatePolicy() == bundle.UpdatePolicyManual && !fresh {
 		if a.policySkipped != offer.Version {
 			a.policySkipped = offer.Version
 			slog.InfoContext(ctx, "agent update offer ignored by the organization's policy", "version", offer.Version)
@@ -89,7 +93,12 @@ func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 		slog.WarnContext(ctx, "staging the agent update failed; retrying at the next check-in", "version", offer.Version, "error", err)
 		return
 	}
-	slog.InfoContext(ctx, "agent update staged; asking the supervisor to install it", "version", offer.Version)
+	slog.InfoContext(ctx, "agent update staged; asking the supervisor to install it", "version", offer.Version, "requested", fresh)
+	if fresh {
+		at := offer.RequestedAt.UTC()
+		a.st.UpdateRequestHandledAt = &at
+		a.saveState()
+	}
 	if err := a.d.Signal(pid); err != nil {
 		slog.ErrorContext(ctx, "notifying the supervisor failed", "error", err)
 	}

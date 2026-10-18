@@ -271,6 +271,7 @@
       "use_denied": "A request with the API token {name} was refused: {reason, select, revoked {the token is revoked} expired {the token expired} creator_inactive {its creator is disabled or lost the required role} other {{reason}}}"
     },
     "device": {
+      "agent_update_requested": "{actor} asked {hostname} to install agent {version} now",
       "owners_changed": "{actor} changed the owners of {hostname}",
       "enrolled": "The device {hostname} enrolled",
       "approved": "{actor} approved the device {hostname}",
@@ -532,6 +533,15 @@
     "back": "Go to the start page"
   },
   "devices": {
+    "updateAgent": {
+      "label": "Update agent now",
+      "title": "Update the agent now",
+      "confirm": "Offer {version} to {hostname} at its next check-in, outside the rollout wave and regardless of the update policy? The supervisor installs it with self-test, probation and automatic rollback as usual.",
+      "requested": "Update to {version} requested {at}; the device picks it up at its next check-in.",
+      "noRelease": "No agent release is being offered right now.",
+      "upToDate": "The device already runs the offered release.",
+      "offered": "the current agent release"
+    },
     "logins": {
       "user": "User",
       "at": "Signed in",

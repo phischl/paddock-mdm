@@ -35,6 +35,9 @@ type State struct {
 	LastCheckinAt *time.Time `json:"last_checkin_at,omitempty"`
 	// FailedUpdateVersion is the last agent version whose update failed; it is not offered to the supervisor again.
 	FailedUpdateVersion string `json:"failed_update_version,omitempty"`
+	// UpdateRequestHandledAt is the requested_at of the last update-now request the agent staged (plan M8d decision
+	// 28): each request overrides the update policy and a failed version once.
+	UpdateRequestHandledAt *time.Time `json:"update_request_handled_at,omitempty"`
 	// ReportedUpdateAt is the "at" of the update result already turned into an event.
 	ReportedUpdateAt *time.Time `json:"reported_update_at,omitempty"`
 	// ReportedRegularAt and ReportedSecurityAt are the ends of the last regular and security update runs reported as

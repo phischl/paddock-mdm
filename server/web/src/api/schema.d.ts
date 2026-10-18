@@ -566,6 +566,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/update-agent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Asks an active device to install the agent release the platform offers at its
+         *     next check-in, outside its rollout wave and regardless of the update policy (plan M8d decision 26); the
+         *     supervisor installs it with self-test, probation and rollback as usual. The request ends with the device's
+         *     report for that version or after 24 hours. 409 invalid_state: the device is not active, no release is being
+         *     offered (no rollout or a halted one), the device already runs the release, or the release has no artifact for
+         *     the device's architecture.
+         */
+        post: operations["updateDeviceAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/groups": {
         parameters: {
             query?: never;
@@ -2939,6 +2965,10 @@ export interface components {
             disk_state?: components["schemas"]["DiskState"];
             /** @description The users responsible for the device, sorted by username (plan M8d decision 2). No login or sudo rights. */
             owners: components["schemas"]["UserRef"][];
+            /** @description The release an administrator asked the device to install now (plan M8d decision 26); null without an open request. */
+            agent_update_requested_version?: string | null;
+            /** Format: date-time */
+            agent_update_requested_at?: string | null;
             /** @description The hardware facts of the inventory (plan M8d decision 8); null while the inventory has no row for the device. */
             hardware: components["schemas"]["DeviceHardware"] | null;
         };
@@ -5317,6 +5347,27 @@ export interface operations {
         };
     };
     retireDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    updateDeviceAgent: {
         parameters: {
             query?: never;
             header: {

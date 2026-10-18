@@ -22,8 +22,8 @@ func setUpdatePolicy(t *testing.T, s *Stack, policy string) {
 }
 
 // TestUpdatePolicyManual is gate S-UP3 of plan M8d (AC5): with the organization on manual, a completed rollout of a
-// newer release is offered but not installed within three check-ins, and the agent's journal names the policy. The
-// last step, *Update agent now*, is added with PDK-226.
+// newer release is offered but not installed within three check-ins, and the agent's journal names the policy;
+// *Update agent now* installs it.
 func TestUpdatePolicyManual(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
@@ -52,5 +52,7 @@ func TestUpdatePolicyManual(t *testing.T) {
 		if d.AgentVersion() != before || d.Must("sudo ls -A /var/lib/paddock/staging 2>/dev/null || true") != "" {
 			t.Fatalf("%s was installed or staged under the manual policy (running %s)", v, d.AgentVersion())
 		}
+		// Update agent now installs it regardless of the policy (PDK-226).
+		requestUpdate(t, s, d, v)
 	})
 }

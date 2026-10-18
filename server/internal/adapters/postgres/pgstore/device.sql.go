@@ -14,6 +14,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearAgentUpdateRequest = `-- name: ClearAgentUpdateRequest :execrows
+UPDATE device SET agent_update_requested_version = NULL, agent_update_requested_at = NULL
+WHERE id = $1 AND agent_update_requested_version = $2
+`
+
+type ClearAgentUpdateRequestParams struct {
+	DeviceID uuid.UUID
+	Version  *string
+}
+
+// The device reported the outcome of the requested version.
+func (q *Queries) ClearAgentUpdateRequest(ctx context.Context, arg ClearAgentUpdateRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearAgentUpdateRequest, arg.DeviceID, arg.Version)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countDevices = `-- name: CountDevices :one
 SELECT count(*) FROM (
   SELECT 1 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
@@ -97,8 +116,21 @@ func (q *Queries) DeviceContact(ctx context.Context, id uuid.UUID) (string, erro
 	return contact, err
 }
 
+const expireAgentUpdateRequests = `-- name: ExpireAgentUpdateRequests :execrows
+UPDATE device SET agent_update_requested_version = NULL, agent_update_requested_at = NULL
+WHERE agent_update_requested_at < $1::timestamptz
+`
+
+func (q *Queries) ExpireAgentUpdateRequests(ctx context.Context, before time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, expireAgentUpdateRequests, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getDevice = `-- name: GetDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended FROM device WHERE id = $1
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at FROM device WHERE id = $1
 `
 
 func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -117,6 +149,8 @@ func (q *Queries) GetDevice(ctx context.Context, id uuid.UUID) (Device, error) {
 		&i.EnrolledAt,
 		&i.StateChangedAt,
 		&i.LoginsSuspended,
+		&i.AgentUpdateRequestedVersion,
+		&i.AgentUpdateRequestedAt,
 	)
 	return i, err
 }
@@ -141,7 +175,7 @@ func (q *Queries) GetDeviceIdentityKey(ctx context.Context, keyID string) (Devic
 }
 
 const getDeviceStatus = `-- name: GetDeviceStatus :one
-SELECT device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health, schema_versions, login_state, presumed_self_locked_at, presumed_lost_at, agent_version_key FROM device_status WHERE device_id = $1
+SELECT device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health, schema_versions, login_state, presumed_self_locked_at, presumed_lost_at, agent_version_key, arch FROM device_status WHERE device_id = $1
 `
 
 func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (DeviceStatus, error) {
@@ -160,6 +194,7 @@ func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (Devi
 		&i.PresumedSelfLockedAt,
 		&i.PresumedLostAt,
 		&i.AgentVersionKey,
+		&i.Arch,
 	)
 	return i, err
 }
@@ -188,7 +223,7 @@ const insertDevice = `-- name: InsertDevice :one
 INSERT INTO device (id, organization_id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7,
         $8)
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at
 `
 
 type InsertDeviceParams struct {
@@ -227,6 +262,8 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 		&i.EnrolledAt,
 		&i.StateChangedAt,
 		&i.LoginsSuspended,
+		&i.AgentUpdateRequestedVersion,
+		&i.AgentUpdateRequestedAt,
 	)
 	return i, err
 }
@@ -270,6 +307,37 @@ func (q *Queries) InsertDeviceIdentityKey(ctx context.Context, arg InsertDeviceI
 		arg.KeyProtection,
 	)
 	return err
+}
+
+const listAgentUpdateRequests = `-- name: ListAgentUpdateRequests :many
+SELECT id, agent_update_requested_version, agent_update_requested_at FROM device
+WHERE agent_update_requested_at IS NOT NULL ORDER BY id
+`
+
+type ListAgentUpdateRequestsRow struct {
+	ID                          uuid.UUID
+	AgentUpdateRequestedVersion *string
+	AgentUpdateRequestedAt      *time.Time
+}
+
+func (q *Queries) ListAgentUpdateRequests(ctx context.Context) ([]ListAgentUpdateRequestsRow, error) {
+	rows, err := q.db.Query(ctx, listAgentUpdateRequests)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAgentUpdateRequestsRow{}
+	for rows.Next() {
+		var i ListAgentUpdateRequestsRow
+		if err := rows.Scan(&i.ID, &i.AgentUpdateRequestedVersion, &i.AgentUpdateRequestedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listCachedDeviceKeys = `-- name: ListCachedDeviceKeys :many
@@ -434,7 +502,7 @@ func (q *Queries) ListDeviceIdentityKeys(ctx context.Context, deviceID uuid.UUID
 
 const listDevices = `-- name: ListDevices :many
 
-SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device_status.last_contact_at, device_status.applied_bundle_version,
+SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device.agent_update_requested_version, device.agent_update_requested_at, device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
        paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact,
        -- The owners as UserRef objects for the list column (plan M8d decision 3).
@@ -544,6 +612,8 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.Device.EnrolledAt,
 			&i.Device.StateChangedAt,
 			&i.Device.LoginsSuspended,
+			&i.Device.AgentUpdateRequestedVersion,
+			&i.Device.AgentUpdateRequestedAt,
 			&i.LastContactAt,
 			&i.AppliedBundleVersion,
 			&i.AgentVersion,
@@ -569,7 +639,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 }
 
 const lockDevice = `-- name: LockDevice :one
-SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended FROM device WHERE id = $1 FOR UPDATE
+SELECT id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at FROM device WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) {
@@ -588,6 +658,8 @@ func (q *Queries) LockDevice(ctx context.Context, id uuid.UUID) (Device, error) 
 		&i.EnrolledAt,
 		&i.StateChangedAt,
 		&i.LoginsSuspended,
+		&i.AgentUpdateRequestedVersion,
+		&i.AgentUpdateRequestedAt,
 	)
 	return i, err
 }
@@ -601,10 +673,26 @@ func (q *Queries) RevokeDeviceIdentityKeys(ctx context.Context, deviceID uuid.UU
 	return err
 }
 
+const setAgentUpdateRequest = `-- name: SetAgentUpdateRequest :exec
+
+UPDATE device SET agent_update_requested_version = $1, agent_update_requested_at = now() WHERE id = $2
+`
+
+type SetAgentUpdateRequestParams struct {
+	Version *string
+	ID      uuid.UUID
+}
+
+// Update now (plan M8d decisions 26 and 29).
+func (q *Queries) SetAgentUpdateRequest(ctx context.Context, arg SetAgentUpdateRequestParams) error {
+	_, err := q.db.Exec(ctx, setAgentUpdateRequest, arg.Version, arg.ID)
+	return err
+}
+
 const setDeviceState = `-- name: SetDeviceState :one
 UPDATE device SET state = $1, state_changed_at = now()
 WHERE id = $2 AND state = $3
-RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended
+RETURNING id, organization_id, hostname, state, bundle_seq, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at, state_changed_at, logins_suspended, agent_update_requested_version, agent_update_requested_at
 `
 
 type SetDeviceStateParams struct {
@@ -629,6 +717,8 @@ func (q *Queries) SetDeviceState(ctx context.Context, arg SetDeviceStateParams) 
 		&i.EnrolledAt,
 		&i.StateChangedAt,
 		&i.LoginsSuspended,
+		&i.AgentUpdateRequestedVersion,
+		&i.AgentUpdateRequestedAt,
 	)
 	return i, err
 }

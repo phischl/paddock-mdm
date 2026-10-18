@@ -22,6 +22,7 @@ const (
 	CodeDeviceRetired              Code = "device.retired"
 	CodeDeviceGroupsChanged        Code = "device.groups_changed"
 	CodeDeviceOwnersChanged        Code = "device.owners_changed"
+	CodeDeviceAgentUpdateRequested Code = "device.agent_update_requested"
 	CodeDeviceCloneSuspected       Code = "device.clone_suspected"
 	CodeDeviceBundleApplied        Code = "device.bundle_applied"
 	CodeDeviceBundleRejected       Code = "device.bundle_rejected"
@@ -267,6 +268,12 @@ var registry = map[Code]Definition{
 		Code: CodeDeviceGroupsChanged, Emitted: true,
 		Description: "The device group memberships of a device were replaced.",
 		Params:      []string{"hostname", "added", "removed"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceAgentUpdateRequested: {
+		Code: CodeDeviceAgentUpdateRequested, Emitted: true,
+		Description: "An administrator asked a device to install the offered agent release at its next check-in, outside its rollout wave and regardless of the organization's update policy.",
+		Params:      []string{"hostname", "version", "from_version"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceOwnersChanged: {

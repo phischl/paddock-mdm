@@ -157,7 +157,7 @@ func TestOfferForPreReleases(t *testing.T) {
 	for i, release := range alphaSequence {
 		o := Offer{Version: release, Status: RolloutCompleted, Waves: []int{100}, Artifacts: map[string]Artifact{"amd64": {SHA256: "ab"}}}
 		for j, running := range alphaSequence {
-			if _, ok := o.For(in, "amd64", running); ok != (j < i) {
+			if _, ok := o.For(in, "amd64", running, false); ok != (j < i) {
 				t.Errorf("release %s, device on %s: offered %v", release, running, ok)
 			}
 		}
@@ -167,31 +167,50 @@ func TestOfferForPreReleases(t *testing.T) {
 func TestOfferFor(t *testing.T) {
 	in := uuid.MustParse("0190f000-0000-7000-8000-00000000000d") // bucket 94
 	o := Offer{Version: "1.1.0", Status: RolloutRunning, Waves: []int{50, 100}, Artifacts: map[string]Artifact{"amd64": {SHA256: "ab"}}}
-	if _, ok := o.For(in, "amd64", "1.0.0"); ok {
+	if _, ok := o.For(in, "amd64", "1.0.0", false); ok {
 		t.Error("bucket 94 offered in a 50 % wave")
 	}
 	o.CurrentWave = 1
-	if a, ok := o.For(in, "amd64", "1.0.0"); !ok || a.SHA256 != "ab" {
+	if a, ok := o.For(in, "amd64", "1.0.0", false); !ok || a.SHA256 != "ab" {
 		t.Error("not offered in the 100 % wave")
 	}
-	if _, ok := o.For(in, "amd64", "1.1.0"); ok {
+	if _, ok := o.For(in, "amd64", "1.1.0", false); ok {
 		t.Error("offered to a device that runs the version")
 	}
 	for _, newer := range []string{"1.1.1", "1.10.0", "2.0.0-alpha.1", "1.1.0+build.2"} {
-		if _, ok := o.For(in, "amd64", newer); ok {
+		if _, ok := o.For(in, "amd64", newer, false); ok {
 			t.Errorf("offered to a device on %s, which is not older than the release", newer)
 		}
 	}
 	for _, older := range []string{"1.0.10", "1.1.0-rc.1", "0.0.0-dev", "", "unknown"} {
-		if _, ok := o.For(in, "amd64", older); !ok {
+		if _, ok := o.For(in, "amd64", older, false); !ok {
 			t.Errorf("not offered to a device on %q", older)
 		}
 	}
-	if _, ok := o.For(in, "arm64", "1.0.0"); ok {
+	if _, ok := o.For(in, "arm64", "1.0.0", false); ok {
 		t.Error("offered without an artifact for the arch")
 	}
 	o.Status = RolloutHalted
-	if _, ok := o.For(in, "amd64", "1.0.0"); ok {
+	if _, ok := o.For(in, "amd64", "1.0.0", false); ok {
 		t.Error("offered by a halted rollout")
+	}
+	if _, ok := o.For(in, "amd64", "1.0.0", true); ok {
+		t.Error("a halted rollout offered to a requested device")
+	}
+}
+
+// TestOfferForRequested (plan M8d decision 27): a requested device is offered the release outside its wave; the
+// version and artifact checks stay.
+func TestOfferForRequested(t *testing.T) {
+	in := uuid.MustParse("0190f000-0000-7000-8000-00000000000d") // bucket 94
+	o := Offer{Version: "1.1.0", Status: RolloutRunning, Waves: []int{1, 100}, Artifacts: map[string]Artifact{"amd64": {SHA256: "ab"}}}
+	if _, ok := o.For(in, "amd64", "1.0.0", true); !ok {
+		t.Error("requested device not offered outside its wave")
+	}
+	if _, ok := o.For(in, "amd64", "1.1.0", true); ok {
+		t.Error("requested device offered the version it runs")
+	}
+	if _, ok := o.For(in, "arm64", "1.0.0", true); ok {
+		t.Error("requested device offered without an artifact")
 	}
 }

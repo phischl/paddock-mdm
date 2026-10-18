@@ -178,18 +178,20 @@ type ChangeSet struct {
 }
 
 type Device struct {
-	ID                uuid.UUID
-	OrganizationID    uuid.UUID
-	Hostname          string
-	State             string
-	BundleSeq         int64
-	HardwareUuid      *string
-	MachineID         *string
-	OsRelease         json.RawMessage
-	EnrollmentTokenID uuid.NullUUID
-	EnrolledAt        time.Time
-	StateChangedAt    time.Time
-	LoginsSuspended   bool
+	ID                          uuid.UUID
+	OrganizationID              uuid.UUID
+	Hostname                    string
+	State                       string
+	BundleSeq                   int64
+	HardwareUuid                *string
+	MachineID                   *string
+	OsRelease                   json.RawMessage
+	EnrollmentTokenID           uuid.NullUUID
+	EnrolledAt                  time.Time
+	StateChangedAt              time.Time
+	LoginsSuspended             bool
+	AgentUpdateRequestedVersion *string
+	AgentUpdateRequestedAt      *time.Time
 }
 
 type DeviceAlert struct {
@@ -305,6 +307,7 @@ type DeviceStatus struct {
 	PresumedSelfLockedAt *time.Time
 	PresumedLostAt       *time.Time
 	AgentVersionKey      *string
+	Arch                 string
 }
 
 type DeviceUserSeen struct {

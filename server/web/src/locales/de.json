@@ -271,6 +271,7 @@
       "use_denied": "Eine Anfrage mit dem API-Token {name} wurde abgelehnt: {reason, select, revoked {das Token ist widerrufen} expired {das Token ist abgelaufen} creator_inactive {sein Ersteller ist deaktiviert oder hat die nötige Rolle verloren} other {{reason}}}"
     },
     "device": {
+      "agent_update_requested": "{actor} hat {hostname} aufgefordert, Agent {version} jetzt zu installieren",
       "owners_changed": "{actor} hat die Besitzer von {hostname} geändert",
       "enrolled": "Das Gerät {hostname} hat sich registriert",
       "approved": "{actor} hat das Gerät {hostname} freigegeben",
@@ -532,6 +533,15 @@
     "back": "Zur Startseite"
   },
   "devices": {
+    "updateAgent": {
+      "label": "Agent jetzt aktualisieren",
+      "title": "Agent jetzt aktualisieren",
+      "confirm": "{version} dem Gerät {hostname} beim nächsten Check-in anbieten, außerhalb der Rollout-Welle und unabhängig von der Update-Richtlinie? Der Supervisor installiert es wie üblich mit Selbsttest, Probezeit und automatischem Rollback.",
+      "requested": "Update auf {version} angefordert {at}; das Gerät holt es beim nächsten Check-in ab.",
+      "noRelease": "Derzeit wird kein Agent-Release angeboten.",
+      "upToDate": "Das Gerät läuft bereits mit dem angebotenen Release.",
+      "offered": "Das aktuelle Agent-Release"
+    },
     "logins": {
       "user": "Benutzer",
       "at": "Angemeldet",

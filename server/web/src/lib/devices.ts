@@ -130,6 +130,20 @@ export async function setDeviceOwners(id: string, userIDs: string[]): Promise<st
   return error ? problemCode(error) : null
 }
 
+/** Asks the device to install the offered agent release at its next check-in (plan M8d decision 26); null on
+ * success, otherwise the problem code and detail. */
+export async function requestAgentUpdate(id: string): Promise<{ problem: string; detail?: string } | null> {
+  const { error } = await api.POST('/api/v1/devices/{id}/update-agent', { params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } } })
+  return error ? { problem: problemCode(error), detail: (error as { detail?: string } | undefined)?.detail } : null
+}
+
+/** The message key of a refused update-now request: the two expected refusals have their own texts. */
+export function agentUpdateProblemKey(res: { problem: string; detail?: string }): string | null {
+  if (res.detail === 'no agent release is being offered') return 'devices.updateAgent.noRelease'
+  if (res.detail?.startsWith('the device already runs')) return 'devices.updateAgent.upToDate'
+  return null
+}
+
 /** All device groups by name (selection lists), paged through the list contract (at most its depth limit). */
 export async function allGroups(): Promise<{ id: string; name: string }[]> {
   const out: { id: string; name: string }[] = []

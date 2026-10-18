@@ -76,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also in the declarative document): with *Manual*, devices install no agent release, and no newer fleetd, unless an
   administrator requests it for the device; *Automatic* (default) follows the rollout waves. A group set to manual
   wins over automatic.
+- *Update agent now* on the device page (`POST /api/v1/devices/{id}/update-agent`, organization administrators and
+  operators, audited as `device.agent_update_requested`): the device installs the offered agent release at its next
+  check-in, outside its rollout wave and regardless of the update policy, with the usual self-test, probation and
+  rollback. The request ends with the device's report or after 24 hours.
 
 ### Changed
 

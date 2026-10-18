@@ -171,6 +171,12 @@ func (c *Commands) roundOrg(ctx context.Context, org uuid.UUID) error {
 		}
 		slog.InfoContext(ctx, "command expired", "organization_id", org, "device_id", e.DeviceID, "command_id", e.ID)
 	}
+	// Update-now requests end after 24 hours (plan M8d decision 29); the cache sync removes their au: keys.
+	if n, err := c.commands.ExpireAgentUpdateRequests(ctx, now); err != nil {
+		return err
+	} else if n > 0 {
+		slog.InfoContext(ctx, "update-now requests expired", "organization_id", org, "count", n)
+	}
 	revocations, err := c.revocations.Expire(ctx, now)
 	if err != nil {
 		return err

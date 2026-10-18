@@ -289,6 +289,24 @@ var deviceAuditCases = func() map[string][]auditCase {
 				expectOneEvent(t, w.alice, res.RequestID, "device.groups_changed", "failure")
 			}},
 		},
+		"POST /api/v1/devices/{id}/update-agent": {
+			// The success case needs a running rollout; gate A6 (TestUpdateNow) records it exactly once.
+			{"refused state", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPost, "/api/v1/devices/"+pendingDevice(t, w)+"/update-agent", nil)
+				expectStatus(t, res, http.StatusConflict, "invalid_state")
+				expectOneEvent(t, w.alice, res.RequestID, "device.agent_update_requested", "failure")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.bob, http.MethodPost, "/api/v1/devices/"+activeID(t, w)+"/update-agent", nil)
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.agent_update_requested", "denied")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPost, "/api/v1/devices/"+uuid.NewString()+"/update-agent", nil)
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.agent_update_requested", "failure")
+			}},
+		},
 		"PUT /api/v1/devices/{id}/owners": {
 			{"success", func(t *testing.T, w *auditWorld) {
 				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/owners", map[string]any{"user_ids": []string{}})

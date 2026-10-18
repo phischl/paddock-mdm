@@ -891,6 +891,29 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/update-agent:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: updateDeviceAgent
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator. Asks an active device to install the agent release the platform offers at its
+        next check-in, outside its rollout wave and regardless of the update policy (plan M8d decision 26); the
+        supervisor installs it with self-test, probation and rollback as usual. The request ends with the device's
+        report for that version or after 24 hours. 409 invalid_state: the device is not active, no release is being
+        offered (no rollout or a halted one), the device already runs the release, or the release has no artifact for
+        the device's architecture.
+      x-paddock-audit: device.agent_update_requested
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200": { $ref: "#/components/responses/Device" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/groups:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -4711,6 +4734,11 @@ components:
           type: array
           description: The users responsible for the device, sorted by username (plan M8d decision 2). No login or sudo rights.
           items: { $ref: "#/components/schemas/UserRef" }
+        agent_update_requested_version:
+          type: string
+          nullable: true
+          description: The release an administrator asked the device to install now (plan M8d decision 26); null without an open request.
+        agent_update_requested_at: { type: string, format: date-time, nullable: true }
         hardware:
           description: The hardware facts of the inventory (plan M8d decision 8); null while the inventory has no row for the device.
           nullable: true

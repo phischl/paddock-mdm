@@ -735,6 +735,27 @@ func TestCheckinAgentUpdate(t *testing.T) {
 	if u := checkin("amd64", "1.0.0"); u != nil {
 		t.Fatal("offered to a device outside the current wave")
 	}
+	// Update now (plan M8d decision 27): a request for the offered version lifts the wave and marks the offer.
+	requestedAt := e.now.Add(-time.Minute).UTC().Truncate(time.Second)
+	if err := e.cache.PutUpdateRequest(context.Background(), id, "1.0.9", requestedAt, e.now); err != nil {
+		t.Fatal(err)
+	}
+	if u := checkin("amd64", "1.0.0"); u != nil {
+		t.Fatalf("a request for another version lifted the wave: %+v", u)
+	}
+	_ = e.cache.PutUpdateRequest(context.Background(), id, "1.1.0", requestedAt, e.now)
+	if u := checkin("amd64", "1.0.0"); u == nil || !u.Requested || u.RequestedAt == nil || !u.RequestedAt.Equal(requestedAt) {
+		t.Fatalf("requested offer %+v", u)
+	}
+	if u := checkin("amd64", "1.1.0"); u != nil {
+		t.Fatalf("requested device on the version offered %+v", u)
+	}
+	offer.Status = agentrelease.RolloutHalted
+	_ = e.cache.PutOffer(context.Background(), &offer)
+	if u := checkin("amd64", "1.0.0"); u != nil {
+		t.Fatalf("halted rollout offered to a requested device %+v", u)
+	}
+	_ = e.cache.DeleteUpdateRequest(context.Background(), id)
 	_ = e.cache.PutOffer(context.Background(), nil)
 	if u := checkin("amd64", "1.0.0"); u != nil {
 		t.Fatal("offered after the offer was deleted")

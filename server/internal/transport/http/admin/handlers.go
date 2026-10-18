@@ -40,6 +40,7 @@ type handlers struct {
 	logins        *app.Logins
 	loginSettings *app.LoginSettings
 	loginHistory  *app.LoginHistory
+	agentUpdates  *app.AgentUpdates
 	privileges    *app.Privileges
 
 	commands    *app.DeviceCommands

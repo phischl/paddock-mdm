@@ -88,7 +88,16 @@ func (s *CacheSync) Changed(ctx context.Context, payload string) error {
 				return err
 			}
 			return s.putToken(ctx, tok)
-		case "device", "device_identity_key":
+		case "device":
+			if err := s.putKeys(ctx, q, org, uuid.NullUUID{UUID: id, Valid: true}); err != nil {
+				return err
+			}
+			dev, err := q.GetDevice(ctx, id)
+			if err != nil {
+				return err
+			}
+			return s.putUpdateRequest(ctx, id, dev.AgentUpdateRequestedVersion, dev.AgentUpdateRequestedAt)
+		case "device_identity_key":
 			return s.putKeys(ctx, q, org, uuid.NullUUID{UUID: id, Valid: true})
 		}
 		return fmt.Errorf("unexpected table in notification %q", payload)
@@ -132,8 +141,29 @@ func (s *CacheSync) Reconcile(ctx context.Context, org uuid.UUID) error {
 				return err
 			}
 		}
-		return s.putKeys(ctx, q, org, uuid.NullUUID{})
+		if err := s.putKeys(ctx, q, org, uuid.NullUUID{}); err != nil {
+			return err
+		}
+		requests, err := q.ListAgentUpdateRequests(ctx)
+		if err != nil {
+			return err
+		}
+		for _, r := range requests {
+			if err := s.putUpdateRequest(ctx, r.ID, r.AgentUpdateRequestedVersion, r.AgentUpdateRequestedAt); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// putUpdateRequest writes au:<device> for an open update-now request younger than 24 hours and deletes it otherwise
+// (plan M8d decision 26).
+func (s *CacheSync) putUpdateRequest(ctx context.Context, device uuid.UUID, version *string, at *time.Time) error {
+	if version == nil || at == nil {
+		return s.cache.DeleteUpdateRequest(ctx, device)
+	}
+	return s.cache.PutUpdateRequest(ctx, device, *version, *at, s.now())
 }
 
 func (s *CacheSync) putToken(ctx context.Context, tok pgstore.EnrollmentToken) error {

@@ -173,7 +173,8 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 		Id: d.ID, Hostname: d.Hostname, State: adminapi.DeviceState(d.State), HardwareUuid: d.HardwareUuid,
 		MachineId: d.MachineID, OsRelease: map[string]string{}, EnrollmentTokenId: idPtr(d.EnrollmentTokenID),
 		EnrolledAt: d.EnrolledAt.UTC(), StateChangedAt: d.StateChangedAt.UTC(), BundleVersion: d.BundleSeq,
-		Owners: []adminapi.UserRef{},
+		Owners: []adminapi.UserRef{}, AgentUpdateRequestedVersion: d.AgentUpdateRequestedVersion,
+		AgentUpdateRequestedAt: utcPtr(d.AgentUpdateRequestedAt),
 	}
 	_ = json.Unmarshal(d.OsRelease, &out.OsRelease) // written by the worker from a map[string]string
 	if status != nil {
@@ -192,8 +193,9 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		OsRelease: base.OsRelease, EnrollmentTokenId: base.EnrollmentTokenId, EnrolledAt: base.EnrolledAt,
 		StateChangedAt: base.StateChangedAt, BundleVersion: base.BundleVersion, LastContactAt: base.LastContactAt,
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
-		Hardware: base.Hardware,
-		Groups:   make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
+		Hardware: base.Hardware, AgentUpdateRequestedVersion: base.AgentUpdateRequestedVersion,
+		AgentUpdateRequestedAt: base.AgentUpdateRequestedAt,
+		Groups:                 make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
 		LoginAssignment: adminapi.DeviceLoginAssignment{
 			Users: make([]adminapi.UserRef, len(d.Login.Users)), Groups: make([]adminapi.UserGroupRef, len(d.Login.Groups)),
@@ -300,6 +302,14 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	out.Owners = toUserRefs(d.Owners)
 	out.Hardware = toDeviceHardware(d.Hardware)
 	return out, nil
+}
+
+func (h *handlers) UpdateDeviceAgent(ctx context.Context, req adminapi.UpdateDeviceAgentRequestObject) (adminapi.UpdateDeviceAgentResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, h.agentUpdates.RequestNow)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UpdateDeviceAgent200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
 }
 
 func (h *handlers) SetDeviceGroups(ctx context.Context, req adminapi.SetDeviceGroupsRequestObject) (adminapi.SetDeviceGroupsResponseObject, error) {
