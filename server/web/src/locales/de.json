@@ -205,7 +205,7 @@
     "invalid_command": "Ein Befehl ist nicht erlaubt: Verwenden Sie einen absoluten Pfad mit optionalen Argumenten, ohne ALL, !, # und die Zeichen , : = \\ ^ $ * ? [ ].",
     "setting_locked": "Diese Einstellung kann nicht mehr geändert werden: Geräte verwenden sie bereits.",
     "step_up_required": "Bestätigen Sie Ihre Identität, um fortzufahren.",
-    "step_up_failed": "Die Identitätsbestätigung ist fehlgeschlagen. Versuchen Sie es erneut mit Ihrem eigenen Konto. Haben Sie Ihre Identität vor weniger als einer Minute bestätigt, warten Sie zuerst eine Minute.",
+    "step_up_failed": "Die Identitätsbestätigung ist fehlgeschlagen. Versuchen Sie es erneut mit Ihrem eigenen Konto. Haben Sie Ihre Identität vor weniger als 20 Sekunden bestätigt, warten Sie zuerst 20 Sekunden.",
     "revocation_disabled": "Der Widerruf ist in dieser Installation nicht aktiviert (Abnahme ausstehend).",
     "revocation_frozen": "Sie können 24 Stunden lang keine Widerrufe anfordern oder freigeben, weil Sie ein Widerrufslimit überschritten haben.",
     "revocation_rejected": "Der Widerruf wurde abgelehnt.",

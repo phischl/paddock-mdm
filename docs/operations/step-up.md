@@ -97,9 +97,9 @@ TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot c
   portal's client secret and the portal's access policy. Authentik has no per-request flow override, hence the
   second application.
 - `GET /api/auth/stepup?return_to=` sends the administrator to `paddock-portal-stepup` with `prompt=login`,
-  `max_age=60` and the session's username as `login_hint` (the flow skips the identification stage).
+  `max_age=20` and the session's username as `login_hint` (the flow skips the identification stage).
 - `GET /api/auth/stepup/callback` accepts the ID token only for the same user (`sub`), with `auth_time` at most
-  60 s old and not earlier than the step-up's start, and MFA in `amr`, and then stores the time and the token ID in
+  20 s old and not earlier than the step-up's start, and MFA in `amr`, and then stores the time and the token ID in
   the session cookie. Otherwise the session stays as it was and the browser returns with `stepup=failed`. Both
   checks compare Authentik's `auth_time` with the api's clock, so the hosts of `paddock-api` and Authentik must keep
   their clocks in sync (NTP): an api clock ahead of Authentik's refuses step-ups, one behind it accepts older logins.
@@ -114,13 +114,14 @@ The portal shows how long the last step-up stays valid: a chip *Confirmed until 
 *Identity confirmed until …* in the user menu (*No current identity confirmation* otherwise), from
 `step_up_valid_until` of `GET /api/v1/me`; both disappear when the window ends.
 
-`max_age` is 60, not 0: Authentik ignores `max_age=0` and forces a new login for `prompt=login` only once per
-Authentik login, so a second step-up would otherwise receive a token of the first one. With `max_age=60`, any step-up
-more than 60 s after the previous Authentik login authenticates again; within 60 s Authentik may hand out the earlier
-login, whose `auth_time` predates the step-up, so the callback refuses it and the administrator tries again a minute
-later.
+`max_age` is 20, not 0: Authentik ignores `max_age=0` and forces a new login for `prompt=login` only once per
+Authentik login, so a second step-up would otherwise receive a token of the first one. With `max_age=20`, any step-up
+more than 20 s after the previous Authentik login authenticates again; within 20 s Authentik may hand out the earlier
+login, whose `auth_time` predates the step-up, so the callback refuses it and the administrator waits 20 seconds
+and tries again. 20 s stays below the 30 s for which the escrow-reader and the revocation-issuer accept a step-up, so
+a step-up that is too old for them is always old enough for Authentik to authenticate again.
 After a step-up that was refused because another account authenticated, Authentik keeps that account's login; the
-next step-up asks for credentials again once it is older than 60 s.
+next step-up asks for credentials again once it is older than 20 s.
 
 ## Configuration
 
