@@ -26,6 +26,7 @@ import (
 	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/legacy"
 	"github.com/google/uuid"
+	vk "github.com/valkey-io/valkey-go"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
@@ -87,6 +88,7 @@ type env struct {
 	t       *testing.T
 	handler http.Handler
 	cache   *devicecache.Cache
+	valkey  vk.Client
 	pub     *fakePublisher
 	router  routers.Router
 	now     time.Time
@@ -101,7 +103,8 @@ func newEnv(t *testing.T, perKey, perIP int) *env {
 // newEnvTrusting is newEnv with trusted proxies (plan M7a decision 5).
 func newEnvTrusting(t *testing.T, perKey, perIP int, trusted []netip.Prefix) *env {
 	t.Helper()
-	e := &env{t: t, cache: devicecache.New(valkeytest.Start(t).Client(t)), pub: &fakePublisher{},
+	vc := valkeytest.Start(t).Client(t)
+	e := &env{t: t, cache: devicecache.New(vc), valkey: vc, pub: &fakePublisher{},
 		now: time.Now().Truncate(time.Second), org: uuid.New()}
 	e.handler = device.NewHandler(device.Deps{
 		Cache: e.cache, Publisher: e.pub, Presigner: fakePresigner{}, Artifacts: fakePresigner{}, Escrow: fakePresigner{},
@@ -830,6 +833,25 @@ func TestBackpressureAndRateLimits(t *testing.T) {
 		t.Fatalf("other key, same address: %d %s", r.status, r.body)
 	}
 	e.expectProblem(checkin(d, did), http.StatusTooManyRequests, "rate_limited")
+}
+
+// TestValkeyStall: a Valkey that stops answering is a transient outage, answered 503 with Retry-After so the agent
+// retries, never 500 (CI run of PR #87: "devicecache: rate limit: i/o timeout").
+func TestValkeyStall(t *testing.T) {
+	e := newEnv(t, 0, 0)
+	c := newClient(t)
+	id := e.enrolled(c, "active")
+	stall := e.valkey.B().ClientPause().Timeout(8000).All().Build()
+	if err := e.valkey.Do(context.Background(), stall).Error(); err != nil {
+		t.Fatal(err)
+	}
+	r := e.send(c, request{method: "POST", path: "/v1/events", device: id.String(), body: protocol.EventsRequest{
+		Events: []protocol.Event{{EventSeq: 1, Type: "bundle.applied", OccurredAt: e.now, Data: json.RawMessage(`{}`)}},
+	}})
+	e.expectProblem(r, http.StatusServiceUnavailable, "backpressure")
+	if r.header.Get("Retry-After") != "5" {
+		t.Fatalf("Retry-After %q", r.header.Get("Retry-After"))
+	}
 }
 
 // TestRateLimitClientAddress: the per-address limit keys on the derived client address — the canonical header of a

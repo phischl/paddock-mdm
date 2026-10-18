@@ -151,6 +151,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When Valkey stalls or is unreachable, the device API now answers 503 with `Retry-After` (problem code
+  `backpressure`) instead of 500. Devices back off and retry instead of reporting a server fault.
 - The permission profile form no longer leaves an unhandled error in the browser console when the root-equivalence
   preview cannot reach the server; the preview just stays empty.
 - A release public key or another secret file of a Paddock service with mode 0600 made the roles fail with

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -153,10 +154,26 @@ var (
 	errInternal         = newError(http.StatusInternalServerError, "internal")
 )
 
-// fail writes err as problem details; anything that is not an *apiError is logged and answered 500.
+// unavailableRetryAfter is the Retry-After of a 503 for an unreachable dependency.
+const unavailableRetryAfter = 5 * time.Second
+
+// fail writes err as problem details. A network error towards a dependency (Valkey or the broker, the only ones the
+// gateway talks to) is answered 503 with Retry-After; anything else that is not an *apiError is logged and answered
+// 500.
 func (g *gateway) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var e *apiError
-	if !errors.As(err, &e) {
+	var netErr net.Error
+	switch {
+	case errors.As(err, &e):
+	case errors.As(err, &netErr):
+		// A stalled or unreachable Valkey is transient; a 503 lets the agent back off and retry instead of treating
+		// the request as a server fault. The closed problem code registry has no dedicated code, and backpressure
+		// already means "retry after the given time" to the agent.
+		slog.WarnContext(r.Context(), "device request failed: dependency unavailable", "error", err,
+			"request_id", httpx.RequestID(r.Context()))
+		e = errBackpressure.with("a dependency is temporarily unavailable")
+		e.retryAfter = unavailableRetryAfter
+	default:
 		slog.ErrorContext(r.Context(), "device request failed", "error", err, "request_id", httpx.RequestID(r.Context()))
 		e = errInternal
 	}
