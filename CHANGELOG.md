@@ -154,8 +154,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it running again.
 - A repeated identity confirmation (step-up) is possible 20 seconds after the previous one instead of a minute; the
   step-up asks the identity provider to authenticate again after 20 seconds.
-- The portal sign-in enrols a WebAuthn authenticator when the administrator has none: after the TOTP code for an
-  administrator with TOTP only, after the password for a new administrator without any authenticator. TOTP stays
+- The portal sign-in enrols a WebAuthn authenticator when the administrator has none: after the TOTP code (or one of
+  the account's recovery codes, which the identity provider counts as the TOTP factor) for an administrator with TOTP
+  only, after the password for a new administrator without any authenticator. Keep administrators' recovery codes in
+  custody. TOTP stays
   usable for the identity provider's own interfaces and the device login.
 - *End all sessions* now also signs every portal user out of the identity provider, so a stolen browser session cannot
   sign in again without password and authenticator.
@@ -197,7 +199,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A release that failed its probation is rolled back exactly once; the restarted agent no longer re-installs it before
   the rollback is recorded.
 - Authentik's own sign-in asks a user with an authenticator for the second factor once instead of twice; a sign-in
-  with a recovery code, e-mail, SMS or Duo code is still followed by a WebAuthn or TOTP prompt.
+  with a recovery code, e-mail, SMS or Duo code is still followed by a prompt for a second factor of the user's own
+  devices, where a further recovery code is accepted as well.
 
 ## [0.1.0-alpha.3] - 2026-10-17
 

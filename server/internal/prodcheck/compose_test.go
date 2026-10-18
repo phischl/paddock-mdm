@@ -365,7 +365,8 @@ func TestContainerHardening(t *testing.T) {
 // default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a). The stage is
 // skipped only when order 30 has validated a WebAuthn or TOTP device in this sign-in, because a last_auth_threshold
 // cannot skip a stage after another stage's validation (PDK-324). Owning such a device does not skip it, so a sign-in
-// with a recovery code, e-mail, SMS or Duo still passes WebAuthn or TOTP, and an expression error keeps the stage.
+// with a recovery code, e-mail, SMS or Duo is asked again (where Authentik also accepts a further recovery code), and
+// an expression error keeps the stage.
 func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 	read := func(path string) string {
 		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))
@@ -417,8 +418,8 @@ func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 
 // TestPortalBlueprintLoginWebAuthnOnly (plan M8f decision 13 as amended on 2026-10-18): stage A at order 30 validates
 // any existing authenticator and enrols WebAuthn only for an account without one; stage B at order 31 enrols WebAuthn
-// after a TOTP validation and runs only for an account without a WebAuthn device. The default flow's stage, which
-// serves every Authentik user, keeps accepting TOTP.
+// after a TOTP validation (Authentik counts a recovery code as TOTP) and runs only for an account without a WebAuthn
+// device. The default flow's stage, which serves every Authentik user, keeps accepting TOTP.
 func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-portal.yaml"))
 	if err != nil {
