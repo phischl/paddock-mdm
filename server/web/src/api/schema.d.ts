@@ -2115,6 +2115,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/platform/v1/openbao/auto-unseal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The automatic-unseal setting (ADR 0035): the acknowledged decision, the unsealer's
+         *     report and OpenBao's seal status. Sessions only: platform tokens do not exist.
+         */
+        get: operations["getAutoUnseal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/openbao/auto-unseal/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Records the typed
+         *     acknowledgement of the current disclaimer and enables the setting; the unsealer on the host acts only while it
+         *     is enabled. 409 disclaimer_outdated when disclaimer_version is not the current version (the response of GET
+         *     carries it); 400 invalid_request when acknowledgement is not the exact sentence of the disclaimer. Every
+         *     attempt is audited.
+         */
+        post: operations["enableAutoUnseal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/platform/v1/openbao/auto-unseal/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Disables the setting:
+         *     the unsealer stops unsealing at once; the shares stay on the host until the operator runs
+         *     ./paddock auto-unseal disable. Every attempt is audited.
+         */
+        post: operations["disableAutoUnseal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases/{version}/rollout/resume": {
         parameters: {
             query?: never;
@@ -2361,6 +2425,52 @@ export interface components {
              * @description The new session generation; every session of an older generation is invalid.
              */
             generation: number;
+        };
+        AutoUnsealEnable: {
+            disclaimer_version: string;
+            acknowledgement: string;
+        };
+        AutoUnsealStatus: {
+            /** @enum {string} */
+            state: "disabled" | "enabled";
+            /** @description The current version of the disclaimer text. */
+            disclaimer_version: string;
+            /** @description The version that was acknowledged. */
+            acknowledgement_version: string | null;
+            acknowledgement: string | null;
+            acknowledged_by: string | null;
+            /** Format: date-time */
+            acknowledged_at: string | null;
+            disabled_by: string | null;
+            /** Format: date-time */
+            disabled_at: string | null;
+            unsealer: components["schemas"]["UnsealerReport"];
+            seal: components["schemas"]["SealStatus"];
+        };
+        UnsealerReport: {
+            /** @description The unsealer reported within the last 60 s. */
+            running: boolean;
+            /** Format: date-time */
+            seen_at: string | null;
+            shares_present: boolean;
+            /** Format: int64 */
+            unseal_count: number;
+            /** Format: date-time */
+            last_unseal_at: string | null;
+            /** Format: int64 */
+            failure_count: number;
+            /** Format: date-time */
+            last_failure_at: string | null;
+            /** @enum {string|null} */
+            last_failure_reason: "unreachable" | "invalid_share" | "still_sealed" | null;
+        };
+        SealStatus: {
+            reachable: boolean;
+            initialized: boolean;
+            sealed: boolean;
+            type: string;
+            threshold: number;
+            shares: number;
         };
         AgentRollout: {
             version: string;
@@ -8173,6 +8283,82 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
+        };
+    };
+    getAutoUnseal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoUnsealStatus"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+        };
+    };
+    enableAutoUnseal: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoUnsealEnable"];
+            };
+        };
+        responses: {
+            /** @description Enabled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoUnsealStatus"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    disableAutoUnseal: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disabled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoUnsealStatus"];
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     resumeAgentRollout: {

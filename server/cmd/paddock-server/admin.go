@@ -16,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/config"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
+	"github.com/phischl/paddock-mdm/server/internal/domain/autounseal"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/platform/valkey"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -24,11 +25,11 @@ import (
 )
 
 // adminCommand is a parsed paddock-server admin command line (plan M6c decision 20; allowlist: plan M7a decision 21;
-// agent-release: plan M7b decision 31).
+// agent-release: plan M7b decision 31; auto-unseal: plan M8u decision 8).
 type adminCommand struct {
-	name    string // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | security-review | end-sessions
+	name    string // bump-bundle-seq | recompile | rebuild-cache | allowlist | agent-release | security-review | end-sessions | auto-unseal
 	by      int64  // bump-bundle-seq only
-	sub     string // allowlist only: show | disable | add
+	sub     string // allowlist: show | disable | add; auto-unseal: show | verify | disable
 	cidr    string // allowlist add
 	label   string // allowlist add
 	version string // agent-release
@@ -82,6 +83,16 @@ func parseAdmin(args []string) (adminCommand, error) {
 				return adminCommand{}, errUsage
 			}
 			cmd.cidr, cmd.label = *cidr, *label
+		default:
+			return adminCommand{}, errUsage
+		}
+	case "auto-unseal":
+		if len(args) != 2 {
+			return adminCommand{}, errUsage
+		}
+		cmd.sub = args[1]
+		switch cmd.sub {
+		case "show", "verify", "disable":
 		default:
 			return adminCommand{}, errUsage
 		}
@@ -175,8 +186,89 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stdout, "every portal session ended (generation %d)\n", gen)
+	case "auto-unseal":
+		return runAutoUnsealCLI(ctx, cmd.sub, app.NewAutoUnseal(admin.Runner(), platformPool, nil), os.Stdout)
 	}
 	return nil
+}
+
+// errAutoUnsealNotEnabled ends admin auto-unseal verify with exit code 1 after the message is printed.
+var errAutoUnsealNotEnabled = errors.New("automatic unseal is not enabled")
+
+// autoUnsealCLI is the part of app.AutoUnseal the host commands use.
+type autoUnsealCLI interface {
+	Load(ctx context.Context) (autounseal.Setting, error)
+	DisableCLI(ctx context.Context) (autounseal.Setting, error)
+}
+
+// runAutoUnsealCLI is paddock-server admin auto-unseal show|verify|disable (plan M8u decision 8). There is no enable:
+// enabling is a platform administrator's acknowledgement in the portal. The row holds no share, so nothing printed
+// here can be one.
+func runAutoUnsealCLI(ctx context.Context, sub string, uc autoUnsealCLI, out io.Writer) error {
+	switch sub {
+	case "verify":
+		s, err := uc.Load(ctx)
+		if err != nil {
+			return err
+		}
+		if s.State != autounseal.StateEnabled {
+			fmt.Fprintln(out, "automatic unseal is not enabled: a platform administrator enables it in the portal first (Platform → OpenBao)")
+			return errAutoUnsealNotEnabled
+		}
+		fmt.Fprintf(out, "automatic unseal acknowledged by %s on %s (disclaimer %s)\n", s.AcknowledgedBy,
+			s.AcknowledgedAt.UTC().Format(time.RFC3339), s.DisclaimerVersion)
+	case "show":
+		s, err := uc.Load(ctx)
+		if err != nil {
+			return err
+		}
+		writeAutoUnseal(out, s)
+	case "disable":
+		s, err := uc.DisableCLI(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "automatic unseal disabled in the platform setting; run ./paddock auto-unseal disable to remove the shares from the host")
+		writeAutoUnseal(out, s)
+	}
+	return nil
+}
+
+func writeAutoUnseal(out io.Writer, s autounseal.Setting) {
+	ts := func(t time.Time) string {
+		if t.IsZero() {
+			return "-"
+		}
+		return t.UTC().Format(time.RFC3339)
+	}
+	str := func(v string) string {
+		if v == "" {
+			return "-"
+		}
+		return v
+	}
+	r := s.Report
+	for _, kv := range [][2]string{
+		{"state", string(s.State)},
+		{"disclaimer_version", str(s.DisclaimerVersion)},
+		{"current_disclaimer_version", autounseal.DisclaimerVersion},
+		{"acknowledgement", str(s.Acknowledgement)},
+		{"acknowledged_by", str(s.AcknowledgedBy)},
+		{"acknowledged_by_subject", str(s.AcknowledgedBySubject)},
+		{"acknowledged_at", ts(s.AcknowledgedAt)},
+		{"disabled_by", str(s.DisabledBy)},
+		{"disabled_at", ts(s.DisabledAt)},
+		{"unsealer_seen_at", ts(r.SeenAt)},
+		{"unsealer_running", strconv.FormatBool(r.UnsealerRunning(time.Now()))},
+		{"unsealer_shares_present", strconv.FormatBool(r.SharesPresent)},
+		{"unseal_count", strconv.FormatInt(r.UnsealCount, 10)},
+		{"last_unseal_at", ts(r.LastUnsealAt)},
+		{"failure_count", strconv.FormatInt(r.FailureCount, 10)},
+		{"last_failure_at", ts(r.LastFailureAt)},
+		{"last_failure_reason", str(r.LastFailureReason)},
+	} {
+		fmt.Fprintf(out, "%s: %s\n", kv[0], kv[1])
+	}
 }
 
 // runAllowlist is the break-glass of the IP allow list (plan M7a decision 21): show, disable and add run with a system

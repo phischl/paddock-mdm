@@ -34,6 +34,7 @@ commands:
   admin end-sessions
   admin allowlist show|disable
   admin allowlist add --cidr <cidr> --label <label>
+  admin auto-unseal show|verify|disable
   admin agent-release --version <x.y.z> --dir <dir>
   backup openbao
   backup decrypt <in> <out|->
@@ -155,7 +156,7 @@ func exitCode(err error) int {
 	case errors.Is(err, errUsage):
 		fmt.Fprint(os.Stderr, usage)
 		return 2
-	case errors.Is(err, errProdCheckFailed):
+	case errors.Is(err, errProdCheckFailed), errors.Is(err, errAutoUnsealNotEnabled):
 		return 1
 	case errors.As(err, &missing):
 		slog.Error("configuration incomplete", "missing", missing.Names)

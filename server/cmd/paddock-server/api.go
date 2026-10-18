@@ -199,6 +199,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Sessions:       sessionStore,
 		StepUpAccounts: accounts,
 		EndSessions:    app.NewSessions(runner, sessionStore),
+		AutoUnseal:     app.NewAutoUnseal(runner, platformPool, baoClient),
 		PublicURL:      publicURL,
 		Static:         static,
 		// Development only: LoadDevStepUp refuses the variables in production.

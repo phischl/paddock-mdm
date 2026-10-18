@@ -377,6 +377,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		StepUpTokens:   e.stepUps,
 		Sessions:       e.sessions,
 		EndSessions:    app.NewSessions(runner, e.sessions),
+		AutoUnseal:     app.NewAutoUnseal(runner, platformPool, nil),
 		PublicURL:      "https://admin.test",
 		Static:         static,
 	}

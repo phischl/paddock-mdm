@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Automatic unseal of OpenBao, API and host commands (ADR 0035): a platform administrator with a step-up records the
+  typed acknowledgement of a versioned disclaimer with `POST /api/platform/v1/openbao/auto-unseal/enable` and
+  disables it again with `…/disable`; `GET /api/platform/v1/openbao/auto-unseal` shows the setting, the unsealer's
+  report and OpenBao's seal status. `paddock-server admin auto-unseal show|verify|disable` reads, checks and disables
+  the setting on the host. The worker records every automatic unseal and every failed attempt as
+  `platform.openbao_auto_unsealed` and exports `paddock_auto_unseal_enabled`, `paddock_auto_unseal_shares_present`
+  and `paddock_auto_unseal_unsealer_up`; new audit codes `platform.auto_unseal_enabled` and
+  `platform.auto_unseal_disabled`.
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.
