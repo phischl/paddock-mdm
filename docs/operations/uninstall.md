@@ -91,5 +91,7 @@ outcome, every step, local administrator and TPM result, `"delivered": false`). 
 hand in the portal (*Retire*); the retirement revokes its identity keys. If the helper never ran (no result file, the
 packages still installed — for example a reboot during the removal lost the helper, which runs from `/run`), cancel
 the request or request it again once the report is 24 hours overdue (counted from the device's command result, or
-from the delivery when there is none; audited with `report_overdue`), or remove the packages by hand. A late report
-of the withdrawn command no longer retires the device.
+from the delivery when there is none; audited with `report_overdue`), or remove the packages by hand. A command the
+device received but has not answered yet (`delivered`) is cancelled with the request: a device that comes back with
+it gets its result refused and does not start the removal. A late report of the withdrawn command no longer retires
+the device.

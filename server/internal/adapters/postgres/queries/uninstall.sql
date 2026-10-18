@@ -26,6 +26,12 @@ WHERE d.id = @id AND d.uninstall_requested_at IS NOT NULL;
 UPDATE device_command SET status = 'cancelled', finished_at = @finished_at::timestamptz
 WHERE id = @id AND status IN ('pending','failed','expired');
 
+-- name: WithdrawDeviceCommand :execrows
+-- A command whose result the caller claimed as cancelled first (devicecache ClaimResult): pending, or delivered when
+-- the uninstall report is overdue or a Lock or Destroy takes precedence (review 2 findings A and D).
+UPDATE device_command SET status = 'cancelled', finished_at = @finished_at::timestamptz
+WHERE id = @id AND status IN ('pending','delivered');
+
 -- name: DeviceHasOpenRevocation :one
 -- An open Lock or Destroy; the standing self-lock token of the dead man's switch does not count.
 SELECT EXISTS (

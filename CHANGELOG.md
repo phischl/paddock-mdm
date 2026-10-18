@@ -92,7 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Devices can be removed from Paddock from the portal (*Danger zone* → *Remove Paddock*, organization administrators
   with a step-up and the typed hostname, `POST /api/v1/devices/{id}/uninstall`) in two modes, leave as is or reset,
   and the request can be cancelled until the device received it, or requested again or cancelled once the device's
-  removal report is 24 hours overdue (`report_overdue`); a cancelled removal never starts on the device. The device is
+  removal report is 24 hours overdue (`report_overdue`, which also withdraws a command the device received but did
+  not answer yet); a cancelled removal never starts on the device. The device is
   retired after it reported the removal of the open request (`device.uninstalled`, `device.retired` with reason
   `uninstalled`); a removal report without such a request is audited and retires nothing. Pending removals appear on
   the attention page. Lock and Destroy are refused while a removal is requested (it removes `paddock-revoke`).

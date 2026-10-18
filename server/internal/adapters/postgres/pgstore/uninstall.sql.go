@@ -285,3 +285,23 @@ func (q *Queries) UninstallResultPending(ctx context.Context, arg UninstallResul
 	err := row.Scan(&column_1)
 	return column_1, err
 }
+
+const withdrawDeviceCommand = `-- name: WithdrawDeviceCommand :execrows
+UPDATE device_command SET status = 'cancelled', finished_at = $1::timestamptz
+WHERE id = $2 AND status IN ('pending','delivered')
+`
+
+type WithdrawDeviceCommandParams struct {
+	FinishedAt time.Time
+	ID         uuid.UUID
+}
+
+// A command whose result the caller claimed as cancelled first (devicecache ClaimResult): pending, or delivered when
+// the uninstall report is overdue or a Lock or Destroy takes precedence (review 2 findings A and D).
+func (q *Queries) WithdrawDeviceCommand(ctx context.Context, arg WithdrawDeviceCommandParams) (int64, error) {
+	result, err := q.db.Exec(ctx, withdrawDeviceCommand, arg.FinishedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

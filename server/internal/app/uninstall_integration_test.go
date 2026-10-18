@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -522,6 +523,67 @@ func TestUninstallReportOverdue(t *testing.T) {
 	}
 	if retired, err := w.reports.RetireUninstalled(systemCtx(w.org), w.device); err != nil || retired {
 		t.Fatalf("a report of the withdrawn command retired: %v, %v", retired, err)
+	}
+}
+
+// TestUninstallOverdueWithdrawsTheDeliveredCommand (review 2 finding A): an overdue cancel or re-request of an
+// uninstall whose command the device received cancels that command, claims its result as cancelled and removes it
+// from the gateway, so a device that comes back with it never removes itself; a result the device claimed first
+// refuses both.
+func TestUninstallOverdueWithdrawsTheDeliveredCommand(t *testing.T) {
+	w := newUninstallWorld(t)
+	admin := w.as(w.org, principal.RoleOrgAdmin, true)
+	deliveredLongAgo := func(id uuid.UUID) {
+		w.exec(t, "UPDATE device_command SET status = 'delivered', delivered_at = now() - interval '25 hours' WHERE id = $1", id)
+	}
+	withdrawn := func(id uuid.UUID) {
+		t.Helper()
+		if n := w.count(t, "SELECT count(*) FROM device_command WHERE id = $1 AND status = 'cancelled'", id); n != 1 {
+			t.Fatalf("command %s not cancelled", id)
+		}
+		if owner, status, _ := w.cache.ClaimResult(context.Background(), uuid.Nil, id, "succeeded"); owner != w.device || status != "cancelled" {
+			t.Fatalf("result claim of %s: %s %s", id, owner, status)
+		}
+		if !slices.Contains(w.cache.deleted, id) {
+			t.Fatalf("command %s left in the gateway cache", id)
+		}
+	}
+
+	dev, err := w.uninstalls.Request(admin, w.device, w.leave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := dev.UninstallCommandID.UUID
+	deliveredLongAgo(first)
+	if dev, err = w.uninstalls.Request(admin, w.device, w.leave()); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn(first)
+	second := dev.UninstallCommandID.UUID
+	deliveredLongAgo(second)
+	if _, err := w.uninstalls.Cancel(admin, w.device); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn(second)
+
+	dev, err = w.uninstalls.Request(admin, w.device, w.leave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	third := dev.UninstallCommandID.UUID
+	deliveredLongAgo(third)
+	if _, _, err := w.cache.ClaimResult(context.Background(), w.device, third, "succeeded"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.uninstalls.Cancel(admin, w.device)
+	expectUninstallProblem(t, err, "invalid_state", 409, "the device already reported a result")
+	_, err = w.uninstalls.Request(admin, w.device, w.leave())
+	expectUninstallProblem(t, err, "invalid_state", 409, "the device already reported a result")
+	if n := w.count(t, "SELECT count(*) FROM device_command WHERE id = $1 AND status = 'delivered'", third); n != 1 {
+		t.Fatal("the command the device reported was changed")
+	}
+	if n := w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND uninstall_command_id = $2", w.device, third); n != 1 {
+		t.Fatal("the request was cleared")
 	}
 }
 
