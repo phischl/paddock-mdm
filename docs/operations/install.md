@@ -208,8 +208,9 @@ session on the server. A platform administrator ends every portal session at onc
 `./paddock compose run --rm --no-deps paddock-worker admin end-sessions` when the portal is not usable. Both also end
 the Authentik browser sessions of every portal user (platform administrators and organization role members), so a
 stolen browser session cannot sign in again without password and authenticator; device logins and API tokens are not
-affected. When Authentik cannot be reached the action is recorded as a failure after the portal sessions ended; run
-it again.
+affected. When Authentik cannot be reached, or does not answer within 80 seconds, both fail with
+`upstream_unavailable` after the portal sessions have ended (the CLI command exits with an error); this is expected while
+Authentik is down. Run the action again once Authentik is back, so that the identity provider's sessions end too.
 
 ## 9. First platform administrator, first organization, first device
 
