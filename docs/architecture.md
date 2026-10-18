@@ -1036,8 +1036,9 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > `paddock_stepup`), whose claim `paddock_mfa_classes` names the authenticator classes the step-up's login validated;
 > the callback refuses every step-up token without the WebAuthn class, so Paddock itself checks the factor that
 > Authentik's `amr` does not distinguish (ADR 0034 amendment 2026-10-18, ADR 0007 amendment 2026-10-18).
-> The portal sign-in validates and enrols WebAuthn only (stage `paddock-admin-login-mfa`); TOTP stays usable for
-> Authentik's own interfaces and the device login. *End all sessions* also ends the Authentik browser sessions of every
+> The portal sign-in validates an existing authenticator (WebAuthn or TOTP, stage `paddock-admin-login-mfa`) and then
+> enrols WebAuthn for an account without a WebAuthn device (stage `paddock-admin-login-webauthn`); TOTP stays usable
+> for Authentik's own interfaces and the device login. *End all sessions* also ends the Authentik browser sessions of every
 > portal user (the platform admins group and every organization's role groups) through Authentik's bulk delete, inside
 > the same audited action; a failure there is recorded after the Paddock sessions ended (ADR 0034 and ADR 0007
 > amendments 2026-10-18).

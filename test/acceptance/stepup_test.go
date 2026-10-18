@@ -3,6 +3,7 @@ package acceptance
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -177,7 +178,8 @@ func expectCreated(t *testing.T, res env.Response) env.Response {
 
 // TestStepUpFactor is gate S16 of plan M8s (decision 40): the shipped step-up flow validates with WebAuthn only at
 // order 30, the development blueprint adds the stage at order 31 that also accepts TOTP, and both blueprints applied.
-// The portal sign-in's stage validates and enrols WebAuthn only (plan M8f decision 14).
+// The portal sign-in validates any existing authenticator at order 30 and enrols WebAuthn at order 31 for an account
+// without a WebAuthn device (plan M8f decision 13 as amended on 2026-10-18); development skips both.
 func TestStepUpFactor(t *testing.T) {
 	ctx := testContext(t, time.Minute)
 	ak, err := env.NewAuthentik()
@@ -231,19 +233,67 @@ func TestStepUpFactor(t *testing.T) {
 	if got := classes(31); fmt.Sprint(got) != "[webauthn totp]" {
 		t.Errorf("order 31 (development) validates %v, want [webauthn totp]", got)
 	}
-	var login struct {
+	type validateStage struct {
+		DeviceClasses       []string `json:"device_classes"`
+		NotConfiguredAction string   `json:"not_configured_action"`
+		ConfigurationStages []string `json:"configuration_stages"`
+	}
+	for _, c := range []struct{ name, classes string }{
+		{"paddock-admin-login-mfa", "[webauthn totp]"},
+		{"paddock-admin-login-webauthn", "[webauthn]"},
+	} {
+		var login struct {
+			Results []validateStage `json:"results"`
+		}
+		if err := ak.Get(ctx, "/stages/authenticator/validate/?name="+c.name, &login); err != nil || len(login.Results) != 1 {
+			t.Fatalf("stage %s: %+v %v", c.name, login, err)
+		}
+		if s := login.Results[0]; fmt.Sprint(s.DeviceClasses) != c.classes || s.NotConfiguredAction != "configure" ||
+			len(s.ConfigurationStages) != 1 {
+			t.Errorf("%s: %+v, want %s, configure and one configuration stage", c.name, s, c.classes)
+		}
+	}
+	if err := ak.Get(ctx, "/flows/instances/?slug=paddock-admin-login", &flows); err != nil || len(flows.Results) != 1 {
+		t.Fatalf("flow paddock-admin-login: %+v %v", flows, err)
+	}
+	var loginBindings struct {
 		Results []struct {
-			DeviceClasses       []string `json:"device_classes"`
-			NotConfiguredAction string   `json:"not_configured_action"`
-			ConfigurationStages []string `json:"configuration_stages"`
+			Order      int    `json:"order"`
+			PolicyPK   string `json:"policybindingmodel_ptr_id"`
+			EngineMode string `json:"policy_engine_mode"`
+			StageObj   struct {
+				Name string `json:"name"`
+			} `json:"stage_obj"`
 		} `json:"results"`
 	}
-	if err := ak.Get(ctx, "/stages/authenticator/validate/?name=paddock-admin-login-mfa", &login); err != nil || len(login.Results) != 1 {
-		t.Fatalf("stage paddock-admin-login-mfa: %+v %v", login, err)
+	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &loginBindings); err != nil {
+		t.Fatal(err)
 	}
-	if s := login.Results[0]; fmt.Sprint(s.DeviceClasses) != "[webauthn]" || s.NotConfiguredAction != "configure" ||
-		len(s.ConfigurationStages) != 1 {
-		t.Errorf("paddock-admin-login-mfa: %+v, want [webauthn], configure and one configuration stage", s)
+	var policies []string
+	for _, b := range loginBindings.Results {
+		if b.Order != 31 {
+			continue
+		}
+		if b.StageObj.Name != "paddock-admin-login-webauthn" || b.EngineMode != "all" {
+			t.Errorf("paddock-admin-login order 31: %+v, want paddock-admin-login-webauthn in mode all", b)
+		}
+		var pb struct {
+			Results []struct {
+				PolicyObj struct {
+					Name string `json:"name"`
+				} `json:"policy_obj"`
+			} `json:"results"`
+		}
+		if err := ak.Get(ctx, "/policies/bindings/?target="+b.PolicyPK, &pb); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range pb.Results {
+			policies = append(policies, p.PolicyObj.Name)
+		}
+	}
+	slices.Sort(policies)
+	if fmt.Sprint(policies) != "[paddock-admin-login-webauthn-missing paddock-dev-skip-mfa]" {
+		t.Errorf("paddock-admin-login order 31 policies %v, want the WebAuthn-missing policy and the development skip", policies)
 	}
 }
 

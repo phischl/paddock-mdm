@@ -41,6 +41,14 @@ entries:
       order: 1
     attrs:
       target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, default-authentication-flow]]], [order, 31]]
+  # The portal login's WebAuthn enrolment stage B (plan M8f decision 13, amended 2026-10-18) would send the TOTP-only
+  # test users to the WebAuthn setup; its binding evaluates its policies in mode "all", so this policy skips it.
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf skip-mfa
+      order: 2
+    attrs:
+      target: !Find [authentik_flows.flowstagebinding, [target, !Find [authentik_flows.flow, [slug, paddock-admin-login]]], [order, 31]]
 
   # The step-up validates with WebAuthn only; the test users have scripted TOTP authenticators. The WebAuthn stage at
   # order 30 is skipped like the login's, and a stage that also accepts TOTP takes its place at order 31.
