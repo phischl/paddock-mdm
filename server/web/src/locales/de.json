@@ -240,6 +240,7 @@
       "use_denied": "Eine Anfrage mit dem API-Token {name} wurde abgelehnt: {reason, select, revoked {das Token ist widerrufen} expired {das Token ist abgelaufen} creator_inactive {sein Ersteller ist deaktiviert oder hat die nötige Rolle verloren} other {{reason}}}"
     },
     "device": {
+      "owners_changed": "{actor} hat die Besitzer von {hostname} geändert",
       "enrolled": "Das Gerät {hostname} hat sich registriert",
       "approved": "{actor} hat das Gerät {hostname} freigegeben",
       "rejected": "{actor} hat das Gerät {hostname} abgelehnt",
@@ -500,6 +501,14 @@
     "back": "Zur Startseite"
   },
   "devices": {
+    "owners": {
+      "title": "Besitzer",
+      "column": "Besitzer",
+      "hint": "Wer für dieses Gerät verantwortlich ist. Besitzer erhalten über diese Einstellung keine Anmelde- oder sudo-Rechte.",
+      "saved": "Besitzer gespeichert.",
+      "none": "Kein Besitzer zugewiesen."
+    },
+    "ownerFilter": "Besitzer",
     "title": "Geräte",
     "back": "Zurück zu den Geräten",
     "hostname": "Hostname",
@@ -1092,6 +1101,9 @@
     }
   },
   "users": {
+    "ownedDevices": {
+      "title": "Geräte im Besitz"
+    },
     "title": "Benutzer",
     "noDomain": "Keine Organisationsdomain",
     "noDomainDetail": "Der Benutzername {username} endet nicht auf eine der Domains der Organisation ({domains}). Der Benutzer kann sich nicht an Geräten anmelden: Die Anmeldekomponente akzeptiert nur name@domain. Benennen Sie den Benutzer in der Identitätsquelle um, oder lassen Sie einen Plattformadministrator die Domain der Organisation hinzufügen.",

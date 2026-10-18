@@ -126,6 +126,23 @@ func (u *Users) Get(ctx context.Context, id uuid.UUID) (UserDetail, error) {
 	return out, err
 }
 
+// ListOwnedDevices returns one page of the devices a user owns (plan M8d decision 4); a missing or foreign user is
+// not_found.
+func (u *Users) ListOwnedDevices(ctx context.Context, id uuid.UUID, query DeviceQuery) (Listed[pgstore.ListDevicesRow], error) {
+	var out Listed[pgstore.ListDevicesRow]
+	if _, err := RequireOrg(ctx, RolesRead); err != nil {
+		return out, err
+	}
+	query.OwnerID = &id
+	err := u.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		if _, err := q.GetAppUser(ctx, id); err != nil {
+			return notFound(err)
+		}
+		return listDevices(ctx, q, query, &out)
+	})
+	return out, err
+}
+
 func loadUserDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (UserDetail, error) {
 	var out UserDetail
 	var err error

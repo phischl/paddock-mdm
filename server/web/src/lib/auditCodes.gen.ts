@@ -41,6 +41,7 @@ export const auditCodes = [
   'device.logins_resumed',
   'device.logins_suspended',
   'device.logins_suspension_applied',
+  'device.owners_changed',
   'device.presumed_self_locked',
   'device.quarantine_released',
   'device.rejected',

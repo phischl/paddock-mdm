@@ -289,6 +289,29 @@ var deviceAuditCases = func() map[string][]auditCase {
 				expectOneEvent(t, w.alice, res.RequestID, "device.groups_changed", "failure")
 			}},
 		},
+		"PUT /api/v1/devices/{id}/owners": {
+			{"success", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/owners", map[string]any{"user_ids": []string{}})
+				expectStatus(t, res, http.StatusOK, "")
+				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "success")
+			}},
+			{"validation failure", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/owners",
+					map[string]any{"user_ids": []string{uuid.NewString()}})
+				expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "failure")
+			}},
+			{"wrong role", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.bob, http.MethodPut, "/api/v1/devices/"+activeID(t, w)+"/owners", map[string]any{"user_ids": []string{}})
+				expectStatus(t, res, http.StatusForbidden, "forbidden")
+				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "denied")
+			}},
+			{"not found", func(t *testing.T, w *auditWorld) {
+				res := call(t, w.alice, http.MethodPut, "/api/v1/devices/"+uuid.NewString()+"/owners", map[string]any{"user_ids": []string{}})
+				expectStatus(t, res, http.StatusNotFound, "not_found")
+				expectOneEvent(t, w.alice, res.RequestID, "device.owners_changed", "failure")
+			}},
+		},
 	}
 	files := managedCases("/api/v1/managed-files", "managed_file",
 		func() map[string]any {

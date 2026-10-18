@@ -20,7 +20,9 @@ SELECT count(*) FROM (
   LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
   WHERE ($1::text IS NULL
          OR hostname ILIKE $1::text ESCAPE '\'
-         OR hardware_uuid ILIKE $1::text ESCAPE '\')
+         OR hardware_uuid ILIKE $1::text ESCAPE '\'
+         OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
+                    AND (u.username ILIKE $1::text ESCAPE '\' OR u.display_name ILIKE $1::text ESCAPE '\')))
     AND ($2::text[] IS NULL OR state = ANY($2::text[]))
     AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
     AND ($4::text[] IS NULL
@@ -32,7 +34,9 @@ SELECT count(*) FROM (
     AND ($6::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_group_member m
           WHERE m.device_id = device.id AND m.device_group_id = $6::uuid))
-  LIMIT $7
+    AND ($7::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = $7::uuid))
+  LIMIT $8
 ) matching
 `
 
@@ -43,6 +47,7 @@ type CountDevicesParams struct {
 	Contacts              []string
 	SecurityOverdueWindow pgtype.Interval
 	DeviceGroupID         uuid.NullUUID
+	OwnerID               uuid.NullUUID
 	CountLimit            int32
 }
 
@@ -54,6 +59,7 @@ func (q *Queries) CountDevices(ctx context.Context, arg CountDevicesParams) (int
 		arg.Contacts,
 		arg.SecurityOverdueWindow,
 		arg.DeviceGroupID,
+		arg.OwnerID,
 		arg.CountLimit,
 	)
 	var count int64
@@ -428,12 +434,18 @@ const listDevices = `-- name: ListDevices :many
 
 SELECT device.id, device.organization_id, device.hostname, device.state, device.bundle_seq, device.hardware_uuid, device.machine_id, device.os_release, device.enrollment_token_id, device.enrolled_at, device.state_changed_at, device.logins_suspended, device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
-       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact
+       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact,
+       -- The owners as UserRef objects for the list column (plan M8d decision 3).
+       (SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'username', u.username, 'display_name', u.display_name)
+                                  ORDER BY u.username), '[]'::jsonb)
+        FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
 WHERE ($1::text IS NULL
        OR hostname ILIKE $1::text ESCAPE '\'
-       OR hardware_uuid ILIKE $1::text ESCAPE '\')
+       OR hardware_uuid ILIKE $1::text ESCAPE '\'
+       OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
+                  AND (u.username ILIKE $1::text ESCAPE '\' OR u.display_name ILIKE $1::text ESCAPE '\')))
   AND ($2::text[] IS NULL OR state = ANY($2::text[]))
   AND ($3::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY($3::text[]))
   AND ($4::text[] IS NULL
@@ -446,17 +458,19 @@ WHERE ($1::text IS NULL
   AND ($6::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m
         WHERE m.device_id = device.id AND m.device_group_id = $6::uuid))
+  AND ($7::uuid IS NULL OR EXISTS (
+        SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = $7::uuid))
 ORDER BY
-  CASE WHEN $7::text = 'hostname' THEN hostname END ASC,
-  CASE WHEN $7::text = '-hostname' THEN hostname END DESC,
-  CASE WHEN $7::text = 'last_contact_at' THEN last_contact_at END ASC,
-  CASE WHEN $7::text = '-last_contact_at' THEN last_contact_at END DESC,
-  CASE WHEN $7::text = 'enrolled_at' THEN enrolled_at END ASC,
-  CASE WHEN $7::text = '-enrolled_at' THEN enrolled_at END DESC,
-  CASE WHEN $7::text = 'state' THEN state END ASC,
-  CASE WHEN $7::text = '-state' THEN state END DESC,
+  CASE WHEN $8::text = 'hostname' THEN hostname END ASC,
+  CASE WHEN $8::text = '-hostname' THEN hostname END DESC,
+  CASE WHEN $8::text = 'last_contact_at' THEN last_contact_at END ASC,
+  CASE WHEN $8::text = '-last_contact_at' THEN last_contact_at END DESC,
+  CASE WHEN $8::text = 'enrolled_at' THEN enrolled_at END ASC,
+  CASE WHEN $8::text = '-enrolled_at' THEN enrolled_at END DESC,
+  CASE WHEN $8::text = 'state' THEN state END ASC,
+  CASE WHEN $8::text = '-state' THEN state END DESC,
   device.id
-LIMIT $9 OFFSET $8
+LIMIT $10 OFFSET $9
 `
 
 type ListDevicesParams struct {
@@ -466,6 +480,7 @@ type ListDevicesParams struct {
 	Contacts              []string
 	SecurityOverdueWindow pgtype.Interval
 	DeviceGroupID         uuid.NullUUID
+	OwnerID               uuid.NullUUID
 	Sort                  string
 	SkipRows              int32
 	MaxRows               int32
@@ -478,6 +493,7 @@ type ListDevicesRow struct {
 	AgentVersion         *string
 	DiskState            string
 	Contact              string
+	Owners               json.RawMessage
 }
 
 // List queries (ADR 0018): see device_group.sql. Sort and search columns are unambiguous across the join.
@@ -489,6 +505,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 		arg.Contacts,
 		arg.SecurityOverdueWindow,
 		arg.DeviceGroupID,
+		arg.OwnerID,
 		arg.Sort,
 		arg.SkipRows,
 		arg.MaxRows,
@@ -518,6 +535,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.AgentVersion,
 			&i.DiskState,
 			&i.Contact,
+			&i.Owners,
 		); err != nil {
 			return nil, err
 		}

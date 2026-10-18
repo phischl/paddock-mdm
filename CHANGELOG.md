@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A weekly upstream version watch compares the pinned container images, the Himmelblau version, fleetd and the Fleet
   NVD release with upstream and keeps one GitHub issue with the label `upstream` per outdated pin, naming the gates
   to run before the bump; `make upstream-check` prints the same comparison locally.
+- A device has owners: the users responsible for it, set on the device page (at most 20, audited as
+  `device.owners_changed`), shown and filterable in the device list, searchable by user name, and listed under
+  *Devices owned* on the user page. Owners get no login or sudo rights through this setting.
 
 ### Changed
 

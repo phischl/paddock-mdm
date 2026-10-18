@@ -17,6 +17,7 @@ import (
 // List definitions of the M3a collection endpoints; TestListSpecsMatchContract keeps them equal to x-paddock-list.
 var (
 	userList              = listing.Spec{Sort: []string{"username", "display_name", "created_at"}, DefaultSort: "username"}
+	ownedDeviceList       = listing.Spec{Sort: []string{"hostname", "last_contact_at"}, DefaultSort: "hostname"}
 	userGroupList         = listing.Spec{Sort: []string{"name", "slug", "created_at"}, DefaultSort: "name"}
 	upstreamGroupList     = listing.Spec{Sort: []string{"name"}, DefaultSort: "name"}
 	permissionProfileList = listing.Spec{Sort: []string{"name", "class", "created_at", "updated_at"}, DefaultSort: "name"}
@@ -94,6 +95,20 @@ func (h *handlers) CreateUser(ctx context.Context, req adminapi.CreateUserReques
 		Body:    adminapi.UserCreated{User: toUser(created.User, created.Domains), RecoveryLink: created.RecoveryLink},
 		Headers: adminapi.CreateUser201ResponseHeaders{Location: &loc},
 	}, nil
+}
+
+func (h *handlers) ListUserDevices(ctx context.Context, req adminapi.ListUserDevicesRequestObject) (adminapi.ListUserDevicesResponseObject, error) {
+	params, err := listing.Parse(ownedDeviceList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.users.ListOwnedDevices(ctx, req.Id, app.DeviceQuery{Page: params.ListPage()})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ListUserDevices200JSONResponse(listing.NewPage(toDeviceRows(res.Items), params, res.Count)), nil
 }
 
 func (h *handlers) GetUser(ctx context.Context, req adminapi.GetUserRequestObject) (adminapi.GetUserResponseObject, error) {

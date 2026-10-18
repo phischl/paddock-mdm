@@ -1,5 +1,5 @@
 import {
-  api, listPage, problemCode, type IdentitySource, type User, type UserCreated, type UserDetail,
+  api, listPage, problemCode, type Device, type IdentitySource, type OwnedDeviceSort, type User, type UserCreated, type UserDetail,
   type UserEffectiveProfile, type UserSort,
 } from '../api/client'
 import { maxListDepth, type ListFilter, type ListParams, type Page } from './listQuery'
@@ -50,6 +50,16 @@ export function listGroupMembers(groupID: string): (p: ListParams) => Promise<Pa
             locked: lockedParam(p),
           },
         },
+      }),
+    )
+}
+
+/** One page of the devices a user owns for DataList (plan M8d decision 4). */
+export function listOwnedDevices(userID: string): (p: ListParams) => Promise<Page<Device>> {
+  return async (p) =>
+    listPage(
+      await api.GET('/api/v1/users/{id}/devices', {
+        params: { path: { id: userID }, query: { page: p.page, page_size: p.page_size, sort: p.sort as OwnedDeviceSort, q: p.q } },
       }),
     )
 }

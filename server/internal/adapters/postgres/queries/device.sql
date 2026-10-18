@@ -15,12 +15,18 @@ SELECT * FROM device WHERE id = @id FOR UPDATE;
 -- name: ListDevices :many
 SELECT sqlc.embed(device), device_status.last_contact_at, device_status.applied_bundle_version,
        device_status.agent_version, coalesce(device_status.health -> 'disk' ->> 'state', '')::text AS disk_state, -- '' = none
-       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact
+       paddock_device_contact(device.state, device_status.last_contact_at, device_status.presumed_lost_at, open_alert.kind, now())::text AS contact,
+       -- The owners as UserRef objects for the list column (plan M8d decision 3).
+       (SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'username', u.username, 'display_name', u.display_name)
+                                  ORDER BY u.username), '[]'::jsonb)
+        FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
 WHERE (sqlc.narg(q_pattern)::text IS NULL
        OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
-       OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+       OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
+                  AND (u.username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\' OR u.display_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')))
   AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
   AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
   AND (sqlc.narg(contacts)::text[] IS NULL
@@ -33,6 +39,8 @@ WHERE (sqlc.narg(q_pattern)::text IS NULL
   AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_group_member m
         WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
+  AND (sqlc.narg(owner_id)::uuid IS NULL OR EXISTS (
+        SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = sqlc.narg(owner_id)::uuid))
 ORDER BY
   CASE WHEN @sort::text = 'hostname' THEN hostname END ASC,
   CASE WHEN @sort::text = '-hostname' THEN hostname END DESC,
@@ -51,7 +59,9 @@ SELECT count(*) FROM (
   LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
   WHERE (sqlc.narg(q_pattern)::text IS NULL
          OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
-         OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')
+         OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
+                    AND (u.username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\' OR u.display_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')))
     AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
     AND (sqlc.narg(disk_states)::text[] IS NULL OR device_status.health -> 'disk' ->> 'state' = ANY(sqlc.narg(disk_states)::text[]))
     AND (sqlc.narg(contacts)::text[] IS NULL
@@ -63,6 +73,8 @@ SELECT count(*) FROM (
     AND (sqlc.narg(device_group_id)::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_group_member m
           WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
+    AND (sqlc.narg(owner_id)::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = sqlc.narg(owner_id)::uuid))
   LIMIT @count_limit
 ) matching;
 

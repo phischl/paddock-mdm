@@ -713,8 +713,8 @@ paths:
       x-paddock-list:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
-        search: [hostname, hardware_uuid]
-        filters: [state, device_group_id, disk_state, contact, security_updates]
+        search: [hostname, hardware_uuid, owners.username, owners.display_name]
+        filters: [state, device_group_id, disk_state, contact, security_updates, owner_id]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -747,6 +747,10 @@ paths:
             overdue = devices that have contacted Paddock but report no successful security update run within the last
             48 hours (the overview's "Security updates overdue", plan M7c amendment 2026-10-10).
           schema: { type: string, enum: [overdue] }
+        - name: owner_id
+          in: query
+          description: Only devices this user owns (plan M8d decision 3).
+          schema: { type: string, format: uuid }
       responses:
         "200":
           description: One page of devices.
@@ -908,6 +912,34 @@ paths:
       responses:
         "200":
           description: The device with its new memberships.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/owners:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: setDeviceOwners
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator. Replaces the owners of the device: the users responsible for it (at most 20;
+        duplicates are collapsed). Owners have no login or sudo rights through this setting and are not part of the
+        bundle. An unknown or foreign user: 400 invalid_request.
+      x-paddock-audit: device.owners_changed
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeviceOwnersUpdate" }
+      responses:
+        "200":
+          description: The device with its new owners.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeviceDetail" }
@@ -1269,6 +1301,33 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "502": { $ref: "#/components/responses/Problem" }
+  /api/v1/users/{id}/devices:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listUserDevices
+      tags: [users]
+      description: "Roles: org_admin, org_operator, org_auditor. The devices the user owns (plan M8d decision 4)."
+      x-paddock-list:
+        sort: [hostname, last_contact_at]
+        default_sort: hostname
+        search: [hostname, hardware_uuid, owners.username, owners.display_name]
+        filters: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/OwnedDeviceSort"
+        - $ref: "#/components/parameters/Search"
+      responses:
+        "200":
+          description: One page of the devices the user owns.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DevicePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
   /api/v1/users/{id}/lock:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -3687,6 +3746,14 @@ components:
         type: string
         enum: [hostname, -hostname, last_contact_at, -last_contact_at, enrolled_at, -enrolled_at, state, -state]
         default: hostname
+    OwnedDeviceSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [hostname, -hostname, last_contact_at, -last_contact_at]
+        default: hostname
     EnrollmentTokenSort:
       name: sort
       in: query
@@ -4509,7 +4576,7 @@ components:
     Device:
       type: object
       required: [id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at,
-                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version, contact]
+                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version, contact, owners]
       properties:
         id: { type: string, format: uuid }
         hostname: { type: string }
@@ -4528,6 +4595,10 @@ components:
         applied_bundle_version: { type: integer, format: int64, nullable: true }
         agent_version: { type: string, nullable: true }
         disk_state: { $ref: "#/components/schemas/DiskState" }
+        owners:
+          type: array
+          description: The users responsible for the device, sorted by username (plan M8d decision 2). No login or sudo rights.
+          items: { $ref: "#/components/schemas/UserRef" }
     DeviceGroupRef:
       type: object
       required: [id, name]
@@ -5346,6 +5417,15 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    DeviceOwnersUpdate:
+      type: object
+      required: [user_ids]
+      additionalProperties: false
+      properties:
+        user_ids:
+          type: array
+          maxItems: 20
+          items: { type: string, format: uuid }
     DeviceGroupsUpdate:
       type: object
       required: [device_group_ids]

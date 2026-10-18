@@ -265,6 +265,14 @@ type DeviceLoginAssignment struct {
 	SubjectID      uuid.UUID
 }
 
+type DeviceOwner struct {
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	UserID         uuid.UUID
+	AssignedAt     time.Time
+	AssignedBy     uuid.NullUUID
+}
+
 type DeviceStatus struct {
 	DeviceID             uuid.UUID
 	OrganizationID       uuid.UUID

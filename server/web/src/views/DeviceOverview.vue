@@ -3,6 +3,7 @@ import { computed, inject, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { VulnerabilityFinding } from '../api/client'
 import DangerZone from '../components/DangerZone.vue'
+import DeviceOwners from '../components/DeviceOwners.vue'
 import DiskEncryptionCard from '../components/DiskEncryptionCard.vue'
 import LocalAdminCard from '../components/LocalAdminCard.vue'
 import SeverityChip from '../components/SeverityChip.vue'
@@ -198,6 +199,13 @@ async function copyId(): Promise<void> {
           </div>
         </dl>
       </section>
+
+      <DeviceOwners
+        :device-id="d.id"
+        :owners="d.owners"
+        :can-write="session.canWrite"
+        @saved="page.load()"
+      />
 
       <section
         class="pd-panel"

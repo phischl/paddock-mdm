@@ -240,6 +240,7 @@
       "use_denied": "A request with the API token {name} was refused: {reason, select, revoked {the token is revoked} expired {the token expired} creator_inactive {its creator is disabled or lost the required role} other {{reason}}}"
     },
     "device": {
+      "owners_changed": "{actor} changed the owners of {hostname}",
       "enrolled": "The device {hostname} enrolled",
       "approved": "{actor} approved the device {hostname}",
       "rejected": "{actor} rejected the device {hostname}",
@@ -500,6 +501,14 @@
     "back": "Go to the start page"
   },
   "devices": {
+    "owners": {
+      "title": "Owners",
+      "column": "Owners",
+      "hint": "Who is responsible for this device. Owners have no login or sudo rights through this setting.",
+      "saved": "Owners saved.",
+      "none": "No owner assigned."
+    },
+    "ownerFilter": "Owner",
     "title": "Devices",
     "back": "Back to devices",
     "hostname": "Hostname",
@@ -1092,6 +1101,9 @@
     }
   },
   "users": {
+    "ownedDevices": {
+      "title": "Devices owned"
+    },
     "title": "Users",
     "noDomain": "No organization domain",
     "noDomainDetail": "The username {username} does not end with one of the organization's domains ({domains}). The user cannot sign in on devices: the login component accepts name@domain only. Rename the user in the identity source, or let a platform administrator add the domain to the organization.",

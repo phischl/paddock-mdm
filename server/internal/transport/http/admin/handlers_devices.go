@@ -118,7 +118,7 @@ func (h *handlers) ListDevices(ctx context.Context, req adminapi.ListDevicesRequ
 		return nil, err
 	}
 	res, err := h.devices.List(ctx, app.DeviceQuery{Page: params.ListPage(), States: states, GroupID: req.Params.DeviceGroupId,
-		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0})
+		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0, OwnerID: req.Params.OwnerId})
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +153,8 @@ func toDeviceRows(rows []pgstore.ListDevicesRow) []adminapi.Device {
 			items[i].DiskState = &s
 		}
 		items[i].Contact = adminapi.DeviceContact(r.Contact)
+		// Built by ListDevices with jsonb_build_object; an unreadable value leaves the column empty.
+		_ = json.Unmarshal(r.Owners, &items[i].Owners)
 	}
 	return items
 }
@@ -162,6 +164,7 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 		Id: d.ID, Hostname: d.Hostname, State: adminapi.DeviceState(d.State), HardwareUuid: d.HardwareUuid,
 		MachineId: d.MachineID, OsRelease: map[string]string{}, EnrollmentTokenId: idPtr(d.EnrollmentTokenID),
 		EnrolledAt: d.EnrolledAt.UTC(), StateChangedAt: d.StateChangedAt.UTC(), BundleVersion: d.BundleSeq,
+		Owners: []adminapi.UserRef{},
 	}
 	_ = json.Unmarshal(d.OsRelease, &out.OsRelease) // written by the worker from a map[string]string
 	if status != nil {
@@ -172,12 +175,13 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 
 func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 	base := toDevice(d.Device, d.Status)
+	base.Owners = toUserRefs(d.Owners)
 	out := adminapi.DeviceDetail{
 		Id: base.Id, Hostname: base.Hostname, State: base.State, Contact: adminapi.DeviceContact(d.Contact),
 		HardwareUuid: base.HardwareUuid, MachineId: base.MachineId,
 		OsRelease: base.OsRelease, EnrollmentTokenId: base.EnrollmentTokenId, EnrolledAt: base.EnrolledAt,
 		StateChangedAt: base.StateChangedAt, BundleVersion: base.BundleVersion, LastContactAt: base.LastContactAt,
-		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion,
+		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
 		Groups: make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
 		LoginAssignment: adminapi.DeviceLoginAssignment{
@@ -282,6 +286,7 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	}
 	out := toDevice(d.Device, d.Status)
 	out.Contact = adminapi.DeviceContact(d.Contact)
+	out.Owners = toUserRefs(d.Owners)
 	return out, nil
 }
 
@@ -291,6 +296,22 @@ func (h *handlers) SetDeviceGroups(ctx context.Context, req adminapi.SetDeviceGr
 		return nil, err
 	}
 	return adminapi.SetDeviceGroups200JSONResponse(toDeviceDetail(d)), nil
+}
+
+func (h *handlers) SetDeviceOwners(ctx context.Context, req adminapi.SetDeviceOwnersRequestObject) (adminapi.SetDeviceOwnersResponseObject, error) {
+	d, err := h.devices.SetOwners(ctx, req.Id, req.Body.UserIds)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetDeviceOwners200JSONResponse(toDeviceDetail(d)), nil
+}
+
+func toUserRefs(users []pgstore.AppUser) []adminapi.UserRef {
+	out := make([]adminapi.UserRef, len(users))
+	for i, u := range users {
+		out[i] = toUserRef(u)
+	}
+	return out
 }
 
 func (h *handlers) GetDeviceEffectiveConfig(ctx context.Context, req adminapi.GetDeviceEffectiveConfigRequestObject) (adminapi.GetDeviceEffectiveConfigResponseObject, error) {

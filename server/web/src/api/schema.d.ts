@@ -589,6 +589,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/owners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Replaces the owners of the device: the users responsible for it (at most 20;
+         *     duplicates are collapsed). Owners have no login or sudo rights through this setting and are not part of the
+         *     bundle. An unknown or foreign user: 400 invalid_request.
+         */
+        put: operations["setDeviceOwners"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/effective-config": {
         parameters: {
             query?: never;
@@ -739,6 +762,25 @@ export interface paths {
         head?: never;
         /** @description Roles: org_admin, org_operator. Synced users: 409 attribute_owned_upstream. */
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/users/{id}/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /** @description Roles: org_admin, org_operator, org_auditor. The devices the user owns (plan M8d decision 4). */
+        get: operations["listUserDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/users/{id}/lock": {
@@ -2841,6 +2883,8 @@ export interface components {
             applied_bundle_version: number | null;
             agent_version: string | null;
             disk_state?: components["schemas"]["DiskState"];
+            /** @description The users responsible for the device, sorted by username (plan M8d decision 2). No login or sudo rights. */
+            owners: components["schemas"]["UserRef"][];
         };
         DeviceGroupRef: {
             /** Format: uuid */
@@ -3573,6 +3617,9 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        DeviceOwnersUpdate: {
+            user_ids: string[];
+        };
         DeviceGroupsUpdate: {
             device_group_ids: string[];
         };
@@ -4137,6 +4184,8 @@ export interface components {
         SeverityFilter: components["schemas"]["Severity"][];
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
+        /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
+        OwnedDeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
         EnrollmentTokenSort: "name" | "-name" | "created_at" | "-created_at" | "expires_at" | "-expires_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -4996,6 +5045,8 @@ export interface operations {
                 contact?: components["schemas"]["DeviceContact"][];
                 /** @description overdue = devices that have contacted Paddock but report no successful security update run within the last 48 hours (the overview's "Security updates overdue", plan M7c amendment 2026-10-10). */
                 security_updates?: "overdue";
+                /** @description Only devices this user owns (plan M8d decision 3). */
+                owner_id?: string;
             };
             header?: never;
             path?: never;
@@ -5201,6 +5252,38 @@ export interface operations {
         };
         responses: {
             /** @description The device with its new memberships. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    setDeviceOwners: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceOwnersUpdate"];
+            };
+        };
+        responses: {
+            /** @description The device with its new owners. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5697,6 +5780,40 @@ export interface operations {
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             502: components["responses"]["Problem"];
+        };
+    };
+    listUserDevices: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
+                sort?: components["parameters"]["OwnedDeviceSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the devices the user owns. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevicePage"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
         };
     };
     lockUser: {

@@ -96,6 +96,7 @@ var privileged = map[string]struct {
 	"POST /api/platform/v1/openbao/auto-unseal/disable":                    {app.ScopePlatform, app.SpecAutoUnsealDisable},
 	"POST /api/v1/enrollment-tokens":                                       {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
 	"PUT /api/v1/devices/{id}/groups":                                      {app.ScopeOrg, app.SpecDeviceSetGroups},
+	"PUT /api/v1/devices/{id}/owners":                                      {app.ScopeOrg, app.SpecDeviceSetOwners},
 	"POST /api/v1/devices/{id}/approve":                                    {app.ScopeOrg, app.SpecDeviceApprove},
 	"POST /api/v1/devices/{id}/reject":                                     {app.ScopeOrg, app.SpecDeviceReject},
 	"POST /api/v1/devices/{id}/release-quarantine":                         {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},

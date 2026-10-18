@@ -291,6 +291,8 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/devices/{id}/retire":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/retire" }, nil),
 	"PUT /api/v1/devices/{id}/groups": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/groups" },
 		map[string]any{"device_group_ids": []string{}}),
+	"PUT /api/v1/devices/{id}/owners": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/owners" },
+		map[string]any{"user_ids": []string{}}),
 	"GET /api/v1/devices/{id}/effective-config": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/effective-config" }, nil),
 	"GET /api/v1/device-groups/{id}/devices":    itemFixture(func(w *isolationWorld) string { return "/api/v1/device-groups/" + w.globexDeviceGroup + "/devices" }, nil),
 
@@ -334,6 +336,7 @@ var isolationFixtures = map[string]isolationFixture{
 	"DELETE /api/v1/users/{id}":                itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser }, nil),
 	"POST /api/v1/users/{id}/lock":             itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/lock" }, nil),
 	"POST /api/v1/users/{id}/unlock":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/unlock" }, nil),
+	"GET /api/v1/users/{id}/devices":           itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/devices" }, nil),
 	"GET /api/v1/users/{id}/effective-profile": itemFixture(func(w *isolationWorld) string { return "/api/v1/users/" + w.globexUser + "/effective-profile" }, nil),
 
 	"GET /api/v1/user-groups": {kind: isoList, request: func(*testing.T, *isolationWorld) (string, any) {

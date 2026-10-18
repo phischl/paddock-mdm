@@ -21,6 +21,7 @@ const (
 	CodeDeviceQuarantineReleased   Code = "device.quarantine_released"
 	CodeDeviceRetired              Code = "device.retired"
 	CodeDeviceGroupsChanged        Code = "device.groups_changed"
+	CodeDeviceOwnersChanged        Code = "device.owners_changed"
 	CodeDeviceCloneSuspected       Code = "device.clone_suspected"
 	CodeDeviceBundleApplied        Code = "device.bundle_applied"
 	CodeDeviceBundleRejected       Code = "device.bundle_rejected"
@@ -264,6 +265,12 @@ var registry = map[Code]Definition{
 		Code: CodeDeviceGroupsChanged, Emitted: true,
 		Description: "The device group memberships of a device were replaced.",
 		Params:      []string{"hostname", "added", "removed"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceOwnersChanged: {
+		Code: CodeDeviceOwnersChanged, Emitted: true,
+		Description: "An administrator changed the owners of a device.",
+		Params:      []string{"hostname", "added", "removed", "owners"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceCloneSuspected: {
