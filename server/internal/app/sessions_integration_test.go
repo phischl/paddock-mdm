@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -112,6 +113,57 @@ func TestEndAllSessionsEndsIdentitySessions(t *testing.T) {
 	if n := countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.sessions_ended'
 		AND outcome = 'failure'`, "corr-"+t.Name()); n != 1 {
 		t.Fatalf("%d failure events", n)
+	}
+}
+
+// observingSessions checks, during each bulk delete, that the action is already recorded as started and that the call
+// carries a deadline; it ends no session and fails when told to.
+type observingSessions struct {
+	check    func()
+	deadline time.Time
+	fail     error
+}
+
+func (f *observingSessions) EndUserSessions(ctx context.Context, _ []string) (int, error) {
+	f.check()
+	f.deadline, _ = ctx.Deadline()
+	return 0, f.fail
+}
+
+// TestEndAllSessionsCallsOutsideTheTransaction (plan M8f decision 16, amended 2026-10-18; PDK-322): the identity
+// provider is called after the started action is committed, so a crash leaves an action the reaper records as unknown,
+// and within a deadline below the HTTP write timeout; a call that runs into the deadline records a failure.
+func TestEndAllSessionsCallsOutsideTheTransaction(t *testing.T) {
+	admin, super, _ := adminHarness(t)
+	store := sessions.NewStore(valkeytest.Start(t).Client(t))
+	started := func() int {
+		return countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.sessions_ended'
+			AND status = 'started'`, "corr-"+t.Name())
+	}
+	var seen []int
+	ender := &observingSessions{check: func() { seen = append(seen, started()) }}
+	before := time.Now()
+	if _, err := app.NewSessions(admin.Runner(), store, fixedPortalUsers{n: 3}, ender).EndAllCLI(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(seen) != "[1]" {
+		t.Fatalf("started actions seen during the identity-provider call %v, want [1]", seen)
+	}
+	if ender.deadline.IsZero() || ender.deadline.After(before.Add(90*time.Second)) {
+		t.Fatalf("identity-provider call deadline %v, want one within 90 s of %v", ender.deadline, before)
+	}
+	if n := started(); n != 0 {
+		t.Fatalf("%d actions still started after the call", n)
+	}
+
+	ender.fail = context.DeadlineExceeded
+	_, err := app.NewSessions(admin.Runner(), store, fixedPortalUsers{n: 3}, ender).EndAllCLI(context.Background())
+	if !errors.Is(err, problem.UpstreamUnavailable) {
+		t.Fatalf("identity provider past the deadline: %v, want upstream_unavailable", err)
+	}
+	if n := countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.sessions_ended'
+		AND status = 'finished' AND outcome = 'failure' AND (params->>'identity_users')::int = 3`, "corr-"+t.Name()); n != 1 {
+		t.Fatalf("%d failure events with identity_users 3", n)
 	}
 }
 

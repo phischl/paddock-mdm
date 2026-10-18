@@ -387,6 +387,17 @@ password alone enrolled a key that passes every step-up. `paddock-portal.yaml` n
     signs every portal user out of the identity provider, so a stolen browser session cannot sign in again without
     password and authenticator."
 
+**Architect note 2026-10-18 (fix round 1, Review 1 finding M2, PDK-322): decision 16 is amended.** "Inside the same
+action" now means the external part of `ActionRunner.RunExternal`, not `RunTx`: `prepare` is empty, so the first
+transaction only records the started action; `external` ends the Paddock sessions (`store.EndAll`, Valkey) and then
+lists the portal users and sends the chunked bulk deletes under a context deadline of 80 s
+(`identitySessionBudget`: the HTTP write timeout is 120 s and the final transaction may take up to 30 s); `finalize`
+records `generation`, `identity_users` and `identity_sessions_ended` as far as they are known. A crash after the
+started action leaves an action the reaper finalizes as `unknown`, so every attempt has an audit event, and no
+database transaction stays open during the directory calls. A call past the deadline fails like any other Authentik
+error (`upstream_unavailable`). Test: `sessions_integration_test.go::TestEndAllSessionsCallsOutsideTheTransaction`
+(the action is `started` during the bulk delete, the call has a deadline, a deadline error records a failure).
+
 ### 3.5 Public pages follow the browser language (PDK-301)
 
 21. `i18n.ts` MUST gain

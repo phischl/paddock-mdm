@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
@@ -38,6 +39,10 @@ var (
 // identitySessionChunk is the number of users per bulk delete of identity-provider sessions (plan M8f decision 16).
 const identitySessionChunk = 50
 
+// identitySessionBudget bounds the identity-provider part of end all sessions: the HTTP server's write timeout is
+// 120 s, and the runner's final transaction may take up to 30 s after it.
+const identitySessionBudget = 80 * time.Second
+
 // Sessions ends portal sessions.
 type Sessions struct {
 	runner   *ActionRunner
@@ -64,46 +69,67 @@ func (s *Sessions) EndAllCLI(ctx context.Context) (int64, error) {
 }
 
 func (s *Sessions) endAll(ctx context.Context, spec ActionSpec) (int64, error) {
-	var gen int64
-	err := s.runner.RunTx(ctx, ScopePlatform, spec, func(ctx context.Context, _ *pgstore.Queries, rec Recorder) error {
-		var err error
-		if gen, err = s.store.EndAll(ctx); err != nil {
-			return fmt.Errorf("end sessions: %w", err)
-		}
-		rec.SetParam("generation", gen)
-		// The Paddock sessions are ended already when the identity provider fails (RR-35): the action records the
-		// failure and the operator repeats it, which ends the remaining identity-provider sessions.
-		if err := s.endIdentitySessions(ctx, rec); err != nil {
-			return fmt.Errorf("%w: %w", problem.UpstreamUnavailable.WithDetail(
-				"the identity provider's sessions could not be ended; end all sessions again"), err)
-		}
-		return nil
-	})
+	var (
+		gen               int64
+		genSet            bool
+		users, identities = -1, -1
+	)
+	// The calls to Valkey and Authentik run outside any transaction (RunExternal): the started action is committed
+	// first, so a crash in between leaves an action the reaper records as unknown, and no transaction stays open for
+	// 1 + 3 × organizations directory calls (plan M8f decision 16, amended 2026-10-18).
+	err := s.runner.RunExternal(ctx, ScopePlatform, spec,
+		func(context.Context, *pgstore.Queries, Recorder) error { return nil },
+		func(ctx context.Context) error {
+			var err error
+			if gen, err = s.store.EndAll(ctx); err != nil {
+				return fmt.Errorf("end sessions: %w", err)
+			}
+			genSet = true
+			// The Paddock sessions are ended already when the identity provider fails (RR-35): the action records the
+			// failure and the operator repeats it, which ends the remaining identity-provider sessions.
+			if users, identities, err = s.endIdentitySessions(ctx); err != nil {
+				return fmt.Errorf("%w: %w", problem.UpstreamUnavailable.WithDetail(
+					"the identity provider's sessions could not be ended; end all sessions again"), err)
+			}
+			return nil
+		},
+		func(_ context.Context, _ *pgstore.Queries, rec Recorder, _ error) error {
+			if genSet {
+				rec.SetParam("generation", gen)
+			}
+			if users >= 0 {
+				rec.SetParam("identity_users", users)
+			}
+			if identities >= 0 {
+				rec.SetParam("identity_sessions_ended", identities)
+			}
+			return nil
+		})
 	return gen, err
 }
 
-// endIdentitySessions ends the identity provider's browser sessions of every portal user, in chunks.
-func (s *Sessions) endIdentitySessions(ctx context.Context, rec Recorder) error {
-	users, err := s.users.PortalUsers(ctx)
+// endIdentitySessions ends the identity provider's browser sessions of every portal user, in chunks, within
+// identitySessionBudget, and returns the number of listed users (-1 when the listing failed) and of the sessions
+// ended so far.
+func (s *Sessions) endIdentitySessions(ctx context.Context) (users, ended int, err error) {
+	ctx, cancel := context.WithTimeout(ctx, identitySessionBudget)
+	defer cancel()
+	listed, err := s.users.PortalUsers(ctx)
 	if err != nil {
-		return fmt.Errorf("list portal users: %w", err)
+		return -1, -1, fmt.Errorf("list portal users: %w", err)
 	}
-	rec.SetParam("identity_users", len(users))
-	pks := make([]string, len(users))
-	for i, u := range users {
+	pks := make([]string, len(listed))
+	for i, u := range listed {
 		pks[i] = u.PK
 	}
-	ended := 0
 	for start := 0; start < len(pks); start += identitySessionChunk {
 		n, err := s.identity.EndUserSessions(ctx, pks[start:min(start+identitySessionChunk, len(pks))])
 		ended += n
-		rec.SetParam("identity_sessions_ended", ended)
 		if err != nil {
-			return fmt.Errorf("end identity-provider sessions: %w", err)
+			return len(listed), ended, fmt.Errorf("end identity-provider sessions: %w", err)
 		}
 	}
-	rec.SetParam("identity_sessions_ended", ended)
-	return nil
+	return len(listed), ended, nil
 }
 
 // PortalUsers lists the identity provider's portal users: the members of the platform admins group and of the role
