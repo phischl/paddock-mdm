@@ -102,6 +102,7 @@ async function revoke(action: RevokeAction): Promise<void> {
   }
   requested.value = res
   await load()
+  if (res.uninstall_cancelled) emit('changed')
 }
 
 /** Remove Paddock starts with a step-up; the uninstall dialog follows on return. */
@@ -172,15 +173,6 @@ onMounted(async () => {
       data-testid="revocation-disabled"
     >
       {{ t('revocations.disabled') }}
-    </v-alert>
-    <v-alert
-      v-else-if="revocable && uninstallPending(uninstall)"
-      type="info"
-      variant="tonal"
-      class="conflict pd-danger-alert"
-      data-testid="revocation-uninstall-pending"
-    >
-      {{ t('devices.revocation.uninstallPending') }}
     </v-alert>
     <template v-else-if="revocable">
       <div
@@ -308,6 +300,15 @@ onMounted(async () => {
     >
       {{ t('devices.revocation.requested.' + (requested.action === 'destroy' ? 'destroy' : 'lock')) }}
     </p>
+    <v-alert
+      v-if="requested?.uninstall_cancelled"
+      :type="requested.uninstall_cancelled === 'after_delivery' ? 'warning' : 'info'"
+      variant="tonal"
+      class="conflict pd-danger-alert"
+      data-testid="revocation-uninstall-cancelled"
+    >
+      {{ t('devices.revocation.uninstallCancelled.' + requested.uninstall_cancelled) }}
+    </v-alert>
     <v-table
       v-if="requests.length > 0"
       class="table pd-danger-timeline"

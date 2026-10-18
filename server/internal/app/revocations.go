@@ -13,6 +13,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
+	"github.com/phischl/paddock-mdm/server/internal/domain/devicecommand"
 	"github.com/phischl/paddock-mdm/server/internal/domain/revocation"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -36,13 +37,15 @@ type Revocations struct {
 	runner  *ActionRunner
 	org     *db.OrgPool
 	tokens  StepUpTokens
+	cache   UninstallCache
 	enabled bool
 	now     func() time.Time
 }
 
-// NewRevocations creates the use cases; enabled is PADDOCK_REVOCATION_ENABLED.
-func NewRevocations(runner *ActionRunner, org *db.OrgPool, tokens StepUpTokens, enabled bool) *Revocations {
-	return &Revocations{runner: runner, org: org, tokens: tokens, enabled: enabled, now: time.Now}
+// NewRevocations creates the use cases; cache withdraws an uninstall a request cancels, enabled is
+// PADDOCK_REVOCATION_ENABLED.
+func NewRevocations(runner *ActionRunner, org *db.OrgPool, tokens StepUpTokens, cache UninstallCache, enabled bool) *Revocations {
+	return &Revocations{runner: runner, org: org, tokens: tokens, cache: cache, enabled: enabled, now: time.Now}
 }
 
 // Enabled reports PADDOCK_REVOCATION_ENABLED.
@@ -57,15 +60,18 @@ type RevocationInput struct {
 }
 
 // Request records a Lock (approved at once) or a Destroy (waiting for a second administrator) with the requester's
-// approval (audited: revocation.requested).
-func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.RevocationRequest, error) {
+// approval (audited: revocation.requested). It cancels an uninstall of the device without a removal report and
+// returns what it cancelled (UninstallCancelled*, "" for none).
+func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.RevocationRequest, string, error) {
 	spec := SpecRevocationRequest
 	spec.Target = &audit.Target{Type: "device", ID: in.DeviceID.String()}
 	spec.Params = map[string]any{"action": in.Action}
 	if !r.enabled {
-		return pgstore.RevocationRequest{}, r.runner.RecordRejected(ctx, ScopeOrg, spec, disabled())
+		return pgstore.RevocationRequest{}, "", r.runner.RecordRejected(ctx, ScopeOrg, spec, disabled())
 	}
 	var out pgstore.RevocationRequest
+	var cancelled string
+	var withdrawn uuid.UUID
 	err := r.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		if in.Action != revocation.ActionLock && in.Action != revocation.ActionDestroy {
 			return problem.InvalidRequest.WithDetail("action must be lock or destroy")
@@ -80,14 +86,10 @@ func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.
 		if dev.State != device.StateActive && dev.State != device.StateQuarantined {
 			return problem.InvalidState.WithDetail("only active or quarantined devices can be revoked")
 		}
-		// The uninstall helper purges paddock-revoke and its trust anchor, so a revocation issued meanwhile could not
-		// run; the uninstall refuses an open Lock or Destroy the same way (PDK-327). The device's row lock serializes
-		// both requests.
+		// The device's row lock serializes the request with an uninstall request, which refuses an open Lock or
+		// Destroy.
 		if dev, err = q.LockDevice(ctx, dev.ID); err != nil {
 			return err
-		}
-		if dev.UninstallRequestedAt != nil && dev.UninstalledAt == nil {
-			return problem.InvalidState.WithDetail("an uninstall is requested for this device; cancel it first")
 		}
 		p, _ := principal.From(ctx)
 		token, jti, err := r.stepUpToken(ctx, q, p)
@@ -120,9 +122,68 @@ func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.
 		if status == revocation.StatusApproved {
 			rec.RevocationApproved(out.ID)
 		}
-		return nil
+		cancelled, withdrawn, err = r.cancelUninstall(ctx, q, rec, dev, out.ID, now)
+		return err
 	})
-	return out, err
+	if err == nil {
+		dropWithdrawnCommand(ctx, r.cache, in.DeviceID, withdrawn)
+	}
+	return out, cancelled, err
+}
+
+// What a Lock or Destroy request did to an open uninstall of the device (Revocations.Request).
+const (
+	UninstallCancelledBeforeDelivery = "before_delivery"
+	// UninstallCancelledAfterDelivery: the device had received the uninstall command and may already have removed
+	// paddock-revoke.
+	UninstallCancelledAfterDelivery = "after_delivery"
+)
+
+// cancelUninstall withdraws an uninstall of the device that has no removal report yet (audited as its own
+// device.uninstall_cancelled with reason revocation): Lock and Destroy take precedence and are never blocked, because
+// the removal purges paddock-revoke (review 2 finding D). A command without a result is withdrawn like a cancel
+// (Uninstalls.Cancel); one the device already answered, or a result it claimed first, does not stop the revocation.
+// It returns UninstallCancelled* ("" when no uninstall was open) and the command to drop from cmd:<device_id> after
+// the commit.
+func (r *Revocations) cancelUninstall(ctx context.Context, q *pgstore.Queries, rec Recorder, dev pgstore.Device,
+	requestID uuid.UUID, now time.Time) (string, uuid.UUID, error) {
+	if dev.UninstallRequestedAt == nil || dev.UninstalledAt != nil || !dev.UninstallCommandID.Valid {
+		return "", uuid.Nil, nil
+	}
+	cmd, err := q.GetDeviceCommand(ctx, dev.UninstallCommandID.UUID)
+	if err != nil {
+		return "", uuid.Nil, err
+	}
+	received := cmd.DeliveredAt != nil || cmd.Status == devicecommand.StatusDelivered || cmd.Status == devicecommand.StatusSucceeded
+	switch cmd.Status {
+	case devicecommand.StatusPending, devicecommand.StatusDelivered:
+		claimed, err := withdrawUninstallCommand(ctx, q, r.cache, dev.ID, cmd, now)
+		if err != nil {
+			return "", uuid.Nil, err
+		}
+		received = received || claimed != ""
+	case devicecommand.StatusFailed, devicecommand.StatusExpired:
+		if _, err := q.CancelDeviceCommand(ctx, pgstore.CancelDeviceCommandParams{ID: cmd.ID, FinishedAt: now}); err != nil {
+			return "", uuid.Nil, err
+		}
+	}
+	if _, err := q.ClearDeviceUninstall(ctx, dev.ID); err != nil {
+		return "", uuid.Nil, err
+	}
+	spec := SpecUninstallCancel
+	spec.Target = &audit.Target{Type: "device", ID: dev.ID.String(), Display: dev.Hostname}
+	spec.Params = map[string]any{"hostname": dev.Hostname, "command_id": cmd.ID.String(), "reason": "revocation",
+		"request_id": requestID.String(), "after_delivery": received}
+	if dev.UninstallMode != nil {
+		spec.Params["mode"] = *dev.UninstallMode
+	}
+	rec.Also(spec)
+	if received {
+		rec.SetParam("uninstall_cancelled", UninstallCancelledAfterDelivery)
+		return UninstallCancelledAfterDelivery, cmd.ID, nil
+	}
+	rec.SetParam("uninstall_cancelled", UninstallCancelledBeforeDelivery)
+	return UninstallCancelledBeforeDelivery, cmd.ID, nil
 }
 
 // Approve records the second approval of a Destroy by another administrator — another account and another

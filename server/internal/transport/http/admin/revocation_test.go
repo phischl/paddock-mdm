@@ -153,7 +153,7 @@ func TestRevocationFrozen(t *testing.T) {
 // dead man's switch answer 403 revocation_disabled and record the attempt as denied; GET /api/v1/me tells the portal.
 func TestRevocationDisabled(t *testing.T) {
 	e := newEnvWith(t, func(d *admin.Deps) {
-		d.Revocations = app.NewRevocations(d.Runner, nil, nil, false)
+		d.Revocations = app.NewRevocations(d.Runner, nil, nil, nil, false)
 		d.DMS = app.NewDMS(d.Runner, nil, nil, false, false)
 	})
 	alice := e.steppedUp(e.session(e.acme, principal.RoleOrgAdmin), time.Now())

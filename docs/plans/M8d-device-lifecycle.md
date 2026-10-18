@@ -1257,7 +1257,14 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   device's result was claimed first — and deletes the `cmd:<device_id>` field after the commit; the worker's command
   round stays as the fallback. A request whose removal report is overdue (`UninstallReportTimeout`, 24 h after the
   command's result, or its delivery) can be cancelled or requested again; audited with `report_overdue`, and
-  `DeviceUninstall.report_overdue` lets the portal offer the cancel.
+  `DeviceUninstall.report_overdue` lets the portal offer the cancel. Fix round 2 (review 2 finding A): the overdue
+  cancel and re-request also withdraw a `delivered` command (`WithdrawDeviceCommand` after `ClaimResult(cancelled)`,
+  409 when the device reported first; `DeleteCommand` after the commit); `succeeded` stays as it is.
+- 37 (fix round 2, review 2 finding D, replaces PDK-327's refusal): `Revocations.Request` cancels an uninstall without a removal
+  report in its transaction (same withdrawal; a device that reported first does not stop the revocation),
+  `ClearDeviceUninstall`, and records `device.uninstall_cancelled` (reason `revocation`, `request_id`,
+  `after_delivery`) through `Recorder.Also`; `RevocationRequest.uninstall_cancelled` (`before_delivery`,
+  `after_delivery`) drives the portal warning.
 - 39: the agent starts the helper only after the server accepted the result with 2xx; a 404/409 drops the pending
   uninstall and removes its plan and binary copy; `LaunchedAt` is saved after `systemd-run` succeeded.
 - 41: `MarkDeviceUninstalled` requires the open request, the event's `command_id` and the command `succeeded`; a report

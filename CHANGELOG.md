@@ -97,7 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not answer yet); a cancelled removal never starts on the device. The device is
   retired after it reported the removal of the open request (`device.uninstalled`, `device.retired` with reason
   `uninstalled`); a removal report without such a request is audited and retires nothing. Pending removals appear on
-  the attention page. Lock and Destroy are refused while a removal is requested (it removes `paddock-revoke`).
+  the attention page. Lock and Destroy take precedence: requesting one cancels a pending removal (audited as
+  `device.uninstall_cancelled` with reason `revocation`), and the device page warns when the device had already
+  received the removal and may have removed `paddock-revoke`.
 - Agents of this release carry out the removal in the transient unit `paddock-uninstall`: they stop and purge
   Paddock's services and packages, keep every user file and the disk encryption, keep the managed local administrator
   when it is the last local administrator, and leave a summary in `/root/paddock-uninstall/result.json`.

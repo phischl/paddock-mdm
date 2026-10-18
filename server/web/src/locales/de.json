@@ -812,7 +812,10 @@
         "destroy": "Die Vernichtung wurde angefordert. Sie wartet auf der Seite Widerrufe auf die Freigabe durch einen zweiten Administrator."
       },
       "presumedSelfLocked": "Das Gerät hat Paddock seit vor {at} nicht erreicht und hat sich vermutlich selbst gesperrt (Totmannschalter).",
-      "uninstallPending": "Sperren und Vernichten sind nicht verfügbar, solange das Entfernen von Paddock aussteht: Das Entfernen entfernt auch das Widerrufswerkzeug. Brechen Sie das Entfernen zuerst ab.",
+      "uninstallCancelled": {
+        "before_delivery": "Das ausstehende Entfernen von Paddock wurde abgebrochen: Sperren und Vernichten haben Vorrang.",
+        "after_delivery": "Das ausstehende Entfernen von Paddock wurde abgebrochen, das Gerät hatte es aber bereits erhalten. Es hat das Widerrufsmodul möglicherweise schon entfernt; dann kann die Sperre oder Vernichtung darauf nicht ausgeführt werden."
+      },
       "timeline": "Widerrufe dieses Geräts",
       "steps": "Fortschritt",
       "timelineSteps": {

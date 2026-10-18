@@ -19,6 +19,10 @@ let resumeFor: string | null = null
 vi.mock('../lib/revocations', async (original) => ({
   ...(await original<typeof import('../lib/revocations')>()),
   listRevocations: () => () => Promise.resolve({ items: [], page: 1, page_size: 10, total: 0, total_capped: false, sort: '-requested_at' }),
+  requestRevocation: (_id: string, action: string) => Promise.resolve({
+    id: 'r1', device_id: 'd1', hostname: 'lt-1', action, status: 'approved', requested_at: '2026-10-18T10:00:00Z', reason: 'stolen',
+    approvals: [], uninstall_cancelled: 'after_delivery',
+  }),
 }))
 vi.mock('../lib/stepUp', async (original) => ({
   ...(await original<typeof import('../lib/stepUp')>()),
@@ -153,11 +157,16 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     expect(el('uninstall-cancel-request')).toBeNull()
   })
 
-  it('replaces Lock and Destroy with a hint while a removal is pending (PDK-327)', async () => {
-    await mountZone({ uninstall: pending })
-    expect(text('revocation-uninstall-pending')).toContain('Cancel the removal first.')
-    expect(el('revocation-lock')).toBeNull()
-    expect(el('revocation-destroy')).toBeNull()
+  it('keeps Lock and Destroy while a removal is pending and warns when the lock cancelled a delivered removal', async () => {
+    const onChanged = vi.fn()
+    resumeFor = 'revocation-lock'
+    await mountZone({ uninstall: { ...pending, command_status: 'delivered' } }, onChanged)
+    expect(el('revocation-lock')).not.toBeNull()
+    expect(el('revocation-destroy')).not.toBeNull()
+    settleConfirm({ reason: 'stolen' })
+    await flushPromises()
+    expect(text('revocation-uninstall-cancelled')).toContain('It may already have removed the revocation module')
+    expect(onChanged).toHaveBeenCalledTimes(1)
   })
 
   it('offers the cancel again once the removal report is overdue', async () => {

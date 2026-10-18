@@ -1441,8 +1441,9 @@ export interface paths {
          *     root volume stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
          *     the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
          *     administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
-         *     open Lock, 409 invalid_state unless the device is active or quarantined, or while an uninstall of the device
-         *     is requested (the removal purges paddock-revoke; cancel it first).
+         *     open Lock, 409 invalid_state unless the device is active or quarantined. A Lock takes precedence over an
+         *     uninstall: an uninstall of the device without a removal report is cancelled in the same transaction (audited
+         *     as its own device.uninstall_cancelled, reason revocation) and uninstall_cancelled says so.
          */
         post: operations["lockDevice"];
         delete?: never;
@@ -1468,7 +1469,8 @@ export interface paths {
          *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
          *     Requests a Destroy: a Lock whose escrowed header and recovery key are deleted before the token is issued, so
          *     the device's data is unrecoverable. It waits for a second administrator (another account and another identity)
-         *     to approve it (two-person rule). 409 invalid_state while an uninstall of the device is requested.
+         *     to approve it (two-person rule). Like a Lock, it cancels an uninstall of the device without a removal report
+         *     (uninstall_cancelled).
          */
         post: operations["destroyDevice"];
         delete?: never;
@@ -3713,6 +3715,11 @@ export interface components {
             finished_at?: string;
             /** @description Why the revocation-issuer rejected or failed it, e.g. limit_admin_hour. */
             rejection?: string;
+            /**
+             * @description Only in the response of a Lock or Destroy request that cancelled an uninstall of the device. after_delivery: the device had already received the uninstall command and may already have removed the revocation module (paddock-revoke).
+             * @enum {string}
+             */
+            uninstall_cancelled?: "before_delivery" | "after_delivery";
             /** @description The device's confirmation: erased (true only if every LUKS volume has no keyslot left and unresolved is empty), slots_before and slots_after (sums over the reported volumes), volumes (one {device, slots_before, slots_after, erased} per reported volume, failed ones included, the root volume last) and unresolved (the crypttab entries the device could not erase with certainty; absent when there are none). Confirmations of devices before M4c.1 have no volumes, e.g. {"erased": true, "slots_before": 2, "slots_after": 0}. */
             result?: {
                 [key: string]: unknown;

@@ -20,6 +20,9 @@ keep_local_admin}`) and `POST /api/v1/devices/{id}/uninstall/cancel`.
   clears anything.
 - On the device the command is refused (`failed`, reason `revocation_pending`) while a Lock or Destroy token was handed
   to `paddock-revoke` within the last 24 hours.
+- A Lock or Destroy requested while the removal is pending cancels it (`device.uninstall_cancelled`, reason
+  `revocation`): a command without a result is withdrawn like a cancel; when the device had already received it, the
+  device page warns that it may already have removed `paddock-revoke` (`docs/operations/revocation.md`).
 
 ## The two modes
 

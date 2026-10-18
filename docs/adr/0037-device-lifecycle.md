@@ -308,6 +308,14 @@ update-now request for the rollout's release (unexpired) lifts the wave gate of 
 package, as it does for the agent offer; never while the rollout is halted. The request recompiles the device (review
 2 finding C).
 
+**IV. Lock and Destroy before an uninstall (review 2 finding D, replaces PDK-327's refusal).** Lock and Destroy are
+never blocked by an uninstall. The revocation request cancels an uninstall without a removal report in its own
+transaction — a `pending` or `delivered` command is withdrawn like a cancel (result claimed as `cancelled`, command
+cancelled, removed from `cmd:<device_id>` after the commit), a command the device already answered stays — and records
+`device.uninstall_cancelled` (reason `revocation`) next to `revocation.requested`, each once (`Recorder.Also`). When
+the device had received the command, the response (`uninstall_cancelled: after_delivery`) and the portal warn that
+`paddock-revoke` may already be gone. The revocation path itself is unchanged.
+
 Consequences: + No supervisor change reaches every device at once, and a server outage no longer blocks a supervisor
 version for good. − A supervisor wave follows the compiler's reconcile interval rather than the gateway's offer; a
 device whose server stays unreachable retries for up to three days.

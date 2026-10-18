@@ -181,7 +181,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),
 		Autoinstall:    app.NewAutoinstall(runner, orgPool, bundlesURL),
 		Disk:           app.NewDisk(runner, orgPool, escrowAccess, escrowObjects),
-		Revocations:    app.NewRevocations(runner, orgPool, stepUpTokens, revocationEnabled),
+		Revocations:    app.NewRevocations(runner, orgPool, stepUpTokens, devicecache.New(vk), revocationEnabled),
 		DMS:            app.NewDMS(runner, orgPool, devicecache.New(vk), revocationEnabled, common.Development()),
 		Updates:        app.NewUpdates(runner, orgPool),
 		Attention:      app.NewAttention(orgPool),
