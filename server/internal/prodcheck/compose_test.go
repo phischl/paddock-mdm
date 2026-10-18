@@ -362,9 +362,10 @@ func TestContainerHardening(t *testing.T) {
 // TestStepUpBlueprintWebAuthnOnly (plan M8s decision 40): the shipped step-up flow validates with WebAuthn only; only
 // the development blueprint adds a stage that accepts TOTP.
 // TestPortalBlueprintBindsMFAOnTheDefaultFlow: the portal blueprint adds a second factor at order 31 of Authentik's
-// default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a). The stage runs only
-// for a user without a WebAuthn or TOTP authenticator, because a user with one has just validated it at order 30 and
-// a last_auth_threshold cannot skip a stage after another stage's validation (PDK-324).
+// default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a). The stage is
+// skipped only when order 30 has validated a WebAuthn or TOTP device in this sign-in, because a last_auth_threshold
+// cannot skip a stage after another stage's validation (PDK-324). Owning such a device does not skip it, so a sign-in
+// with a recovery code, e-mail, SMS or Duo still passes WebAuthn or TOTP, and an expression error keeps the stage.
 func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 	read := func(path string) string {
 		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))
@@ -395,12 +396,18 @@ func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 		{"id: default-flow-mfa-binding\n", "re_evaluate_policies: true"},
 		{"id: default-flow-mfa-binding\n", "policy_engine_mode: all"},
 		{"name: paddock-default-login-mfa-missing\n",
-			`return not (ak_user_has_authenticator(request.user, "webauthn") or ak_user_has_authenticator(request.user, "totp"))`},
+			`method_args = request.context.get("auth_method_args") or {}`},
+		{"name: paddock-default-login-mfa-missing\n",
+			`return not any(d.__class__.__name__ in ("TOTPDevice", "WebAuthnDevice") for d in method_args.get("mfa_devices") or [])`},
 		{"policy: !KeyOf default-flow-mfa-missing\n", "target: !KeyOf default-flow-mfa-binding"},
+		{"policy: !KeyOf default-flow-mfa-missing\n", "failure_result: true"},
 	} {
 		if !strings.Contains(block(c.marker), c.want) {
 			t.Errorf("the entry with %q lacks %q", strings.TrimSpace(c.marker), c.want)
 		}
+	}
+	if strings.Contains(block("name: paddock-default-login-mfa-missing\n"), "ak_user_has_authenticator") {
+		t.Error("paddock-default-login-mfa-missing decides by the devices the user owns, not by the factor of this sign-in")
 	}
 	dev := read(filepath.Join("dev", "paddock-dev.yaml"))
 	if !strings.Contains(dev, "[slug, default-authentication-flow]]], [order, 31]]") {

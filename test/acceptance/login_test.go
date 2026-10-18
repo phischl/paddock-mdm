@@ -166,8 +166,8 @@ func TestLoginMFAPath(t *testing.T) {
 	if stage == "" {
 		t.Fatalf("no stage binding at order 31: %+v", bindings.Results)
 	}
-	// The stage runs only for a user without WebAuthn or TOTP: a user with one has just validated it at order 30
-	// (PDK-324); the development blueprint skips it entirely.
+	// The stage is skipped only after a WebAuthn or TOTP validation at order 30 in the same sign-in (PDK-324); the
+	// development blueprint skips it entirely.
 	var pb struct {
 		Results []struct {
 			PolicyObj struct {

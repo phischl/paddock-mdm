@@ -165,10 +165,17 @@ upgrade, each in a private browser window:
    authenticator, then the portal opens.
 4. A new administrator without any authenticator signs in: Authentik asks for the password and then for the WebAuthn
    enrolment once; the enrolment appears in Authentik's event log (*Events* → `model_created`, WebAuthn device).
-5. Authentik's own sign-in (`https://auth.<domain>/if/user/`, flow `default-authentication-flow`): a user with a TOTP
-   or WebAuthn authenticator is asked for it once (Authentik's stage at order 30; Paddock's stage
-   `paddock-default-login-mfa` at order 31 is skipped by the policy `paddock-default-login-mfa-missing`). A user without
-   either is asked to enrol one (WebAuthn or TOTP) after the password.
+5. Authentik's own sign-in (`https://auth.<domain>/if/user/`, flow `default-authentication-flow`). Paddock's stage
+   `paddock-default-login-mfa` at order 31 is skipped by the policy `paddock-default-login-mfa-missing` only when
+   Authentik's stage at order 30 has validated a TOTP or WebAuthn device in the same sign-in:
+   1. A user with TOTP signs in with the TOTP code: Authentik asks for the code once, then the user interface opens.
+   2. A user with WebAuthn signs in with the WebAuthn authenticator: Authentik asks for it once, then the user
+      interface opens.
+   3. A user with TOTP and recovery codes chooses a recovery code at order 30: Authentik then asks for the TOTP code or
+      a WebAuthn authenticator at order 31 and offers no enrolment; without a valid TOTP code the sign-in does not
+      finish, so no session exists from which a passkey could be enrolled in the user settings.
+   4. A user without TOTP or WebAuthn (no device, or recovery codes only) is asked to enrol one (WebAuthn or TOTP)
+      after the password and any factor order 30 asks for.
 
 ## Development stack
 

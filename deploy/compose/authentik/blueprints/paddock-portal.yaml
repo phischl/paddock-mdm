@@ -117,10 +117,12 @@ entries:
       order: 0
     attrs:
       target: !KeyOf mfa-webauthn-binding
-  # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17): a user without a
-  # WebAuthn or TOTP authenticator must enrol one. A user with one has just validated it in Authentik's own stage at
-  # order 30, so the policy below skips this stage for them (PDK-324): the MFA cookie of a last_auth_threshold is bound
-  # to the stage that set it and never let this stage skip a validation of the stage at order 30.
+  # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17, plan M8x decision 5):
+  # every sign-in validates a WebAuthn or TOTP device; a user without one enrols one here. The policy below skips this
+  # stage only when Authentik's own stage at order 30 has just validated a WebAuthn or TOTP device in this flow
+  # (PDK-324): the MFA cookie of a last_auth_threshold is bound to the stage that set it and never let this stage skip
+  # a validation of the stage at order 30. Owning such a device is not enough: order 30 also accepts recovery codes,
+  # e-mail, SMS and Duo, and a sign-in with one of those must still pass WebAuthn or TOTP here.
   - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
     id: default-flow-mfa
     identifiers:
@@ -149,14 +151,20 @@ entries:
     identifiers:
       name: paddock-default-login-mfa-missing
     attrs:
+      # The name stays as first shipped although the policy checks the factor used, not the devices owned: the policy
+      # binding is identified by the policy, so a renamed policy would leave the old binding on order 31 after a
+      # re-apply.
       expression: |
-        return not (ak_user_has_authenticator(request.user, "webauthn") or ak_user_has_authenticator(request.user, "totp"))
+        method_args = request.context.get("auth_method_args") or {}
+        return not any(d.__class__.__name__ in ("TOTPDevice", "WebAuthnDevice") for d in method_args.get("mfa_devices") or [])
   - model: authentik_policies.policybinding
     identifiers:
       policy: !KeyOf default-flow-mfa-missing
       order: 0
     attrs:
       target: !KeyOf default-flow-mfa-binding
+      # Authentik's default failure result (false) would remove the stage if the expression raised; true fails closed.
+      failure_result: true
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf login-flow
