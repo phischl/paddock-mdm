@@ -79,10 +79,12 @@ type PendingInstall struct {
 	Packages  []string `json:"packages"`
 }
 
-// PendingUninstall is an accepted uninstall command; LaunchedAt is set once the removal was started.
+// PendingUninstall is an accepted uninstall command; Reported is set once the server accepted its result (2xx),
+// LaunchedAt once the removal was started.
 type PendingUninstall struct {
 	CommandID  string     `json:"command_id"`
 	Mode       string     `json:"mode"`
+	Reported   bool       `json:"reported,omitempty"`
 	LaunchedAt *time.Time `json:"launched_at,omitempty"`
 }
 

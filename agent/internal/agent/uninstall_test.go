@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +20,12 @@ import (
 
 func uninstallAgent(t *testing.T) (*Agent, *[][]string) {
 	t.Helper()
+	a, launched, _ := uninstallAgentGW(t)
+	return a, launched
+}
+
+func uninstallAgentGW(t *testing.T) (*Agent, *[][]string, *testgw.Gateway) {
+	t.Helper()
 	g := testgw.New(t)
 	a := newAgent(t, g)
 	self := filepath.Join(t.TempDir(), "paddockd")
@@ -31,7 +38,7 @@ func uninstallAgent(t *testing.T) (*Agent, *[][]string) {
 		*launched = append(*launched, append([]string{name}, args...))
 		return nil
 	}
-	return a, launched
+	return a, launched, g
 }
 
 func uninstallCmd(params string) *command.Command {
@@ -69,7 +76,10 @@ func TestUninstallAccepted(t *testing.T) {
 	if len(*launched) != 0 {
 		t.Fatalf("started before the result was accepted: %v", *launched)
 	}
-	a.st.CommandResults = nil
+	a.postResults(context.Background())
+	if a.st.PendingUninstall == nil || !a.st.PendingUninstall.Reported {
+		t.Fatalf("accepted result not marked: %+v", a.st.PendingUninstall)
+	}
 	a.launchUninstall(context.Background())
 	a.launchUninstall(context.Background())
 	want := []string{"systemd-run", "--unit=paddock-uninstall", "--collect", "--no-block", "--property=KillMode=process",
@@ -112,6 +122,7 @@ func TestUninstallHelperFailed(t *testing.T) {
 	if status, _ := a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`)); status != protocol.CommandSucceeded {
 		t.Fatal(status)
 	}
+	a.st.PendingUninstall.Reported = true
 	a.launchUninstall(context.Background())
 	pending, err := a.d.Spool.Pending()
 	if err != nil || len(pending) != 1 || pending[0].Type != protocol.EventAgentUninstalled {
@@ -124,5 +135,48 @@ func TestUninstallHelperFailed(t *testing.T) {
 	}
 	if a.st.PendingUninstall != nil {
 		t.Fatalf("pending mark kept: %+v", a.st.PendingUninstall)
+	}
+}
+
+// TestUninstallRefusedResultWithdraws (review finding 1): a result the server refuses (cancelled: 409, removed from
+// cmd: 404) never starts the removal; the mark, the plan and the binary copy are removed.
+func TestUninstallRefusedResultWithdraws(t *testing.T) {
+	for _, status := range []int{http.StatusConflict, http.StatusNotFound} {
+		a, launched, g := uninstallAgentGW(t)
+		if s, _ := a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`)); s != protocol.CommandSucceeded {
+			t.Fatal(s)
+		}
+		a.st.CommandResults = []state.CommandResult{{CommandID: "c-un", Status: protocol.CommandSucceeded}}
+		g.ResultFail = status
+		a.postResults(context.Background())
+		a.launchUninstall(context.Background())
+		if len(*launched) != 0 || a.st.PendingUninstall != nil || len(a.st.CommandResults) != 0 {
+			t.Fatalf("%d: launched %v, pending %+v", status, *launched, a.st.PendingUninstall)
+		}
+		for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary()} {
+			if _, err := os.Stat(f); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%d: %s kept: %v", status, f, err)
+			}
+		}
+	}
+}
+
+// TestUninstallLaunchedAtAfterStart (review finding 8): a failing start leaves no LaunchedAt behind before the
+// helper_failed report, and a successful start sets it only afterwards.
+func TestUninstallLaunchedAtAfterStart(t *testing.T) {
+	a, _ := uninstallAgent(t)
+	var seen *time.Time
+	a.d.RunUnit = func(context.Context, string, ...string) error {
+		if st, _ := state.Load(a.d.Layout.State()); st.PendingUninstall != nil {
+			seen = st.PendingUninstall.LaunchedAt
+		}
+		return nil
+	}
+	a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`))
+	a.st.PendingUninstall.Reported = true
+	a.saveState()
+	a.launchUninstall(context.Background())
+	if seen != nil || a.st.PendingUninstall.LaunchedAt == nil {
+		t.Fatalf("LaunchedAt saved before the start (%v) or not after it (%v)", seen, a.st.PendingUninstall.LaunchedAt)
 	}
 }

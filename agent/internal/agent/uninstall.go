@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"slices"
@@ -75,20 +76,33 @@ func (a *Agent) copySelf() error {
 	return fsutil.WriteFile(a.d.Layout.UninstallBinary(), bin, 0o700, 0o700)
 }
 
-// launchUninstall starts the accepted removal once its command result left CommandResults, exactly once. A start
-// that fails is reported as agent.uninstalled with outcome helper_failed, and the mark is cleared.
+// withdrawUninstall drops a pending uninstall whose result the server refused and removes its plan and binary copy.
+func (a *Agent) withdrawUninstall(ctx context.Context) {
+	p := a.st.PendingUninstall
+	slog.WarnContext(ctx, "uninstall withdrawn by the server; Paddock stays installed", "command_id", p.CommandID)
+	for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary()} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.WarnContext(ctx, "removing the uninstall preparation failed", "file", f, "error", err)
+		}
+	}
+	a.st.PendingUninstall = nil
+}
+
+// launchUninstall starts the accepted removal once the server accepted its command result (2xx), exactly once.
+// LaunchedAt is saved only after systemd-run succeeded, so a crash before the start retries it. A start that fails is
+// reported as agent.uninstalled with outcome helper_failed, and the mark is cleared.
 func (a *Agent) launchUninstall(ctx context.Context) {
 	p := a.st.PendingUninstall
-	if p == nil || p.LaunchedAt != nil ||
+	if p == nil || p.LaunchedAt != nil || !p.Reported ||
 		slices.ContainsFunc(a.st.CommandResults, func(r state.CommandResult) bool { return r.CommandID == p.CommandID }) {
 		return
 	}
-	at := a.d.Now().UTC()
-	p.LaunchedAt = &at
-	a.saveState()
 	err := a.d.RunUnit(ctx, "systemd-run", "--unit="+UninstallUnit, "--collect", "--no-block", "--property=KillMode=process",
 		a.d.Layout.UninstallBinary(), "uninstall", "--plan", a.d.Layout.UninstallPlan())
 	if err == nil {
+		at := a.d.Now().UTC()
+		p.LaunchedAt = &at
+		a.saveState()
 		slog.InfoContext(ctx, "removal of Paddock started", "command_id", p.CommandID, "unit", UninstallUnit)
 		return
 	}

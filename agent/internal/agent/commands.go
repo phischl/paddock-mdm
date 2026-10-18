@@ -39,16 +39,28 @@ func (a *Agent) handleCommands(ctx context.Context, envelopes []json.RawMessage)
 }
 
 // postResults reports the kept command results in order. A result the server refuses as unknown (404, e.g. the
-// command expired meanwhile) or conflicting (409) is dropped; any other failure is retried at the next check-in.
+// command expired meanwhile) or conflicting (409) is dropped; any other failure is retried at the next check-in. The
+// result of a pending uninstall marks it reported when accepted and withdraws it when refused: a refusal means the
+// command was cancelled or expired, so the removal must not start.
 func (a *Agent) postResults(ctx context.Context) {
 	for len(a.st.CommandResults) > 0 {
 		r := a.st.CommandResults[0]
 		err := a.d.Client.CommandResult(ctx, a.st.DeviceID, a.st.Seq, r.CommandID, protocol.CommandResult{Status: r.Status, Result: r.Result})
 		var apiErr *client.APIError
+		pending := a.st.PendingUninstall
+		if pending != nil && pending.CommandID != r.CommandID {
+			pending = nil
+		}
 		switch {
 		case err == nil:
+			if pending != nil {
+				pending.Reported = true
+			}
 		case errors.As(err, &apiErr) && (apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusConflict):
 			slog.WarnContext(ctx, "command result refused; dropped", "command_id", r.CommandID, "error", err)
+			if pending != nil {
+				a.withdrawUninstall(ctx)
+			}
 		default:
 			slog.WarnContext(ctx, "sending command result failed; retrying at the next check-in", "command_id", r.CommandID, "error", err)
 			return
