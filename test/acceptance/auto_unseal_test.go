@@ -102,7 +102,8 @@ func TestAutoUnsealAcknowledgement(t *testing.T) {
 	}
 	res = enableAutoUnseal(t, alice, disclaimerVersion, acknowledgementEN)
 	expectStatus(t, res, http.StatusForbidden, "forbidden")
-	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.auto_unseal_enabled", "denied", auditPollTimeout)
+	// An organization administrator's denied platform action is recorded in its own organization (ActionRunner).
+	expectOneEvent(t, alice, res.RequestID, "platform.auto_unseal_enabled", "denied")
 
 	if found.State == "enabled" {
 		stepUp(t, root, env.PlatformAdmin, true)
