@@ -77,7 +77,8 @@ func uninstallAttention(t *testing.T, p *env.Portal, hostname string) []string {
 // TestUninstall is gate A8 of plan M8d (AC8, AC9 server part): an organization administrator with a step-up requests
 // the removal of Paddock with the typed hostname; refusals for a missing step-up, a wrong hostname, a second request,
 // reset-only options with leave, a TPM keyslot and a pending Lock; cancel before the device received the command and
-// not after; the device's acceptance and removal report retire it with reason uninstalled.
+// not after; the device's acceptance and removal report retire it with reason uninstalled. A Lock takes precedence:
+// it cancels a pending removal and records that on its one revocation.requested event (ADR 0037 amendment IV).
 func TestUninstall(t *testing.T) {
 	alice := login(t, env.Alice)
 	admin := adminUser(t, "uninstall")
@@ -145,6 +146,8 @@ func TestUninstall(t *testing.T) {
 		_ = call(t, alice, http.MethodGet, "/api/v1/devices/"+d.DeviceID+"/disk", nil).JSON(&disk)
 		return len(disk.Tokens) == 2
 	})
+	// The dev stack's step-up window is 30 s; the wait for the health report outlasts it.
+	admin.stepUp(t)
 	res = call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "reset", map[string]any{"clear_tpm": true}))
 	expectStatus(t, res, http.StatusConflict, "tpm_in_use_by_disk")
 
@@ -188,12 +191,31 @@ func TestUninstall(t *testing.T) {
 		t.Fatalf("attention of a retired device %v", got)
 	}
 
-	// A pending Lock refuses the removal of its device; another organization finds neither route.
+	// A Lock cancels a pending removal in the same request and records it on its one event; the pending Lock then
+	// refuses the removal of its device; another organization finds neither route.
 	other := "a8l-" + uniqueSuffix()
 	locked := activeDevice(t, alice, "", other)
 	other = getDevice(t, alice, locked.DeviceID).Hostname
-	expectStatus(t, call(t, admin.Portal, http.MethodPost, "/api/v1/devices/"+locked.DeviceID+"/lock",
-		map[string]any{"confirm_hostname": other, "reason": "gate A8"}), http.StatusCreated, "")
+	admin.stepUp(t)
+	res = call(t, admin.Portal, http.MethodPost, "/api/v1/devices/"+locked.DeviceID+"/uninstall", uninstallBody(locked, other, "leave", nil))
+	expectStatus(t, res, http.StatusOK, "")
+	lockedCmd := uninstallOf(t, alice, locked.DeviceID).Uninstall.CommandID
+	res = call(t, admin.Portal, http.MethodPost, "/api/v1/devices/"+locked.DeviceID+"/lock",
+		map[string]any{"confirm_hostname": other, "reason": "gate A8"})
+	expectStatus(t, res, http.StatusCreated, "")
+	var lock struct {
+		UninstallCancelled string `json:"uninstall_cancelled"`
+	}
+	if err := res.JSON(&lock); err != nil || lock.UninstallCancelled != "before_delivery" {
+		t.Fatalf("lock response %s (%v), want uninstall_cancelled before_delivery", res.Body, err)
+	}
+	ev = expectOneEvent(t, alice, res.RequestID, "revocation.requested", "success")
+	if ev.Params["uninstall_cancelled"] != "before_delivery" || ev.Params["uninstall_command_id"] != lockedCmd || ev.Params["action"] != "lock" {
+		t.Fatalf("revocation.requested params %v", ev.Params)
+	}
+	if s := uninstallOf(t, alice, locked.DeviceID); s.Uninstall != nil {
+		t.Fatalf("uninstall after the lock: %+v", s.Uninstall)
+	}
 	res = call(t, admin.Portal, http.MethodPost, "/api/v1/devices/"+locked.DeviceID+"/uninstall", uninstallBody(locked, other, "leave", nil))
 	expectStatus(t, res, http.StatusConflict, "invalid_state")
 	if detail := problemDetail(t, res); detail != "a lock or destroy is pending for this device" {
