@@ -48,6 +48,13 @@ once and asks for one security review afterwards: follow the four steps in `docs
    ./paddock ps        # before the roles start
    ```
 
+   Control plane: when B changes the OpenBao image or its configuration, `./paddock up` recreates OpenBao and it
+   starts **sealed**. The Paddock roles cannot become healthy until it is unsealed, so `./paddock up` keeps waiting
+   (up to 15 minutes, then it fails and names OpenBao as sealed). Have three custodians ready: while it waits, they
+   run `./paddock bao operator unseal` in a second shell, one share each (`docs/operations/install.md` section 6);
+   if it timed out, unseal and run `./paddock up` again. With automatic unseal on (`docs/operations/openbao.md`
+   section 6) the unsealer does this. `./paddock up` never unseals by itself: the shares are not on the host.
+
 5. Watch the readiness of the roles and the alerts for an hour (`docs/operations/monitoring.md`). Keep A's directory
    until the next upgrade: it is the rollback. A's `.secrets/` stays a full copy of the secrets, including the
    OpenBao shares file `.secrets/openbao/auto-unseal-shares` when automatic unseal is on. When you disable automatic
