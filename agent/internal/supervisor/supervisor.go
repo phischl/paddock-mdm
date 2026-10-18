@@ -364,14 +364,17 @@ func (s *Supervisor) rollback(reason string) {
 		slog.Warn("rolled back; the result waits until the flip back is durable", "version", p.Version, "slot", p.FromSlot)
 		return
 	}
-	s.restartChild()
 	if err != nil {
+		s.restartChild()
 		slog.Error("rollback failed: current still points at the new agent; retrying", "version", p.Version, "active_slot", s.activeSlot(),
 			"previous_slot", p.FromSlot, "attempts", rollbackAttempts, "error", err)
 		s.keepRollbackPending(p)
 		return
 	}
+	// The result is written and the request removed before the previous agent starts: it checks in at once and would
+	// otherwise stage the release it was just rolled back from (ADR 0024 amendment 2026-10-18).
 	s.conclude(p, outcomeRolledBack)
+	s.restartChild()
 }
 
 // flipBack points current at slot in up to attempts attempts, retrying with back-off. It succeeds exactly when current then points at slot: a
@@ -404,18 +407,26 @@ func (s *Supervisor) flipBack(slot string, attempts int) (durable bool, err erro
 func (s *Supervisor) confirmRollback() {
 	p := s.rolledBack
 	s.recordPending(p)
-	if p.RollbackPending && !s.retryFlipBack(p) {
+	retried := p.RollbackPending
+	if retried && !s.retryFlipBack(p) {
 		return
 	}
 	if !s.confirmFlip(p.FromSlot) {
+		if retried {
+			s.restartChild()
+		}
 		return
 	}
 	s.rolledBack = nil
 	s.conclude(p, outcomeRolledBack)
+	// As in rollback: the old agent starts only after the result exists.
+	if retried {
+		s.restartChild()
+	}
 }
 
 // retryFlipBack makes one attempt per retry slot to flip current back to FromSlot. A current that already points there
-// (an operator flipped it by hand) succeeds as well; the old agent is restarted and the flip must still become durable.
+// (an operator flipped it by hand) succeeds as well; the caller restarts the old agent and makes the flip durable.
 func (s *Supervisor) retryFlipBack(p *probation) bool {
 	if s.cfg.Now().Before(p.retryAt) {
 		return false
@@ -430,7 +441,6 @@ func (s *Supervisor) retryFlipBack(p *probation) bool {
 	}
 	slog.Info("rolled back on a retry", "version", p.Version, "attempt", p.retries, "slot", p.FromSlot)
 	p.RollbackPending = false
-	s.restartChild()
 	return true
 }
 
