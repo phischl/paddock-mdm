@@ -117,8 +117,10 @@ entries:
       order: 0
     attrs:
       target: !KeyOf mfa-webauthn-binding
-  # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17): a user without an
-  # authenticator must enrol one; a user who just validated one in the stage at order 30 is not asked twice.
+  # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17): a user without a
+  # WebAuthn or TOTP authenticator must enrol one. A user with one has just validated it in Authentik's own stage at
+  # order 30, so the policy below skips this stage for them (PDK-324): the MFA cookie of a last_auth_threshold is bound
+  # to the stage that set it and never let this stage skip a validation of the stage at order 30.
   - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
     id: default-flow-mfa
     identifiers:
@@ -126,7 +128,7 @@ entries:
     attrs:
       device_classes: [webauthn, totp]
       not_configured_action: configure
-      last_auth_threshold: minutes=5
+      last_auth_threshold: seconds=0
       configuration_stages:
         - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
         - !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
@@ -137,8 +139,24 @@ entries:
       stage: !KeyOf default-flow-mfa
       order: 31
     attrs:
-      evaluate_on_plan: true
+      # Evaluated when the stage is reached, for the identified user; "all": the development blueprint binds a policy
+      # that always fails to skip this stage.
+      evaluate_on_plan: false
       re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies_expression.expressionpolicy
+    id: default-flow-mfa-missing
+    identifiers:
+      name: paddock-default-login-mfa-missing
+    attrs:
+      expression: |
+        return not (ak_user_has_authenticator(request.user, "webauthn") or ak_user_has_authenticator(request.user, "totp"))
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf default-flow-mfa-missing
+      order: 0
+    attrs:
+      target: !KeyOf default-flow-mfa-binding
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf login-flow

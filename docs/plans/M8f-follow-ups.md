@@ -324,6 +324,20 @@ password alone enrolled a key that passes every step-up. `paddock-portal.yaml` n
   stages and the two policies on the order-31 binding. The flows themselves are checked on the lab
   (`docs/operations/step-up.md` *Checking the portal sign-in factor*), because the development stack skips them.
 
+**Architect note 2026-10-18 (fix round 1, PDK-324): the default-flow stage of M8x.** `paddock-default-login-mfa` at
+order 31 of `default-authentication-flow` asked every user with an authenticator a second time: Authentik's own stage
+`default-authentication-mfa-validation` at order 30 validates any device class (`not_configured_action: skip`,
+`last_auth_threshold: seconds=0`, verified in the 2026.8.3 database of the development stack), and the
+`last_auth_threshold: minutes=5` of order 31 could not skip it, because the MFA cookie is bound to the stage that set
+it. The binding now has `evaluate_on_plan: false`, `re_evaluate_policies: true`, `policy_engine_mode: all` and the
+expression policy `paddock-default-login-mfa-missing`
+(`return not (ak_user_has_authenticator(request.user, "webauthn") or ak_user_has_authenticator(request.user, "totp"))`);
+the stage sets `last_auth_threshold: seconds=0` explicitly, so a re-apply resets the old value. A user with WebAuthn or
+TOTP has validated a device at order 30 and is asked once; a user without either (no device, or only static, SMS, e-mail
+or Duo) enrols one as before. Mode *all* keeps the development skip effective. Tests:
+`TestPortalBlueprintBindsMFAOnTheDefaultFlow` (attributes, policy, policy binding) and acceptance `TestLoginMFAPath` (mode
+*all*, both policies on order 31); lab case 5 in `docs/operations/step-up.md`.
+
 ### 3.4 End all sessions ends the administrators' Authentik sessions too (PDK-190) — ADR 0034 amendment 2026-10-18, ADR 0007 amendment
 
 16. `app.Sessions` MUST gain two dependencies and end the Authentik sessions inside the same action:

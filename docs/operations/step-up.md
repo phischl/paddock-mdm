@@ -165,6 +165,10 @@ upgrade, each in a private browser window:
    authenticator, then the portal opens.
 4. A new administrator without any authenticator signs in: Authentik asks for the password and then for the WebAuthn
    enrolment once; the enrolment appears in Authentik's event log (*Events* → `model_created`, WebAuthn device).
+5. Authentik's own sign-in (`https://auth.<domain>/if/user/`, flow `default-authentication-flow`): a user with a TOTP
+   or WebAuthn authenticator is asked for it once (Authentik's stage at order 30; Paddock's stage
+   `paddock-default-login-mfa` at order 31 is skipped by the policy `paddock-default-login-mfa-missing`). A user without
+   either is asked to enrol one (WebAuthn or TOTP) after the password.
 
 ## Development stack
 
