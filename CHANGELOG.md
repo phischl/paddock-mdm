@@ -115,6 +115,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Upgrade order for the device lifecycle release (M8d): update the server first, then the agents. Every protocol and
+  bundle change is additive; older agents ignore the new bundle fields, and the new event types
+  (`agent.supervisor_updated`, `agent.uninstalled`) are only sent after a bundle section or command of this release.
 - A portal sign-in reuses an existing Authentik session that was authenticated with a second factor instead of asking
   for the password again; a session without a second factor is still refused.
 - Devices install Himmelblau 4.0.6 by default (`PADDOCK_HIMMELBLAU_VERSION`, previously 4.0.4): a device code

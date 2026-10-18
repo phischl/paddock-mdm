@@ -564,6 +564,14 @@ sequenceDiagram
 - **Proxies:** the agent honours `HTTPS_PROXY`/`NO_PROXY` and a proxy setting in `/etc/paddock/agent.yml`;
   it never alters system routes, DNS or VPN state (open question "third-party VPNs").
 
+> **Amendment 2026-10-17 (M8d, ADR 0037):** the offer may be an **update-now request**: an administrator's request
+> for one device is mirrored by the worker to Valkey `au:<device>` (`{version, requested_at}`, at most 24 h); the
+> gateway then offers the current release outside the device's wave (never a halted one) with
+> `agent_update.requested = true` and `requested_at`, and the agent stages it regardless of its update policy and of
+> an earlier failure of that version, once per request. The heartbeat carries the agent's architecture; the health
+> report carries `components` (installed paddockd, supervisor, paddock-revoke, Himmelblau and fleetd versions) and,
+> in `disk`, `unlock_mode` and `boot_separate`.
+
 ### 6.8 Device API
 
 | Method and path | Purpose | Success | Errors |
@@ -1185,6 +1193,18 @@ stateDiagram-v2
   2026-10-12).
 - The supervisor's own update happens only through the distribution package (`apt`), never through the agent channel.
 
+> **Amendment 2026-10-17 (M8d, ADR 0037):** the bullet "the supervisor's own update happens only through the
+> distribution package (`apt`)" is replaced. Once the current release's rollout completed, v2 bundles carry its
+> `paddock-supervisor` package per architecture (`agent.supervisor_packages`, SHA-256 in the signed bundle). An agent
+> of that same release whose policy allows updates installs a newer package through the transient systemd unit
+> `paddock-supervisor-upgrade` (`paddockd supervisor-upgrade`, outside the supervisor's cgroup): it keeps a copy of the
+> binary and unit file, runs `dpkg -i` (15 min), waits up to 10 min for a check-in of the agent with a stable
+> supervisor process and restores the copy otherwise; the outcome is `agent.supervisor_updated` (audit
+> `device.supervisor_updated` / `device.supervisor_update_failed`) and never counts toward a rollout threshold. The
+> supervisor still never updates itself. The agent update policy (`automatic` | `manual`, organization with group
+> overrides, `agent.update_policy` in the bundle) gates agent, supervisor and fleetd upgrades; *Update agent now*
+> overrides it for one device (§6.7).
+
 ### 11.3 Reconcilers (apply engine)
 
 Fixed resource types, each idempotent, each with `Plan()` (diff without changes) and `Apply()`:
@@ -1243,6 +1263,12 @@ Commands are delivered in the check-in response, signed individually (DSSE,
 Expired commands are marked `expired` and never executed (platform outage question). Results go to
 `POST /v1/commands/{id}/result`; the agent stores executed command IDs for 60 days to drop duplicates.
 
+> **Amendment 2026-10-17 (M8d, ADR 0037):** command `uninstall` (7 d, params `mode` = `leave` | `reset`,
+> `clear_tpm`, `keep_local_admin`): the agent accepts it, copies itself to `/run/paddock/uninstall/` and, once the
+> result was accepted, runs `paddockd uninstall` in the transient unit `paddock-uninstall`; the final event
+> `agent.uninstalled` retires the device (`device.retired` with reason `uninstalled`). The request can be cancelled
+> while the command is not delivered. Runbook `docs/operations/uninstall.md`.
+
 ### 11.5 Events and detection (layer 3)
 
 | Check | Interval | Event on deviation |
@@ -1286,6 +1312,11 @@ and appears on the "action required" list; the admin chooses Retire, Lock or Kee
 > *Presumed lost*. `paddock_device_contact` takes the reference time as an argument (migration 00049). The worker's
 > report of a stopped agent (`device.tamper_agent_not_running`) is the attention kind `agent_not_running` until
 > fleetd's policy passes again.
+
+> **Amendment 2026-10-17 (M8d, ADR 0037):** a device group may override both thresholds
+> (`device_group.staleness_warning_h`, `staleness_critical_h`, set together); a device in several groups takes the
+> most lenient pair of its groups, else the organization's. The alert's audit event names the threshold and its
+> `source` (`organization` | `device_group`).
 
 ### 12.2 Managed local administrator (F16)
 
@@ -1398,6 +1429,15 @@ device with a short-lived presigned PUT issued by the gateway, not through the q
 > key. A device is `compliant` only when every volume is escrowed. Lock and `self_lock` tokens carry the confirmed
 > volume UUIDs (`volumes`); `paddock-revoke` erases root plus exactly those and reports the rest as
 > `skipped_not_escrowed`, so a Lock stays restorable. Destroy erases every volume and deletes all escrowed headers.
+
+> **Amendment 2026-10-17 (M8d, ADR 0038):** the unlock mode is `tpm_pin` (TPM2 + boot PIN, default) or `tpm_only`
+> (TPM2 alone, PCR 7), set per organization with device-group overrides (`tpm_pin` wins across groups). The
+> autoinstall embeds the mode of the token's group in `disk-setup.json`; `tpm_only` enrolls without a PIN dialogue.
+> The bundle's `disk.unlock_mode` defines the compliant keyslot set (`recovery` + `tpm2+pin` or `tpm2`); a disk
+> enrolled for the other mode is `unlock_mode_mismatch`, converted by an operator with the recovery key
+> (`docs/operations/disk-recovery.md`). The agent never enrolls or wipes a TPM keyslot of an enrolled device. "No
+> in-place conversion" is now: in-place conversion is deferred to M8e (ADR 0038); unencrypted devices report whether
+> `/boot` is separate, and the portal asks for a reinstall.
 
 **A14 (decided 2026-10-05):** boot PIN (TPM2+PIN, set at installation) **and** Hello PIN (login) — both. The separate UX
 test is replaced by the pilot feedback of the reference deployment.
@@ -1757,6 +1797,13 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 `vulnerability_finding`, `policy_result`, `device_inventory_ref`, `agent_release`, `rollout_wave`,
 `revocation_request`, `enrollment_token`, `effective_profile_cache`.
 
+> **Amendment 2026-10-17 (M8d, ADR 0037/0038):** new tables `device_owner` (owners of a device, no rights),
+> `device_login_event` (login history while the organization records it, purged after `login_history_days`) and the
+> platform table `component_target`; new columns: `device_inventory_ref` hardware facts, `device_group` staleness pair,
+> `agent_update_policy`, `disk_unlock_mode`; `organization_login_settings.login_history_*`, `disk_unlock_mode`;
+> `organization_update_settings.agent_update_policy`; `device.agent_update_requested_*`, `uninstall_*`,
+> `uninstalled_at`, `retired_reason`; `device_status.arch`, `components_outdated`.
+
 ### 16.2 Conventions
 
 - Primary keys UUIDv7 (time-ordered) generated in Go; timestamps `timestamptz` in UTC.
@@ -1788,6 +1835,11 @@ reason), `outbox`, `action`, `alert`, `device_status`, `tamper_finding`, `instal
 > run while api and compiler are down and would otherwise need a standing platform-scope token. API tokens are
 > organization-scoped, never exceed the creator's role, expire after at most 365 days and need a step-up to
 > create. Plan: `docs/plans/M6c-paddockctl.md`.
+
+> **Amendment 2026-10-17 (M8d, ADR 0037/0038):** new endpoints `PUT /api/v1/devices/{id}/owners`,
+> `GET /api/v1/devices/{id}/logins`, `GET /api/v1/users/{id}/devices`, `POST /api/v1/devices/{id}/update-agent`,
+> `POST /api/v1/devices/{id}/uninstall` (step-up) and `…/uninstall/cancel`, `GET /api/platform/v1/component-targets`;
+> the device list gains the filters `owner_id` and `component_outdated`. Plan: `docs/plans/M8d-device-lifecycle.md`.
 
 ### 17.2 Device API
 

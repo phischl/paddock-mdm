@@ -331,6 +331,31 @@ Once the rollback is made, the device reports `device.agent_rolled_back` and the
 disappears when the device reports another agent version. The rollout counts the device once as failed, whether it
 reported `rollback_failed`, `rolled_back` or both.
 
+## Update policy
+
+An organization chooses whether its devices take agent releases automatically (*Updates* → *Agent updates*,
+`agent_update_policy` of the update settings, also in the declarative document; ADR 0037 decision 1):
+
+- **Automatic** (default): devices install every release the platform rolls out, in their wave.
+- **Manual**: devices install an agent release only when an administrator requests it per device (*Update agent
+  now*). The same policy holds back the supervisor package and fleetd upgrades; a missing fleetd is still installed.
+
+A device group can override the organization's policy; a device in several groups is `manual` when any of them says
+so, and `automatic` when a group says so on a `manual` organization. The bundle carries the result
+(`agent.update_policy`, absent for automatic). An agent on `manual` logs `agent update offer ignored by the
+organization's policy` once per offered version. Devices left on an old agent appear on the attention page as
+`agent_outdated` and leave the support window after N-2 minor releases (426 `agent_unsupported`, residual risk RR-51).
+
+## Update now
+
+*Update agent now* on the device page (`POST /api/v1/devices/{id}/update-agent`, organization administrators and
+operators, audited as `device.agent_update_requested`) asks one active device to install the release the platform
+currently offers at its next check-in — outside its rollout wave and regardless of the update policy, with the usual
+self-test, probation and rollback. It is refused (409 `invalid_state`) while no release is offered (no rollout, or a
+halted one), when the device already runs the release, or when the release has no artifact for the device's
+architecture. The request ends with the device's report of that version (`device.agent_updated`, `…update_failed` or
+`…rolled_back`) or after 24 hours; an earlier failure of the same version on the device is retried once per request.
+
 ## Supervisor package
 
 A device updates `paddock-supervisor` from the current release (ADR 0037 decision 3): once a release's rollout
