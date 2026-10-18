@@ -412,6 +412,21 @@ organization A and IDs of organization B and requires 404 for every one.
 Integrity and confidentiality of what matters do not depend on TLS: bundles and commands are
 signed end-to-end, secrets in bundles are encrypted to the device's key. TLS protects metadata.
 
+> **Amendment 2026-10-18 (M8f, ADR 0040) — what TLS protects.**
+>
+> 1. **What the connection protects.** TLS protects the confidentiality of reports and of the enrollment token and
+>    the authenticity of the device login's and fleetd's endpoints; integrity and the revocation path never depend on
+>    it (unchanged, architecture §6.1). Pinning (A), report encryption (B) and a signed pointer (C) are **deferred**;
+>    the residual risk is recorded (RR-64).
+> 2. **Freeze detection on the server.** The attention kind `config_behind` lists an active device whose newest bundle
+>    was compiled more than one hour ago, which checked in after that hour, and whose applied bundle version is older
+>    than the newest (plan M8f §3.6). The grace period is one hour (bundles are compiled within seconds and applied at
+>    the next check-in, at most ~6 minutes later; an hour tolerates a sealed OpenBao or a compiler restart). No audit
+>    event: the kind is a derived condition like `agent_outdated`.
+> 3. **Blocking and the dead man's switch.** A blocked connection is treated like an outage: staleness alerts and,
+>    when enabled, the self-lock after the period. The setting says so (plan M8f §3.6 decision 25; RR-65).
+> 4. **Enrollment token.** Unchanged: expiry, maximum uses, revocation and approval unless auto-approve is set (RR-05).
+
 ### 6.2 Keys on the device
 
 | Key | Algorithm | Storage | Purpose |
@@ -1441,6 +1456,7 @@ test is replaced by the pilot feedback of the reference deployment.
   valid only when `elapsed ≥ period` as stated inside the signed token). The regular revocation
   sequence follows, the confirmation POST is attempted once.
 - The worker marks devices silent past the period as `presumed_self_locked`.
+- A blocked connection triggers the switch like an outage; the portal says so at the setting.
 
 ---
 

@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Users whose username does not end with one of the organization's domains are marked "No organization domain"
   (they cannot sign in on devices), the user page explains why, and the Users page of an organization without a
   domain shows a banner. Users in the API carry `domain_match`.
+- The attention page lists a device that keeps checking in but has not applied its newest configuration for more than
+  an hour (kind *Configuration behind*).
 
 ### Changed
 
@@ -62,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has none; TOTP stays usable for the identity provider's own interfaces and the device login.
 - *End all sessions* now also signs every portal user out of the identity provider, so a stolen browser session cannot
   sign in again without password and authenticator.
+- The dead man's switch setting says that a blocked connection triggers the lock like an outage.
 
 ### Fixed
 

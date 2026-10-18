@@ -103,7 +103,9 @@ test("organization admin sees the dead man's switch warning", async ({ page }) =
   await login(page, 'alice@acme.test', 'dev_alice_password')
   await mainNav(page).getByRole('link', { name: "Dead man's switch" }).click()
   await expect(page.getByTestId('dms-warning')).toHaveText(
-    'If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself.')
+    'If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself. ' +
+      'This includes a device whose connection to Paddock is blocked on purpose: an attacker who keeps the device from ' +
+      'reaching Paddock can trigger the lock.')
   await page.getByTestId('dms-period').locator('input').fill('10')
   await expect(page.getByTestId('dms-short-period')).toBeVisible()
   await page.getByTestId('dms-period').locator('input').fill('3')

@@ -159,7 +159,7 @@ export async function getDeviceUpdates(deviceID: string): Promise<DeviceUpdates 
 export const attentionKinds: AttentionKind[] = [
   'presumed_lost', 'stale_critical', 'stale_warning', 'quarantined', 'revocation_pending', 'revocation_expired',
   'disk_not_compliant', 'login_apply_failed', 'sudo_apply_failed', 'agent_rollback_pending', 'agent_not_running',
-  'agent_outdated',
+  'config_behind', 'agent_outdated',
 ]
 
 export const attentionFilter: ListFilter = {
