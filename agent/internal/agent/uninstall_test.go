@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,35 @@ func TestUninstallRefused(t *testing.T) {
 	a.st.HandedRevocations = map[string]time.Time{"h": a.d.Now().Add(-25 * time.Hour)}
 	if status, _ := a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`)); status != protocol.CommandSucceeded {
 		t.Fatalf("an old revocation still refuses: %s", status)
+	}
+}
+
+// TestUninstallRelaunchAdoptsRunningRemoval (review 2 finding E): after a crash between systemd-run and saving
+// LaunchedAt, the relaunch fails because paddock-uninstall.service is still running; the agent adopts the running
+// removal instead of reporting helper_failed.
+func TestUninstallRelaunchAdoptsRunningRemoval(t *testing.T) {
+	a, _ := uninstallAgent(t)
+	var calls []string
+	a.d.RunUnit = func(_ context.Context, name string, args ...string) error {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "systemd-run" {
+			return errors.New("Unit paddock-uninstall.service was already loaded or has a fragment file.")
+		}
+		return nil
+	}
+	if status, _ := a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`)); status != protocol.CommandSucceeded {
+		t.Fatal(status)
+	}
+	a.st.PendingUninstall.Reported = true
+	a.launchUninstall(context.Background())
+	if a.st.PendingUninstall == nil || a.st.PendingUninstall.LaunchedAt == nil {
+		t.Fatalf("pending uninstall %+v, want launched", a.st.PendingUninstall)
+	}
+	if pending, err := a.d.Spool.Pending(); err != nil || len(pending) != 0 {
+		t.Fatalf("spool %+v, %v; want no helper_failed", pending, err)
+	}
+	if len(calls) != 2 || calls[1] != "systemctl is-active --quiet paddock-uninstall.service" {
+		t.Fatalf("calls %q", calls)
 	}
 }
 

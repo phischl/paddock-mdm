@@ -1266,7 +1266,9 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   `after_delivery`) through `Recorder.Also`; `RevocationRequest.uninstall_cancelled` (`before_delivery`,
   `after_delivery`) drives the portal warning.
 - 39: the agent starts the helper only after the server accepted the result with 2xx; a 404/409 drops the pending
-  uninstall and removes its plan and binary copy; `LaunchedAt` is saved after `systemd-run` succeeded.
+  uninstall and removes its plan and binary copy; `LaunchedAt` is saved after `systemd-run` succeeded. When
+  `systemd-run` fails while `paddock-uninstall.service` is active (a relaunch after a crash), the agent adopts the
+  running removal instead of reporting `helper_failed` (fix round 2, review 2 finding E).
 - 41: `MarkDeviceUninstalled` requires the open request, the event's `command_id` and the command `succeeded`; a report
   before the worker recorded the result (`pending`/`delivered`, not expired) is retried; any other report is audited
   only. `RetireUninstalled` runs through `RecordOnceWith` keyed on `uninstalled_at IS NOT NULL AND state = 'active'`

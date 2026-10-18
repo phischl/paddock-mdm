@@ -99,6 +99,13 @@ func (a *Agent) launchUninstall(ctx context.Context) {
 	}
 	err := a.d.RunUnit(ctx, "systemd-run", "--unit="+UninstallUnit, "--collect", "--no-block", "--property=KillMode=process",
 		a.d.Layout.UninstallBinary(), "uninstall", "--plan", a.d.Layout.UninstallPlan())
+	// A crash between systemd-run and saving LaunchedAt reruns the launch while the removal still runs; systemd-run
+	// then fails because the unit is loaded, and reporting helper_failed would end the request under the running
+	// removal (review 2 finding E). The transient unit is Type=simple, so a running helper is active.
+	if err != nil && a.d.RunUnit(ctx, "systemctl", "is-active", "--quiet", UninstallUnit+".service") == nil {
+		slog.WarnContext(ctx, "the removal of Paddock is already running; adopting it", "command_id", p.CommandID, "error", err)
+		err = nil
+	}
 	if err == nil {
 		at := a.d.Now().UTC()
 		p.LaunchedAt = &at
