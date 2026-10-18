@@ -95,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removal report is 24 hours overdue (`report_overdue`); a cancelled removal never starts on the device. The device is
   retired after it reported the removal of the open request (`device.uninstalled`, `device.retired` with reason
   `uninstalled`); a removal report without such a request is audited and retires nothing. Pending removals appear on
-  the attention page.
+  the attention page. Lock and Destroy are refused while a removal is requested (it removes `paddock-revoke`).
 - Agents of this release carry out the removal in the transient unit `paddock-uninstall`: they stop and purge
   Paddock's services and packages, keep every user file and the disk encryption, keep the managed local administrator
   when it is the last local administrator, and leave a summary in `/root/paddock-uninstall/result.json`.

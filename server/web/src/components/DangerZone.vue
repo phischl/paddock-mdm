@@ -173,6 +173,15 @@ onMounted(async () => {
     >
       {{ t('revocations.disabled') }}
     </v-alert>
+    <v-alert
+      v-else-if="revocable && uninstallPending(uninstall)"
+      type="info"
+      variant="tonal"
+      class="conflict pd-danger-alert"
+      data-testid="revocation-uninstall-pending"
+    >
+      {{ t('devices.revocation.uninstallPending') }}
+    </v-alert>
     <template v-else-if="revocable">
       <div
         class="pd-danger-row"

@@ -812,6 +812,7 @@
         "destroy": "Die Vernichtung wurde angefordert. Sie wartet auf der Seite Widerrufe auf die Freigabe durch einen zweiten Administrator."
       },
       "presumedSelfLocked": "Das Gerät hat Paddock seit vor {at} nicht erreicht und hat sich vermutlich selbst gesperrt (Totmannschalter).",
+      "uninstallPending": "Sperren und Vernichten sind nicht verfügbar, solange das Entfernen von Paddock aussteht: Das Entfernen entfernt auch das Widerrufswerkzeug. Brechen Sie das Entfernen zuerst ab.",
       "timeline": "Widerrufe dieses Geräts",
       "steps": "Fortschritt",
       "timelineSteps": {

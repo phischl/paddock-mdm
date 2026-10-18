@@ -812,6 +812,7 @@
         "destroy": "The destroy was requested. It waits for the approval of a second administrator on the Revocations page."
       },
       "presumedSelfLocked": "The device has not reached Paddock since before {at} and has presumably locked itself (dead man's switch).",
+      "uninstallPending": "Lock and Destroy are not available while the removal of Paddock is pending: the removal also removes the revocation tool. Cancel the removal first.",
       "timeline": "Revocations of this device",
       "steps": "Progress",
       "timelineSteps": {

@@ -1441,7 +1441,8 @@ export interface paths {
          *     root volume stays restorable with the escrowed header and recovery key. The request is approved at once and handed to
          *     the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
          *     administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
-         *     open Lock, 409 invalid_state unless the device is active or quarantined.
+         *     open Lock, 409 invalid_state unless the device is active or quarantined, or while an uninstall of the device
+         *     is requested (the removal purges paddock-revoke; cancel it first).
          */
         post: operations["lockDevice"];
         delete?: never;
@@ -1467,7 +1468,7 @@ export interface paths {
          *     PADDOCK_REVOCATION_ENABLED is off, 403 revocation_frozen while the caller is frozen after an exceeded limit.
          *     Requests a Destroy: a Lock whose escrowed header and recovery key are deleted before the token is issued, so
          *     the device's data is unrecoverable. It waits for a second administrator (another account and another identity)
-         *     to approve it (two-person rule).
+         *     to approve it (two-person rule). 409 invalid_state while an uninstall of the device is requested.
          */
         post: operations["destroyDevice"];
         delete?: never;

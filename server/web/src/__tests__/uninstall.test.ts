@@ -153,6 +153,13 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     expect(el('uninstall-cancel-request')).toBeNull()
   })
 
+  it('replaces Lock and Destroy with a hint while a removal is pending (PDK-327)', async () => {
+    await mountZone({ uninstall: pending })
+    expect(text('revocation-uninstall-pending')).toContain('Cancel the removal first.')
+    expect(el('revocation-lock')).toBeNull()
+    expect(el('revocation-destroy')).toBeNull()
+  })
+
   it('offers the cancel again once the removal report is overdue', async () => {
     await mountZone({ uninstall: { ...pending, command_status: 'succeeded', report_overdue: true } })
     expect(el('uninstall-cancel-request')).not.toBeNull()

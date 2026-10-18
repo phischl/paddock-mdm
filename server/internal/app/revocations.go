@@ -80,6 +80,15 @@ func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.
 		if dev.State != device.StateActive && dev.State != device.StateQuarantined {
 			return problem.InvalidState.WithDetail("only active or quarantined devices can be revoked")
 		}
+		// The uninstall helper purges paddock-revoke and its trust anchor, so a revocation issued meanwhile could not
+		// run; the uninstall refuses an open Lock or Destroy the same way (PDK-327). The device's row lock serializes
+		// both requests.
+		if dev, err = q.LockDevice(ctx, dev.ID); err != nil {
+			return err
+		}
+		if dev.UninstallRequestedAt != nil && dev.UninstalledAt == nil {
+			return problem.InvalidState.WithDetail("an uninstall is requested for this device; cancel it first")
+		}
 		p, _ := principal.From(ctx)
 		token, jti, err := r.stepUpToken(ctx, q, p)
 		if err != nil {

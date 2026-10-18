@@ -26,6 +26,7 @@ type uninstallWorld struct {
 	devices    *app.Devices
 	reports    *app.DeviceReports
 	cache      *fakeUninstallCache
+	api        *db.OrgPool
 	device     uuid.UUID
 	hostname   string
 }
@@ -46,7 +47,7 @@ func newUninstallWorld(t *testing.T) uninstallWorld {
 	t.Cleanup(worker.Close)
 	cache := &fakeUninstallCache{claims: map[uuid.UUID]string{}}
 	w := uninstallWorld{harness: h, uninstalls: app.NewUninstalls(h.runner, api, cache), devices: app.NewDevices(h.runner, api),
-		reports: app.NewDeviceReports(app.NewActionRunner(worker, nil, httpx.RequestID), worker), cache: cache}
+		reports: app.NewDeviceReports(app.NewActionRunner(worker, nil, httpx.RequestID), worker), cache: cache, api: api}
 	w.device, w.hostname = w.newDevice(t, h.org, "active")
 	return w
 }
@@ -521,5 +522,27 @@ func TestUninstallReportOverdue(t *testing.T) {
 	}
 	if retired, err := w.reports.RetireUninstalled(systemCtx(w.org), w.device); err != nil || retired {
 		t.Fatalf("a report of the withdrawn command retired: %v, %v", retired, err)
+	}
+}
+
+// TestRevocationRefusedWhileUninstallPending (PDK-327): a Lock or Destroy is refused while an uninstall is requested,
+// because the removal purges paddock-revoke; after a cancel the request proceeds (here to the step-up check).
+func TestRevocationRefusedWhileUninstallPending(t *testing.T) {
+	w := newUninstallWorld(t)
+	admin := w.as(w.org, principal.RoleOrgAdmin, true)
+	revocations := app.NewRevocations(w.runner, w.api, nil, true)
+	if _, err := w.uninstalls.Request(admin, w.device, w.leave()); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"lock", "destroy"} {
+		_, err := revocations.Request(admin, app.RevocationInput{DeviceID: w.device, Action: action, ConfirmHostname: w.hostname, Reason: "stolen"})
+		expectUninstallProblem(t, err, "invalid_state", 409, "an uninstall is requested for this device; cancel it first")
+	}
+	if _, err := w.uninstalls.Cancel(admin, w.device); err != nil {
+		t.Fatal(err)
+	}
+	_, err := revocations.Request(admin, app.RevocationInput{DeviceID: w.device, Action: "lock", ConfirmHostname: w.hostname, Reason: "stolen"})
+	if !errors.Is(err, problem.StepUpRequired) {
+		t.Fatalf("after the cancel: %v", err)
 	}
 }
