@@ -55,6 +55,7 @@
     "agentReleases": "Agent-Releases",
     "ipAllowlist": "IP-Freigabeliste",
     "sessions": "Sitzungen",
+    "openbao": "OpenBao",
     "users": "Benutzer",
     "userGroups": "Gruppen",
     "permissionProfiles": "Berechtigungsprofile",
@@ -184,7 +185,8 @@
     "ip_allowlist_unavailable": "Das Portal startet und kann die IP-Freigabeliste noch nicht prüfen. Versuchen Sie es gleich noch einmal.",
     "lockout_confirmation_required": "Diese Änderung würde Ihre eigene Adresse aus der Freigabeliste entfernen.",
     "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten.",
-    "session_store_unavailable": "Das Portal erreicht seinen Sitzungsspeicher nicht. Versuchen Sie es gleich noch einmal."
+    "session_store_unavailable": "Das Portal erreicht seinen Sitzungsspeicher nicht. Versuchen Sie es gleich noch einmal.",
+    "disclaimer_outdated": "Der Hinweistext hat sich geändert. Lesen Sie den neuen Text und bestätigen Sie erneut."
   },
   "audit": {
     "title": "Audit-Protokoll",
@@ -314,7 +316,10 @@
       "ip_allowlist_changed": "{action, select, added {{actor} hat {cidr} ({label}) zur IP-Freigabeliste hinzugefügt} updated {{actor} hat den Eintrag {previous_cidr} der IP-Freigabeliste zu {cidr} ({label}) geändert} other {{actor} hat {cidr} ({label}) aus der IP-Freigabeliste entfernt}}",
       "ip_allowlist_denied": "{aggregated, select, true {{count, number} Anfragen von {ip} wurden durch die IP-Freigabeliste abgewiesen} other {Eine Anfrage von {ip} wurde durch die IP-Freigabeliste abgewiesen}}",
       "ip_allowlist_disabled": "{method, select, env {Die IP-Freigabeliste wird auf der API umgangen (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} hat die IP-Freigabeliste abgeschaltet: {entries_removed, number} Einträge entfernt}}",
-      "sessions_ended": "{actor} hat alle Portal-Sitzungen beendet"
+      "sessions_ended": "{actor} hat alle Portal-Sitzungen beendet",
+      "auto_unseal_enabled": "{actor} hat das automatische Entsiegeln von OpenBao aktiviert und den Hinweis {disclaimer_version} bestätigt",
+      "auto_unseal_disabled": "{method, select, cli {Das automatische Entsiegeln von OpenBao wurde auf dem Host deaktiviert} other {{actor} hat das automatische Entsiegeln von OpenBao deaktiviert}}",
+      "openbao_auto_unsealed": "{failures, plural, =0 {Der Unsealer hat OpenBao automatisch entsiegelt ({unseals, number} Mal seit dem letzten Bericht)} other {Der Unsealer konnte OpenBao nicht entsiegeln ({failures, number} Fehlversuche, letzter Grund {last_failure_reason})}}"
     },
     "agent_rollout": {
       "started": "{actor} hat das Rollout von Agent {version} gestartet",
@@ -934,6 +939,59 @@
     "endAll": "Alle Sitzungen beenden",
     "confirmTitle": "Alle Sitzungen beenden?",
     "confirmMessage": "Alle Administratoren, auch Sie, werden bei der nächsten Anfrage abgemeldet. Geben Sie END zur Bestätigung ein."
+  },
+  "openbao": {
+    "title": "OpenBao",
+    "summary": "OpenBao verwahrt jeden Schlüssel dieser Installation. Nach jedem Neustart ist es versiegelt; drei Schlüsselverwahrer entsiegeln es — oder, wenn Sie das Risiko unten akzeptieren, der Unsealer auf dem Control-Plane-Host.",
+    "seal": {
+      "title": "Siegel",
+      "unsealed": "Entsiegelt",
+      "sealed": "Versiegelt",
+      "unreachable": "OpenBao ist nicht erreichbar",
+      "threshold": "{threshold} von {shares} Anteilen entsiegeln es ({type})"
+    },
+    "setting": {
+      "title": "Automatisches Entsiegeln",
+      "off": "Aus",
+      "on": "An — bestätigt von {by} am {at}, Hinweis {version}",
+      "outdated": "Der Hinweistext hat sich seit dieser Bestätigung geändert.",
+      "disabledBy": "Deaktiviert von {by} am {at}"
+    },
+    "unsealer": {
+      "title": "Unsealer auf dem Host",
+      "notRunning": "Läuft nicht",
+      "runningWithShares": "Läuft, Anteile vorhanden",
+      "runningNoShares": "Läuft, keine Anteile auf dem Host",
+      "seenAt": "Letzter Bericht {at}",
+      "lastUnseal": "Letztes automatisches Entsiegeln {at} ({count, number} insgesamt)",
+      "neverUnsealed": "Noch kein automatisches Entsiegeln",
+      "lastFailure": "Letzter Fehlversuch {at}: {reason}",
+      "reason": {
+        "unreachable": "OpenBao hat nicht geantwortet",
+        "invalid_share": "ein Anteil wurde abgelehnt",
+        "still_sealed": "nach drei Anteilen weiterhin versiegelt"
+      }
+    },
+    "alerts": {
+      "sharesLeft": "Das automatische Entsiegeln ist aus, aber die Anteile liegen noch auf dem Host. Führen Sie dort ./paddock auto-unseal disable aus.",
+      "hostStep": "Die Bestätigung ist aufgezeichnet. Ein Operator aktiviert den Unsealer auf dem Host mit ./paddock auto-unseal enable."
+    },
+    "enable": "Automatisches Entsiegeln aktivieren",
+    "disable": "Automatisches Entsiegeln deaktivieren",
+    "disableConfirmTitle": "Automatisches Entsiegeln deaktivieren?",
+    "disableConfirmMessage": "Das automatische Entsiegeln endet sofort. Die Anteile bleiben auf dem Host, bis ein Operator ./paddock auto-unseal disable ausführt.",
+    "disclaimer": {
+      "title": "Automatisches Entsiegeln von OpenBao aktivieren",
+      "intro": "Beim automatischen Entsiegeln liegen drei der fünf Entsiegelungsanteile auf dem Control-Plane-Host, in .secrets/openbao/auto-unseal-shares. Ein kleiner Dienst auf diesem Host, der Unsealer, liest sie und entsiegelt OpenBao, wann immer es versiegelt startet — solange diese Einstellung an ist.",
+      "lead": "Bevor Sie es aktivieren, verstehen und akzeptieren Sie diese Folgen:",
+      "risk1": "Wer den Host kontrolliert, kontrolliert jeden Schlüssel. Wer Root auf dem Host hat, eine Kopie seiner Festplatte, einen Snapshot der virtuellen Maschine oder eine Kopie von .secrets/, kann OpenBao entsiegeln und jeden Schlüssel darin verwenden: die Signaturschlüssel für Gerätekonfiguration, Kommandos und Widerrufs-Token, den Escrow-Schlüssel, der das hinterlegte Wiederherstellungsmaterial der Festplatten aller Geräte entschlüsselt, den Audit-Ketten-Schlüssel und die Sitzungsschlüssel des Portals.",
+      "risk2": "Das Verwahrer-Modell schützt das Entsiegeln nicht mehr. Heute müssen drei benannte Schlüsselverwahrer gemeinsam handeln, bevor OpenBao entsiegelt wird. Mit dem automatischen Entsiegeln existieren ihre Anteile weiter, aber drei davon liegen auf dem Host; niemand muss handeln, und niemand wird gefragt.",
+      "risk3": "Kopien und Backups des Hosts werden so sensibel wie die Schlüssel selbst. Paddock schreibt die Anteile nie in seine eigenen Backups, aber ein Festplattenabbild, ein VM-Snapshot oder eine Kopie des Bundle-Verzeichnisses enthält sie — und nichts in Paddock kann erkennen, dass eine solche Kopie existiert.",
+      "risk4": "Dies ist ein Restrisiko Ihres Informationssicherheits-Managementsystems (RR-43 in docs/compliance/residual-risks.md). Erfassen Sie es mit einem Verantwortlichen und einer Entscheidung. Auf einem Produktions-Host warnt ./paddock check bei jedem Lauf, solange das automatische Entsiegeln an ist.",
+      "outro": "Das Aktivieren hier legt keinen Anteil auf den Host. Es zeichnet Ihre Bestätigung mit Ihrem Namen, der Uhrzeit und der Version dieses Textes ({version}) im Audit-Log auf. Ein Operator mit Zugang zum Host führt danach ./paddock auto-unseal enable aus; ohne diese Bestätigung verweigert der Befehl die Ausführung. Das Deaktivieren hier beendet das automatische Entsiegeln sofort; die Anteile bleiben auf dem Host, bis der Operator ./paddock auto-unseal disable ausführt.",
+      "typeLabel": "Geben Sie zur Bestätigung den Satz ein: {sentence}",
+      "sentence": "Ich verstehe und akzeptiere das Risiko"
+    }
   },
   "changeSets": {
     "title": "Änderungssätze",

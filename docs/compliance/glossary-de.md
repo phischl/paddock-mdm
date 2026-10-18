@@ -89,6 +89,8 @@ schedule weekdays `Mon … Sun`) stay as the API expects them.
 | Synced (user), upstream directory | Synchronisiert, Quellverzeichnis | |
 | Tamper (event) | Manipulation | |
 | Theme | Erscheinungsbild (System / Hell / Dunkel) | |
+| Unseal, automatic unseal (OpenBao) | Entsiegeln, automatisches Entsiegeln | The unseal share is the *Entsiegelungsanteil* (*Anteil*); the custodian the *Schlüsselverwahrer*. |
+| Unsealer | Unsealer | kept in English: the name of the service on the control-plane host (ADR 0035) |
 | User lock | Sperre; Benutzer sperren / entsperren | *Benutzersperre* where it must be told apart from a device lock. |
 | User menu | Benutzermenü | |
 | Volume (LUKS) | Volume | kept in English, as in cryptsetup |

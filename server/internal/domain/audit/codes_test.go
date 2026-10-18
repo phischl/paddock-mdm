@@ -47,3 +47,27 @@ func TestM8sCodes(t *testing.T) {
 		}
 	}
 }
+
+// TestM8uCodes: the codes of plan M8u §6.4 are registered with their params in the documented order and their
+// outcomes.
+func TestM8uCodes(t *testing.T) {
+	all := []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied}
+	for _, tc := range []struct {
+		code     Code
+		params   []string
+		outcomes []Outcome
+	}{
+		{CodePlatformAutoUnsealEnabled, []string{"disclaimer_version", "acknowledgement", "previous_state"}, all},
+		{CodePlatformAutoUnsealDisabled, []string{"previous_state", "method"}, all},
+		{CodePlatformOpenBaoAutoUnsealed, []string{"unseals", "last_unseal_at", "failures", "last_failure_at", "last_failure_reason"}, []Outcome{OutcomeSuccess, OutcomeFailure}},
+	} {
+		d, ok := Lookup(tc.code)
+		if !ok || !tc.code.Registered() || !d.Emitted {
+			t.Errorf("%s is not registered as emitted", tc.code)
+			continue
+		}
+		if !slices.Equal(d.Params, tc.params) || !slices.Equal(d.Outcomes, tc.outcomes) {
+			t.Errorf("%s: params %v outcomes %v, want %v %v", tc.code, d.Params, d.Outcomes, tc.params, tc.outcomes)
+		}
+	}
+}

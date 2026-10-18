@@ -27,6 +27,8 @@ func TestRLSLint(t *testing.T) {
 		"osv_ubuntu": true, "osv_ubuntu_binary": true, "osv_sync_state": true,
 		// IP allow list of the administrative surfaces (plan M7a decision 10), role paddock_platform only.
 		"ip_allowlist_entry": true,
+		// Automatic unseal of OpenBao (plan M8u decision 2), roles paddock_platform and paddock_unsealer only.
+		"openbao_auto_unseal": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
