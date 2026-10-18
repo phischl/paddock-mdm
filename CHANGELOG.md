@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Users whose username does not end with one of the organization's domains are marked "No organization domain"
   (they cannot sign in on devices), the user page explains why, and the Users page of an organization without a
   domain shows a banner. Users in the API carry `domain_match`.
+- A weekly upstream version watch compares the pinned container images, the Himmelblau version, fleetd and the Fleet
+  NVD release with upstream and keeps one GitHub issue with the label `upstream` per outdated pin, naming the gates
+  to run before the bump; `make upstream-check` prints the same comparison locally.
 
 ### Changed
 

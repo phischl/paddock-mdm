@@ -10,4 +10,5 @@ use (
 	./test/acceptance
 	./test/load
 	./test/system
+	./tools/upstreamwatch
 )

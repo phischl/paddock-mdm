@@ -78,3 +78,34 @@ notes of B:
 
 Never edit the shipped files of a bundle to change behaviour: `./paddock verify` reports it, and the next upgrade
 replaces them. Settings belong in `.env`.
+
+## Upstream version watch
+
+Dependabot proposes updates for Go modules, npm packages and GitHub Actions. It does not see the container images
+pinned by tag and digest in `deploy/compose/versions.env`, the Himmelblau version the compiler rolls out
+(`PADDOCK_HIMMELBLAU_VERSION` default in `server/cmd/paddock-server/compiler.go`), the fleetd build version (the tag
+of `FLEETCTL_IMAGE`, reported as `fleetctl`) and the Fleet NVD release of `FLEET_CPE_DATABASE_URL` (reported as
+`fleet_nvd`). The workflow *upstream-watch* (`.github/workflows/upstream-watch.yml`, every Monday 05:17 UTC and on
+demand) compares each of them with upstream (ADR 0037 amendment 2026-10-17):
+
+- **What it checks.** Images: the registry's tag list (Docker Hub API; ghcr.io, gcr.io and mcr.microsoft.com through
+  the anonymous OCI distribution API). The latest tag is the highest tag of the same shape as the pin (`2.11.6` only
+  compares with `x.y.z`, `4.3.6-management` with `x.y.z-management`). The floating `nonroot` tag of `RUNTIME_IMAGE` is
+  compared by manifest digest. Himmelblau: the directory listing of `packages.himmelblau-idm.org/stable/`. Fleet NVD:
+  the latest release of `fleetdm/nvd`. Each pin is classified `patch`, `minor`, `major`, `digest`, `ok` or `unknown`
+  (a lookup failed; printed in the job log, never an issue).
+- **The label.** Every outdated pin gets exactly one open issue with the label `upstream` and the title
+  `upstream: <name> <pinned> → <latest>`. The body names the pinned line, the latest version, the classification,
+  the release notes and the gates to run before the bump. When upstream moves again the issue is edited; once the pin
+  is current the issue gets the comment `pinned <version> now` and is closed.
+- **What to do with an issue.** Read the release notes, bump the pin in its own branch (resolve the new digest with
+  `docker buildx imagetools inspect <image>:<tag>`), run the gates the issue lists, open a pull request. The
+  watch closes the issue on its next run after the merge.
+- **Local run.** `make upstream-check` prints one line `<name> <pinned> <latest> <classification>` per pin
+  (`go run ./tools/upstreamwatch check --json` for JSON). Docker Hub rate-limits anonymous listings; a pin that
+  turns `unknown` locally is retried by the next run.
+- **Why issues and not pull requests.** Every pin has a gate a person runs before merging (WORM gate for RustFS,
+  `TestIdentityLockAuthentik` for Authentik, the inventory gates for Fleet, the restore drill for Postgres and Caddy,
+  the gitleaks default config hash for gitleaks). A bot pull request would suggest a bump is ready when it is not,
+  and a bot with repository write access (Renovate) was rejected as a new external dependency. The job has
+  `contents: read` and `issues: write` only.

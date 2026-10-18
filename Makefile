@@ -971,3 +971,7 @@ scan-images: image image-compiler image-pgbackrest ## trivy: OS packages and Go 
 		docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(TRIVY_CACHE):/root/.cache/trivy \
 			$(TRIVY_IMAGE) image $(TRIVY_ARGS) $$img || exit 1; \
 	done
+
+.PHONY: upstream-check
+upstream-check: ## Compare the pins of versions.env, the Himmelblau default, fleetd and the Fleet NVD release with upstream
+	go run ./tools/upstreamwatch check

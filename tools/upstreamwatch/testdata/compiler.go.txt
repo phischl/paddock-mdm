@@ -1,0 +1,1 @@
+	himmelblau := l.String("PADDOCK_HIMMELBLAU_VERSION", "4.0.4")
