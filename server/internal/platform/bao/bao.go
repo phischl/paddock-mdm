@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,6 +311,64 @@ func (c *Client) Sealed(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("bao: health: %w", err)
 	}
 	return h.Sealed, nil
+}
+
+// SealStatus is sys/seal-status (no token).
+type SealStatus struct {
+	Reachable   bool
+	Initialized bool
+	Sealed      bool
+	Type        string // "shamir" today
+	Threshold   int    // t
+	Shares      int    // n
+	Progress    int    // shares submitted so far
+}
+
+// ErrShareRefused is the error of Unseal when OpenBao answered 400: the share is malformed or not a share of this
+// barrier.
+var ErrShareRefused = errors.New("bao: unseal share refused")
+
+func sealStatus(r *api.SealStatusResponse) SealStatus {
+	if r == nil {
+		return SealStatus{Reachable: true}
+	}
+	return SealStatus{Reachable: true, Initialized: r.Initialized, Sealed: r.Sealed, Type: r.Type, Threshold: r.T,
+		Shares: r.N, Progress: r.Progress}
+}
+
+// SealStatus reads sys/seal-status. An unreachable OpenBao is SealStatus{Reachable: false} with the error.
+func (c *Client) SealStatus(ctx context.Context) (SealStatus, error) {
+	r, err := c.api.Sys().SealStatusWithContext(ctx)
+	if err != nil {
+		return SealStatus{}, fmt.Errorf("bao: seal status: %w", err)
+	}
+	return sealStatus(r), nil
+}
+
+// Unseal submits one share to sys/unseal and returns the status after it. The share is never logged: an answer of
+// OpenBao becomes its HTTP status only, never its message (ErrShareRefused for a 400); a transport error names the
+// URL and the cause, never the request body.
+func (c *Client) Unseal(ctx context.Context, share string) (SealStatus, error) {
+	r, err := c.api.Sys().UnsealWithContext(ctx, share)
+	if err != nil {
+		var re *api.ResponseError
+		if errors.As(err, &re) {
+			if re.StatusCode == http.StatusBadRequest {
+				return SealStatus{}, ErrShareRefused
+			}
+			return SealStatus{}, fmt.Errorf("bao: unseal: status %d", re.StatusCode)
+		}
+		return SealStatus{}, fmt.Errorf("bao: unseal: %w", err)
+	}
+	return sealStatus(r), nil
+}
+
+// ResetUnseal discards a partial unseal progress (sys/unseal with reset=true).
+func (c *Client) ResetUnseal(ctx context.Context) error {
+	if _, err := c.api.Sys().ResetUnsealProcessWithContext(ctx); err != nil {
+		return fmt.Errorf("bao: reset unseal: %w", err)
+	}
+	return nil
 }
 
 // RaftSnapshot writes a snapshot of the integrated Raft storage to w (AppRole paddock-backup: read on

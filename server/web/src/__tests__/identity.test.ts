@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 import ProfileForm from '../components/ProfileForm.vue'
 import EffectiveProfileView from '../components/EffectiveProfileView.vue'
 import { createPortalI18n } from '../i18n'
@@ -7,6 +7,12 @@ import { vuetify } from '../plugins/vuetify'
 import { auditText } from '../lib/format'
 import { lines } from '../lib/loginSettings'
 import { commandLines } from '../lib/profiles'
+
+const previewRootEquivalence = vi.fn(() => Promise.reject(new TypeError('fetch failed')))
+vi.mock('../lib/profiles', async (original) => ({
+  ...(await original<typeof import('../lib/profiles')>()),
+  previewRootEquivalence: () => previewRootEquivalence(),
+}))
 import { groupSlugPattern, slugFrom } from '../lib/userGroups'
 import type { AuditEvent, UserEffectiveProfile } from '../api/client'
 
@@ -47,6 +53,22 @@ describe('ProfileForm', () => {
       name: 'nginx', class: 'restricted', commands: ['/usr/bin/systemctl restart nginx.service'], requirePassword: true,
       timestampTimeoutMin: 5, lecture: 'once',
     })
+    wrapper.unmount()
+  })
+
+  it('shows no root warning and rejects nothing when the preview request fails (PDK-320)', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(ProfileForm, { props: { submitLabel: 'Create' }, global })
+      await wrapper.find('#profile-commands').setValue('/usr/bin/bash\n')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(previewRootEquivalence).toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="root-equivalent-preview"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

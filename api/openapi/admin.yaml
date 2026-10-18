@@ -3450,6 +3450,74 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/openbao/auto-unseal:
+    get:
+      operationId: getAutoUnseal
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin. The automatic-unseal setting (ADR 0035): the acknowledged decision, the unsealer's
+        report and OpenBao's seal status. Sessions only: platform tokens do not exist.
+      responses:
+        "200":
+          description: The setting.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoUnsealStatus" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/openbao/auto-unseal/enable:
+    post:
+      operationId: enableAutoUnseal
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Records the typed
+        acknowledgement of the current disclaimer and enables the setting; the unsealer on the host acts only while it
+        is enabled. 409 disclaimer_outdated when disclaimer_version is not the current version (the response of GET
+        carries it); 400 invalid_request when acknowledgement is not the exact sentence of the disclaimer. Every
+        attempt is audited.
+      x-paddock-audit: platform.auto_unseal_enabled
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AutoUnsealEnable" }
+      responses:
+        "200":
+          description: Enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoUnsealStatus" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/openbao/auto-unseal/disable:
+    post:
+      operationId: disableAutoUnseal
+      tags: [platform]
+      security:
+        - session: []
+      description: |
+        Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Disables the setting:
+        the unsealer stops unsealing at once; the shares stay on the host until the operator runs
+        ./paddock auto-unseal disable. Every attempt is audited.
+      x-paddock-audit: platform.auto_unseal_disabled
+      parameters:
+        - $ref: "#/components/parameters/Csrf"
+      responses:
+        "200":
+          description: Disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoUnsealStatus" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases/{version}/rollout/resume:
     parameters:
       - $ref: "#/components/parameters/Version"
@@ -4018,6 +4086,50 @@ components:
           type: integer
           format: int64
           description: The new session generation; every session of an older generation is invalid.
+    AutoUnsealEnable:
+      type: object
+      required: [disclaimer_version, acknowledgement]
+      properties:
+        disclaimer_version: { type: string, maxLength: 16 }
+        acknowledgement: { type: string, maxLength: 128 }
+    AutoUnsealStatus:
+      type: object
+      required: [state, disclaimer_version, acknowledgement_version, acknowledgement, acknowledged_by,
+                 acknowledged_at, disabled_by, disabled_at, unsealer, seal]
+      properties:
+        state: { type: string, enum: [disabled, enabled] }
+        disclaimer_version: { type: string, description: The current version of the disclaimer text. }
+        acknowledgement_version: { type: string, nullable: true, description: The version that was acknowledged. }
+        acknowledgement: { type: string, nullable: true }
+        acknowledged_by: { type: string, nullable: true }
+        acknowledged_at: { type: string, format: date-time, nullable: true }
+        disabled_by: { type: string, nullable: true }
+        disabled_at: { type: string, format: date-time, nullable: true }
+        unsealer: { $ref: "#/components/schemas/UnsealerReport" }
+        seal: { $ref: "#/components/schemas/SealStatus" }
+    UnsealerReport:
+      type: object
+      required: [running, seen_at, shares_present, unseal_count, last_unseal_at, failure_count, last_failure_at,
+                 last_failure_reason]
+      properties:
+        running: { type: boolean, description: The unsealer reported within the last 60 s. }
+        seen_at: { type: string, format: date-time, nullable: true }
+        shares_present: { type: boolean, description: Three shares are on the host; only the report of a running unsealer counts. }
+        unseal_count: { type: integer, format: int64 }
+        last_unseal_at: { type: string, format: date-time, nullable: true }
+        failure_count: { type: integer, format: int64 }
+        last_failure_at: { type: string, format: date-time, nullable: true }
+        last_failure_reason: { type: string, nullable: true, enum: [unreachable, invalid_share, still_sealed, null] }
+    SealStatus:
+      type: object
+      required: [reachable, initialized, sealed, type, threshold, shares]
+      properties:
+        reachable: { type: boolean }
+        initialized: { type: boolean }
+        sealed: { type: boolean }
+        type: { type: string }
+        threshold: { type: integer }
+        shares: { type: integer }
     AgentRollout:
       type: object
       required: [version, waves, current_wave_index, wave_started_at, min_wave_minutes, failure_threshold_percent,

@@ -31,6 +31,8 @@ type handlers struct {
 	declarative *app.Declarative
 	// sessions ends every portal session (plan M8s decision 16).
 	sessions *app.Sessions
+	// autoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
+	autoUnseal *app.AutoUnseal
 
 	users         *app.Users
 	userGroups    *app.UserGroups

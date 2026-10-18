@@ -155,6 +155,11 @@ const (
 	CodeOrganizationSecurityReviewRequired  Code = "organization.security_review_required"
 	CodeDeviceHeaderObjectRejected          Code = "device.header_object_rejected"
 	CodeSettingsManagedFilesChanged         Code = "settings.managed_files_changed"
+
+	// Automatic unseal of OpenBao (ADR 0035, plan M8u §6.4).
+	CodePlatformAutoUnsealEnabled   Code = "platform.auto_unseal_enabled"
+	CodePlatformAutoUnsealDisabled  Code = "platform.auto_unseal_disabled"
+	CodePlatformOpenBaoAutoUnsealed Code = "platform.openbao_auto_unsealed"
 )
 
 // Definition documents one code (rendered into docs/compliance/audit-codes.md by `make gen`).
@@ -984,6 +989,27 @@ var registry = map[Code]Definition{
 		Params:      []string{"old_operator_roots", "operator_roots"},
 		Outcomes:    adminOutcomes,
 		Note:        "Denied with step_up_required without a fresh step-up and for API tokens, forbidden for another role; failure with path_not_allowed for a root outside the rules of ADR 0034 (amendment 2026-10-16).",
+	},
+	CodePlatformAutoUnsealEnabled: {
+		Code: CodePlatformAutoUnsealEnabled, Emitted: true,
+		Description: "A platform administrator acknowledged the automatic-unseal disclaimer with a step-up and enabled the setting.",
+		Params:      []string{"disclaimer_version", "acknowledgement", "previous_state"},
+		Outcomes:    adminOutcomes,
+		Note:        "Denied with step_up_required without a fresh step-up, forbidden for a non-platform principal; failure with disclaimer_outdated or invalid_request when the version or the sentence does not match. Platform pseudo-organization.",
+	},
+	CodePlatformAutoUnsealDisabled: {
+		Code: CodePlatformAutoUnsealDisabled, Emitted: true,
+		Description: "The automatic-unseal setting was disabled; the unsealer stops unsealing at once.",
+		Params:      []string{"previous_state", "method"},
+		Outcomes:    adminOutcomes,
+		Note:        "method is portal or cli (paddock-server admin auto-unseal disable). Platform pseudo-organization.",
+	},
+	CodePlatformOpenBaoAutoUnsealed: {
+		Code: CodePlatformOpenBaoAutoUnsealed, Emitted: true,
+		Description: "The unsealer unsealed OpenBao with the shares on the host, or failed to; recorded by the worker from the unsealer's report.",
+		Params:      []string{"unseals", "last_unseal_at", "failures", "last_failure_at", "last_failure_reason"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "One event per observed change of the counters, at most every 30 s; a failure carries error code auto_unseal_failed and last_failure_reason unreachable, invalid_share or still_sealed. Actor is the system actor paddock-unsealer. Platform pseudo-organization.",
 	},
 	CodeActionFinalizedUnknown: {
 		Code: CodeActionFinalizedUnknown, Emitted: false,

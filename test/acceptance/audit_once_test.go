@@ -320,6 +320,46 @@ var auditCases = map[string][]auditCase{
 			expectOneEvent(t, w.alice, res.RequestID, "platform.ip_allowlist_changed", "denied")
 		}},
 	},
+	// The automatic unseal is platform-wide state (gates U2 and U3 exercise enabling and disabling and restore it);
+	// here only the cases that leave it as it is.
+	"POST /api/platform/v1/openbao/auto-unseal/enable": {
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			root := login(t, env.PlatformAdmin)
+			res := enableAutoUnseal(t, root, disclaimerVersion, acknowledgementEN)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.auto_unseal_enabled", "denied", auditPollTimeout)
+		}},
+		{"validation failure", func(t *testing.T, w *auditWorld) {
+			freshStepUp(t, w.root, env.PlatformAdmin)
+			res := enableAutoUnseal(t, w.root, disclaimerVersion, "I accept")
+			expectStatus(t, res, http.StatusBadRequest, "invalid_request")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.auto_unseal_enabled", "failure", auditPollTimeout)
+		}},
+		{"conflict", func(t *testing.T, w *auditWorld) {
+			freshStepUp(t, w.root, env.PlatformAdmin)
+			res := enableAutoUnseal(t, w.root, "2000-01-01", acknowledgementEN)
+			expectStatus(t, res, http.StatusConflict, "disclaimer_outdated")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.auto_unseal_enabled", "failure", auditPollTimeout)
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := enableAutoUnseal(t, w.alice, disclaimerVersion, acknowledgementEN)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "platform.auto_unseal_enabled", "denied")
+		}},
+	},
+	"POST /api/platform/v1/openbao/auto-unseal/disable": {
+		{"no step-up", func(t *testing.T, w *auditWorld) {
+			root := login(t, env.PlatformAdmin)
+			res := call(t, root, http.MethodPost, autoUnsealPath+"/disable", nil)
+			expectStatus(t, res, http.StatusForbidden, "step_up_required")
+			expectOneIndexEvent(t, w.idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.auto_unseal_disabled", "denied", auditPollTimeout)
+		}},
+		{"wrong role", func(t *testing.T, w *auditWorld) {
+			res := call(t, w.alice, http.MethodPost, autoUnsealPath+"/disable", nil)
+			expectStatus(t, res, http.StatusForbidden, "forbidden")
+			expectOneEvent(t, w.alice, res.RequestID, "platform.auto_unseal_disabled", "denied")
+		}},
+	},
 }
 
 type group struct{ id, name string }

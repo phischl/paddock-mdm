@@ -6,12 +6,14 @@ SECRETS_DIR="${SECRETS_DIR:-$COMPOSE_DIR/.secrets}"
 
 # The Compose file sets: the single source of truth for the Makefile, the operator bundle (deploy/bundle/) and
 # server/internal/prodcheck/compose_test.go, which read these lines literally (plan M7b decision 18).
-DEV_FILES="compose.yaml compose.audit.yaml compose.dev.yaml"
+DEV_FILES="compose.yaml compose.audit.yaml compose.auto-unseal.yaml compose.dev.yaml"
 DEV_BACKUP_FILES="compose.backup.yaml compose.backup.dev.yaml"
 PROD_FILES_controlplane="compose.yaml compose.prod.yaml compose.backup.yaml"
 PROD_FILES_audit="compose.audit.yaml compose.audit.prod.yaml"
 PROD_FILES_lab="compose.yaml compose.prod.yaml compose.audit.yaml compose.lab.yaml"
 LAB_BACKUP_FILES="compose.backup.yaml"
+# The unsealer of the automatic unseal of OpenBao (ADR 0035), on a control-plane or lab host with PADDOCK_AUTO_UNSEAL=yes.
+AUTO_UNSEAL_FILES="compose.auto-unseal.yaml"
 
 # env_value <name>: value from the process environment, else from .env, else from .env.example.
 env_value() {
@@ -40,8 +42,8 @@ require_development() {
 }
 
 # compose_files prints the Compose files of this host, one per line: the development set (plus the backup files when
-# BACKUP is set) or the production set of PADDOCK_HOST (on a lab host plus the backup file when PADDOCK_LAB_BACKUP is
-# yes), then every path of PADDOCK_COMPOSE_EXTRA (space-separated absolute paths; the CI smoke test's overlay, empty
+# BACKUP is set) or the production set of PADDOCK_HOST (on a control-plane or lab host plus the unsealer when
+# PADDOCK_AUTO_UNSEAL is yes, on a lab host plus the backup file when PADDOCK_LAB_BACKUP is yes), then every path of PADDOCK_COMPOSE_EXTRA (space-separated absolute paths; the CI smoke test's overlay, empty
 # otherwise). Returns 2 when a production host has no valid PADDOCK_HOST.
 compose_files() {
   local files f host
@@ -50,11 +52,15 @@ compose_files() {
   else
     host="$(env_value PADDOCK_HOST)"
     case "$host" in
-      controlplane) files="$PROD_FILES_controlplane" ;;
+      controlplane)
+        files="$PROD_FILES_controlplane"
+        if [[ "$(env_value PADDOCK_AUTO_UNSEAL)" == yes ]]; then files+=" $AUTO_UNSEAL_FILES"; fi
+        ;;
       audit) files="$PROD_FILES_audit" ;;
       # compose.backup.yaml last: its worker secrets add to the !override list of compose.prod.yaml (plan M8a).
       lab)
         files="$PROD_FILES_lab"
+        if [[ "$(env_value PADDOCK_AUTO_UNSEAL)" == yes ]]; then files+=" $AUTO_UNSEAL_FILES"; fi
         if [[ "$(env_value PADDOCK_LAB_BACKUP)" == yes ]]; then files+=" $LAB_BACKUP_FILES"; fi
         ;;
       *)

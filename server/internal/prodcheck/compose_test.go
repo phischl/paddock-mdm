@@ -108,9 +108,12 @@ func TestComposeConfigsMountEverySecretTheyName(t *testing.T) {
 		"production audit host":    {prodFiles(t, "audit"), []string{"prod.env.example"}},
 		"lab":                      {prodFiles(t, "lab"), []string{"lab.env.example"}},
 		"lab with backups":         {append(prodFiles(t, "lab"), libFiles(t, "LAB_BACKUP_FILES")...), []string{"lab.env.example"}},
-		"development":              {[]string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml"}, []string{".env.example"}},
-		"development with backups": {[]string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml", "compose.backup.yaml",
-			"compose.backup.dev.yaml"}, []string{".env.example"}},
+		"development":              {libFiles(t, "DEV_FILES"), []string{".env.example"}},
+		"development with backups": {append(libFiles(t, "DEV_FILES"), libFiles(t, "DEV_BACKUP_FILES")...), []string{".env.example"}},
+		"control plane with automatic unseal": {append(prodFiles(t, "controlplane"), libFiles(t, "AUTO_UNSEAL_FILES")...),
+			[]string{"prod.env.example"}},
+		"lab with automatic unseal and backups": {append(append(prodFiles(t, "lab"), libFiles(t, "AUTO_UNSEAL_FILES")...),
+			libFiles(t, "LAB_BACKUP_FILES")...), []string{"lab.env.example"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -192,6 +192,13 @@ once; `./paddock check` warns on a production host and passes on a lab host; eve
    -- +goose StatementEnd
    ```
 
+   Amendment 2026-10-18 (architect note, decided by the orchestrator as architect, 2026-10-18; PDK-303): the column
+   grant lets `paddock_unsealer` write any value into `unseal_count` and `failure_count`, and a lowered counter
+   would suppress `platform.openbao_auto_unsealed` events. Audit integrity wins: migration 00050 (amended before it
+   was merged) also creates the `BEFORE UPDATE` trigger `openbao_auto_unseal_counters_monotonic`, which rejects any
+   decrease of either counter, for every role, with SQLSTATE `23514` and the message `openbao_auto_unseal:
+   unseal_count and failure_count never decrease`. The grants stay as above.
+
 3. sqlc queries in `server/internal/adapters/postgres/queries/auto_unseal.sql` MUST provide: `GetAutoUnseal`
    (the row), `GetAutoUnsealForUpdate` (`… FOR UPDATE`), `EnableAutoUnseal` (sets `state='enabled'`,
    `disclaimer_version`, `acknowledgement`, `acknowledged_by`, `acknowledged_by_subject`, `acknowledged_at=now()`,
@@ -384,6 +391,13 @@ once; `./paddock check` warns on a production host and passes on a lab host; eve
     `ErrAutoUnsealFailed`, defined in `app/autounseal.go` as `&problem.Error{Code: "auto_unseal_failed", Status:
     http.StatusInternalServerError}`) with params `failures`, `last_failure_at`, `last_failure_reason`; both update
     `audited_*` in the same transaction (`MarkAutoUnsealAudited`). No change → no event.
+    Amendment 2026-10-18 (architect note, decided by the orchestrator as architect, 2026-10-18; PDK-199 Review 1):
+    `paddock_auto_unseal_shares_present` is 1 only when the unsealer reports shares **and**
+    `Report.UnsealerRunning(now)` holds (`Report.SharesOnHost(now)`). `./paddock auto-unseal disable` removes the
+    unsealer before it deletes the file, so nothing writes `false` afterwards; without this rule
+    `PaddockAutoUnsealWithdrawn` would fire for good after the documented remediation. The admin API's
+    `unsealer.shares_present` follows the same rule. Trade-off: a stopped unsealer whose file is still on the host
+    is reported as "not running", not as "shares present"; `./paddock auto-unseal status` reads the file itself.
 
 ### 3.4 Compose, secrets, host commands
 
@@ -507,6 +521,9 @@ once; `./paddock check` warns on a production host and passes on a lab host; eve
     `Automatic unseal is off, but the shares are still on the host. Run ./paddock auto-unseal disable there.`
     When the state is `enabled` and the unsealer is not running or has no shares, it MUST show the info alert `The
     acknowledgement is recorded. An operator enables the unsealer on the host with ./paddock auto-unseal enable.`
+    Amendment 2026-10-18 (architect note, decided by the orchestrator as architect, 2026-10-18; PDK-199 Review 1):
+    "the unsealer reports shares present" means `unsealer.running` **and** `unsealer.shares_present` (decision 13
+    amendment); the warning clears once `./paddock auto-unseal disable` has removed the unsealer.
 23. Enabling opens `server/web/src/components/AutoUnsealDisclaimerDialog.vue`: a modal in the conventions of
     `ConfirmDialog` (focus on Cancel, Esc cancels, Enter never submits, `aria-labelledby`/`aria-describedby`) that
     renders the disclaimer of §6.6 as title, paragraphs and a numbered list, a text field labelled with the
@@ -903,6 +920,12 @@ numbered list, `outro` and the field labelled `typeLabel`; a component test MUST
 four risks. The constants `autounseal.Acknowledgements` MUST equal `disclaimer.sentence` of `en.json` and `de.json`;
 a Go test in `server/internal/domain/autounseal` MUST read both catalogs and compare.
 
+Amendment 2026-10-18 (architect note, decided by the orchestrator as architect, 2026-10-18; PDK-199 fix round 2,
+browser check at 375 px): the field label cut the sentence off on a phone. The dialog shows the sentence as its own
+quoted block after the new key `typePrompt` (en `"Type this sentence to confirm:"`, de `"Geben Sie zur Bestätigung
+diesen Satz ein:"`), and `typeLabel` becomes the short field label (en `"Sentence to confirm"`, de
+`"Bestätigungssatz"`) without `{sentence}`. `sentence` and every other key above stay verbatim.
+
 ### 6.7 Residual risk RR-43 (`docs/compliance/residual-risks.md`, section "Control plane and audit domain", verbatim)
 
 M8b reserved RR-40 to RR-42; this plan takes **RR-43**.
@@ -959,7 +982,9 @@ PDK-199 last. PDK-193 and PDK-194 MAY run in parallel.
 
 Roles: **P** = platform admin (`env.PlatformAdmin`, step-up with `stepUp`), **A** = org_admin (`env.Alice`),
 **T** = API token of `env.Alice`, **O** = host operator (CI smoke test). "Event" = exactly one audit event with the
-given code and outcome in the platform pseudo-organization, found with `expectOneIndexEvent` by `correlation_id`.
+given code and outcome in the platform pseudo-organization, found with `expectOneIndexEvent` by `correlation_id`;
+a denied action of an organization principal (A, T) is recorded in that principal's own organization (ActionRunner
+rule), found with `expectOneEvent` (architect note 2026-10-18).
 
 | # | Given / When / Then | Role sees |
 | --- | --- | --- |

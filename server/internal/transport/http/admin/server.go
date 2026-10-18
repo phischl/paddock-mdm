@@ -64,9 +64,11 @@ type Deps struct {
 	Sessions SessionStore
 	// EndSessions ends every portal session of the installation (plan M8s decision 16).
 	EndSessions *app.Sessions
-	PublicURL   string
-	Static      *StaticHandler // portal build
-	Now         func() time.Time
+	// AutoUnseal is the automatic unseal of OpenBao (plan M8u decision 7).
+	AutoUnseal *app.AutoUnseal
+	PublicURL  string
+	Static     *StaticHandler // portal build
+	Now        func() time.Time
 	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
 	StepUpMaxAuthAge time.Duration
 	// ExposeStepUp adds the session's step-up time and the step-up timing to GET /api/v1/me (development only, for
@@ -90,6 +92,8 @@ var privileged = map[string]struct {
 	"DELETE /api/v1/device-groups/{id}":                                    {app.ScopeOrg, app.SpecDeviceGroupDelete},
 	"POST /api/platform/v1/organizations":                                  {app.ScopePlatform, app.SpecOrganizationCreate},
 	"POST /api/platform/v1/sessions/end-all":                               {app.ScopePlatform, app.SpecSessionsEndAll},
+	"POST /api/platform/v1/openbao/auto-unseal/enable":                     {app.ScopePlatform, app.SpecAutoUnsealEnable},
+	"POST /api/platform/v1/openbao/auto-unseal/disable":                    {app.ScopePlatform, app.SpecAutoUnsealDisable},
 	"POST /api/v1/enrollment-tokens":                                       {app.ScopeOrg, app.SpecEnrollmentTokenCreate},
 	"PUT /api/v1/devices/{id}/groups":                                      {app.ScopeOrg, app.SpecDeviceSetGroups},
 	"POST /api/v1/devices/{id}/approve":                                    {app.ScopeOrg, app.SpecDeviceApprove},
@@ -184,6 +188,7 @@ func NewHandler(d Deps) http.Handler {
 		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,
 		declarative:    d.Declarative, ipAllowlist: d.IPAllowlist, now: d.Now, sessions: d.EndSessions,
+		autoUnseal:   d.AutoUnseal,
 		stepUpWindow: tokenTTL,
 	}
 	if d.ExposeStepUp {

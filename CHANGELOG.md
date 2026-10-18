@@ -19,6 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional automatic unseal of OpenBao (ADR 0035). A platform administrator opens the new portal page *Platform* →
+  *OpenBao*, reads a versioned disclaimer of the risks and confirms, with a step-up, by typing "I understand and accept
+  the risk" (German: "Ich verstehe und akzeptiere das Risiko"); the page also shows the seal status, who acknowledged
+  which disclaimer version, the unsealer on the host and the last automatic unseal. The host operator then runs
+  `./paddock auto-unseal enable` with three custodians, who type their unseal shares without echo; the command refuses
+  without the portal acknowledgement, stores the shares in `.secrets/openbao/auto-unseal-shares`, sets
+  `PADDOCK_AUTO_UNSEAL=yes` and starts the new `paddock-unsealer` service (its own PostgreSQL role, no AppRole), which
+  unseals OpenBao after every restart while the setting is on. Disabling in the portal stops it at once;
+  `./paddock auto-unseal disable` removes the unsealer and the shares of its bundle directory (delete the copy in a
+  bundle directory kept for rollback as well, `docs/operations/openbao.md` section 6); `./paddock auto-unseal status`
+  reports the state.
+  Every step is audited (`platform.auto_unseal_enabled`, `platform.auto_unseal_disabled`,
+  `platform.openbao_auto_unsealed`); `paddock-server admin auto-unseal show|verify|disable` serves the host. The
+  shares on the host are residual risk RR-43: `./paddock check` gains the item `openbao auto-unseal` and the status
+  `WARN`, warns on every run on a production control plane and passes on a lab host. Alerts
+  `PaddockAutoUnsealWithdrawn` (shares left on the host after disabling) and `PaddockAutoUnsealerDown` (the unsealer
+  does not report). Lab hosts that unseal with a cron job move to it as `docs/operations/lab-install.md` section 11
+  describes. `./paddock secrets` now also creates the unsealer's database secrets.
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.
@@ -57,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The permission profile form no longer leaves an unhandled error in the browser console when the root-equivalence
+  preview cannot reach the server; the preview just stays empty.
 - A release public key or another secret file of a Paddock service with mode 0600 made the roles fail with
   "permission denied". `./paddock check` now names such a file (item `secret files readable by the Paddock services`)
   with the `chmod 644` to run, and `./paddock agent-release` refuses a release directory the `paddock-api` service

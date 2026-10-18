@@ -23,6 +23,9 @@ func TestParseAdmin(t *testing.T) {
 		{[]string{"allowlist", "add", "--label=office vpn", "--cidr=2001:db8::/32"}, adminCommand{name: "allowlist", sub: "add", cidr: "2001:db8::/32", label: "office vpn"}},
 		{[]string{"agent-release", "--version", "1.2.0", "--dir", "/release"}, adminCommand{name: "agent-release", version: "1.2.0", dir: "/release"}},
 		{[]string{"agent-release", "--dir=/r", "--version=0.1.0-alpha.1"}, adminCommand{name: "agent-release", version: "0.1.0-alpha.1", dir: "/r"}},
+		{[]string{"auto-unseal", "show"}, adminCommand{name: "auto-unseal", sub: "show"}},
+		{[]string{"auto-unseal", "verify"}, adminCommand{name: "auto-unseal", sub: "verify"}},
+		{[]string{"auto-unseal", "disable"}, adminCommand{name: "auto-unseal", sub: "disable"}},
 	} {
 		got, err := parseAdmin(c.args)
 		if err != nil || got != c.want {
@@ -39,6 +42,7 @@ func TestParseAdmin(t *testing.T) {
 		{"allowlist", "add", "--cidr", "203.0.113.0/24", "--label", "host", "extra"},
 		{"agent-release"}, {"agent-release", "--version", "1.0.0"}, {"agent-release", "--dir", "/r"},
 		{"agent-release", "--version", "1.0.0", "--dir", "/r", "extra"}, {"agent-release", "--version", "1.0.0", "--dir", "/r", "--publish"},
+		{"auto-unseal"}, {"auto-unseal", "enable"}, {"auto-unseal", "show", "x"}, {"auto-unseal", "--force"},
 	} {
 		if _, err := parseAdmin(args); !errors.Is(err, errUsage) {
 			t.Errorf("parseAdmin(%q) = %v, want a usage error", args, err)

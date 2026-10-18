@@ -96,6 +96,9 @@ var (
 	// SessionStoreUnavailable answers every portal session request while the session store cannot be reached; the
 	// session fails closed and the cookie is kept (ADR 0034 decision 4). API tokens are not affected.
 	SessionStoreUnavailable = &Error{Code: "session_store_unavailable", Status: http.StatusServiceUnavailable}
+	// DisclaimerOutdated: the acknowledged disclaimer of the automatic unseal is not the current version (plan M8u
+	// decision 6); recorded as failure.
+	DisclaimerOutdated = &Error{Code: "disclaimer_outdated", Status: http.StatusConflict}
 	// Enrollment rejections recorded by the worker (error_code of device.enrolled); never sent over HTTP.
 	InvalidToken   = &Error{Code: "invalid_token", Status: http.StatusUnprocessableEntity}
 	TokenRevoked   = &Error{Code: "token_revoked", Status: http.StatusUnprocessableEntity}

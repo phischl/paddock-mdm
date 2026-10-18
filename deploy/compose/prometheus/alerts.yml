@@ -88,6 +88,23 @@ groups:
         annotations:
           summary: "OpenBao is sealed"
           description: "Bundles, commands and the audit seal stop until three custodians unseal OpenBao (docs/operations/openbao.md)."
+      # Automatic unseal (ADR 0035, plan M8u decision 25), from the worker's observation of the unsealer's report.
+      - alert: PaddockAutoUnsealWithdrawn
+        expr: max(paddock_auto_unseal_enabled) == 0 and max(paddock_auto_unseal_shares_present) == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Automatic unseal was disabled in the portal, but the shares are still on the host"
+          description: "Run ./paddock auto-unseal disable on the control-plane host (docs/operations/openbao.md section 6)."
+      - alert: PaddockAutoUnsealerDown
+        expr: max(paddock_auto_unseal_enabled) == 1 and max(paddock_auto_unseal_unsealer_up) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Automatic unseal is enabled, but the unsealer does not report"
+          description: "OpenBao will stay sealed after the next restart until the unsealer runs or three custodians unseal it."
       - alert: PaddockOpenBaoUnreachable
         expr: min(paddock_openbao_reachable) == 0
         for: 5m

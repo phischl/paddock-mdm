@@ -373,6 +373,28 @@ type ManagedUnit struct {
 	UpdatedAt      time.Time
 }
 
+type OpenbaoAutoUnseal struct {
+	ID                    int16
+	State                 string
+	DisclaimerVersion     *string
+	Acknowledgement       *string
+	AcknowledgedBy        *string
+	AcknowledgedBySubject *string
+	AcknowledgedAt        *time.Time
+	DisabledBy            *string
+	DisabledAt            *time.Time
+	UnsealerSeenAt        *time.Time
+	UnsealerSharesPresent bool
+	UnsealCount           int64
+	LastUnsealAt          *time.Time
+	FailureCount          int64
+	LastFailureAt         *time.Time
+	LastFailureReason     *string
+	AuditedUnsealCount    int64
+	AuditedFailureCount   int64
+	UpdatedAt             time.Time
+}
+
 type Organization struct {
 	ID        uuid.UUID
 	Slug      string

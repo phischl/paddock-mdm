@@ -61,9 +61,21 @@ if status | grep -q '"initialized": false'; then
   chmod 600 "$INIT_FILE"
   # Secret-ids stored for a previous OpenBao instance (e.g. after `make down V=1`) are invalid now.
   rm -f "$SECRETS_DIR"/approle/*/secret_id
+  # So are the unsealer's shares of the previous instance (written again below).
+  rm -f "$BAO_DIR/auto-unseal-shares"
   echo "OpenBao initialized; development shares and root token stored in .secrets/openbao/"
 fi
 unseal
+
+# The development unsealer's material (plan M8u decision 17): the first three shares, one per line. 0644 inside the
+# 0700 directory, as every secret file: the container's user reads it through the Compose secret.
+SHARES_FILE="$BAO_DIR/auto-unseal-shares"
+if [[ ! -s "$SHARES_FILE" ]]; then
+  (umask 077 && for i in 1 2 3; do sed -n "s/^Unseal Key $i: //p" "$INIT_FILE"; done >"$SHARES_FILE.tmp")
+  mv "$SHARES_FILE.tmp" "$SHARES_FILE"
+  chmod 644 "$SHARES_FILE"
+  echo "development shares of the unsealer stored in .secrets/openbao/auto-unseal-shares"
+fi
 
 BAO_TOKEN="$(sed -n 's/^Initial Root Token: //p' "$INIT_FILE")"
 export BAO_TOKEN

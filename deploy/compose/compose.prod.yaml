@@ -10,6 +10,7 @@
 x-paddock-prod:
   interconnect_addr: ${PADDOCK_INTERCONNECT_ADDR:?set PADDOCK_INTERCONNECT_ADDR in .env}
   revocation_accepted: ${PADDOCK_REVOCATION_ACCEPTED:-no}
+  auto_unseal: ${PADDOCK_AUTO_UNSEAL:-no}
 
 services:
   caddy:

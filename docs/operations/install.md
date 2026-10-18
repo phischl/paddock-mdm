@@ -164,6 +164,12 @@ every AppRole's `role_id` and `secret_id` to `.secrets/approle/<role>/`. Copy `.
 to the audit host (section 4). OpenBao starts sealed after every restart; three custodians unseal it
 (`docs/operations/openbao.md` section 2).
 
+Optionally, a platform administrator can accept automatic unseal in the portal and the host operator then enables the
+unsealer with `./paddock auto-unseal enable` (`docs/operations/openbao.md` section 6). **On a production host this is
+a residual risk**: whoever controls the host or a copy of its disk can unseal OpenBao and use every key. Record RR-43
+(`docs/compliance/residual-risks.md`) in your ISMS before you enable it; `./paddock check` warns on every run while it
+is on.
+
 ## 7. Control plane: buckets and Fleet
 
 ```sh

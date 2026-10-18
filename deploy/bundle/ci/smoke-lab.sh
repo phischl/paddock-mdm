@@ -275,4 +275,54 @@ lab_paddock up
 after="$(ids)"
 [[ "$before" == "$after" ]] || fail "a second ./paddock up recreated containers"
 
-step "12 done"
+step "12 automatic unseal"
+# Plan M8u gate U6 (ADR 0035), after the idempotence step so that the restarts below do not count as recreated
+# containers there. CI stand-in for the portal: the acknowledgement row is set directly; the shares of step 5 reach
+# ./paddock auto-unseal enable on stdin, never on a command line. Every output of this step is kept in au_log and
+# searched for the shares at the end.
+au_log="$W/auto-unseal.log"
+: >"$au_log"
+lab_paddock compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d paddock -c \
+  "UPDATE openbao_auto_unseal SET state='enabled', disclaimer_version='2026-10-17', acknowledgement='I understand and accept the risk', acknowledged_by='smoke test', acknowledged_at=now() WHERE id=1" \
+  </dev/null 2>&1 | tee -a "$au_log"
+printf '%s\n' "${shares[@]}" | lab_paddock auto-unseal enable 2>&1 | tee -a "$au_log"
+check_with_warning "$W/check-auto-unseal-on.txt"
+cat "$W/check-auto-unseal-on.txt" >>"$au_log"
+grep -q '^PASS  openbao auto-unseal$' "$W/check-auto-unseal-on.txt" ||
+  fail "./paddock check does not pass openbao auto-unseal with automatic unseal on"
+grep -q 'RR-43' "$W/check-auto-unseal-on.txt" || fail "./paddock check does not name RR-43 on the lab host"
+lab_paddock compose restart openbao </dev/null 2>&1 | tee -a "$au_log"
+unsealed=""
+for _ in $(seq 1 30); do
+  if lab_paddock bao status </dev/null 2>/dev/null | grep -Eq '^Sealed +false'; then
+    unsealed=1
+    break
+  fi
+  sleep 2
+done
+[[ -n "$unsealed" ]] || fail "OpenBao is not unsealed automatically within 60 s of a restart"
+lab_paddock auto-unseal status </dev/null 2>&1 | tee -a "$au_log" | grep -q '^shares file: present$' ||
+  fail "./paddock auto-unseal status does not report the shares file"
+# The disable below removes the unsealer's container and with it its log, so the log is captured here.
+lab_paddock logs paddock-unsealer >"$W/auto-unseal-unsealer.log" 2>&1 </dev/null
+grep -q 'OpenBao unsealed automatically' "$W/auto-unseal-unsealer.log" ||
+  fail "the log of paddock-unsealer was not captured (no automatic unseal in it)"
+lab_paddock auto-unseal disable </dev/null 2>&1 | tee -a "$au_log"
+[[ ! -e "$W/lab/.secrets/openbao/auto-unseal-shares" ]] || fail "the shares file is still on the host after disable"
+grep -q '^PADDOCK_AUTO_UNSEAL=no$' "$W/lab/.env" || fail ".env does not set PADDOCK_AUTO_UNSEAL=no after disable"
+if lab_paddock ps --format '{{.Service}}' </dev/null | grep -qx paddock-unsealer; then
+  fail "paddock-unsealer still runs after disable"
+fi
+check_with_warning "$W/check-auto-unseal-off.txt"
+cat "$W/check-auto-unseal-off.txt" >>"$au_log"
+grep -A1 '^PASS  openbao auto-unseal$' "$W/check-auto-unseal-off.txt" | grep -q 'automatic unseal is off' ||
+  fail "./paddock check does not report automatic unseal as off"
+lab_paddock logs >"$W/auto-unseal-compose.log" 2>&1 </dev/null
+for share in "${shares[@]}"; do
+  if grep -qF -- "$share" "$au_log" "$W/auto-unseal-unsealer.log" "$W/auto-unseal-compose.log" "$W"/check*.txt; then
+    fail "an unseal share appears in the output or the logs"
+  fi
+done
+echo "automatic unseal: enabled, unsealed after a restart, disabled; no share in any output or log"
+
+step "13 done"

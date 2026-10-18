@@ -116,6 +116,10 @@ store is not restored; the audit host keeps running. Commands run in the control
    configuration (one share) and refuses the original shares ("invalid key size 33"). After the restart three
    custodians unseal it with their shares (`docs/operations/openbao.md` section 2). Policies, AppRoles and keys are those of the snapshot; secret IDs issued
    after it must be issued again.
+
+   With automatic unseal (`docs/operations/openbao.md` section 6), the unsealer's attempts against the temporary
+   single-share instance fail with `invalid_share` (alerts and audit events show them) until the restored node
+   restarts; then it unseals the node automatically, and no custodian is needed for this unseal.
 5. **Paddock.** Start Authentik and the roles except the compiler, then run the restore commands in exactly this order
    (plan M6c decisions 20–22): a restored database can hold older bundle sequence numbers than the devices, which would
    refuse new bundles as downgrades; Valkey's caches and the bundles bucket are rebuilt from PostgreSQL.

@@ -285,10 +285,14 @@ agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd,
 		$$(for f in bin/deb/*.deb bin/fleetd/*.deb; do printf -- '--deb %s ' "$$f"; done)
 
 .PHONY: up
-up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy (BACKUP=1: with backups)
+# dev-secrets first: it only creates missing files, so a stack started before a new secret existed gets it on upgrade.
+# OpenBao is bootstrapped (and so unsealed) before the first wait: a recreated OpenBao starts sealed, and role
+# containers still running from an earlier `make up` cannot get healthy until it is unsealed.
+up: dev-secrets ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy (BACKUP=1: with backups)
 	$(COMPOSE) up -d $(if $(BACKUP),--build,)
-	$(COMPOSE_DIR)/scripts/wait-healthy.sh
+	$(COMPOSE_DIR)/scripts/postgres-unsealer-role.sh
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
+	$(COMPOSE_DIR)/scripts/wait-healthy.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
@@ -345,7 +349,7 @@ paddockctl: ## Build paddockctl for amd64 and arm64 into bin/paddockctl/<arch>/ 
 .PHONY: acceptance
 # The exactly-once gate checks about 180 cases of ≈ 11 s each (delivery plus the 5 s settle check); they run in
 # parallel, PADDOCK_ACCEPTANCE_PARALLEL at a time (default 8).
-acceptance: ## Run acceptance gates against the running stack (optional T=<regex>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll)
+acceptance: ## Run acceptance gates against the running stack (optional T=<regex>, PADDOCK_ACCEPTANCE_PARALLEL, ACCEPTANCE_TIMEOUT, PADDOCK_ACCEPTANCE_DISRUPTIVE=1 for TestSessionsEndAll and TestAutoUnsealRestart)
 	CGO_ENABLED=0 go build -trimpath -o bin/paddockctl/paddockctl ./cli/cmd/paddockctl
 	PADDOCK_ACCEPTANCE_PADDOCKCTL=$(CURDIR)/bin/paddockctl/paddockctl \
 		go test -count=1 -timeout $(ACCEPTANCE_TIMEOUT) ./test/acceptance/... $(if $(T),-run '$(T)',) -v

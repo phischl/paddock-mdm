@@ -237,6 +237,25 @@ func (p *RelayPool) InRelay(ctx context.Context, fn func(ctx context.Context, q 
 	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
 }
 
+// UnsealerPool is the pool of role paddock_unsealer (plan M8u decision 10): SELECT on openbao_auto_unseal and UPDATE
+// of its report columns, nothing else.
+type UnsealerPool struct{ pool }
+
+// NewUnsealerPool opens the paddock_unsealer pool.
+func NewUnsealerPool(ctx context.Context, dsn string, o Options) (*UnsealerPool, error) {
+	p, err := newPool(ctx, dsn, o)
+	if err != nil {
+		return nil, err
+	}
+	return &UnsealerPool{pool{p}}, nil
+}
+
+// InUnsealer runs fn in a transaction of role paddock_unsealer. There is no principal check: the unsealer is a
+// background role with one credential, and the role's grants are the boundary.
+func (p *UnsealerPool) InUnsealer(ctx context.Context, fn func(ctx context.Context, q *pgstore.Queries) error) error {
+	return inTx(ctx, p.p, nil, func(tx pgx.Tx) error { return fn(ctx, pgstore.New(tx)) })
+}
+
 // Listen holds a dedicated connection with LISTEN channel and sends to notify on every notification (non-blocking).
 // It returns when ctx ends or the connection fails.
 func (p *RelayPool) Listen(ctx context.Context, channel string, notify chan<- struct{}) error {

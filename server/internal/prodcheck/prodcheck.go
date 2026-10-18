@@ -41,6 +41,8 @@ type Prod struct {
 	RevocationAccepted string `json:"revocation_accepted"`
 	// LabProxyAddr is the TLS proxy's address as the lab host reaches it (compose.lab.yaml).
 	LabProxyAddr string `json:"lab_proxy_addr"`
+	// AutoUnseal is PADDOCK_AUTO_UNSEAL (compose.prod.yaml), set by ./paddock auto-unseal (ADR 0035).
+	AutoUnseal string `json:"auto_unseal"`
 }
 
 // Service is one Compose service.
@@ -121,6 +123,9 @@ type Result struct {
 	OK   bool
 	// Detail holds the findings, one per line.
 	Detail string
+	// Warn marks a passed item that still needs the operator's attention (printed WARN, plan M8u decision 20); a
+	// warning never fails the check.
+	Warn bool
 }
 
 // devOnly are the variables honoured only with PADDOCK_ENV=development; any of them in production is a finding even
@@ -146,6 +151,7 @@ func Run(ctx context.Context, c Config, o Options) []Result {
 		checkSecretFiles(c),
 		checkSecretFilesReadableByServices(c),
 		checkMountedReferences(c),
+		checkAutoUnseal(c, o),
 	}
 	lab := o.Host == HostLab
 	if lab {
@@ -178,8 +184,11 @@ func Write(w io.Writer, results []Result) bool {
 	ok := true
 	for _, r := range results {
 		status := "PASS"
-		if !r.OK {
+		switch {
+		case !r.OK:
 			status, ok = "FAIL", false
+		case r.Warn:
+			status = "WARN"
 		}
 		_, _ = fmt.Fprintln(w, status+"  "+r.Item)
 		if r.Detail != "" {
@@ -280,6 +289,68 @@ func checkRevocation(c Config) Result {
 		}
 	}
 	return result("revocation path enabled only after its acceptance", f)
+}
+
+// Automatic unseal of OpenBao (ADR 0035, plan M8u decision 20).
+const (
+	autoUnsealItem    = "openbao auto-unseal"
+	autoUnsealService = "paddock-unsealer"
+	autoUnsealShares  = "openbao_auto_unseal_shares"
+	autoUnsealRisk    = "automatic unseal is on: whoever controls this host or a copy of its disk, snapshots or .secrets/ can unseal OpenBao and use every key; the custodian threshold of ADR 0006 does not gate the unseal (residual risk RR-43)"
+)
+
+// autoUnsealForbiddenEnv are the variables of credentials the unsealer must not hold.
+var autoUnsealForbiddenEnv = []string{"PADDOCK_OPENBAO_ROLE_ID_FILE", "PADDOCK_OPENBAO_SECRET_ID_FILE", "PADDOCK_VALKEY_ADDR",
+	"PADDOCK_AMQP_URL"}
+
+// checkAutoUnseal: the unsealer and the switch PADDOCK_AUTO_UNSEAL go together, never on the audit host; only the
+// unsealer mounts the shares, and it holds no AppRole and no database URL but its own. A production control plane with
+// automatic unseal passes with a warning on every run (residual risk RR-43); a lab host passes.
+func checkAutoUnseal(c Config, o Options) Result {
+	u, has := c.Services[autoUnsealService]
+	on := c.Prod.AutoUnseal == "yes"
+	var f []string
+	if has && !on {
+		f = append(f, autoUnsealService+" is configured but PADDOCK_AUTO_UNSEAL is not yes")
+	}
+	if on && !has {
+		f = append(f, "PADDOCK_AUTO_UNSEAL=yes but "+autoUnsealService+" is not in the configuration")
+	}
+	if (on || has) && o.Host == HostAudit {
+		f = append(f, "PADDOCK_AUTO_UNSEAL=yes on the audit host: there is no OpenBao here")
+	}
+	for _, name := range sortedServices(c) {
+		if name == autoUnsealService {
+			continue
+		}
+		for _, sec := range c.Services[name].Secrets {
+			if sec.Source == autoUnsealShares {
+				f = append(f, name+": mounts "+autoUnsealShares)
+			}
+		}
+	}
+	if has {
+		for _, sec := range u.Secrets {
+			own := sec.Source == "db_paddock_unsealer_url"
+			dbURL := strings.HasPrefix(sec.Source, "db_paddock_") && strings.HasSuffix(sec.Source, "_url")
+			if strings.HasPrefix(sec.Source, "approle_") || (dbURL && !own) {
+				f = append(f, autoUnsealService+": mounts "+sec.Source)
+			}
+		}
+		for _, v := range autoUnsealForbiddenEnv {
+			if env(u, v) != "" {
+				f = append(f, autoUnsealService+": "+v+" is set")
+			}
+		}
+	}
+	switch {
+	case len(f) > 0:
+		return result(autoUnsealItem, f)
+	case has && on:
+		return Result{Item: autoUnsealItem, OK: true, Warn: o.Host == HostControlPlane, Detail: autoUnsealRisk}
+	default:
+		return Result{Item: autoUnsealItem, OK: true, Detail: "automatic unseal is off"}
+	}
 }
 
 // usedSecrets returns the top-level secrets mounted by at least one service.

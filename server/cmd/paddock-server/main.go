@@ -21,7 +21,7 @@ import (
 const usage = `usage: paddock-server <command> [arguments] [+ <command> [arguments] ...]
 
 commands:
-  serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer
+  serve api|gateway|worker|compiler|outbox-relay|audit-writer|escrow-reader|revocation-issuer|unsealer
   migrate paddock|audit
   provision rabbitmq
   audit seal [--day YYYY-MM-DD]
@@ -34,6 +34,7 @@ commands:
   admin end-sessions
   admin allowlist show|disable
   admin allowlist add --cidr <cidr> --label <label>
+  admin auto-unseal show|verify|disable
   admin agent-release --version <x.y.z> --dir <dir>
   backup openbao
   backup decrypt <in> <out|->
@@ -140,6 +141,8 @@ func runServe(ctx context.Context, l *config.Loader, common config.Common, args 
 		return serveEscrowReader(ctx, l, common)
 	case "revocation-issuer":
 		return serveRevocationIssuer(ctx, l, common)
+	case "unsealer":
+		return serveUnsealer(ctx, l, common)
 	default:
 		return errUsage
 	}
@@ -153,7 +156,7 @@ func exitCode(err error) int {
 	case errors.Is(err, errUsage):
 		fmt.Fprint(os.Stderr, usage)
 		return 2
-	case errors.Is(err, errProdCheckFailed):
+	case errors.Is(err, errProdCheckFailed), errors.Is(err, errAutoUnsealNotEnabled):
 		return 1
 	case errors.As(err, &missing):
 		slog.Error("configuration incomplete", "missing", missing.Names)

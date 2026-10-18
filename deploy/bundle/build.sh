@@ -68,6 +68,7 @@ mkdir -p "$dir"
 # development-only scripts stay out.
 shipped=(
   compose.yaml compose.prod.yaml compose.backup.yaml compose.audit.yaml compose.audit.prod.yaml compose.lab.yaml
+  compose.auto-unseal.yaml
   caddy/Caddyfile.prod caddy/Caddyfile.lab caddy/guards.caddy caddy/entrypoint.sh
   nginx/paddock.conf.example
   openbao/config.hcl openbao/prod.hcl
@@ -77,8 +78,9 @@ shipped=(
   authentik/entrypoint.sh
   fleet/entrypoint.sh fleet/backup.sh fleet/backup-upload.sh
   prometheus/prometheus.yml prometheus/alerts.yml prometheus/scrape/controlplane.yml prometheus/scrape/audit.yml
+  prometheus/scrape/auto-unseal.yml
   scripts/lib.sh scripts/gen-prod-secrets.sh scripts/openbao-configure.sh scripts/rustfs-bundles-bootstrap.sh
-  scripts/rustfs-audit-bootstrap.sh scripts/fleet-bootstrap.sh scripts/wait-healthy.sh
+  scripts/rustfs-audit-bootstrap.sh scripts/fleet-bootstrap.sh scripts/wait-healthy.sh scripts/postgres-unsealer-role.sh
 )
 for f in "$src"/authentik/blueprints/*.yaml; do shipped+=("authentik/blueprints/$(basename "$f")"); done
 

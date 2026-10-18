@@ -55,6 +55,7 @@
     "agentReleases": "Agent releases",
     "ipAllowlist": "IP allow list",
     "sessions": "Sessions",
+    "openbao": "OpenBao",
     "users": "Users",
     "userGroups": "Groups",
     "permissionProfiles": "Permission profiles",
@@ -184,7 +185,8 @@
     "ip_allowlist_unavailable": "The portal is starting and cannot check the IP allow list yet. Try again in a moment.",
     "lockout_confirmation_required": "This change would remove your own address from the allow list.",
     "disable_confirmation_required": "This change would switch the allow list off.",
-    "session_store_unavailable": "The portal cannot reach its session store. Try again in a moment."
+    "session_store_unavailable": "The portal cannot reach its session store. Try again in a moment.",
+    "disclaimer_outdated": "The disclaimer has changed. Read the new text and confirm it again."
   },
   "audit": {
     "title": "Audit log",
@@ -314,7 +316,10 @@
       "ip_allowlist_changed": "{action, select, added {{actor} added {cidr} ({label}) to the IP allow list} updated {{actor} changed the IP allow list entry {previous_cidr} to {cidr} ({label})} other {{actor} removed {cidr} ({label}) from the IP allow list}}",
       "ip_allowlist_denied": "{aggregated, select, true {{count, number} requests from {ip} were refused by the IP allow list} other {A request from {ip} was refused by the IP allow list}}",
       "ip_allowlist_disabled": "{method, select, env {The IP allow list is bypassed on the api (PADDOCK_IP_ALLOWLIST_BYPASS)} other {{actor} switched the IP allow list off: {entries_removed, number} entries removed}}",
-      "sessions_ended": "{actor} ended every portal session"
+      "sessions_ended": "{actor} ended every portal session",
+      "auto_unseal_enabled": "{actor} enabled automatic unseal of OpenBao and acknowledged the disclaimer {disclaimer_version}",
+      "auto_unseal_disabled": "{method, select, cli {Automatic unseal of OpenBao was disabled on the host} other {{actor} disabled automatic unseal of OpenBao}}",
+      "openbao_auto_unsealed": "{failures, plural, =0 {The unsealer unsealed OpenBao automatically ({unseals, number} times since the last report)} other {The unsealer failed to unseal OpenBao ({failures, number} failures, last reason {last_failure_reason})}}"
     },
     "agent_rollout": {
       "started": "{actor} started the rollout of agent {version}",
@@ -934,6 +939,60 @@
     "endAll": "End all sessions",
     "confirmTitle": "End all sessions?",
     "confirmMessage": "Every administrator, you included, is signed out at the next request. Type END to confirm."
+  },
+  "openbao": {
+    "title": "OpenBao",
+    "summary": "OpenBao holds every key of this installation. It starts sealed after every restart; three custodians unseal it, or, if you accept the risk below, the unsealer on the control-plane host does.",
+    "seal": {
+      "title": "Seal",
+      "unsealed": "Unsealed",
+      "sealed": "Sealed",
+      "unreachable": "OpenBao is not reachable",
+      "threshold": "{threshold} of {shares} shares unseal it ({type})"
+    },
+    "setting": {
+      "title": "Automatic unseal",
+      "off": "Off",
+      "on": "On — acknowledged by {by} on {at}, disclaimer {version}",
+      "outdated": "The disclaimer has changed since this acknowledgement.",
+      "disabledBy": "Disabled by {by} on {at}"
+    },
+    "unsealer": {
+      "title": "Unsealer on the host",
+      "notRunning": "Not running",
+      "runningWithShares": "Running, shares present",
+      "runningNoShares": "Running, no shares on the host",
+      "seenAt": "Last report {at}",
+      "lastUnseal": "Last automatic unseal {at} ({count, number} in total)",
+      "neverUnsealed": "No automatic unseal yet",
+      "lastFailure": "Last failure {at}: {reason}",
+      "reason": {
+        "unreachable": "OpenBao did not answer",
+        "invalid_share": "a share was refused",
+        "still_sealed": "still sealed after three shares"
+      }
+    },
+    "alerts": {
+      "sharesLeft": "Automatic unseal is off, but the shares are still on the host. Run ./paddock auto-unseal disable there.",
+      "hostStep": "The acknowledgement is recorded. An operator enables the unsealer on the host with ./paddock auto-unseal enable."
+    },
+    "enable": "Enable automatic unseal",
+    "disable": "Disable automatic unseal",
+    "disableConfirmTitle": "Disable automatic unseal?",
+    "disableConfirmMessage": "Automatic unseal stops at once. The shares stay on the host until an operator runs ./paddock auto-unseal disable.",
+    "disclaimer": {
+      "title": "Enable automatic unseal of OpenBao",
+      "intro": "Automatic unseal keeps three of the five unseal shares on the control-plane host, in .secrets/openbao/auto-unseal-shares. A small service on that host, the unsealer, reads them and unseals OpenBao whenever it starts sealed, as long as this setting is on.",
+      "lead": "Before you enable it, understand and accept these consequences:",
+      "risk1": "Whoever controls the host controls every key. Anyone with root on the host, a copy of its disk, a snapshot of the virtual machine or a copy of .secrets/ can unseal OpenBao and use every key in it: the signing keys for device configuration, commands and revocation tokens, the escrow key that decrypts the escrowed disk recovery material of every device, the audit chain key and the portal session keys.",
+      "risk2": "The custodian model no longer protects the unseal. Today three named custodians must act together before OpenBao unseals. With automatic unseal their shares still exist, but three of them lie on the host; no person has to act, and no one is asked.",
+      "risk3": "Copies and backups of the host become as sensitive as the keys. Paddock never writes the shares into its own backups, but a disk image, a VM snapshot or a copy of the bundle directory does contain them, and nothing in Paddock can tell that such a copy exists.",
+      "risk4": "This is a residual risk of your information security management system (RR-43 in docs/compliance/residual-risks.md). Record it with an owner and a decision. On a production host, ./paddock check warns on every run while automatic unseal is on.",
+      "outro": "Enabling here places no share on the host. It records your acknowledgement, with your name, the time and the version of this text ({version}), in the audit log. An operator with access to the host then runs ./paddock auto-unseal enable, which refuses to run without this acknowledgement. Disabling here stops the automatic unseal at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable.",
+      "typePrompt": "Type this sentence to confirm:",
+      "typeLabel": "Sentence to confirm",
+      "sentence": "I understand and accept the risk"
+    }
   },
   "changeSets": {
     "title": "Change sets",
