@@ -706,3 +706,90 @@ func TestRevocationCancelsUninstall(t *testing.T) {
 		}
 	})
 }
+
+// resultMeanwhileCache is a fakeUninstallCache whose claims let the worker record the device's result first: the
+// gateway publishes a result before it claims it.
+type resultMeanwhileCache struct {
+	*fakeUninstallCache
+	record func(id uuid.UUID)
+}
+
+func (c resultMeanwhileCache) ClaimResult(ctx context.Context, device, id uuid.UUID, status string) (uuid.UUID, string, error) {
+	c.record(id)
+	return c.fakeUninstallCache.ClaimResult(ctx, device, id, status)
+}
+
+// TestUninstallResultRecordedWhileWithdrawn (review 3 finding F): the worker records the device's result between the
+// read of the command and its withdrawal, although the withdrawal won the result claim. A Lock still goes ahead, with
+// after_delivery and the request cleared; a cancel is refused.
+func TestUninstallResultRecordedWhileWithdrawn(t *testing.T) {
+	w := newUninstallWorld(t)
+	cache := resultMeanwhileCache{fakeUninstallCache: w.cache, record: func(id uuid.UUID) {
+		w.exec(t, "UPDATE device_command SET status = 'succeeded', finished_at = now() WHERE id = $1", id)
+	}}
+	revocations := app.NewRevocations(w.runner, w.api, stepUpTokens{}, cache, true)
+	uninstalls := app.NewUninstalls(w.runner, w.api, cache)
+	p := principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Display: "alice", Role: principal.RoleOrgAdmin,
+		OrganizationID: w.org, IP: "192.0.2.1", StepUpAt: time.Now(), StepUpJTI: uuid.NewString(), Subject: uuid.NewString()}
+	admin := httpx.WithRequestID(principal.With(context.Background(), p), uuid.NewString())
+
+	t.Run("lock", func(t *testing.T) {
+		dev, host := w.newDevice(t, w.org, "active")
+		u, err := w.uninstalls.Request(admin, dev, app.UninstallInput{Mode: "leave", ConfirmHostname: host, Reason: "returned laptop"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := u.UninstallCommandID.UUID
+		w.exec(t, "UPDATE device_command SET status = 'delivered', delivered_at = now() WHERE id = $1", cmd)
+		_, cancelled, err := revocations.Request(admin, app.RevocationInput{DeviceID: dev, Action: "lock", ConfirmHostname: host, Reason: "stolen"})
+		if err != nil || cancelled != app.UninstallCancelledAfterDelivery {
+			t.Fatalf("lock: %q, %v; want after_delivery", cancelled, err)
+		}
+		if n := w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND uninstall_requested_at IS NULL", dev); n != 1 {
+			t.Fatal("the uninstall stayed requested")
+		}
+		if n := w.count(t, "SELECT count(*) FROM device_command WHERE id = $1 AND status = 'succeeded'", cmd); n != 1 {
+			t.Fatal("the recorded result was changed")
+		}
+		if n := w.count(t, `SELECT count(*) FROM outbox WHERE payload ->> 'code' = 'revocation.requested' AND payload ->> 'outcome' = 'success'
+			AND payload -> 'target' ->> 'id' = $1 AND payload -> 'params' ->> 'uninstall_cancelled' = 'after_delivery'`, dev.String()); n != 1 {
+			t.Fatalf("%d revocation.requested with after_delivery", n)
+		}
+	})
+
+	t.Run("cancel", func(t *testing.T) {
+		dev, host := w.newDevice(t, w.org, "active")
+		u, err := w.uninstalls.Request(admin, dev, app.UninstallInput{Mode: "leave", ConfirmHostname: host, Reason: "returned laptop"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = uninstalls.Cancel(admin, dev)
+		expectUninstallProblem(t, err, "invalid_state", 409, "the command can no longer be cancelled")
+		if n := w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND uninstall_command_id = $2", dev, u.UninstallCommandID.UUID); n != 1 {
+			t.Fatal("a refused cancel cleared the request")
+		}
+	})
+}
+
+// TestUninstallOverdueRequestClaimsAfterItsChecks (review 3 finding G): a re-request of an overdue uninstall that
+// fails a check leaves the delivered command and its result unclaimed, because the claim survives a rollback.
+func TestUninstallOverdueRequestClaimsAfterItsChecks(t *testing.T) {
+	w := newUninstallWorld(t)
+	admin := w.as(w.org, principal.RoleOrgAdmin, true)
+	dev, err := w.uninstalls.Request(admin, w.device, w.leave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := dev.UninstallCommandID.UUID
+	w.exec(t, "UPDATE device_command SET status = 'delivered', delivered_at = now() - interval '25 hours' WHERE id = $1", cmd)
+	in := w.leave()
+	in.ClearTPM = true
+	_, err = w.uninstalls.Request(admin, w.device, in)
+	expectUninstallProblem(t, err, "invalid_request", 422, "clear_tpm and keep_local_admin apply to mode reset only")
+	if owner, status, _ := w.cache.ClaimResult(context.Background(), w.device, cmd, "succeeded"); owner != w.device || status != "succeeded" {
+		t.Fatalf("result of the open command already claimed: %s %s", owner, status)
+	}
+	if n := w.count(t, "SELECT count(*) FROM device_command WHERE id = $1 AND status = 'delivered'", cmd); n != 1 {
+		t.Fatal("a refused request changed the open command")
+	}
+}

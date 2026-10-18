@@ -91,6 +91,9 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 	var out pgstore.Device
 	var withdrawn uuid.UUID
 	err := u.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		// overdue is the delivered command of an overdue request, withdrawn only after every check passed: the result
+		// claim lives in Valkey and survives a rollback (review 3 finding G).
+		var overdue pgstore.DeviceCommand
 		dev, err := q.LockDevice(ctx, deviceID)
 		if err != nil {
 			return notFound(err)
@@ -119,14 +122,7 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 			}
 			rec.SetParam("report_overdue", true)
 			if open.Status == devicecommand.StatusDelivered {
-				claimed, err := withdrawUninstallCommand(ctx, q, u.cache, deviceID, open, u.now())
-				if err != nil {
-					return err
-				}
-				if claimed != "" {
-					return problem.InvalidState.WithDetail("the device already reported a result")
-				}
-				withdrawn = open.ID
+				overdue = open
 			}
 		}
 		revoking, err := q.DeviceHasOpenRevocation(ctx, deviceID)
@@ -156,6 +152,19 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 			params["keep_local_admin"] = true
 		}
 		now := u.now()
+		if overdue.ID != uuid.Nil {
+			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, deviceID, overdue, now)
+			if err != nil {
+				return err
+			}
+			if claimed != "" {
+				return problem.InvalidState.WithDetail("the device already reported a result")
+			}
+			if !ok {
+				return errCommandFinished()
+			}
+			withdrawn = overdue.ID
+		}
 		cmd, err := issueCommand(ctx, q, rec, deviceID, command.TypeUninstall, params, now, nil)
 		if err != nil {
 			return err
@@ -230,7 +239,7 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 		switch {
 		case cmd.Status == devicecommand.StatusSucceeded && overdue:
 		case cmd.Status == devicecommand.StatusPending || (cmd.Status == devicecommand.StatusDelivered && overdue):
-			claimed, err := withdrawUninstallCommand(ctx, q, u.cache, deviceID, cmd, now)
+			claimed, ok, err := withdrawUninstallCommand(ctx, q, u.cache, deviceID, cmd, now)
 			if err != nil {
 				return err
 			}
@@ -239,6 +248,9 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 			}
 			if claimed != "" {
 				return problem.InvalidState.WithDetail("the device already reported a result")
+			}
+			if !ok {
+				return errCommandFinished()
 			}
 			withdrawn = cmd.ID
 		case cmd.Status == devicecommand.StatusDelivered:
@@ -267,25 +279,28 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 // withdrawUninstallCommand cancels an uninstall command without a result (pending or delivered): it claims the
 // result as cancelled first, so a result the device posts afterwards is a conflict and the agent never starts the
 // removal, then cancels the command. When the device's result was claimed first it returns that status and leaves
-// the command as it is; the caller decides whether that refuses its action. The caller runs dropWithdrawnCommand
-// after the commit.
+// the command as it is. withdrawn is false also when the command already has a result although the claim was won:
+// the gateway publishes a result before it claims it, so the worker may have recorded it meanwhile. The caller
+// decides whether either refuses its action and runs dropWithdrawnCommand after the commit.
 func withdrawUninstallCommand(ctx context.Context, q *pgstore.Queries, cache UninstallCache, deviceID uuid.UUID,
-	cmd pgstore.DeviceCommand, now time.Time) (string, error) {
+	cmd pgstore.DeviceCommand, now time.Time) (claimed string, withdrawn bool, err error) {
 	owner, status, err := cache.ClaimResult(ctx, deviceID, cmd.ID, devicecommand.StatusCancelled)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if owner != deviceID || status != devicecommand.StatusCancelled {
-		return status, nil
+		return status, false, nil
 	}
 	n, err := q.WithdrawDeviceCommand(ctx, pgstore.WithdrawDeviceCommandParams{ID: cmd.ID, FinishedAt: now.UTC()})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	if n != 1 {
-		return "", problem.InvalidState.WithDetail("the command can no longer be cancelled")
-	}
-	return "", nil
+	return "", n == 1, nil
+}
+
+// errCommandFinished refuses a cancel of an uninstall command that got its result while it was withdrawn.
+func errCommandFinished() error {
+	return problem.InvalidState.WithDetail("the command can no longer be cancelled")
 }
 
 // dropWithdrawnCommand removes a withdrawn command (uuid.Nil: none) from cmd:<device_id>, so the gateway no longer

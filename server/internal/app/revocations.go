@@ -158,11 +158,13 @@ func (r *Revocations) cancelUninstall(ctx context.Context, q *pgstore.Queries, r
 	received := cmd.DeliveredAt != nil || cmd.Status == devicecommand.StatusDelivered || cmd.Status == devicecommand.StatusSucceeded
 	switch cmd.Status {
 	case devicecommand.StatusPending, devicecommand.StatusDelivered:
-		claimed, err := withdrawUninstallCommand(ctx, q, r.cache, dev.ID, cmd, now)
+		// A command that got its result meanwhile (not withdrawn) counts like a result the device claimed first:
+		// Lock and Destroy are never refused because of an uninstall (review 3 finding F).
+		claimed, withdrawn, err := withdrawUninstallCommand(ctx, q, r.cache, dev.ID, cmd, now)
 		if err != nil {
 			return "", uuid.Nil, err
 		}
-		received = received || claimed != ""
+		received = received || claimed != "" || !withdrawn
 	case devicecommand.StatusFailed, devicecommand.StatusExpired:
 		if _, err := q.CancelDeviceCommand(ctx, pgstore.CancelDeviceCommandParams{ID: cmd.ID, FinishedAt: now}); err != nil {
 			return "", uuid.Nil, err
