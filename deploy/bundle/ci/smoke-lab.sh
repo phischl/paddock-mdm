@@ -303,6 +303,10 @@ done
 [[ -n "$unsealed" ]] || fail "OpenBao is not unsealed automatically within 60 s of a restart"
 lab_paddock auto-unseal status </dev/null 2>&1 | tee -a "$au_log" | grep -q '^shares file: present$' ||
   fail "./paddock auto-unseal status does not report the shares file"
+# The disable below removes the unsealer's container and with it its log, so the log is captured here.
+lab_paddock logs paddock-unsealer >"$W/auto-unseal-unsealer.log" 2>&1 </dev/null
+grep -q 'OpenBao unsealed automatically' "$W/auto-unseal-unsealer.log" ||
+  fail "the log of paddock-unsealer was not captured (no automatic unseal in it)"
 lab_paddock auto-unseal disable </dev/null 2>&1 | tee -a "$au_log"
 [[ ! -e "$W/lab/.secrets/openbao/auto-unseal-shares" ]] || fail "the shares file is still on the host after disable"
 grep -q '^PADDOCK_AUTO_UNSEAL=no$' "$W/lab/.env" || fail ".env does not set PADDOCK_AUTO_UNSEAL=no after disable"
@@ -315,7 +319,7 @@ grep -A1 '^PASS  openbao auto-unseal$' "$W/check-auto-unseal-off.txt" | grep -q 
   fail "./paddock check does not report automatic unseal as off"
 lab_paddock logs >"$W/auto-unseal-compose.log" 2>&1 </dev/null
 for share in "${shares[@]}"; do
-  if grep -qF -- "$share" "$au_log" "$W/auto-unseal-compose.log" "$W"/check*.txt; then
+  if grep -qF -- "$share" "$au_log" "$W/auto-unseal-unsealer.log" "$W/auto-unseal-compose.log" "$W"/check*.txt; then
     fail "an unseal share appears in the output or the logs"
   fi
 done
