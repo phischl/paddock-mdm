@@ -145,6 +145,9 @@ func TestSessionsStepUpMismatch(t *testing.T) {
 // TestSessionsDeactivation is gate S11: deactivating the user in the identity provider ends its portal sessions
 // within the worker's interval; after reactivation the user signs in again.
 func TestSessionsDeactivation(t *testing.T) {
+	// Each waits for the same worker round with its own temporary user, so the four session gates run together after
+	// the sequential gates (PDK-189).
+	t.Parallel()
 	alice := login(t, env.Alice)
 	org := orgOf(t, alice)
 	idx := auditIndex(t)
@@ -184,6 +187,9 @@ func TestSessionsDeactivation(t *testing.T) {
 // TestSessionsRoleChange is gate S12: moving an administrator to the auditors group ends its sessions within the
 // worker's interval; the next login has the auditor role and the change is recorded.
 func TestSessionsRoleChange(t *testing.T) {
+	// Each waits for the same worker round with its own temporary user, so the four session gates run together after
+	// the sequential gates (PDK-189).
+	t.Parallel()
 	alice := login(t, env.Alice)
 	org := orgOf(t, alice)
 	idx := auditIndex(t)
@@ -263,6 +269,9 @@ func firstParam(events []env.IndexEvent, name string) any {
 // TestAPITokenCreatorInactive is the gate of PDK-184: an API token stops working once the worker round moved its
 // creator to a role that may not hold the token's role, and its refused use is recorded with reason creator_inactive.
 func TestAPITokenCreatorInactive(t *testing.T) {
+	// Each waits for the same worker round with its own temporary user, so the four session gates run together after
+	// the sequential gates (PDK-189).
+	t.Parallel()
 	alice := login(t, env.Alice)
 	org := orgOf(t, alice)
 	idx := auditIndex(t)
@@ -303,6 +312,9 @@ func TestAPITokenCreatorInactive(t *testing.T) {
 // loses the portal session within the worker's interval, and the revocation is recorded once in the platform
 // pseudo-organization.
 func TestSessionsPlatformAdminRemoved(t *testing.T) {
+	// Each waits for the same worker round with its own temporary user, so the four session gates run together after
+	// the sequential gates (PDK-189).
+	t.Parallel()
 	idx := auditIndex(t)
 	ak, err := env.NewAuthentik()
 	if err != nil {
