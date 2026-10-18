@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
 
 // Device is an enrolled VM with its device group and managed configuration.
@@ -207,4 +209,31 @@ func (d *Device) ownErrors(params map[string]any) []any {
 		}
 	}
 	return own
+}
+
+// RequestUninstall asks, as alice after a step-up, to remove Paddock from the device with mode and the extra options
+// (clear_tpm, keep_local_admin) and returns the response; status is the expected HTTP status.
+func (d *Device) RequestUninstall(mode string, extra map[string]any, status int) portal.Response {
+	d.t.Helper()
+	body := map[string]any{"mode": mode, "confirm_hostname": d.Must("hostname"), "reason": "system gate " + d.run}
+	for k, v := range extra {
+		body[k] = v
+	}
+	d.s.StepUp()
+	return d.s.Call(http.MethodPost, "/api/v1/devices/"+d.ID+"/uninstall", body, status)
+}
+
+// WaitRetired waits for the device's removal report and its retirement and returns the params of device.uninstalled.
+func (d *Device) WaitRetired(t *testing.T, timeout time.Duration) map[string]any {
+	t.Helper()
+	p := d.WaitEvent(t, "device.uninstalled", timeout, nil)
+	Until(t, d.Name+": retired after the removal", 2*time.Minute, 5*time.Second, nil, func() bool {
+		var dev struct {
+			State         string  `json:"state"`
+			RetiredReason *string `json:"retired_reason"`
+		}
+		_ = json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev)
+		return dev.State == "retired" && dev.RetiredReason != nil && *dev.RetiredReason == "uninstalled"
+	})
+	return p
 }

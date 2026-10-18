@@ -67,6 +67,14 @@ password that is valid on the device. Before the device confirmed its first pass
 confirmed yet — password 1 is stored and waits for the device's confirmation at its next check-in (within about 5
 minutes)*, not *none yet*.
 
+## After an uninstall
+
+Removing Paddock in mode `leave` keeps the managed local administrator; its last escrowed password stays revealable
+for the retired device. Mode `reset` removes the account (its home directory stays) unless it is the last local
+administrator of the device or the request keeps it (`keep_local_admin`); the device reports which applied
+(`local_admin: removed | kept | kept_last_admin`, `docs/operations/uninstall.md`). The password is no longer rotated
+once the agent is gone.
+
 ## Keys and credentials
 
 Only the `paddock-escrow-reader` role decrypts, with the OpenBao AppRole `paddock-escrow-reader` (`update` on

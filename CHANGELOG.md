@@ -92,6 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agents of this release carry out the removal in the transient unit `paddock-uninstall`: they stop and purge
   Paddock's services and packages, keep every user file and the disk encryption, keep the managed local administrator
   when it is the last local administrator, and leave a summary in `/root/paddock-uninstall/result.json`.
+- Runbook `docs/operations/uninstall.md`: both removal modes step by step, what stays, the last-administrator guard,
+  the TPM clear and its firmware fallback, cancelling, and what to do when a device's removal report never arrived.
 
 ### Changed
 

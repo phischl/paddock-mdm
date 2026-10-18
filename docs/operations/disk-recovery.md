@@ -49,6 +49,10 @@ device page, and that volume's header is escrowed again. The agent never wipes a
 
 ## Recovering a device
 
+Removing Paddock from a device (`docs/operations/uninstall.md`) never changes a keyslot, `/etc/crypttab` or the boot
+loader: the PIN, the TPM and the recovery key keep unlocking the disk, and the escrowed recovery key and headers stay
+revealable for the retired device.
+
 Both actions need an organization administrator, a step-up (MFA within the last 5 minutes) and the device's
 hostname typed as confirmation. Each is recorded once in the audit log (`disk.recovery_key_revealed`,
 `disk.header_downloaded`, with the generation and, for a header, the volume, never the secret).
