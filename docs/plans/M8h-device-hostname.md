@@ -574,3 +574,8 @@ Open points (default chosen):
   models the clearing, `Plan` treats a pretty hostname of `""` or the name as in sync, and S-HN1 (§9) accepts both
   and checks that two consecutive drift passes after the correction change nothing and report no
   `config.drift_corrected`.
+- **Avahi after a partial failure.** Decision 13 is refined: `Apply` restarts a running `avahi-daemon.service` right
+  after a successful `hostnamectl`, before the `/etc/hosts` write, and reports both errors (`errors.Join`). A failed
+  restart stays pending in `reconcile.HostnameState`, which the applier keeps for the agent's lifetime; while it is
+  pending and the names are in sync, `Plan` lists `systemctl restart avahi-daemon.service`, so the next pass (drift
+  or bundle) retries it. An agent restart forgets a pending restart; Avahi then follows at the next rename or reboot.

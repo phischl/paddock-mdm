@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"sync/atomic"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
@@ -27,6 +28,16 @@ type Hostname struct {
 	// HostsManaged reports whether the current bundle manages /etc/hosts as a file; then the reconciler leaves
 	// the file alone (ADR 0041 decision 6).
 	HostsManaged func() bool
+	// State carries what one pass leaves for the next; the applier keeps one for the agent's lifetime. Without it
+	// a failed avahi-daemon restart is not retried.
+	State *HostnameState
+}
+
+// HostnameState is what the hostname reconciler remembers between passes.
+type HostnameState struct {
+	// avahiPending is set while the restart of avahi-daemon after a rename has not succeeded: the names are in
+	// sync then, so only this flag makes the next pass retry it.
+	avahiPending atomic.Bool
 }
 
 // Type implements Reconciler.
@@ -54,6 +65,8 @@ func (h *Hostname) Plan(ctx context.Context, r bundle.Resource) ([]string, error
 	// 2026-10-18), so an empty pretty name is in sync; only a pretty name of its own is drift.
 	if names.StaticHostname != name || names.Hostname != name || (names.PrettyHostname != "" && names.PrettyHostname != name) {
 		changes = append(changes, "hostnamectl hostname "+name)
+	} else if h.State != nil && h.State.avahiPending.Load() {
+		changes = append(changes, "systemctl restart "+avahiUnit)
 	}
 	if h.HostsManaged == nil || !h.HostsManaged() {
 		data, _, err := h.Sys.ReadFile(HostsFile)
@@ -67,7 +80,8 @@ func (h *Hostname) Plan(ctx context.Context, r bundle.Resource) ([]string, error
 	return changes, nil
 }
 
-// Apply implements Reconciler. A failing step leaves the later ones undone; the device keeps working with
+// Apply implements Reconciler. A refused rename leaves /etc/hosts and Avahi alone; after a rename avahi-daemon is
+// restarted whether or not /etc/hosts can be written, and both errors are reported. The device keeps working with
 // whatever name it has (contract 8).
 func (h *Hostname) Apply(ctx context.Context, r bundle.Resource) Result {
 	return apply(ctx, r, h.Plan, func(changes []string) error {
@@ -75,7 +89,7 @@ func (h *Hostname) Apply(ctx context.Context, r bundle.Resource) Result {
 		if err != nil {
 			return err
 		}
-		renamed := false
+		var errs []error
 		for _, c := range changes {
 			switch {
 			case strings.HasPrefix(c, "hostnamectl "):
@@ -86,36 +100,41 @@ func (h *Hostname) Apply(ctx context.Context, r bundle.Resource) Result {
 				if exit != 0 {
 					return fmt.Errorf("%s: exit %d %s", c, exit, strings.TrimSpace(out))
 				}
-				renamed = true
+				errs = append(errs, h.restartAvahi(ctx))
+			case c == "systemctl restart "+avahiUnit:
+				errs = append(errs, h.restartAvahi(ctx))
 			case strings.HasPrefix(c, "write "+HostsFile):
-				if err := h.writeHosts(name); err != nil {
-					return err
-				}
+				errs = append(errs, h.writeHosts(name))
 			default:
 				return fmt.Errorf("unknown change %q", c)
 			}
 		}
-		if renamed {
-			return h.restartAvahi(ctx)
-		}
-		return nil
+		return errors.Join(errs...)
 	})
 }
 
 // restartAvahi restarts a running avahi-daemon: it reads the host name at startup only and would keep announcing
-// the old one (ADR 0041 context).
+// the old one (ADR 0041 context). A failed restart stays pending in State for the next pass.
 func (h *Hostname) restartAvahi(ctx context.Context) error {
 	if _, exit, err := h.Sys.Systemctl(ctx, "is-active", avahiUnit); err != nil || exit != 0 {
+		h.setAvahiPending(false)
 		return nil
 	}
 	out, exit, err := h.Sys.Systemctl(ctx, "restart", avahiUnit)
 	if err == nil && exit != 0 {
 		err = fmt.Errorf("exit %d %s", exit, strings.TrimSpace(out))
 	}
+	h.setAvahiPending(err != nil)
 	if err != nil {
 		return fmt.Errorf("avahi-daemon restart failed: %w", err)
 	}
 	return nil
+}
+
+func (h *Hostname) setAvahiPending(pending bool) {
+	if h.State != nil {
+		h.State.avahiPending.Store(pending)
+	}
 }
 
 func (h *Hostname) writeHosts(name string) error {

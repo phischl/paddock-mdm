@@ -56,6 +56,7 @@ type Applier struct {
 	file      *reconcile.File
 	login     *reconcile.Login
 	inventory *reconcile.Inventory
+	hostname  reconcile.HostnameState
 }
 
 // WithInventory adds the reconciler of the bundle's inventory section; without it the section is ignored.
@@ -123,7 +124,7 @@ func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bu
 // reconciler returns the reconciler of a resource type of bundle b.
 func (a *Applier) reconciler(b *bundle.Bundle, typ string) (reconcile.Reconciler, bool) {
 	if typ == bundle.TypeHostname {
-		return &reconcile.Hostname{Sys: a.sys, HostsManaged: func() bool { return managesHosts(b) }}, true
+		return &reconcile.Hostname{Sys: a.sys, HostsManaged: func() bool { return managesHosts(b) }, State: &a.hostname}, true
 	}
 	if typ == reconcile.InventoryID && a.inventory != nil {
 		return a.inventory, true

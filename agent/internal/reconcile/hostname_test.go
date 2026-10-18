@@ -3,6 +3,8 @@ package reconcile_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,7 +27,7 @@ func hostnameFixture(t *testing.T) (*fakesys.System, *reconcile.Hostname, *bool)
 	sys.Hostnames = fakesys.Hostnames{Static: "lap-0421", Transient: "lap-0421", Pretty: "lap-0421"}
 	sys.Files[reconcile.HostsFile] = &fakesys.File{Data: []byte("127.0.0.1 localhost\n127.0.1.1\tlap-0421\n"), Mode: 0o644}
 	managed := false
-	return sys, &reconcile.Hostname{Sys: sys, HostsManaged: func() bool { return managed }}, &managed
+	return sys, &reconcile.Hostname{Sys: sys, HostsManaged: func() bool { return managed }, State: &reconcile.HostnameState{}}, &managed
 }
 
 func hostnameResource(t *testing.T, name string) bundle.Resource {
@@ -184,6 +186,54 @@ func TestHostnameAvahi(t *testing.T) {
 			t.Fatalf("apply %+v, names %+v", res, sys.Hostnames)
 		}
 	})
+	// The names are in sync after a failed restart; the next pass still retries it until it succeeds (review 1
+	// finding 2).
+	t.Run("restart retried", func(t *testing.T) {
+		sys, h, _ := hostnameFixture(t)
+		sys.Hostnames.Transient = "other"
+		sys.Units["avahi-daemon.service"] = &fakesys.Unit{State: "enabled", Active: true}
+		sys.FailCmd = "systemctl restart avahi-daemon.service"
+		if res := h.Apply(context.Background(), r); res.Status != reconcile.Error {
+			t.Fatalf("apply %+v", res)
+		}
+		want := []string{"systemctl restart avahi-daemon.service"}
+		for range 2 {
+			if changes, err := h.Plan(context.Background(), r); err != nil || !slices.Equal(changes, want) {
+				t.Fatalf("plan after the failed restart %v, %v", changes, err)
+			}
+			if res := h.Apply(context.Background(), r); res.Status != reconcile.Error {
+				t.Fatalf("retry while failing %+v", res)
+			}
+		}
+		sys.FailCmd = ""
+		sys.Calls = nil
+		if res := h.Apply(context.Background(), r); res.Status != reconcile.Changed || !slices.Equal(sys.Calls, want) {
+			t.Fatalf("retry %+v, calls %v", res, sys.Calls)
+		}
+		if changes, err := h.Plan(context.Background(), r); err != nil || len(changes) != 0 {
+			t.Fatalf("plan after the restart %v, %v", changes, err)
+		}
+	})
+	// A failing /etc/hosts write does not keep Avahi on the old name; both errors are reported.
+	t.Run("hosts write fails", func(t *testing.T) {
+		sys, h, _ := hostnameFixture(t)
+		sys.Hostnames.Transient = "other"
+		sys.Files[reconcile.HostsFile] = &fakesys.File{Data: []byte(ubuntuHosts), Mode: 0o644}
+		sys.Units["avahi-daemon.service"] = &fakesys.Unit{State: "enabled", Active: true}
+		h.Sys = failingWrite{sys}
+		res := h.Apply(context.Background(), r)
+		if res.Status != reconcile.Error || !strings.Contains(res.Message, "read-only file system") ||
+			!slices.Equal(sys.Calls, []string{"hostnamectl hostname lap-0421", "systemctl restart avahi-daemon.service"}) {
+			t.Fatalf("apply %+v, calls %v", res, sys.Calls)
+		}
+		sys.FailCmd = "systemctl restart avahi-daemon.service"
+		sys.Hostnames.Transient = "other"
+		res = h.Apply(context.Background(), r)
+		if res.Status != reconcile.Error || !strings.Contains(res.Message, "read-only file system") ||
+			!strings.Contains(res.Message, "avahi-daemon restart failed") {
+			t.Fatalf("apply with both failing %+v", res)
+		}
+	})
 }
 
 // TestHostnameErrors: a refused rename leaves /etc/hosts alone; an invalid spec and an unavailable hostnamed are
@@ -241,6 +291,13 @@ func TestUnitsDoNotProtectHostname(t *testing.T) {
 			}
 		}
 	}
+}
+
+// failingWrite is a system whose files cannot be written.
+type failingWrite struct{ reconcile.System }
+
+func (failingWrite) WriteFileAtomic(string, []byte, fs.FileMode, int, int) error {
+	return errors.New("read-only file system")
 }
 
 // failingHostnamectl is a system whose hostnamed does not answer.
