@@ -101,7 +101,7 @@ func (h *Helper) sudoersAndNotices(ctx context.Context) string {
 	if last != "" {
 		if err := h.run(ctx, "visudo", "-c"); err != nil {
 			errs = append(errs, err.Error())
-			if werr := os.WriteFile(h.path(last), lastData, lastMode); werr != nil {
+			if werr := os.WriteFile(h.path(last), lastData, lastMode); werr != nil { //nolint:gosec // a paddock-u- file just read from sudoers.d
 				errs = append(errs, "restore "+last+": "+werr.Error())
 			}
 		}
@@ -268,6 +268,6 @@ func copyTree(from, to string) error {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(dst, data, 0o600)
+		return os.WriteFile(dst, data, 0o600) //nolint:gosec // below the quarantine directory
 	})
 }
