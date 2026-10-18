@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,8 +24,10 @@ const guestHosts = "10.0.2.2 device.paddock.localhost bundles.paddock.localhost 
 
 // Stack is the development stack as the system tests use it.
 type Stack struct {
-	t     *testing.T
-	root  string // repository root
+	root string // repository root
+	// mu guards alice, which Login replaces while subtests may use it; a *portal.Session itself is safe for
+	// concurrent requests.
+	mu    sync.Mutex
 	alice *portal.Session
 	// composeFiles are the Compose files the stack ran with when the test started: after a `make down` nothing is
 	// running any more to tell whether `make up` needs the backup overlay (PDK-018).
@@ -39,20 +42,30 @@ func newStack(t *testing.T) *Stack {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	s := &Stack{t: t, root: root, composeFiles: runningComposeFiles(ctx)}
-	s.Login()
+	s := &Stack{root: root, composeFiles: runningComposeFiles(ctx)}
+	s.Login(t)
 	return s
 }
 
 // Login (re)signs in alice, e.g. after the stack was restarted.
-func (s *Stack) Login() {
-	s.t.Helper()
+func (s *Stack) Login(t *testing.T) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	var err error
-	if s.alice, err = portal.Login(ctx, portal.Alice); err != nil {
-		s.t.Fatalf("login alice (run make dev-seed): %v", err)
+	alice, err := portal.Login(ctx, portal.Alice)
+	if err != nil {
+		t.Fatalf("login alice (run make dev-seed): %v", err)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.alice = alice
+}
+
+// session is alice's current session.
+func (s *Stack) session() *portal.Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.alice
 }
 
 // stepUpRetryAfter is longer than the development stack's maximum auth age of a step-up (PADDOCK_STEPUP_MAX_AUTH_AGE,
@@ -63,101 +76,101 @@ const stepUpRetryAfter = 20 * time.Second
 // profile. Authentik re-authenticates only a login older than the maximum auth age: a step-up within that age of the
 // previous one gets the previous login's auth_time, which the server may find a second too old by the time of the
 // callback. A refused step-up is therefore repeated once, after that age.
-func (s *Stack) StepUp() {
-	s.t.Helper()
+func (s *Stack) StepUp(t *testing.T) {
+	t.Helper()
 	for attempt := 1; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		final, err := s.alice.StepUp(ctx, portal.Alice, "/")
+		final, err := s.session().StepUp(ctx, portal.Alice, "/")
 		cancel()
 		if err == nil && !strings.Contains(final, "stepup=failed") {
 			return
 		}
 		if attempt == 2 {
-			s.t.Fatalf("step-up of alice: %v (returned to %s)", err, final)
+			t.Fatalf("step-up of alice: %v (returned to %s)", err, final)
 		}
-		s.t.Logf("step-up of alice refused (%v, returned to %s); repeating after %s", err, final, stepUpRetryAfter)
+		t.Logf("step-up of alice refused (%v, returned to %s); repeating after %s", err, final, stepUpRetryAfter)
 		time.Sleep(stepUpRetryAfter)
 	}
 }
 
 // Call sends an admin API request as alice and expects status.
-func (s *Stack) Call(method, path string, body any, status int) portal.Response {
-	s.t.Helper()
+func (s *Stack) Call(t *testing.T, method, path string, body any, status int) portal.Response {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	res, err := s.alice.Do(ctx, method, path, body)
+	res, err := s.session().Do(ctx, method, path, body)
 	if err != nil || res.Status != status {
-		s.t.Fatalf("%s %s: HTTP %d (want %d) %v %s", method, path, res.Status, status, err, res.Body)
+		t.Fatalf("%s %s: HTTP %d (want %d) %v %s", method, path, res.Status, status, err, res.Body)
 	}
 	return res
 }
 
 // DeleteOnCleanup deletes the device group, managed file or unit at path when the test ends; a resource the test
 // deleted itself is fine (plan M2.2 decision 7).
-func (s *Stack) DeleteOnCleanup(path string) {
-	s.t.Cleanup(func() { s.cleanupCall(http.MethodDelete, path, http.StatusNoContent, http.StatusNotFound) })
+func (s *Stack) DeleteOnCleanup(t *testing.T, path string) {
+	t.Cleanup(func() { s.cleanupCall(t, http.MethodDelete, path, http.StatusNoContent, http.StatusNotFound) })
 }
 
 // RevokeOnCleanup revokes an enrollment token when the test ends (tokens cannot be deleted; revoking is
 // idempotent).
-func (s *Stack) RevokeOnCleanup(tokenID string) {
-	s.t.Cleanup(func() {
-		s.cleanupCall(http.MethodPost, "/api/v1/enrollment-tokens/"+tokenID+"/revoke", http.StatusOK)
+func (s *Stack) RevokeOnCleanup(t *testing.T, tokenID string) {
+	t.Cleanup(func() {
+		s.cleanupCall(t, http.MethodPost, "/api/v1/enrollment-tokens/"+tokenID+"/revoke", http.StatusOK)
 	})
 }
 
 // cleanupCall sends a cleanup request as alice and reports, without stopping, a status other than ok. It signs in
 // again once if the session ended, e.g. after a gate restarted the stack.
-func (s *Stack) cleanupCall(method, path string, ok ...int) {
+func (s *Stack) cleanupCall(t *testing.T, method, path string, ok ...int) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	res, err := s.alice.Do(ctx, method, path, nil)
+	res, err := s.session().Do(ctx, method, path, nil)
 	if err == nil && res.Status == http.StatusUnauthorized {
-		s.Login()
-		res, err = s.alice.Do(ctx, method, path, nil)
+		s.Login(t)
+		res, err = s.session().Do(ctx, method, path, nil)
 	}
 	if err != nil || !slices.Contains(ok, res.Status) {
-		s.t.Errorf("cleanup: %s %s: HTTP %d %v %s", method, path, res.Status, err, res.Body)
+		t.Errorf("cleanup: %s %s: HTTP %d %v %s", method, path, res.Status, err, res.Body)
 	}
 }
 
 // ID decodes the id of a created resource.
 // OperatorRoot adds root to alice's organization's operator roots unless it is there, with a fresh step-up: below it
 // the system tests manage files without a step-up (ADR 0034 amendment 2026-10-16).
-func (s *Stack) OperatorRoot(root string) {
-	s.t.Helper()
+func (s *Stack) OperatorRoot(t *testing.T, root string) {
+	t.Helper()
 	var cur struct {
 		OperatorRoots []string `json:"operator_roots"`
 	}
-	if err := json.Unmarshal(s.Call(http.MethodGet, "/api/v1/settings/managed-files", nil, http.StatusOK).Body, &cur); err != nil {
-		s.t.Fatal(err)
+	if err := json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/settings/managed-files", nil, http.StatusOK).Body, &cur); err != nil {
+		t.Fatal(err)
 	}
 	if slices.Contains(cur.OperatorRoots, root) {
 		return
 	}
-	s.StepUp()
-	s.Call(http.MethodPut, "/api/v1/settings/managed-files", map[string]any{"operator_roots": append(cur.OperatorRoots, root)}, http.StatusOK)
+	s.StepUp(t)
+	s.Call(t, http.MethodPut, "/api/v1/settings/managed-files", map[string]any{"operator_roots": append(cur.OperatorRoots, root)}, http.StatusOK)
 }
 
-func (s *Stack) ID(res portal.Response) string {
-	s.t.Helper()
+func (s *Stack) ID(t *testing.T, res portal.Response) string {
+	t.Helper()
 	var v struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(res.Body, &v); err != nil || v.ID == "" {
-		s.t.Fatalf("no id in %s", res.Body)
+		t.Fatalf("no id in %s", res.Body)
 	}
 	return v.ID
 }
 
 // Events returns the audit events of code whose target is the device, oldest first.
-func (s *Stack) Events(code, deviceID string) []portal.AuditEvent {
-	s.t.Helper()
+func (s *Stack) Events(t *testing.T, code, deviceID string) []portal.AuditEvent {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	all, err := s.alice.AuditEvents(ctx, code)
+	all, err := s.session().AuditEvents(ctx, code)
 	if err != nil {
-		s.t.Fatal(err)
+		t.Fatal(err)
 	}
 	var out []portal.AuditEvent
 	for i := len(all) - 1; i >= 0; i-- {
@@ -188,8 +201,8 @@ func Until(t *testing.T, what string, timeout, interval time.Duration, tick func
 
 // Make runs a make target in the repository root. A restart of the stack (down, up) keeps the backup overlay of a
 // stack that runs with it (PDK-018).
-func (s *Stack) Make(args ...string) {
-	s.t.Helper()
+func (s *Stack) Make(t *testing.T, args ...string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	if slices.Contains(args, "down") || slices.Contains(args, "up") {
@@ -198,7 +211,7 @@ func (s *Stack) Make(args ...string) {
 	cmd := exec.CommandContext(ctx, "make", args...)
 	cmd.Dir = s.root
 	if out, err := cmd.CombinedOutput(); err != nil {
-		s.t.Fatalf("make %s: %v\n%s", strings.Join(args, " "), err, tail(out))
+		t.Fatalf("make %s: %v\n%s", strings.Join(args, " "), err, tail(out))
 	}
 }
 
@@ -236,9 +249,9 @@ func tail(b []byte) string {
 // Release builds paddockd version with the paddock_dev tag (plus extra tags), uploads it signed with the
 // development release key and starts a rollout to all devices with the given extra agentrelease flags; running
 // rollouts are halted first.
-func (s *Stack) Release(version string, tags []string, flags ...string) string {
-	s.t.Helper()
-	bin := s.BuildAgent(version, tags)
+func (s *Stack) Release(t *testing.T, version string, tags []string, flags ...string) string {
+	t.Helper()
+	bin := s.BuildAgent(t, version, tags)
 	args := append([]string{"--version", version, "--artifact", "amd64=" + bin, "--rollout", "--halt-running",
 		"--waves", "100", "--min-wave-minutes", "1"}, flags...)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -246,22 +259,22 @@ func (s *Stack) Release(version string, tags []string, flags ...string) string {
 	cmd := exec.CommandContext(ctx, agentRelease(s.root), args...)
 	cmd.Dir = s.root
 	if out, err := cmd.CombinedOutput(); err != nil {
-		s.t.Fatalf("agentrelease %s: %v\n%s", version, err, out)
+		t.Fatalf("agentrelease %s: %v\n%s", version, err, out)
 	}
 	return bin
 }
 
 // BuildAgent builds a static linux/amd64 paddockd with the paddock_dev tag and returns its path.
-func (s *Stack) BuildAgent(version string, tags []string) string {
-	s.t.Helper()
-	bin := filepath.Join(s.t.TempDir(), "paddockd-"+version)
+func (s *Stack) BuildAgent(t *testing.T, version string, tags []string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "paddockd-"+version)
 	cmd := exec.Command("go", "build", "-trimpath", "-tags", strings.Join(append([]string{"paddock_dev"}, tags...), ","),
 		"-ldflags", "-s -w -X github.com/phischl/paddock-mdm/agent/internal/buildinfo.Version="+version,
 		"-o", bin, "./agent/cmd/paddockd")
 	cmd.Dir = s.root
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		s.t.Fatalf("build paddockd %s: %v\n%s", version, err, out)
+		t.Fatalf("build paddockd %s: %v\n%s", version, err, out)
 	}
 	return bin
 }
@@ -274,17 +287,17 @@ func agentRelease(root string) string {
 }
 
 // Rollout reads the rollout of version as the platform administrator.
-func (s *Stack) Rollout(version string) (status string) {
-	s.t.Helper()
+func (s *Stack) Rollout(t *testing.T, version string) (status string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	root, err := portal.Login(ctx, portal.PlatformAdmin)
 	if err != nil {
-		s.t.Fatal(err)
+		t.Fatal(err)
 	}
 	res, err := root.Do(ctx, http.MethodGet, "/api/platform/v1/agent-releases/"+version, nil)
 	if err != nil || res.Status != http.StatusOK {
-		s.t.Fatalf("release %s: %v %s", version, err, res.Body)
+		t.Fatalf("release %s: %v %s", version, err, res.Body)
 	}
 	var d struct {
 		Rollout *struct {
@@ -313,8 +326,8 @@ func version(minor int, label string) string {
 func (s *Stack) InstallRelease(t *testing.T) string {
 	t.Helper()
 	v := version(9, "ai")
-	s.Make("deb", "VERSION="+v, "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget")
-	t.Cleanup(func() { s.Make("deb", "VERSION=0.1.0", "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget") })
+	s.Make(t, "deb", "VERSION="+v, "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget")
+	t.Cleanup(func() { s.Make(t, "deb", "VERSION=0.1.0", "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget") })
 	debs, err := filepath.Glob(filepath.Join(s.root, "bin", "deb", "*.deb"))
 	if err != nil || len(debs) != 3 {
 		t.Fatalf("packages %v: %v", debs, err)

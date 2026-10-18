@@ -77,7 +77,7 @@ func requireBreakGlass(t *testing.T, s *Stack) {
 		Action     string   `json:"user_lock_session_action"`
 		Hello      bool     `json:"hello_enabled"`
 	}
-	if err := json.Unmarshal(s.Call(http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &set); err != nil {
+	if err := json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &set); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(set.BreakGlass, "paddock") || !slices.Contains(set.Allowlist, "90-paddock") || !slices.Contains(set.Allowlist, "README") ||
@@ -110,7 +110,7 @@ func (w *identityWorld) newDirectoryUser(t *testing.T, prefix, slug string) *dir
 	u := &directoryUser{name: prefix + "-" + w.deviceRun + "@" + slug + ".test", password: hex.EncodeToString(pw), pin: randomDigits(t, 8), totp: &portal.TOTP{}}
 	pk, err := w.ak.CreateUser(ctx, u.name, u.password, portal.RootGroup(slug))
 	if pk != 0 {
-		w.s.t.Cleanup(func() { _ = w.ak.DeleteUser(context.Background(), pk) })
+		t.Cleanup(func() { _ = w.ak.DeleteUser(context.Background(), pk) })
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func (w *identityWorld) newDirectoryUser(t *testing.T, prefix, slug string) *dir
 func (w *identityWorld) syncedID(t *testing.T, u *directoryUser) string {
 	t.Helper()
 	Until(t, "user "+u.name+" synced", 4*time.Minute, 5*time.Second, nil, func() bool {
-		res := w.s.Call(http.MethodGet, "/api/v1/users?"+url.Values{"q": {u.name}, "source": {"synced"}}.Encode(), nil, http.StatusOK)
+		res := w.s.Call(t, http.MethodGet, "/api/v1/users?"+url.Values{"q": {u.name}, "source": {"synced"}}.Encode(), nil, http.StatusOK)
 		var page struct {
 			Items []struct {
 				ID       string `json:"id"`
@@ -159,20 +159,20 @@ func newIdentityWorld(t *testing.T, s *Stack, d *Device) *identityWorld {
 
 	// Profiles scoped to this run's device group, so no other device and no other test sees them.
 	w.restrictedCommands = []string{"/usr/bin/journalctl -u systest.service", "/usr/bin/systemctl restart systest.service"}
-	s.StepUp() // creating and assigning a full profile (ADR 0034 decision 1)
-	w.restrictedID = s.ID(s.Call(http.MethodPost, "/api/v1/permission-profiles", map[string]any{
+	s.StepUp(t) // creating and assigning a full profile (ADR 0034 decision 1)
+	w.restrictedID = s.ID(t, s.Call(t, http.MethodPost, "/api/v1/permission-profiles", map[string]any{
 		"name": "systest restricted " + d.run, "class": "restricted", "commands": w.restrictedCommands,
 	}, http.StatusCreated))
-	s.DeleteOnCleanup("/api/v1/permission-profiles/" + w.restrictedID)
-	w.fullID = s.ID(s.Call(http.MethodPost, "/api/v1/permission-profiles", map[string]any{
+	s.DeleteOnCleanup(t, "/api/v1/permission-profiles/"+w.restrictedID)
+	w.fullID = s.ID(t, s.Call(t, http.MethodPost, "/api/v1/permission-profiles", map[string]any{
 		"name": "systest full " + d.run, "class": "full",
 	}, http.StatusCreated))
-	s.DeleteOnCleanup("/api/v1/permission-profiles/" + w.fullID)
+	s.DeleteOnCleanup(t, "/api/v1/permission-profiles/"+w.fullID)
 	for _, a := range []struct{ profile, user string }{{w.restrictedID, w.dave.id}, {w.fullID, w.fred.id}} {
-		id := s.ID(s.Call(http.MethodPost, "/api/v1/profile-assignments", map[string]any{
+		id := s.ID(t, s.Call(t, http.MethodPost, "/api/v1/profile-assignments", map[string]any{
 			"profile_id": a.profile, "subject_type": "user", "subject_id": a.user, "device_group_id": d.Group,
 		}, http.StatusCreated))
-		s.DeleteOnCleanup("/api/v1/profile-assignments/" + id)
+		s.DeleteOnCleanup(t, "/api/v1/profile-assignments/"+id)
 	}
 
 	// The agent installs Himmelblau from its bundle and configures the device's allow list.
@@ -434,7 +434,7 @@ func gateP3(t *testing.T, w *identityWorld) {
 	t.Log(w.Must("sudo -l -U " + w.dave.name))
 
 	changed := append(slices.Clone(w.restrictedCommands), "/usr/bin/uptime")
-	w.s.Call(http.MethodPatch, "/api/v1/permission-profiles/"+w.restrictedID, map[string]any{"commands": changed}, http.StatusOK)
+	w.s.Call(t, http.MethodPatch, "/api/v1/permission-profiles/"+w.restrictedID, map[string]any{"commands": changed}, http.StatusOK)
 	start := time.Now()
 	Until(t, "profile change on the device", nextCheckinBound, 5*time.Second, nil, func() bool {
 		return slices.Equal(w.sudoList(w.dave.name), changed)
@@ -533,7 +533,7 @@ func gateL2(t *testing.T, w *identityWorld) {
 			t.Fatalf("session %s of %s is locked before the lock in Paddock", s.ID, w.dave.name)
 		}
 	}
-	w.s.Call(http.MethodPost, "/api/v1/users/"+w.dave.id+"/lock", nil, http.StatusOK)
+	w.s.Call(t, http.MethodPost, "/api/v1/users/"+w.dave.id+"/lock", nil, http.StatusOK)
 	lockedAt := time.Now()
 	if exit := w.pamLogin(t, w.dave, true, 3*time.Minute); exit == 0 {
 		t.Errorf("online login of the locked user %s succeeded", w.dave.name)
@@ -596,7 +596,7 @@ echo "rc=$?"
 	// Unlock in Paddock: the device drops the deny entry, and the user signs in with the device code and a new PIN.
 	// The unlock is guaranteed at the next check-in only (architecture F2), not at the one the link toggle triggers:
 	// that one may come before the unlocked bundle or not at all for a short blip (PDK-019).
-	w.s.Call(http.MethodPost, "/api/v1/users/"+w.dave.id+"/unlock", nil, http.StatusOK)
+	w.s.Call(t, http.MethodPost, "/api/v1/users/"+w.dave.id+"/unlock", nil, http.StatusOK)
 	unlockedAt := time.Now()
 	w.toggleLink(t)
 	Until(t, "deny list without "+w.dave.name, nextCheckinBound, 5*time.Second, nil, func() bool {
@@ -613,7 +613,7 @@ echo "rc=$?"
 	// (device_user_seen, M3a decision 10).
 	w.assignLogins(t, w.fred, w.nina)
 	relocked := time.Now().Add(-10 * time.Second)
-	w.s.Call(http.MethodPost, "/api/v1/users/"+w.dave.id+"/lock", nil, http.StatusOK)
+	w.s.Call(t, http.MethodPost, "/api/v1/users/"+w.dave.id+"/lock", nil, http.StatusOK)
 	w.toggleLink(t)
 	w.WaitEvent(t, "device.user_lock_applied", 3*time.Minute, func(p map[string]any) bool {
 		at, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(p["occurred_at"]))
@@ -622,7 +622,7 @@ echo "rc=$?"
 	if !strings.Contains(w.Must("cat /etc/paddock/login-deny"), w.dave.name) {
 		t.Errorf("deny list lacks %s, who is seen on the device but no longer assigned", w.dave.name)
 	}
-	w.s.Call(http.MethodPost, "/api/v1/users/"+w.dave.id+"/unlock", nil, http.StatusOK)
+	w.s.Call(t, http.MethodPost, "/api/v1/users/"+w.dave.id+"/unlock", nil, http.StatusOK)
 	w.assignLogins(t, w.dave, w.fred, w.nina)
 	w.toggleLink(t)
 	Until(t, "deny list without "+w.dave.name+" again", 3*time.Minute, 5*time.Second, nil, func() bool {
@@ -638,7 +638,7 @@ func (w *identityWorld) assignLogins(t *testing.T, users ...*directoryUser) {
 	for _, u := range users {
 		ids = append(ids, u.id)
 	}
-	w.s.Call(http.MethodPut, "/api/v1/devices/"+w.ID+"/login-assignment", map[string]any{"users": ids, "groups": []string{}}, http.StatusOK)
+	w.s.Call(t, http.MethodPut, "/api/v1/devices/"+w.ID+"/login-assignment", map[string]any{"users": ids, "groups": []string{}}, http.StatusOK)
 }
 
 // gateL3: suspending logins ends the directory sessions within one check-in and refuses directory logins; the
@@ -647,7 +647,7 @@ func gateL3(t *testing.T, w *identityWorld) {
 	if len(w.UserSessions(w.dave.name)) == 0 {
 		t.Fatalf("%s has no session to end", w.dave.name)
 	}
-	w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/suspend-logins", nil, http.StatusOK)
+	w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/suspend-logins", nil, http.StatusOK)
 	w.toggleLink(t)
 	ended := w.WaitEvent(t, "device.logins_suspension_applied", 3*time.Minute, nil)
 	t.Logf("logins.suspension_applied %v", ended)
@@ -688,7 +688,7 @@ func gateL3(t *testing.T, w *identityWorld) {
 		t.Errorf("break-glass SSH: %q", out)
 	}
 
-	w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/resume-logins", nil, http.StatusOK)
+	w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/resume-logins", nil, http.StatusOK)
 	w.toggleLink(t)
 	Until(t, "allow list restored", 3*time.Minute, 5*time.Second, nil, func() bool {
 		out, _ := w.SSH(context.Background(), nil, "grep '^pam_allow_groups' /etc/himmelblau/himmelblau.conf")
@@ -704,8 +704,8 @@ func gateL3(t *testing.T, w *identityWorld) {
 // when nobody is locked and the file is empty (then PAM logs no open errors); with the Himmelblau daemons stopped the
 // local accounts still log in.
 func gateL4(t *testing.T, w *identityWorld) {
-	w.s.Call(http.MethodPost, "/api/v1/users/"+w.nina.id+"/lock", nil, http.StatusOK)
-	t.Cleanup(func() { w.s.cleanupCall(http.MethodPost, "/api/v1/users/"+w.nina.id+"/unlock", http.StatusOK) })
+	w.s.Call(t, http.MethodPost, "/api/v1/users/"+w.nina.id+"/lock", nil, http.StatusOK)
+	t.Cleanup(func() { w.s.cleanupCall(t, http.MethodPost, "/api/v1/users/"+w.nina.id+"/unlock", http.StatusOK) })
 	w.toggleLink(t)
 	Until(t, "deny list with "+w.nina.name, 3*time.Minute, 5*time.Second, nil, func() bool {
 		out, _ := w.SSH(context.Background(), nil, "cat /etc/paddock/login-deny 2>/dev/null || true")
@@ -732,7 +732,7 @@ func gateL4(t *testing.T, w *identityWorld) {
 
 	// Nobody locked (plan M3.1 decision 3, AC3): the deny file exists and is empty, is restored empty, and PAM logs
 	// no open errors.
-	w.s.Call(http.MethodPost, "/api/v1/users/"+w.nina.id+"/unlock", nil, http.StatusOK)
+	w.s.Call(t, http.MethodPost, "/api/v1/users/"+w.nina.id+"/unlock", nil, http.StatusOK)
 	w.toggleLink(t)
 	emptyDeny := func() bool {
 		out, _ := w.SSH(context.Background(), nil, "test -f /etc/paddock/login-deny && ! test -s /etc/paddock/login-deny && echo empty")

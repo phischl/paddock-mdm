@@ -25,7 +25,7 @@ import (
 func TestInventoryGates(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Gate(t, "inventory")
-		fleetd := vm.Together(t, "inventory", "fleetd release", func() string { return s.PublishFleetd() })
+		fleetd := vm.Together(t, "inventory", "fleetd release", func() string { return s.PublishFleetd(t) })
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
 		if !t.Run("F1 fleetd enrolled", func(t *testing.T) { d.Bind(t); gateF1(t, d, fleetd) }) {
@@ -38,20 +38,20 @@ func TestInventoryGates(t *testing.T) {
 
 // PublishFleetd publishes bin/fleetd/fleet-osquery_<version>_amd64.deb in a new release without rollout, which no
 // device updates to, and returns the fleetd version.
-func (s *Stack) PublishFleetd() string {
-	s.t.Helper()
+func (s *Stack) PublishFleetd(t *testing.T) string {
+	t.Helper()
 	debs, err := filepath.Glob(filepath.Join(s.root, "bin", "fleetd", "fleet-osquery_*_amd64.deb"))
 	if err != nil || len(debs) != 1 {
-		s.t.Fatalf("want one fleetd package in bin/fleetd (make fleetd-deb), got %v", debs)
+		t.Fatalf("want one fleetd package in bin/fleetd (make fleetd-deb), got %v", debs)
 	}
 	v := version(8, "fleetd")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, agentRelease(s.root), "--version", v, "--artifact", "amd64="+s.BuildAgent(v, nil),
+	cmd := exec.CommandContext(ctx, agentRelease(s.root), "--version", v, "--artifact", "amd64="+s.BuildAgent(t, v, nil),
 		"--deb", debs[0], "--publish")
 	cmd.Dir = s.root
 	if out, err := cmd.CombinedOutput(); err != nil {
-		s.t.Fatalf("agentrelease %s: %v\n%s", v, err, out)
+		t.Fatalf("agentrelease %s: %v\n%s", v, err, out)
 	}
 	return strings.TrimSuffix(strings.TrimPrefix(filepath.Base(debs[0]), "fleet-osquery_"), "_amd64.deb")
 }
@@ -109,7 +109,7 @@ func retireTwins(t *testing.T, d *Device, hardwareUUID string) {
 		t.Fatal(err)
 	}
 	for _, id := range strings.Fields(out) {
-		d.s.Call(http.MethodPost, "/api/v1/devices/"+id+"/retire", nil, http.StatusOK)
+		d.s.Call(t, http.MethodPost, "/api/v1/devices/"+id+"/retire", nil, http.StatusOK)
 	}
 }
 
@@ -144,7 +144,7 @@ func gateF4(t *testing.T, d *Device) {
 	}
 	list := func(path string) page {
 		var p page
-		if err := json.Unmarshal(d.s.Call(http.MethodGet, path, nil, http.StatusOK).Body, &p); err != nil {
+		if err := json.Unmarshal(d.s.Call(t, http.MethodGet, path, nil, http.StatusOK).Body, &p); err != nil {
 			t.Fatal(err)
 		}
 		return p

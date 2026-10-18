@@ -28,13 +28,13 @@ func TestNoticeGate(t *testing.T) {
 func setNotice(t *testing.T, s *Stack, text string) string {
 	t.Helper()
 	var settings map[string]any
-	if err := json.Unmarshal(s.Call(http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &settings); err != nil {
+	if err := json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &settings); err != nil {
 		t.Fatal(err)
 	}
 	old, _ := settings["notice_text"].(string)
 	delete(settings, "updated_at")
 	settings["notice_text"] = text
-	s.Call(http.MethodPut, "/api/v1/settings/login", settings, http.StatusOK)
+	s.Call(t, http.MethodPut, "/api/v1/settings/login", settings, http.StatusOK)
 	return old
 }
 

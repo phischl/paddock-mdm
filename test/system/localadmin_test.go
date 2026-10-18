@@ -35,7 +35,7 @@ type localAdminState struct {
 func (w *laWorld) state() localAdminState {
 	w.t.Helper()
 	var s localAdminState
-	if err := json.Unmarshal(w.s.Call(http.MethodGet, "/api/v1/devices/"+w.ID+"/local-admin", nil, http.StatusOK).Body, &s); err != nil {
+	if err := json.Unmarshal(w.s.Call(w.t, http.MethodGet, "/api/v1/devices/"+w.ID+"/local-admin", nil, http.StatusOK).Body, &s); err != nil {
 		w.t.Fatal(err)
 	}
 	return s
@@ -66,9 +66,9 @@ type revealed struct {
 // reveal reveals the passwords after a step-up of alice and checks that the reveal is exactly one audit event.
 func (w *laWorld) reveal(t *testing.T) []revealed {
 	t.Helper()
-	w.s.StepUp()
+	w.s.StepUp(t)
 	hostname := w.Must("hostname")
-	res := w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/reveal", map[string]any{"confirm_hostname": hostname}, http.StatusOK)
+	res := w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/reveal", map[string]any{"confirm_hostname": hostname}, http.StatusOK)
 	var out struct {
 		Passwords []revealed `json:"passwords"`
 	}
@@ -77,7 +77,7 @@ func (w *laWorld) reveal(t *testing.T) []revealed {
 	}
 	w.reveals++
 	Until(t, "one audit event per reveal", time.Minute, 2*time.Second, nil, func() bool {
-		return len(w.s.Events("local_admin.revealed", w.ID)) == w.reveals
+		return len(w.s.Events(t, "local_admin.revealed", w.ID)) == w.reveals
 	})
 	return out.Passwords
 }
@@ -174,7 +174,7 @@ func gateLA1(t *testing.T, w *laWorld) {
 	}
 
 	// Rotate now.
-	w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/rotate", nil, http.StatusAccepted)
+	w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/rotate", nil, http.StatusAccepted)
 	w.waitActive(t, 2, 5*time.Minute)
 	pw2 := active(t, w.reveal(t))
 	if pw2.Generation != 2 || pw2.Password == pw1.Password || !w.login(t, pw2.Password) || w.login(t, pw1.Password) {
@@ -185,7 +185,7 @@ func gateLA1(t *testing.T, w *laWorld) {
 	// in parallel request their rotations together and share the stopped worker.
 	w.Together(t, "LA1", "rotate", func() string { return "" })
 	since := w.Must("date -u +'%Y-%m-%d %H:%M:%S'")
-	w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/rotate", nil, http.StatusAccepted)
+	w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/rotate", nil, http.StatusAccepted)
 	time.Sleep(5 * time.Second)
 	w.Together(t, "LA1", "stop worker", func() string {
 		if out, err := compose(t, "stop", "paddock-worker"); err != nil {
@@ -222,14 +222,14 @@ func gateLA1(t *testing.T, w *laWorld) {
 		}
 		return ""
 	})
-	w.s.Login() // the worker restart does not end the session, but the step-up is older than 5 minutes anyway
+	w.s.Login(t) // the worker restart does not end the session, but the step-up is older than 5 minutes anyway
 	w.WaitEvent(t, "local_admin.rotation_failed", 5*time.Minute, func(p map[string]any) bool { return p["reason"] == "escrow_timeout" })
 	if p := active(t, w.reveal(t)); p.Generation != 2 || p.Password != pw2.Password {
 		t.Fatalf("after the failure the active generation is %d", p.Generation)
 	}
 
 	// The next rotation succeeds with a new generation; the never applied one is superseded.
-	w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/rotate", nil, http.StatusAccepted)
+	w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/local-admin/rotate", nil, http.StatusAccepted)
 	w.waitActive(t, 4, 5*time.Minute)
 	ps := w.reveal(t)
 	pw4 := active(t, ps)

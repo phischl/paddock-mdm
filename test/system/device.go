@@ -58,31 +58,31 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 	vm.Must("sudo dpkg -i " + strings.Join(remote, " ") + " && systemctl is-enabled paddock-supervisor && readlink /opt/paddock/agent/current")
 
 	// Configuration of this device, before enrollment.
-	d.Group = s.ID(s.Call(http.MethodPost, "/api/v1/device-groups", map[string]string{"name": "systest " + vm.Name + " " + d.run}, http.StatusCreated))
-	s.DeleteOnCleanup("/api/v1/device-groups/" + d.Group)
-	s.OperatorRoot("/etc/paddock-systest/")
+	d.Group = s.ID(t, s.Call(t, http.MethodPost, "/api/v1/device-groups", map[string]string{"name": "systest " + vm.Name + " " + d.run}, http.StatusCreated))
+	s.DeleteOnCleanup(t, "/api/v1/device-groups/"+d.Group)
+	s.OperatorRoot(t, "/etc/paddock-systest/")
 	for _, name := range []string{"a", "b"} {
-		res := s.Call(http.MethodPost, "/api/v1/managed-files", map[string]any{
+		res := s.Call(t, http.MethodPost, "/api/v1/managed-files", map[string]any{
 			"path": d.managedPath(name), "content": "managed " + name + " " + d.run + "\n", "mode": "0640", "owner": "root",
 			"group": "adm", "device_group_id": d.Group,
 		}, http.StatusCreated)
-		d.Files[d.managedPath(name)] = s.ID(res)
-		s.DeleteOnCleanup("/api/v1/managed-files/" + d.Files[d.managedPath(name)])
+		d.Files[d.managedPath(name)] = s.ID(t, res)
+		s.DeleteOnCleanup(t, "/api/v1/managed-files/"+d.Files[d.managedPath(name)])
 	}
-	s.StepUp() // a unit file is on a sensitive path (ADR 0034 decision 2)
+	s.StepUp(t) // a unit file is on a sensitive path (ADR 0034 decision 2)
 	unitFile := "/etc/systemd/system/" + d.Unit
-	res := s.Call(http.MethodPost, "/api/v1/managed-files", map[string]any{
+	res := s.Call(t, http.MethodPost, "/api/v1/managed-files", map[string]any{
 		"path": unitFile, "mode": "0644", "device_group_id": d.Group,
 		"content": "[Unit]\nDescription=Paddock system test unit\n\n[Service]\nExecStart=/bin/sleep infinity\n\n[Install]\nWantedBy=multi-user.target\n",
 	}, http.StatusCreated)
-	d.Files[unitFile] = s.ID(res)
-	s.DeleteOnCleanup("/api/v1/managed-files/" + d.Files[unitFile])
-	res = s.Call(http.MethodPost, "/api/v1/managed-units", map[string]any{"unit": d.Unit, "enabled": true, "active": true, "device_group_id": d.Group}, http.StatusCreated)
-	s.DeleteOnCleanup("/api/v1/managed-units/" + s.ID(res))
+	d.Files[unitFile] = s.ID(t, res)
+	s.DeleteOnCleanup(t, "/api/v1/managed-files/"+d.Files[unitFile])
+	res = s.Call(t, http.MethodPost, "/api/v1/managed-units", map[string]any{"unit": d.Unit, "enabled": true, "active": true, "device_group_id": d.Group}, http.StatusCreated)
+	s.DeleteOnCleanup(t, "/api/v1/managed-units/"+s.ID(t, res))
 
 	// The token names no group: a group that an enrollment token names cannot be deleted. The device joins the
 	// group after enrollment, so its first bundle may lack this configuration (see Bundle).
-	tok := s.Call(http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{
+	tok := s.Call(t, http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{
 		"name": "systest " + vm.Name + " " + d.run, "max_uses": 1, "auto_approve": true,
 		"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 	}, http.StatusCreated)
@@ -95,7 +95,7 @@ func Install(t *testing.T, s *Stack, vm *VM, debDir string) *Device {
 	if err := json.Unmarshal(tok.Body, &created); err != nil || created.Token.ID == "" {
 		t.Fatalf("enrollment token %s: %v", tok.Body, err)
 	}
-	s.RevokeOnCleanup(created.Token.ID)
+	s.RevokeOnCleanup(t, created.Token.ID)
 	vm.MustIn(created.EnrollmentConfig, "umask 077 && cat > /tmp/enroll.json")
 	vm.Must("sudo paddockd enroll --config /tmp/enroll.json --remove-config && test ! -e /tmp/enroll.json")
 	d.ID = d.State()["device_id"].(string)
@@ -114,7 +114,7 @@ func (d *Device) joinGroup() {
 		enrolled = d.bundleVersion()
 		return enrolled > 0
 	})
-	d.s.Call(http.MethodPut, "/api/v1/devices/"+d.ID+"/groups", map[string]any{"device_group_ids": []string{d.Group}}, http.StatusOK)
+	d.s.Call(d.t, http.MethodPut, "/api/v1/devices/"+d.ID+"/groups", map[string]any{"device_group_ids": []string{d.Group}}, http.StatusOK)
 	Until(d.t, "bundle compiled with the device group", time.Minute, 2*time.Second, nil, func() bool {
 		d.Bundle = d.bundleVersion()
 		return d.Bundle > enrolled
@@ -127,7 +127,7 @@ func (d *Device) bundleVersion() float64 {
 	var dev struct {
 		BundleVersion float64 `json:"bundle_version"`
 	}
-	if err := json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev); err != nil {
+	if err := json.Unmarshal(d.s.Call(d.t, http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev); err != nil {
 		d.t.Fatal(err)
 	}
 	return dev.BundleVersion
@@ -171,7 +171,7 @@ func (d *Device) WaitEvent(t *testing.T, code string, timeout time.Duration, mat
 			last = time.Now()
 		}
 	}, func() bool {
-		for _, e := range d.s.Events(code, d.ID) {
+		for _, e := range d.s.Events(d.t, code, d.ID) {
 			if match == nil || match(e.Params) {
 				found = e.Params
 				return true
