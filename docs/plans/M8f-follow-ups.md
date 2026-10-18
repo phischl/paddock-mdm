@@ -324,6 +324,13 @@ password alone enrolled a key that passes every step-up. `paddock-portal.yaml` n
   stages and the two policies on the order-31 binding. The flows themselves are checked on the lab
   (`docs/operations/step-up.md` *Checking the portal sign-in factor*), because the development stack skips them.
 
+**Note 2026-10-18 (Review 3, B3): recovery codes count as a second factor; decided by the maintainer 2026-10-18
+(option a).** Authentik checks a code against every device of the user, recovery codes included
+(`stages/authenticator_validate/challenge.py:144-157`, `stage.py:80-85`). Stage A therefore accepts one recovery code
+of a TOTP-only administrator in place of the TOTP code, and stage B then enrols WebAuthn: "proves TOTP" above means
+"proves TOTP or enters one of the account's recovery codes". No deny stage is added; RR-62 names the risk and the
+measures (recovery codes of administrators in custody, regenerated after a suspected disclosure).
+
 **Implementer note 2026-10-18 (fix rounds 1 and 2, PDK-324), approved by the orchestrator acting as architect on
 2026-10-18 for the B2 decision: the default-flow stage of M8x.** `paddock-default-login-mfa` at order 31 of
 `default-authentication-flow` asked every user with an authenticator a second time: Authentik's own stage
@@ -350,6 +357,12 @@ binding is identified by the policy. Mode *all* keeps the development skip effec
 `TestPortalBlueprintBindsMFAOnTheDefaultFlow` (attributes, the factor-based expression, no ownership check,
 `failure_result`) and acceptance `TestLoginMFAPath` (mode *all*, both policies on order 31); lab case 5 in
 `docs/operations/step-up.md`.
+
+**Note 2026-10-18 (Review 3, B3): recovery codes count as a second factor; decided by the maintainer 2026-10-18
+(option a).** Order 31 also accepts a recovery code, because Authentik counts it as the TOTP factor
+(`challenge.py:144-157`). A sign-in that used a recovery code at order 30 finishes after a second factor of the user's
+own devices, recovery codes included, not necessarily after a WebAuthn or TOTP validation; the consequence above that
+"no session from a weaker factor can enrol a passkey" holds only for e-mail, SMS and Duo. RR-62 names the risk.
 
 ### 3.4 End all sessions ends the administrators' Authentik sessions too (PDK-190) — ADR 0034 amendment 2026-10-18, ADR 0007 amendment
 

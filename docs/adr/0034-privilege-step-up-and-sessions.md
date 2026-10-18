@@ -214,6 +214,11 @@ Decisions:
    no authenticator still follows the password alone (RR-62). The default-flow stage (every Authentik user) and the
    device-login stages keep both classes. The pre-upgrade enrolment note of decision 6 is superseded by the enrolment
    at sign-in.
+   *Note 2026-10-18 (M8f Review 3, B3): recovery codes count as a second factor; decided by the maintainer
+   2026-10-18 (option a).* Authentik accepts one of the account's recovery codes wherever it asks for a TOTP code, so
+   "proves TOTP" in this decision includes entering a recovery code: the password and one recovery code of a TOTP-only
+   administrator enrol WebAuthn in stage B. No deny stage enforces the factor class; RR-62 names the risk and the
+   custody of administrators' recovery codes.
 4. **End all sessions** (decision 4) also deletes the identity provider's authenticated sessions of every portal user
    (platform administrators and the three role groups of every organization) through Authentik's
    `core/authenticated_sessions/bulk_delete`, inside the same audited action, run as its external part
