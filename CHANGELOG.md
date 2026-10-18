@@ -19,30 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Automatic unseal of OpenBao, API and host commands (ADR 0035): a platform administrator with a step-up records the
-  typed acknowledgement of a versioned disclaimer with `POST /api/platform/v1/openbao/auto-unseal/enable` and
-  disables it again with `…/disable`; `GET /api/platform/v1/openbao/auto-unseal` shows the setting, the unsealer's
-  report and OpenBao's seal status. `paddock-server admin auto-unseal show|verify|disable` reads, checks and disables
-  the setting on the host. The worker records every automatic unseal and every failed attempt as
-  `platform.openbao_auto_unsealed` and exports `paddock_auto_unseal_enabled`, `paddock_auto_unseal_shares_present`
-  and `paddock_auto_unseal_unsealer_up`; new audit codes `platform.auto_unseal_enabled` and
-  `platform.auto_unseal_disabled`.
-- Portal page *Platform* → *OpenBao*: shows the seal status, the automatic-unseal setting with who acknowledged which
-  disclaimer version, the unsealer on the host and its last unseal or failure. Enabling shows the disclaimer with its
-  four risks and needs the typed sentence "I understand and accept the risk" (German: "Ich verstehe und akzeptiere das
-  Risiko") and a step-up; disabling asks for confirmation and a step-up.
-- `./paddock auto-unseal status|enable|disable` on a control-plane or lab host: `enable` refuses without the portal
-  acknowledgement, asks for three unseal shares without echo, stores them in `.secrets/openbao/auto-unseal-shares`,
-  sets `PADDOCK_AUTO_UNSEAL=yes` in `.env` and starts the new `paddock-unsealer` service (overlay
-  `compose.auto-unseal.yaml`, its own PostgreSQL role `paddock_unsealer`, no AppRole); `disable` stops it, deletes the
-  shares and sets `PADDOCK_AUTO_UNSEAL=no`. `./paddock secrets` now also creates `db_paddock_unsealer_password` and
-  `db_paddock_unsealer_url`.
-- `./paddock check` gains the item `openbao auto-unseal` and the status `WARN`: it fails when the unsealer and
-  `PADDOCK_AUTO_UNSEAL` disagree, on the audit host, when another service mounts the shares or the unsealer holds an
-  AppRole or another database URL; it warns on every run on a production control plane with automatic unseal
-  (residual risk RR-43) and passes on a lab host. A warning does not change the exit code.
-- Alerts `PaddockAutoUnsealWithdrawn` (automatic unseal disabled in the portal, but the shares still on the host for
-  an hour) and `PaddockAutoUnsealerDown` (automatic unseal enabled, but the unsealer has not reported for 10 minutes).
+- Optional automatic unseal of OpenBao (ADR 0035). A platform administrator opens the new portal page *Platform* →
+  *OpenBao*, reads a versioned disclaimer of the risks and confirms, with a step-up, by typing "I understand and accept
+  the risk" (German: "Ich verstehe und akzeptiere das Risiko"); the page also shows the seal status, who acknowledged
+  which disclaimer version, the unsealer on the host and the last automatic unseal. The host operator then runs
+  `./paddock auto-unseal enable` with three custodians, who type their unseal shares without echo; the command refuses
+  without the portal acknowledgement, stores the shares in `.secrets/openbao/auto-unseal-shares`, sets
+  `PADDOCK_AUTO_UNSEAL=yes` and starts the new `paddock-unsealer` service (its own PostgreSQL role, no AppRole), which
+  unseals OpenBao after every restart while the setting is on. Disabling in the portal stops it at once;
+  `./paddock auto-unseal disable` removes the unsealer and the shares; `./paddock auto-unseal status` reports the state.
+  Every step is audited (`platform.auto_unseal_enabled`, `platform.auto_unseal_disabled`,
+  `platform.openbao_auto_unsealed`); `paddock-server admin auto-unseal show|verify|disable` serves the host. The
+  shares on the host are residual risk RR-43: `./paddock check` gains the item `openbao auto-unseal` and the status
+  `WARN`, warns on every run on a production control plane and passes on a lab host. Alerts
+  `PaddockAutoUnsealWithdrawn` (shares left on the host after disabling) and `PaddockAutoUnsealerDown` (the unsealer
+  does not report). Lab hosts that unseal with a cron job move to it as `docs/operations/lab-install.md` section 11
+  describes. `./paddock secrets` now also creates the unsealer's database secrets.
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.

@@ -125,3 +125,107 @@ keys or secret IDs) take a snapshot at once, so that a restore never brings back
 ```sh
 docker compose … run --rm --no-deps paddock-worker backup openbao
 ```
+
+## 6. Automatic unseal
+
+Automatic unseal (ADR 0035) lets a service on the control-plane host, the **unsealer** (`paddock-unsealer`), unseal
+OpenBao after every restart instead of three custodians. It is an option: read the risk below before you enable it.
+
+**What it is.** The unsealer keeps three of the five unseal shares in `.secrets/openbao/auto-unseal-shares` (mode 0644
+inside the 0700 `.secrets/` directory, mounted as the Compose secret `openbao_auto_unseal_shares` into the unsealer
+only). Every 10 s it reads the platform setting from PostgreSQL with its own role `paddock_unsealer` and OpenBao's
+seal status; it submits the three shares only while OpenBao is initialized and sealed and the setting is *enabled*.
+After a failed attempt it resets the unseal progress and waits 60 s. OpenBao is unsealed within about 20 s of
+starting sealed.
+
+**What it is not.** The unsealer has no AppRole, no token and no key: it can unseal, nothing else. OpenBao's seal stays
+Shamir 3 of 5; snapshots, restore, rekey and the custodians' own shares are unchanged. Paddock never writes the shares
+into a backup.
+
+**The risk (RR-43, `docs/compliance/residual-risks.md`).** Whoever controls the host, a copy of its disk, a VM snapshot
+or a copy of `.secrets/` can unseal OpenBao and use every key in it. The custodian threshold no longer gates the
+unseal. Record the risk in your ISMS before you enable it; on a production host `./paddock check` warns on every run
+(`WARN  openbao auto-unseal`), on a lab host the item passes.
+
+### Enabling
+
+Two people act, in this order:
+
+1. **A platform administrator in the portal**: *Platform* → *OpenBao* → *Enable automatic unseal*. The dialog shows the
+   disclaimer (version `2026-10-17`); type the sentence it names (`I understand and accept the risk`, in German `Ich
+   verstehe und akzeptiere das Risiko`) and confirm the identity (step-up). The acknowledgement, with the name, the
+   time and the disclaimer version, is recorded as `platform.auto_unseal_enabled`. Nothing reaches the host yet; the
+   page says that the host step is still open.
+2. **The host operator, with three custodians present**, on the control-plane (or lab) host:
+
+   ```sh
+   ./paddock auto-unseal enable
+   ```
+
+   The command refuses on the audit host, while `PADDOCK_AUTO_UNSEAL=yes` or a shares file exists, and without the
+   portal acknowledgement (`automatic unseal is not enabled: a platform administrator enables it in the portal first
+   (Platform → OpenBao)`). It creates the PostgreSQL role, then asks three times
+   `Unseal share N of 3 (from a custodian, not echoed):`; each custodian types their decrypted share. Nothing is
+   echoed and no share is ever on a command line, in e-mail or in chat. Empty shares, shares with whitespace and two
+   equal shares are refused. It writes the file, sets `PADDOCK_AUTO_UNSEAL=yes` in `.env` (do not edit it by hand),
+   starts the unsealer and prints:
+
+   ```text
+   automatic unseal is enabled on this host. Verify it now: ./paddock compose restart openbao, then ./paddock bao status shows "Sealed false" within 30 s. Remove every other unseal automation (for example a cron job) and its copies of the shares.
+   ```
+
+   Run `./paddock up` once afterwards, so that Prometheus scrapes the unsealer (`prometheus/scrape/auto-unseal.yml`).
+
+### Verifying
+
+```sh
+./paddock compose restart openbao
+./paddock bao status        # "Sealed false" within 30 s
+./paddock auto-unseal status
+```
+
+`./paddock auto-unseal status` prints `PADDOCK_AUTO_UNSEAL`, `shares file: present|absent`, the state of
+`paddock-unsealer` and the `Sealed` line; it never prints a share. The portal page shows *Last automatic unseal* with
+the time and the count, and within 30 s the audit log shows `platform.openbao_auto_unsealed` (actor `paddock-unsealer`,
+recorded by the worker; a failed attempt is recorded with outcome failure and the reason `unreachable`,
+`invalid_share` or `still_sealed`). On the host, `paddock-server admin auto-unseal show` prints the setting and the
+report (`./paddock compose run --rm --no-deps paddock-worker admin auto-unseal show`).
+
+### Disabling
+
+1. **In the portal**: *Platform* → *OpenBao* → *Disable automatic unseal* (step-up). The unsealer stops unsealing at
+   once (`platform.auto_unseal_disabled`, method portal). If the portal is not usable, the host operator runs
+   `./paddock compose run --rm --no-deps paddock-worker admin auto-unseal disable` (method cli).
+2. **On the host**: `./paddock auto-unseal disable` stops and removes the unsealer, deletes the shares file (`shred -u`
+   where available) and sets `PADDOCK_AUTO_UNSEAL=no`. It prints:
+
+   ```text
+   the shares are deleted from this host. If the host, its disk or its backups may have been copied while automatic unseal was on, rotate the shares with three custodians (docs/operations/openbao.md section 6). If the portal still shows automatic unseal as enabled, a platform administrator disables it there.
+   ```
+
+`shred` does not guarantee erasure on SSDs or copy-on-write file systems. If the host, its disk, its snapshots or its
+backups may have been copied while automatic unseal was on, **rekey** with three custodians, which invalidates every
+copy of the shares file:
+
+```sh
+bao operator rekey -key-shares=5 -key-threshold=3   # three custodians each enter their current share
+# hand the five new shares to the custodians, then take a snapshot at once:
+./paddock compose run --rm --no-deps paddock-worker backup openbao
+```
+
+### Monitoring
+
+| Alert | Fires when | Action |
+| --- | --- | --- |
+| `PaddockAutoUnsealWithdrawn` (warning) | automatic unseal was disabled in the portal, but the unsealer reported shares on the host for 1 h | `./paddock auto-unseal disable` on the host |
+| `PaddockAutoUnsealerDown` (warning) | automatic unseal is enabled, but the unsealer has not reported for 10 min | check `./paddock auto-unseal status` and `./paddock logs paddock-unsealer`; OpenBao stays sealed after the next restart until the unsealer runs or three custodians unseal it |
+
+Metrics: the worker exports `paddock_auto_unseal_enabled`, `paddock_auto_unseal_shares_present` and
+`paddock_auto_unseal_unsealer_up`; the unsealer exports `paddock_unsealer_shares_present`,
+`paddock_unsealer_setting_enabled` and `paddock_unsealer_unseals_total{result}` (`docs/operations/monitoring.md`).
+
+### Restore
+
+During restore step 4 (`docs/operations/restore.md`) the temporary single-share OpenBao refuses the unsealer's
+shares: the unsealer records `invalid_share` failures and backs off. Once the restored node restarts with its own
+barrier, the unsealer unseals it automatically; no manual step is needed.

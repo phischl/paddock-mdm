@@ -1487,8 +1487,10 @@ flowchart TB
 ### 13.2 Operations
 
 - OpenBao runs with integrated Raft storage; **Shamir unseal 3 of 5**, shares held by named persons. A
-  sealed OpenBao stops bundle signing and reveals; devices keep working (fail safe). Auto-unseal MAY
-  be configured by the operator with a KMS of their choice (not bundled).
+  sealed OpenBao stops bundle signing and reveals; devices keep working (fail safe). Automatic unseal
+  is a bundled option (ADR 0035): a platform administrator acknowledges a versioned disclaimer in the
+  portal, the host operator starts the unsealer that holds three shares; a KMS of the operator's choice
+  stays possible outside the bundle.
 - Every role authenticates with its own AppRole; secret IDs are delivered as Docker secrets and are
   response-wrapped at provisioning.
 - **Revocation trust anchor (decided 2026-10-05, plan M4c):** the `revocation-signing` public keys reach devices
@@ -1965,7 +1967,7 @@ Implementation plans are written per milestone in `docs/plans/`, in the format o
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | RLS misconfiguration (table without policy) | Cross-organization leak | Migration lint: CI fails if any table with `organization_id` lacks `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY` + policy; isolation gate |
-| OpenBao sealed after restart | Bundles and reveals stop | Fail safe on devices; alerting; documented unseal procedure; optional auto-unseal |
+| OpenBao sealed after restart | Bundles and reveals stop | Fail safe on devices; alerting; documented unseal procedure; optional automatic unseal (ADR 0035, RR-43) |
 | Authentik superuser sees all organizations | Insider risk across organizations | Authentik admin accounts limited to platform operators; Authentik admin events forwarded to the audit pipeline |
 | Self-lock token for DMS lives on the device before it is needed | A root user could trigger an early self-lock of their own device | Token encodes `elapsed ≥ period`; abuse only harms the user's own device and is visible in audit; acceptable |
 | One binary with many roles | A bug in shared code affects all roles | Role-specific OpenBao and DB credentials limit blast radius; separate container per role |

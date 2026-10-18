@@ -366,3 +366,25 @@ As in production: `docs/operations/upgrade.md`. Extract the new bundle next to t
   down or its certificate is not trusted, logins fail. Devices keep working (fail safe).
 - **`PaddockCertificateProbeFailing`.** The worker cannot verify your proxy's certificate for one of the five names:
   check that it is publicly trusted and covers all five.
+
+## 11. Automatic unseal (replacing a cron job)
+
+A lab host that unseals OpenBao with a hand-made cron job (a script and a file with three shares) moves to the bundled
+automatic unseal (ADR 0035, `docs/operations/openbao.md` section 6), which Paddock checks, monitors and audits:
+
+1. Enable it as in `docs/operations/openbao.md` section 6: a platform administrator acknowledges the disclaimer in
+   the portal (*Platform* → *OpenBao*), then `./paddock auto-unseal enable` on the host with the three shares typed
+   at the prompts.
+2. Remove the cron job and its share file:
+
+   ```sh
+   crontab -e                      # delete the unseal line (or remove the file of /etc/cron.d/ that holds it)
+   shred -u /path/to/your/share/file
+   ```
+
+   Remove every other copy of those shares on the host as well.
+3. Verify: `./paddock compose restart openbao`, then `./paddock bao status` shows `Sealed false` within 30 s, and the
+   portal page shows the automatic unseal.
+
+On the lab host `./paddock check` passes the item `openbao auto-unseal` and names the residual risk RR-43; on a
+production control plane the same setting is reported as `WARN` on every run.
