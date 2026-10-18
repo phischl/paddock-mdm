@@ -285,11 +285,14 @@ agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd,
 		$$(for f in bin/deb/*.deb bin/fleetd/*.deb; do printf -- '--deb %s ' "$$f"; done)
 
 .PHONY: up
-up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy (BACKUP=1: with backups)
+# dev-secrets first: it only creates missing files, so a stack started before a new secret existed gets it on upgrade.
+# OpenBao is bootstrapped (and so unsealed) before the first wait: a recreated OpenBao starts sealed, and role
+# containers still running from an earlier `make up` cannot get healthy until it is unsealed.
+up: dev-secrets ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy (BACKUP=1: with backups)
 	$(COMPOSE) up -d $(if $(BACKUP),--build,)
 	$(COMPOSE_DIR)/scripts/postgres-unsealer-role.sh
-	$(COMPOSE_DIR)/scripts/wait-healthy.sh
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
+	$(COMPOSE_DIR)/scripts/wait-healthy.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-bundles-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/fleet-bootstrap.sh
