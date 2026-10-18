@@ -92,6 +92,7 @@ describe('login history setting (PDK-224)', () => {
     await flushPromises()
     expect(pendingConfirm.value?.options.message).toBe('Switch the login history off? Every recorded login of this organization is deleted at once.')
     expect(pendingConfirm.value?.options.destructive).toBe(true)
+    expect(pendingConfirm.value?.options.confirmLabel).toBe('Switch off and delete')
     settleConfirm(false)
     await flushPromises()
     expect(saveLoginSettings).not.toHaveBeenCalled()
@@ -102,5 +103,33 @@ describe('login history setting (PDK-224)', () => {
     settleConfirm({ reason: '' })
     await flushPromises()
     expect(saveLoginSettings).toHaveBeenCalledWith(expect.objectContaining({ login_history_enabled: false, login_history_days: 90 }))
+  })
+
+  // Browser check M8d defect 2: days below the minimum showed only the generic problem.
+  it.each(['3', '366', '', '7.5'])('marks %j retention days, names the rule and does not save', async (days) => {
+    await mountView(LoginSettingsView)
+    const input = document.querySelector('#settings-login-history-days') as HTMLInputElement
+    input.value = days
+    input.dispatchEvent(new Event('input'))
+    await flushPromises()
+    ;(document.querySelector('[data-testid="save-login-settings"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(saveLoginSettings).not.toHaveBeenCalled()
+    expect(pendingConfirm.value).toBeNull()
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(document.querySelector('[data-testid="login-history-days"]')?.textContent).toContain('Enter a whole number of days from 7 to 365.')
+  })
+
+  it('accepts the limits of the retention', async () => {
+    saveLoginSettings.mockResolvedValue({ ...stored, login_history_days: 7 })
+    await mountView(LoginSettingsView)
+    const input = document.querySelector('#settings-login-history-days') as HTMLInputElement
+    input.value = '7'
+    input.dispatchEvent(new Event('input'))
+    await flushPromises()
+    ;(document.querySelector('[data-testid="save-login-settings"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(saveLoginSettings).toHaveBeenCalledWith(expect.objectContaining({ login_history_days: 7 }))
+    expect(input.getAttribute('aria-invalid')).toBe('false')
   })
 })

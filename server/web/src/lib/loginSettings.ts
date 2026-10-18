@@ -12,6 +12,16 @@ export async function saveLoginSettings(s: LoginSettingsUpdate): Promise<LoginSe
   return data ?? problemCode(error)
 }
 
+/** Retention limits of the login history in days (server: loginsettings.Min/MaxLoginHistoryDays). */
+export const minLoginHistoryDays = 7
+export const maxLoginHistoryDays = 365
+
+/** Whether the text of the retention field is a whole number of days the server accepts. */
+export function validLoginHistoryDays(text: string): boolean {
+  const days = Number(text)
+  return text.trim() !== '' && Number.isInteger(days) && days >= minLoginHistoryDays && days <= maxLoginHistoryDays
+}
+
 /** List settings from a text area: one entry per line, blank lines ignored. */
 export function lines(text: string): string[] {
   return text.split('\n').map((l) => l.trim()).filter((l) => l !== '')

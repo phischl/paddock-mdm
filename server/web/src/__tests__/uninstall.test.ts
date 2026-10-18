@@ -129,7 +129,11 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     await flushPromises()
     expect(text('uninstall-explanation')).toContain('Himmelblau and its configuration are removed')
     expect((el('uninstall-clear-tpm')!.querySelector('input') as HTMLInputElement).disabled).toBe(true)
-    expect(text('uninstall-clear-tpm')).toContain('Not available: the disk of this device unlocks with the TPM.')
+    // Browser check M8d defect 3: the reason sits outside the disabled control so it keeps its contrast.
+    const hint = el('uninstall-clear-tpm-hint')!
+    expect(hint.textContent).toContain('Not available: the disk of this device unlocks with the TPM.')
+    expect(el('uninstall-clear-tpm')!.contains(hint)).toBe(false)
+    expect((el('uninstall-clear-tpm')!.querySelector('input') as HTMLInputElement).getAttribute('aria-describedby')).toBe(hint.id)
     ;(el('uninstall-keep-local-admin')!.querySelector('input') as HTMLInputElement).click()
     await type('uninstall-reason', 'reissue')
     await type('uninstall-typed', 'lt-1')

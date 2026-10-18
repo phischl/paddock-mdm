@@ -1442,7 +1442,9 @@
       "enabled": "Record which directory users sign in on each device, and when",
       "days": "Keep the history for (days)",
       "notice": "The login history is personal data of your employees: every session start is stored with user name, device and time for the period above and deleted afterwards. Switch it on only with the agreement of your works council or the equivalent body and inform the users. It is off by default; user locks do not depend on it.",
-      "disableConfirm": "Switch the login history off? Every recorded login of this organization is deleted at once."
+      "disableConfirm": "Switch the login history off? Every recorded login of this organization is deleted at once.",
+      "disableConfirmLabel": "Switch off and delete",
+      "daysInvalid": "Enter a whole number of days from {min} to {max}."
     },
     "title": "Login & privileges",
     "updatedAt": "Last changed {at}",

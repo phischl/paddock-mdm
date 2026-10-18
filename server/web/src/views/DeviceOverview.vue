@@ -250,45 +250,44 @@ async function copyId(): Promise<void> {
           </h2>
         </header>
         <div class="pd-panel-body">
-          <v-table class="table">
-            <thead>
-              <tr>
-                <th scope="col">
-                  {{ t('devices.components.title') }}
-                </th>
-                <th scope="col">
-                  {{ t('devices.components.installed') }}
-                </th>
-                <th scope="col">
-                  {{ t('devices.components.expected') }}
-                </th>
-                <th scope="col">
-                  {{ t('devices.state') }}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="c in d.components"
-                :key="c.name"
-                :data-testid="'component-' + c.name"
-              >
-                <td>{{ t('devices.components.names.' + c.name) }}</td>
-                <td :class="c.installed ? 'mono' : 'pd-muted'">
-                  {{ c.installed || '–' }}
-                </td>
-                <td :class="c.expected ? 'mono' : 'pd-muted'">
-                  {{ c.expected ?? '–' }}
-                </td>
-                <td>
-                  <StatusChip
-                    :status="componentStatus(c.status).status"
-                    :label="t(componentStatus(c.status).label)"
-                  />
-                </td>
-              </tr>
-            </tbody>
-          </v-table>
+          <ul class="pd-components">
+            <li
+              v-for="c in d.components"
+              :key="c.name"
+              :data-testid="'component-' + c.name"
+            >
+              <div class="pd-component-head">
+                <span
+                  class="pd-component-name"
+                  data-testid="component-name"
+                >{{ t('devices.components.names.' + c.name) }}</span>
+                <StatusChip
+                  :status="componentStatus(c.status).status"
+                  :label="t(componentStatus(c.status).label)"
+                />
+              </div>
+              <dl class="pd-component-versions">
+                <div>
+                  <dt>{{ t('devices.components.installed') }}</dt>
+                  <dd
+                    :class="c.installed ? 'mono' : 'pd-muted'"
+                    data-testid="component-installed"
+                  >
+                    {{ c.installed || '–' }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{{ t('devices.components.expected') }}</dt>
+                  <dd
+                    :class="c.expected ? 'mono' : 'pd-muted'"
+                    data-testid="component-expected"
+                  >
+                    {{ c.expected ?? '–' }}
+                  </dd>
+                </div>
+              </dl>
+            </li>
+          </ul>
           <p class="pd-type-caption pd-muted">
             {{ t('devices.components.hint') }}
           </p>

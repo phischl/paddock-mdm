@@ -56,11 +56,23 @@ export function validateSettings(s: UpdateSettingsUpdate): SettingsErrors {
   if (!Number.isInteger(s.max_random_delay_min) || s.max_random_delay_min < 0 || s.max_random_delay_min > maxRandomDelayMin) {
     out.max_random_delay_min = 'updates.settings.delayInvalid'
   }
-  if (!Number.isInteger(s.staleness_warning_h) || s.staleness_warning_h < 1 || s.staleness_warning_h > maxWarningH) {
-    out.staleness_warning_h = 'updates.settings.warningInvalid'
-  }
-  if (!Number.isInteger(s.staleness_critical_h) || s.staleness_critical_h <= s.staleness_warning_h || s.staleness_critical_h > maxCriticalH) {
-    out.staleness_critical_h = 'updates.settings.criticalInvalid'
+  const staleness = validateStaleness(s.staleness_warning_h, s.staleness_critical_h)
+  if (staleness.warning_h) out.staleness_warning_h = staleness.warning_h
+  if (staleness.critical_h) out.staleness_critical_h = staleness.critical_h
+  return out
+}
+
+/**
+ * Message keys of an invalid pair of contact thresholds in hours (server: updates.ValidateThresholds), shared by the
+ * organization's settings and a device group's override. An empty number field arrives as '' and is invalid.
+ */
+export function validateStaleness(warningH: unknown, criticalH: unknown): { warning_h?: string; critical_h?: string } {
+  const out: { warning_h?: string; critical_h?: string } = {}
+  const warningValid = Number.isInteger(warningH) && (warningH as number) >= 1 && (warningH as number) <= maxWarningH
+  if (!warningValid) out.warning_h = 'updates.settings.warningInvalid'
+  if (!Number.isInteger(criticalH) || (criticalH as number) > maxCriticalH ||
+    (Number.isInteger(warningH) && (criticalH as number) <= (warningH as number))) {
+    out.critical_h = 'updates.settings.criticalInvalid'
   }
   return out
 }

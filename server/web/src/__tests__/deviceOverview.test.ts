@@ -119,12 +119,17 @@ describe('device overview components (PDK-236)', () => {
         { name: 'fleetd', installed: '', expected: '1.43.0', status: 'missing' },
       ],
     })
-    const cells = (name: string) =>
-      [...document.querySelectorAll(`[data-testid="component-${name}"] td`)].map((td) => td.textContent?.trim())
+    const cells = (name: string) => {
+      const item = document.querySelector(`[data-testid="component-${name}"]`)
+      const text = (id: string) => item?.querySelector(`[data-testid="${id}"]`)?.textContent?.trim()
+      return [text('component-name'), text('component-installed'), text('component-expected'), item?.querySelector('.pd-chip')?.textContent?.trim()]
+    }
     expect(cells('paddockd')).toEqual(['Agent (paddockd)', '0.1.0', '0.1.0', 'Up to date'])
     expect(cells('paddock_revoke')).toEqual(['Revocation module (paddock-revoke)', '–', '–', 'Not installed'])
     expect(cells('himmelblau')).toEqual(['Himmelblau', '4.0.3-1', '4.0.4', 'Outdated'])
     expect(cells('fleetd')).toEqual(['fleetd (osquery)', '–', '1.43.0', 'Not installed'])
+    const labels = [...document.querySelectorAll('[data-testid="component-himmelblau"] dt')].map((dt) => dt.textContent?.trim())
+    expect(labels).toEqual(['Installed', 'Expected'])
     expect(document.querySelector('[data-testid="device-components"]')?.textContent)
       .toContain('Expected versions come from the current agent release')
     expect(document.querySelector('[data-testid="components-target-hint"]')?.textContent)
@@ -137,7 +142,20 @@ describe('device overview components (PDK-236)', () => {
         name: name as 'paddockd', installed: '', expected: null, status: 'unknown' as const,
       })),
     })
-    const statuses = [...document.querySelectorAll('[data-testid^="component-"] td:last-child')].map((td) => td.textContent?.trim())
+    const statuses = [...document.querySelectorAll('[data-testid="device-components"] li .pd-chip')].map((c) => c.textContent?.trim())
     expect(statuses).toEqual(['Not reported', 'Not reported', 'Not reported', 'Not reported', 'Not reported'])
+  })
+
+  // Browser check M8d defect 1: the four-column table overflowed the side column and needed a focusable scroll region.
+  it('renders the components as a list without a table, a scroll region or a repeated panel title', async () => {
+    await mountOverview({
+      components: [{ name: 'himmelblau', installed: '4.0.3-1', expected: '4.0.4', status: 'outdated' }],
+    })
+    const panel = document.querySelector('[data-testid="device-components"]')!
+    expect(panel.querySelector('table, .v-table, .v-table__wrapper, [role="table"], th')).toBeNull()
+    expect(panel.querySelectorAll('ul.pd-components > li')).toHaveLength(1)
+    const titles = [...panel.querySelectorAll('*')].filter((el) => el.children.length === 0 && el.textContent?.trim() === 'Components')
+    expect(titles).toHaveLength(1)
+    expect(titles[0].tagName).toBe('H2')
   })
 })

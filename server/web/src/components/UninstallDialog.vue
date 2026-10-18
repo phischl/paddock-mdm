@@ -101,10 +101,20 @@ function onConfirm(): void {
             v-model="clearTpm"
             :label="t('devices.uninstall.clearTpm.label')"
             :disabled="diskTpm"
-            :hint="diskTpm ? t('devices.uninstall.clearTpm.disabledTpmDisk') : ''"
-            :persistent-hint="diskTpm"
+            :hide-details="diskTpm"
+            :aria-describedby="diskTpm ? id + '-clear-tpm-hint' : undefined"
             data-testid="uninstall-clear-tpm"
           />
+          <!-- Outside the checkbox: a hint inside the disabled control inherits its opacity and fails the contrast
+               minimum, but it carries the reason and has to stay readable. -->
+          <p
+            v-if="diskTpm"
+            :id="id + '-clear-tpm-hint'"
+            class="pd-type-caption pd-uninstall-hint"
+            data-testid="uninstall-clear-tpm-hint"
+          >
+            {{ t('devices.uninstall.clearTpm.disabledTpmDisk') }}
+          </p>
           <v-checkbox
             v-model="keepLocalAdmin"
             :label="t('devices.uninstall.keepLocalAdmin.label')"

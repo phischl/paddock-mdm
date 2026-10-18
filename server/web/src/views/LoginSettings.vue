@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DiskUnlockMode, SessionAction } from '../api/client'
 import { formatDateTime } from '../lib/format'
-import { getLoginSettings, lines, saveLoginSettings } from '../lib/loginSettings'
+import { getLoginSettings, lines, maxLoginHistoryDays, minLoginHistoryDays, saveLoginSettings, validLoginHistoryDays } from '../lib/loginSettings'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
 import { useConfirm } from '../composables/useConfirm'
@@ -34,6 +34,11 @@ const historyEnabled = ref(false)
 const historyDays = ref('90')
 /** Whether the stored setting records the login history: switching it off deletes the rows (plan M8d decision 20). */
 const historyStored = ref(false)
+const submitted = ref(false)
+const historyDaysError = computed(() =>
+  submitted.value && !validLoginHistoryDays(historyDays.value)
+    ? t('loginSettings.loginHistory.daysInvalid', { min: minLoginHistoryDays, max: maxLoginHistoryDays })
+    : '')
 const updatedAt = ref('')
 const problem = ref('')
 const saved = ref(false)
@@ -67,10 +72,12 @@ onMounted(async () => {
 async function save(): Promise<void> {
   problem.value = ''
   saved.value = false
+  submitted.value = true
+  if (historyDaysError.value) return
   if (historyStored.value && !historyEnabled.value) {
     const confirmed = await confirm({
       title: t('loginSettings.loginHistory.title'), message: t('loginSettings.loginHistory.disableConfirm'),
-      confirmLabel: t('common.save'), destructive: true,
+      confirmLabel: t('loginSettings.loginHistory.disableConfirmLabel'), destructive: true,
     })
     if (!confirmed) return
   }
@@ -224,8 +231,11 @@ async function save(): Promise<void> {
           v-model="historyDays"
           :label="t('loginSettings.loginHistory.days')"
           type="number"
-          min="7"
-          max="365"
+          :min="minLoginHistoryDays"
+          :max="maxLoginHistoryDays"
+          :error-messages="historyDaysError ? [historyDaysError] : []"
+          :aria-invalid="!!historyDaysError"
+          data-testid="login-history-days"
         />
       </fieldset>
       <fieldset :disabled="!session.canDelete">

@@ -64,6 +64,31 @@ describe('DeviceGroupForm', () => {
     expect(wrapper.emitted('submit')).toEqual([[{ name: 'Servers', description: '', staleness: null, agent_update_policy: null, disk_unlock_mode: null }]])
   })
 
+  // Browser check M8d defect 2: invalid thresholds showed only the generic problem; the fields now name the rule.
+  it.each([
+    ['200', '100', '', 'Enter a whole number above the warning and at most 2160.'],
+    ['0', '10', 'Enter a whole number from 1 to 720.', ''],
+    ['', '', 'Enter a whole number from 1 to 720.', 'Enter a whole number above the warning and at most 2160.'],
+  ])('marks invalid thresholds %s/%s and does not submit (PDK-222)', async (warning, critical, warningMsg, criticalMsg) => {
+    const wrapper = mountForm({ initialName: 'Laptops', initialStaleness: { warning_h: 120, critical_h: 840 } })
+    await wrapper.find('#device-group-staleness-warning').setValue(warning)
+    await wrapper.find('#device-group-staleness-critical').setValue(critical)
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('submit')).toBeUndefined()
+    const field = (id: string) => wrapper.find(id).element.closest('.v-input')!
+    expect(wrapper.find('#device-group-staleness-warning').attributes('aria-invalid')).toBe(String(warningMsg !== ''))
+    expect(wrapper.find('#device-group-staleness-critical').attributes('aria-invalid')).toBe(String(criticalMsg !== ''))
+    if (warningMsg) expect(field('#device-group-staleness-warning').textContent).toContain(warningMsg)
+    if (criticalMsg) expect(field('#device-group-staleness-critical').textContent).toContain(criticalMsg)
+  })
+
+  it('does not check the thresholds while the override is off', async () => {
+    const wrapper = mountForm({ initialName: 'Servers', initialStaleness: { warning_h: 200, critical_h: 100 } })
+    await wrapper.find('#device-group-staleness-override').setValue(false)
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({ staleness: null })
+  })
+
   it('keeps the agent update policy override of a group (PDK-225)', async () => {
     const wrapper = mountForm({ initialName: 'Kiosks', initialAgentUpdatePolicy: 'manual' })
     await wrapper.find('form').trigger('submit')

@@ -73,7 +73,7 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   // Plan M7c decision 29: the state chip of an active device names its contact state.
   await expect(page.getByTestId('device-state')).toHaveText(/^(Online|No recent contact|Never contacted)$/)
   // Plan M8d decision 56: the components panel lists the five components (a fresh enrollment reports none yet).
-  await expect(page.getByTestId('device-components').getByRole('row')).toHaveCount(6)
+  await expect(page.getByTestId('device-components').locator('ul.pd-components > li')).toHaveCount(5)
   await expect(page.getByTestId('component-himmelblau')).toContainText('Himmelblau')
 
   // Group membership and a managed file for the group.

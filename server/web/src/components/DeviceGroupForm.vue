@@ -6,6 +6,7 @@ import { useProblemText } from '../lib/problems'
 import type { AgentUpdatePolicy, DeviceGroupStaleness, DiskUnlockMode } from '../api/client'
 import type { DeviceGroupInput } from '../lib/deviceGroupPage'
 import { laptopStaleness } from '../lib/deviceGroups'
+import { validateStaleness } from '../lib/updates'
 
 const props = withDefaults(
   defineProps<{
@@ -55,10 +56,13 @@ function laptopPreset(): void {
 const errors = computed(() => validateDeviceGroup(name.value, description.value))
 const nameError = computed(() => (touched.value && errors.value.name ? t(errors.value.name) : ''))
 const descriptionError = computed(() => (touched.value && errors.value.description ? t(errors.value.description) : ''))
+const stalenessErrors = computed(() => (override.value ? validateStaleness(warningH.value, criticalH.value) : {}))
+const warningError = computed(() => (touched.value && stalenessErrors.value.warning_h ? t(stalenessErrors.value.warning_h) : ''))
+const criticalError = computed(() => (touched.value && stalenessErrors.value.critical_h ? t(stalenessErrors.value.critical_h) : ''))
 
 function submit(): void {
   touched.value = true
-  if (hasErrors(errors.value)) return
+  if (hasErrors(errors.value) || hasErrors(stalenessErrors.value)) return
   emit('submit', {
     name: name.value, description: description.value,
     staleness: override.value ? { warning_h: Number(warningH.value), critical_h: Number(criticalH.value) } : null,
@@ -111,6 +115,8 @@ function submit(): void {
         type="number"
         :disabled="!override"
         :label="t('deviceGroups.staleness.warning')"
+        :error-messages="warningError ? [warningError] : []"
+        :aria-invalid="!!warningError"
         data-testid="group-staleness-warning"
       />
       <v-text-field
@@ -119,6 +125,8 @@ function submit(): void {
         type="number"
         :disabled="!override"
         :label="t('deviceGroups.staleness.critical')"
+        :error-messages="criticalError ? [criticalError] : []"
+        :aria-invalid="!!criticalError"
         data-testid="group-staleness-critical"
       />
       <v-btn

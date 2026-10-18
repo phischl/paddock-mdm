@@ -274,6 +274,14 @@ a.pd-pill:hover { filter: brightness(0.95); }
 .pd-danger .v-btn--variant-outlined.text-error { color: var(--pd-danger-outline-text) !important; border-color: var(--pd-danger-border); }
 .pd-danger-alert, .pd-danger-note { margin: 12px 14px; }
 .pd-danger-timeline { margin: 0 14px 14px; }
+/* At phone width the German timeline was about 60 px wider than the card and needed a focusable scroll region
+   (browser check M8d): narrower cell padding and breaking long dates and device paths keep it inside. */
+@media (max-width: 599.98px) {
+  .pd-danger-timeline.v-table > .v-table__wrapper > table > * > tr > :is(th, td) {
+    padding-inline: var(--pd-space-2);
+    overflow-wrap: anywhere;
+  }
+}
 
 /* Overview (plan M7c decision 28): KPI strip, panels in a grid, compact tables; one column below 1100 px. */
 .pd-block { display: block; }
@@ -369,6 +377,18 @@ a.pd-kpi:hover { background: var(--pd-row-hover); color: var(--pd-text-primary);
 .pd-health li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--pd-border-subtle); }
 .pd-health li:last-child { border-bottom: 0; }
 .pd-health-label { color: var(--pd-text-secondary); }
+/* The components panel sits in the narrow side column (and at 375 px): a list wraps where a four-column table
+   would scroll sideways and cut off the state. */
+.pd-components { list-style: none; margin: 0; padding: 0; }
+.pd-components li { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--pd-border-subtle); min-width: 0; }
+.pd-components li:last-child { border-bottom: 0; }
+.pd-component-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.pd-component-name { overflow-wrap: anywhere; min-width: 0; }
+.pd-component-versions { display: flex; flex-wrap: wrap; gap: 0 16px; margin: 0; }
+.pd-component-versions > div { display: flex; gap: 6px; min-width: 0; }
+.pd-component-versions dt { color: var(--pd-text-secondary); }
+.pd-component-versions dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+.pd-uninstall-hint { margin: 0 0 var(--pd-space-2) var(--pd-space-8); color: var(--pd-text-secondary); }
 .pd-identity-id { display: inline-flex; align-items: center; gap: 2px; }
 /* Vuetify drops the input's minimum width on blur, so the chips reflow onto one line fewer and the button below
    moves away from the click that blurred the field; the focused width is kept. */

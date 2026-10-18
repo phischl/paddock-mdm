@@ -1442,7 +1442,9 @@
       "enabled": "Aufzeichnen, welche Verzeichnisbenutzer sich wann an welchem Gerät anmelden",
       "days": "Verlauf aufbewahren für (Tage)",
       "notice": "Der Anmeldeverlauf sind personenbezogene Daten Ihrer Beschäftigten: Jeder Sitzungsstart wird mit Benutzername, Gerät und Zeitpunkt für die obige Dauer gespeichert und danach gelöscht. Schalten Sie ihn nur mit Zustimmung Ihres Betriebsrats oder der entsprechenden Stelle ein und informieren Sie die Benutzer. Er ist standardmäßig aus; Benutzersperren hängen nicht davon ab.",
-      "disableConfirm": "Anmeldeverlauf ausschalten? Jede aufgezeichnete Anmeldung dieser Organisation wird sofort gelöscht."
+      "disableConfirm": "Anmeldeverlauf ausschalten? Jede aufgezeichnete Anmeldung dieser Organisation wird sofort gelöscht.",
+      "disableConfirmLabel": "Ausschalten und löschen",
+      "daysInvalid": "Geben Sie eine ganze Zahl von {min} bis {max} Tagen ein."
     },
     "title": "Anmeldung & Rechte",
     "updatedAt": "Zuletzt geändert {at}",
