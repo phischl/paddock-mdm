@@ -173,9 +173,9 @@ func hostsHasName(data []byte, name string) bool {
 	return false
 }
 
-// hostsWithName returns /etc/hosts with its first 127.0.1.1 line replaced by "127.0.1.1\t<name>" and every other
-// byte kept; without such a line the entry follows the first 127.0.0.1 line or ends the file. A missing file
-// becomes the two loopback lines.
+// hostsWithName returns /etc/hosts with the first host name of its first 127.0.1.1 line replaced by name and every
+// other byte kept, further names and aliases included; without such a line the entry "127.0.1.1\t<name>" follows the
+// first 127.0.0.1 line or ends the file. A missing file becomes the two loopback lines.
 func hostsWithName(data []byte, exists bool, name string) []byte {
 	entry := hostsLoopIP + "\t" + name
 	if !exists {
@@ -189,7 +189,7 @@ func hostsWithName(data []byte, exists bool, name string) []byte {
 			continue
 		}
 		if f[0] == hostsLoopIP {
-			lines[i] = entry + line[len(strings.TrimRight(line, "\r\n")):]
+			lines[i] = withFirstName(line, name)
 			return []byte(strings.Join(lines, ""))
 		}
 		if f[0] == hostsLocalIP && local < 0 {
@@ -208,4 +208,24 @@ func hostsWithName(data []byte, exists bool, name string) []byte {
 	}
 	lines = append(lines[:local+1], append([]string{entry + "\n"}, lines[local+1:]...)...)
 	return []byte(strings.Join(lines, ""))
+}
+
+// withFirstName returns a 127.0.1.1 line with its first host name set to name; the separators, the further names,
+// a comment and the line ending stay. A line without a host name gets name after the address.
+func withFirstName(line, name string) string {
+	start := strings.Index(line, hostsLoopIP) + len(hostsLoopIP)
+	head, after := line[:start], line[start:]
+	body := strings.TrimLeft(after, " \t")
+	sep := after[:len(after)-len(body)]
+	if sep == "" {
+		sep = "\t"
+	}
+	end := strings.IndexAny(body, " \t\r\n#")
+	if end < 0 {
+		end = len(body)
+	}
+	if end == 0 && strings.HasPrefix(body, "#") {
+		return head + sep + name + " " + body
+	}
+	return head + sep + name + body[end:]
 }

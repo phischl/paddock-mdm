@@ -98,8 +98,13 @@ func TestHostnameHostsFile(t *testing.T) {
 		name, before, want string
 		absent             bool
 	}{
-		{name: "replaced", before: ubuntuHosts, want: strings.Replace(ubuntuHosts, "127.0.1.1 old\n", "127.0.1.1\tlap-0421\n", 1)},
-		{name: "first of two", before: "127.0.1.1 old a\n# x\n127.0.1.1 other\n", want: "127.0.1.1\tlap-0421\n# x\n127.0.1.1 other\n"},
+		{name: "replaced", before: ubuntuHosts, want: strings.Replace(ubuntuHosts, "127.0.1.1 old\n", "127.0.1.1 lap-0421\n", 1)},
+		{name: "first of two", before: "127.0.1.1 old a\n# x\n127.0.1.1 other\n", want: "127.0.1.1 lap-0421 a\n# x\n127.0.1.1 other\n"},
+		// Only the first host name changes; aliases, a comment and the line ending stay (review 1 finding 3).
+		{name: "aliases kept", before: "  127.0.1.1\told.corp.example  old alias # x\r\n::1 ip6-localhost\n",
+			want: "  127.0.1.1\tlap-0421  old alias # x\r\n::1 ip6-localhost\n"},
+		{name: "address only", before: "127.0.1.1\n", want: "127.0.1.1\tlap-0421\n"},
+		{name: "address and comment", before: "127.0.1.1 # x", want: "127.0.1.1 lap-0421 # x"},
 		{name: "commented line is no entry", before: "#127.0.1.1 old\n127.0.0.1 localhost\n::1 ip6-localhost\n",
 			want: "#127.0.1.1 old\n127.0.0.1 localhost\n127.0.1.1\tlap-0421\n::1 ip6-localhost\n"},
 		{name: "inserted after an unterminated 127.0.0.1", before: "127.0.0.1 localhost", want: "127.0.0.1 localhost\n127.0.1.1\tlap-0421\n"},

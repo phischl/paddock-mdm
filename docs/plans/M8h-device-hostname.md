@@ -579,3 +579,6 @@ Open points (default chosen):
   restart stays pending in `reconcile.HostnameState`, which the applier keeps for the agent's lifetime; while it is
   pending and the names are in sync, `Plan` lists `systemctl restart avahi-daemon.service`, so the next pass (drift
   or bundle) retries it. An agent restart forgets a pending restart; Avahi then follows at the next rename or reboot.
+- **`/etc/hosts` keeps names and aliases.** Decision 13 is refined: the reconciler replaces only the first host name
+  (field 1) of the first `127.0.1.1` line; the separators, further names and aliases, a comment and the line ending
+  stay. A `127.0.1.1` line without a host name gets `\t<name>` after the address.
