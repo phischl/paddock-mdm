@@ -281,8 +281,8 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceUninstallCancelled: {
 		Code: CodeDeviceUninstallCancelled, Emitted: true,
-		Description: "An organization administrator cancelled an uninstall before the device received it, or withdrew one whose removal report is overdue (report_overdue). A Lock or Destroy request cancels an uninstall without a removal report in the same transaction (reason revocation, with the revocation's request_id and after_delivery when the device had received the command).",
-		Params:      []string{"hostname", "mode", "command_id", "report_overdue", "reason", "request_id", "after_delivery"},
+		Description: "An organization administrator cancelled an uninstall before the device received it, or withdrew one whose removal report is overdue (report_overdue). A Lock or Destroy request that cancels an uninstall records no event of this code: it is recorded on revocation.requested (uninstall_cancelled).",
+		Params:      []string{"hostname", "mode", "command_id", "report_overdue"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceUninstalled: {
@@ -766,9 +766,9 @@ var registry = map[Code]Definition{
 	CodeRevocationRequested: {
 		Code: CodeRevocationRequested, Emitted: true,
 		Description: "An organization administrator requested a Lock or Destroy of a device after a step-up, typing its hostname; a Lock is approved with the request, a Destroy waits for a second administrator.",
-		Params:      []string{"action", "hostname", "request_id", "uninstall_cancelled"},
+		Params:      []string{"action", "hostname", "request_id", "uninstall_cancelled", "uninstall_command_id"},
 		Outcomes:    adminOutcomes,
-		Note:        "action is lock or destroy. uninstall_cancelled (before_delivery or after_delivery) when the request cancelled an uninstall of the device, recorded as its own device.uninstall_cancelled. denied with revocation_disabled while PADDOCK_REVOCATION_ENABLED is off, revocation_frozen while the administrator is frozen after a limit was exceeded.",
+		Note:        "action is lock or destroy. uninstall_cancelled (before_delivery, or after_delivery when the device had received the uninstall command) and uninstall_command_id when the request cancelled an uninstall of the device in the same transaction; no separate device.uninstall_cancelled is recorded. denied with revocation_disabled while PADDOCK_REVOCATION_ENABLED is off, revocation_frozen while the administrator is frozen after a limit was exceeded.",
 	},
 	CodeRevocationApproved: {
 		Code: CodeRevocationApproved, Emitted: true,

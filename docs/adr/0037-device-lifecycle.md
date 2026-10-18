@@ -311,9 +311,11 @@ package, as it does for the agent offer; never while the rollout is halted. The 
 **IV. Lock and Destroy before an uninstall (review 2 finding D, replaces PDK-327's refusal).** Lock and Destroy are
 never blocked by an uninstall. The revocation request cancels an uninstall without a removal report in its own
 transaction — a `pending` or `delivered` command is withdrawn like a cancel (result claimed as `cancelled`, command
-cancelled, removed from `cmd:<device_id>` after the commit), a command the device already answered stays — and records
-`device.uninstall_cancelled` (reason `revocation`) next to `revocation.requested`, each once (`Recorder.Also`). When
-the device had received the command, the response (`uninstall_cancelled: after_delivery`) and the portal warn that
+cancelled, removed from `cmd:<device_id>` after the commit), a command the device already answered stays. The cancel
+is recorded on the request's one `revocation.requested` event as the params `uninstall_cancelled`
+(`before_delivery`|`after_delivery`) and `uninstall_command_id`; no separate `device.uninstall_cancelled` is written,
+because `ActionRunner` records exactly one audit event per attempt (architect decision, fix round 3). When the device
+had received the command, the response (`uninstall_cancelled: after_delivery`) and the portal warn that
 `paddock-revoke` may already be gone. The revocation path itself is unchanged.
 
 Consequences: + No supervisor change reaches every device at once, and a server outage no longer blocks a supervisor

@@ -122,7 +122,7 @@ func (r *Revocations) Request(ctx context.Context, in RevocationInput) (pgstore.
 		if status == revocation.StatusApproved {
 			rec.RevocationApproved(out.ID)
 		}
-		cancelled, withdrawn, err = r.cancelUninstall(ctx, q, rec, dev, out.ID, now)
+		cancelled, withdrawn, err = r.cancelUninstall(ctx, q, rec, dev, now)
 		return err
 	})
 	if err == nil {
@@ -139,14 +139,15 @@ const (
 	UninstallCancelledAfterDelivery = "after_delivery"
 )
 
-// cancelUninstall withdraws an uninstall of the device that has no removal report yet (audited as its own
-// device.uninstall_cancelled with reason revocation): Lock and Destroy take precedence and are never blocked, because
-// the removal purges paddock-revoke (review 2 finding D). A command without a result is withdrawn like a cancel
-// (Uninstalls.Cancel); one the device already answered, or a result it claimed first, does not stop the revocation.
+// cancelUninstall withdraws an uninstall of the device that has no removal report yet: Lock and Destroy take
+// precedence and are never blocked, because the removal purges paddock-revoke (review 2 finding D). A command without
+// a result is withdrawn like a cancel (Uninstalls.Cancel); one the device already answered, or a result it claimed
+// first, does not stop the revocation. The cancel is recorded as the params uninstall_cancelled and
+// uninstall_command_id of revocation.requested, the action's one event (ActionRunner records exactly one per attempt).
 // It returns UninstallCancelled* ("" when no uninstall was open) and the command to drop from cmd:<device_id> after
 // the commit.
 func (r *Revocations) cancelUninstall(ctx context.Context, q *pgstore.Queries, rec Recorder, dev pgstore.Device,
-	requestID uuid.UUID, now time.Time) (string, uuid.UUID, error) {
+	now time.Time) (string, uuid.UUID, error) {
 	if dev.UninstallRequestedAt == nil || dev.UninstalledAt != nil || !dev.UninstallCommandID.Valid {
 		return "", uuid.Nil, nil
 	}
@@ -170,14 +171,7 @@ func (r *Revocations) cancelUninstall(ctx context.Context, q *pgstore.Queries, r
 	if _, err := q.ClearDeviceUninstall(ctx, dev.ID); err != nil {
 		return "", uuid.Nil, err
 	}
-	spec := SpecUninstallCancel
-	spec.Target = &audit.Target{Type: "device", ID: dev.ID.String(), Display: dev.Hostname}
-	spec.Params = map[string]any{"hostname": dev.Hostname, "command_id": cmd.ID.String(), "reason": "revocation",
-		"request_id": requestID.String(), "after_delivery": received}
-	if dev.UninstallMode != nil {
-		spec.Params["mode"] = *dev.UninstallMode
-	}
-	rec.Also(spec)
+	rec.SetParam("uninstall_command_id", cmd.ID.String())
 	if received {
 		rec.SetParam("uninstall_cancelled", UninstallCancelledAfterDelivery)
 		return UninstallCancelledAfterDelivery, cmd.ID, nil

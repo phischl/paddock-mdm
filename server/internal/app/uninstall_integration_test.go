@@ -594,9 +594,10 @@ func (stepUpTokens) Get(context.Context, string) (string, bool, error) { return 
 
 // TestRevocationCancelsUninstall (review 2 finding D, replaces PDK-327's refusal): Lock and Destroy are never blocked
 // by an uninstall. The request cancels an uninstall without a removal report in the same transaction — a pending or
-// delivered command is withdrawn like a cancel, one the device already answered stays — and records
-// device.uninstall_cancelled (reason revocation) once next to revocation.requested; after_delivery warns that the
-// device may already have removed paddock-revoke. A refused revocation leaves the uninstall alone.
+// delivered command is withdrawn like a cancel, one the device already answered stays — and records it as the params
+// uninstall_cancelled and uninstall_command_id of the one revocation.requested event (no second event: ActionRunner
+// records exactly one per attempt); after_delivery warns that the device may already have removed paddock-revoke. A
+// refused revocation leaves the uninstall alone.
 func TestRevocationCancelsUninstall(t *testing.T) {
 	w := newUninstallWorld(t)
 	revocations := app.NewRevocations(w.runner, w.api, stepUpTokens{}, w.cache, true)
@@ -655,18 +656,18 @@ func TestRevocationCancelsUninstall(t *testing.T) {
 					t.Fatalf("result claim %q", status)
 				}
 			}
-			if events(dev, "device.uninstall_cancelled") != 1 || events(dev, "revocation.requested") != 1 {
+			if events(dev, "device.uninstall_cancelled") != 0 || events(dev, "revocation.requested") != 1 {
 				t.Fatalf("events: %d device.uninstall_cancelled, %d revocation.requested", events(dev, "device.uninstall_cancelled"),
 					events(dev, "revocation.requested"))
 			}
 			var raw []byte
-			if err := w.super.QueryRow(context.Background(), `SELECT payload -> 'params' FROM outbox WHERE payload ->> 'code' = 'device.uninstall_cancelled'
+			if err := w.super.QueryRow(context.Background(), `SELECT payload -> 'params' FROM outbox WHERE payload ->> 'code' = 'revocation.requested'
 				AND payload -> 'target' ->> 'id' = $1`, dev.String()).Scan(&raw); err != nil {
 				t.Fatal(err)
 			}
 			var params map[string]any
 			_ = json.Unmarshal(raw, &params)
-			if params["reason"] != "revocation" || params["request_id"] != req.ID.String() || params["after_delivery"] != (tc.want == app.UninstallCancelledAfterDelivery) {
+			if params["uninstall_cancelled"] != tc.want || params["uninstall_command_id"] != cmd.String() || params["request_id"] != req.ID.String() {
 				t.Fatalf("params %v", params)
 			}
 		})
@@ -687,13 +688,21 @@ func TestRevocationCancelsUninstall(t *testing.T) {
 		if n := events(dev, "device.uninstall_cancelled"); n != 0 {
 			t.Fatalf("%d device.uninstall_cancelled after a refused revocation", n)
 		}
+		if n := w.count(t, `SELECT count(*) FROM outbox WHERE payload ->> 'code' = 'revocation.requested' AND payload -> 'target' ->> 'id' = $1
+			AND payload -> 'params' ? 'uninstall_cancelled'`, dev.String()); n != 0 {
+			t.Fatal("a refused revocation recorded uninstall_cancelled")
+		}
 	})
 
 	t.Run("no uninstall", func(t *testing.T) {
 		dev, host := w.newDevice(t, w.org, "active")
 		_, cancelled, err := revocations.Request(stepUp(), app.RevocationInput{DeviceID: dev, Action: "lock", ConfirmHostname: host, Reason: "stolen"})
-		if err != nil || cancelled != "" || events(dev, "device.uninstall_cancelled") != 0 {
+		if err != nil || cancelled != "" || events(dev, "device.uninstall_cancelled") != 0 || events(dev, "revocation.requested") != 1 {
 			t.Fatalf("%q, %v", cancelled, err)
+		}
+		if n := w.count(t, `SELECT count(*) FROM outbox WHERE payload ->> 'code' = 'revocation.requested' AND payload -> 'target' ->> 'id' = $1
+			AND payload -> 'params' ? 'uninstall_cancelled'`, dev.String()); n != 0 {
+			t.Fatal("uninstall_cancelled without an uninstall")
 		}
 	})
 }

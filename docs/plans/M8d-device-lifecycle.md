@@ -1262,9 +1262,10 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   409 when the device reported first; `DeleteCommand` after the commit); `succeeded` stays as it is.
 - 37 (fix round 2, review 2 finding D, replaces PDK-327's refusal): `Revocations.Request` cancels an uninstall without a removal
   report in its transaction (same withdrawal; a device that reported first does not stop the revocation),
-  `ClearDeviceUninstall`, and records `device.uninstall_cancelled` (reason `revocation`, `request_id`,
-  `after_delivery`) through `Recorder.Also`; `RevocationRequest.uninstall_cancelled` (`before_delivery`,
-  `after_delivery`) drives the portal warning.
+  `ClearDeviceUninstall`, and records the cancel as the params `uninstall_cancelled` (`before_delivery`,
+  `after_delivery`) and `uninstall_command_id` on the one `revocation.requested` event (fix round 3: no second
+  event, `ActionRunner` records exactly one per attempt); `RevocationRequest.uninstall_cancelled` drives the portal
+  warning.
 - 39: the agent starts the helper only after the server accepted the result with 2xx; a 404/409 drops the pending
   uninstall and removes its plan and binary copy; `LaunchedAt` is saved after `systemd-run` succeeded. When
   `systemd-run` fails while `paddock-uninstall.service` is active (a relaunch after a crash), the agent adopts the

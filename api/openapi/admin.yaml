@@ -2308,8 +2308,8 @@ paths:
         the revocation-issuer, which checks the step-up proof and the limits (3 per hour and 10 per 24 h per
         administrator, 20 per 24 h per organization) before it signs. 409 already_exists while the device has an
         open Lock, 409 invalid_state unless the device is active or quarantined. A Lock takes precedence over an
-        uninstall: an uninstall of the device without a removal report is cancelled in the same transaction (audited
-        as its own device.uninstall_cancelled, reason revocation) and uninstall_cancelled says so.
+        uninstall: an uninstall of the device without a removal report is cancelled in the same transaction (recorded
+        as uninstall_cancelled on revocation.requested) and uninstall_cancelled says so.
       x-paddock-audit: revocation.requested
       parameters:
         - $ref: "#/components/parameters/Csrf"

@@ -80,10 +80,6 @@ type Recorder interface {
 	// RequireStepUp is RequiresStepUp for actions that need a step-up only for some inputs (e.g. assigning a full
 	// profile): it returns problem.StepUpRequired, recorded as denied, unless the step-up is fresh.
 	RequireStepUp() error
-	// Also records a second action the action carried out, e.g. the uninstall a Lock cancels: its own event (spec's
-	// code, target and params) with the same actor and correlation, written in the same transaction only when the
-	// action succeeds. A failed attempt records only the action itself.
-	Also(spec ActionSpec)
 }
 
 // CorrelationIDFunc extracts the request ID from ctx (set by the httpx middleware).
@@ -142,8 +138,6 @@ type recorder struct {
 	commands   []uuid.UUID
 	approved   []uuid.UUID
 	stepUp     func() error
-	newAlso    func(spec ActionSpec) *recorder
-	also       []*recorder
 }
 
 func (r *recorder) SetTarget(t audit.Target) { r.target = &t }
@@ -172,8 +166,6 @@ func (r *recorder) CommandIssued(id uuid.UUID) { r.commands = append(r.commands,
 func (r *recorder) RevocationApproved(id uuid.UUID) { r.approved = append(r.approved, id) }
 
 func (r *recorder) RequireStepUp() error { return r.stepUp() }
-
-func (r *recorder) Also(spec ActionSpec) { r.also = append(r.also, r.newAlso(spec)) }
 
 var secretParamWords = []string{"password", "secret", "token"}
 
@@ -227,10 +219,6 @@ func (r *ActionRunner) newRecorder(ctx context.Context, p principal.Principal, s
 		}
 		rec.actor.StepUp = true
 		return nil
-	}
-	rec.newAlso = func(spec ActionSpec) *recorder {
-		spec.CorrelationID = rec.correlated
-		return r.newRecorder(ctx, p, scope, spec)
 	}
 	return rec
 }
@@ -655,22 +643,8 @@ func (r *ActionRunner) insertFinished(ctx context.Context, q *pgstore.Queries, r
 		if err := insertStateChanges(ctx, q, rec); err != nil {
 			return err
 		}
-		if err := r.insertAlso(ctx, q, rec); err != nil {
-			return err
-		}
 	}
 	return insertOutbox(ctx, q, rec, outcome, code, finished)
-}
-
-// insertAlso records the actions a successful action carried out as well (Recorder.Also), with its final actor.
-func (r *ActionRunner) insertAlso(ctx context.Context, q *pgstore.Queries, rec *recorder) error {
-	for _, a := range rec.also {
-		a.actor, a.org = rec.actor, rec.org
-		if err := r.insertFinished(ctx, q, a, nil); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // insertStateChanges writes the queued state changes, command.issued and revocation.approved messages of a
@@ -733,9 +707,6 @@ func (r *ActionRunner) finishStarted(ctx context.Context, q *pgstore.Queries, re
 	}
 	if outcome == audit.OutcomeSuccess {
 		if err := insertStateChanges(ctx, q, rec); err != nil {
-			return err
-		}
-		if err := r.insertAlso(ctx, q, rec); err != nil {
 			return err
 		}
 	}
