@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+// TestLoadOpenBaoAddr reads the address only: no AppRole file is required (plan M8u decision 9).
+func TestLoadOpenBaoAddr(t *testing.T) {
+	l := NewLoaderFrom(map[string]string{"PADDOCK_OPENBAO_ADDR": "https://openbao:8200"})
+	if got := LoadOpenBaoAddr(l); got != "https://openbao:8200" || l.Err() != nil {
+		t.Fatalf("LoadOpenBaoAddr = %q, err %v", got, l.Err())
+	}
+	l = NewLoaderFrom(map[string]string{})
+	_ = LoadOpenBaoAddr(l)
+	var missing *MissingError
+	if !errors.As(l.Err(), &missing) || !reflect.DeepEqual(missing.Names, []string{"PADDOCK_OPENBAO_ADDR"}) {
+		t.Fatalf("Err() = %v, want PADDOCK_OPENBAO_ADDR missing", l.Err())
+	}
+}
+
 func TestMissingVariablesAreReportedTogether(t *testing.T) {
 	l := NewLoaderFrom(map[string]string{"PADDOCK_AMQP_URL": "amqp://x"})
 	_ = LoadAMQP(l)

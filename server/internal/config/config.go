@@ -290,6 +290,11 @@ func LoadOpenBao(l *Loader) OpenBao {
 	}
 }
 
+// LoadOpenBaoAddr reads PADDOCK_OPENBAO_ADDR only (roles without an AppRole: the unsealer).
+func LoadOpenBaoAddr(l *Loader) string {
+	return l.Required("PADDOCK_OPENBAO_ADDR")
+}
+
 // Valkey is the Valkey connection of gateway, worker and compiler.
 type Valkey struct {
 	Addr     string
