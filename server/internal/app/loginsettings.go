@@ -62,6 +62,9 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 	var out pgstore.OrganizationLoginSetting
 	in = loginsettings.Normalize(in)
 	err := s.runner.RunTx(ctx, ScopeOrg, SpecLoginSettingsUpdate, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		if err := q.LockLoginHistory(ctx); err != nil {
+			return err
+		}
 		cur, err := q.GetLoginSettings(ctx)
 		if err != nil {
 			return err

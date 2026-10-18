@@ -28,11 +28,12 @@ import (
 type DeviceReports struct {
 	runner *ActionRunner
 	org    *db.OrgPool
+	now    func() time.Time
 }
 
 // NewDeviceReports creates the use cases.
 func NewDeviceReports(runner *ActionRunner, org *db.OrgPool) *DeviceReports {
-	return &DeviceReports{runner: runner, org: org}
+	return &DeviceReports{runner: runner, org: org, now: time.Now}
 }
 
 // RecordStatus materializes a heartbeat into device_status; an older heartbeat never overwrites a newer one.
@@ -221,19 +222,10 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 // redelivery skips them by (device_id, event_seq).
 func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, events []protocol.Event) error {
 	entries := make([]OnceEntry, 0, len(events))
-	var history *bool
 	for _, ev := range events {
 		entry, ok := eventEntry(deviceID, ev)
 		if ev.Type == protocol.EventSessionLogin {
-			// The organization's setting is read once per batch, not per event (plan M8d decision 16).
-			if history == nil {
-				on, err := d.loginHistoryEnabled(ctx)
-				if err != nil {
-					return err
-				}
-				history = &on
-			}
-			entry, ok = sessionLoginEntry(deviceID, ev, *history)
+			entry, ok = sessionLoginEntry(deviceID, ev, d.now())
 		}
 		if ok {
 			entries = append(entries, entry)
@@ -310,11 +302,7 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 // recordSessionLogin notes that a user logged in on a device (device_user_seen, plan M3a decision 10); logins are not
 // audited (privacy, volume), and a redelivered event only repeats the same upsert. A malformed event is ignored.
 func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UUID, ev protocol.Event) error {
-	history, err := d.loginHistoryEnabled(ctx)
-	if err != nil {
-		return err
-	}
-	entry, ok := sessionLoginEntry(deviceID, ev, history)
+	entry, ok := sessionLoginEntry(deviceID, ev, d.now())
 	if !ok {
 		return nil
 	}
@@ -324,21 +312,14 @@ func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UU
 	})
 }
 
-// loginHistoryEnabled reports whether the context's organization records its login history.
-func (d *DeviceReports) loginHistoryEnabled(ctx context.Context) (bool, error) {
-	var on bool
-	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		s, err := q.GetLoginSettings(ctx)
-		on = s.LoginHistoryEnabled
-		return err
-	})
-	return on, err
-}
-
 // sessionLoginEntry is the unaudited batch entry of a session login (an upsert of device_user_seen and, while the
 // organization records its login history, a device_login_event row; plan M8d decision 16); false for a malformed
-// event, including a username with control characters.
-func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event, history bool) (OnceEntry, bool) {
+// event, including a username with control characters. The login time comes from the device: it is capped at the
+// server's time plus protocol.MaxClockSkew, so retention can delete every row (PDK-223 review 1 finding 4). The
+// setting is read in the inserting transaction under the shared login history lock, so a switch-off that commits
+// first prevents the insert and one that commits later deletes the row (finding 3); a login before the switch-on, or
+// older than the retention window, is not stored (finding 13).
+func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event, now time.Time) (OnceEntry, bool) {
 	var login protocol.SessionLogin
 	if json.Unmarshal(ev.Data, &login) != nil {
 		return OnceEntry{}, false
@@ -351,11 +332,25 @@ func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event, history bool) (Onc
 	if at.IsZero() || at.After(ev.OccurredAt.Add(time.Minute)) {
 		at = ev.OccurredAt
 	}
+	if latest := now.Add(protocol.MaxClockSkew); at.IsZero() || at.After(latest) {
+		at = latest
+	}
 	return OnceEntry{Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
 		if err := q.UpsertDeviceUserSeen(ctx, pgstore.UpsertDeviceUserSeenParams{
 			OrganizationID: mustOrg(ctx), DeviceID: deviceID, Username: username, LastSeenAt: at.UTC(),
-		}); err != nil || !history {
+		}); err != nil {
 			return false, err
+		}
+		if err := q.LockLoginHistoryShared(ctx); err != nil {
+			return false, err
+		}
+		s, err := q.GetLoginSettings(ctx)
+		if err != nil || !s.LoginHistoryEnabled {
+			return false, err
+		}
+		if (s.LoginHistoryEnabledAt != nil && at.Before(*s.LoginHistoryEnabledAt)) ||
+			at.Before(now.AddDate(0, 0, -int(s.LoginHistoryDays))) {
+			return false, nil
 		}
 		return false, q.InsertDeviceLoginEvent(ctx, pgstore.InsertDeviceLoginEventParams{
 			ID: uuid.Must(uuid.NewV7()), OrganizationID: mustOrg(ctx), DeviceID: deviceID, Username: username, At: at.UTC(),

@@ -11,7 +11,7 @@ import (
 
 const getLoginSettings = `-- name: GetLoginSettings :one
 
-SELECT organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days, disk_unlock_mode FROM organization_login_settings
+SELECT organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days, disk_unlock_mode, login_history_enabled_at FROM organization_login_settings
 `
 
 // Login settings (plan M3a decision 8): one row per organization, created with the defaults by a trigger.
@@ -35,8 +35,30 @@ func (q *Queries) GetLoginSettings(ctx context.Context) (OrganizationLoginSettin
 		&i.LoginHistoryEnabled,
 		&i.LoginHistoryDays,
 		&i.DiskUnlockMode,
+		&i.LoginHistoryEnabledAt,
 	)
 	return i, err
+}
+
+const lockLoginHistory = `-- name: LockLoginHistory :exec
+SELECT pg_advisory_xact_lock(hashtextextended('login_history:' || current_setting('paddock.org_id'), 0))
+`
+
+// Serializes a change of the login history setting with the worker's inserts (LockLoginHistoryShared): a switch-off
+// waits for running inserts, and its deletion sees them (PDK-223 review 1 finding 3).
+func (q *Queries) LockLoginHistory(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockLoginHistory)
+	return err
+}
+
+const lockLoginHistoryShared = `-- name: LockLoginHistoryShared :exec
+SELECT pg_advisory_xact_lock_shared(hashtextextended('login_history:' || current_setting('paddock.org_id'), 0))
+`
+
+// Taken by the worker before it reads the setting and inserts a login; concurrent inserts do not block each other.
+func (q *Queries) LockLoginHistoryShared(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockLoginHistoryShared)
+	return err
 }
 
 const updateLoginSettings = `-- name: UpdateLoginSettings :one
@@ -47,8 +69,12 @@ SET hello_enabled = $1, hello_pin_min_length = $2,
     local_admin_username = $7, local_admin_rotation_days = $8,
     rotate_after_reveal_hours = $9, notice_text = $10,
     boot_pin_min_length = $11, login_history_enabled = $12,
-    login_history_days = $13, disk_unlock_mode = $14, updated_at = now()
-RETURNING organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days, disk_unlock_mode
+    login_history_days = $13, disk_unlock_mode = $14, updated_at = now(),
+    login_history_enabled_at = CASE
+      WHEN NOT $12::boolean THEN NULL
+      WHEN organization_login_settings.login_history_enabled THEN organization_login_settings.login_history_enabled_at
+      ELSE now() END
+RETURNING organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days, disk_unlock_mode, login_history_enabled_at
 `
 
 type UpdateLoginSettingsParams struct {
@@ -103,6 +129,7 @@ func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettin
 		&i.LoginHistoryEnabled,
 		&i.LoginHistoryDays,
 		&i.DiskUnlockMode,
+		&i.LoginHistoryEnabledAt,
 	)
 	return i, err
 }

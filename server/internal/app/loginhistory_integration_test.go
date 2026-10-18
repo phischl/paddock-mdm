@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/app"
@@ -132,6 +133,12 @@ func TestLoginHistory(t *testing.T) {
 	if err := w.setHistory(t, boolPtr(true), intPtr(30)); err != nil {
 		t.Fatal(err)
 	}
+	// The logins below started before the switch-on above; date it back so they count (finding 13 is tested in
+	// TestLoginHistoryBounds).
+	if _, err := w.super.Exec(context.Background(), "UPDATE organization_login_settings SET login_history_enabled_at = $2 WHERE organization_id = $1",
+		w.org, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	ev := w.lastEvent(t)
 	if ev.Params["login_history_enabled"] != true || ev.Params["login_history_days"] != float64(30) {
 		t.Fatalf("enabled params %v", ev.Params)
@@ -203,4 +210,137 @@ func (w historyWorld) otherOrg(t *testing.T) uuid.UUID {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// TestLoginHistoryBounds (PDK-223 review 1 findings 4 and 13): a login dated in the future is stored at most
+// protocol.MaxClockSkew after the server's time; a login before the switch-on or older than the retention window is
+// not stored, while device_user_seen still notes the user.
+func TestLoginHistoryBounds(t *testing.T) {
+	w := newHistoryWorld(t)
+	if err := w.setHistory(t, boolPtr(true), intPtr(7)); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	w.logins(t, 1, "fred@acme.test", future)
+	var at time.Time
+	if err := w.super.QueryRow(context.Background(), "SELECT at FROM device_login_event WHERE device_id = $1", w.device).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	if at.After(time.Now().Add(protocol.MaxClockSkew)) {
+		t.Fatalf("future login stored at %s", at)
+	}
+
+	w.logins(t, 2, "gina@acme.test", time.Now().Add(-time.Hour))
+	if n := w.count(t, "device_login_event"); n != 1 {
+		t.Fatalf("a login before the switch-on was stored: %d rows", n)
+	}
+	if _, err := w.super.Exec(context.Background(), "UPDATE organization_login_settings SET login_history_enabled_at = now() - interval '30 days' WHERE organization_id = $1", w.org); err != nil {
+		t.Fatal(err)
+	}
+	w.logins(t, 3, "gina@acme.test", time.Now().Add(-8*24*time.Hour))
+	if n := w.count(t, "device_login_event"); n != 1 {
+		t.Fatalf("a login older than the retention window was stored: %d rows", n)
+	}
+	w.logins(t, 4, "gina@acme.test", time.Now().Add(-time.Hour))
+	if n := w.count(t, "device_login_event"); n != 2 {
+		t.Fatalf("a login after the switch-on was not stored: %d rows", n)
+	}
+	var seen int
+	if err := w.super.QueryRow(context.Background(), "SELECT count(*) FROM device_user_seen WHERE device_id = $1 AND username = 'gina@acme.test'", w.device).Scan(&seen); err != nil || seen != 1 {
+		t.Fatalf("device_user_seen %d (%v)", seen, err)
+	}
+	if err := w.setHistory(t, boolPtr(true), nil); err != nil {
+		t.Fatal(err)
+	}
+	var kept bool
+	if err := w.super.QueryRow(context.Background(), "SELECT login_history_enabled_at < now() - interval '1 day' FROM organization_login_settings WHERE organization_id = $1", w.org).Scan(&kept); err != nil || !kept {
+		t.Fatalf("saving the history on again moved the switch-on time (%v)", err)
+	}
+}
+
+// TestLoginHistorySwitchOffRace (PDK-223 review 1 finding 3): the worker decides inside its insert transaction under
+// the shared login history lock. A switch-off that holds the lock first leaves no row behind, and a switch-off while
+// an insert holds the lock waits and deletes the inserted row.
+func TestLoginHistorySwitchOffRace(t *testing.T) {
+	w := newHistoryWorld(t)
+	ctx := context.Background()
+	lockAs := func(tx pgx.Tx, shared bool) {
+		t.Helper()
+		fn := "pg_advisory_xact_lock"
+		if shared {
+			fn = "pg_advisory_xact_lock_shared"
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('paddock.org_id', $1, true)", w.org.String()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT "+fn+"(hashtextextended('login_history:' || current_setting('paddock.org_id'), 0))"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A switch-off in progress (lock, update, delete — what LoginSettings.Update does) commits after the worker
+	// started: the worker waits and then sees the history off.
+	if err := w.setHistory(t, boolPtr(true), nil); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := w.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockAs(tx, false)
+	if _, err := tx.Exec(ctx, "UPDATE organization_login_settings SET login_history_enabled = false, login_history_enabled_at = NULL WHERE organization_id = $1", w.org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM device_login_event WHERE organization_id = $1", w.org); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		data, _ := json.Marshal(protocol.SessionLogin{Username: "hank@acme.test", At: time.Now()})
+		_ = w.reports.RecordEvents(systemCtx(w.org), w.device, []protocol.Event{{EventSeq: 1, Type: protocol.EventSessionLogin,
+			OccurredAt: time.Now(), Data: data}})
+	}()
+	select {
+	case <-done:
+		t.Fatal("the insert did not wait for the switch-off")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if n := w.count(t, "device_login_event"); n != 0 {
+		t.Fatalf("%d rows after a switch-off that committed first", n)
+	}
+
+	// An insert holds the shared lock: the switch-off waits for it and its deletion sees the row.
+	if err := w.setHistory(t, boolPtr(true), nil); err != nil {
+		t.Fatal(err)
+	}
+	tx, err = w.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockAs(tx, true)
+	if _, err := tx.Exec(ctx, "INSERT INTO device_login_event (id, organization_id, device_id, username, at) VALUES ($1, $2, $3, 'ivy@acme.test', now())",
+		uuid.Must(uuid.NewV7()), w.org, w.device); err != nil {
+		t.Fatal(err)
+	}
+	off := make(chan error, 1)
+	go func() { off <- w.setHistory(t, boolPtr(false), nil) }()
+	select {
+	case err := <-off:
+		t.Fatalf("the switch-off did not wait for the insert: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-off; err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(t, "device_login_event"); n != 0 {
+		t.Fatalf("%d rows after a switch-off that waited for the insert", n)
+	}
 }

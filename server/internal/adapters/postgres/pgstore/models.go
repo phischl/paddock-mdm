@@ -474,6 +474,7 @@ type OrganizationLoginSetting struct {
 	LoginHistoryEnabled    bool
 	LoginHistoryDays       int32
 	DiskUnlockMode         string
+	LoginHistoryEnabledAt  *time.Time
 }
 
 type OrganizationManagedFileSetting struct {
