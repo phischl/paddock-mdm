@@ -283,6 +283,7 @@
       "quarantine_released": "{actor} hat das Gerät {hostname} aus der Quarantäne entlassen",
       "retired": "{actor} hat das Gerät {hostname} außer Betrieb genommen",
       "groups_changed": "{actor} hat die Gerätegruppen von {hostname} geändert",
+      "name_changed": "Gerätename geändert",
       "clone_suspected": "Das Gerät {hostname} wurde unter Quarantäne gestellt, weil seine Identität geklont zu sein scheint",
       "bundle_applied": "Das Gerät {target} hat Bundle {bundle_version, number} angewendet",
       "bundle_rejected": "Das Gerät {target} hat ein Bundle abgelehnt",

@@ -106,6 +106,7 @@ var privileged = map[string]struct {
 	"POST /api/v1/devices/{id}/update-agent":                               {app.ScopeOrg, app.SpecAgentUpdateRequest},
 	"POST /api/v1/devices/{id}/uninstall":                                  {app.ScopeOrg, app.SpecUninstallRequest},
 	"POST /api/v1/devices/{id}/uninstall/cancel":                           {app.ScopeOrg, app.SpecUninstallCancel},
+	"PUT /api/v1/devices/{id}/name":                                        {app.ScopeOrg, app.SpecDeviceSetName},
 	"POST /api/v1/devices/{id}/approve":                                    {app.ScopeOrg, app.SpecDeviceApprove},
 	"POST /api/v1/devices/{id}/reject":                                     {app.ScopeOrg, app.SpecDeviceReject},
 	"POST /api/v1/devices/{id}/release-quarantine":                         {app.ScopeOrg, app.SpecDeviceReleaseQuarantine},

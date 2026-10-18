@@ -283,6 +283,7 @@
       "quarantine_released": "{actor} released the device {hostname} from quarantine",
       "retired": "{actor} retired the device {hostname}",
       "groups_changed": "{actor} changed the device groups of {hostname}",
+      "name_changed": "Device name changed",
       "clone_suspected": "The device {hostname} was quarantined because its identity seems to be cloned",
       "bundle_applied": "The device {target} applied bundle {bundle_version, number}",
       "bundle_rejected": "The device {target} rejected a bundle",

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -290,5 +291,39 @@ func TestUpdatesResourceGolden(t *testing.T) {
 	}
 	if err := ValidateUpdates(UpdatesSpec{SecurityDailyAt: "03:00", RegularSchedule: "Sat 04:00", Holds: []Hold{{Package: "-o"}}}); err == nil {
 		t.Error("ValidateUpdates accepted an option as package")
+	}
+}
+
+func TestValidHostname(t *testing.T) {
+	cases := map[string]bool{
+		"a": true, "lap-0421": true, strings.Repeat("a", 63): true,
+		"": false, "-a": false, "a-": false, "A1": false, "a.b": false, "localhost": false,
+		strings.Repeat("a", 64): false, "a_b": false,
+	}
+	for name, want := range cases {
+		if got := ValidHostname(name); got != want {
+			t.Errorf("ValidHostname(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestHostnameResource(t *testing.T) {
+	r, err := HostnameResource(HostnameSpec{Name: "lap-0421"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.ID != "hostname" || r.Type != TypeHostname || string(r.Spec) != `{"name":"lap-0421"}` {
+		t.Errorf("resource %s/%s spec %s", r.ID, r.Type, r.Spec)
+	}
+	a := sample(t)
+	b := a
+	b.Hostname = &HostnameSpec{Name: "lap-0421"}
+	ha, _ := ContentSHA256(a)
+	hb, err := ContentSHA256(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ha == hb {
+		t.Error("the hostname section is not part of the content hash")
 	}
 }

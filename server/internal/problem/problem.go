@@ -53,8 +53,10 @@ var (
 	AlreadyExists       = &Error{Code: "already_exists", Status: http.StatusConflict}
 	InUse               = &Error{Code: "in_use", Status: http.StatusConflict}
 	SettingLocked       = &Error{Code: "setting_locked", Status: http.StatusConflict}
-	PathNotAllowed      = &Error{Code: "path_not_allowed", Status: http.StatusUnprocessableEntity}
-	UnitNotAllowed      = &Error{Code: "unit_not_allowed", Status: http.StatusUnprocessableEntity}
+	// Conflict: a unique value is held by another resource of the organization (plan M8h decision 4: a device name).
+	Conflict       = &Error{Code: "conflict", Status: http.StatusConflict}
+	PathNotAllowed = &Error{Code: "path_not_allowed", Status: http.StatusUnprocessableEntity}
+	UnitNotAllowed = &Error{Code: "unit_not_allowed", Status: http.StatusUnprocessableEntity}
 	// Update management (plan M5b decisions 1 and 3).
 	InvalidSchedule = &Error{Code: "invalid_schedule", Status: http.StatusUnprocessableEntity}
 	PackageOnHold   = &Error{Code: "package_on_hold", Status: http.StatusConflict}

@@ -179,7 +179,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description Roles: org_admin, org_operator, org_auditor. The members of a device group. */
+        /** @description Roles: org_admin, org_operator, org_auditor. The members of a device group. q matches the reported hostname, the managed name and the hardware UUID. */
         get: operations["listDeviceGroupDevices"];
         put?: never;
         post?: never;
@@ -415,7 +415,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Roles: org_admin, org_operator, org_auditor. */
+        /** @description Roles: org_admin, org_operator, org_auditor. q matches the reported hostname, the managed name and the hardware UUID. */
         get: operations["listDevices"];
         put?: never;
         post?: never;
@@ -706,6 +706,31 @@ export interface paths {
          *     bundle. An unknown or foreign user: 400 invalid_request.
          */
         put: operations["setDeviceOwners"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/name": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * @description Roles: org_admin, org_operator. Sets or clears the managed name of a device. The device applies it as its
+         *     hostname (static, transient and pretty) at its next check-in; a name changed on the device is corrected at the
+         *     next drift check. The name is one lowercase DNS label (1–63 characters, letters, digits, hyphens; not
+         *     "localhost") and unique among the organization's devices that are not retired (409 conflict otherwise); a
+         *     retired device cannot be named (409 invalid_state).
+         */
+        put: operations["setDeviceName"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3016,7 +3041,15 @@ export interface components {
         Device: {
             /** Format: uuid */
             id: string;
+            /** @description The hostname the device reported at its last check-in (at enrollment until then). */
             hostname: string;
+            /** @description The managed name the device applies as its hostname (ADR 0041); null when not managed. */
+            name: string | null;
+            /**
+             * @description unmanaged when name is null, applied when the reported hostname equals name, pending otherwise.
+             * @enum {string}
+             */
+            name_state: "unmanaged" | "pending" | "applied";
             state: components["schemas"]["DeviceState"];
             contact: components["schemas"]["DeviceContact"];
             hardware_uuid: string | null;
@@ -3895,6 +3928,10 @@ export interface components {
         };
         DeviceOwnersUpdate: {
             user_ids: string[];
+        };
+        DeviceNameUpdate: {
+            /** @description The managed name; null clears it (the device keeps its current hostname). */
+            name: string | null;
         };
         DeviceGroupsUpdate: {
             device_group_ids: string[];
@@ -5697,6 +5734,39 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+        };
+    };
+    setDeviceName: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceNameUpdate"];
+            };
+        };
+        responses: {
+            /** @description The device with its new managed name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
         };
     };
     getDeviceEffectiveConfig: {

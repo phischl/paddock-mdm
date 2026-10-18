@@ -42,6 +42,7 @@ var (
 	SpecDeviceRetire            = ActionSpec{Code: audit.CodeDeviceRetired, AllowedRoles: RolesAdmin}
 	SpecDeviceSetGroups         = ActionSpec{Code: audit.CodeDeviceGroupsChanged, AllowedRoles: RolesWrite}
 	SpecDeviceSetOwners         = ActionSpec{Code: audit.CodeDeviceOwnersChanged, AllowedRoles: RolesWrite}
+	SpecDeviceSetName           = ActionSpec{Code: audit.CodeDeviceNameChanged, AllowedRoles: RolesWrite}
 )
 
 // MaxDeviceOwners is the most owners a device can have (plan M8d decision 2).
@@ -395,6 +396,61 @@ func (d *Devices) SetOwners(ctx context.Context, id uuid.UUID, userIDs []uuid.UU
 		rec.SetParam("added", added)
 		rec.SetParam("removed", removed)
 		rec.SetParam("owners", owners)
+		out, err = loadDeviceDetail(ctx, q, id)
+		return err
+	})
+	return out, err
+}
+
+// Name states of a device (plan M8h decision 6).
+const (
+	NameUnmanaged = "unmanaged"
+	NamePending   = "pending"
+	NameApplied   = "applied"
+)
+
+// NameState derives whether a device's managed name is unmanaged, pending or applied from the managed name and the
+// hostname the device reported.
+func NameState(name *string, hostname string) string {
+	switch {
+	case name == nil:
+		return NameUnmanaged
+	case *name == hostname:
+		return NameApplied
+	default:
+		return NamePending
+	}
+}
+
+// SetName sets or clears (nil) the managed name of a device; the device applies it as its hostname at its next
+// check-in (audited: device.name_changed, ADR 0041).
+func (d *Devices) SetName(ctx context.Context, id uuid.UUID, name *string) (DeviceDetail, error) {
+	var out DeviceDetail
+	spec := SpecDeviceSetName
+	spec.Target = &audit.Target{Type: "device", ID: id.String()}
+	err := d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		dev, err := q.LockDevice(ctx, id)
+		if err != nil {
+			return notFound(err)
+		}
+		rec.SetTarget(audit.Target{Type: "device", ID: id.String(), Display: dev.Hostname})
+		rec.SetParam("hostname", dev.Hostname)
+		rec.SetParam("name", deref(name, ""))
+		rec.SetParam("previous_name", deref(dev.Name, ""))
+		if name != nil && !bundle.ValidHostname(*name) {
+			return problem.InvalidRequest.WithDetail(`name must be a lowercase host name label of 1 to 63 characters (letters, digits, hyphens), not "localhost"`)
+		}
+		if dev.State == device.StateRetired {
+			return problem.InvalidState.WithDetail("a retired device cannot be named")
+		}
+		_, err = q.SetDeviceName(ctx, pgstore.SetDeviceNameParams{ID: id, Name: name})
+		if db.IsUniqueViolation(err, "device_org_name_key") {
+			return problem.Conflict.WithDetail("name is used by another device of this organization")
+		}
+		if err != nil {
+			return err
+		}
+		rec.StateChanged(statechange.ScopeDevice, id)
 		out, err = loadDeviceDetail(ctx, q, id)
 		return err
 	})

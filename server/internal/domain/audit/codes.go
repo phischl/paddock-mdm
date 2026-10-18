@@ -22,6 +22,7 @@ const (
 	CodeDeviceRetired            Code = "device.retired"
 	CodeDeviceGroupsChanged      Code = "device.groups_changed"
 	CodeDeviceOwnersChanged      Code = "device.owners_changed"
+	CodeDeviceNameChanged        Code = "device.name_changed"
 	// Uninstall (plan M8d decisions 37, 38 and 41).
 	CodeDeviceUninstallRequested   Code = "device.uninstall_requested"
 	CodeDeviceUninstallCancelled   Code = "device.uninstall_cancelled"
@@ -296,6 +297,12 @@ var registry = map[Code]Definition{
 		Code: CodeDeviceGroupsChanged, Emitted: true,
 		Description: "The device group memberships of a device were replaced.",
 		Params:      []string{"hostname", "added", "removed"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceNameChanged: {
+		Code: CodeDeviceNameChanged, Emitted: true,
+		Description: "An administrator set or cleared the managed name of a device; the device applies it as its hostname at its next check-in.",
+		Params:      []string{"hostname", "name", "previous_name"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceAgentUpdateRequested: {

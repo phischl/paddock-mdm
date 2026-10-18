@@ -17,6 +17,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 // Releases are the Ubuntu releases the generator supports.
@@ -61,7 +63,6 @@ var (
 )
 
 var (
-	hostnamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	localePattern   = regexp.MustCompile(`^[a-z]{2,3}(_[A-Z]{2})?\.UTF-8$`)
 	keyboardPattern = regexp.MustCompile(`^[a-z]{2,8}$`)
 	timezonePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$`)
@@ -72,7 +73,7 @@ func Validate(release, hostname, locale, keyboardLayout, timezone string) error 
 	switch {
 	case !slices.Contains(Releases, release):
 		return ErrRelease
-	case !hostnamePattern.MatchString(hostname):
+	case !bundle.ValidHostname(hostname):
 		return ErrHostname
 	case !localePattern.MatchString(locale):
 		return ErrLocale

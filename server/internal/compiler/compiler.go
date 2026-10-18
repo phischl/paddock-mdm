@@ -160,6 +160,7 @@ type compileTarget struct {
 	agent     string // the agent version of the last check-in
 	forced    bool   // a forced state change targets the device (plan M6c decision 19)
 	request   updateRequest
+	name      *string // the device's managed name (ADR 0041); nil when not managed
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -217,6 +218,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
 				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
 				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
+			t.name = row.Name
 			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
@@ -384,6 +386,9 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
 		Agent: agent, Resources: resources, Keys: v2.Keys,
 		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection, Disk: diskSection,
+	}
+	if t.v2 {
+		b.Hostname = hostnameSection(ctx, t)
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {

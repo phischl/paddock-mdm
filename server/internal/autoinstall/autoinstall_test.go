@@ -234,6 +234,7 @@ func TestValidate(t *testing.T) {
 		"hostname quote":    {1, `a"b`, autoinstall.ErrHostname},
 		"hostname long":     {1, strings.Repeat("a", 64), autoinstall.ErrHostname},
 		"hostname hyphen":   {1, "-a", autoinstall.ErrHostname},
+		"hostname local":    {1, "localhost", autoinstall.ErrHostname},
 		"locale no charset": {2, "en_US", autoinstall.ErrLocale},
 		"locale injection":  {2, "en_US.UTF-8\nx: y", autoinstall.ErrLocale},
 		"keyboard":          {3, "us; reboot", autoinstall.ErrKeyboard},
