@@ -436,7 +436,7 @@ func gateP3(t *testing.T, w *identityWorld) {
 	changed := append(slices.Clone(w.restrictedCommands), "/usr/bin/uptime")
 	w.s.Call(http.MethodPatch, "/api/v1/permission-profiles/"+w.restrictedID, map[string]any{"commands": changed}, http.StatusOK)
 	start := time.Now()
-	Until(t, "profile change on the device", 3*time.Minute, 5*time.Second, nil, func() bool {
+	Until(t, "profile change on the device", nextCheckinBound, 5*time.Second, nil, func() bool {
 		return slices.Equal(w.sudoList(w.dave.name), changed)
 	})
 	t.Logf("profile change on the device after %s (one check-in)", time.Since(start).Round(time.Second))
