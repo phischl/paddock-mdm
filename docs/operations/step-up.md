@@ -86,11 +86,13 @@ everything else; an administrator applies root-equivalent changes from the porta
 The portal sign-in makes sure that every administrator has a WebAuthn authenticator, in two stages of the flow
 `paddock-admin-login`:
 
-- Order 30, `paddock-admin-login-mfa`: the administrator proves an existing authenticator (WebAuthn or TOTP). Only an
-  account with no authenticator at all enrols a WebAuthn authenticator here, after the password (residual risk RR-62).
+- Order 30, `paddock-admin-login-mfa`: the administrator proves an existing authenticator (WebAuthn or TOTP). Authentik
+  counts one of the account's recovery codes as the TOTP factor and accepts it here as well. Only an account with no
+  WebAuthn or TOTP authenticator enrols a WebAuthn authenticator here, after the password (residual risk RR-62).
 - Order 31, `paddock-admin-login-webauthn`: runs only for an account without a WebAuthn device (policy
-  `paddock-admin-login-webauthn-missing`). An administrator with TOTP only has just proven the TOTP code and enrols a
-  WebAuthn authenticator now; the password alone never enrols a key for an account that has an authenticator.
+  `paddock-admin-login-webauthn-missing`). An administrator with TOTP only has just proven the TOTP code or entered a
+  recovery code and enrols a WebAuthn authenticator now; the password alone never enrols a key for an account with
+  TOTP or WebAuthn, but the password and one recovery code do (RR-62: keep administrators' recovery codes in custody).
 
 A TOTP authenticator stays usable for Authentik's own interfaces and the device login. A TOTP-only administrator who
 reaches the portal through an existing Authentik session (Authentik's default sign-in) never passes these stages and
@@ -148,7 +150,8 @@ next step-up asks for credentials again once it is older than 20 s.
 Earlier versions also accepted a TOTP code at the step-up and at the portal sign-in. Every administrator needs a
 browser or device with a WebAuthn authenticator (security key, or a platform authenticator such as Windows Hello,
 Touch ID, Android, or a phone through the browser's QR code). The portal sign-in now enrols a WebAuthn authenticator
-when the administrator has none, after the administrator proved an existing TOTP authenticator (section *Factor*); a
+when the administrator has none, after the administrator proved an existing TOTP authenticator or entered one of
+its recovery codes (section *Factor*); a
 TOTP authenticator stays usable for Authentik's own interfaces and the device login. No enrolment before the upgrade
 is required.
 
@@ -160,7 +163,10 @@ upgrade, each in a private browser window:
 1. An administrator with a TOTP authenticator only signs in through the portal: Authentik asks for the password, then
    for the TOTP code, then for the WebAuthn enrolment; after the enrolment the portal opens and a step-up succeeds.
 2. The same kind of account (TOTP only, a second test administrator), with the password but a wrong TOTP code:
-   Authentik refuses the code and never offers a WebAuthn enrolment.
+   Authentik refuses the code and never offers a WebAuthn enrolment. An unused recovery code of the same account in
+   place of the TOTP code is accepted (Authentik counts it as the TOTP factor) and leads to the WebAuthn enrolment;
+   the enrolment appears in Authentik's event log (*Events* → `model_created`, WebAuthn device). Regenerate the
+   account's recovery codes afterwards.
 3. An administrator with a WebAuthn authenticator signs in: Authentik asks for the password and once for the
    authenticator, then the portal opens.
 4. A new administrator without any authenticator signs in: Authentik asks for the password and then for the WebAuthn
@@ -171,9 +177,12 @@ upgrade, each in a private browser window:
    1. A user with TOTP signs in with the TOTP code: Authentik asks for the code once, then the user interface opens.
    2. A user with WebAuthn signs in with the WebAuthn authenticator: Authentik asks for it once, then the user
       interface opens.
-   3. A user with TOTP and recovery codes chooses a recovery code at order 30: Authentik then asks for the TOTP code or
-      a WebAuthn authenticator at order 31 and offers no enrolment; without a valid TOTP code the sign-in does not
-      finish, so no session exists from which a passkey could be enrolled in the user settings.
+   3. A user with TOTP and recovery codes chooses a recovery code at order 30: Authentik then asks again at order 31
+      (TOTP code or WebAuthn authenticator) and offers no enrolment. Authentik also accepts a second, unused recovery
+      code there, because it counts a recovery code as the TOTP factor. The sign-in therefore finishes only after a
+      second factor of the user's own devices, recovery codes included; the password and a single recovery code are
+      not enough (a used code is spent). Whoever holds the password and two recovery codes gets a session and can
+      enrol a passkey in the user settings (RR-62).
    4. A user without TOTP or WebAuthn (no device, or recovery codes only) is asked to enrol one (WebAuthn or TOTP)
       after the password and any factor order 30 asks for.
 
