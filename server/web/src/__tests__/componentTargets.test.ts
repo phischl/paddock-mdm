@@ -65,6 +65,6 @@ describe('component list helpers', () => {
     expect(componentStatus('ok').status).toBe('ok')
     expect(componentStatus('missing').status).toBe('neutral')
     expect(componentFilter.kind === 'enum' && componentFilter.key).toBe('component_outdated')
-    expect(componentFilter.hint).toBe('devices.components.targetHint')
+    expect(componentFilter.kind === 'enum' && componentFilter.hint).toBe('devices.components.targetHint')
   })
 })
