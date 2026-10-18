@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without the portal acknowledgement, stores the shares in `.secrets/openbao/auto-unseal-shares`, sets
   `PADDOCK_AUTO_UNSEAL=yes` and starts the new `paddock-unsealer` service (its own PostgreSQL role, no AppRole), which
   unseals OpenBao after every restart while the setting is on. Disabling in the portal stops it at once;
-  `./paddock auto-unseal disable` removes the unsealer and the shares; `./paddock auto-unseal status` reports the state.
+  `./paddock auto-unseal disable` removes the unsealer and the shares of its bundle directory (delete the copy in a
+  bundle directory kept for rollback as well, `docs/operations/openbao.md` section 6); `./paddock auto-unseal status`
+  reports the state.
   Every step is audited (`platform.auto_unseal_enabled`, `platform.auto_unseal_disabled`,
   `platform.openbao_auto_unsealed`); `paddock-server admin auto-unseal show|verify|disable` serves the host. The
   shares on the host are residual risk RR-43: `./paddock check` gains the item `openbao auto-unseal` and the status

@@ -49,7 +49,11 @@ once and asks for one security review afterwards: follow the four steps in `docs
    ```
 
 5. Watch the readiness of the roles and the alerts for an hour (`docs/operations/monitoring.md`). Keep A's directory
-   until the next upgrade: it is the rollback.
+   until the next upgrade: it is the rollback. A's `.secrets/` stays a full copy of the secrets, including the
+   OpenBao shares file `.secrets/openbao/auto-unseal-shares` when automatic unseal is on. When you disable automatic
+   unseal later, delete that file in A's directory as well (`docs/operations/openbao.md` section 6, *Disabling*) —
+   `./paddock auto-unseal disable` deletes only the copy of the directory it runs in — and rotate the shares if the
+   host may have been copied. When you delete A's directory, delete its `.secrets/` with it.
 
 Then the audit host, the same way without step 3.
 

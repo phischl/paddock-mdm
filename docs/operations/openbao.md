@@ -203,6 +203,12 @@ report (`./paddock compose run --rm --no-deps paddock-worker admin auto-unseal s
    the shares are deleted from this host. If the host, its disk or its backups may have been copied while automatic unseal was on, rotate the shares with three custodians (docs/operations/openbao.md section 6). If the portal still shows automatic unseal as enabled, a platform administrator disables it there.
    ```
 
+3. **Every other bundle directory**: the command deletes the shares file of the bundle directory it runs in only.
+   `./paddock migrate-from` copies `.secrets/` (`docs/operations/upgrade.md`), so the directory of the previous
+   version kept for rollback holds its own copy at `.secrets/openbao/auto-unseal-shares`. Delete it in every kept
+   bundle directory as well (`shred -u` where available), or run `./paddock auto-unseal disable` there before you
+   start that version again. If such a copy may have been copied off the host, rotate the shares as below.
+
 `shred` does not guarantee erasure on SSDs or copy-on-write file systems. If the host, its disk, its snapshots or its
 backups may have been copied while automatic unseal was on, **rekey** with three custodians, which invalidates every
 copy of the shares file:
