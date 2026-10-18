@@ -98,9 +98,23 @@ function onConfirm(): void {
           </li>
         </ol>
         <p>{{ t('openbao.disclaimer.outro', { version }) }}</p>
+        <p
+          :id="id + '-prompt'"
+          class="disclaimer-prompt"
+        >
+          {{ t('openbao.disclaimer.typePrompt') }}
+        </p>
+        <!-- The sentence stands outside the field label, which is cut off on a narrow screen (PDK-199 fix round 2). -->
+        <blockquote
+          class="disclaimer-sentence"
+          data-testid="auto-unseal-sentence"
+        >
+          {{ sentence }}
+        </blockquote>
         <v-text-field
           v-model="typed"
-          :label="t('openbao.disclaimer.typeLabel', { sentence })"
+          :label="t('openbao.disclaimer.typeLabel')"
+          :aria-describedby="id + '-prompt'"
           autocomplete="off"
           spellcheck="false"
           data-testid="auto-unseal-typed"
@@ -148,5 +162,18 @@ function onConfirm(): void {
 
 .disclaimer-risks li + li {
   margin-top: var(--pd-space-2);
+}
+
+.disclaimer-prompt {
+  margin-top: var(--pd-space-3);
+}
+
+.disclaimer-sentence {
+  margin: var(--pd-space-2) 0 var(--pd-space-3);
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 </style>

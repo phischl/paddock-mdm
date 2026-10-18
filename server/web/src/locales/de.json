@@ -989,7 +989,8 @@
       "risk3": "Kopien und Backups des Hosts werden so sensibel wie die Schlüssel selbst. Paddock schreibt die Anteile nie in seine eigenen Backups, aber ein Festplattenabbild, ein VM-Snapshot oder eine Kopie des Bundle-Verzeichnisses enthält sie — und nichts in Paddock kann erkennen, dass eine solche Kopie existiert.",
       "risk4": "Dies ist ein Restrisiko Ihres Informationssicherheits-Managementsystems (RR-43 in docs/compliance/residual-risks.md). Erfassen Sie es mit einem Verantwortlichen und einer Entscheidung. Auf einem Produktions-Host warnt ./paddock check bei jedem Lauf, solange das automatische Entsiegeln an ist.",
       "outro": "Das Aktivieren hier legt keinen Anteil auf den Host. Es zeichnet Ihre Bestätigung mit Ihrem Namen, der Uhrzeit und der Version dieses Textes ({version}) im Audit-Log auf. Ein Operator mit Zugang zum Host führt danach ./paddock auto-unseal enable aus; ohne diese Bestätigung verweigert der Befehl die Ausführung. Das Deaktivieren hier beendet das automatische Entsiegeln sofort; die Anteile bleiben auf dem Host, bis der Operator ./paddock auto-unseal disable ausführt.",
-      "typeLabel": "Geben Sie zur Bestätigung den Satz ein: {sentence}",
+      "typePrompt": "Geben Sie zur Bestätigung diesen Satz ein:",
+      "typeLabel": "Bestätigungssatz",
       "sentence": "Ich verstehe und akzeptiere das Risiko"
     }
   },

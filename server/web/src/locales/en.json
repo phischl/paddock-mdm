@@ -989,7 +989,8 @@
       "risk3": "Copies and backups of the host become as sensitive as the keys. Paddock never writes the shares into its own backups, but a disk image, a VM snapshot or a copy of the bundle directory does contain them, and nothing in Paddock can tell that such a copy exists.",
       "risk4": "This is a residual risk of your information security management system (RR-43 in docs/compliance/residual-risks.md). Record it with an owner and a decision. On a production host, ./paddock check warns on every run while automatic unseal is on.",
       "outro": "Enabling here places no share on the host. It records your acknowledgement, with your name, the time and the version of this text ({version}), in the audit log. An operator with access to the host then runs ./paddock auto-unseal enable, which refuses to run without this acknowledgement. Disabling here stops the automatic unseal at once; the shares stay on the host until the operator runs ./paddock auto-unseal disable.",
-      "typeLabel": "Type the sentence to confirm: {sentence}",
+      "typePrompt": "Type this sentence to confirm:",
+      "typeLabel": "Sentence to confirm",
       "sentence": "I understand and accept the risk"
     }
   },

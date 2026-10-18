@@ -130,8 +130,23 @@ describe('AutoUnsealDisclaimerDialog (plan M8u decision 23)', () => {
       en.openbao.disclaimer.risk4,
     ])
     expect(text).toContain(en.openbao.disclaimer.outro.replace('{version}', '2026-10-17'))
-    expect(text).toContain('Type the sentence to confirm: I understand and accept the risk')
+    expect(text).toContain('Type this sentence to confirm:')
     expect(document.activeElement).toBe(el('auto-unseal-cancel'))
+  })
+
+  it('shows the full sentence as its own text outside the short field label, in both languages', async () => {
+    for (const [locale, catalog] of [['en', en], ['de', de]] as const) {
+      mountDialog(locale)
+      await flushPromises()
+      const quote = el('auto-unseal-sentence')
+      expect(quote?.textContent?.trim()).toBe(catalog.openbao.disclaimer.sentence)
+      expect(quote?.closest('label')).toBeNull()
+      const label = el('auto-unseal-typed')?.querySelector('label')?.textContent ?? ''
+      expect(label).toContain(catalog.openbao.disclaimer.typeLabel)
+      expect(label).not.toContain(catalog.openbao.disclaimer.sentence)
+      wrapper?.unmount()
+      wrapper = null
+    }
   })
 
   it('enables the button only for the exact English sentence', async () => {

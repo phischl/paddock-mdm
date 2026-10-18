@@ -920,6 +920,12 @@ numbered list, `outro` and the field labelled `typeLabel`; a component test MUST
 four risks. The constants `autounseal.Acknowledgements` MUST equal `disclaimer.sentence` of `en.json` and `de.json`;
 a Go test in `server/internal/domain/autounseal` MUST read both catalogs and compare.
 
+Amendment 2026-10-18 (architect note, decided by the orchestrator as architect, 2026-10-18; PDK-199 fix round 2,
+browser check at 375 px): the field label cut the sentence off on a phone. The dialog shows the sentence as its own
+quoted block after the new key `typePrompt` (en `"Type this sentence to confirm:"`, de `"Geben Sie zur Bestätigung
+diesen Satz ein:"`), and `typeLabel` becomes the short field label (en `"Sentence to confirm"`, de
+`"Bestätigungssatz"`) without `{sentence}`. `sentence` and every other key above stay verbatim.
+
 ### 6.7 Residual risk RR-43 (`docs/compliance/residual-risks.md`, section "Control plane and audit domain", verbatim)
 
 M8b reserved RR-40 to RR-42; this plan takes **RR-43**.
