@@ -24,7 +24,7 @@ type isolationWorld struct {
 	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
 	// globexSim is the simulated agent of globexDevice.
 	globexSim *devicesim.Device
-	// globexLogin is the user name of the session start globexSim reported (seedGlobexOwnersAndLogins).
+	// globexLogin is the user name of the session start globexSim reported (seedGlobexLogin).
 	globexLogin string
 	// globexEnrollment is the enrollment configuration of globexToken.
 	globexEnrollment protocol.EnrollmentConfig
@@ -117,9 +117,9 @@ func seedGlobexIdentity(t *testing.T, w *isolationWorld) {
 	w.globexIDs = append(w.globexIDs, w.globexUser, w.globexUserGroup, w.globexProfile, w.globexAssignment)
 }
 
-// seedGlobexOwnersAndLogins makes, as carol, globexUser the owner of globexDevice and records one session start of
-// globexDevice with login history on (restored when the gate ends), so the user's devices and the device's logins
-// have globex data to find.
+// seedGlobexOwnersAndLogins makes, as carol, globexUser the owner of globexDevice and switches login history on
+// (restored when the gate ends), so the user's devices have globex data to find; the session start itself is seeded
+// right before the logins list is checked (seedGlobexLogin).
 func seedGlobexOwnersAndLogins(t *testing.T, w *isolationWorld) {
 	t.Helper()
 	res := call(t, w.carol, http.MethodPut, "/api/v1/devices/"+w.globexDevice+"/owners", map[string]any{"user_ids": []string{w.globexUser}})
@@ -127,9 +127,29 @@ func seedGlobexOwnersAndLogins(t *testing.T, w *isolationWorld) {
 	original := currentLoginSettings(t, w.carol)
 	w.top.Cleanup(func() { _ = call(w.top, w.carol, http.MethodPut, "/api/v1/settings/login", original) })
 	expectStatus(t, putLoginHistory(t, w.carol, true, 365), http.StatusOK, "")
-	// A session start before the switch-on is not recorded: at is taken after the PUT returned.
+}
+
+// seedGlobexLogin records one session start of globexDevice and waits until carol sees it. It runs right before the
+// logins list is checked: the development stack counts the retention days in seconds, so a row seeded with the
+// other fixtures could be purged before the gate reaches the route.
+func seedGlobexLogin(t *testing.T, w *isolationWorld) {
+	t.Helper()
 	w.globexLogin = "globex-iso-" + uniqueSuffix() + "@globex.test"
 	sendSessionLogins(t, w.globexSim, 1, w.globexLogin, time.Now().UTC().Truncate(time.Millisecond))
+	query := "/api/v1/devices/" + w.globexDevice + "/logins?" + url.Values{"username": {strings.ToLower(w.globexLogin)}}.Encode()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Second) {
+		var page struct {
+			Total int `json:"total"`
+		}
+		res := call(t, w.carol, http.MethodGet, query, nil)
+		expectStatus(t, res, http.StatusOK, "")
+		if err := res.JSON(&page); err == nil && page.Total > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the seeded globex login is not listed for carol within 30 s: %s", res.Body)
+		}
+	}
 }
 
 // seedGlobexDevices creates, as carol, a device group with an enrolled device (through the device API), an
@@ -601,7 +621,7 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"globex-iso"}},
 		{"action": {"destroy"}, "status": {"requested"}, "page_size": {"100"}},
 	},
-	// globexUser owns globexDevice, which reported one session start (seedGlobexOwnersAndLogins).
+	// globexUser owns globexDevice (seedGlobexOwnersAndLogins), which reported one session start (seedGlobexLogin).
 	"/api/v1/users/{id}/devices":  {{"q": {"globex-iso"}}, {"sort": {"-last_contact_at"}}},
 	"/api/v1/devices/{id}/logins": {{"q": {"globex-iso"}}, {"sort": {"username"}}},
 }
@@ -650,6 +670,12 @@ func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 	}
 	delete(s, "updated_at")
 	return s
+}
+
+// listSeeds seed globex data of a collection GET right before the gate checks it: data the development stack's
+// retention purges within minutes.
+var listSeeds = map[string]func(t *testing.T, w *isolationWorld){
+	"/api/v1/devices/{id}/logins": seedGlobexLogin,
 }
 
 // listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c

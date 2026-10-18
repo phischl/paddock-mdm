@@ -144,6 +144,9 @@ func TestOrganizationIsolation(t *testing.T) {
 			if !ok {
 				t.Fatalf("collection GET %s has no entry in listIsolationQueries", path)
 			}
+			if seed := listSeeds[path]; seed != nil {
+				seed(t, w)
+			}
 			for _, dynamic := range listIsolationDynamicQueries[path] {
 				queries = append(queries, dynamic(w))
 			}
