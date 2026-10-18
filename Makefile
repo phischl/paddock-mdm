@@ -365,8 +365,19 @@ system-test: ## Run the agent system tests on the VirtualBox VMs against the run
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	PADDOCK_SYSTEM_VMS=$(VM) go test -count=1 -timeout 8h ./test/system/... $(if $(T),-run '$(T)',) -v
 
+# The Playwright image ships the browsers of exactly one @playwright/test version (PDK-290): refuse a mismatch before
+# any test runs instead of failing on missing browsers. Dependabot ignores the package; bump both together.
+.PHONY: e2e-check-playwright
+e2e-check-playwright:
+	@npm="$$(sed -n 's/.*"@playwright\/test": "\([^"]*\)".*/\1/p' $(WEB_DIR)/package.json)"; \
+	image="$$(printf '%s\n' '$(PLAYWRIGHT_IMAGE)' | sed -n 's/.*playwright:v\([^-]*\)-.*/\1/p')"; \
+	if [ -z "$$npm" ] || [ "$$npm" != "$$image" ]; then \
+		echo "@playwright/test $$npm in server/web/package.json does not match PLAYWRIGHT_IMAGE v$$image in deploy/compose/versions.env; bump both together" >&2; \
+		exit 1; \
+	fi
+
 .PHONY: e2e
-e2e: ## Run Playwright end-to-end tests against the running stack (PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
+e2e: e2e-check-playwright ## Run Playwright end-to-end tests against the running stack (PADDOCK_E2E_SCREENSHOTS=1 also writes the README screenshots)
 	CGO_ENABLED=0 go build -o bin/devicesim ./test/acceptance/cmd/devicesim
 	CGO_ENABLED=0 go build -o bin/agentrelease ./test/acceptance/cmd/agentrelease
 	docker run --rm --network host -u $(UID):$(GID) -e HOME=/tmp -e npm_config_cache=/tmp/.npm \
