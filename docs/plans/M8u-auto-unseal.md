@@ -982,7 +982,9 @@ PDK-199 last. PDK-193 and PDK-194 MAY run in parallel.
 
 Roles: **P** = platform admin (`env.PlatformAdmin`, step-up with `stepUp`), **A** = org_admin (`env.Alice`),
 **T** = API token of `env.Alice`, **O** = host operator (CI smoke test). "Event" = exactly one audit event with the
-given code and outcome in the platform pseudo-organization, found with `expectOneIndexEvent` by `correlation_id`.
+given code and outcome in the platform pseudo-organization, found with `expectOneIndexEvent` by `correlation_id`;
+a denied action of an organization principal (A, T) is recorded in that principal's own organization (ActionRunner
+rule), found with `expectOneEvent` (architect note 2026-10-18).
 
 | # | Given / When / Then | Role sees |
 | --- | --- | --- |
