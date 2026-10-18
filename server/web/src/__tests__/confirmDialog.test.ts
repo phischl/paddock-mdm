@@ -6,6 +6,7 @@ import ConfirmDialog from '../components/ConfirmDialog.vue'
 import { pendingConfirm, settleConfirm, useConfirm } from '../composables/useConfirm'
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
+import styles from '../styles.css?raw'
 
 let wrapper: VueWrapper | null = null
 
@@ -67,6 +68,15 @@ describe('ConfirmDialog', () => {
     expect(w.emitted('confirm')).toHaveLength(1)
     expect(w.emitted('cancel')).toHaveLength(1)
     expect(el('confirm-accept')?.className).toContain('bg-error')
+  })
+
+  it('puts its buttons into the shared action row, which wraps on a narrow screen (PDK-199 fix round 3)', async () => {
+    mountDialog({ confirmLabel: 'Automatisches Entsiegeln aktivieren' })
+    await flushPromises()
+    const row = el('confirm-cancel')?.parentElement
+    expect(row?.classList.contains('form-actions')).toBe(true)
+    expect(el('confirm-accept')?.parentElement).toBe(row)
+    expect(styles).toMatch(/\.form-actions\s*\{[^}]*flex-wrap:\s*wrap/)
   })
 
   it('cancels on Esc', async () => {

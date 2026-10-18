@@ -11,6 +11,7 @@ import type { AutoUnsealAcknowledgement, AutoUnsealStatus } from '../lib/autoUns
 import { vuetify } from '../plugins/vuetify'
 import en from '../locales/en.json'
 import de from '../locales/de.json'
+import styles from '../styles.css?raw'
 
 function statusOf(over: Partial<AutoUnsealStatus> = {}, unsealer: Partial<AutoUnsealStatus['unsealer']> = {}): AutoUnsealStatus {
   return {
@@ -177,6 +178,15 @@ describe('AutoUnsealDisclaimerDialog (plan M8u decision 23)', () => {
     expect(accept().disabled).toBe(false)
     accept().click()
     expect(w.emitted('confirm')).toEqual([[{ disclaimer_version: '2026-10-17', acknowledgement: 'Ich verstehe und akzeptiere das Risiko' }]])
+  })
+
+  it('puts its buttons into the shared action row, which wraps on a narrow screen', async () => {
+    mountDialog('de')
+    await flushPromises()
+    const row = el('auto-unseal-cancel')?.parentElement
+    expect(row?.classList.contains('form-actions')).toBe(true)
+    expect(el('auto-unseal-accept')?.parentElement).toBe(row)
+    expect(styles).toMatch(/\.form-actions\s*\{[^}]*flex-wrap:\s*wrap/)
   })
 
   it('cancels on Esc', async () => {

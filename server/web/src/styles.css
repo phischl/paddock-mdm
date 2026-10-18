@@ -57,7 +57,8 @@ h3 { font-size: 13px; line-height: 18px; font-weight: 600; margin: 0; }
 
 .form { display: flex; flex-direction: column; gap: 0.5rem; }
 .form-error { color: var(--pd-status-critical-fg); font-weight: 600; }
-.form-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
+/* Wraps so that a long button label (German at 375 px) moves to its own line instead of pushing the others off-screen. */
+.form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
 .filters { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; }
 /* A filter's hint shows below it while it has the focus; the other filters keep their place. */
 .filters .v-input { flex: 0 1 14rem; align-self: flex-start; }
