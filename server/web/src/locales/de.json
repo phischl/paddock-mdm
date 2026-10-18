@@ -1563,7 +1563,7 @@
   },
   "dms": {
     "title": "Totmannschalter",
-    "warning": "Ist Paddock länger als diese Frist nicht erreichbar, sperrt sich jedes Gerät mit eingeschaltetem Schalter selbst.",
+    "warning": "Ist Paddock länger als diese Frist nicht erreichbar, sperrt sich jedes Gerät mit eingeschaltetem Schalter selbst. Das gilt auch für ein Gerät, dessen Verbindung zu Paddock absichtlich blockiert wird: Ein Angreifer, der das Gerät von Paddock fernhält, kann die Sperre auslösen.",
     "enabled": "Totmannschalter einschalten",
     "period": "Frist (Tage)",
     "periodHint": "Tage Betriebszeit ohne Kontakt zu Paddock, nach denen sich ein Gerät selbst sperrt.",
@@ -1575,7 +1575,7 @@
     "saved": "Die Einstellungen wurden gespeichert. Die Geräte erhalten sie bei ihrem nächsten Check-in.",
     "confirm": {
       "title": "Totmannschalter einschalten",
-      "message": "Jedes Gerät der Organisation sperrt sich nach {days, plural, one {# Tag} other {# Tagen}} Betriebszeit ohne Kontakt zu Paddock selbst, auch wenn Paddock selbst ausgefallen ist. Ein gesperrtes Gerät muss mit seinem hinterlegten Header und dem Wiederherstellungsschlüssel wiederhergestellt werden.",
+      "message": "Jedes Gerät der Organisation sperrt sich nach {days, plural, one {# Tag} other {# Tagen}} Betriebszeit ohne Kontakt zu Paddock selbst, auch wenn Paddock selbst ausgefallen ist oder die Verbindung des Geräts absichtlich blockiert wird. Ein gesperrtes Gerät muss mit seinem hinterlegten Header und dem Wiederherstellungsschlüssel wiederhergestellt werden.",
       "label": "Einschalten"
     }
   },
@@ -1719,7 +1719,8 @@
       "revocation_expired": "Sperre oder Vernichtung abgelaufen",
       "agent_rollback_pending": "Agent-Rücksetzung ausstehend",
       "agent_not_running": "Agent läuft nicht",
-      "uninstall_pending": "Entfernung von Paddock ausstehend"
+      "uninstall_pending": "Entfernung von Paddock ausstehend",
+      "config_behind": "Konfiguration im Rückstand"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1734,7 +1735,8 @@
       "revocation_expired": "Gerät öffnen",
       "agent_rollback_pending": "Gerät öffnen",
       "agent_not_running": "Gerät öffnen",
-      "uninstall_pending": "Gerät öffnen"
+      "uninstall_pending": "Gerät öffnen",
+      "config_behind": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

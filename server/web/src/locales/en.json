@@ -1563,7 +1563,7 @@
   },
   "dms": {
     "title": "Dead man's switch",
-    "warning": "If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself.",
+    "warning": "If Paddock is unreachable for longer than this period, every device with the switch enabled locks itself. This includes a device whose connection to Paddock is blocked on purpose: an attacker who keeps the device from reaching Paddock can trigger the lock.",
     "enabled": "Turn on the dead man's switch",
     "period": "Period (days)",
     "periodHint": "Days of uptime without reaching Paddock after which a device locks itself.",
@@ -1575,7 +1575,7 @@
     "saved": "The settings were saved. Devices receive them with their next check-in.",
     "confirm": {
       "title": "Turn on the dead man's switch",
-      "message": "Every device of the organization locks itself after {days, plural, one {# day} other {# days}} of uptime without reaching Paddock, also when Paddock itself is down. A locked device must be restored with its escrowed header and recovery key.",
+      "message": "Every device of the organization locks itself after {days, plural, one {# day} other {# days}} of uptime without reaching Paddock, also when Paddock itself is down or the device's connection is blocked on purpose. A locked device must be restored with its escrowed header and recovery key.",
       "label": "Turn on"
     }
   },
@@ -1719,7 +1719,8 @@
       "revocation_expired": "Lock or Destroy expired",
       "agent_rollback_pending": "Agent rollback pending",
       "agent_not_running": "Agent not running",
-      "uninstall_pending": "Removal of Paddock pending"
+      "uninstall_pending": "Removal of Paddock pending",
+      "config_behind": "Configuration behind"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1734,7 +1735,8 @@
       "revocation_expired": "Open device",
       "agent_rollback_pending": "Open device",
       "agent_not_running": "Open device",
-      "uninstall_pending": "Open device"
+      "uninstall_pending": "Open device",
+      "config_behind": "Open device"
     },
     "more": "+{count}",
     "empty": {
