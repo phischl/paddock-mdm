@@ -291,8 +291,7 @@ defineExpose({ reload: load })
             multiple
             clearable
             :hint="f.hint ? t(f.hint) : undefined"
-            :persistent-hint="!!f.hint"
-            :hide-details="!f.hint"
+            :hide-details="f.hint ? 'auto' : true"
             :data-testid="'list-filter-' + f.key"
             @update:model-value="(v: string[] | null) => update({ [f.key]: v ?? [] })"
           />

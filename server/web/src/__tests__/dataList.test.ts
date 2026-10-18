@@ -80,10 +80,15 @@ async function mountList(
 }
 
 describe('DataList', () => {
-  it('shows the hint of a filter below it', async () => {
+  it('shows the hint of a filter below it while the filter has the focus', async () => {
     const fetch = vi.fn((p: ListParams) => Promise.resolve(pageOf(p, 1)))
     const { w } = await mountList('/list', fetch, undefined, { filters: [{ ...filters[0], hint: 'devices.contactHint' }] })
-    expect(w.find('[data-testid="list-filter-status"]').text()).toContain('Online: a check-in within the last 15 minutes.')
+    const filter = w.get('[data-testid="list-filter-status"]')
+    expect(filter.text()).not.toContain('Online: a check-in within the last 15 minutes.')
+    await filter.get('input').trigger('focus')
+    expect(filter.text()).toContain('Online: a check-in within the last 15 minutes.')
+    const describedBy = filter.get('input').attributes('aria-describedby')
+    expect(document.getElementById(describedBy!)?.textContent).toContain('Online: a check-in within the last 15 minutes.')
   })
 
   it('reads the list state from the URL', async () => {
