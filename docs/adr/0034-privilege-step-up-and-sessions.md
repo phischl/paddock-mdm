@@ -216,7 +216,10 @@ Decisions:
    at sign-in.
 4. **End all sessions** (decision 4) also deletes the identity provider's authenticated sessions of every portal user
    (platform administrators and the three role groups of every organization) through Authentik's
-   `core/authenticated_sessions/bulk_delete`, inside the same audited action; the service account gains the two session
+   `core/authenticated_sessions/bulk_delete`, inside the same audited action, run as its external part
+   (`ActionRunner.RunExternal`: the started action is committed before Valkey and Authentik are called, so a crash
+   leaves an action the reaper records as `unknown`; the Authentik part has 80 s, below the 120 s HTTP write timeout);
+   the service account gains the two session
    permissions. A single account's revocation (role change, step-up mismatch, deactivation) stays Paddock-only: the
    account signs in again with its current role, and a deactivation already ended everything in Authentik.
 

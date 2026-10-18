@@ -1040,8 +1040,8 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > enrols WebAuthn for an account without a WebAuthn device (stage `paddock-admin-login-webauthn`); TOTP stays usable
 > for Authentik's own interfaces and the device login. *End all sessions* also ends the Authentik browser sessions of every
 > portal user (the platform admins group and every organization's role groups) through Authentik's bulk delete, inside
-> the same audited action; a failure there is recorded after the Paddock sessions ended (ADR 0034 and ADR 0007
-> amendments 2026-10-18).
+> the same audited action as an external call (`ActionRunner.RunExternal`, at most 80 s for the Authentik part); a
+> failure there is recorded after the Paddock sessions ended (ADR 0034 and ADR 0007 amendments 2026-10-18).
 
 ---
 
