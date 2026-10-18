@@ -106,6 +106,7 @@ function onConfirm(): void {
         </p>
         <!-- The sentence stands outside the field label, which is cut off on a narrow screen (PDK-199 fix round 2). -->
         <blockquote
+          :id="id + '-sentence'"
           class="disclaimer-sentence"
           data-testid="auto-unseal-sentence"
         >
@@ -114,7 +115,7 @@ function onConfirm(): void {
         <v-text-field
           v-model="typed"
           :label="t('openbao.disclaimer.typeLabel')"
-          :aria-describedby="id + '-prompt'"
+          :aria-describedby="id + '-prompt ' + id + '-sentence'"
           autocomplete="off"
           spellcheck="false"
           data-testid="auto-unseal-typed"

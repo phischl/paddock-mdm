@@ -150,6 +150,16 @@ describe('AutoUnsealDisclaimerDialog (plan M8u decision 23)', () => {
     }
   })
 
+  it('describes the field with the prompt and the sentence, so a screen reader announces what to type', async () => {
+    mountDialog()
+    await flushPromises()
+    const input = el('auto-unseal-typed')?.querySelector('input') as HTMLInputElement
+    const ids = (input.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+    const described = ids.map((ref) => document.getElementById(ref)?.textContent?.trim())
+    expect(described).toContain(en.openbao.disclaimer.typePrompt)
+    expect(described).toContain(en.openbao.disclaimer.sentence)
+  })
+
   it('enables the button only for the exact English sentence', async () => {
     const w = mountDialog()
     await flushPromises()
