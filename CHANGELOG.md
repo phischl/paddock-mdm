@@ -154,6 +154,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step-up asks the identity provider to authenticate again after 20 seconds.
 - The portal sign-in accepts a WebAuthn authenticator only and enrols one at the first sign-in when the administrator
   has none; TOTP stays usable for the identity provider's own interfaces and the device login.
+- *End all sessions* now also signs every portal user out of the identity provider, so a stolen browser session cannot
+  sign in again without password and authenticator.
 
 ### Fixed
 

@@ -52,6 +52,10 @@ SELECT coalesce(paddock_org_id_by_slug(@slug), '00000000-0000-0000-0000-00000000
 -- name: ListOrganizationIDs :many
 SELECT id::uuid FROM paddock_organization_ids() AS id;
 
+-- Every organization's slug for the platform pool (End all sessions lists the role groups, plan M8f decision 16).
+-- name: ListOrganizationSlugs :many
+SELECT slug FROM organization ORDER BY slug;
+
 -- Organization domains (plan M3a decision 1). The platform use case serializes domain changes with this advisory
 -- lock, so two organizations can never claim the same domain concurrently.
 -- name: LockOrganizationDomains :exec

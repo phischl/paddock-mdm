@@ -3633,8 +3633,11 @@ paths:
       tags: [platform]
       description: >-
         Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal
-        session of the installation, the caller's own with its next request; every administrator signs in again. API
-        tokens are not affected. 503 session_store_unavailable while the session store is unreachable.
+        session and every identity-provider browser session of every portal user (platform administrators and
+        organization role members); device logins and API tokens are not affected. The caller's own session ends with
+        its next request; every administrator signs in again. 503 session_store_unavailable while the session store is
+        unreachable; 502 upstream_unavailable when the identity provider's sessions could not be ended (the portal
+        sessions are ended already; end all sessions again).
       x-paddock-audit: platform.sessions_ended
       parameters:
         - $ref: "#/components/parameters/Csrf"
@@ -3646,6 +3649,7 @@ paths:
               schema: { $ref: "#/components/schemas/SessionsEnded" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/openbao/auto-unseal:
     get:

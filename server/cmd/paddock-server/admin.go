@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
 	"github.com/phischl/paddock-mdm/server/internal/allowlistcache"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/config"
@@ -125,6 +126,11 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 	if cmd.name == "rebuild-cache" || cmd.name == "allowlist" || cmd.name == "end-sessions" {
 		vkCfg = config.LoadValkey(l)
 	}
+	// End all sessions also ends the portal users' Authentik sessions (plan M8f decision 18).
+	var akCfg config.Authentik
+	if cmd.name == "end-sessions" {
+		akCfg = config.LoadAuthentik(l)
+	}
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -181,7 +187,8 @@ func runAdmin(ctx context.Context, l *config.Loader, args []string) error {
 			return err
 		}
 		defer vk.Close()
-		gen, err := app.NewSessions(admin.Runner(), sessions.NewStore(vk)).EndAllCLI(ctx)
+		ak := authentik.New(akCfg.URL, akCfg.Token)
+		gen, err := app.NewSessions(admin.Runner(), sessions.NewStore(vk), app.NewPortalUsers(platformPool, ak), ak).EndAllCLI(ctx)
 		if err != nil {
 			return err
 		}

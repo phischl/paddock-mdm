@@ -204,7 +204,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		StepUpTokens:   stepUpTokens,
 		Sessions:       sessionStore,
 		StepUpAccounts: accounts,
-		EndSessions:    app.NewSessions(runner, sessionStore),
+		EndSessions:    app.NewSessions(runner, sessionStore, app.NewPortalUsers(platformPool, ak), ak),
 		AutoUnseal:     app.NewAutoUnseal(runner, platformPool, baoClient),
 		PublicURL:      publicURL,
 		Static:         static,

@@ -74,7 +74,7 @@ These actions always need a fresh step-up, whatever their content:
 | `PUT /api/v1/settings/dms` | organization administrators, when the dead man's switch is enabled |
 | `POST /api/v1/api-tokens` | organization administrators and operators |
 | `POST`, `PATCH`, `DELETE /api/platform/v1/ip-allowlist…` | platform administrators |
-| `POST /api/platform/v1/sessions/end-all` | platform administrators |
+| `POST /api/platform/v1/sessions/end-all` (also ends every portal user's Authentik sessions) | platform administrators |
 | `PUT /api/v1/settings/managed-files` | organization administrators (operator roots) |
 
 **API tokens** (ADR 0034 decision 3): a request authenticated with an API token never satisfies a step-up. Such a

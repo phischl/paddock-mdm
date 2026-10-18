@@ -332,6 +332,17 @@ type Valkey struct {
 	Password string
 }
 
+// Authentik is the Authentik API of Paddock's service account.
+type Authentik struct {
+	URL   string
+	Token string
+}
+
+// LoadAuthentik reads PADDOCK_AUTHENTIK_URL and PADDOCK_AUTHENTIK_TOKEN_FILE.
+func LoadAuthentik(l *Loader) Authentik {
+	return Authentik{URL: l.Required("PADDOCK_AUTHENTIK_URL"), Token: l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")}
+}
+
 // LoadValkey reads PADDOCK_VALKEY_*.
 func LoadValkey(l *Loader) Valkey {
 	return Valkey{

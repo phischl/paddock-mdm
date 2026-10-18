@@ -211,7 +211,11 @@ Portal sessions are kept in Valkey: while Valkey is unreachable the portal answe
 (devices and API tokens are not affected), and after Valkey is back every session continues. Signing out ends the
 session on the server. A platform administrator ends every portal session at once under *Platform* → *Sessions*
 (with a step-up), or on the control plane with
-`./paddock compose run --rm --no-deps paddock-worker admin end-sessions` when the portal is not usable.
+`./paddock compose run --rm --no-deps paddock-worker admin end-sessions` when the portal is not usable. Both also end
+the Authentik browser sessions of every portal user (platform administrators and organization role members), so a
+stolen browser session cannot sign in again without password and authenticator; device logins and API tokens are not
+affected. When Authentik cannot be reached the action is recorded as a failure after the portal sessions ended; run
+it again.
 
 ## 9. First platform administrator, first organization, first device
 
