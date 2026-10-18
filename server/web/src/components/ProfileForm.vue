@@ -43,7 +43,8 @@ watch([cls, commands], () => {
   const lines = commandLines(commands.value)
   if (cls.value !== 'full' && !(cls.value === 'restricted' && lines.length > 0)) return
   previewTimer = setTimeout(async () => {
-    const res = await previewRootEquivalence(cls.value, cls.value === 'full' ? [] : lines)
+    // A request that fails (server unreachable) shows nothing, like a failed answer; it must not reject unhandled.
+    const res = await previewRootEquivalence(cls.value, cls.value === 'full' ? [] : lines).catch(() => null)
     if (seq === previewSeq) preview.value = res
   }, 300)
 }, { immediate: true })
