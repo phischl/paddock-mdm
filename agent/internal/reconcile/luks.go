@@ -30,8 +30,35 @@ const (
 	LUKSEscrowWait   = 15 * time.Minute
 )
 
-// compliantKeyslots is the keyslot set of a compliant device (plan M4b decision 11).
-var compliantKeyslots = []string{luks.KindRecovery, luks.KindTPM2PIN}
+// compliantKeyslotsFor is the keyslot set of a compliant device in an unlock mode (plan M4b decision 11, plan M8d
+// decision 48): the recovery key and the mode's TPM keyslot.
+func compliantKeyslotsFor(mode string) []string {
+	return []string{luks.KindRecovery, tpmKind(mode)}
+}
+
+// tpmKind is the TPM keyslot kind of an unlock mode; any other mode than tpm_only is tpm_pin.
+func tpmKind(mode string) string {
+	if mode == bundle.UnlockModeTPMOnly {
+		return luks.KindTPM2
+	}
+	return luks.KindTPM2PIN
+}
+
+// otherTPMKind is the TPM keyslot kind of the other unlock mode.
+func otherTPMKind(mode string) string {
+	if mode == bundle.UnlockModeTPMOnly {
+		return luks.KindTPM2PIN
+	}
+	return luks.KindTPM2
+}
+
+// unlockMode normalizes the applied bundle's unlock mode: absent is tpm_pin.
+func unlockMode(mode string) string {
+	if mode == bundle.UnlockModeTPMOnly {
+		return mode
+	}
+	return bundle.UnlockModeTPMPIN
+}
 
 // LUKSEscrow uploads escrows of the device (device API, bound to the device).
 type LUKSEscrow interface {
@@ -72,6 +99,7 @@ type LUKS struct {
 
 	pending  *luksEscrow
 	health   *protocol.DiskHealth
+	mode     string // the unlock mode of the applied bundle (tpm_pin or tpm_only)
 	rootUUID string // the LUKS UUID of the root volume in the current pass ("" when cryptsetup reported none)
 	// volumeSet identifies the volumes of /etc/crypttab of the last pass (their UUIDs, sorted).
 	volumeSet string
@@ -157,8 +185,11 @@ type luksEscrow struct {
 }
 
 // Tick polls a pending escrow and, with full or once an escrow finished, inventories the root volume and takes the
-// next step. keys are the keys of the applied bundle. It returns the disk health, nil before the first inventory.
-func (m *LUKS) Tick(ctx context.Context, keys *bundle.Keys, full bool) *protocol.DiskHealth {
+// next step. keys are the keys of the applied bundle, mode its disk unlock mode ("" is tpm_pin, plan M8d decision
+// 48). It returns the disk health, nil before the first inventory. The agent never enrolls or wipes a TPM keyslot of
+// an enrolled device: a keyslot of the other mode is reported as unlock_mode_mismatch.
+func (m *LUKS) Tick(ctx context.Context, keys *bundle.Keys, full bool, mode string) *protocol.DiskHealth {
+	m.mode = unlockMode(mode)
 	if m.pending != nil && m.poll(ctx) {
 		full = true
 	}
@@ -172,7 +203,7 @@ func (m *LUKS) Tick(ctx context.Context, keys *bundle.Keys, full bool) *protocol
 func (m *LUKS) pass(ctx context.Context, keys *bundle.Keys) {
 	vol, err := luks.Root(ctx, m.Tools)
 	if errors.Is(err, luks.ErrNotEncrypted) {
-		m.health = &protocol.DiskHealth{State: protocol.DiskNotEncrypted}
+		m.health = &protocol.DiskHealth{State: protocol.DiskNotEncrypted, UnlockMode: m.mode, BootSeparate: m.bootSeparate(ctx)}
 		return
 	}
 	if err != nil {
@@ -365,7 +396,7 @@ func (m *LUKS) step(ctx context.Context, device string, md luks.Metadata, passph
 		return nil // a recovery keyslot this agent did not create: nothing to escrow
 	case digest(md) != m.State.HeaderDigest:
 		return m.escrowHeader(ctx, device, m.rootUUID, true, digest(md), keys)
-	case passphrase && md.Has(luks.KindTPM2PIN):
+	case passphrase && md.Has(tpmKind(m.mode)):
 		return m.removePassphrase(ctx, device, keyFile, md)
 	}
 	return nil
@@ -510,9 +541,10 @@ func (m *LUKS) escrowHeader(ctx context.Context, device, volume string, root boo
 	return nil
 }
 
-// removePassphrase wipes the install passphrase's keyslot and, once it is gone and TPM2+PIN and the agent's recovery
-// key remain, deletes the passphrase file (plan M4b decision 11). Other keyslots stay; if the result is not exactly
-// TPM2+PIN and the recovery key, the extra keyslots are reported as tamper.keyslot_changed (plan M4b.1 decision 3).
+// removePassphrase wipes the install passphrase's keyslot and, once it is gone and the TPM keyslot of the unlock mode
+// and the agent's recovery key remain, deletes the passphrase file (plan M4b decision 11, plan M8d decision 48). Other
+// keyslots stay; if the result is not exactly the mode's TPM keyslot and the recovery key, the extra keyslots are
+// reported as tamper.keyslot_changed (plan M4b.1 decision 3).
 func (m *LUKS) removePassphrase(ctx context.Context, device, keyFile string, before luks.Metadata) error {
 	slot := *m.State.InstallSlot
 	if err := m.change(ctx, device, func() error { return m.wipe(ctx, device, keyFile, before, slot, luks.KindPassword) }); err != nil {
@@ -522,16 +554,17 @@ func (m *LUKS) removePassphrase(ctx context.Context, device, keyFile string, bef
 	if err != nil {
 		return err
 	}
-	if md.Kind(slot) != "" || !md.Has(luks.KindTPM2PIN) || m.State.RecoverySlot == nil || md.Kind(*m.State.RecoverySlot) != luks.KindRecovery {
+	if md.Kind(slot) != "" || !md.Has(tpmKind(m.mode)) || m.State.RecoverySlot == nil || md.Kind(*m.State.RecoverySlot) != luks.KindRecovery {
 		return fmt.Errorf("after removing the install passphrase (keyslot %d) the keyslots are %v", slot, md.Kinds())
 	}
 	if err := shred(keyFile); err != nil {
 		return fmt.Errorf("delete the install passphrase: %w", err)
 	}
-	slog.InfoContext(ctx, "install passphrase removed; the disk unlocks with TPM2+PIN or the recovery key", "keyslot", slot)
-	if kinds := md.Kinds(); !slices.Equal(kinds, compliantKeyslots) {
-		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Volume: m.rootUUID, Before: compliantKeyslots, After: kinds})
-		slog.WarnContext(ctx, "LUKS keyslots not created by Paddock are kept", "expected", compliantKeyslots, "keyslots", kinds)
+	slog.InfoContext(ctx, "install passphrase removed; the disk unlocks with the TPM or the recovery key", "keyslot", slot,
+		"unlock_mode", m.mode)
+	if kinds, want := md.Kinds(), compliantKeyslotsFor(m.mode); !slices.Equal(kinds, want) {
+		m.Emit(protocol.EventTamperKeyslotChanged, protocol.TamperKeyslotChanged{Volume: m.rootUUID, Before: want, After: kinds})
+		slog.WarnContext(ctx, "LUKS keyslots not created by Paddock are kept", "expected", want, "keyslots", kinds)
 	}
 	return nil
 }
@@ -595,22 +628,36 @@ func (m *LUKS) poll(ctx context.Context) bool {
 	return true
 }
 
-// state is the disk state of a managed volume.
+// state is the disk state of a managed volume in the unlock mode of the applied bundle (plan M8d decision 48).
 func (m *LUKS) state(md luks.Metadata, passphrase bool) string {
+	own, other := tpmKind(m.mode), otherTPMKind(m.mode)
 	switch {
 	case !md.Has(luks.KindTPM2PIN) && !md.Has(luks.KindTPM2) && !m.TPM2Present():
 		return protocol.DiskTPMMissing
-	case !md.Has(luks.KindTPM2PIN):
+	case md.Has(other) && !md.Has(own):
+		return protocol.DiskUnlockModeMismatch
+	case !md.Has(own):
 		return protocol.DiskTPMPINMissing
 	case passphrase || m.pending != nil || m.State.RecoveryStored == 0 || digest(md) != m.State.HeaderDigest ||
-		!slices.Equal(md.Kinds(), compliantKeyslots):
+		!slices.Equal(md.Kinds(), compliantKeyslotsFor(m.mode)):
 		return protocol.DiskEscrowPending
 	}
 	return protocol.DiskCompliant
 }
 
 func (m *LUKS) report(s string, kinds []string) *protocol.DiskHealth {
-	return &protocol.DiskHealth{State: s, LUKSVersion: 2, Tokens: kinds, Keyslots: len(kinds)}
+	return &protocol.DiskHealth{State: s, LUKSVersion: 2, Tokens: kinds, Keyslots: len(kinds), UnlockMode: m.mode}
+}
+
+// bootSeparate reports whether /boot is a file system of its own (the layout an in-place encryption could convert,
+// ADR 0038); nil when findmnt cannot tell.
+func (m *LUKS) bootSeparate(ctx context.Context) *bool {
+	out, _, exit, err := m.Tools.Command(ctx, nil, "findmnt", "--target", "/boot", "--noheadings", "--output", "TARGET")
+	if err != nil || exit != 0 {
+		return nil
+	}
+	separate := strings.TrimSpace(out) == "/boot"
+	return &separate
 }
 
 func (m *LUKS) save() {

@@ -98,6 +98,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the declarative document): TPM + boot PIN (default) or TPM only, with a security notice. The autoinstall embeds
   the mode of the token's group, bundles carry it, and devices whose keyslots do not match are reported as
   `unlock_mode_mismatch`; `docs/operations/disk-recovery.md` describes the conversion with the recovery key.
+- Agents of this release set up a `tpm_only` installation at its first boot without a PIN dialogue (the TPM unlocks
+  the disk while Secure Boot is unchanged), count the recovery key and the mode's TPM keyslot as compliant, and report
+  a disk enrolled for the other mode as `unlock_mode_mismatch`; they never enroll or wipe a TPM keyslot of an
+  installed device.
 
 ### Changed
 

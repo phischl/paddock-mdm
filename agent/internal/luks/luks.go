@@ -240,6 +240,13 @@ func EnrollTPM2PIN(ctx context.Context, t Tools, device, keyFile string, pin []b
 	return err
 }
 
+// EnrollTPM2 adds a TPM2 token without a PIN bound to PCR 7 (unlock mode tpm_only, ADR 0038 decision 1), unlocking
+// with the key file.
+func EnrollTPM2(ctx context.Context, t Tools, device, keyFile string) error {
+	_, err := run(ctx, t, nil, "systemd-cryptenroll", "--tpm2-device=auto", "--tpm2-pcrs=7", "--unlock-key-file="+keyFile, device)
+	return err
+}
+
 // recoveryKeyPattern is the format of systemd-cryptenroll recovery keys: 64 modhex characters (256 bits) in groups
 // of eight.
 var recoveryKeyPattern = regexp.MustCompile(`^[cbdefghijklnrtuv]{8}(-[cbdefghijklnrtuv]{8}){7}$`)

@@ -203,6 +203,7 @@ type diskEscrow struct {
 type diskInfo struct {
 	State             *string      `json:"state"`
 	Tokens            []string     `json:"tokens"`
+	UnlockMode        string       `json:"unlock_mode"`
 	RecoveryKeys      []diskEscrow `json:"recovery_keys"`
 	Headers           []diskEscrow `json:"headers"`
 	LastKeyslotChange *struct {

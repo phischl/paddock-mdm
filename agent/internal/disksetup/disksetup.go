@@ -18,6 +18,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 )
 
 // Bounds of the boot PIN length (the organization setting boot_pin_min_length).
@@ -69,7 +70,10 @@ func Run(ctx context.Context, o Options) error {
 		slog.ErrorContext(ctx, "disk setup skipped: the install passphrase is missing", "error", err)
 		return done(o.Layout)
 	}
-	minLength := minPINLength(o.Layout)
+	minLength, mode := settings(o.Layout)
+	if mode == bundle.UnlockModeTPMOnly {
+		return enrollTPMOnly(ctx, o, d, vol.Device)
+	}
 	d.say(fmt.Sprintf(intro, minLength))
 	for failures := 0; failures < MaxEnrollFailures; {
 		pin, err := d.choosePIN(minLength)
@@ -96,6 +100,34 @@ func Run(ctx context.Context, o Options) error {
 	d.say("The boot PIN could not be set. The device starts without it for now and asks again at the next start.\n\n")
 	return nil
 }
+
+// enrollTPMOnly enrolls the TPM without a PIN (unlock mode tpm_only, plan M8d decision 47): no dialogue and no skip,
+// up to MaxEnrollFailures attempts; a failure keeps the marker so the next boot tries again.
+func enrollTPMOnly(ctx context.Context, o Options, d *dialogue, device string) error {
+	d.say(introTPMOnly)
+	for failures := 0; failures < MaxEnrollFailures; failures++ {
+		err := luks.EnrollTPM2(ctx, o.Tools, device, o.Layout.InstallPassphrase())
+		if err == nil {
+			d.say("The TPM unlock is set. From the next start on, the disk unlocks without input.\n\n")
+			slog.InfoContext(ctx, "TPM unlock enrolled (TPM2 without PIN, PCR 7)", "device", device)
+			return done(o.Layout)
+		}
+		slog.ErrorContext(ctx, "enrolling the TPM unlock failed", "device", device, "error", err)
+		d.say("Setting the TPM unlock failed. Trying again ...\n\n")
+	}
+	d.say("The TPM unlock could not be set. The device starts with the disk passphrase for now and tries again at the next start.\n\n")
+	return nil
+}
+
+// introTPMOnly is the console text of the tpm_only setup (binding text of plan M8d decision 47).
+const introTPMOnly = `Paddock disk encryption setup
+
+The disk of this device is encrypted and unlocks automatically with the
+security chip (TPM) of this device while Secure Boot stays unchanged.
+No PIN is needed. IT keeps a recovery key for this device.
+
+Enrolling the TPM unlock. This takes a few seconds ...
+`
 
 const intro = `Paddock disk encryption setup
 
@@ -172,16 +204,25 @@ func (d *dialogue) read(prompt string) ([]byte, error) {
 	return bytes.TrimRight(line, "\r\n"), nil
 }
 
-// minPINLength reads boot_pin_min_length from disk-setup.json; a missing or invalid file gives the default.
-func minPINLength(l paths.Layout) int {
+// settings reads boot_pin_min_length and unlock_mode from disk-setup.json (plan M8d decision 47); a missing or invalid
+// value gives the default (DefaultPINLength, tpm_pin).
+func settings(l paths.Layout) (minLength int, mode string) {
 	var s struct {
-		BootPINMinLength int `json:"boot_pin_min_length"`
+		BootPINMinLength int    `json:"boot_pin_min_length"`
+		UnlockMode       string `json:"unlock_mode"`
 	}
+	minLength, mode = DefaultPINLength, bundle.UnlockModeTPMPIN
 	data, err := os.ReadFile(l.DiskSetupConfig())
-	if err != nil || json.Unmarshal(data, &s) != nil || s.BootPINMinLength < MinPINLength || s.BootPINMinLength > MaxPINLength {
-		return DefaultPINLength
+	if err != nil || json.Unmarshal(data, &s) != nil {
+		return minLength, mode
 	}
-	return s.BootPINMinLength
+	if s.BootPINMinLength >= MinPINLength && s.BootPINMinLength <= MaxPINLength {
+		minLength = s.BootPINMinLength
+	}
+	if s.UnlockMode == bundle.UnlockModeTPMOnly {
+		mode = bundle.UnlockModeTPMOnly
+	}
+	return minLength, mode
 }
 
 // done removes the pending marker.
