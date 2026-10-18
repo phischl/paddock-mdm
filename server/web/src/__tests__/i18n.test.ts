@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import IntlMessageFormat from 'intl-messageformat'
 import { de as vuetifyDe, en as vuetifyEn } from 'vuetify/locale'
-import { applyLocale, createPortalI18n, i18n } from '../i18n'
+import { applyLocale, browserLocale, createPortalI18n, i18n } from '../i18n'
 import { catalogProblems, type Catalog } from '../lib/catalogCheck'
 import { auditCodes } from '../lib/auditCodes.gen'
 import en from '../locales/en.json'
@@ -72,6 +72,24 @@ describe('catalogProblems', () => {
       'de: p: arguments {count} differ from en {count, thing}',
     ])
     expect(catalogProblems(plural, { p: '{count, plural, one {# {thing}} other {# {thing}}}' }, 'de', [])).toEqual([])
+  })
+})
+
+describe('browserLocale (plan M8f decision 22)', () => {
+  it.each([
+    [['de-DE', 'en'], 'de'],
+    [['fr-FR', 'de-CH'], 'de'],
+    [['fr-FR'], 'en'],
+    [[], 'en'],
+    [['EN-us'], 'en'],
+    [['DE'], 'de'],
+  ])('maps %j to %s', (languages, locale) => {
+    expect(browserLocale(languages)).toBe(locale)
+  })
+
+  it('starts an instance in the given locale', () => {
+    expect(createPortalI18n('de').global.locale.value).toBe('de')
+    expect(createPortalI18n().global.locale.value).toBe('en')
   })
 })
 
