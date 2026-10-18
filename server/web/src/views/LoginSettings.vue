@@ -6,6 +6,7 @@ import { formatDateTime } from '../lib/format'
 import { getLoginSettings, lines, saveLoginSettings } from '../lib/loginSettings'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
+import { useConfirm } from '../composables/useConfirm'
 import { usePending } from '../composables/usePending'
 
 const { t, locale } = useI18n()
@@ -13,6 +14,7 @@ const { pending, run } = usePending()
 const problemText = useProblemText()
 const session = useSessionStore()
 const sessionActions: SessionAction[] = ['lock_screen', 'terminate']
+const confirm = useConfirm()
 
 const loaded = ref(false)
 const helloEnabled = ref(true)
@@ -26,6 +28,10 @@ const rotationDays = ref('30')
 const revealHours = ref('')
 const notice = ref('')
 const bootPinLength = ref('8')
+const historyEnabled = ref(false)
+const historyDays = ref('90')
+/** Whether the stored setting records the login history: switching it off deletes the rows (plan M8d decision 20). */
+const historyStored = ref(false)
 const updatedAt = ref('')
 const problem = ref('')
 const saved = ref(false)
@@ -42,6 +48,9 @@ function apply(s: Exclude<Awaited<ReturnType<typeof getLoginSettings>>, string>)
   revealHours.value = s.rotate_after_reveal_hours === null ? '' : String(s.rotate_after_reveal_hours)
   notice.value = s.notice_text
   bootPinLength.value = String(s.boot_pin_min_length)
+  historyEnabled.value = s.login_history_enabled
+  historyStored.value = s.login_history_enabled
+  historyDays.value = String(s.login_history_days)
   updatedAt.value = s.updated_at
   loaded.value = true
 }
@@ -55,6 +64,13 @@ onMounted(async () => {
 async function save(): Promise<void> {
   problem.value = ''
   saved.value = false
+  if (historyStored.value && !historyEnabled.value) {
+    const confirmed = await confirm({
+      title: t('loginSettings.loginHistory.title'), message: t('loginSettings.loginHistory.disableConfirm'),
+      confirmLabel: t('common.save'), destructive: true,
+    })
+    if (!confirmed) return
+  }
   const res = await saveLoginSettings({
     hello_enabled: helloEnabled.value, hello_pin_min_length: Number(pinLength.value),
     user_lock_session_action: sessionAction.value, break_glass_accounts: lines(breakGlass.value),
@@ -62,6 +78,7 @@ async function save(): Promise<void> {
     local_admin_username: localAdmin.value.trim(), local_admin_rotation_days: Number(rotationDays.value),
     rotate_after_reveal_hours: revealHours.value.trim() === '' ? null : Number(revealHours.value),
     notice_text: notice.value.trim(), boot_pin_min_length: Number(bootPinLength.value),
+    login_history_enabled: historyEnabled.value, login_history_days: Number(historyDays.value),
   })
   if (typeof res === 'string') {
     problem.value = res
@@ -176,6 +193,35 @@ async function save(): Promise<void> {
           type="number"
           min="1"
           max="168"
+        />
+      </fieldset>
+      <fieldset
+        :disabled="!session.canDelete"
+        data-testid="login-history-settings"
+      >
+        <legend>{{ t('loginSettings.loginHistory.title') }}</legend>
+        <v-alert
+          type="info"
+          variant="tonal"
+          data-testid="login-history-notice"
+        >
+          {{ t('loginSettings.loginHistory.notice') }}
+        </v-alert>
+        <v-switch
+          id="settings-login-history"
+          v-model="historyEnabled"
+          :label="t('loginSettings.loginHistory.enabled')"
+          color="primary"
+          hide-details
+          data-testid="login-history-enabled"
+        />
+        <v-text-field
+          id="settings-login-history-days"
+          v-model="historyDays"
+          :label="t('loginSettings.loginHistory.days')"
+          type="number"
+          min="7"
+          max="365"
         />
       </fieldset>
       <fieldset :disabled="!session.canDelete">

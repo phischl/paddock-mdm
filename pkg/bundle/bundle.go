@@ -173,6 +173,9 @@ type LoginSpec struct {
 	LocalAdmin *LocalAdminSpec `json:"local_admin,omitempty"`
 	// Notice is the login notice (plan M4a decision 19): plain text, "" for none.
 	Notice string `json:"notice,omitempty"`
+	// ReportEverySession makes the agent report every session start instead of once per user and 24 hours, while
+	// the organization records its login history (plan M8d decision 17); agents of earlier releases ignore it.
+	ReportEverySession bool `json:"report_every_session,omitempty"`
 }
 
 // LocalAdminSpec is the managed local administrator of the login resource.

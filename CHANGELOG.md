@@ -69,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `login_history_days` (7–365, default 90); while it is on every session start a device reports is stored and listed
   by `GET /api/v1/devices/{id}/logins`; the worker deletes older entries every 6 hours (`retention.purged`, store
   `device_login_event`), and switching it off deletes every entry at once.
+- *Login & privileges* has a *Login history* section with the privacy notice (works council agreement), and the device
+  page a *Logins* tab. With the history on, agents of this release report every session start instead of once per
+  user and day.
 
 ### Changed
 

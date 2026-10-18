@@ -77,6 +77,8 @@ type Session struct {
 	UID   int
 	User  string
 	Class string
+	// Timestamp is the Timestamp property as loginctl prints it; "" omits it.
+	Timestamp string
 }
 
 // New returns a fake with root/root, nobody and an empty file system.
@@ -371,7 +373,11 @@ func (s *System) Loginctl(_ context.Context, args ...string) (string, int, error
 		for _, id := range args[1:] {
 			for _, ss := range s.Sessions {
 				if ss.ID == id {
-					blocks = append(blocks, fmt.Sprintf("Id=%s\nUser=%d\nName=%s\nClass=%s\n", ss.ID, ss.UID, ss.User, ss.Class))
+					block := fmt.Sprintf("Id=%s\nUser=%d\nName=%s\nClass=%s\n", ss.ID, ss.UID, ss.User, ss.Class)
+					if ss.Timestamp != "" {
+						block += "Timestamp=" + ss.Timestamp + "\n"
+					}
+					blocks = append(blocks, block)
 				}
 			}
 		}

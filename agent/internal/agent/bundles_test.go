@@ -247,6 +247,48 @@ func TestSessionLogins(t *testing.T) {
 	}
 }
 
+// TestSessionLoginsEverySession (plan M8d decision 17): with report_every_session two sessions of the same user are
+// two session.login events with their session start times; a session that ends is pruned, and a new one is reported.
+func TestSessionLoginsEverySession(t *testing.T) {
+	ctx := context.Background()
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	sys := withSystem(t, a)
+	sys.Files["/etc/passwd"] = &fakesys.File{Data: []byte("paddock:x:1000:1000::/home/paddock:/bin/bash\n"), Mode: 0o644}
+	sys.Passwd = map[string]int{"dave@acme.test": 811622788}
+	sys.Sessions = []fakesys.Session{
+		{ID: "7", UID: 811622788, User: "dave", Class: "user", Timestamp: "Sun 2026-10-04 07:30:00 UTC"},
+		{ID: "9", UID: 811622788, User: "dave", Class: "user"},
+		{ID: "4", UID: 1000, User: "paddock", Class: "user"},
+	}
+	now := time.Date(2026, 10, 4, 8, 0, 0, 0, time.UTC)
+	a.d.Now = func() time.Time { return now }
+	login, err := bundle.LoginResource(bundle.LoginSpec{Provider: bundle.ProviderHimmelblau,
+		Himmelblau: bundle.HimmelblauSpec{Domain: "acme.test"}, ReportEverySession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.current = &bundle.Bundle{Resources: []bundle.Resource{login}}
+	a.trackSessions(ctx)
+	a.trackSessions(ctx)
+	pending, _ := a.d.Spool.Pending()
+	if len(pending) != 2 || string(pending[0].Data) != `{"username":"dave@acme.test","at":"2026-10-04T07:30:00Z"}` ||
+		string(pending[1].Data) != `{"username":"dave@acme.test","at":"2026-10-04T08:00:00Z"}` {
+		t.Fatalf("spool %+v", pending)
+	}
+	sys.Sessions = sys.Sessions[1:]
+	now = now.Add(time.Minute)
+	a.trackSessions(ctx)
+	if _, ok := a.st.SessionsReported["dave\x007"]; ok {
+		t.Fatal("the ended session was not pruned")
+	}
+	sys.Sessions = append(sys.Sessions, fakesys.Session{ID: "11", UID: 811622788, User: "dave", Class: "user"})
+	a.trackSessions(ctx)
+	if pending, _ := a.d.Spool.Pending(); len(pending) != 3 {
+		t.Fatalf("a new session was not reported: %+v", pending)
+	}
+}
+
 // TestCheckinReportsRevokeCapabilities (PDK-009): the check-in health carries what the installed paddock-revoke
 // understands; when the call fails — a build before PDK-009 (unknown command), a missing paddock-revoke — the field
 // is not reported at all, so that the server keeps the last value (review round 1).

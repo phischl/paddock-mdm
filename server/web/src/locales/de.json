@@ -522,6 +522,13 @@
     "back": "Zur Startseite"
   },
   "devices": {
+    "logins": {
+      "user": "Benutzer",
+      "at": "Angemeldet",
+      "off": "Der Anmeldeverlauf ist für diese Organisation ausgeschaltet.",
+      "offLink": "Unter „Anmeldung & Rechte“ einschalten.",
+      "empty": "Noch keine Anmeldungen aufgezeichnet."
+    },
     "hardware": {
       "manufacturer": "Hersteller",
       "model": "Modell",
@@ -817,6 +824,7 @@
       "unknown": "unbekannt"
     },
     "tabs": {
+      "logins": "Anmeldungen",
       "overview": "Übersicht",
       "access": "Anmeldung & sudo",
       "configuration": "Konfiguration",
@@ -1304,6 +1312,13 @@
     }
   },
   "loginSettings": {
+    "loginHistory": {
+      "title": "Anmeldeverlauf",
+      "enabled": "Aufzeichnen, welche Verzeichnisbenutzer sich wann an welchem Gerät anmelden",
+      "days": "Verlauf aufbewahren für (Tage)",
+      "notice": "Der Anmeldeverlauf sind personenbezogene Daten Ihrer Beschäftigten: Jeder Sitzungsstart wird mit Benutzername, Gerät und Zeitpunkt für die obige Dauer gespeichert und danach gelöscht. Schalten Sie ihn nur mit Zustimmung Ihres Betriebsrats oder der entsprechenden Stelle ein und informieren Sie die Benutzer. Er ist standardmäßig aus; Benutzersperren hängen nicht davon ab.",
+      "disableConfirm": "Anmeldeverlauf ausschalten? Jede aufgezeichnete Anmeldung dieser Organisation wird sofort gelöscht."
+    },
     "title": "Anmeldung & Rechte",
     "updatedAt": "Zuletzt geändert {at}",
     "login": "Geräteanmeldung",

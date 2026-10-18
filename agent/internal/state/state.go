@@ -41,7 +41,9 @@ type State struct {
 	// updates.run (plan M5b decision 6).
 	ReportedRegularAt  *time.Time `json:"reported_regular_at,omitempty"`
 	ReportedSecurityAt *time.Time `json:"reported_security_at,omitempty"`
-	// SessionsReported is the last session.login per directory user (at most one per 24 h, plan M3b decision 11).
+	// SessionsReported is the last session.login per directory user (at most one per 24 h, plan M3b decision 11),
+	// and while the login history is on one entry per reported session, keyed "<user>\x00<session ID>" and pruned
+	// when the session ends (plan M8d decision 17).
 	SessionsReported map[string]time.Time `json:"sessions_reported,omitempty"`
 	// ExecutedCommands are the IDs of the commands this device started, with the time, kept 60 days so a command is
 	// never executed twice (plan M4a decision 3).

@@ -352,6 +352,29 @@ func TestVisudo(t *testing.T) {
 }
 
 // TestRevocationFlag: PADDOCK_REVOCATION_ENABLED reaches v2 bundles as revocation.enabled (plan M4c decision 1).
+// TestLoginHistoryFlag: the login resource asks for every session start while the organization records its login
+// history; off, the field is absent (plan M8d decision 17).
+func TestLoginHistoryFlag(t *testing.T) {
+	w := newWorld(t)
+	w.exec("UPDATE organization SET domains = '{c.test}' WHERE id = $1", w.org)
+	d := w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	b := w.fetch(d)
+	if spec[bundle.LoginSpec](t, b, "login").ReportEverySession {
+		t.Fatal("report_every_session set while the history is off")
+	}
+	for _, r := range b.Resources {
+		if r.ID == "login" && strings.Contains(string(r.Spec), "report_every_session") {
+			t.Fatalf("login spec carries the field: %s", r.Spec)
+		}
+	}
+	w.exec("UPDATE organization_login_settings SET login_history_enabled = true WHERE organization_id = $1", w.org)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if !spec[bundle.LoginSpec](t, w.fetch(d), "login").ReportEverySession {
+		t.Fatal("report_every_session missing while the history is on")
+	}
+}
+
 func TestRevocationFlag(t *testing.T) {
 	w := newWorldConfig(t, func(c *compiler.Config) { c.RevocationEnabled = true })
 	d := w.v2Device("{1,2}")

@@ -14,7 +14,7 @@ const (
 		"     7 811622788 dave@acme.test seat0 4100 user   tty2 no   -\n" +
 		"    c1 60578 gdm-greeter seat0 2629   greeter       tty1 no   -\n"
 	shown = "Id=1\nUser=60578\nName=gdm-greeter\nClass=manager-early\n\nId=4\nUser=1000\nName=paddock\nClass=user\n\n" +
-		"Id=7\nUser=811622788\nName=dave@acme.test\nClass=user\n\nId=c1\nUser=60578\nName=gdm-greeter\nClass=greeter\n"
+		"Id=7\nUser=811622788\nName=dave@acme.test\nClass=user\nTimestamp=Sat 2026-10-17 10:15:02 UTC\n\nId=c1\nUser=60578\nName=gdm-greeter\nClass=greeter\n"
 	passwd = "root:x:0:0:root:/root:/bin/bash\ngdm:x:975:975:Gnome Display Manager:/var/lib/gdm3:/bin/false\n" +
 		"paddock:x:1000:1000:Paddock Test:/home/paddock:/bin/bash\ndave:x:1001:1001::/home/dave:/bin/bash\n"
 )
@@ -24,7 +24,7 @@ func fakeLoginctl(t *testing.T) Loginctl {
 		switch {
 		case slices.Equal(args, []string{"list-sessions", "--no-legend"}):
 			return listed, 0, nil
-		case slices.Equal(args, []string{"show-session", "1", "4", "7", "c1", "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class"}):
+		case slices.Equal(args, []string{"show-session", "1", "4", "7", "c1", "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class", "-p", "Timestamp"}):
 			return shown, 0, nil
 		}
 		t.Fatalf("unexpected loginctl %v", args)
@@ -34,7 +34,8 @@ func fakeLoginctl(t *testing.T) Loginctl {
 
 func TestListAndDirectoryUsers(t *testing.T) {
 	list, err := List(context.Background(), fakeLoginctl(t))
-	if err != nil || len(list) != 4 || list[2] != (Session{ID: "7", UID: 811622788, User: "dave@acme.test", Class: "user"}) {
+	if err != nil || len(list) != 4 || list[2] != (Session{ID: "7", UID: 811622788, User: "dave@acme.test", Class: "user",
+		Started: time.Date(2026, 10, 17, 10, 15, 2, 0, time.UTC)}) || !list[0].Started.IsZero() {
 		t.Fatalf("List: %+v %v", list, err)
 	}
 	local := LocalUIDs([]byte(passwd))
@@ -80,5 +81,41 @@ func TestNewLoginsOncePerDay(t *testing.T) {
 	}
 	if got := NewLogins(list, local, seen, now.Add(24*time.Hour)); len(got) != 1 || got[0].User != "dave@acme.test" {
 		t.Fatalf("not reported again after 24 h: %v", got)
+	}
+}
+
+// TestNewSessionLoginsEverySession (plan M8d decision 17): with the login history on, every session of a directory
+// user is reported once; a session that ended is pruned so that a new session with the same ID is reported again;
+// the once-per-day entries are left alone.
+func TestNewSessionLoginsEverySession(t *testing.T) {
+	local := LocalUIDs([]byte(passwd))
+	now := time.Date(2026, 10, 4, 8, 0, 0, 0, time.UTC)
+	seen := map[string]time.Time{"erin@acme.test": now}
+	a := Session{ID: "7", UID: 811622788, User: "dave@acme.test", Class: "user"}
+	b := Session{ID: "9", UID: 811622788, User: "dave@acme.test", Class: "user"}
+	admin := Session{ID: "4", UID: 1000, User: "paddock", Class: "user"}
+	if got := NewSessionLogins([]Session{a, b, admin}, local, seen, now); len(got) != 2 || got[0].ID != "7" || got[1].ID != "9" {
+		t.Fatalf("first poll %v", got)
+	}
+	if got := NewSessionLogins([]Session{a, b, admin}, local, seen, now.Add(time.Minute)); len(got) != 0 {
+		t.Fatalf("reported twice: %v", got)
+	}
+	if got := NewSessionLogins([]Session{b}, local, seen, now.Add(2*time.Minute)); len(got) != 0 {
+		t.Fatalf("after a session ended: %v", got)
+	}
+	if got := NewSessionLogins([]Session{a, b}, local, seen, now.Add(3*time.Minute)); len(got) != 1 || got[0].ID != "7" {
+		t.Fatalf("a new session with the ended session's ID: %v", got)
+	}
+	if _, ok := seen["erin@acme.test"]; !ok {
+		t.Fatal("the once-per-day entry was pruned")
+	}
+}
+
+func TestParseTimestamp(t *testing.T) {
+	if got := parseTimestamp("Sat 2026-10-17 10:15:02 UTC"); !got.Equal(time.Date(2026, 10, 17, 10, 15, 2, 0, time.UTC)) {
+		t.Fatalf("parsed %v", got)
+	}
+	if got := parseTimestamp("n/a"); !got.IsZero() {
+		t.Fatalf("garbage parsed as %v", got)
 	}
 }

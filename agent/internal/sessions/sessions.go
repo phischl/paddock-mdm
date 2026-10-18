@@ -1,6 +1,6 @@
 // Package sessions reads the user sessions of logind through loginctl (plan M3b decisions 10 and 11) and tells
-// directory users from local accounts. It reads session IDs, user names, UIDs and session classes only, never
-// process, command or session content.
+// directory users from local accounts. It reads session IDs, user names, UIDs, session classes and start times only,
+// never process, command or session content.
 package sessions
 
 import (
@@ -23,6 +23,8 @@ type Session struct {
 	UID   int
 	User  string
 	Class string // user, user-early, …, greeter, lock-screen, manager, background
+	// Started is the start of the session as logind reports it (Timestamp); zero when it could not be read.
+	Started time.Time
 }
 
 // Loginctl runs loginctl (reconcile.System.Loginctl).
@@ -48,7 +50,7 @@ func List(ctx context.Context, loginctl Loginctl) ([]Session, error) {
 		return nil, nil
 	}
 	args := append([]string{"show-session"}, ids...)
-	out, exit, err = loginctl(ctx, append(args, "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class")...)
+	out, exit, err = loginctl(ctx, append(args, "-p", "Id", "-p", "Name", "-p", "User", "-p", "Class", "-p", "Timestamp")...)
 	if err == nil && exit != 0 {
 		err = fmt.Errorf("loginctl show-session: exit %d", exit) // a session ended in between: the next pass retries
 	}
@@ -84,10 +86,25 @@ func parseShow(out string) []Session {
 			cur.UID, _ = strconv.Atoi(v)
 		case "Class":
 			cur.Class = v
+		case "Timestamp":
+			cur.Started = parseTimestamp(v)
 		}
 	}
 	flush()
 	return list
+}
+
+// timestampLayout is how loginctl prints a timestamp property ("Sat 2026-10-17 10:15:02 CEST").
+const timestampLayout = "Mon 2006-01-02 15:04:05 MST"
+
+// parseTimestamp reads a loginctl timestamp in the device's time zone, whose abbreviations loginctl prints; the zero
+// time when it cannot be read.
+func parseTimestamp(v string) time.Time {
+	t, err := time.ParseInLocation(timestampLayout, strings.TrimSpace(v), time.Local)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 // LocalUIDs parses /etc/passwd into name → UID; it parses /etc/group into name → GID as well (the same first three
@@ -129,6 +146,37 @@ func IsDirectoryUser(s Session, local map[string]int, breakGlass []string) bool 
 
 // ReportInterval is how often a user's login is reported at most (plan M3b decision 11).
 const ReportInterval = 24 * time.Hour
+
+// sessionKey is the key of a reported session in the seen map of NewSessionLogins: the user and the session ID,
+// separated by a NUL that neither may contain (plan M8d decision 17).
+func sessionKey(s Session) string { return s.User + "\x00" + s.ID }
+
+// NewSessionLogins returns every session of a directory user that was not reported yet and records it in seen; the
+// entries of sessions that are gone are pruned, so that a later session with a reused ID is reported again. It is the
+// rule while the organization records its login history (bundle.LoginSpec.ReportEverySession).
+func NewSessionLogins(sessions []Session, local map[string]int, seen map[string]time.Time, now time.Time) []Session {
+	current := map[string]bool{}
+	for _, s := range sessions {
+		current[sessionKey(s)] = true
+	}
+	for key := range seen {
+		if strings.Contains(key, "\x00") && !current[key] {
+			delete(seen, key)
+		}
+	}
+	var out []Session
+	for _, s := range sessions {
+		if !IsDirectoryUser(s, local, nil) {
+			continue
+		}
+		if _, ok := seen[sessionKey(s)]; ok {
+			continue
+		}
+		seen[sessionKey(s)] = now
+		out = append(out, s)
+	}
+	return out
+}
 
 // NewLogins returns one session of each directory user that was not reported within ReportInterval and records the
 // users in seen (username → last report); entries older than ReportInterval are pruned. Local accounts are never
