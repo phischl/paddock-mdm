@@ -384,6 +384,13 @@ once; `./paddock check` warns on a production host and passes on a lab host; eve
     `ErrAutoUnsealFailed`, defined in `app/autounseal.go` as `&problem.Error{Code: "auto_unseal_failed", Status:
     http.StatusInternalServerError}`) with params `failures`, `last_failure_at`, `last_failure_reason`; both update
     `audited_*` in the same transaction (`MarkAutoUnsealAudited`). No change → no event.
+    Amendment 2026-10-18 (architect note, decided by the orchestrator as architect, 2026-10-18; PDK-199 Review 1):
+    `paddock_auto_unseal_shares_present` is 1 only when the unsealer reports shares **and**
+    `Report.UnsealerRunning(now)` holds (`Report.SharesOnHost(now)`). `./paddock auto-unseal disable` removes the
+    unsealer before it deletes the file, so nothing writes `false` afterwards; without this rule
+    `PaddockAutoUnsealWithdrawn` would fire for good after the documented remediation. The admin API's
+    `unsealer.shares_present` follows the same rule. Trade-off: a stopped unsealer whose file is still on the host
+    is reported as "not running", not as "shares present"; `./paddock auto-unseal status` reads the file itself.
 
 ### 3.4 Compose, secrets, host commands
 
@@ -507,6 +514,9 @@ once; `./paddock check` warns on a production host and passes on a lab host; eve
     `Automatic unseal is off, but the shares are still on the host. Run ./paddock auto-unseal disable there.`
     When the state is `enabled` and the unsealer is not running or has no shares, it MUST show the info alert `The
     acknowledgement is recorded. An operator enables the unsealer on the host with ./paddock auto-unseal enable.`
+    Amendment 2026-10-18 (architect note, decided by the orchestrator as architect, 2026-10-18; PDK-199 Review 1):
+    "the unsealer reports shares present" means `unsealer.running` **and** `unsealer.shares_present` (decision 13
+    amendment); the warning clears once `./paddock auto-unseal disable` has removed the unsealer.
 23. Enabling opens `server/web/src/components/AutoUnsealDisclaimerDialog.vue`: a modal in the conventions of
     `ConfirmDialog` (focus on Cancel, Esc cancels, Enter never submits, `aria-labelledby`/`aria-describedby`) that
     renders the disclaimer of §6.6 as title, paragraphs and a numbered list, a text field labelled with the
