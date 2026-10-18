@@ -110,7 +110,8 @@ func TestIdentitySync(t *testing.T) {
 }
 
 // TestIdentitySyncDomainMatch (plan M8x decision 48): a synced user whose Authentik username has no organization
-// domain is listed with domain_match false; dave@acme.test with true.
+// domain is listed with domain_match false, one in acme.test with true. Both are direct members of paddock.acme, as
+// the sync requires; the dev users are members of role groups only and are never synced.
 func TestIdentitySyncDomainMatch(t *testing.T) {
 	alice := login(t, env.Alice)
 	ak, err := env.NewAuthentik()
@@ -118,16 +119,22 @@ func TestIdentitySyncDomainMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := testContext(t, syncRound+time.Minute)
-	name := "lab" + uniqueSuffix()
-	pk, err := ak.CreateUserWithEmail(ctx, name, name+"@other.test", "pw-"+uuid.NewString(), env.RootGroup("acme"))
-	t.Cleanup(func() {
-		if pk != 0 {
-			_ = ak.DeleteUser(context.Background(), pk)
+	create := func(username, email string) {
+		t.Helper()
+		pk, err := ak.CreateUserWithEmail(ctx, username, email, "pw-"+uuid.NewString(), env.RootGroup("acme"))
+		t.Cleanup(func() {
+			if pk != 0 {
+				_ = ak.DeleteUser(context.Background(), pk)
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
+	bare := "lab" + uniqueSuffix()
+	create(bare, bare+"@other.test")
+	inDomain := "dm-" + uniqueSuffix() + "@acme.test"
+	create(inDomain, inDomain)
 	match := func(id string) bool {
 		t.Helper()
 		res := call(t, alice, http.MethodGet, "/api/v1/users/"+id, nil)
@@ -140,10 +147,10 @@ func TestIdentitySyncDomainMatch(t *testing.T) {
 		}
 		return *u.DomainMatch
 	}
-	if match(waitSyncedUser(t, alice, name)) {
-		t.Fatalf("%s without @ has domain_match true", name)
+	if match(waitSyncedUser(t, alice, bare)) {
+		t.Fatalf("%s without @ has domain_match true", bare)
 	}
-	if !match(waitSyncedUser(t, alice, env.Dave)) {
-		t.Fatalf("%s has domain_match false", env.Dave)
+	if !match(waitSyncedUser(t, alice, inDomain)) {
+		t.Fatalf("%s has domain_match false", inDomain)
 	}
 }
