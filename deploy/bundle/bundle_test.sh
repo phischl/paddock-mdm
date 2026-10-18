@@ -283,6 +283,9 @@ mkdir -p "$work/fakebin"
 cat >"$work/fakebin/docker" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+# Like docker compose run and exec, the stand-in reads its stdin: a command of enable that is not redirected
+# swallows the shares.
+[[ -t 0 ]] || cat >/dev/null
 case "$*" in
   *"auto-unseal verify"*)
     if [[ "$FAKE_VERIFY" == ok ]]; then
@@ -293,7 +296,6 @@ case "$*" in
     echo "automatic unseal is not enabled: a platform administrator enables it in the portal first (Platform → OpenBao)"
     exit 1
     ;;
-  *psql*) cat >/dev/null ;;
 esac
 exit 0
 FAKE
@@ -346,7 +348,7 @@ done
 [[ -z "$leaked" ]] && pass "no share in the output or on a docker command line" || fail "a share leaked into the output or a command line"
 
 set +e
-out="$(cd "$work/u" && env -u SECRETS_DIR PATH="$work/fakebin:$PATH" ./paddock auto-unseal disable 2>&1)"
+out="$(cd "$work/u" && env -u SECRETS_DIR PATH="$work/fakebin:$PATH" ./paddock auto-unseal disable 2>&1 </dev/null)"
 rc=$?
 set -e
 if [[ $rc -eq 0 && ! -e "$f" && "$(grep -c '^PADDOCK_AUTO_UNSEAL=no$' "$work/u/.env")" == 1 &&
@@ -356,7 +358,7 @@ else
   fail "disable: exit $rc, $out"
 fi
 set +e
-out="$(cd "$work/u" && env -u SECRETS_DIR PATH="$work/fakebin:$PATH" ./paddock auto-unseal disable 2>&1)"
+out="$(cd "$work/u" && env -u SECRETS_DIR PATH="$work/fakebin:$PATH" ./paddock auto-unseal disable 2>&1 </dev/null)"
 rc=$?
 set -e
 [[ $rc -eq 0 ]] && pass "auto-unseal disable a second time: exit 0" || fail "disable a second time: exit $rc, $out"

@@ -22,7 +22,7 @@ export UNSEALER_PASSWORD
 
 ready=""
 for _ in $(seq 1 60); do
-  if compose exec -T postgres pg_isready -U postgres -d paddock >/dev/null 2>&1; then
+  if compose exec -T postgres pg_isready -U postgres -d paddock </dev/null >/dev/null 2>&1; then
     ready=1
     break
   fi

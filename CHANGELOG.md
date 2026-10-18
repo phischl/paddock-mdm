@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PADDOCK_AUTO_UNSEAL` disagree, on the audit host, when another service mounts the shares or the unsealer holds an
   AppRole or another database URL; it warns on every run on a production control plane with automatic unseal
   (residual risk RR-43) and passes on a lab host. A warning does not change the exit code.
+- Alerts `PaddockAutoUnsealWithdrawn` (automatic unseal disabled in the portal, but the shares still on the host for
+  an hour) and `PaddockAutoUnsealerDown` (automatic unseal enabled, but the unsealer has not reported for 10 minutes).
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.

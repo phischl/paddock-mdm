@@ -220,13 +220,14 @@ case "$cmd" in
         lab_warning
         [[ "$(dotenv PADDOCK_AUTO_UNSEAL)" != yes && ! -e "$shares_file" ]] ||
           die "automatic unseal is already set up on this host: run ./paddock auto-unseal disable first"
-        "$BUNDLE_DIR/scripts/gen-prod-secrets.sh" "$PADDOCK_HOST" >/dev/null
+        "$BUNDLE_DIR/scripts/gen-prod-secrets.sh" "$PADDOCK_HOST" >/dev/null </dev/null
         # The portal acknowledgement first: no share reaches the host without it.
-        if ! verified="$(compose run --rm --no-deps -T paddock-worker admin auto-unseal verify 2>/dev/null)"; then
+        # stdin stays for the shares: no command before them may read it.
+        if ! verified="$(compose run --rm --no-deps -T paddock-worker admin auto-unseal verify 2>/dev/null </dev/null)"; then
           die "$(grep -m1 '^automatic unseal' <<<"$verified" || echo 'automatic unseal is not enabled: a platform administrator enables it in the portal first (Platform → OpenBao)')"
         fi
         grep -m1 '^automatic unseal' <<<"$verified" || true
-        "$BUNDLE_DIR/scripts/postgres-unsealer-role.sh"
+        "$BUNDLE_DIR/scripts/postgres-unsealer-role.sh" </dev/null
         shares=()
         for n in 1 2 3; do
           share=""

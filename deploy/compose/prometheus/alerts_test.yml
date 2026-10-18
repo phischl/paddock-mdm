@@ -288,3 +288,49 @@ tests:
       - eval_time: 50m
         alertname: PaddockWALArchiveLag
         exp_alerts: []
+
+  - name: shares left on the host after the portal disabled automatic unseal warn after 1 hour
+    interval: 1m
+    input_series:
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x70"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x70"
+    alert_rule_test:
+      - eval_time: 59m
+        alertname: PaddockAutoUnsealWithdrawn
+        exp_alerts: []
+      - eval_time: 61m
+        alertname: PaddockAutoUnsealWithdrawn
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Automatic unseal was disabled in the portal, but the shares are still on the host"
+              description: "Run ./paddock auto-unseal disable on the control-plane host (docs/operations/openbao.md section 6)."
+      - eval_time: 61m
+        alertname: PaddockAutoUnsealerDown
+        exp_alerts: []
+
+  - name: an enabled automatic unseal without a reporting unsealer warns after 10 minutes
+    interval: 1m
+    input_series:
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x15"
+      - series: 'paddock_auto_unseal_unsealer_up{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x15"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x15"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: PaddockAutoUnsealerDown
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: PaddockAutoUnsealerDown
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Automatic unseal is enabled, but the unsealer does not report"
+              description: "OpenBao will stay sealed after the next restart until the unsealer runs or three custodians unseal it."
+      - eval_time: 11m
+        alertname: PaddockAutoUnsealWithdrawn
+        exp_alerts: []
