@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `platform.openbao_auto_unsealed` and exports `paddock_auto_unseal_enabled`, `paddock_auto_unseal_shares_present`
   and `paddock_auto_unseal_unsealer_up`; new audit codes `platform.auto_unseal_enabled` and
   `platform.auto_unseal_disabled`.
+- Portal page *Platform* → *OpenBao*: shows the seal status, the automatic-unseal setting with who acknowledged which
+  disclaimer version, the unsealer on the host and its last unseal or failure. Enabling shows the disclaimer with its
+  four risks and needs the typed sentence "I understand and accept the risk" (German: "Ich verstehe und akzeptiere das
+  Risiko") and a step-up; disabling asks for confirmation and a step-up.
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.

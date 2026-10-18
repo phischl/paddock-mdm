@@ -53,6 +53,7 @@ export const router = createRouter({
     { path: '/platform/agent-releases/:version', name: 'agent-release', component: () => import('./views/AgentReleaseDetail.vue') },
     { path: '/platform/ip-allowlist', name: 'ip-allowlist', component: () => import('./views/IpAllowlist.vue') },
     { path: '/platform/sessions', name: 'platform-sessions', component: () => import('./views/PlatformSessions.vue') },
+    { path: '/platform/openbao', name: 'platform-openbao', component: () => import('./views/PlatformOpenBao.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFound.vue') },
   ],
 })
