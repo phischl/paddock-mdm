@@ -125,14 +125,21 @@ func newStepUpWorld(t *testing.T) *stepUpWorld {
 // newStepUpWorldWith is newStepUpWorld with Deps.StepUpMaxAuthAge (0: the production value).
 func newStepUpWorldWith(t *testing.T, maxAuthAge time.Duration) *stepUpWorld {
 	t.Helper()
-	p := principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Subject: "sub-alice",
-		Display: "alice@acme.test", Role: principal.RoleOrgAdmin, OrganizationID: uuid.Must(uuid.NewV7())}
-	return newStepUpWorldFor(t, maxAuthAge, p, nil)
+	return newStepUpWorldFor(t, maxAuthAge, stepUpAlice(), nil)
 }
 
+// stepUpAlice is the org_admin whose session steps up.
+func stepUpAlice() principal.Principal {
+	return principal.Principal{Kind: principal.KindAdmin, ID: uuid.Must(uuid.NewV7()), Subject: "sub-alice",
+		Display: "alice@acme.test", Role: principal.RoleOrgAdmin, OrganizationID: uuid.Must(uuid.NewV7())}
+}
+
+// totpClass is the authenticator class of an Authentik TOTP device.
+const totpClass = "authentik_stages_authenticator_totp.totpdevice"
+
 // newStepUpWorldFor is a step-up world for the session of p whose role check uses roles (nil: a fake that resolves
-// acme to the session's organization).
-func newStepUpWorldFor(t *testing.T, maxAuthAge time.Duration, p principal.Principal, roles admin.StepUpAccounts) *stepUpWorld {
+// acme to the session's organization); deps adjust the handler's dependencies.
+func newStepUpWorldFor(t *testing.T, maxAuthAge time.Duration, p principal.Principal, roles admin.StepUpAccounts, deps ...func(*admin.Deps)) *stepUpWorld {
 	t.Helper()
 	idp := newFakeStepUpIdP(t)
 	key := make([]byte, 32)
@@ -165,9 +172,13 @@ func newStepUpWorldFor(t *testing.T, maxAuthAge time.Duration, p principal.Princ
 	sessions.records["sid-alice"] = sessionsRecord(p)
 	w := &stepUpWorld{t: t, idp: idp, keys: keys, maxAge: maxAge, tokens: tokens, sessions: sessions, clock: time.Now()}
 	w.session = admin.NewSession(p, "sid-alice", "en", w.clock)
-	w.handler = admin.NewHandler(admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
+	d := admin.Deps{Static: static, Keys: keys, OIDC: admin.NewOIDC(admin.OIDCConfig{}), StepUp: stepUp,
 		StepUpTokens: tokens, StepUpAccounts: roles, Sessions: sessions, PublicURL: "https://admin.test",
-		StepUpMaxAuthAge: maxAuthAge, Now: func() time.Time { return w.clock }})
+		StepUpMaxAuthAge: maxAuthAge, Now: func() time.Time { return w.clock }}
+	for _, f := range deps {
+		f(&d)
+	}
+	w.handler = admin.NewHandler(d)
 	return w
 }
 
@@ -226,7 +237,7 @@ func TestStepUp(t *testing.T) {
 	// good are the claims of a step-up that authenticated at the step-up's start (Paddock's clock in w).
 	good := func(w *stepUpWorld) map[string]any {
 		return map[string]any{"sub": "sub-alice", "auth_time": w.clock.Unix(), "amr": []string{"pwd", "mfa"}, "jti": "jti-1",
-			"groups": []string{"paddock.acme", "paddock.acme.admins"}}
+			"groups": []string{"paddock.acme", "paddock.acme.admins"}, "paddock_mfa_classes": []string{admin.StepUpWebAuthnClass}}
 	}
 	with := func(w *stepUpWorld, k string, v any) map[string]any {
 		c := good(w)
@@ -248,6 +259,7 @@ func TestStepUp(t *testing.T) {
 			t.Fatal(err)
 		}
 		if sess.PID != w.session.PID || sess.StepUpJTI != "jti-1" || time.Since(time.Unix(sess.StepUpAt, 0)) > 5*time.Second ||
+			len(sess.StepUpClasses) != 1 || sess.StepUpClasses[0] != admin.StepUpWebAuthnClass ||
 			sess.Principal("").StepUpAt.IsZero() || sess.Principal("").StepUpJTI != "jti-1" {
 			t.Fatalf("session %+v", sess)
 		}
@@ -263,6 +275,11 @@ func TestStepUp(t *testing.T) {
 		"without MFA":        func(w *stepUpWorld) map[string]any { return with(w, "amr", []string{"pwd"}) },
 		"without jti":        func(w *stepUpWorld) map[string]any { return with(w, "jti", "") },
 		"without groups":     func(w *stepUpWorld) map[string]any { return with(w, "groups", nil) },
+		// The factor is checked by Paddock, not only by Authentik's stage (plan M8f decision 8): a token without the
+		// claim (mapping missing), with an empty list or with TOTP only is refused.
+		"without authenticator classes": func(w *stepUpWorld) map[string]any { return with(w, "paddock_mfa_classes", nil) },
+		"with no authenticator class":   func(w *stepUpWorld) map[string]any { return with(w, "paddock_mfa_classes", []string{}) },
+		"with TOTP only":                func(w *stepUpWorld) map[string]any { return with(w, "paddock_mfa_classes", []string{totpClass}) },
 		// The login event the session started from, one second before the step-up: what Authentik sends when it skips
 		// the step-up flow (stepup.go, checkStepUp).
 		"authentication before the step-up": func(w *stepUpWorld) map[string]any { return with(w, "auth_time", w.clock.Unix()-1) },
@@ -278,6 +295,25 @@ func TestStepUp(t *testing.T) {
 			}
 		})
 	}
+	t.Run("WebAuthn and TOTP", func(t *testing.T) {
+		w := newStepUpWorld(t)
+		res := w.stepUp(with(w, "paddock_mfa_classes", []string{totpClass, admin.StepUpWebAuthnClass}))
+		if res.Header().Get("Location") != "/devices/x" || cookieOf(res, admin.SessionCookie) == nil {
+			t.Fatalf("callback: %s", res.Header().Get("Location"))
+		}
+	})
+	t.Run("development class", func(t *testing.T) {
+		// PADDOCK_STEPUP_MFA_CLASS lets the development users step up with TOTP; WebAuthn alone is then refused.
+		dev := func(d *admin.Deps) { d.StepUpMFAClass = totpClass }
+		w := newStepUpWorldFor(t, 0, stepUpAlice(), nil, dev)
+		if res := w.stepUp(with(w, "paddock_mfa_classes", []string{totpClass})); res.Header().Get("Location") != "/devices/x" {
+			t.Fatalf("TOTP with the development class: %s", res.Header().Get("Location"))
+		}
+		w = newStepUpWorldFor(t, 0, stepUpAlice(), nil, dev)
+		if res := w.stepUp(good(w)); res.Header().Get("Location") != "/devices/x?stepup=failed" {
+			t.Fatalf("WebAuthn with the development class: %s", res.Header().Get("Location"))
+		}
+	})
 	t.Run("authentication during the step-up", func(t *testing.T) {
 		w := newStepUpWorld(t)
 		start := w.clock

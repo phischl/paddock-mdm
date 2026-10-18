@@ -2445,6 +2445,8 @@ export interface components {
             window_seconds: number;
             /** @description The oldest login a step-up callback accepts (max_age). */
             max_auth_age_seconds: number;
+            /** @description Authenticator classes ("<app>.<model>") the session's last step-up validated (claim paddock_mfa_classes); absent without a step-up. */
+            mfa_classes?: string[];
         };
         /** @description A patch of the account settings; at least one field. */
         MeUpdate: {

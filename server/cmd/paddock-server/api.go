@@ -62,6 +62,8 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 	stepUpCfg.Issuer = l.Required("PADDOCK_OIDC_STEPUP_ISSUER")
 	stepUpCfg.ClientID = l.String("PADDOCK_OIDC_STEPUP_CLIENT_ID", "paddock-portal-stepup")
 	stepUpCfg.RedirectPath = "/api/auth/stepup/callback"
+	// The scope paddock_stepup carries the validated authenticator classes (plan M8f decision 7).
+	stepUpCfg.Scopes = []string{"openid", "profile", "groups", "paddock_stepup"}
 	authentikURL := l.Required("PADDOCK_AUTHENTIK_URL")
 	authentikToken := l.SecretFile("PADDOCK_AUTHENTIK_TOKEN_FILE")
 	releaseKey := l.SecretFile("PADDOCK_RELEASE_PUBLIC_KEY_FILE")
@@ -208,6 +210,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		Static:         static,
 		// Development only: LoadDevStepUp refuses the variables in production.
 		StepUpMaxAuthAge: devStepUp.MaxAuthAge,
+		StepUpMFAClass:   devStepUp.MFAClass,
 		ExposeStepUp:     common.Development(),
 		LoginMFAOptional: loginMFAOptional,
 		TrustedProxies:   common.TrustedProxies,

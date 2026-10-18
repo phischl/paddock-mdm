@@ -82,6 +82,27 @@ entries:
       stage: !KeyOf login
       order: 100
 
+  # The step-up proves a WebAuthn authenticator (ADR 0034 decision 6). Authentik's amr says only "mfa", for WebAuthn and
+  # TOTP alike; this mapping names the classes of the authenticators the session's login validated, from the login
+  # event Authentik itself uses for amr (providers/oauth2/id_token.py), so that the api can refuse any other factor.
+  - model: authentik_providers_oauth2.scopemapping
+    id: scope-stepup-mfa
+    identifiers:
+      managed: io.paddock/scope-stepup-mfa
+    attrs:
+      name: "Paddock: step-up authenticator classes"
+      scope_name: paddock_stepup
+      description: Authenticator classes of the step-up
+      expression: |
+        from authentik.events.signals import get_login_event
+        classes = []
+        event = get_login_event(token.session) if token and token.session else None
+        if event:
+            for device in (event.context.get("auth_method_args") or {}).get("mfa_devices") or []:
+                if isinstance(device, dict) and device.get("app") and device.get("model_name"):
+                    classes.append(f"{device['app']}.{device['model_name']}")
+        return {"paddock_mfa_classes": classes}
+
   # --- OIDC provider and application, with the client policy of paddock-portal ---
   - model: authentik_providers_oauth2.oauth2provider
     id: provider
@@ -109,6 +130,7 @@ entries:
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
         # The role at the step-up is checked against the session's (plan M8s decision 19); paddock-portal.yaml defines it.
         - !Find [authentik_providers_oauth2.scopemapping, [managed, io.paddock/scope-groups]]
+        - !KeyOf scope-stepup-mfa
 
   - model: authentik_core.application
     id: application

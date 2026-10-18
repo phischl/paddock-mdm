@@ -1017,7 +1017,10 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 
 > **Amendment 2026-10-18 (M8f):** the step-up's authorization request carries `max_age=20` (below the 30 s window of
 > the escrow-reader and the revocation-issuer), so a repeated step-up is possible 20 s after the previous one
-> (ADR 0034 amendment 2026-10-18).
+> (ADR 0034 amendment 2026-10-18). The step-up provider carries the mapping `io.paddock/scope-stepup-mfa` (scope
+> `paddock_stepup`), whose claim `paddock_mfa_classes` names the authenticator classes the step-up's login validated;
+> the callback refuses every step-up token without the WebAuthn class, so Paddock itself checks the factor that
+> Authentik's `amr` does not distinguish (ADR 0034 amendment 2026-10-18, ADR 0007 amendment 2026-10-18).
 
 ---
 

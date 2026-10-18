@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -450,7 +451,7 @@ func (e *env) steppedUp(c *http.Cookie, at time.Time) *http.Cookie {
 	if err := e.keys.Open(admin.SessionCookie, c.Value, &sess); err != nil {
 		e.t.Fatal(err)
 	}
-	sess.StepUpAt, sess.StepUpJTI = at.Unix(), e.stepUps.issue(sess.Sub, at)
+	sess.StepUpAt, sess.StepUpJTI, sess.StepUpClasses = at.Unix(), e.stepUps.issue(sess.Sub, at), []string{admin.StepUpWebAuthnClass}
 	v, err := e.keys.Seal(admin.SessionCookie, sess)
 	if err != nil {
 		e.t.Fatal(err)
@@ -800,7 +801,8 @@ func TestMeStepUpIsDevelopmentOnly(t *testing.T) {
 		t.Fatalf("development /me without a step-up: %+v", m.StepUp)
 	}
 	e.do(call{method: "GET", path: "/api/v1/me", cookie: e.steppedUp(plain, at)}).decode(t, &m)
-	if m.StepUp == nil || m.StepUp.At == nil || !m.StepUp.At.Equal(at) {
+	if m.StepUp == nil || m.StepUp.At == nil || !m.StepUp.At.Equal(at) || m.StepUp.MfaClasses == nil ||
+		fmt.Sprint(*m.StepUp.MfaClasses) != "["+admin.StepUpWebAuthnClass+"]" {
 		t.Fatalf("development /me after a step-up at %s: %+v", at, m.StepUp)
 	}
 }

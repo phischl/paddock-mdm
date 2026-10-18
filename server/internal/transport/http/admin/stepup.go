@@ -33,6 +33,9 @@ const (
 	// development). It stays below the escrow-reader's and revocation-issuer's 30 s window, so a step-up too old for
 	// them is always old enough for Authentik to authenticate again (ADR 0034 amendment 2026-10-18).
 	StepUpMaxAuthAge = 20 * time.Second
+	// StepUpWebAuthnClass is the authenticator class a step-up must have validated (ADR 0034 decision 6 and amendment
+	// 2026-10-18): Authentik's amr says "mfa" for WebAuthn and TOTP alike, the claim paddock_mfa_classes names the class.
+	StepUpWebAuthnClass = "authentik_stages_authenticator_webauthn.webauthndevice"
 )
 
 // stepUpState is the payload of the paddock_stepup cookie.
@@ -124,6 +127,9 @@ type stepUpClaims struct {
 	JTI      string   `json:"jti"`
 	// Groups are the role groups at the step-up (plan M8s decision 19); nil when the provider sent none.
 	Groups []string `json:"groups"`
+	// MFAClasses are the classes ("<app>.<model>") of the authenticators the step-up's login validated (mapping
+	// io.paddock/scope-stepup-mfa, plan M8f decision 6); nil when the provider sent none.
+	MFAClasses []string `json:"paddock_mfa_classes"`
 }
 
 // StepUpAccounts resolves the organization of the role a step-up carries and handles a role that no longer matches
@@ -163,10 +169,10 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, raw, err := b.stepUpToken(r, st)
 	if err == nil {
-		err = checkStepUp(claims, st.Session, st.Started, now, b.maxAuthAge)
+		err = checkStepUp(claims, st.Session, st.Started, now, b.maxAuthAge, b.mfaClass)
 	}
 	if err != nil {
-		slog.WarnContext(ctx, "step-up rejected", "error", err, "account_id", st.Session.PID)
+		slog.WarnContext(ctx, "step-up rejected", "error", err, "account_id", st.Session.PID, "mfa_classes", claims.MFAClasses)
 		stepUpFailed(w, r, st.ReturnTo)
 		return
 	}
@@ -190,7 +196,7 @@ func (b *bff) stepUpCallback(w http.ResponseWriter, r *http.Request) {
 	if err := b.tokens.Put(ctx, claims.JTI, raw, b.tokenTTL); err != nil {
 		slog.ErrorContext(ctx, "keeping the step-up token failed; decryptions will ask for a new step-up", "error", err)
 	}
-	sess.Idle, sess.StepUpAt, sess.StepUpJTI = now.Unix(), now.Unix(), claims.JTI
+	sess.Idle, sess.StepUpAt, sess.StepUpJTI, sess.StepUpClasses = now.Unix(), now.Unix(), claims.JTI, claims.MFAClasses
 	value, err := b.keys.Seal(SessionCookie, sess)
 	if err != nil {
 		slog.ErrorContext(ctx, "session cookie", "error", err)
@@ -232,8 +238,8 @@ func (b *bff) stepUpToken(r *http.Request, st stepUpState) (stepUpClaims, string
 }
 
 // checkStepUp checks that the step-up authenticated the session's own user just now, after its start (unix), with
-// MFA.
-func checkStepUp(c stepUpClaims, sess Session, started int64, now time.Time, maxAuthAge time.Duration) error {
+// MFA and an authenticator of requiredClass.
+func checkStepUp(c stepUpClaims, sess Session, started int64, now time.Time, maxAuthAge time.Duration, requiredClass string) error {
 	if c.Subject == "" || c.Subject != sess.Sub {
 		return errors.New("the step-up authenticated another user")
 	}
@@ -250,6 +256,12 @@ func checkStepUp(c stepUpClaims, sess Session, started int64, now time.Time, max
 	}
 	if !slices.Contains(c.AMR, "mfa") {
 		return errors.New("the step-up did not use MFA")
+	}
+	// A login through another Authentik flow that validated TOTP also says "mfa", and Authentik may answer a started
+	// step-up with it (plan M8f §2): only the validated class proves the WebAuthn authenticator. A token without the
+	// claim means the mapping is missing and fails closed.
+	if !slices.Contains(c.MFAClasses, requiredClass) {
+		return errors.New("the step-up did not validate the required authenticator class")
 	}
 	return nil
 }

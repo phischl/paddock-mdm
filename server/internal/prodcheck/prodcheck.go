@@ -132,7 +132,7 @@ type Result struct {
 // where the role would refuse or ignore it, because it shows that development overrides leaked into the host.
 var devOnly = []string{
 	"PADDOCK_STEPUP_WINDOW", "PADDOCK_STEPUP_MAX_AUTH_AGE", "PADDOCK_STALENESS_UNIT", "PADDOCK_REAPER_THRESHOLD",
-	"PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL", "PADDOCK_RETENTION_UNIT",
+	"PADDOCK_OSV_SYNC_INTERVAL", "PADDOCK_LOGIN_MFA_OPTIONAL", "PADDOCK_RETENTION_UNIT", "PADDOCK_STEPUP_MFA_CLASS",
 }
 
 // releaseKeyVars name the minisign public keys of agent and revocation releases.

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	if err := k.Open(SessionCookie, v, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out != in {
+	if !reflect.DeepEqual(out, in) {
 		t.Fatalf("round trip changed the session: %+v != %+v", out, in)
 	}
 	if p := out.Principal("192.0.2.1"); p.OrganizationID != in.Org || p.Role != principal.RoleOrgAdmin || p.IP != "192.0.2.1" ||
