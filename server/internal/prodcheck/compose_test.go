@@ -359,7 +359,9 @@ func TestContainerHardening(t *testing.T) {
 // TestStepUpBlueprintWebAuthnOnly (plan M8s decision 40): the shipped step-up flow validates with WebAuthn only; only
 // the development blueprint adds a stage that accepts TOTP.
 // TestPortalBlueprintBindsMFAOnTheDefaultFlow: the portal blueprint adds a second factor at order 31 of Authentik's
-// default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a).
+// default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a). The stage runs only
+// for a user without a WebAuthn or TOTP authenticator, because a user with one has just validated it at order 30 and
+// a last_auth_threshold cannot skip a stage after another stage's validation (PDK-324).
 func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 	read := func(path string) string {
 		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))
@@ -369,10 +371,32 @@ func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 		return string(b)
 	}
 	portal := read(filepath.Join("blueprints", "paddock-portal.yaml"))
-	for _, want := range []string{"name: paddock-default-login-mfa", "slug, default-authentication-flow", "order: 31",
-		"not_configured_action: configure", "last_auth_threshold: minutes=5"} {
-		if !strings.Contains(portal, want) {
-			t.Errorf("paddock-portal.yaml does not contain %q", want)
+	block := func(marker string) string {
+		t.Helper()
+		start := strings.Index(portal, marker)
+		if start < 0 {
+			t.Fatalf("paddock-portal.yaml has no entry %q", marker)
+		}
+		end := strings.Index(portal[start:], "\n  - model:")
+		if end < 0 {
+			end = len(portal) - start
+		}
+		return portal[start : start+end]
+	}
+	for _, c := range []struct{ marker, want string }{
+		{"name: paddock-default-login-mfa\n", "not_configured_action: configure"},
+		{"name: paddock-default-login-mfa\n", "last_auth_threshold: seconds=0"},
+		{"id: default-flow-mfa-binding\n", "slug, default-authentication-flow"},
+		{"id: default-flow-mfa-binding\n", "order: 31"},
+		{"id: default-flow-mfa-binding\n", "evaluate_on_plan: false"},
+		{"id: default-flow-mfa-binding\n", "re_evaluate_policies: true"},
+		{"id: default-flow-mfa-binding\n", "policy_engine_mode: all"},
+		{"name: paddock-default-login-mfa-missing\n",
+			`return not (ak_user_has_authenticator(request.user, "webauthn") or ak_user_has_authenticator(request.user, "totp"))`},
+		{"policy: !KeyOf default-flow-mfa-missing\n", "target: !KeyOf default-flow-mfa-binding"},
+	} {
+		if !strings.Contains(block(c.marker), c.want) {
+			t.Errorf("the entry with %q lacks %q", strings.TrimSpace(c.marker), c.want)
 		}
 	}
 	dev := read(filepath.Join("dev", "paddock-dev.yaml"))

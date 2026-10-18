@@ -98,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `./paddock logs` and `make logs` redact token values that the identity provider prints for refused token refreshes.
 - A release that failed its probation is rolled back exactly once; the restarted agent no longer re-installs it before
   the rollback is recorded.
+- Authentik's own sign-in asks a user with an authenticator for the second factor once instead of twice.
 
 ## [0.1.0-alpha.3] - 2026-10-17
 
