@@ -338,6 +338,20 @@ func gateS4(t *testing.T, d *Device) {
 		if p["from_version"] != good || d.AgentVersion() != good || d.Slot() != slot {
 			t.Fatalf("after the rollback: %v, version %s slot %s; want %s in %s", p, d.AgentVersion(), d.Slot(), good, slot)
 		}
+		// Rolled back exactly once (PDK-300): the restarted agent must not stage the release again, also over the
+		// check-ins of the next three minutes.
+		for end := time.Now().Add(3 * time.Minute); time.Now().Before(end); time.Sleep(time.Minute) {
+			d.Checkin()
+		}
+		n := 0
+		for _, e := range d.s.Events("device.agent_rolled_back", d.ID) {
+			if e.Params["version"] == v {
+				n++
+			}
+		}
+		if n != 1 || d.AgentVersion() != good {
+			t.Fatalf("%d device.agent_rolled_back events for %s, agent %s; want exactly one and %s", n, v, d.AgentVersion(), good)
+		}
 	})
 
 	t.Run("self-test failure", func(t *testing.T) {

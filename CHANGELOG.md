@@ -95,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public portal pages such as the sign-in refusal use the browser's language (German or English) before a session
   exists.
 - `./paddock logs` and `make logs` redact token values that the identity provider prints for refused token refreshes.
+- A release that failed its probation is rolled back exactly once; the restarted agent no longer re-installs it before
+  the rollback is recorded.
 
 ## [0.1.0-alpha.3] - 2026-10-17
 
