@@ -271,7 +271,8 @@ any version may replace an active agent that cannot report its version), install
 (`/opt/paddock/agent/A` or `B`), runs `paddockd self-test`, flips `/opt/paddock/agent/current`, and watches a
 probation of 10 minutes: the new agent must keep running and check in. Three crashes or no check-in by the end of
 the probation flip back. A version that failed is not tried again on that device. The supervisor writes the result
-before it restarts the previous agent, so the restarted agent never stages the release it just rolled back from. The
+before it restarts the previous agent, so the restarted agent never stages the release it just rolled back from; a
+request the agent stages for a release whose result it has not read yet is removed without a second install. The
 outcomes in
 `update-result.json` and their audit codes:
 
