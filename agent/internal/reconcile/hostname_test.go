@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -134,6 +135,39 @@ func TestHostnameHostsFile(t *testing.T) {
 				t.Fatalf("plan after apply %v, %v", changes, err)
 			}
 		})
+	}
+}
+
+// TestHostnameHostsSymlink: a symlinked /etc/hosts is left alone and not planned, so drift passes stay quiet; it is
+// logged once while it stays a symlink and again after it was a regular file in between (review 1 finding 4).
+func TestHostnameHostsSymlink(t *testing.T) {
+	var logs strings.Builder
+	defer slog.SetDefault(slog.Default())
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	sys, h, _ := hostnameFixture(t)
+	sys.Files[reconcile.HostsFile] = &fakesys.File{Symlink: true, Mode: fs.ModeSymlink | 0o777}
+	r := hostnameResource(t, "lap-0421")
+	for range 3 {
+		if changes, err := h.Plan(context.Background(), r); err != nil || len(changes) != 0 {
+			t.Fatalf("plan %v, %v", changes, err)
+		}
+	}
+	if res := h.Apply(context.Background(), r); res.Status != reconcile.OK || len(sys.Calls) != 0 || !sys.Files[reconcile.HostsFile].Symlink {
+		t.Fatalf("apply %+v, calls %v", res, sys.Calls)
+	}
+	if n := strings.Count(logs.String(), "non-regular file"); n != 1 {
+		t.Fatalf("logged %d times:\n%s", n, logs.String())
+	}
+	sys.Files[reconcile.HostsFile] = &fakesys.File{Data: []byte("127.0.1.1 lap-0421\n"), Mode: 0o644}
+	if _, err := h.Plan(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	sys.Files[reconcile.HostsFile] = &fakesys.File{Symlink: true, Mode: fs.ModeSymlink | 0o777}
+	if _, err := h.Plan(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(logs.String(), "non-regular file"); n != 2 {
+		t.Fatalf("logged %d times after a regular file in between:\n%s", n, logs.String())
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 
@@ -38,6 +39,9 @@ type HostnameState struct {
 	// avahiPending is set while the restart of avahi-daemon after a rename has not succeeded: the names are in
 	// sync then, so only this flag makes the next pass retry it.
 	avahiPending atomic.Bool
+	// hostsSkipped is set while /etc/hosts is not a regular file and that was logged, so it is logged once rather
+	// than at every drift pass.
+	hostsSkipped atomic.Bool
 }
 
 // Type implements Reconciler.
@@ -73,8 +77,15 @@ func (h *Hostname) Plan(ctx context.Context, r bundle.Resource) ([]string, error
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("read %s: %w", HostsFile, err)
 		}
-		if !hostsHasName(data, name) {
-			changes = append(changes, "write "+HostsFile+" "+hostsLoopIP+" "+name)
+		if err == nil && data == nil {
+			h.skipHosts(ctx)
+		} else {
+			if h.State != nil {
+				h.State.hostsSkipped.Store(false)
+			}
+			if !hostsHasName(data, name) {
+				changes = append(changes, "write "+HostsFile+" "+hostsLoopIP+" "+name)
+			}
 		}
 	}
 	return changes, nil
@@ -129,6 +140,14 @@ func (h *Hostname) restartAvahi(ctx context.Context) error {
 		return fmt.Errorf("avahi-daemon restart failed: %w", err)
 	}
 	return nil
+}
+
+// skipHosts leaves a non-regular /etc/hosts (a symlink, e.g. to a file another tool generates) alone: writing it
+// would replace the link (RR-70). It is logged once while it stays so.
+func (h *Hostname) skipHosts(ctx context.Context) {
+	if h.State == nil || h.State.hostsSkipped.CompareAndSwap(false, true) {
+		slog.WarnContext(ctx, "the hostname reconciler leaves a non-regular file alone", "path", HostsFile)
+	}
 }
 
 func (h *Hostname) setAvahiPending(pending bool) {

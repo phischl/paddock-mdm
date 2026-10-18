@@ -582,3 +582,6 @@ Open points (default chosen):
 - **`/etc/hosts` keeps names and aliases.** Decision 13 is refined: the reconciler replaces only the first host name
   (field 1) of the first `127.0.1.1` line; the separators, further names and aliases, a comment and the line ending
   stay. A `127.0.1.1` line without a host name gets `\t<name>` after the address.
+- **Symlinked `/etc/hosts`.** When `/etc/hosts` is not a regular file (a symlink), `Plan` leaves it out of the plan
+  instead of planning a write that fails at every drift pass; the agent logs it once while it stays so (state in
+  `reconcile.HostnameState`), and RR-70 covers the stale `127.0.1.1` line this leaves.
