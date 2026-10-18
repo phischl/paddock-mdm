@@ -234,4 +234,27 @@ func (c *Client) listRoleGroup(ctx context.Context, groupName string) (out []por
 	return nil, false, fmt.Errorf("authentik: %s has more than %d pages of members", groupName, maxPages)
 }
 
+// EndUserSessions deletes every Authentik authenticated session of the users userPKs in one bulk delete and returns
+// how many it deleted; Authentik deletes the browser's Django session with each, which signs the browser out (plan
+// M8f decision 17). The caller chunks the users.
+func (c *Client) EndUserSessions(ctx context.Context, userPKs []string) (int, error) {
+	if len(userPKs) == 0 {
+		return 0, nil
+	}
+	q := url.Values{}
+	for _, pk := range userPKs {
+		if _, err := strconv.Atoi(pk); err != nil {
+			return 0, fmt.Errorf("authentik: user pk %q is not an integer", pk)
+		}
+		q.Add("user_pks", pk)
+	}
+	var res struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := c.do(ctx, http.MethodDelete, "/api/v3/core/authenticated_sessions/bulk_delete/?"+q.Encode(), nil, &res); err != nil {
+		return 0, upstream(err)
+	}
+	return res.Deleted, nil
+}
+
 func userPath(pk string) string { return "/api/v3/core/users/" + url.PathEscape(pk) + "/" }

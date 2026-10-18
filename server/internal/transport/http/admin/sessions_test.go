@@ -2,15 +2,19 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/phischl/paddock-mdm/server/internal/ports"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
@@ -131,8 +135,31 @@ func TestServerSideSessions(t *testing.T) {
 	}
 }
 
+// fakeIdentitySessions is the identity provider of End all sessions: two portal users with one session each.
+type fakeIdentitySessions struct {
+	mu    sync.Mutex
+	ended []string
+	fail  bool
+}
+
+func (f *fakeIdentitySessions) PortalUsers(context.Context) ([]ports.IdentityUser, error) {
+	return []ports.IdentityUser{{PK: "1", Username: "root"}, {PK: "2", Username: "alice@acme.test"}}, nil
+}
+
+func (f *fakeIdentitySessions) EndUserSessions(_ context.Context, pks []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fail {
+		return 0, fmt.Errorf("%w: authentik: HTTP 503", problem.UpstreamUnavailable)
+	}
+	f.ended = append(f.ended, pks...)
+	return len(pks), nil
+}
+
 // TestEndAllSessions covers plan M8s decision 16: a platform administrator with a step-up ends every session (the
 // own one included) and the event is recorded; without step-up and for organization administrators it is refused.
+// The identity provider's sessions of the portal users end too (plan M8f decision 16); when the identity provider
+// fails, the answer is 502 and the portal sessions are ended all the same.
 func TestEndAllSessions(t *testing.T) {
 	e := newEnv(t)
 	root := e.platformSession()
@@ -161,6 +188,23 @@ func TestEndAllSessions(t *testing.T) {
 	for name, c := range map[string]*http.Cookie{"own": stepped, "other": alice} {
 		if r := e.do(call{method: "GET", path: "/api/v1/me", cookie: c}); r.status != http.StatusUnauthorized {
 			t.Errorf("%s session after end all: %d", name, r.status)
+		}
+	}
+	if fmt.Sprint(e.identitySessions.ended) != "[1 2]" {
+		t.Fatalf("identity-provider sessions ended for %v, want [1 2]", e.identitySessions.ended)
+	}
+
+	e.identitySessions.fail = true
+	alice = e.session(e.acme, principal.RoleOrgAdmin)
+	stepped = e.steppedUp(e.platformSession(), time.Now())
+	r = e.do(call{method: "POST", path: "/api/platform/v1/sessions/end-all", cookie: stepped})
+	if r.status != http.StatusBadGateway || r.problemCode(t) != "upstream_unavailable" {
+		t.Fatalf("identity provider down: %d %s", r.status, r.body)
+	}
+	e.expectEvent(r, "platform.sessions_ended:failure:upstream_unavailable")
+	for name, c := range map[string]*http.Cookie{"own": stepped, "other": alice} {
+		if r := e.do(call{method: "GET", path: "/api/v1/me", cookie: c}); r.status != http.StatusUnauthorized {
+			t.Errorf("%s session after a failed end all: %d", name, r.status)
 		}
 	}
 }

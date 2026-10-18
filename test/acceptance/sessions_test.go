@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -222,6 +223,24 @@ func TestSessionsEndAll(t *testing.T) {
 	alice := login(t, env.Alice)
 	root := login(t, env.PlatformAdmin)
 	idx := auditIndex(t)
+	ak, err := env.NewAuthentik()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// identitySessions counts the Authentik sessions of user (plan M8f decision 20).
+	identitySessions := func(user string) int {
+		t.Helper()
+		var res struct {
+			Results []json.RawMessage `json:"results"`
+		}
+		if err := ak.Get(testContext(t, time.Minute), "/core/authenticated_sessions/?user__username="+url.QueryEscape(user), &res); err != nil {
+			t.Fatal(err)
+		}
+		return len(res.Results)
+	}
+	if n := identitySessions(env.Alice); n < 1 {
+		t.Fatalf("alice has %d Authentik sessions after signing in, want at least 1", n)
+	}
 
 	res := call(t, alice, http.MethodPost, "/api/platform/v1/sessions/end-all", nil)
 	expectStatus(t, res, http.StatusForbidden, "forbidden")
@@ -243,13 +262,29 @@ func TestSessionsEndAll(t *testing.T) {
 			t.Errorf("%s's session after end all: %d, want 401", name, status)
 		}
 	}
+	for _, user := range []string{env.Alice, env.PlatformAdmin} {
+		if n := identitySessions(user); n != 0 {
+			t.Errorf("%s has %d Authentik sessions after end all, want 0", user, n)
+		}
+	}
 	// Every helper signs in again; the event is read with a new session.
 	for _, user := range []string{env.PlatformAdmin, env.Alice, env.Dave, env.Bob, env.Carol} {
 		if p := login(t, user); meStatus(t, p) != http.StatusOK {
 			t.Fatalf("%s cannot sign in again", user)
 		}
 	}
-	expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.sessions_ended", "success", auditPollTimeout)
+	ev := expectOneIndexEvent(t, idx, platformOrg, "correlation_id = $1", res.RequestID, "platform.sessions_ended", "success", auditPollTimeout)
+	if ended, users := numParam(ev, "identity_sessions_ended"), numParam(ev, "identity_users"); ended < 2 || users < 5 {
+		t.Fatalf("identity_sessions_ended %v, identity_users %v; want at least 2 and 5: %+v", ended, users, ev.Params)
+	}
+}
+
+// numParam is a numeric event parameter (-1 when absent).
+func numParam(ev env.IndexEvent, name string) float64 {
+	if v, ok := ev.Params[name].(float64); ok {
+		return v
+	}
+	return -1
 }
 
 // firstParam is a parameter of the first event (nil without events).

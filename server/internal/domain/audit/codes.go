@@ -946,10 +946,10 @@ var registry = map[Code]Definition{
 	},
 	CodePlatformSessionsEnded: {
 		Code: CodePlatformSessionsEnded, Emitted: true,
-		Description: "A platform administrator ended every portal session of the installation.",
-		Params:      []string{"generation"},
+		Description: "A platform administrator ended every portal session of the installation and every identity-provider browser session of every portal user.",
+		Params:      []string{"generation", "identity_users", "identity_sessions_ended"},
 		Outcomes:    adminOutcomes,
-		Note:        "generation is the new session generation; every session of an older generation is invalid. Denied with step_up_required without a fresh step-up, forbidden for a non-platform principal. Platform pseudo-organization.",
+		Note:        "generation is the new session generation; every session of an older generation is invalid. identity_users is the number of portal users listed in the identity provider, identity_sessions_ended the number of their identity-provider sessions ended. Failure with upstream_unavailable when the identity provider failed; the portal sessions are ended already. Denied with step_up_required without a fresh step-up, forbidden for a non-platform principal. Platform pseudo-organization.",
 	},
 	CodePermissionProfileRootGrantConfirmed: {
 		Code: CodePermissionProfileRootGrantConfirmed, Emitted: true,

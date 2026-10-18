@@ -131,6 +131,31 @@ func (q *Queries) ListOrganizationIDs(ctx context.Context) ([]uuid.UUID, error) 
 	return items, nil
 }
 
+const listOrganizationSlugs = `-- name: ListOrganizationSlugs :many
+SELECT slug FROM organization ORDER BY slug
+`
+
+// Every organization's slug for the platform pool (End all sessions lists the role groups, plan M8f decision 16).
+func (q *Queries) ListOrganizationSlugs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listOrganizationSlugs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, err
+		}
+		items = append(items, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrganizations = `-- name: ListOrganizations :many
 
 SELECT id, slug, name, status, created_at, updated_at, domains FROM organization

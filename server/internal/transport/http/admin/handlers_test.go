@@ -278,6 +278,8 @@ type env struct {
 	sessions *fakeSessions
 	// accounts are the login use cases of the handler, for the step-up role check (plan M8s decision 20).
 	accounts *app.Accounts
+	// identitySessions are the identity provider's sessions that End all sessions ends (plan M8f decision 16).
+	identitySessions *fakeIdentitySessions
 }
 
 func newEnv(t *testing.T) *env {
@@ -334,7 +336,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		t.Fatal(err)
 	}
 	e := &env{t: t, keys: keys, super: super, writer: writer, idp: idp, release: releaseKey, disk: newDiskEscrow(t),
-		stepUps: newStepUpProofs(), sessions: newFakeSessions()}
+		stepUps: newStepUpProofs(), sessions: newFakeSessions(), identitySessions: &fakeIdentitySessions{}}
 	escrowAccess := newEscrowAccess(t, pg.EscrowReader, e.stepUps, e.disk)
 	verifyRelease := app.NewReleaseVerifier(releasePub)
 	bundleKeys := func(context.Context) ([]protocol.BundleKey, error) {
@@ -377,7 +379,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		OIDC:           admin.NewOIDC(admin.OIDCConfig{}),
 		StepUpTokens:   e.stepUps,
 		Sessions:       e.sessions,
-		EndSessions:    app.NewSessions(runner, e.sessions),
+		EndSessions:    app.NewSessions(runner, e.sessions, e.identitySessions, e.identitySessions),
 		PublicURL:      "https://admin.test",
 		Static:         static,
 	}

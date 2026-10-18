@@ -499,3 +499,40 @@ func mustAtoi(t *testing.T, s string) int {
 	}
 	return n
 }
+
+// TestEndUserSessions (plan M8f decision 17): one bulk delete per call with every user pk, the deleted count decoded;
+// a refusal is upstream_unavailable, a pk that is not an integer is refused before any request.
+func TestEndUserSessions(t *testing.T) {
+	var requests []string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_, _ = w.Write([]byte(`{"deleted": 3}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	n, err := client(srv).EndUserSessions(ctx, []string{"7", "12"})
+	if err != nil || n != 3 {
+		t.Fatalf("EndUserSessions: %d %v", n, err)
+	}
+	if want := "DELETE /api/v3/core/authenticated_sessions/bulk_delete/?user_pks=7&user_pks=12"; len(requests) != 1 || requests[0] != want {
+		t.Fatalf("requests %v, want %q", requests, want)
+	}
+	if n, err := client(srv).EndUserSessions(ctx, nil); err != nil || n != 0 || len(requests) != 1 {
+		t.Fatalf("no users: %d %v after %d requests", n, err, len(requests))
+	}
+	if _, err := client(srv).EndUserSessions(ctx, []string{"7", "x&user_pks=1"}); err == nil || len(requests) != 1 {
+		t.Fatalf("a pk that is not an integer: %v after %d requests", err, len(requests))
+	}
+	status = http.StatusForbidden
+	if _, err := client(srv).EndUserSessions(ctx, []string{"7"}); !errors.Is(err, problem.UpstreamUnavailable) || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("403: %v", err)
+	}
+}

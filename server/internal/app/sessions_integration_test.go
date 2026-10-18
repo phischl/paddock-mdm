@@ -2,21 +2,60 @@ package app_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
+	"github.com/phischl/paddock-mdm/server/internal/platform/db"
+	"github.com/phischl/paddock-mdm/server/internal/ports"
+	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/problem"
 	"github.com/phischl/paddock-mdm/server/internal/sessions"
+	"github.com/phischl/paddock-mdm/server/internal/testsupport/pgtest"
 	"github.com/phischl/paddock-mdm/server/internal/testsupport/valkeytest"
 )
+
+// fixedPortalUsers lists n portal users with the pks 1..n.
+type fixedPortalUsers struct{ n int }
+
+func (f fixedPortalUsers) PortalUsers(context.Context) ([]ports.IdentityUser, error) {
+	out := make([]ports.IdentityUser, f.n)
+	for i := range out {
+		out[i] = ports.IdentityUser{PK: strconv.Itoa(i + 1), Username: fmt.Sprintf("u%d", i+1)}
+	}
+	return out, nil
+}
+
+// identitySessions records every bulk delete; each user has two sessions. failAt fails the call with that index (1-based).
+type identitySessions struct {
+	mu     sync.Mutex
+	calls  [][]string
+	failAt int
+}
+
+func (f *identitySessions) EndUserSessions(_ context.Context, pks []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, slices.Clone(pks))
+	if len(f.calls) == f.failAt {
+		return 0, fmt.Errorf("%w: authentik: HTTP 403", problem.UpstreamUnavailable)
+	}
+	return 2 * len(pks), nil
+}
 
 // TestEndAllSessionsCLI: paddock-server admin end-sessions increments the session generation and records
 // platform.sessions_ended with the system actor and the new generation (plan M8s decision 16).
 func TestEndAllSessionsCLI(t *testing.T) {
 	admin, super, _ := adminHarness(t)
 	store := sessions.NewStore(valkeytest.Start(t).Client(t))
-	s := app.NewSessions(admin.Runner(), store)
+	s := app.NewSessions(admin.Runner(), store, fixedPortalUsers{}, &identitySessions{})
 	for want := int64(1); want <= 2; want++ {
 		gen, err := s.EndAllCLI(context.Background())
 		if err != nil || gen != want {
@@ -28,4 +67,104 @@ func TestEndAllSessionsCLI(t *testing.T) {
 		"corr-"+t.Name(), uuid.Nil); n != 1 {
 		t.Fatalf("%d platform.sessions_ended events of generation 2", n)
 	}
+}
+
+// TestEndAllSessionsEndsIdentitySessions (plan M8f decisions 16 and 20): ending all sessions also ends the identity
+// provider's sessions of every portal user, 50 users per call, and records how many users and sessions; a failing call
+// fails the action with upstream_unavailable after the Paddock sessions are ended.
+func TestEndAllSessionsEndsIdentitySessions(t *testing.T) {
+	admin, super, _ := adminHarness(t)
+	store := sessions.NewStore(valkeytest.Start(t).Client(t))
+	ender := &identitySessions{}
+	s := app.NewSessions(admin.Runner(), store, fixedPortalUsers{n: 120}, ender)
+	if _, err := s.EndAllCLI(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	for i, c := range ender.calls {
+		if want := []int{50, 50, 20}; i >= len(want) || len(c) != want[i] {
+			t.Fatalf("calls %v, want 50, 50 and 20 users", ender.calls)
+		}
+		seen = append(seen, c...)
+	}
+	slices.Sort(seen)
+	if len(slices.Compact(seen)) != 120 {
+		t.Fatalf("%d distinct users ended, want 120", len(seen))
+	}
+	if n := countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.sessions_ended'
+		AND outcome = 'success' AND (params->>'identity_users')::int = 120 AND (params->>'identity_sessions_ended')::int = 240`,
+		"corr-"+t.Name()); n != 1 {
+		t.Fatalf("%d success events with identity_users 120 and identity_sessions_ended 240", n)
+	}
+
+	failing := &identitySessions{failAt: 2}
+	gen, err := app.NewSessions(admin.Runner(), store, fixedPortalUsers{n: 120}, failing).EndAllCLI(context.Background())
+	if !errors.Is(err, problem.UpstreamUnavailable) ||
+		problem.From(err).Detail != "the identity provider's sessions could not be ended; end all sessions again" {
+		t.Fatalf("failing identity provider: %v", err)
+	}
+	if len(failing.calls) != 2 {
+		t.Fatalf("%d calls after a failing chunk, want 2", len(failing.calls))
+	}
+	if gen != 2 {
+		t.Fatalf("generation %d after the failure, want 2: the Paddock sessions are ended first", gen)
+	}
+	if n := countRows(t, super, `SELECT count(*) FROM action WHERE correlation_id = $1 AND code = 'platform.sessions_ended'
+		AND outcome = 'failure'`, "corr-"+t.Name()); n != 1 {
+		t.Fatalf("%d failure events", n)
+	}
+}
+
+// roleDirectory answers RoleGroupUsers from groups; a group it does not know does not exist.
+type roleDirectory struct {
+	ports.UserDirectory
+	groups map[string][]ports.IdentityUser
+}
+
+func (d roleDirectory) RoleGroupUsers(_ context.Context, name string) ([]ports.IdentityUser, error) {
+	if users, ok := d.groups[name]; ok {
+		return users, nil
+	}
+	return nil, ports.ErrGroupNotFound
+}
+
+// TestPortalUsers (plan M8f decision 16): the portal users are the platform administrators and the members of the
+// three role groups of every organization, each once; a group that does not exist yet is skipped, any other error
+// fails the listing.
+func TestPortalUsers(t *testing.T) {
+	_, super, org := adminHarness(t)
+	var slug string
+	if err := super.QueryRow(context.Background(), "SELECT slug FROM organization WHERE id = $1", org).Scan(&slug); err != nil {
+		t.Fatal(err)
+	}
+	platform, err := db.NewPlatformPool(context.Background(), pgtest.SharedPaddock(t).Platform, db.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(platform.Close)
+	root, alice, bob := ports.IdentityUser{PK: "1"}, ports.IdentityUser{PK: "2"}, ports.IdentityUser{PK: "3"}
+	dir := roleDirectory{groups: map[string][]ports.IdentityUser{
+		organization.PlatformAdminsGroup():                        {root},
+		organization.RoleGroup(slug, organization.GroupAdmins):    {alice},
+		organization.RoleGroup(slug, organization.GroupOperators): {alice, bob},
+	}}
+	ctx := principal.With(context.Background(), principal.Principal{Kind: principal.KindPlatformAdmin, ID: uuid.Must(uuid.NewV7()), Role: principal.RolePlatform})
+	users, err := app.NewPortalUsers(platform, dir).PortalUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(users) != fmt.Sprint([]ports.IdentityUser{root, alice, bob}) {
+		t.Fatalf("portal users %v, want root, alice and bob once", users)
+	}
+	failing := failingDirectory{roleDirectory: dir}
+	if _, err := app.NewPortalUsers(platform, failing).PortalUsers(ctx); err == nil {
+		t.Fatal("a failing role group listing was ignored")
+	}
+}
+
+// failingDirectory fails every listing.
+type failingDirectory struct{ roleDirectory }
+
+func (failingDirectory) RoleGroupUsers(context.Context, string) ([]ports.IdentityUser, error) {
+	return nil, problem.UpstreamUnavailable
 }

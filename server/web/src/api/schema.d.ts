@@ -2107,7 +2107,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal session of the installation, the caller's own with its next request; every administrator signs in again. API tokens are not affected. 503 session_store_unavailable while the session store is unreachable. */
+        /** @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal session and every identity-provider browser session of every portal user (platform administrators and organization role members); device logins and API tokens are not affected. The caller's own session ends with its next request; every administrator signs in again. 503 session_store_unavailable while the session store is unreachable; 502 upstream_unavailable when the identity provider's sessions could not be ended (the portal sessions are ended already; end all sessions again). */
         post: operations["endAllSessions"];
         delete?: never;
         options?: never;
@@ -8174,6 +8174,7 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
         };
     };
