@@ -13,15 +13,19 @@ const (
 	CodeDeviceGroupDeleted     Code = "device_group.deleted"
 	CodeActionFinalizedUnknown Code = "action.finalized_unknown"
 
-	CodeEnrollmentTokenCreated     Code = "enrollment_token.created"
-	CodeEnrollmentTokenRevoked     Code = "enrollment_token.revoked"
-	CodeDeviceEnrolled             Code = "device.enrolled"
-	CodeDeviceApproved             Code = "device.approved"
-	CodeDeviceRejected             Code = "device.rejected"
-	CodeDeviceQuarantineReleased   Code = "device.quarantine_released"
-	CodeDeviceRetired              Code = "device.retired"
-	CodeDeviceGroupsChanged        Code = "device.groups_changed"
-	CodeDeviceOwnersChanged        Code = "device.owners_changed"
+	CodeEnrollmentTokenCreated   Code = "enrollment_token.created"
+	CodeEnrollmentTokenRevoked   Code = "enrollment_token.revoked"
+	CodeDeviceEnrolled           Code = "device.enrolled"
+	CodeDeviceApproved           Code = "device.approved"
+	CodeDeviceRejected           Code = "device.rejected"
+	CodeDeviceQuarantineReleased Code = "device.quarantine_released"
+	CodeDeviceRetired            Code = "device.retired"
+	CodeDeviceGroupsChanged      Code = "device.groups_changed"
+	CodeDeviceOwnersChanged      Code = "device.owners_changed"
+	// Uninstall (plan M8d decisions 37, 38 and 41).
+	CodeDeviceUninstallRequested   Code = "device.uninstall_requested"
+	CodeDeviceUninstallCancelled   Code = "device.uninstall_cancelled"
+	CodeDeviceUninstalled          Code = "device.uninstalled"
 	CodeDeviceAgentUpdateRequested Code = "device.agent_update_requested"
 	CodeDeviceCloneSuspected       Code = "device.clone_suspected"
 	CodeDeviceBundleApplied        Code = "device.bundle_applied"
@@ -189,6 +193,7 @@ var deviceEventParams = []string{
 	"sessions_terminated", "group", "removed", "file", "quarantined_as", "sha256_before", "sha256_after",
 	"generation", "service", "at", "field", "before", "after", "unit",
 	"kind", "started_at", "finished_at", "upgraded", "held_back", "reboot_required", "result", "error", "volume",
+	"command_id", "mode", "local_admin", "tpm", "steps",
 }
 
 var registry = map[Code]Definition{
@@ -264,8 +269,28 @@ var registry = map[Code]Definition{
 	CodeDeviceRetired: {
 		Code: CodeDeviceRetired, Emitted: true,
 		Description: "An administrator retired a device; its identity keys are revoked.",
-		Params:      []string{"hostname", "from_state"},
+		Params:      []string{"hostname", "from_state", "reason"},
 		Outcomes:    adminOutcomes,
+		Note:        "reason is uninstalled when the device retired itself by reporting its removal (actor: system).",
+	},
+	CodeDeviceUninstallRequested: {
+		Code: CodeDeviceUninstallRequested, Emitted: true,
+		Description: "An organization administrator asked, with a step-up, to remove Paddock from a device; mode leave keeps everything else working, mode reset also removes Himmelblau, the managed files and the managed local administrator.",
+		Params:      []string{"hostname", "mode", "clear_tpm", "keep_local_admin", "reason", "command_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceUninstallCancelled: {
+		Code: CodeDeviceUninstallCancelled, Emitted: true,
+		Description: "An organization administrator cancelled an uninstall before the device received it.",
+		Params:      []string{"hostname", "mode", "command_id"},
+		Outcomes:    adminOutcomes,
+	},
+	CodeDeviceUninstalled: {
+		Code: CodeDeviceUninstalled, Emitted: true,
+		Description: "The device removed Paddock as requested and reported the outcome of every step (actor: the device); the device is retired by the next event.",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "The param outcome is completed or partial (a step failed); steps maps every step to done, skipped or failed:<message>.",
 	},
 	CodeDeviceGroupsChanged: {
 		Code: CodeDeviceGroupsChanged, Emitted: true,

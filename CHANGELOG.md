@@ -84,6 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an agent of that release installs the package through a transient unit, waits up to 10 minutes for its next
   check-in and restores the previous supervisor otherwise (audited as `device.supervisor_updated` or
   `device.supervisor_update_failed`). The update policy applies; a failed version is not installed again.
+- Devices can be removed from Paddock from the portal (*Danger zone* → *Remove Paddock*, organization administrators
+  with a step-up and the typed hostname, `POST /api/v1/devices/{id}/uninstall`) in two modes, leave as is or reset,
+  and the request can be cancelled until the device received it; the device retires itself after reporting the
+  removal (`device.uninstalled`, `device.retired` with reason `uninstalled`). Pending removals appear on the attention
+  page.
 
 ### Changed
 

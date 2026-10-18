@@ -17,6 +17,9 @@ const (
 	StateRetired     = "retired"
 )
 
+// RetiredUninstalled is device.retired_reason of a device retired by its own removal report (plan M8d decision 41).
+const RetiredUninstalled = "uninstalled"
+
 // States are all device states.
 var States = []string{StatePending, StateActive, StateRejected, StateQuarantined, StateRetired}
 

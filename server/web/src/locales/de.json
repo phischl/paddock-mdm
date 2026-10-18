@@ -214,7 +214,8 @@
     "lockout_confirmation_required": "Diese Änderung würde Ihre eigene Adresse aus der Freigabeliste entfernen.",
     "disable_confirmation_required": "Diese Änderung würde die Freigabeliste abschalten.",
     "session_store_unavailable": "Das Portal erreicht seinen Sitzungsspeicher nicht. Versuchen Sie es gleich noch einmal.",
-    "disclaimer_outdated": "Der Hinweistext hat sich geändert. Lesen Sie den neuen Text und bestätigen Sie erneut."
+    "disclaimer_outdated": "Der Hinweistext hat sich geändert. Lesen Sie den neuen Text und bestätigen Sie erneut.",
+    "tpm_in_use_by_disk": "Die Festplatte dieses Geräts wird mit dem TPM entsperrt; er kann nicht gelöscht werden."
   },
   "audit": {
     "retention": {
@@ -320,7 +321,10 @@
       "stale_warning": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert (Warnung)",
       "stale_critical": "Das Gerät {target} hat Paddock seit {threshold_h, number} Stunden nicht kontaktiert und gilt als vermutlich verloren",
       "stale_cleared": "Das Gerät {target} hat Paddock wieder kontaktiert",
-      "header_object_rejected": "Der hinterlegte LUKS-Header von {hostname} wurde abgewiesen: seine Größe weicht von der angekündigten ab"
+      "header_object_rejected": "Der hinterlegte LUKS-Header von {hostname} wurde abgewiesen: seine Größe weicht von der angekündigten ab",
+      "uninstall_requested": "{actor} hat angefordert, Paddock von {hostname} zu entfernen ({mode})",
+      "uninstall_cancelled": "{actor} hat die Entfernung von Paddock von {hostname} zurückgezogen",
+      "uninstalled": "Das Gerät {target} hat Paddock entfernt ({mode}, {outcome})"
     },
     "revocation": {
       "requested": "{actor} hat {action, select, lock {die Sperre} destroy {die Vernichtung} other {den Widerruf}} von {hostname} angefordert",
@@ -832,6 +836,11 @@
         "title": "Außer Betrieb nehmen",
         "explanation": "Außerbetriebnahme widerruft die Identität des Geräts dauerhaft, es erhält keine Konfiguration mehr. Das lässt sich nicht rückgängig machen.",
         "label": "Außer Betrieb nehmen …"
+      },
+      "uninstall": {
+        "title": "Paddock entfernen",
+        "explanation": "Entfernt den Paddock-Agent mit einem signierten Befehl vom Gerät und nimmt das Gerät außer Betrieb. Sie wählen, ob das Gerät so bleibt, wie es ist, oder zurückgesetzt wird. Benutzerdaten werden nie gelöscht.",
+        "label": "Paddock entfernen …"
       }
     },
     "contactFilter": "Kontakt",
@@ -888,6 +897,49 @@
     "securityFilter": "Sicherheitsupdates",
     "securityUpdates": {
       "overdue": "Überfällig (kein erfolgreicher Lauf in 48 h)"
+    },
+    "uninstall": {
+      "title": "Paddock von {hostname} entfernen",
+      "leave": {
+        "label": "Gerät so lassen, wie es ist",
+        "explanation": "Entfernt Agent, Supervisor, fleetd und Paddocks eigene Dateien. Behält jedes lokale Konto einschließlich des lokalen Administrators (sein Passwort bleibt abrufbar), die sudo-Rechte der Notfallkonten, Himmelblau und Verzeichnis-Anmeldungen, verwaltete Dateien und die Festplattenverschlüsselung mit PIN und Wiederherstellungsschlüssel."
+      },
+      "reset": {
+        "label": "System zurücksetzen",
+        "explanation": "Alles wie bei „so lassen“ und zusätzlich: Himmelblau und seine Konfiguration werden entfernt (Verzeichnisbenutzer können sich nicht mehr anmelden; ihre Home-Verzeichnisse bleiben), unveränderte verwaltete Dateien werden entfernt, und der lokale Administrator wird entfernt, außer er ist der letzte lokale Administrator. Die Festplattenverschlüsselung wird nie verändert."
+      },
+      "clearTpm": {
+        "label": "Auch den TPM löschen (nur möglich, solange die Festplatte nicht damit entsperrt wird)",
+        "disabledTpmDisk": "Nicht verfügbar: Die Festplatte dieses Geräts wird mit dem TPM entsperrt. Ein Löschen ließe nur den Wiederherstellungsschlüssel übrig."
+      },
+      "keepLocalAdmin": {
+        "label": "Das Konto des lokalen Administrators behalten"
+      },
+      "confirmLabel": "Paddock entfernen",
+      "typed": "Geben Sie den Hostnamen zur Bestätigung ein. Das Gerät wird außer Betrieb genommen, sobald es die Entfernung meldet.",
+      "pending": "Entfernung angefordert ({mode}) — {status}. Das Gerät entfernt Paddock beim nächsten Check-in und wird dann außer Betrieb genommen.",
+      "modes": {
+        "leave": "so lassen",
+        "reset": "zurücksetzen"
+      },
+      "cancel": {
+        "label": "Anforderung zurückziehen",
+        "title": "Entfernung zurückziehen",
+        "confirm": "Entfernung von Paddock von {hostname} zurückziehen? Nur möglich, solange das Gerät den Befehl nicht erhalten hat."
+      },
+      "done": "Paddock wurde am {at} entfernt ({mode}); lokaler Administrator: {localAdmin}; TPM: {tpm}.",
+      "localAdmin": {
+        "removed": "entfernt",
+        "kept": "behalten",
+        "kept_last_admin": "behalten (letzter lokaler Administrator)"
+      },
+      "tpm": {
+        "cleared": "gelöscht",
+        "requested_at_next_boot": "Löschen beim nächsten Start angefordert",
+        "skipped_in_use": "nicht gelöscht (die Festplatte wird damit entsperrt)",
+        "not_requested": "nicht angefordert",
+        "failed": "Löschen fehlgeschlagen"
+      }
     }
   },
   "tokens": {
@@ -1382,7 +1434,8 @@
     "types": {
       "rotate_admin_password": "Passwort des lokalen Administrators rotieren",
       "delete_self_lock": "Token des Totmannschalters löschen",
-      "install_now": "Pakete sofort installieren"
+      "install_now": "Pakete sofort installieren",
+      "uninstall": "Paddock entfernen"
     },
     "statuses": {
       "pending": "Ausstehend",
@@ -1606,7 +1659,8 @@
       "revocation_pending": "Sperre oder Vernichtung wartet",
       "revocation_expired": "Sperre oder Vernichtung abgelaufen",
       "agent_rollback_pending": "Agent-Rücksetzung ausstehend",
-      "agent_not_running": "Agent läuft nicht"
+      "agent_not_running": "Agent läuft nicht",
+      "uninstall_pending": "Entfernung von Paddock ausstehend"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1620,7 +1674,8 @@
       "revocation_pending": "Gerät öffnen",
       "revocation_expired": "Gerät öffnen",
       "agent_rollback_pending": "Gerät öffnen",
-      "agent_not_running": "Gerät öffnen"
+      "agent_not_running": "Gerät öffnen",
+      "uninstall_pending": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

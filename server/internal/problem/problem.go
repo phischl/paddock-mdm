@@ -65,6 +65,10 @@ var (
 	// is applied (plan M6c amendment 2026-10-08).
 	PlanChanged    = &Error{Code: "plan_changed", Status: http.StatusPreconditionFailed}
 	TooManyDevices = &Error{Code: "too_many_devices", Status: http.StatusUnprocessableEntity}
+	// Uninstall (plan M8d decision 37): clear_tpm while a volume unlocks with the TPM; and invalid_request with 422 for
+	// a request whose values contradict the device or each other (typed hostname, reset-only options with leave).
+	TPMInUseByDisk            = &Error{Code: "tpm_in_use_by_disk", Status: http.StatusConflict}
+	InvalidRequestUnprocessed = &Error{Code: "invalid_request", Status: http.StatusUnprocessableEntity}
 	// TooManyVolumes is the error code of a header escrow for a 33rd distinct volume of a device (PDK-009, review
 	// round 1); recorded by the worker, never sent over HTTP.
 	TooManyVolumes = &Error{Code: "too_many_volumes", Status: http.StatusConflict}

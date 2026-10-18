@@ -174,7 +174,7 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 		MachineId: d.MachineID, OsRelease: map[string]string{}, EnrollmentTokenId: idPtr(d.EnrollmentTokenID),
 		EnrolledAt: d.EnrolledAt.UTC(), StateChangedAt: d.StateChangedAt.UTC(), BundleVersion: d.BundleSeq,
 		Owners: []adminapi.UserRef{}, AgentUpdateRequestedVersion: d.AgentUpdateRequestedVersion,
-		AgentUpdateRequestedAt: utcPtr(d.AgentUpdateRequestedAt),
+		AgentUpdateRequestedAt: utcPtr(d.AgentUpdateRequestedAt), RetiredReason: d.RetiredReason,
 	}
 	_ = json.Unmarshal(d.OsRelease, &out.OsRelease) // written by the worker from a map[string]string
 	if status != nil {
@@ -194,8 +194,9 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		StateChangedAt: base.StateChangedAt, BundleVersion: base.BundleVersion, LastContactAt: base.LastContactAt,
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
 		Hardware: base.Hardware, AgentUpdateRequestedVersion: base.AgentUpdateRequestedVersion,
-		AgentUpdateRequestedAt: base.AgentUpdateRequestedAt,
-		Groups:                 make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
+		AgentUpdateRequestedAt: base.AgentUpdateRequestedAt, RetiredReason: base.RetiredReason,
+		Uninstall: toDeviceUninstall(d.Uninstall),
+		Groups:    make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
 		LoginAssignment: adminapi.DeviceLoginAssignment{
 			Users: make([]adminapi.UserRef, len(d.Login.Users)), Groups: make([]adminapi.UserGroupRef, len(d.Login.Groups)),
@@ -301,6 +302,7 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	out.Contact = adminapi.DeviceContact(d.Contact)
 	out.Owners = toUserRefs(d.Owners)
 	out.Hardware = toDeviceHardware(d.Hardware)
+	out.Uninstall = toDeviceUninstall(d.Uninstall)
 	return out, nil
 }
 
@@ -310,6 +312,42 @@ func (h *handlers) UpdateDeviceAgent(ctx context.Context, req adminapi.UpdateDev
 		return nil, err
 	}
 	return adminapi.UpdateDeviceAgent200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) UninstallDevice(ctx context.Context, req adminapi.UninstallDeviceRequestObject) (adminapi.UninstallDeviceResponseObject, error) {
+	in := app.UninstallInput{Mode: string(req.Body.Mode), ConfirmHostname: req.Body.ConfirmHostname, Reason: req.Body.Reason,
+		ClearTPM: deref(req.Body.ClearTpm, false), KeepLocalAdmin: deref(req.Body.KeepLocalAdmin, false)}
+	d, err := h.transition(ctx, req.Id, func(ctx context.Context, id uuid.UUID) (pgstore.Device, error) {
+		return h.uninstalls.Request(ctx, id, in)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.UninstallDevice200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+func (h *handlers) CancelDeviceUninstall(ctx context.Context, req adminapi.CancelDeviceUninstallRequestObject) (adminapi.CancelDeviceUninstallResponseObject, error) {
+	d, err := h.transition(ctx, req.Id, h.uninstalls.Cancel)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.CancelDeviceUninstall200JSONResponse{DeviceJSONResponse: adminapi.DeviceJSONResponse(d)}, nil
+}
+
+// toDeviceUninstall is the uninstall of a device; nil without one.
+func toDeviceUninstall(u *pgstore.GetDeviceUninstallRow) *adminapi.DeviceUninstall {
+	if u == nil {
+		return nil
+	}
+	out := &adminapi.DeviceUninstall{Mode: adminapi.DeviceUninstallMode(u.Mode), RequestedAt: u.RequestedAt.UTC(),
+		CommandId: u.CommandID, CommandStatus: u.CommandStatus, UninstalledAt: utcPtr(u.UninstalledAt)}
+	if u.LocalAdmin != "" {
+		out.LocalAdmin = &u.LocalAdmin
+	}
+	if u.Tpm != "" {
+		out.Tpm = &u.Tpm
+	}
+	return out
 }
 
 func (h *handlers) SetDeviceGroups(ctx context.Context, req adminapi.SetDeviceGroupsRequestObject) (adminapi.SetDeviceGroupsResponseObject, error) {

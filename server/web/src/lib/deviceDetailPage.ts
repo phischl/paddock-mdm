@@ -9,6 +9,7 @@ import {
   setLoginsSuspended, type DeviceAction,
 } from './devices'
 import { getDisk } from './disk'
+import { diskUsesTpm } from './uninstall'
 import { getEffectiveSudo } from './profiles'
 import { listRevocations } from './revocations'
 import { attentionOf, getDeviceUpdates } from './updates'
@@ -39,6 +40,8 @@ export function useDeviceDetailPage(id: () => string) {
   const loginSaved = ref(false)
   const sudo = ref<EffectiveSudo | null>(null)
   const diskState = ref<DiskState | null>(null)
+  /** Whether a volume of the device unlocks with the TPM (the uninstall cannot clear it then). */
+  const diskTpm = ref(false)
   const updates = ref<DeviceUpdates | null>(null)
   const conditions = ref<AttentionKind[]>([])
   const revocations = ref<RevocationRequest[]>([])
@@ -72,6 +75,7 @@ export function useDeviceDetailPage(id: () => string) {
         : Promise.resolve(null),
     ])
     diskState.value = typeof disk === 'string' ? null : disk.state
+    diskTpm.value = diskUsesTpm(typeof disk === 'string' ? null : disk)
     updates.value = typeof u === 'string' ? null : u
     conditions.value = attention?.conditions.map((c) => c.kind) ?? []
     revocations.value = revs?.items ?? []
@@ -177,6 +181,6 @@ export function useDeviceDetailPage(id: () => string) {
   return {
     device, config, groups, selectedGroups, problem, saved, actions, load, run, saveGroups, resumeGroups,
     users, userGroups, loginUsers, loginGroups, loginSaved, sudo, loadSubjects, saveLogin, toggleSuspension,
-    diskState, updates, conditions, revocations, refresh, changed,
+    diskState, diskTpm, updates, conditions, revocations, refresh, changed,
   }
 }

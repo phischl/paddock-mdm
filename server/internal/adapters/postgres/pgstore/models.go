@@ -192,6 +192,11 @@ type Device struct {
 	LoginsSuspended             bool
 	AgentUpdateRequestedVersion *string
 	AgentUpdateRequestedAt      *time.Time
+	UninstallRequestedAt        *time.Time
+	UninstallMode               *string
+	UninstallCommandID          uuid.NullUUID
+	UninstalledAt               *time.Time
+	RetiredReason               *string
 }
 
 type DeviceAlert struct {

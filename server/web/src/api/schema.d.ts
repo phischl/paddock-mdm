@@ -592,6 +592,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/uninstall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin, with a step-up within the last 300 s (403 step_up_required). Issues the signed command
+         *     uninstall (lifetime 7 days, plan M8d decision 37): the device removes Paddock at its next check-in and is
+         *     retired by its report. Mode leave keeps everything else working; mode reset also removes Himmelblau, the
+         *     unchanged managed files and the managed local administrator (unless it is the last local administrator or
+         *     keep_local_admin is set) and, with clear_tpm, clears the TPM. User data and the disk encryption are never
+         *     changed. confirm_hostname must equal the device's hostname. 422 invalid_request: unknown mode, a reason outside
+         *     2–500 characters, a wrong confirm_hostname, or clear_tpm or keep_local_admin with mode leave. 409 invalid_state:
+         *     the device is not active, an uninstall is already requested, or a Lock or Destroy is pending; 409
+         *     tpm_in_use_by_disk: clear_tpm while the last health report lists a TPM keyslot on any volume.
+         */
+        post: operations["uninstallDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/uninstall/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Roles: org_admin. Cancels an uninstall while its command is pending, failed or expired (plan M8d decision 38):
+         *     the command becomes cancelled and the request is cleared. 409 invalid_state: no uninstall is requested, the
+         *     device already received the command, or the uninstall completed.
+         */
+        post: operations["cancelDeviceUninstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/groups": {
         parameters: {
             query?: never;
@@ -2971,6 +3023,46 @@ export interface components {
             agent_update_requested_at?: string | null;
             /** @description The hardware facts of the inventory (plan M8d decision 8); null while the inventory has no row for the device. */
             hardware: components["schemas"]["DeviceHardware"] | null;
+            /** @description The uninstall of the device (plan M8d decision 42): set from the request until it is cancelled, also after the device reported the removal; null without one. Filled on the device detail and the responses of device actions; null in lists. */
+            uninstall?: components["schemas"]["DeviceUninstall"] | null;
+            /** @description Why the device was retired, when not by an administrator; uninstalled after its removal report. */
+            retired_reason?: string | null;
+        };
+        DeviceUninstall: {
+            /** @enum {string} */
+            mode: "leave" | "reset";
+            /** Format: date-time */
+            requested_at: string;
+            /** Format: uuid */
+            command_id: string;
+            /** @description The status of the command uninstall: pending, delivered, succeeded, failed or expired. */
+            command_status: string;
+            /**
+             * Format: date-time
+             * @description When the device reported the removal.
+             */
+            uninstalled_at: string | null;
+            /** @description From the removal report: removed, kept or kept_last_admin. */
+            local_admin: string | null;
+            /** @description From the removal report: cleared, requested_at_next_boot, skipped_in_use, not_requested or failed. */
+            tpm: string | null;
+        };
+        DeviceUninstallRequest: {
+            /** @enum {string} */
+            mode: "leave" | "reset";
+            /** @description Must equal the device's hostname. */
+            confirm_hostname: string;
+            reason: string;
+            /**
+             * @description Mode reset only.
+             * @default false
+             */
+            clear_tpm: boolean;
+            /**
+             * @description Mode reset only.
+             * @default false
+             */
+            keep_local_admin: boolean;
         };
         /** @description Asset facts the inventory reports (ADR 0037 decision 7); empty strings and zeros where it reports none. Free disk space, uptime and network addresses stay in Fleet. */
         DeviceHardware: {
@@ -3164,7 +3256,7 @@ export interface components {
         /** @enum {string} */
         DeviceCommandStatus: "pending" | "delivered" | "succeeded" | "failed" | "expired" | "cancelled";
         /** @enum {string} */
-        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now";
+        DeviceCommandType: "rotate_admin_password" | "delete_self_lock" | "install_now" | "uninstall";
         DeviceCommand: {
             /** Format: uuid */
             id: string;
@@ -3314,7 +3406,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending";
         Attention: {
             /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
             id: string;
@@ -3327,7 +3419,7 @@ export interface components {
              * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; otherwise empty. */
             detail: string;
         };
         AttentionPage: {
@@ -5368,6 +5460,53 @@ export interface operations {
         };
     };
     updateDeviceAgent: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+        };
+    };
+    uninstallDevice: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Paddock-CSRF": components["parameters"]["Csrf"];
+            };
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceUninstallRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["Device"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+        };
+    };
+    cancelDeviceUninstall: {
         parameters: {
             query?: never;
             header: {

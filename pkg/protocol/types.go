@@ -180,7 +180,29 @@ const (
 	// Supervisor package update (plan M8d decision 33): the outcome of one installation of the current release's
 	// paddock-supervisor package; only sent by agents that received supervisor_packages in a bundle.
 	EventAgentSupervisorUpdated = "agent.supervisor_updated"
+	// Uninstall (plan M8d decision 40): the final report of `paddockd uninstall`, sent once after the command
+	// uninstall; the device is retired by it.
+	EventAgentUninstalled = "agent.uninstalled"
 )
+
+// Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial.
+const (
+	UninstallCompleted = "completed"
+	UninstallPartial   = "partial"
+)
+
+// MaxUninstallSteps bounds the steps of EventAgentUninstalled.
+const MaxUninstallSteps = 32
+
+// AgentUninstalled is the data of agent.uninstalled.
+type AgentUninstalled struct {
+	CommandID  string            `json:"command_id"`
+	Mode       string            `json:"mode"`
+	Outcome    string            `json:"outcome"`
+	LocalAdmin string            `json:"local_admin"` // removed, kept, kept_last_admin
+	TPM        string            `json:"tpm"`         // cleared, requested_at_next_boot, skipped_in_use, not_requested, failed
+	Steps      map[string]string `json:"steps"`       // step name → done, skipped or failed:<message>
+}
 
 // Outcomes of EventAgentSupervisorUpdated.
 const (
@@ -232,6 +254,7 @@ var EventTypes = []string{
 	EventTamperServiceStopped,
 	EventUpdatesRun,
 	EventAgentSupervisorUpdated,
+	EventAgentUninstalled,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass

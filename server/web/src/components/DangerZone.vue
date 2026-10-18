@@ -2,25 +2,32 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import type { RevocationRequest } from '../api/client'
+import type { DeviceUninstall, RevocationRequest } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import { listRevocations, requestRevocation, timeline, volumeResults, type RevokeAction, type VolumeResult } from '../lib/revocations'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
+import { cancelUninstall, requestUninstall, uninstallCancellable, uninstallPending, type UninstallAnswer } from '../lib/uninstall'
 import { useSessionStore } from '../stores/session'
 import PdIcon from './PdIcon'
 import StatusChip from './StatusChip.vue'
+import UninstallDialog from './UninstallDialog.vue'
 import { revocationStatus } from '../lib/status'
 
 /**
  * The danger zone of a device (plan M7c decision 24; plan M4c decision 18 flows unchanged): Lock, Destroy and
  * Retire, each with its own explanation, button and confirm dialog; the reason is collected in the dialog, no
  * shared field. Lock and Destroy go through a step-up, the typed hostname and the request; a Destroy waits for a
- * second administrator. Below the rows: the revocation timeline of the device's latest requests.
+ * second administrator. Below the rows: the revocation timeline of the device's latest requests. Remove Paddock (plan
+ * M8d decision 42) goes through the step-up and the uninstall dialog; a pending removal shows its state and, until
+ * the device received the command, a cancel.
  */
-const props = defineProps<{ deviceId: string; hostname: string; revocable: boolean; presumedSelfLockedAt: string | null; retirable: boolean }>()
-const emit = defineEmits<{ retire: [] }>()
+const props = defineProps<{
+  deviceId: string; hostname: string; revocable: boolean; presumedSelfLockedAt: string | null; retirable: boolean
+  uninstallable?: boolean; uninstall?: DeviceUninstall | null; diskTpm?: boolean
+}>()
+const emit = defineEmits<{ retire: []; changed: [] }>()
 
 const { t, locale } = useI18n()
 const router = useRouter()
@@ -31,6 +38,7 @@ const session = useSessionStore()
 const problem = ref('')
 const requested = ref<RevocationRequest | null>(null)
 const requests = ref<RevocationRequest[]>([])
+const uninstallOpen = ref(false)
 
 const stepUpAction = (action: RevokeAction) => 'revocation-' + action
 
@@ -59,6 +67,13 @@ function start(action: RevokeAction): void {
 }
 
 async function resume(): Promise<void> {
+  const stepped = resumeStepUp<Record<string, never>>('uninstall', props.deviceId)
+  if (stepped) {
+    await router.replace(withoutStepUpParam())
+    if (stepped.failed) problem.value = 'step_up_failed'
+    else uninstallOpen.value = true
+    return
+  }
   for (const action of ['lock', 'destroy'] as RevokeAction[]) {
     const resumed = resumeStepUp<Record<string, never>>(stepUpAction(action), props.deviceId)
     if (!resumed) continue
@@ -87,6 +102,31 @@ async function revoke(action: RevokeAction): Promise<void> {
   }
   requested.value = res
   await load()
+}
+
+/** Remove Paddock starts with a step-up; the uninstall dialog follows on return. */
+function startUninstall(): void {
+  problem.value = ''
+  startStepUp('uninstall', props.deviceId, {})
+}
+
+async function submitUninstall(answer: UninstallAnswer): Promise<void> {
+  uninstallOpen.value = false
+  const res = await requestUninstall(props.deviceId, props.hostname, answer)
+  if (res) problem.value = res
+  emit('changed')
+}
+
+async function cancel(): Promise<void> {
+  problem.value = ''
+  const answer = await confirm({
+    title: t('devices.uninstall.cancel.title'), message: t('devices.uninstall.cancel.confirm', { hostname: props.hostname }),
+    confirmLabel: t('devices.uninstall.cancel.label'),
+  })
+  if (!answer) return
+  const res = await cancelUninstall(props.deviceId)
+  if (res) problem.value = res
+  emit('changed')
 }
 
 onMounted(async () => {
@@ -174,6 +214,50 @@ onMounted(async () => {
       </div>
     </template>
     <div
+      v-if="uninstallPending(uninstall)"
+      class="pd-danger-row"
+      data-testid="danger-uninstall-pending"
+    >
+      <div class="pd-danger-text">
+        <div class="pd-danger-row-title">
+          {{ t('devices.danger.uninstall.title') }}
+        </div>
+        <p role="status">
+          {{ t('devices.uninstall.pending', {
+            mode: t('devices.uninstall.modes.' + uninstall!.mode), status: t('commands.statuses.' + uninstall!.command_status),
+          }) }}
+        </p>
+      </div>
+      <v-btn
+        v-if="uninstallCancellable(uninstall)"
+        variant="outlined"
+        data-testid="uninstall-cancel-request"
+        @click="cancel"
+      >
+        {{ t('devices.uninstall.cancel.label') }}
+      </v-btn>
+    </div>
+    <div
+      v-else-if="uninstallable"
+      class="pd-danger-row"
+      data-testid="danger-uninstall"
+    >
+      <div class="pd-danger-text">
+        <div class="pd-danger-row-title">
+          {{ t('devices.danger.uninstall.title') }}
+        </div>
+        <p>{{ t('devices.danger.uninstall.explanation') }}</p>
+      </div>
+      <v-btn
+        color="error"
+        variant="outlined"
+        data-testid="device-uninstall"
+        @click="startUninstall"
+      >
+        {{ t('devices.danger.uninstall.label') }}
+      </v-btn>
+    </div>
+    <div
       v-if="retirable"
       class="pd-danger-row"
       data-testid="danger-retire"
@@ -193,6 +277,13 @@ onMounted(async () => {
         {{ t('devices.danger.retire.label') }}
       </v-btn>
     </div>
+    <UninstallDialog
+      :model-value="uninstallOpen"
+      :hostname="hostname"
+      :disk-tpm="!!diskTpm"
+      @confirm="submitUninstall"
+      @cancel="uninstallOpen = false"
+    />
     <p
       v-if="problem"
       class="form-error pd-danger-note"

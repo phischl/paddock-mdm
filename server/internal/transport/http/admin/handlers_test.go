@@ -357,6 +357,7 @@ func newEnvWith(t *testing.T, deps func(*admin.Deps), opts ...app.RunnerOption) 
 		Accounts:       app.NewAccounts(runner, orgPool, platformPool, e.sessions),
 		Releases:       app.NewAgentReleases(runner, platformPool, discardStore{}, verifyRelease, verifyRelease, true),
 		AgentUpdates:   app.NewAgentUpdates(runner, orgPool, noOffer{}),
+		Uninstalls:     app.NewUninstalls(runner, orgPool),
 		Users:          app.NewUsers(runner, orgPool, idp),
 		UserGroups:     app.NewUserGroups(runner, orgPool, idp),
 		Logins:         app.NewLogins(runner, orgPool, idp),

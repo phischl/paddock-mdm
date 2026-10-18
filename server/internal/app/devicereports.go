@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -93,6 +95,32 @@ func (d *DeviceReports) QuarantineClone(ctx context.Context, hb ingest.Heartbeat
 	return err == nil, err
 }
 
+// RetireUninstalled retires an active device that reported its removal (plan M8d decision 41): device.retired with
+// the system as actor and the param reason uninstalled, retired_reason uninstalled. A device that is not active or
+// has not reported the removal is left alone, so a redelivered report records nothing.
+func (d *DeviceReports) RetireUninstalled(ctx context.Context, deviceID uuid.UUID) (bool, error) {
+	due := false
+	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		dev, err := q.GetDevice(ctx, deviceID)
+		due = err == nil && dev.State == device.StateActive && dev.UninstalledAt != nil
+		return notFound(err)
+	})
+	if err != nil || !due {
+		return false, err
+	}
+	spec := SpecDeviceRetire
+	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
+	spec.Params = map[string]any{"reason": device.RetiredUninstalled}
+	err = d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		if _, err := TransitionDevice(ctx, q, rec, device.ActionRetire, deviceID); err != nil {
+			return err
+		}
+		reason := device.RetiredUninstalled
+		return q.SetDeviceRetiredReason(ctx, pgstore.SetDeviceRetiredReasonParams{ID: deviceID, Reason: &reason})
+	})
+	return err == nil, err
+}
+
 // eventCodes maps the closed set of device event types to audit codes.
 var eventCodes = map[string]audit.Code{
 	protocol.EventBundleApplied:        audit.CodeDeviceBundleApplied,
@@ -104,6 +132,7 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventAgentEventsDropped:   audit.CodeDeviceAgentEventsDropped,
 	// Failed outcomes switch to device.supervisor_update_failed in eventEntry (ADR 0024 pattern).
 	protocol.EventAgentSupervisorUpdated: audit.CodeDeviceSupervisorUpdated,
+	protocol.EventAgentUninstalled:       audit.CodeDeviceUninstalled,
 
 	protocol.EventLoginApplied:               audit.CodeDeviceLoginApplied,
 	protocol.EventLoginApplyFailed:           audit.CodeDeviceLoginApplyFailed,
@@ -218,6 +247,10 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 			if version, ok := spec.Params["version"].(string); ok {
 				_, err = q.ClearAgentUpdateRequest(ctx, pgstore.ClearAgentUpdateRequestParams{DeviceID: deviceID, Version: &version})
 			}
+		}
+		// The removal report marks the device; the report consumer retires it (plan M8d decision 41).
+		if ev.Type == protocol.EventAgentUninstalled && err == nil {
+			err = markUninstalled(ctx, q, deviceID, ev, spec.Params)
 		}
 		if area := loginStateArea(ev.Type, spec.Params); area != "" && err == nil {
 			err = setLoginState(ctx, q, deviceID, org, area, ev, spec.Params)
@@ -372,7 +405,7 @@ func eventParams(ev protocol.Event) map[string]any {
 	}
 	for _, key := range []string{"reason", "resource", "from_version", "outcome", "stage", "message", "username", "group",
 		"file", "quarantined_as", "sha256_before", "sha256_after", "service", "at", "field", "unit",
-		"kind", "started_at", "finished_at", "result", "error", "volume"} {
+		"kind", "started_at", "finished_at", "result", "error", "volume", "command_id", "mode", "local_admin", "tpm"} {
 		if v, ok := boundedString(data[key]); ok {
 			params[key] = v
 		}
@@ -401,6 +434,9 @@ func eventParams(ev protocol.Event) map[string]any {
 			params[key] = boundedStrings(kinds)
 		}
 	}
+	if steps, ok := data["steps"].(map[string]any); ok { // agent.uninstalled
+		params["steps"] = boundedSteps(steps)
+	}
 	if errs, ok := data["errors"].([]any); ok {
 		out := []map[string]string{}
 		for _, e := range errs[:min(len(errs), maxParamList)] {
@@ -414,6 +450,36 @@ func eventParams(ev protocol.Event) map[string]any {
 		params["errors"] = out
 	}
 	return params
+}
+
+// markUninstalled sets device.uninstalled_at and keeps the reported outcome with the uninstall command.
+func markUninstalled(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, ev protocol.Event, params map[string]any) error {
+	outcome := map[string]any{}
+	for _, key := range []string{"outcome", "local_admin", "tpm"} {
+		if v, ok := params[key]; ok {
+			outcome[key] = v
+		}
+	}
+	raw, err := json.Marshal(outcome)
+	if err != nil {
+		return err
+	}
+	_, err = q.MarkDeviceUninstalled(ctx, pgstore.MarkDeviceUninstalledParams{DeviceID: deviceID, UninstalledAt: ev.OccurredAt, Outcome: raw})
+	return err
+}
+
+// boundedSteps copies at most protocol.MaxUninstallSteps bounded name → status pairs of agent.uninstalled.
+func boundedSteps(steps map[string]any) map[string]string {
+	names := slices.Sorted(maps.Keys(steps))
+	out := map[string]string{}
+	for _, name := range names[:min(len(names), protocol.MaxUninstallSteps)] {
+		k, okK := boundedString(name)
+		v, okV := boundedString(steps[name])
+		if okK && okV {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // boundedStrings copies at most maxParamList bounded strings of a list.

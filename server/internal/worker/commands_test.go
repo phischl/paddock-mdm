@@ -251,3 +251,28 @@ func TestRevocationDeliveryAndConfirmation(t *testing.T) {
 		t.Fatalf("after its lifetime: %s", status(expired))
 	}
 }
+
+// TestCommandRoundRemovesCancelled (plan M8d decision 38): a command the api cancelled is removed from cmd:<device_id>
+// at the next round and never published again.
+func TestCommandRoundRemovesCancelled(t *testing.T) {
+	w := newCommandWorld(t)
+	ctx := context.Background()
+	id := w.command(t, time.Hour, nil)
+	if err := w.c.Round(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if w.published(t)[id] == nil {
+		t.Fatal("not published")
+	}
+	if _, err := w.super.Exec(ctx, "UPDATE device_command SET status = 'cancelled', finished_at = now() WHERE id = $1", id); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := w.c.Round(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if present, _ := w.cache.HasCommand(ctx, w.device, id); present {
+			t.Fatal("cancelled command left in Valkey")
+		}
+	}
+}

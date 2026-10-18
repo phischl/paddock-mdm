@@ -125,6 +125,8 @@ type DeviceDetail struct {
 	Owners []pgstore.AppUser
 	// Hardware are the asset facts of the inventory (plan M8d decision 8); nil while no inventory row exists.
 	Hardware *pgstore.GetDeviceHardwareRow
+	// Uninstall is the device's uninstall with its command (plan M8d decision 42); nil without one.
+	Uninstall *pgstore.GetDeviceUninstallRow
 }
 
 // LoginManagement reports whether the device's agent supports bundle schema v2 (login and sudo, plan M3a decision
@@ -185,6 +187,13 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 		out.Hardware = &hw
 	case !db.IsNoRows(err):
 		return out, err
+	}
+	if out.Device.UninstallRequestedAt != nil {
+		u, err := q.GetDeviceUninstall(ctx, id)
+		if err != nil {
+			return out, err
+		}
+		out.Uninstall = &u
 	}
 	out.Login, err = loadLoginAssignment(ctx, q, id)
 	return out, err

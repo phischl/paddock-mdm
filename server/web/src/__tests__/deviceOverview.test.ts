@@ -44,7 +44,7 @@ async function mountOverview(overrides: Partial<DeviceDetail> = {}) {
   })
   const page = {
     device: ref({ ...device, ...overrides }), groups: ref([{ id: 'g1', name: 'Laptops' }, { id: 'g2', name: 'Finance' }]), selectedGroups, saved,
-    diskState: ref(null), updates: ref(null), conditions: ref([]), refresh: ref(0), actions: ref([]), saveGroups, changed: vi.fn(),
+    diskState: ref(null), diskTpm: ref(false), updates: ref(null), conditions: ref([]), refresh: ref(0), actions: ref([]), saveGroups, changed: vi.fn(),
     run: vi.fn(),
   } as unknown as DevicePage
   const Frame = defineComponent({

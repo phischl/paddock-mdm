@@ -126,6 +126,9 @@ func TestLifetime(t *testing.T) {
 	if d, ok := Lifetime(TypeInstallNow); !ok || d != 24*time.Hour {
 		t.Fatalf("install_now: %v %v", d, ok)
 	}
+	if d, ok := Lifetime(TypeUninstall); !ok || d != 7*24*time.Hour {
+		t.Fatalf("uninstall: %v %v", d, ok)
+	}
 	if _, ok := Lifetime("collect_status"); ok {
 		t.Fatal("collect_status is not a type of this release")
 	}

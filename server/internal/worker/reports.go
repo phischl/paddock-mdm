@@ -3,10 +3,12 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/app"
 	"github.com/phischl/paddock-mdm/server/internal/devicecache"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
@@ -96,6 +98,13 @@ func (r *Reports) events(ctx context.Context, messageID string, body []byte) out
 		slog.WarnContext(ctx, "recording device events failed; retrying", "device_id", batch.DeviceID,
 			"events", len(batch.Events), "error", err)
 		return retry
+	}
+	// The removal report retires the device (plan M8d decision 41); a redelivery finds it retired and records nothing.
+	if slices.ContainsFunc(batch.Events, func(e protocol.Event) bool { return e.Type == protocol.EventAgentUninstalled }) {
+		if _, err := r.reports.RetireUninstalled(ctx, batch.DeviceID); err != nil && !permanent(err) {
+			slog.WarnContext(ctx, "retiring the uninstalled device failed; retrying", "device_id", batch.DeviceID, "error", err)
+			return retry
+		}
 	}
 	return ack
 }

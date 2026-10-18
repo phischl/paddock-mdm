@@ -214,7 +214,8 @@
     "lockout_confirmation_required": "This change would remove your own address from the allow list.",
     "disable_confirmation_required": "This change would switch the allow list off.",
     "session_store_unavailable": "The portal cannot reach its session store. Try again in a moment.",
-    "disclaimer_outdated": "The disclaimer has changed. Read the new text and confirm it again."
+    "disclaimer_outdated": "The disclaimer has changed. Read the new text and confirm it again.",
+    "tpm_in_use_by_disk": "The disk of this device unlocks with the TPM; it cannot be cleared."
   },
   "audit": {
     "retention": {
@@ -320,7 +321,10 @@
       "stale_warning": "The device {target} has not contacted Paddock for {threshold_h, number} hours (warning)",
       "stale_critical": "The device {target} has not contacted Paddock for {threshold_h, number} hours and is presumed lost",
       "stale_cleared": "The device {target} contacted Paddock again",
-      "header_object_rejected": "The escrowed LUKS header of {hostname} was rejected: its size differs from the announced size"
+      "header_object_rejected": "The escrowed LUKS header of {hostname} was rejected: its size differs from the announced size",
+      "uninstall_requested": "{actor} asked to remove Paddock from {hostname} ({mode})",
+      "uninstall_cancelled": "{actor} cancelled the removal of Paddock from {hostname}",
+      "uninstalled": "The device {target} removed Paddock ({mode}, {outcome})"
     },
     "revocation": {
       "requested": "{actor} requested to {action, select, lock {lock} destroy {destroy} other {revoke}} {hostname}",
@@ -832,6 +836,11 @@
         "title": "Retire",
         "explanation": "Retiring revokes the device's identity permanently and it stops receiving configuration. This cannot be undone.",
         "label": "Retire…"
+      },
+      "uninstall": {
+        "title": "Remove Paddock",
+        "explanation": "Removes the Paddock agent from the device with a signed command and retires the device. You choose whether the device is left as it is or reset. User data is never deleted.",
+        "label": "Remove Paddock…"
       }
     },
     "contactFilter": "Contact",
@@ -888,6 +897,49 @@
     "securityFilter": "Security updates",
     "securityUpdates": {
       "overdue": "Overdue (no successful run in 48 h)"
+    },
+    "uninstall": {
+      "title": "Remove Paddock from {hostname}",
+      "leave": {
+        "label": "Leave the device as it is",
+        "explanation": "Removes the agent, supervisor, fleetd and Paddock's own files. Keeps every local account including the managed local administrator (its password stays revealable), the sudo rights of break-glass accounts, Himmelblau and directory logins, managed files and the disk encryption with its PIN and recovery key."
+      },
+      "reset": {
+        "label": "Reset the system",
+        "explanation": "Everything of \"leave\", and additionally: Himmelblau and its configuration are removed (directory users can no longer sign in; their home directories stay), managed files that are unchanged are removed, and the managed local administrator is removed unless it is the last local administrator. The disk encryption is never changed."
+      },
+      "clearTpm": {
+        "label": "Also clear the TPM (only possible while the disk does not unlock with it)",
+        "disabledTpmDisk": "Not available: the disk of this device unlocks with the TPM. Clearing it would leave only the recovery key."
+      },
+      "keepLocalAdmin": {
+        "label": "Keep the managed local administrator account"
+      },
+      "confirmLabel": "Remove Paddock",
+      "typed": "Type the hostname to confirm. The device is retired once it reports the removal.",
+      "pending": "Removal requested ({mode}) — {status}. The device removes Paddock at its next check-in and is then retired.",
+      "modes": {
+        "leave": "leave as is",
+        "reset": "reset"
+      },
+      "cancel": {
+        "label": "Cancel request",
+        "title": "Cancel the removal",
+        "confirm": "Cancel the removal of Paddock from {hostname}? Only possible while the device has not received the command."
+      },
+      "done": "Paddock was removed on {at} ({mode}); local administrator: {localAdmin}; TPM: {tpm}.",
+      "localAdmin": {
+        "removed": "removed",
+        "kept": "kept",
+        "kept_last_admin": "kept (last local administrator)"
+      },
+      "tpm": {
+        "cleared": "cleared",
+        "requested_at_next_boot": "clear requested at the next boot",
+        "skipped_in_use": "not cleared (the disk unlocks with it)",
+        "not_requested": "not requested",
+        "failed": "clearing failed"
+      }
     }
   },
   "tokens": {
@@ -1382,7 +1434,8 @@
     "types": {
       "rotate_admin_password": "Rotate the local administrator password",
       "delete_self_lock": "Delete the dead man's switch token",
-      "install_now": "Install packages now"
+      "install_now": "Install packages now",
+      "uninstall": "Remove Paddock"
     },
     "statuses": {
       "pending": "Pending",
@@ -1606,7 +1659,8 @@
       "revocation_pending": "Lock or Destroy waiting",
       "revocation_expired": "Lock or Destroy expired",
       "agent_rollback_pending": "Agent rollback pending",
-      "agent_not_running": "Agent not running"
+      "agent_not_running": "Agent not running",
+      "uninstall_pending": "Removal of Paddock pending"
     },
     "action": {
       "stale_warning": "Open device",
@@ -1620,7 +1674,8 @@
       "revocation_pending": "Open device",
       "revocation_expired": "Open device",
       "agent_rollback_pending": "Open device",
-      "agent_not_running": "Open device"
+      "agent_not_running": "Open device",
+      "uninstall_pending": "Open device"
     },
     "more": "+{count}",
     "empty": {

@@ -24,7 +24,7 @@ const page = inject(deviceDetailKey)
 if (!page) throw new Error('DeviceHeader outside the device frame')
 const { device, actions, diskState, revocations } = page
 
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const confirm = useConfirm()
 const problemText = useProblemText()
 const session = useSessionStore()
@@ -38,6 +38,18 @@ const encryption = computed(() => encryptionStatus(diskState.value))
 const locked = computed(() => session.canDelete && lockedByRevocation(revocations.value))
 const active = computed(() => d.value.state === 'active')
 const lifecycle = computed(() => actions.value.filter((a) => a !== 'retire'))
+
+/** The result line of a device that removed Paddock and retired itself (plan M8d decision 42). */
+const uninstalled = computed(() => {
+  const u = d.value.uninstall
+  if (d.value.state !== 'retired' || !u?.uninstalled_at) return ''
+  const result = (group: string, value: string | null | undefined) =>
+    value && te('devices.uninstall.' + group + '.' + value) ? t('devices.uninstall.' + group + '.' + value) : (value ?? '–')
+  return t('devices.uninstall.done', {
+    at: formatDateTime(u.uninstalled_at, locale.value), mode: t('devices.uninstall.modes.' + u.mode),
+    localAdmin: result('localAdmin', u.local_admin), tpm: result('tpm', u.tpm),
+  })
+})
 
 async function install(packages: string[]): Promise<{ problem: string; detail?: string } | null> {
   const res = await installNow(d.value.id, packages)
@@ -197,6 +209,13 @@ async function rotate(): Promise<void> {
       {{ t('devices.updateAgent.requested', {
         version: d.agent_update_requested_version, at: formatDateTime(d.agent_update_requested_at, locale),
       }) }}
+    </p>
+    <p
+      v-if="uninstalled"
+      class="pd-type-caption"
+      data-testid="uninstall-done"
+    >
+      {{ uninstalled }}
     </p>
     <p
       v-if="notice"

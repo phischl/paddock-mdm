@@ -351,7 +351,11 @@ async function copyId(): Promise<void> {
       :revocable="d.state === 'active' || d.state === 'quarantined'"
       :presumed-self-locked-at="d.presumed_self_locked_at"
       :retirable="page.actions.value.includes('retire')"
+      :uninstallable="d.state === 'active'"
+      :uninstall="d.uninstall ?? null"
+      :disk-tpm="page.diskTpm.value"
       @retire="page.run('retire')"
+      @changed="page.changed()"
     />
   </div>
 </template>
