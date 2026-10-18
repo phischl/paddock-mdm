@@ -5,6 +5,10 @@ INSERT INTO component_target (component, version, source) VALUES (@component, @v
 ON CONFLICT (component) DO UPDATE SET version = EXCLUDED.version, source = EXCLUDED.source, updated_at = now()
 WHERE component_target.version <> EXCLUDED.version OR component_target.source <> EXCLUDED.source;
 
+-- name: SetHimmelblauTarget :exec
+-- The compiler's only write to the platform table (migration 00063).
+SELECT paddock_set_himmelblau_target(@version::text, @source::text);
+
 -- name: DeleteComponentTargets :exec
 DELETE FROM component_target WHERE component = ANY(@components::text[]);
 

@@ -118,6 +118,21 @@ func (q *Queries) ReleaseHasPackage(ctx context.Context, arg ReleaseHasPackagePa
 	return column_1, err
 }
 
+const setHimmelblauTarget = `-- name: SetHimmelblauTarget :exec
+SELECT paddock_set_himmelblau_target($1::text, $2::text)
+`
+
+type SetHimmelblauTargetParams struct {
+	Version string
+	Source  string
+}
+
+// The compiler's only write to the platform table (migration 00063).
+func (q *Queries) SetHimmelblauTarget(ctx context.Context, arg SetHimmelblauTargetParams) error {
+	_, err := q.db.Exec(ctx, setHimmelblauTarget, arg.Version, arg.Source)
+	return err
+}
+
 const upsertComponentTarget = `-- name: UpsertComponentTarget :exec
 
 INSERT INTO component_target (component, version, source) VALUES ($1, $2, $3)

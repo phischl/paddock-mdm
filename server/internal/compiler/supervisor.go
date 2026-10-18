@@ -8,7 +8,6 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
-	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 )
 
 // supervisorRelease are the paddock-supervisor packages of the current rollout by arch and the percentage of devices
@@ -61,7 +60,5 @@ func (c *Compiler) himmelblauTarget(ctx context.Context, q *pgstore.Queries) err
 	if c.cfg.HimmelblauVersion == "" {
 		return nil
 	}
-	return q.UpsertComponentTarget(ctx, pgstore.UpsertComponentTargetParams{
-		Component: components.Himmelblau, Version: c.cfg.HimmelblauVersion, Source: "PADDOCK_HIMMELBLAU_VERSION",
-	})
+	return q.SetHimmelblauTarget(ctx, pgstore.SetHimmelblauTargetParams{Version: c.cfg.HimmelblauVersion, Source: "PADDOCK_HIMMELBLAU_VERSION"})
 }

@@ -605,3 +605,30 @@ func TestHimmelblauTarget(t *testing.T) {
 		t.Fatalf("target %q %q, %v", version, source, err)
 	}
 }
+
+// TestComponentTargetGrants (PDK-328): only the platform role writes component_target; the compiler writes the
+// himmelblau row through its function only, and the worker and the compiler have no direct access to the table.
+func TestComponentTargetGrants(t *testing.T) {
+	w := newWorld(t)
+	for _, tc := range []struct {
+		role, privilege string
+		want            bool
+	}{
+		{"paddock_platform", "INSERT", true}, {"paddock_platform", "DELETE", true},
+		{"paddock_compiler", "SELECT", false}, {"paddock_compiler", "INSERT", false}, {"paddock_compiler", "UPDATE", false},
+		{"paddock_compiler", "DELETE", false},
+		{"paddock_worker", "SELECT", false}, {"paddock_worker", "INSERT", false}, {"paddock_worker", "UPDATE", false},
+		{"paddock_worker", "DELETE", false},
+	} {
+		var got bool
+		if err := w.super.QueryRow(context.Background(), "SELECT has_table_privilege($1, 'component_target', $2)", tc.role, tc.privilege).
+			Scan(&got); err != nil || got != tc.want {
+			t.Errorf("%s %s on component_target: %v (%v), want %v", tc.role, tc.privilege, got, err, tc.want)
+		}
+	}
+	var config []string
+	if err := w.super.QueryRow(context.Background(), `SELECT proconfig FROM pg_proc WHERE proname = 'paddock_component_targets'`).
+		Scan(&config); err != nil || len(config) != 1 || config[0] != "search_path=public, pg_temp" {
+		t.Fatalf("paddock_component_targets() config %v, %v", config, err)
+	}
+}
