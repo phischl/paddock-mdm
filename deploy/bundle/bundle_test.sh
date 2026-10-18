@@ -22,6 +22,15 @@ fail() {
 }
 pass() { echo "ok: $*"; }
 
+# redact_tokens (RR-63): Authentik's refresh-token warnings print the raw token as token=<value>.
+redacted="$( (. "$compose_src/scripts/lib.sh" && printf '%s\n' 'x Refresh token is revoked token=fake.token-value_x=' \
+  '{"event": "Refresh token is revoked", "token": "fake.token-value_x=", "refresh_token_id": 7}' 'no secret here' | redact_tokens))"
+if [[ "$redacted" == $'x Refresh token is revoked token=<redacted>\n{"event": "Refresh token is revoked", "token": "<redacted>", "refresh_token_id": 7}\nno secret here' ]]; then
+  pass "redact_tokens replaces token values and leaves other lines unchanged"
+else
+  fail "redact_tokens: $redacted"
+fi
+
 # build <bundle sources> <out dir>: a local bundle of version 0.0.0-test.
 build() { "$1/build.sh" --version 0.0.0-test --channel local --images local --out "$2" >/dev/null; }
 lib_files() { sed -n "s/^$2=\"\\(.*\\)\"\$/\\1/p" "$1/scripts/lib.sh"; }
