@@ -523,6 +523,11 @@
     "empty": {
       "title": "No agent releases yet",
       "description": "Upload a signed release to start a staged rollout."
+    },
+    "targets": {
+      "title": "Rollout targets",
+      "himmelblauHint": "Set with PADDOCK_HIMMELBLAU_VERSION of the compiler; devices install it with their next apply.",
+      "none": "No agent release has completed a rollout yet."
     }
   },
   "loginDenied": {
@@ -958,7 +963,29 @@
         "not_requested": "not requested",
         "failed": "clearing failed"
       }
-    }
+    },
+    "components": {
+      "title": "Components",
+      "column": "Components",
+      "installed": "Installed",
+      "expected": "Expected",
+      "names": {
+        "paddockd": "Agent (paddockd)",
+        "paddock_supervisor": "Supervisor",
+        "paddock_revoke": "Revocation module (paddock-revoke)",
+        "himmelblau": "Himmelblau",
+        "fleetd": "fleetd (osquery)"
+      },
+      "status": {
+        "ok": "Up to date",
+        "outdated": "Outdated",
+        "missing": "Not installed",
+        "unknown": "Not reported"
+      },
+      "outdatedCount": "{count, plural, one {# outdated} other {# outdated}}",
+      "hint": "Expected versions come from the current agent release and the Himmelblau version the server rolls out. A device catches up at its next apply or agent update."
+    },
+    "componentFilter": "Component outdated"
   },
   "tokens": {
     "title": "Enrollment tokens",

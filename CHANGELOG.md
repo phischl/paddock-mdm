@@ -109,6 +109,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check-in. The server keeps the expected versions (the current release, the newest fleetd package, the compiler's
   Himmelblau version; `GET /api/platform/v1/component-targets`), the device detail lists every component with its
   status, and `GET /api/v1/devices?component_outdated=true` finds devices with an outdated component.
+- The device page shows the panel *Components* (installed and expected version of the agent, the supervisor,
+  paddock-revoke, Himmelblau and fleetd with their status), the device list a *Components* column and the filter
+  *Component outdated*, and the platform's *Agent releases* page the card *Rollout targets*.
 
 ### Changed
 

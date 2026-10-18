@@ -107,3 +107,35 @@ describe('device overview groups', () => {
     expect(document.querySelector('[role="status"]')?.textContent).toBe('Device groups saved.')
   })
 })
+
+describe('device overview components (PDK-236)', () => {
+  it('lists every component with installed and expected version, its status and the hint', async () => {
+    await mountOverview({
+      components: [
+        { name: 'paddockd', installed: '0.1.0', expected: '0.1.0', status: 'ok' },
+        { name: 'paddock_supervisor', installed: '0.1.0', expected: '0.1.0', status: 'ok' },
+        { name: 'paddock_revoke', installed: '', expected: null, status: 'missing' },
+        { name: 'himmelblau', installed: '4.0.3-1', expected: '4.0.4', status: 'outdated' },
+        { name: 'fleetd', installed: '', expected: '1.43.0', status: 'missing' },
+      ],
+    })
+    const cells = (name: string) =>
+      [...document.querySelectorAll(`[data-testid="component-${name}"] td`)].map((td) => td.textContent?.trim())
+    expect(cells('paddockd')).toEqual(['Agent (paddockd)', '0.1.0', '0.1.0', 'Up to date'])
+    expect(cells('paddock_revoke')).toEqual(['Revocation module (paddock-revoke)', '–', '–', 'Not installed'])
+    expect(cells('himmelblau')).toEqual(['Himmelblau', '4.0.3-1', '4.0.4', 'Outdated'])
+    expect(cells('fleetd')).toEqual(['fleetd (osquery)', '–', '1.43.0', 'Not installed'])
+    expect(document.querySelector('[data-testid="device-components"]')?.textContent)
+      .toContain('Expected versions come from the current agent release')
+  })
+
+  it('shows Not reported for an agent that reports no components', async () => {
+    await mountOverview({
+      components: ['paddockd', 'paddock_supervisor', 'paddock_revoke', 'himmelblau', 'fleetd'].map((name) => ({
+        name: name as 'paddockd', installed: '', expected: null, status: 'unknown' as const,
+      })),
+    })
+    const statuses = [...document.querySelectorAll('[data-testid^="component-"] td:last-child')].map((td) => td.textContent?.trim())
+    expect(statuses).toEqual(['Not reported', 'Not reported', 'Not reported', 'Not reported', 'Not reported'])
+  })
+})

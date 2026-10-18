@@ -1,5 +1,6 @@
 import {
   api, listPage, problemCode, type AgentRelease, type AgentReleaseDetail, type AgentReleaseSort, type AgentReleaseStatus,
+  type ComponentTarget,
 } from '../api/client'
 import type { ListFilter, ListParams, Page } from './listQuery'
 
@@ -64,4 +65,15 @@ export async function runRolloutAction(version: string, action: RolloutAction): 
       break
   }
   return error ? problemCode(error) : null
+}
+
+/** The component targets of the platform (plan M8d decision 55); the problem code on failure. */
+export async function getComponentTargets(): Promise<ComponentTarget[] | string> {
+  const { data, error } = await api.GET('/api/platform/v1/component-targets')
+  return data?.targets ?? problemCode(error)
+}
+
+/** Whether a release completed a rollout: then targets other than Himmelblau's exist. */
+export function releaseTargetsExist(targets: ComponentTarget[]): boolean {
+  return targets.some((t) => t.component !== 'himmelblau')
 }

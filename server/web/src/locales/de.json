@@ -523,6 +523,11 @@
     "empty": {
       "title": "Noch keine Agent-Releases",
       "description": "Laden Sie ein signiertes Release hoch, um einen gestaffelten Rollout zu starten."
+    },
+    "targets": {
+      "title": "Rollout-Ziele",
+      "himmelblauHint": "Gesetzt über PADDOCK_HIMMELBLAU_VERSION des Compilers; Geräte installieren sie beim nächsten Apply.",
+      "none": "Noch kein Agent-Release hat einen Rollout abgeschlossen."
     }
   },
   "loginDenied": {
@@ -958,7 +963,29 @@
         "not_requested": "nicht angefordert",
         "failed": "Löschen fehlgeschlagen"
       }
-    }
+    },
+    "components": {
+      "title": "Komponenten",
+      "column": "Komponenten",
+      "installed": "Installiert",
+      "expected": "Erwartet",
+      "names": {
+        "paddockd": "Agent (paddockd)",
+        "paddock_supervisor": "Supervisor",
+        "paddock_revoke": "Widerrufsmodul (paddock-revoke)",
+        "himmelblau": "Himmelblau",
+        "fleetd": "fleetd (osquery)"
+      },
+      "status": {
+        "ok": "Aktuell",
+        "outdated": "Veraltet",
+        "missing": "Nicht installiert",
+        "unknown": "Nicht gemeldet"
+      },
+      "outdatedCount": "{count, plural, one {# veraltet} other {# veraltet}}",
+      "hint": "Erwartete Versionen stammen aus dem aktuellen Agent-Release und der Himmelblau-Version, die der Server ausrollt. Ein Gerät zieht beim nächsten Apply oder Agent-Update nach."
+    },
+    "componentFilter": "Komponente veraltet"
   },
   "tokens": {
     "title": "Registrierungstoken",

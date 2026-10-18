@@ -28,6 +28,8 @@ test('platform admin halts an agent rollout', async ({ page }) => {
 
   await mainNav(page).getByRole('link', { name: 'Agent releases' }).click()
   await expect(page.getByRole('heading', { name: 'Agent releases' })).toBeVisible()
+  // Plan M8d decision 56: the compiler's Himmelblau version is a rollout target.
+  await expect(page.getByTestId('target-himmelblau')).toContainText('PADDOCK_HIMMELBLAU_VERSION')
   await page.getByTestId('list-search').getByRole('searchbox').fill(version)
   await expect(page).toHaveURL(/q=/)
   const row = page.getByRole('row').filter({ hasText: version })

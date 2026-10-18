@@ -1,5 +1,5 @@
 import type {
-  AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceContact, DeviceState,
+  AgentReleaseStatus, AgentRolloutStatus, AttentionKind, AuditActorType, AuditOutcome, DeviceCommandStatus, DeviceComponent, DeviceContact, DeviceState,
   DiskState, OrganizationStatus, RevocationStatus,
 } from '../api/client'
 
@@ -216,6 +216,20 @@ export function actorStatus(type: AuditActorType | string): StatusView {
     case 'api_token':
       return { status: 'info', label }
     default:
+      return { status: 'neutral', label }
+  }
+}
+
+/** The status of a component of a device (plan M8d decision 56). */
+export function componentStatus(s: DeviceComponent['status']): StatusView {
+  const label = 'devices.components.status.' + s
+  switch (s) {
+    case 'ok':
+      return { status: 'ok', label }
+    case 'outdated':
+      return { status: 'warn', label }
+    case 'missing':
+    case 'unknown':
       return { status: 'neutral', label }
   }
 }

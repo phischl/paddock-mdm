@@ -14,6 +14,7 @@ import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { healthRows } from '../lib/deviceHealth'
 import { formatDateTime, formatGB, formatGiB } from '../lib/format'
 import { listDeviceVulnerabilities } from '../lib/inventory'
+import { componentStatus } from '../lib/status'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
 
@@ -233,6 +234,65 @@ async function copyId(): Promise<void> {
             </dd>
           </div>
         </dl>
+      </section>
+
+      <section
+        class="pd-panel"
+        aria-labelledby="device-components-title"
+        data-testid="device-components"
+      >
+        <header class="pd-panel-header">
+          <h2
+            id="device-components-title"
+            class="pd-type-section"
+          >
+            {{ t('devices.components.title') }}
+          </h2>
+        </header>
+        <div class="pd-panel-body">
+          <v-table class="table">
+            <thead>
+              <tr>
+                <th scope="col">
+                  {{ t('devices.components.title') }}
+                </th>
+                <th scope="col">
+                  {{ t('devices.components.installed') }}
+                </th>
+                <th scope="col">
+                  {{ t('devices.components.expected') }}
+                </th>
+                <th scope="col">
+                  {{ t('devices.state') }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="c in d.components"
+                :key="c.name"
+                :data-testid="'component-' + c.name"
+              >
+                <td>{{ t('devices.components.names.' + c.name) }}</td>
+                <td :class="c.installed ? 'mono' : 'pd-muted'">
+                  {{ c.installed || '–' }}
+                </td>
+                <td :class="c.expected ? 'mono' : 'pd-muted'">
+                  {{ c.expected ?? '–' }}
+                </td>
+                <td>
+                  <StatusChip
+                    :status="componentStatus(c.status).status"
+                    :label="t(componentStatus(c.status).label)"
+                  />
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
+          <p class="pd-type-caption pd-muted">
+            {{ t('devices.components.hint') }}
+          </p>
+        </div>
       </section>
 
       <DeviceOwners

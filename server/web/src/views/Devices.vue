@@ -6,7 +6,9 @@ import DataList from '../components/DataList.vue'
 import StatusChip from '../components/StatusChip.vue'
 import TimeCell from '../components/TimeCell.vue'
 import type { Device } from '../api/client'
-import { allGroups, contactFilter, groupFilter, listDevices, ownerFilter, ownerNames, securityFilter, stateFilter } from '../lib/devices'
+import {
+  allGroups, componentFilter, contactFilter, groupFilter, listDevices, ownerFilter, ownerNames, securityFilter, stateFilter,
+} from '../lib/devices'
 import { paneQuery } from '../lib/deviceHealth'
 import { diskStateFilter } from '../lib/disk'
 import type { ListColumn } from '../lib/listQuery'
@@ -27,7 +29,7 @@ onMounted(async () => {
 })
 
 const filters = computed(() => [
-  stateFilter, contactFilter, groupFilter(groups.value), diskStateFilter, securityFilter, ownerFilter(users.value),
+  stateFilter, contactFilter, groupFilter(groups.value), diskStateFilter, securityFilter, ownerFilter(users.value), componentFilter,
 ])
 const columns: ListColumn[] = [
   { key: 'hostname', title: 'devices.hostname', sortable: true },
@@ -37,6 +39,7 @@ const columns: ListColumn[] = [
   { key: 'agent_version', title: 'devices.agentVersion' },
   { key: 'disk_state', title: 'devices.disk.state', role: 'status' },
   { key: 'owners', title: 'devices.owners.column' },
+  { key: 'components', title: 'devices.components.column' },
   { key: 'enrolled_at', title: 'devices.enrolledAt', sortable: true },
 ]
 
@@ -103,6 +106,13 @@ const columns: ListColumn[] = [
       </template>
       <template #[`item.owners`]="{ item }: { item: Device }">
         <span :class="item.owners.length === 0 ? 'pd-muted' : ''">{{ ownerNames(item) || '–' }}</span>
+      </template>
+      <template #[`item.components`]="{ item }: { item: Device }">
+        <span
+          v-if="item.components_outdated.length > 0"
+          data-testid="device-components-outdated"
+        >{{ t('devices.components.outdatedCount', { count: item.components_outdated.length }) }}</span>
+        <span v-else>{{ t('devices.components.status.ok') }}</span>
       </template>
       <template #[`item.enrolled_at`]="{ item }: { item: Device }">
         <TimeCell :iso="item.enrolled_at" />

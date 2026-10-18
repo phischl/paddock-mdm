@@ -21,6 +21,12 @@ export const contactFilter: ListFilter = {
 }
 
 /** The security update filter (plan M7c amendment 2026-10-10): the overview's "Security updates overdue" links to it. */
+/** The component filter of the device list (plan M8d decision 56). */
+export const componentFilter: ListFilter = {
+  kind: 'enum', key: 'component_outdated', label: 'devices.componentFilter',
+  options: [{ value: 'true', title: 'devices.components.status.outdated' }],
+}
+
 export const securityFilter: ListFilter = {
   kind: 'enum', key: 'security_updates', label: 'devices.securityFilter', options: [{ value: 'overdue', title: 'devices.securityUpdates.overdue' }],
 }
@@ -51,6 +57,7 @@ export async function listDevices(p: ListParams): Promise<Page<Device>> {
           contact: p.contact as DeviceContact[],
           security_updates: ((p.security_updates as string[] | undefined) ?? [])[0] as 'overdue' | undefined,
           owner_id: ((p.owner_id as string[] | undefined) ?? [])[0],
+          component_outdated: ((p.component_outdated as string[] | undefined) ?? [])[0] === 'true' ? true : undefined,
         },
       },
     }),
