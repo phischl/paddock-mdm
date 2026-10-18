@@ -159,6 +159,7 @@ type compileTarget struct {
 	v2        bool   // the agent reports bundle schema 2
 	agent     string // the agent version of the last check-in
 	forced    bool   // a forced state change targets the device (plan M6c decision 19)
+	request   updateRequest
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -214,7 +215,8 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		}
 		for _, row := range rows {
 			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
-				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion}
+				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion,
+				request: updateRequest{version: row.AgentUpdateRequestedVersion, at: row.AgentUpdateRequestedAt}}
 			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
@@ -371,7 +373,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 			updatesSection = keys.Updates.section(groups)
 			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
 		}
-		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.id, t.agent)
+		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.id, t.agent, t.request, c.now())
 		if keys.Disk != nil {
 			diskSection = keys.Disk.section(groups)
 		}

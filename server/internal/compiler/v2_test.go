@@ -563,6 +563,32 @@ func TestSupervisorPackages(t *testing.T) {
 	if p := w.fetch(semantic).Agent.SupervisorPackages; p != nil {
 		t.Fatalf("device outside the current wave got %+v", p)
 	}
+
+	// An open update-now request for the release lifts the wave gate for the device, as for the agent offer; a
+	// request for another version or an expired one does not, and a halted rollout carries nothing (review 2
+	// finding C).
+	for _, tc := range []struct {
+		version, age string
+		want         bool
+	}{
+		{v, "1 hour", true}, {"6.9.9", "1 hour", false}, {v, "25 hours", false},
+	} {
+		w.exec("UPDATE device SET agent_update_requested_version = $2, agent_update_requested_at = now() - $3::interval WHERE id = $1",
+			semantic, tc.version, tc.age)
+		w.mustCompile(statechange.ScopeDevice, semantic)
+		if got := w.fetch(semantic).Agent.SupervisorPackages; (len(got) == 1 && got["amd64"] == want) != tc.want {
+			t.Fatalf("request %s %s ago: supervisor packages %+v", tc.version, tc.age, got)
+		}
+	}
+	w.exec("UPDATE device SET agent_update_requested_version = $2, agent_update_requested_at = now() WHERE id = $1", semantic, v)
+	w.exec("UPDATE agent_rollout SET status = 'halted' WHERE version = $1", v)
+	w.mustCompile(statechange.ScopeDevice, semantic)
+	if p := w.fetch(semantic).Agent.SupervisorPackages; p != nil {
+		t.Fatalf("halted rollout with an update-now request rendered %+v", p)
+	}
+	w.exec("UPDATE device SET agent_update_requested_version = NULL, agent_update_requested_at = NULL WHERE id = $1", semantic)
+	w.exec("UPDATE agent_rollout SET status = 'running' WHERE version = $1", v)
+
 	w.exec("UPDATE agent_rollout SET current_wave_index = 1 WHERE version = $1", v)
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	if got := w.fetch(semantic).Agent.SupervisorPackages; len(got) != 1 || got["amd64"] != want {

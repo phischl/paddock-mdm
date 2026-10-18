@@ -1232,8 +1232,10 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
 - 30: migration `00062_supervisor_package_waves.sql` replaces `paddock_supervisor_packages()`; it returns the current
   rollout's packages while its status is `running` or `completed`, with `status`, `waves` and `current_wave_index`.
   The compiler keeps `{packages, percent}` (`agentrelease.Percent`) in the reconcile digest, so a new wave recompiles
-  every device, and renders the packages for a device only when `agentrelease.Eligible(device, percent)`. A halted
-  rollout renders nothing.
+  every device, and renders the packages for a device only when `agentrelease.Eligible(device, percent)` or the
+  device has an open update-now request for the rollout's version younger than `devicecache.UpdateRequestLifetime`
+  (`ListCompileTargets` returns `agent_update_requested_version/_at`; `RequestNow` queues a device state change).
+  A halted rollout renders nothing (fix round 2, review 2 finding C).
 - 33 (replaces "The outcome does not count toward any rollout threshold"): a local-health failure (`install_failed`,
   `rolled_back`) writes `agent_update_report` outcome `supervisor_failed` for the version; the rollout, current-release
   and evaluation statistics count it like `update_failed` (distinct devices). `rolled_back_unreachable` writes no

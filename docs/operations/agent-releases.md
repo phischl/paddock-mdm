@@ -362,8 +362,9 @@ A device updates `paddock-supervisor` from the current release (ADR 0037 decisio
 release's rollout runs or after it completed, the v2 bundle of every device whose agent reports a semantic version
 and whose rollout bucket the waves reached carries the release's `paddock-supervisor` package per architecture
 (`agent.supervisor_packages`, SHA-256 in the signed bundle) — the same wave gate as the agent offer, so the
-supervisor never goes to every device at once. Nothing is offered after the rollout was halted. A new wave reaches
-the bundles at the compiler's next reconcile. An agent installs the package only when
+supervisor never goes to every device at once. An open *Update agent now* request for the release lifts the wave
+gate for that device, as for the agent. Nothing is offered after the rollout was halted. A new wave reaches the
+bundles at the compiler's next reconcile. An agent installs the package only when
 
 - it runs that release itself (agent first, supervisor second, in the same waves),
 - `dpkg` reports an older `paddock-supervisor` (the Debian form `0.1.0~alpha.4` of a pre-release counts as

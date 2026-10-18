@@ -303,7 +303,10 @@ request stays open after `agent.updated` while the device's last health report n
 than the requested version (the component target follows only completed rollouts, so it is no reference here) or
 `components_outdated` names `fleetd`, and ends with `agent.supervisor_updated` (any outcome) or after 24 hours; the
 gateway marks the device's own version `requested` for a device on the release while the request is open (the agent
-never stages its own version); `RequestNow` accepts a device on the release under the same condition.
+never stages its own version); `RequestNow` accepts a device on the release under the same condition. An open
+update-now request for the rollout's release (unexpired) lifts the wave gate of I for that device's supervisor
+package, as it does for the agent offer; never while the rollout is halted. The request recompiles the device (review
+2 finding C).
 
 Consequences: + No supervisor change reaches every device at once, and a server outage no longer blocks a supervisor
 version for good. − A supervisor wave follows the compiler's reconcile interval rather than the gateway's offer; a

@@ -72,6 +72,13 @@ func TestUpdateNow(t *testing.T) {
 	if params["version"] != v || params["from_version"] != "0.9.0" || params["hostname"] != "h" {
 		t.Fatalf("params %v", params)
 	}
+	// The request recompiles the device, whose bundle then carries the supervisor package outside the wave (review 2
+	// finding C).
+	var recompiles int
+	if err := h.super.QueryRow(context.Background(), `SELECT count(*) FROM outbox WHERE payload ->> 'scope' = 'device'
+		AND payload ->> 'id' = $1`, dev.String()).Scan(&recompiles); err != nil || recompiles != 1 {
+		t.Fatalf("%d device state changes (%v), want 1", recompiles, err)
+	}
 
 	// Another version's report leaves the request; the requested version's report clears it.
 	report := func(seq int64, version string) {

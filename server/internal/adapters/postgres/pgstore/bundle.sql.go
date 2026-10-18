@@ -7,6 +7,7 @@ package pgstore
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -93,18 +94,21 @@ func (q *Queries) ListActiveGroupMemberIDs(ctx context.Context, deviceGroupID uu
 
 const listCompileTargets = `-- name: ListCompileTargets :many
 SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions,
-       coalesce(s.agent_version, '')::text AS agent_version
+       coalesce(s.agent_version, '')::text AS agent_version,
+       coalesce(d.agent_update_requested_version, '')::text AS agent_update_requested_version, d.agent_update_requested_at
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = ANY($1::uuid[]) ORDER BY d.id
 `
 
 type ListCompileTargetsRow struct {
-	ID              uuid.UUID
-	State           string
-	BundleSeq       int64
-	LoginsSuspended bool
-	SchemaVersions  []int32
-	AgentVersion    string
+	ID                          uuid.UUID
+	State                       string
+	BundleSeq                   int64
+	LoginsSuspended             bool
+	SchemaVersions              []int32
+	AgentVersion                string
+	AgentUpdateRequestedVersion string
+	AgentUpdateRequestedAt      *time.Time
 }
 
 func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]ListCompileTargetsRow, error) {
@@ -123,6 +127,8 @@ func (q *Queries) ListCompileTargets(ctx context.Context, ids []uuid.UUID) ([]Li
 			&i.LoginsSuspended,
 			&i.SchemaVersions,
 			&i.AgentVersion,
+			&i.AgentUpdateRequestedVersion,
+			&i.AgentUpdateRequestedAt,
 		); err != nil {
 			return nil, err
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
 	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
+	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
 )
@@ -85,6 +86,8 @@ func (u *AgentUpdates) RequestNow(ctx context.Context, deviceID uuid.UUID) (pgst
 		if err := q.SetAgentUpdateRequest(ctx, pgstore.SetAgentUpdateRequestParams{ID: deviceID, Version: &offer.Version}); err != nil {
 			return err
 		}
+		// The request lifts the wave gate of the supervisor package in the device's bundle (review 2 finding C).
+		rec.StateChanged(statechange.ScopeDevice, deviceID)
 		out, err = q.GetDevice(ctx, deviceID)
 		return err
 	})

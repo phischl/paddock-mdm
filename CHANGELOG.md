@@ -87,8 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next check-in and restores the previous supervisor otherwise (audited as `device.supervisor_updated` or
   `device.supervisor_update_failed`). Supervisor upgrades that failed on the device count toward the rollout's failure
   threshold (a rollback only because the server was unreachable does not), and a
-  halted rollout offers no supervisor package. The update policy applies, and *Update agent now* stays open until
-  the supervisor followed; a failed version is not installed again, except after a rollback only because the server
+  halted rollout offers no supervisor package. The update policy applies, and *Update agent now* also brings the
+  supervisor package to a device outside the current wave and stays open until the supervisor followed; a failed version is not installed again, except after a rollback only because the server
   was unreachable, which is retried after 24 hours, up to 3 times.
 - Devices can be removed from Paddock from the portal (*Danger zone* → *Remove Paddock*, organization administrators
   with a step-up and the typed hostname, `POST /api/v1/devices/{id}/uninstall`) in two modes, leave as is or reset,
