@@ -195,6 +195,7 @@
     "invalid_request": "The request was not valid.",
     "internal": "Something went wrong. Please try again.",
     "invalid_state": "This action is not possible in the current state.",
+    "conflict": "This conflicts with an existing item.",
     "already_exists": "This is already managed for the same devices.",
     "in_use": "This item is still in use. Remove what uses it first.",
     "path_not_allowed": "This path is not allowed. Use a path below /etc/, /usr/local/etc/ or /opt/ outside the denied paths.",

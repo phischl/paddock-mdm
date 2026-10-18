@@ -74,14 +74,30 @@ const columns: ListColumn[] = [
         <RouterLink :to="{ name: 'device', params: { id: item.id }, query: paneQuery(route.query) }">
           {{ item.hostname }}
         </RouterLink>
-        <StatusChip
+        <v-tooltip
           v-if="item.name_state === 'pending'"
-          status="warn"
-          :label="t('devices.name.pendingChip')"
-          :title="t('devices.name.pendingTooltip', { name: item.name ?? '' })"
-          class="pd-name-pending"
-          data-testid="device-name-pending"
-        />
+          :text="t('devices.name.pendingTooltip', { name: item.name ?? '' })"
+          location="top"
+          open-on-click
+          open-on-hover
+        >
+          <template #activator="{ props: tip }">
+            <span
+              v-bind="tip"
+              class="pd-name-pending"
+              tabindex="0"
+              data-testid="device-name-pending"
+            >
+              <StatusChip
+                status="warn"
+                :label="t('devices.name.pendingChip')"
+              >
+                {{ t('devices.name.pendingChip') }}
+                <span class="visually-hidden">{{ t('devices.name.pendingTooltip', { name: item.name ?? '' }) }}</span>
+              </StatusChip>
+            </span>
+          </template>
+        </v-tooltip>
       </template>
       <template #[`item.state`]="{ item }: { item: Device }">
         <StatusChip
@@ -130,5 +146,5 @@ const columns: ListColumn[] = [
 </template>
 
 <style scoped>
-.pd-name-pending { margin-inline-start: var(--pd-space-2); }
+.pd-name-pending { margin-inline-start: var(--pd-space-2); cursor: help; }
 </style>

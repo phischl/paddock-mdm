@@ -34,7 +34,7 @@ afterEach(() => {
 })
 
 describe('device list', () => {
-  it('marks a device whose managed name is pending, with the name as tooltip (plan M8h decision 18)', async () => {
+  it('marks a device whose managed name is pending, with the name for screen readers and as an accessible tooltip (plan M8h decision 18)', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', theme: 'system', organization: null } as never
@@ -54,8 +54,15 @@ describe('device list', () => {
     await flushPromises()
     const chips = [...document.querySelectorAll<HTMLElement>('[data-testid="device-name-pending"]')]
     expect(chips).toHaveLength(1)
-    expect(chips[0].textContent?.trim()).toBe('Name pending')
-    expect(chips[0].getAttribute('title')).toBe('Managed name: lap-0421')
     expect(chips[0].closest('tr')?.textContent).toContain('ubuntu')
+    // Screen readers read the managed name with the chip; keyboard and touch users reach the tooltip (review 1 finding 5).
+    expect(chips[0].textContent?.replace(/\s+/g, ' ').trim()).toBe('Name pending Managed name: lap-0421')
+    expect(chips[0].querySelector('.visually-hidden')?.textContent).toBe('Managed name: lap-0421')
+    expect(chips[0].getAttribute('tabindex')).toBe('0')
+    chips[0].dispatchEvent(new FocusEvent('focus'))
+    await flushPromises()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const tooltip = [...document.querySelectorAll<HTMLElement>('.v-tooltip .v-overlay__content')]
+    expect(tooltip.map((el) => el.textContent?.trim())).toContain('Managed name: lap-0421')
   })
 })
