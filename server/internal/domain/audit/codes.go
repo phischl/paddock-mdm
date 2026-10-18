@@ -203,14 +203,15 @@ var registry = map[Code]Definition{
 	CodeDeviceGroupCreated: {
 		Code: CodeDeviceGroupCreated, Emitted: true,
 		Description: "A device group was created.",
-		Params:      []string{"name"},
+		Params:      []string{"name", "staleness_warning_h", "staleness_critical_h", "agent_update_policy", "disk_unlock_mode"},
 		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeDeviceGroupUpdated: {
 		Code: CodeDeviceGroupUpdated, Emitted: true,
 		Description: "A device group was renamed or its description changed.",
-		Params:      []string{"name", "old_name", "description_changed"},
-		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
+		Params: []string{"name", "old_name", "description_changed", "staleness_warning_h", "staleness_critical_h",
+			"agent_update_policy", "disk_unlock_mode"},
+		Outcomes: []Outcome{OutcomeSuccess, OutcomeFailure, OutcomeDenied},
 	},
 	CodeDeviceGroupDeleted: {
 		Code: CodeDeviceGroupDeleted, Emitted: true,
@@ -842,14 +843,14 @@ var registry = map[Code]Definition{
 	CodeDeviceStaleWarning: {
 		Code: CodeDeviceStaleWarning, Emitted: true,
 		Description: "A device has not contacted Paddock for longer than the organization's staleness warning threshold (actor: system).",
-		Params:      []string{"last_contact_at", "threshold_h"},
+		Params:      []string{"last_contact_at", "threshold_h", "source"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per crossing; the device's next contact ends it with device.stale_cleared.",
 	},
 	CodeDeviceStaleCritical: {
 		Code: CodeDeviceStaleCritical, Emitted: true,
 		Description: "A device has not contacted Paddock for longer than the organization's critical staleness threshold: it is presumed lost and listed on the attention page (actor: system).",
-		Params:      []string{"last_contact_at", "threshold_h"},
+		Params:      []string{"last_contact_at", "threshold_h", "source"},
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Recorded once per crossing; the device's next contact ends it with device.stale_cleared.",
 	},

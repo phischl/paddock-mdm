@@ -1,4 +1,9 @@
 {
+  "updateSettings": {
+    "staleness": {
+      "groupsHint": "Gerätegruppen können diese Schwellen überschreiben, zum Beispiel für Laptops."
+    }
+  },
   "app": {
     "name": "Paddock",
     "skipToContent": "Zum Inhalt springen",
@@ -123,6 +128,19 @@
     "typeToConfirm": "Geben Sie zur Bestätigung {text} ein"
   },
   "deviceGroups": {
+    "staleness": {
+      "title": "Kontaktschwellen",
+      "override": "Schwellen der Organisation für diese Gruppe überschreiben",
+      "warning": "Warnung nach (Stunden)",
+      "critical": "Kritisch nach (Stunden)",
+      "laptopPreset": "Laptop-Voreinstellung (5 Tage / 35 Tage)",
+      "hint": "Ein Gerät in mehreren Gruppen übernimmt den mildesten Wert seiner Gruppen. Ohne Überschreibung gelten die Schwellen der Organisation.",
+      "effective": "Wirksam: Warnung nach {warning} h, kritisch nach {critical} h ({source})",
+      "sources": {
+        "organization": "Organisation",
+        "device_group": "Gerätegruppe"
+      }
+    },
     "title": "Gerätegruppen",
     "count": "{count, plural, =0 {Keine Gerätegruppen} one {# Gerätegruppe} other {# Gerätegruppen}}",
     "create": "Gerätegruppe anlegen",

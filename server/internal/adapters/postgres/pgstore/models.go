@@ -224,12 +224,16 @@ type DeviceEventSeen struct {
 }
 
 type DeviceGroup struct {
-	ID             uuid.UUID
-	OrganizationID uuid.UUID
-	Name           string
-	Description    string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                 uuid.UUID
+	OrganizationID     uuid.UUID
+	Name               string
+	Description        string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	StalenessWarningH  *int32
+	StalenessCriticalH *int32
+	AgentUpdatePolicy  *string
+	DiskUnlockMode     *string
 }
 
 type DeviceGroupMember struct {

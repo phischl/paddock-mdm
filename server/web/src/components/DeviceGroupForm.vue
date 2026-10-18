@@ -3,18 +3,21 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { hasErrors, validateDeviceGroup } from '../lib/validation'
 import { useProblemText } from '../lib/problems'
+import type { DeviceGroupStaleness } from '../api/client'
 import type { DeviceGroupInput } from '../lib/deviceGroupPage'
+import { laptopStaleness } from '../lib/deviceGroups'
 
 const props = withDefaults(
   defineProps<{
     submitLabel: string
     initialName?: string
     initialDescription?: string
+    initialStaleness?: DeviceGroupStaleness | null
     problem?: string
     idPrefix?: string
     pending?: boolean
   }>(),
-  { initialName: '', initialDescription: '', problem: '', idPrefix: 'device-group', pending: false },
+  { initialName: '', initialDescription: '', initialStaleness: null, problem: '', idPrefix: 'device-group', pending: false },
 )
 const emit = defineEmits<{
   submit: [form: DeviceGroupInput]
@@ -26,6 +29,15 @@ const problemText = useProblemText()
 const name = ref(props.initialName)
 const description = ref(props.initialDescription)
 const touched = ref(false)
+const override = ref(props.initialStaleness !== null)
+const warningH = ref<number>(props.initialStaleness?.warning_h ?? laptopStaleness.warning_h)
+const criticalH = ref<number>(props.initialStaleness?.critical_h ?? laptopStaleness.critical_h)
+
+function laptopPreset(): void {
+  override.value = true
+  warningH.value = laptopStaleness.warning_h
+  criticalH.value = laptopStaleness.critical_h
+}
 const errors = computed(() => validateDeviceGroup(name.value, description.value))
 const nameError = computed(() => (touched.value && errors.value.name ? t(errors.value.name) : ''))
 const descriptionError = computed(() => (touched.value && errors.value.description ? t(errors.value.description) : ''))
@@ -33,7 +45,10 @@ const descriptionError = computed(() => (touched.value && errors.value.descripti
 function submit(): void {
   touched.value = true
   if (hasErrors(errors.value)) return
-  emit('submit', { name: name.value, description: description.value })
+  emit('submit', {
+    name: name.value, description: description.value,
+    staleness: override.value ? { warning_h: Number(warningH.value), critical_h: Number(criticalH.value) } : null,
+  })
 }
 </script>
 
@@ -61,6 +76,48 @@ function submit(): void {
       :error-messages="descriptionError ? [descriptionError] : []"
       :aria-invalid="!!descriptionError"
     />
+    <fieldset
+      class="pd-group-staleness"
+      data-testid="group-staleness"
+    >
+      <legend>{{ t('deviceGroups.staleness.title') }}</legend>
+      <v-switch
+        :id="idPrefix + '-staleness-override'"
+        v-model="override"
+        :label="t('deviceGroups.staleness.override')"
+        color="primary"
+        hide-details
+        data-testid="group-staleness-override"
+      />
+      <v-text-field
+        :id="idPrefix + '-staleness-warning'"
+        v-model.number="warningH"
+        type="number"
+        :disabled="!override"
+        :label="t('deviceGroups.staleness.warning')"
+        data-testid="group-staleness-warning"
+      />
+      <v-text-field
+        :id="idPrefix + '-staleness-critical'"
+        v-model.number="criticalH"
+        type="number"
+        :disabled="!override"
+        :label="t('deviceGroups.staleness.critical')"
+        data-testid="group-staleness-critical"
+      />
+      <v-btn
+        type="button"
+        variant="tonal"
+        size="small"
+        data-testid="group-staleness-laptop"
+        @click="laptopPreset"
+      >
+        {{ t('deviceGroups.staleness.laptopPreset') }}
+      </v-btn>
+      <p class="pd-type-caption pd-muted">
+        {{ t('deviceGroups.staleness.hint') }}
+      </p>
+    </fieldset>
     <p
       v-if="problem"
       class="form-error"

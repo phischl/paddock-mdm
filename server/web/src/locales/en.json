@@ -1,4 +1,9 @@
 {
+  "updateSettings": {
+    "staleness": {
+      "groupsHint": "Device groups can override these thresholds, for example for laptops."
+    }
+  },
   "app": {
     "name": "Paddock",
     "skipToContent": "Skip to content",
@@ -123,6 +128,19 @@
     "typeToConfirm": "Type {text} to confirm"
   },
   "deviceGroups": {
+    "staleness": {
+      "title": "Contact thresholds",
+      "override": "Override the organization's thresholds for this group",
+      "warning": "Warning after (hours)",
+      "critical": "Critical after (hours)",
+      "laptopPreset": "Laptop preset (5 days / 35 days)",
+      "hint": "A device in several groups takes the most lenient value of its groups. Without an override the organization's thresholds apply.",
+      "effective": "Effective: warning after {warning} h, critical after {critical} h ({source})",
+      "sources": {
+        "organization": "organization",
+        "device_group": "device group"
+      }
+    },
     "title": "Device groups",
     "count": "{count, plural, =0 {No device groups} one {# device group} other {# device groups}}",
     "create": "Create device group",

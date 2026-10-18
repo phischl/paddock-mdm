@@ -2337,14 +2337,45 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description The group's contact thresholds; null when the organization's apply (plan M8d decision 11). */
+            staleness: components["schemas"]["DeviceGroupStaleness"] | null;
+            /** @description The group's agent update policy; null inherits the organization's (ADR 0037 decision 1). */
+            agent_update_policy: components["schemas"]["AgentUpdatePolicy"] | null;
+            /** @description The group's disk unlock mode for new installations; null inherits the organization's (ADR 0038). */
+            disk_unlock_mode: components["schemas"]["DiskUnlockMode"] | null;
         };
+        /** @description Contact thresholds in hours: warning after warning_h (1–720), critical (presumed lost) after critical_h (above warning_h, at most 2160). A device in several groups takes the most lenient values. */
+        DeviceGroupStaleness: {
+            warning_h: number;
+            critical_h: number;
+        };
+        /**
+         * @description automatic follows the platform's rollout waves; manual installs only on an administrator's request per device.
+         * @enum {string}
+         */
+        AgentUpdatePolicy: "automatic" | "manual";
+        /**
+         * @description TPM2 + boot PIN, or TPM2 alone while Secure Boot is unchanged (ADR 0038).
+         * @enum {string}
+         */
+        DiskUnlockMode: "tpm_pin" | "tpm_only";
         DeviceGroupCreate: {
             name: string;
             description?: string;
+            /** @description The contact thresholds of the members in hours (plan M8d decision 11); null or absent inherits the organization's. */
+            staleness?: components["schemas"]["DeviceGroupStaleness"] | null;
+            agent_update_policy?: components["schemas"]["AgentUpdatePolicy"] | null;
+            disk_unlock_mode?: components["schemas"]["DiskUnlockMode"] | null;
         };
         DeviceGroupUpdate: {
             name?: string;
             description?: string;
+            /** @description The contact thresholds of the members in hours (plan M8d decision 11); null clears the override (the organization's thresholds apply), absent keeps it. */
+            staleness?: components["schemas"]["DeviceGroupStaleness"] | null;
+            /** @description null inherits the organization's agent update policy, absent keeps the value. */
+            agent_update_policy?: components["schemas"]["AgentUpdatePolicy"] | null;
+            /** @description null inherits the organization's disk unlock mode, absent keeps the value. */
+            disk_unlock_mode?: components["schemas"]["DiskUnlockMode"] | null;
         };
         DeviceGroupPage: {
             items: components["schemas"]["DeviceGroup"][];

@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The device page shows the hardware facts the inventory reports (manufacturer, model, serial number, processor,
   memory, disk size); the device search finds a device by its serial number. Free disk space, uptime and network
   addresses stay in Fleet.
+- A device group can override the organization's contact thresholds (*Contact thresholds*, with a laptop preset of
+  5 days / 35 days): its members are warned and presumed lost by the group's values, a device in several groups takes
+  the most lenient ones, and `device.stale_warning` / `device.stale_critical` name the source of the threshold.
 
 ### Changed
 

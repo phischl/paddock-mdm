@@ -4,6 +4,7 @@ import DeviceGroupForm from '../components/DeviceGroupForm.vue'
 import { createPortalI18n } from '../i18n'
 import { vuetify } from '../plugins/vuetify'
 import { validateDeviceGroup } from '../lib/validation'
+import { effectiveStaleness } from '../lib/deviceGroups'
 
 function mountForm(props: Record<string, unknown> = {}) {
   return mount(DeviceGroupForm, {
@@ -41,7 +42,26 @@ describe('DeviceGroupForm', () => {
     await wrapper.find('#device-group-name').setValue('Laptops')
     await wrapper.find('#device-group-description').setValue('All laptops')
     await wrapper.find('form').trigger('submit')
-    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Laptops', description: 'All laptops' }]])
+    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Laptops', description: 'All laptops', staleness: null }]])
+  })
+
+  it('fills the laptop preset and submits the override (PDK-222)', async () => {
+    const wrapper = mountForm()
+    await wrapper.find('#device-group-name').setValue('Laptops')
+    expect(wrapper.find('[data-testid="group-staleness"] legend').text()).toBe('Contact thresholds')
+    await wrapper.find('[data-testid="group-staleness-laptop"]').trigger('click')
+    expect((wrapper.find('#device-group-staleness-warning').element as HTMLInputElement).value).toBe('120')
+    expect((wrapper.find('#device-group-staleness-critical').element as HTMLInputElement).value).toBe('840')
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Laptops', description: '', staleness: { warning_h: 120, critical_h: 840 } }]])
+  })
+
+  it('prefills an existing override and clears it when switched off', async () => {
+    const wrapper = mountForm({ initialName: 'Servers', initialStaleness: { warning_h: 2, critical_h: 4 } })
+    expect((wrapper.find('#device-group-staleness-warning').element as HTMLInputElement).value).toBe('2')
+    await wrapper.find('#device-group-staleness-override').setValue(false)
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Servers', description: '', staleness: null }]])
   })
 
   it('prefills values and shows server problems', () => {
@@ -49,5 +69,15 @@ describe('DeviceGroupForm', () => {
     expect((wrapper.find('#device-group-name').element as HTMLInputElement).value).toBe('Servers')
     // Vuetify's field message containers are role="alert" too; the server problem is the form-level paragraph.
     expect(wrapper.find('p[role="alert"]').text()).toBe('An item with this name already exists.')
+  })
+})
+
+describe('effective contact thresholds (PDK-222)', () => {
+  const org = { staleness_warning_h: 24, staleness_critical_h: 168 }
+  it('takes the group override, else the organization', () => {
+    expect(effectiveStaleness({ staleness: { warning_h: 120, critical_h: 840 } }, org))
+      .toEqual({ warning: 120, critical: 840, source: 'device_group' })
+    expect(effectiveStaleness({ staleness: null }, org)).toEqual({ warning: 24, critical: 168, source: 'organization' })
+    expect(effectiveStaleness({ staleness: null }, null)).toBeNull()
   })
 })

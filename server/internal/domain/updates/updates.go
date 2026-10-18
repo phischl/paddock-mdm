@@ -31,6 +31,17 @@ const (
 	MaxReasonLength       = 500
 )
 
+// Agent update policies of an organization or a device group (ADR 0037 decision 1).
+const (
+	UpdatePolicyAutomatic = "automatic"
+	UpdatePolicyManual    = "manual"
+)
+
+// ValidUpdatePolicy reports whether policy is a known agent update policy.
+func ValidUpdatePolicy(policy string) bool {
+	return policy == UpdatePolicyAutomatic || policy == UpdatePolicyManual
+}
+
 // Settings are an organization's update settings.
 type Settings struct {
 	SecurityDailyAt       string
@@ -69,11 +80,8 @@ func (s Settings) Validate() error {
 	if s.MaxRandomDelayMin < 0 || s.MaxRandomDelayMin > bundle.MaxRandomDelayMin {
 		return fmt.Errorf("%w: max_random_delay_min must be between 0 and %d", ErrSettings, bundle.MaxRandomDelayMin)
 	}
-	if s.StalenessWarningH < MinStalenessWarningH || s.StalenessWarningH > MaxStalenessWarningH {
-		return fmt.Errorf("%w: staleness_warning_h must be between %d and %d", ErrSettings, MinStalenessWarningH, MaxStalenessWarningH)
-	}
-	if s.StalenessCriticalH <= s.StalenessWarningH || s.StalenessCriticalH > MaxStalenessCriticalH {
-		return fmt.Errorf("%w: staleness_critical_h must be above staleness_warning_h and at most %d", ErrSettings, MaxStalenessCriticalH)
+	if err := ValidateThresholds("staleness_", s.StalenessWarningH, s.StalenessCriticalH); err != nil {
+		return fmt.Errorf("%w: %w", ErrSettings, err)
 	}
 	return nil
 }

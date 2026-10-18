@@ -139,6 +139,7 @@ const columns = computed<ListColumn[]>(() => [
             id-prefix="edit-group"
             :initial-name="editTarget.name"
             :initial-description="editTarget.description"
+            :initial-staleness="editTarget.staleness"
             :submit-label="t('common.save')"
             :problem="editProblem"
             :pending="pending"

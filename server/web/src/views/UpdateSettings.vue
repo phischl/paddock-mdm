@@ -135,6 +135,9 @@ onMounted(async () => {
           :error-messages="message('staleness_critical_h')"
           data-testid="staleness-critical"
         />
+        <p class="pd-type-caption pd-muted">
+          {{ t('updateSettings.staleness.groupsHint') }}
+        </p>
       </fieldset>
       <p
         v-if="problem"
