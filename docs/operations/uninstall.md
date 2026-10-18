@@ -71,9 +71,10 @@ whoever is at the device to confirm the clear at the next boot (`tpm: requested_
 ## Cancelling
 
 *Cancel request* in the danger zone (`POST …/uninstall/cancel`) withdraws the removal while the command is `pending`,
-`failed` or `expired`; the command becomes `cancelled` and the worker removes it from the delivery queue within a
-minute (`device.uninstall_cancelled`). Once the device received the command (`delivered`) the removal cannot be
-cancelled. When the agent could not start the helper it reports `outcome: helper_failed`: nothing was removed, the
+`failed` or `expired`; the command becomes `cancelled` and leaves the delivery queue at once
+(`device.uninstall_cancelled`). A device that fetched the command before the cancel gets its result refused and does
+not start the removal. Once the server recorded that the device received the command (`delivered`) the removal cannot
+be cancelled — until the removal report is 24 hours overdue (see below). When the agent could not start the helper it reports `outcome: helper_failed`: nothing was removed, the
 request ends and can be made again.
 
 ## Afterwards
@@ -88,4 +89,7 @@ A device that removed Paddock but could not reach the server within 30 minutes s
 the attention page. On the device, `/root/paddock-uninstall/result.json` is the evidence of what happened (mode,
 outcome, every step, local administrator and TPM result, `"delivered": false`). Check it, then retire the device by
 hand in the portal (*Retire*); the retirement revokes its identity keys. If the helper never ran (no result file, the
-packages still installed), cancel the request if possible and request it again, or remove the packages by hand.
+packages still installed — for example a reboot during the removal lost the helper, which runs from `/run`), cancel
+the request or request it again once the report is 24 hours overdue (counted from the device's command result, or
+from the delivery when there is none; audited with `report_overdue`), or remove the packages by hand. A late report
+of the withdrawn command no longer retires the device.

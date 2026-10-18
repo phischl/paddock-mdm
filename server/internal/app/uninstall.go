@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"log/slog"
 	"slices"
 	"time"
 	"unicode/utf8"
@@ -24,12 +25,36 @@ import (
 type Uninstalls struct {
 	runner *ActionRunner
 	org    *db.OrgPool
+	cache  UninstallCache
 	now    func() time.Time
 }
 
+// UninstallCache withdraws a cancelled uninstall from the gateway (devicecache.Cache): the result claim makes a later
+// result of the device a conflict, and the command leaves cmd:<device_id>.
+type UninstallCache interface {
+	ClaimResult(ctx context.Context, device, id uuid.UUID, status string) (uuid.UUID, string, error)
+	DeleteCommand(ctx context.Context, device, id uuid.UUID) error
+}
+
 // NewUninstalls creates the use cases.
-func NewUninstalls(runner *ActionRunner, org *db.OrgPool) *Uninstalls {
-	return &Uninstalls{runner: runner, org: org, now: time.Now}
+func NewUninstalls(runner *ActionRunner, org *db.OrgPool, cache UninstallCache) *Uninstalls {
+	return &Uninstalls{runner: runner, org: org, cache: cache, now: time.Now}
+}
+
+// UninstallReportTimeout is how long after the device received the command, or reported its result, an uninstall
+// may stay without a removal report before an administrator can cancel or request it again: the helper runs from
+// tmpfs (/run), so a reboot during the removal loses it and no report ever arrives (review finding 8).
+const UninstallReportTimeout = 24 * time.Hour
+
+// reportOverdue reports whether the device received the uninstall command at least UninstallReportTimeout ago and
+// no removal report arrived.
+func reportOverdue(cmd pgstore.DeviceCommand, now time.Time) bool {
+	at := cmd.FinishedAt
+	if at == nil {
+		at = cmd.DeliveredAt
+	}
+	return (cmd.Status == devicecommand.StatusDelivered || cmd.Status == devicecommand.StatusSucceeded) && at != nil &&
+		now.Sub(*at) >= UninstallReportTimeout
 }
 
 // Specs of the uninstall actions.
@@ -79,7 +104,14 @@ func (u *Uninstalls) Request(ctx context.Context, deviceID uuid.UUID, in Uninsta
 			return problem.InvalidRequestUnprocessed.WithDetail("confirm_hostname does not match")
 		}
 		if dev.UninstallRequestedAt != nil && dev.UninstalledAt == nil {
-			return problem.InvalidState.WithDetail("an uninstall is already requested")
+			open, err := q.GetDeviceCommand(ctx, dev.UninstallCommandID.UUID)
+			if err != nil && !db.IsNoRows(err) {
+				return err
+			}
+			if err != nil || !reportOverdue(open, u.now()) {
+				return problem.InvalidState.WithDetail("an uninstall is already requested")
+			}
+			rec.SetParam("report_overdue", true)
 		}
 		revoking, err := q.DeviceHasOpenRevocation(ctx, deviceID)
 		if err != nil {
@@ -140,11 +172,15 @@ func tpmInUse(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID) (bool
 }
 
 // Cancel withdraws an uninstall the device has not received (audited: device.uninstall_cancelled): the command is
-// cancelled and the worker's command round removes it from cmd:<device_id>.
+// cancelled, its result is claimed as cancelled in the same transaction (a result the device posts afterwards is a
+// conflict, so the agent never starts the removal; one it posted first refuses the cancel), and after the commit the
+// command leaves cmd:<device_id> so the gateway no longer delivers it. A request whose removal report is overdue
+// (UninstallReportTimeout) is withdrawn as well, with the param report_overdue.
 func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.Device, error) {
 	spec := SpecUninstallCancel
 	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
 	var out pgstore.Device
+	var withdrawn uuid.UUID
 	err := u.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
 		dev, err := q.LockDevice(ctx, deviceID)
 		if err != nil {
@@ -166,21 +202,46 @@ func (u *Uninstalls) Cancel(ctx context.Context, deviceID uuid.UUID) (pgstore.De
 		if err != nil {
 			return err
 		}
+		now := u.now()
+		if reportOverdue(cmd, now) {
+			rec.SetParam("report_overdue", true)
+			out, err = q.ClearDeviceUninstall(ctx, deviceID)
+			return err
+		}
 		switch cmd.Status {
 		case devicecommand.StatusDelivered:
 			return problem.InvalidState.WithDetail("the device already received the command")
 		case devicecommand.StatusSucceeded:
 			return problem.InvalidState.WithDetail("the uninstall completed")
 		}
-		n, err := q.CancelDeviceCommand(ctx, pgstore.CancelDeviceCommandParams{ID: cmd.ID, FinishedAt: u.now().UTC()})
+		n, err := q.CancelDeviceCommand(ctx, pgstore.CancelDeviceCommandParams{ID: cmd.ID, FinishedAt: now.UTC()})
 		if err != nil {
 			return err
 		}
 		if n != 1 {
 			return problem.InvalidState.WithDetail("the command can no longer be cancelled")
 		}
-		out, err = q.ClearDeviceUninstall(ctx, deviceID)
-		return err
+		if out, err = q.ClearDeviceUninstall(ctx, deviceID); err != nil {
+			return err
+		}
+		if cmd.Status == devicecommand.StatusPending {
+			owner, status, err := u.cache.ClaimResult(ctx, deviceID, cmd.ID, devicecommand.StatusCancelled)
+			if err != nil {
+				return err
+			}
+			if owner != deviceID || status != devicecommand.StatusCancelled {
+				return problem.InvalidState.WithDetail("the device already received the command")
+			}
+		}
+		withdrawn = cmd.ID
+		return nil
 	})
+	if err == nil && withdrawn != uuid.Nil {
+		if err := u.cache.DeleteCommand(ctx, deviceID, withdrawn); err != nil {
+			// The result claim already makes the device's result a conflict; the worker's command round removes it.
+			slog.WarnContext(ctx, "removing the cancelled uninstall from the device cache failed", "device_id", deviceID,
+				"command_id", withdrawn, "error", err)
+		}
+	}
 	return out, err
 }

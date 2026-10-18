@@ -167,7 +167,9 @@ func (q *Queries) ListCancelledDeviceCommands(ctx context.Context, since time.Ti
 const markDeviceUninstalled = `-- name: MarkDeviceUninstalled :execrows
 WITH marked AS (
   UPDATE device d SET uninstalled_at = $2::timestamptz
-  WHERE d.id = $3::uuid AND d.uninstalled_at IS NULL
+  FROM device_command c
+  WHERE d.id = $3::uuid AND d.uninstalled_at IS NULL AND d.uninstall_requested_at IS NOT NULL
+    AND d.uninstall_command_id = $4::uuid AND c.id = d.uninstall_command_id AND c.status = 'succeeded'
   RETURNING d.uninstall_command_id
 )
 UPDATE device_command c SET result = coalesce(c.result, '{}'::jsonb) || $1::jsonb
@@ -178,11 +180,18 @@ type MarkDeviceUninstalledParams struct {
 	Outcome       json.RawMessage
 	UninstalledAt time.Time
 	DeviceID      uuid.UUID
+	CommandID     uuid.UUID
 }
 
-// The device's report of the removal (agent.uninstalled); the outcome is kept with the command for the device page.
+// The device's report of the removal (agent.uninstalled) for its open request whose command succeeded; the outcome
+// is kept with the command for the device page. An unsolicited report or one after a cancel marks nothing.
 func (q *Queries) MarkDeviceUninstalled(ctx context.Context, arg MarkDeviceUninstalledParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markDeviceUninstalled, arg.Outcome, arg.UninstalledAt, arg.DeviceID)
+	result, err := q.db.Exec(ctx, markDeviceUninstalled,
+		arg.Outcome,
+		arg.UninstalledAt,
+		arg.DeviceID,
+		arg.CommandID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -249,4 +258,25 @@ func (q *Queries) SetDeviceUninstall(ctx context.Context, arg SetDeviceUninstall
 		&i.RetiredReason,
 	)
 	return i, err
+}
+
+const uninstallResultPending = `-- name: UninstallResultPending :one
+SELECT EXISTS (
+  SELECT 1 FROM device d JOIN device_command c ON c.id = d.uninstall_command_id
+  WHERE d.id = $1::uuid AND d.uninstall_command_id = $2::uuid AND d.uninstall_requested_at IS NOT NULL
+    AND d.uninstalled_at IS NULL AND c.status IN ('pending','delivered') AND c.expires_at > now()
+)::boolean
+`
+
+type UninstallResultPendingParams struct {
+	DeviceID  uuid.UUID
+	CommandID uuid.UUID
+}
+
+// The report matches the open request, but the worker has not recorded the command's result yet.
+func (q *Queries) UninstallResultPending(ctx context.Context, arg UninstallResultPendingParams) (bool, error) {
+	row := q.db.QueryRow(ctx, uninstallResultPending, arg.DeviceID, arg.CommandID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }

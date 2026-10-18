@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -139,29 +141,27 @@ func (d *DeviceReports) QuarantineClone(ctx context.Context, hb ingest.Heartbeat
 }
 
 // RetireUninstalled retires an active device that reported its removal (plan M8d decision 41): device.retired with
-// the system as actor and the param reason uninstalled, retired_reason uninstalled. A device that is not active or
-// has not reported the removal is left alone, so a redelivered report records nothing.
+// the system as actor and the param reason uninstalled, retired_reason uninstalled. It is recorded once, keyed on
+// uninstalled_at IS NOT NULL AND state = 'active' under the device's row lock, so a redelivered or concurrent report
+// records nothing.
 func (d *DeviceReports) RetireUninstalled(ctx context.Context, deviceID uuid.UUID) (bool, error) {
-	due := false
-	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
-		dev, err := q.GetDevice(ctx, deviceID)
-		due = err == nil && dev.State == device.StateActive && dev.UninstalledAt != nil
-		return notFound(err)
-	})
-	if err != nil || !due {
-		return false, err
-	}
 	spec := SpecDeviceRetire
 	spec.Target = &audit.Target{Type: "device", ID: deviceID.String()}
 	spec.Params = map[string]any{"reason": device.RetiredUninstalled}
-	err = d.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+	return d.runner.RecordOnceWith(ctx, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) (bool, error) {
+		dev, err := q.LockDevice(ctx, deviceID)
+		if err != nil {
+			return false, notFound(err)
+		}
+		if dev.State != device.StateActive || dev.UninstalledAt == nil {
+			return false, nil
+		}
 		if _, err := TransitionDevice(ctx, q, rec, device.ActionRetire, deviceID); err != nil {
-			return err
+			return false, err
 		}
 		reason := device.RetiredUninstalled
-		return q.SetDeviceRetiredReason(ctx, pgstore.SetDeviceRetiredReasonParams{ID: deviceID, Reason: &reason})
+		return true, q.SetDeviceRetiredReason(ctx, pgstore.SetDeviceRetiredReasonParams{ID: deviceID, Reason: &reason})
 	})
-	return err == nil, err
 }
 
 // eventCodes maps the closed set of device event types to audit codes.
@@ -495,15 +495,22 @@ func eventParams(ev protocol.Event) map[string]any {
 	return params
 }
 
-// markUninstalled sets device.uninstalled_at and keeps the reported outcome with the uninstall command.
+// errUninstallResultPending: the removal report arrived before the worker recorded the command's result (separate
+// queues); the event batch is retried until the result is recorded or the command expires.
+var errUninstallResultPending = errors.New("uninstall report before its command result; retrying")
+
+// markUninstalled sets device.uninstalled_at and keeps the reported outcome with the uninstall command — only for the
+// device's open request whose command succeeded (review finding 2). Any other report (unsolicited, after a cancel, for
+// another command) stays an audit event of the device and does not retire it.
 func markUninstalled(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, ev protocol.Event, params map[string]any) error {
+	cmd, err := uuid.Parse(fmt.Sprint(params["command_id"]))
+	if err != nil {
+		slog.WarnContext(ctx, "removal report without a command ID; audited, device not retired", "device_id", deviceID)
+		return nil
+	}
 	// The agent could not start the helper (plan M8d decision 39): nothing was removed, and the request ends so that
 	// an administrator can request it again.
 	if params["outcome"] == protocol.UninstallHelperFailed {
-		cmd, err := uuid.Parse(fmt.Sprint(params["command_id"]))
-		if err != nil {
-			return nil
-		}
 		_, err = q.EndFailedUninstall(ctx, pgstore.EndFailedUninstallParams{ID: deviceID, CommandID: cmd})
 		return err
 	}
@@ -517,8 +524,21 @@ func markUninstalled(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID
 	if err != nil {
 		return err
 	}
-	_, err = q.MarkDeviceUninstalled(ctx, pgstore.MarkDeviceUninstalledParams{DeviceID: deviceID, UninstalledAt: ev.OccurredAt, Outcome: raw})
-	return err
+	n, err := q.MarkDeviceUninstalled(ctx, pgstore.MarkDeviceUninstalledParams{DeviceID: deviceID, CommandID: cmd,
+		UninstalledAt: ev.OccurredAt, Outcome: raw})
+	if err != nil || n == 1 {
+		return err
+	}
+	pending, err := q.UninstallResultPending(ctx, pgstore.UninstallResultPendingParams{DeviceID: deviceID, CommandID: cmd})
+	if err != nil {
+		return err
+	}
+	if pending {
+		return errUninstallResultPending
+	}
+	slog.WarnContext(ctx, "removal report without a matching uninstall request; audited, device not retired",
+		"device_id", deviceID, "command_id", cmd)
+	return nil
 }
 
 // boundedSteps copies at most protocol.MaxUninstallSteps bounded name → status pairs of agent.uninstalled.

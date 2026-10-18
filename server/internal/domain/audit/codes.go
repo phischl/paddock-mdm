@@ -276,18 +276,18 @@ var registry = map[Code]Definition{
 	CodeDeviceUninstallRequested: {
 		Code: CodeDeviceUninstallRequested, Emitted: true,
 		Description: "An organization administrator asked, with a step-up, to remove Paddock from a device; mode leave keeps everything else working, mode reset also removes Himmelblau, the managed files and the managed local administrator.",
-		Params:      []string{"hostname", "mode", "clear_tpm", "keep_local_admin", "reason", "command_id"},
+		Params:      []string{"hostname", "mode", "clear_tpm", "keep_local_admin", "reason", "command_id", "report_overdue"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceUninstallCancelled: {
 		Code: CodeDeviceUninstallCancelled, Emitted: true,
-		Description: "An organization administrator cancelled an uninstall before the device received it.",
-		Params:      []string{"hostname", "mode", "command_id"},
+		Description: "An organization administrator cancelled an uninstall before the device received it, or withdrew one whose removal report is overdue (report_overdue).",
+		Params:      []string{"hostname", "mode", "command_id", "report_overdue"},
 		Outcomes:    adminOutcomes,
 	},
 	CodeDeviceUninstalled: {
 		Code: CodeDeviceUninstalled, Emitted: true,
-		Description: "The device removed Paddock as requested and reported the outcome of every step (actor: the device); the device is retired by the next event.",
+		Description: "The device reported that it removed Paddock and the outcome of every step (actor: the device); only the report of the open request whose command succeeded retires the device, by the next event.",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "The param outcome is completed or partial (a step failed); steps maps every step to done, skipped or failed:<message>. helper_failed: the agent could not start the removal, nothing was removed, the request ends and the device is not retired.",

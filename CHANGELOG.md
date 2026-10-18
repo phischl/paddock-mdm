@@ -86,9 +86,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `device.supervisor_update_failed`). The update policy applies; a failed version is not installed again.
 - Devices can be removed from Paddock from the portal (*Danger zone* → *Remove Paddock*, organization administrators
   with a step-up and the typed hostname, `POST /api/v1/devices/{id}/uninstall`) in two modes, leave as is or reset,
-  and the request can be cancelled until the device received it; the device retires itself after reporting the
-  removal (`device.uninstalled`, `device.retired` with reason `uninstalled`). Pending removals appear on the attention
-  page.
+  and the request can be cancelled until the device received it, or requested again or cancelled once the device's
+  removal report is 24 hours overdue (`report_overdue`); a cancelled removal never starts on the device. The device is
+  retired after it reported the removal of the open request (`device.uninstalled`, `device.retired` with reason
+  `uninstalled`); a removal report without such a request is audited and retires nothing. Pending removals appear on
+  the attention page.
 - Agents of this release carry out the removal in the transient unit `paddock-uninstall`: they stop and purge
   Paddock's services and packages, keep every user file and the disk encryption, keep the managed local administrator
   when it is the last local administrator, and leave a summary in `/root/paddock-uninstall/result.json`.

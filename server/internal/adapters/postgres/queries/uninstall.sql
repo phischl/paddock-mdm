@@ -33,14 +33,25 @@ SELECT EXISTS (
 )::boolean;
 
 -- name: MarkDeviceUninstalled :execrows
--- The device's report of the removal (agent.uninstalled); the outcome is kept with the command for the device page.
+-- The device's report of the removal (agent.uninstalled) for its open request whose command succeeded; the outcome
+-- is kept with the command for the device page. An unsolicited report or one after a cancel marks nothing.
 WITH marked AS (
   UPDATE device d SET uninstalled_at = @uninstalled_at::timestamptz
-  WHERE d.id = @device_id::uuid AND d.uninstalled_at IS NULL
+  FROM device_command c
+  WHERE d.id = @device_id::uuid AND d.uninstalled_at IS NULL AND d.uninstall_requested_at IS NOT NULL
+    AND d.uninstall_command_id = @command_id::uuid AND c.id = d.uninstall_command_id AND c.status = 'succeeded'
   RETURNING d.uninstall_command_id
 )
 UPDATE device_command c SET result = coalesce(c.result, '{}'::jsonb) || @outcome::jsonb
 FROM marked m WHERE c.id = m.uninstall_command_id;
+
+-- name: UninstallResultPending :one
+-- The report matches the open request, but the worker has not recorded the command's result yet.
+SELECT EXISTS (
+  SELECT 1 FROM device d JOIN device_command c ON c.id = d.uninstall_command_id
+  WHERE d.id = @device_id::uuid AND d.uninstall_command_id = @command_id::uuid AND d.uninstall_requested_at IS NOT NULL
+    AND d.uninstalled_at IS NULL AND c.status IN ('pending','delivered') AND c.expires_at > now()
+)::boolean;
 
 -- name: EndFailedUninstall :execrows
 -- The device could not start the removal of the request's command: the request ends.

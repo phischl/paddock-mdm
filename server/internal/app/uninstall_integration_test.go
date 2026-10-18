@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ type uninstallWorld struct {
 	uninstalls *app.Uninstalls
 	devices    *app.Devices
 	reports    *app.DeviceReports
+	cache      *fakeUninstallCache
 	device     uuid.UUID
 	hostname   string
 }
@@ -41,10 +44,36 @@ func newUninstallWorld(t *testing.T) uninstallWorld {
 		t.Fatal(err)
 	}
 	t.Cleanup(worker.Close)
-	w := uninstallWorld{harness: h, uninstalls: app.NewUninstalls(h.runner, api), devices: app.NewDevices(h.runner, api),
-		reports: app.NewDeviceReports(app.NewActionRunner(worker, nil, httpx.RequestID), worker)}
+	cache := &fakeUninstallCache{claims: map[uuid.UUID]string{}}
+	w := uninstallWorld{harness: h, uninstalls: app.NewUninstalls(h.runner, api, cache), devices: app.NewDevices(h.runner, api),
+		reports: app.NewDeviceReports(app.NewActionRunner(worker, nil, httpx.RequestID), worker), cache: cache}
 	w.device, w.hostname = w.newDevice(t, h.org, "active")
 	return w
+}
+
+// fakeUninstallCache is the gateway's result claims (cres:) and the commands it removed from cmd:<device_id>.
+type fakeUninstallCache struct {
+	mu      sync.Mutex
+	claims  map[uuid.UUID]string // command ID → "<device>:<status>"
+	deleted []uuid.UUID
+}
+
+func (c *fakeUninstallCache) ClaimResult(_ context.Context, device, id uuid.UUID, status string) (uuid.UUID, string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if v, ok := c.claims[id]; ok {
+		dev, st, _ := strings.Cut(v, ":")
+		return uuid.MustParse(dev), st, nil
+	}
+	c.claims[id] = device.String() + ":" + status
+	return device, status, nil
+}
+
+func (c *fakeUninstallCache) DeleteCommand(_ context.Context, _, id uuid.UUID) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deleted = append(c.deleted, id)
+	return nil
 }
 
 func (w uninstallWorld) newDevice(t *testing.T, org uuid.UUID, state string) (uuid.UUID, string) {
@@ -340,5 +369,151 @@ func TestUninstallHelperFailed(t *testing.T) {
 	}
 	if _, err := w.uninstalls.Request(w.as(w.org, principal.RoleOrgAdmin, true), w.device, w.leave()); err != nil {
 		t.Fatalf("request again: %v", err)
+	}
+}
+
+// uninstalledEvent is the device's removal report for cmd.
+func uninstalledEvent(seq int64, cmd uuid.UUID) protocol.Event {
+	data, _ := json.Marshal(protocol.AgentUninstalled{CommandID: cmd.String(), Mode: "leave", Outcome: protocol.UninstallCompleted,
+		LocalAdmin: "kept", TPM: "not_requested", Steps: map[string]string{"apt": "done"}})
+	return protocol.Event{EventSeq: seq, Type: protocol.EventAgentUninstalled, OccurredAt: time.Now(), Data: data}
+}
+
+// TestUninstallCancelWithdrawsFromTheGateway (review finding 1): a cancel claims the command's result as cancelled
+// and removes the command from cmd:<device_id>, so a result the device posts afterwards is a conflict; a result the
+// device posted before the worker recorded it refuses the cancel; a report after a cancel retires nothing.
+func TestUninstallCancelWithdrawsFromTheGateway(t *testing.T) {
+	w := newUninstallWorld(t)
+	admin := w.as(w.org, principal.RoleOrgAdmin, true)
+	dev, err := w.uninstalls.Request(admin, w.device, w.leave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := dev.UninstallCommandID.UUID
+	if _, err := w.uninstalls.Cancel(admin, w.device); err != nil {
+		t.Fatal(err)
+	}
+	if w.cache.claims[cmd] != w.device.String()+":cancelled" || len(w.cache.deleted) != 1 || w.cache.deleted[0] != cmd {
+		t.Fatalf("claims %v, deleted %v", w.cache.claims, w.cache.deleted)
+	}
+	if _, status, _ := w.cache.ClaimResult(context.Background(), w.device, cmd, "succeeded"); status != "cancelled" {
+		t.Fatalf("the device's later result was accepted: %s", status)
+	}
+	// The device's report after the cancel is audited but does not mark or retire the device.
+	if _, err := w.reports.RecordEvent(systemCtx(w.org), w.device, uninstalledEvent(11, cmd)); err != nil {
+		t.Fatal(err)
+	}
+	if retired, err := w.reports.RetireUninstalled(systemCtx(w.org), w.device); err != nil || retired {
+		t.Fatalf("retired after a cancel: %v, %v", retired, err)
+	}
+	if n := w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND state = 'active' AND uninstalled_at IS NULL", w.device); n != 1 {
+		t.Fatal("device marked after a cancel")
+	}
+
+	// The device's result was claimed before the cancel (the worker has not recorded it yet): the cancel is refused.
+	dev, err = w.uninstalls.Request(admin, w.device, w.leave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd = dev.UninstallCommandID.UUID
+	w.cache.claims[cmd] = w.device.String() + ":succeeded"
+	_, err = w.uninstalls.Cancel(admin, w.device)
+	expectUninstallProblem(t, err, "invalid_state", 409, "the device already received the command")
+	if n := w.count(t, "SELECT count(*) FROM device_command WHERE id = $1 AND status = 'pending'", cmd); n != 1 {
+		t.Fatal("refused cancel changed the command")
+	}
+	if len(w.cache.deleted) != 1 {
+		t.Fatalf("refused cancel removed the command: %v", w.cache.deleted)
+	}
+}
+
+// TestUninstalledOnlyForTheRequest (review finding 2): an unsolicited report, one for another command and one whose
+// command has no successful result never mark or retire the device; a report that arrives before the worker recorded
+// the result is retried and marks the device once the result succeeded.
+func TestUninstalledOnlyForTheRequest(t *testing.T) {
+	w := newUninstallWorld(t)
+	if _, err := w.reports.RecordEvent(systemCtx(w.org), w.device, uninstalledEvent(1, uuid.Must(uuid.NewV7()))); err != nil {
+		t.Fatal(err)
+	}
+	if _, outcome := w.event(t, "device.uninstalled"); outcome != "success" {
+		t.Fatalf("unsolicited report not audited: %s", outcome)
+	}
+	if retired, err := w.reports.RetireUninstalled(systemCtx(w.org), w.device); err != nil || retired {
+		t.Fatalf("unsolicited report retired: %v, %v", retired, err)
+	}
+	dev, err := w.uninstalls.Request(w.as(w.org, principal.RoleOrgAdmin, true), w.device, w.leave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := dev.UninstallCommandID.UUID
+	if _, err := w.reports.RecordEvent(systemCtx(w.org), w.device, uninstalledEvent(2, uuid.Must(uuid.NewV7()))); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(t, "UPDATE device_command SET status = 'failed' WHERE id = $1", cmd)
+	if _, err := w.reports.RecordEvent(systemCtx(w.org), w.device, uninstalledEvent(3, cmd)); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(t, "SELECT count(*) FROM device WHERE id = $1 AND uninstalled_at IS NULL", w.device); n != 1 {
+		t.Fatal("device marked by a report without a successful command")
+	}
+	w.exec(t, "UPDATE device_command SET status = 'delivered' WHERE id = $1", cmd)
+	if err := w.reports.RecordEvents(systemCtx(w.org), w.device, []protocol.Event{uninstalledEvent(4, cmd)}); err == nil {
+		t.Fatal("report before the result was not retried")
+	}
+	w.exec(t, "UPDATE device_command SET status = 'succeeded' WHERE id = $1", cmd)
+	if err := w.reports.RecordEvents(systemCtx(w.org), w.device, []protocol.Event{uninstalledEvent(4, cmd)}); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = w.reports.RetireUninstalled(systemCtx(w.org), w.device)
+		}()
+	}
+	wg.Wait()
+	if n := w.count(t, "SELECT count(*) FROM outbox WHERE payload ->> 'code' = 'device.retired' AND payload -> 'target' ->> 'id' = $1", w.device.String()); n != 1 {
+		t.Fatalf("%d device.retired events for concurrent reports", n)
+	}
+}
+
+// TestUninstallReportOverdue (review finding 8): a request the device received more than UninstallReportTimeout ago
+// without a removal report can be cancelled and requested again (param report_overdue); a report of the old command
+// then retires nothing.
+func TestUninstallReportOverdue(t *testing.T) {
+	w := newUninstallWorld(t)
+	admin := w.as(w.org, principal.RoleOrgAdmin, true)
+	dev, err := w.uninstalls.Request(admin, w.device, w.leave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := dev.UninstallCommandID.UUID
+	w.exec(t, "UPDATE device_command SET status = 'succeeded', delivered_at = now() - interval '23 hours', finished_at = now() - interval '23 hours' WHERE id = $1", old)
+	_, err = w.uninstalls.Cancel(admin, w.device)
+	expectUninstallProblem(t, err, "invalid_state", 409, "the uninstall completed")
+	_, err = w.uninstalls.Request(admin, w.device, w.leave())
+	expectUninstallProblem(t, err, "invalid_state", 409, "an uninstall is already requested")
+
+	w.exec(t, "UPDATE device_command SET finished_at = now() - interval '25 hours' WHERE id = $1", old)
+	dev, err = w.uninstalls.Request(admin, w.device, w.leave())
+	if err != nil || dev.UninstallCommandID.UUID == old {
+		t.Fatalf("request again: %+v, %v", dev, err)
+	}
+	if p, _ := w.event(t, "device.uninstall_requested"); p["report_overdue"] != true {
+		t.Fatalf("params %v", p)
+	}
+	w.exec(t, "UPDATE device_command SET status = 'delivered', delivered_at = now() - interval '25 hours' WHERE id = $1", dev.UninstallCommandID.UUID)
+	if _, err := w.uninstalls.Cancel(admin, w.device); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := w.event(t, "device.uninstall_cancelled"); p["report_overdue"] != true {
+		t.Fatalf("params %v", p)
+	}
+	if _, err := w.reports.RecordEvent(systemCtx(w.org), w.device, uninstalledEvent(9, old)); err != nil {
+		t.Fatal(err)
+	}
+	if retired, err := w.reports.RetireUninstalled(systemCtx(w.org), w.device); err != nil || retired {
+		t.Fatalf("a report of the withdrawn command retired: %v, %v", retired, err)
 	}
 }
