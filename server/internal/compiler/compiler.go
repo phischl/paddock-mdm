@@ -156,8 +156,9 @@ type compileTarget struct {
 	state     string
 	seq       int64
 	suspended bool
-	v2        bool // the agent reports bundle schema 2
-	forced    bool // a forced state change targets the device (plan M6c decision 19)
+	v2        bool   // the agent reports bundle schema 2
+	agent     string // the agent version of the last check-in
+	forced    bool   // a forced state change targets the device (plan M6c decision 19)
 }
 
 // identityLoader loads the organization's identity data at most once per transaction.
@@ -194,6 +195,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Inventory, err = c.inventory(ctx, q); err != nil {
 			return err
 		}
+		if keys.Supervisor, err = supervisorPackages(ctx, q); err != nil {
+			return err
+		}
 		if keys.Updates, err = loadUpdates(ctx, q); err != nil {
 			return err
 		}
@@ -207,7 +211,7 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		}
 		for _, row := range rows {
 			t := compileTarget{id: row.ID, state: row.State, seq: row.BundleSeq, suspended: row.LoginsSuspended,
-				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID]}
+				v2: slices.Contains(row.SchemaVersions, int32(bundle.SchemaVersion2)), forced: forced[row.ID], agent: row.AgentVersion}
 			r, changed, failure, err := c.render(ctx, q, org, t, defs, identity, keys)
 			if err != nil {
 				return fmt.Errorf("render %s: %w", t.id, err)
@@ -363,6 +367,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 			updatesSection = keys.Updates.section(groups)
 			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
 		}
+		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.agent)
 		bundle.SortResources(resources)
 	}
 	b := bundle.Bundle{
@@ -400,6 +405,9 @@ type v2Trust struct {
 	DMS        *bundle.DMS        `json:"-"` // per organization, not part of the reconcile digest
 	// Inventory is the same for every organization; a new fleetd package recompiles every device (reconcile digest).
 	Inventory *bundle.Inventory `json:"inventory"`
+	// Supervisor are the supervisor packages of the current release; a completed rollout recompiles every device
+	// (reconcile digest).
+	Supervisor map[string]bundle.PackageRef `json:"supervisor"`
 	// Updates are the organization's update settings and holds (plan M5b decision 4), not part of the digest.
 	Updates *orgUpdates `json:"-"`
 }

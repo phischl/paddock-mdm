@@ -729,3 +729,47 @@ func TestListReleasesSortsByVersion(t *testing.T) {
 		}
 	}
 }
+
+// TestSupervisorUpdatedEvents (plan M8d decision 33): agent.supervisor_updated is audited as device.supervisor_updated
+// for the outcome updated and as device.supervisor_update_failed for install_failed and rolled_back; no outcome
+// counts toward the release's failure counts or writes an agent update report.
+func TestSupervisorUpdatedEvents(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	v := h.published(t)
+	ctx := context.Background()
+	org, dev := h.device(t)
+	if _, err := h.super.Exec(ctx, "INSERT INTO device_status (device_id, organization_id, agent_version) VALUES ($1, $2, $3)", dev, org, v); err != nil {
+		t.Fatal(err)
+	}
+	for seq, outcome := range []string{protocol.SupervisorOutcomeUpdated, protocol.SupervisorOutcomeInstallFailed, protocol.SupervisorOutcomeRolledBack} {
+		data, _ := json.Marshal(map[string]string{"version": v, "from_version": "0.9.0", "outcome": outcome})
+		if _, err := h.reports.RecordEvent(systemCtx(org), dev, protocol.Event{EventSeq: int64(seq + 1), Type: protocol.EventAgentSupervisorUpdated,
+			OccurredAt: time.Now(), Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(query string, args ...any) (n int) {
+		t.Helper()
+		if err := h.super.QueryRow(ctx, query, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	byOutcome := "SELECT count(*) FROM action WHERE code = $1 AND target->>'id' = $2 AND params->>'outcome' = $3"
+	if n := count(byOutcome, "device.supervisor_updated", dev.String(), "updated"); n != 1 {
+		t.Fatalf("%d device.supervisor_updated events, want 1", n)
+	}
+	for _, outcome := range []string{"install_failed", "rolled_back"} {
+		if n := count(byOutcome, "device.supervisor_update_failed", dev.String(), outcome); n != 1 {
+			t.Fatalf("%d device.supervisor_update_failed events with %s, want 1", n, outcome)
+		}
+	}
+	if n := count("SELECT count(*) FROM agent_update_report WHERE device_id = $1", dev); n != 0 {
+		t.Fatalf("%d agent update reports from supervisor outcomes", n)
+	}
+	var failed int64
+	if err := h.super.QueryRow(ctx, "SELECT failed FROM paddock_agent_rollout_stats($1, 100)", v).Scan(&failed); err != nil || failed != 0 {
+		t.Fatalf("rollout failures %d (%v) after supervisor outcomes, want 0", failed, err)
+	}
+}

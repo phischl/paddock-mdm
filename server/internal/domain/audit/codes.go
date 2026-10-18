@@ -32,12 +32,15 @@ const (
 	CodeDeviceAgentRolledBack      Code = "device.agent_rolled_back"
 	CodeDeviceAgentRollbackFailed  Code = "device.agent_rollback_failed"
 	CodeDeviceAgentEventsDropped   Code = "device.agent_events_dropped"
-	CodeManagedFileCreated         Code = "managed_file.created"
-	CodeManagedFileUpdated         Code = "managed_file.updated"
-	CodeManagedFileDeleted         Code = "managed_file.deleted"
-	CodeManagedUnitCreated         Code = "managed_unit.created"
-	CodeManagedUnitUpdated         Code = "managed_unit.updated"
-	CodeManagedUnitDeleted         Code = "managed_unit.deleted"
+	// Supervisor package updates (plan M8d decision 33).
+	CodeDeviceSupervisorUpdated      Code = "device.supervisor_updated"
+	CodeDeviceSupervisorUpdateFailed Code = "device.supervisor_update_failed"
+	CodeManagedFileCreated           Code = "managed_file.created"
+	CodeManagedFileUpdated           Code = "managed_file.updated"
+	CodeManagedFileDeleted           Code = "managed_file.deleted"
+	CodeManagedUnitCreated           Code = "managed_unit.created"
+	CodeManagedUnitUpdated           Code = "managed_unit.updated"
+	CodeManagedUnitDeleted           Code = "managed_unit.deleted"
 
 	CodeAgentReleaseCreated          Code = "agent_release.created"
 	CodeAgentReleaseArtifactUploaded Code = "agent_release.artifact_uploaded"
@@ -331,6 +334,20 @@ var registry = map[Code]Definition{
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Reported as agent.update_failed with outcome rollback_failed (ADR 0024); device.agent_rolled_back follows once the rollback succeeds.",
+	},
+	CodeDeviceSupervisorUpdated: {
+		Code: CodeDeviceSupervisorUpdated, Emitted: true,
+		Description: "The device installed the supervisor package of the current release and checked in with it (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "outcome is updated. Supervisor outcomes never count toward a rollout's failure threshold.",
+	},
+	CodeDeviceSupervisorUpdateFailed: {
+		Code: CodeDeviceSupervisorUpdateFailed, Emitted: true,
+		Description: "Installing the supervisor package failed, or the supervisor was restored from its backup because the agent did not check in within 10 minutes (actor: the device).",
+		Params:      deviceEventParams,
+		Outcomes:    []Outcome{OutcomeSuccess},
+		Note:        "Reported as agent.supervisor_updated (ADR 0024); outcome is install_failed or rolled_back.",
 	},
 	CodeDeviceAgentEventsDropped: {
 		Code: CodeDeviceAgentEventsDropped, Emitted: true,

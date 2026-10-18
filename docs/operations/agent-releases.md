@@ -331,6 +331,43 @@ Once the rollback is made, the device reports `device.agent_rolled_back` and the
 disappears when the device reports another agent version. The rollout counts the device once as failed, whether it
 reported `rollback_failed`, `rolled_back` or both.
 
+## Supervisor package
+
+A device updates `paddock-supervisor` from the current release (ADR 0037 decision 3): once a release's rollout
+completed, the v2 bundle of every device whose agent reports a semantic version carries the release's
+`paddock-supervisor` package per architecture (`agent.supervisor_packages`, SHA-256 in the signed bundle). Nothing is
+offered while the latest rollout runs or after it was halted. An agent installs the package only when
+
+- it runs that release itself (agent first, supervisor second, in the same waves),
+- `dpkg` reports an older `paddock-supervisor` (the Debian form `0.1.0~alpha.4` of a pre-release counts as
+  `0.1.0-alpha.4`),
+- the update policy is automatic or an administrator requested *Update agent now* at that check-in,
+- no agent update is pending, no supervisor upgrade runs, and the version did not fail on the device before.
+
+The agent downloads the package to `/var/lib/paddock/packages/`, writes `/var/lib/paddock/state/supervisor-upgrade.json`
+and starts `paddockd supervisor-upgrade` in the transient unit `paddock-supervisor-upgrade.service` (`systemd-run`,
+outside the supervisor's cgroup, so the restart by the package's postinst does not stop it). The helper copies
+`/usr/sbin/paddock-supervisor` and its unit file to `/var/lib/paddock/packages/supervisor-backup/`, runs `dpkg -i`
+(killed after 15 minutes) and waits up to 10 minutes for a check-in of the agent after the installation; the new
+supervisor must then keep running with the same process for a minute. It writes
+`/var/lib/paddock/state/supervisor-upgrade-result.json`, which the agent reports as `agent.supervisor_updated`:
+
+| Outcome | Audit code | Meaning |
+|---|---|---|
+| `updated` | `device.supervisor_updated` | The new supervisor runs and its agent checked in. |
+| `install_failed` | `device.supervisor_update_failed` | The backup or `dpkg -i` failed, or the helper did not finish within 30 minutes; the backup is restored only if the supervisor is not running afterwards. |
+| `rolled_back` | `device.supervisor_update_failed` | No check-in within 10 minutes, or the new supervisor kept restarting: the backup was copied back and the supervisor restarted. |
+
+Supervisor outcomes never count toward a rollout's failure threshold. After a rollback `dpkg -l paddock-supervisor`
+may name the new version while the previous binary runs (`/usr/sbin/paddock-supervisor version`) until the next
+successful upgrade. A failed version is not installed again on that device (`failed_supervisor_version` in
+`/var/lib/paddock/state/state.json`); a newer release is. Troubleshooting:
+
+```sh
+journalctl -u paddock-supervisor-upgrade -u paddock-supervisor --since today
+cat /var/lib/paddock/state/supervisor-upgrade-result.json   # until the event is delivered
+```
+
 ## GitHub release workflow
 
 `.github/workflows/release.yml` runs on tags `v*.*.*`. Before the first tag, set the repository variable

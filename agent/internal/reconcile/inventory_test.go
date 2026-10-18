@@ -217,4 +217,3 @@ func TestInventoryUpdatePolicy(t *testing.T) {
 		t.Fatalf("plan when allowed %v, %v", changes, err)
 	}
 }
-

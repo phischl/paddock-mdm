@@ -9,7 +9,8 @@ WHERE m.device_group_id = @device_group_id AND d.state = 'active'
 ORDER BY d.id;
 
 -- name: ListCompileTargets :many
-SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions
+SELECT d.id, d.state, d.bundle_seq, d.logins_suspended, coalesce(s.schema_versions, '{}')::int[] AS schema_versions,
+       coalesce(s.agent_version, '')::text AS agent_version
 FROM device d LEFT JOIN device_status s ON s.device_id = d.id
 WHERE d.id = ANY(@ids::uuid[]) ORDER BY d.id;
 

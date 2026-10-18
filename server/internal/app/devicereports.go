@@ -102,6 +102,8 @@ var eventCodes = map[string]audit.Code{
 	protocol.EventAgentUpdateFailed:    audit.CodeDeviceAgentUpdateFailed,
 	protocol.EventAgentRolledBack:      audit.CodeDeviceAgentRolledBack,
 	protocol.EventAgentEventsDropped:   audit.CodeDeviceAgentEventsDropped,
+	// Failed outcomes switch to device.supervisor_update_failed in eventEntry (ADR 0024 pattern).
+	protocol.EventAgentSupervisorUpdated: audit.CodeDeviceSupervisorUpdated,
 
 	protocol.EventLoginApplied:               audit.CodeDeviceLoginApplied,
 	protocol.EventLoginApplyFailed:           audit.CodeDeviceLoginApplyFailed,
@@ -183,6 +185,9 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 	// The agent carries a failed rollback in agent.update_failed so that older servers accept it (ADR 0024).
 	if ev.Type == protocol.EventAgentUpdateFailed && params["outcome"] == outcomeRollbackFailed {
 		code = audit.CodeDeviceAgentRollbackFailed
+	}
+	if ev.Type == protocol.EventAgentSupervisorUpdated && params["outcome"] != protocol.SupervisorOutcomeUpdated {
+		code = audit.CodeDeviceSupervisorUpdateFailed
 	}
 	spec := ActionSpec{
 		Code:   code,

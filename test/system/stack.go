@@ -266,6 +266,31 @@ func (s *Stack) BuildAgent(version string, tags []string) string {
 	return bin
 }
 
+// ReleaseSupervisor builds the packages of this tree as version (paddock_dev plus supervisorTags, e.g.
+// paddock_testbroken_supervisor) and releases paddockd with the paddock-supervisor package of the same version, the
+// supervisor version bump of gates S-UP2a and S-UP2b (plan M8d decision 34): a rollout to all devices in one
+// one-minute wave, so that it completes and the bundles carry the supervisor package. Running rollouts are halted
+// first; bin/deb is rebuilt as version 0.1.0 for the other system tests when the test ends.
+func (s *Stack) ReleaseSupervisor(t *testing.T, version string, supervisorTags []string) {
+	t.Helper()
+	s.Make("deb", "VERSION="+version, "TAGS="+strings.Join(append([]string{"paddock_dev"}, supervisorTags...), " "),
+		"REVOKE_TAGS=paddock_revoke_testtarget")
+	t.Cleanup(func() { s.Make("deb", "VERSION=0.1.0", "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget") })
+	debs, err := filepath.Glob(filepath.Join(s.root, "bin", "deb", "paddock-supervisor_*.deb"))
+	if err != nil || len(debs) != 1 {
+		t.Fatalf("supervisor package %v: %v", debs, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, agentRelease(s.root), "--version", version,
+		"--artifact", "amd64="+filepath.Join(s.root, "bin", "agent", "amd64", "paddockd"), "--deb", debs[0],
+		"--rollout", "--halt-running", "--waves", "100", "--min-wave-minutes", "1")
+	cmd.Dir = s.root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("agentrelease %s: %v\n%s", version, err, out)
+	}
+}
+
 func agentRelease(root string) string {
 	if p := os.Getenv("PADDOCK_SYSTEM_AGENTRELEASE"); p != "" {
 		return p

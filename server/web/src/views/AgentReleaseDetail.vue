@@ -133,6 +133,12 @@ onMounted(load)
           </tr>
         </tbody>
       </v-table>
+      <p
+        class="pd-type-caption pd-muted"
+        data-testid="supervisor-follows"
+      >
+        {{ t('agentReleases.supervisorFollows') }}
+      </p>
 
       <h2>{{ t('agentReleases.rollout') }}</h2>
       <p v-if="!detail.rollout">

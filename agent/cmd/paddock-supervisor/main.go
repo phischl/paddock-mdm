@@ -28,6 +28,13 @@ func main() {
 		_, _ = os.Stdout.WriteString(buildinfo.Version + "\n")
 		return
 	}
+	if buildinfo.BrokenSupervisor {
+		go func() {
+			time.Sleep(20 * time.Second)
+			slog.Error("paddock_testbroken_supervisor build: exiting")
+			os.Exit(1)
+		}()
+	}
 	var key *minisign.PublicKey
 	var k minisign.PublicKey
 	if err := k.UnmarshalText([]byte(releasePublicKey)); err == nil {

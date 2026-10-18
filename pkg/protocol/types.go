@@ -177,6 +177,16 @@ const (
 	EventTamperServiceStopped = "tamper.service_stopped"
 	// Update management (plan M5b decision 6): one finished run of regular or security updates.
 	EventUpdatesRun = "updates.run"
+	// Supervisor package update (plan M8d decision 33): the outcome of one installation of the current release's
+	// paddock-supervisor package; only sent by agents that received supervisor_packages in a bundle.
+	EventAgentSupervisorUpdated = "agent.supervisor_updated"
+)
+
+// Outcomes of EventAgentSupervisorUpdated.
+const (
+	SupervisorOutcomeUpdated       = "updated"
+	SupervisorOutcomeInstallFailed = "install_failed"
+	SupervisorOutcomeRolledBack    = "rolled_back"
 )
 
 // Kinds and results of UpdatesRun.
@@ -221,6 +231,7 @@ var EventTypes = []string{
 	EventRevocationTrustPinnedTOFU, EventRevocationRefused,
 	EventTamperServiceStopped,
 	EventUpdatesRun,
+	EventAgentSupervisorUpdated,
 }
 
 // SudoGroupMemberKeptLastAdmin is the reason of a TamperSudoGroupMember whose member was kept because no break-glass

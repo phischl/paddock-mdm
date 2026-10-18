@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operators, audited as `device.agent_update_requested`): the device installs the offered agent release at its next
   check-in, outside its rollout wave and regardless of the update policy, with the usual self-test, probation and
   rollback. The request ends with the device's report or after 24 hours.
+- Devices update `paddock-supervisor` themselves: once the rollout of a release with a supervisor package completed,
+  an agent of that release installs the package through a transient unit, waits up to 10 minutes for its next
+  check-in and restores the previous supervisor otherwise (audited as `device.supervisor_updated` or
+  `device.supervisor_update_failed`). The update policy applies; a failed version is not installed again.
 
 ### Changed
 

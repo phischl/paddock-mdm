@@ -40,6 +40,11 @@ type State struct {
 	UpdateRequestHandledAt *time.Time `json:"update_request_handled_at,omitempty"`
 	// ReportedUpdateAt is the "at" of the update result already turned into an event.
 	ReportedUpdateAt *time.Time `json:"reported_update_at,omitempty"`
+	// FailedSupervisorVersion is the last supervisor package version whose upgrade failed or was rolled back; it is
+	// not installed again (plan M8d decision 32). ReportedSupervisorUpgradeAt is the "at" of the supervisor upgrade
+	// result already turned into an event.
+	FailedSupervisorVersion     string     `json:"failed_supervisor_version,omitempty"`
+	ReportedSupervisorUpgradeAt *time.Time `json:"reported_supervisor_upgrade_at,omitempty"`
 	// ReportedRegularAt and ReportedSecurityAt are the ends of the last regular and security update runs reported as
 	// updates.run (plan M5b decision 6).
 	ReportedRegularAt  *time.Time `json:"reported_regular_at,omitempty"`

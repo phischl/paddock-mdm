@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -523,3 +524,33 @@ func TestAgentUpdatePolicy(t *testing.T) {
 	}
 }
 
+// TestSupervisorPackages (plan M8d decision 30): v2 bundles of devices with a semantic agent version carry the
+// paddock-supervisor package of the current completed release per arch; none while the rollout is halted, and none
+// for an agent version that is not semantic.
+func TestSupervisorPackages(t *testing.T) {
+	w := newWorld(t)
+	v := "7.0." + strconv.FormatInt(time.Now().UnixNano()%1000000, 10)
+	sum := strings.Repeat("ab", 32)
+	w.exec("INSERT INTO agent_release (version, status, created_by, published_at) VALUES ($1, 'published', 't', now())", v)
+	w.exec(`INSERT INTO agent_package (version, name, arch, sha256, size, minisig, object_key)
+		VALUES ($1, 'paddock-supervisor', 'amd64', $2, 10, 'm', $3)`, v, sum, "packages/"+v+"/paddock-supervisor_"+v+"_amd64.deb")
+	w.exec("INSERT INTO agent_rollout (version, status, started_by, started_at) VALUES ($1, 'completed', 't', now() + interval '1 day')", v)
+	t.Cleanup(func() { w.exec("UPDATE agent_rollout SET status = 'halted' WHERE version = $1", v) })
+	semantic, other := w.v2Device("{1,2}"), w.v2Device("{1,2}")
+	w.exec("UPDATE device_status SET agent_version = $2 WHERE device_id = $1", semantic, v)
+	w.exec("UPDATE device_status SET agent_version = '0.0.0dev' WHERE device_id = $1", other)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	got := w.fetch(semantic).Agent.SupervisorPackages
+	want := bundle.PackageRef{Version: v, URLPath: "packages/" + v + "/paddock-supervisor_" + v + "_amd64.deb", SHA256: sum}
+	if len(got) != 1 || got["amd64"] != want {
+		t.Fatalf("supervisor packages %+v", got)
+	}
+	if p := w.fetch(other).Agent.SupervisorPackages; p != nil {
+		t.Fatalf("device without a semantic agent version got %+v", p)
+	}
+	w.exec("UPDATE agent_rollout SET status = 'halted' WHERE version = $1", v)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := w.fetch(semantic).Agent.SupervisorPackages; p != nil {
+		t.Fatalf("halted release still rendered: %+v", p)
+	}
+}

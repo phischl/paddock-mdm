@@ -131,6 +131,16 @@ type AgentCfg struct {
 	// UpdatePolicy is the agent update policy of the device (ADR 0037 decision 1): "" (absent) and automatic follow the
 	// rollout waves, manual installs an offered release only when an administrator requested it for the device.
 	UpdatePolicy string `json:"update_policy,omitempty"`
+	// SupervisorPackages are the paddock-supervisor packages of the current release by arch (plan M8d decision 30):
+	// the agent installs the one of its arch after its own update to that release, as the policy allows.
+	SupervisorPackages map[string]PackageRef `json:"supervisor_packages,omitempty"`
+}
+
+// PackageRef is a Debian package on the public package store (https://bundles.<domain>/<url_path>).
+type PackageRef struct {
+	Version string `json:"version"`
+	URLPath string `json:"url_path"`
+	SHA256  string `json:"sha256"`
 }
 
 // Agent update policies of AgentCfg.UpdatePolicy.

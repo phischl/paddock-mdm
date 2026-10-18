@@ -46,6 +46,19 @@ func (l Layout) Staging() string { return l.Join("/var/lib/paddock/staging") }
 // UpdateRequest asks the supervisor to install a staged release.
 func (l Layout) UpdateRequest() string { return l.Join("/var/lib/paddock/staging/request.json") }
 
+// Packages holds downloaded Debian packages until dpkg installed them (fleetd, the supervisor).
+func (l Layout) Packages() string { return l.Join("/var/lib/paddock/packages") }
+
+// SupervisorUpgrade marks a running supervisor upgrade (plan M8d decision 31).
+func (l Layout) SupervisorUpgrade() string {
+	return l.Join("/var/lib/paddock/state/supervisor-upgrade.json")
+}
+
+// SupervisorUpgradeResult is written by `paddockd supervisor-upgrade` when it finished (plan M8d decision 31).
+func (l Layout) SupervisorUpgradeResult() string {
+	return l.Join("/var/lib/paddock/state/supervisor-upgrade-result.json")
+}
+
 // Socket is the health socket.
 func (l Layout) Socket() string { return l.Join("/run/paddock/agent.sock") }
 

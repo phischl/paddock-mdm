@@ -77,8 +77,12 @@ type Deps struct {
 	// Supervisor returns the PID of paddock-supervisor and Signal sends it SIGUSR1 (tests replace both).
 	Supervisor func() (int, error)
 	Signal     func(pid int) error
-	Now        func() time.Time
-	Rand       func() float64 // uniform in [0, 1)
+	// RunUnit runs systemd-run to start a transient unit (the supervisor upgrade, plan M8d decision 31); nil runs it.
+	RunUnit func(ctx context.Context, name string, args ...string) error
+	// Download fetches a package from the package store with at most limit bytes; nil uses Client.Download.
+	Download func(ctx context.Context, url string, limit int64) ([]byte, error)
+	Now      func() time.Time
+	Rand     func() float64 // uniform in [0, 1)
 }
 
 // Agent is the run loop. All state is owned by the goroutine that calls Run.
@@ -101,6 +105,8 @@ type Agent struct {
 	updateRequested bool
 	// policySkipped is the last offered version the manual policy declined, so that it is logged once per version.
 	policySkipped string
+	// supervisorSkipped is the last supervisor package version and reason not installed, logged once.
+	supervisorSkipped string
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -203,6 +209,12 @@ func New(d Deps) (*Agent, error) {
 	}
 	if a.d.Signal == nil {
 		a.d.Signal = update.Notify
+	}
+	if a.d.RunUnit == nil {
+		a.d.RunUnit = runUnit
+	}
+	if a.d.Download == nil && a.d.Client != nil {
+		a.d.Download = a.d.Client.Download
 	}
 	a.refreshHealth()
 	a.loadCurrent()
@@ -350,13 +362,16 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 		a.setError("")
 	}
 	a.reportUpdate()
+	a.reportSupervisorUpgrade()
 	a.handleBundle(ctx, resp.Bundle)
 	a.ticketAccepted = a.acceptTicket(resp.TimeTicket) || a.ticketAccepted
 	a.handleCommands(ctx, resp.Commands)
 	a.handleUpdate(ctx, resp.AgentUpdate)
+	a.handleSupervisorPackage(ctx)
 	a.flush(ctx)
 	a.postResults(ctx)
 	a.clearUpdateResult()
+	a.clearSupervisorResult()
 	return afterSuccess(resp.NextCheckinS, a.d.Rand())
 }
 

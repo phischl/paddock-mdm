@@ -26,6 +26,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/selftest"
+	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/triggers"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
@@ -40,6 +41,9 @@ commands:
   plan           show what applying the last applied bundle again would change (read-only); JSON report
   updates run    install the regular updates and record the result for the agent (paddock-updates.timer)
   disk-setup     ask for the boot PIN on the console and enroll TPM2+PIN (first boot, paddock-disk-setup.service)
+  supervisor-upgrade --deb FILE --from VERSION
+                 install a staged paddock-supervisor package and roll it back when the agent does not check in
+                 (started by the agent in the transient unit paddock-supervisor-upgrade)
   version        print the version
 `
 
@@ -74,6 +78,8 @@ func run(args []string, stdout io.Writer) int {
 		return runDiskSetup(ctx, layout)
 	case "updates":
 		return runUpdates(ctx, layout, rest)
+	case "supervisor-upgrade":
+		return runSupervisorUpgrade(ctx, layout, rest)
 	case "self-test":
 		r := selftest.Run(ctx, layout)
 		enc := json.NewEncoder(stdout)
@@ -197,6 +203,36 @@ func runUpdates(ctx context.Context, layout paths.Layout, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// runSupervisorUpgrade installs a staged supervisor package (plan M8d decision 31). It runs in a transient unit
+// outside the supervisor's cgroup and exits 0 once it wrote its result; the agent reports the outcome.
+func runSupervisorUpgrade(ctx context.Context, layout paths.Layout, args []string) int {
+	fs := flag.NewFlagSet("supervisor-upgrade", flag.ContinueOnError)
+	deb := fs.String("deb", "", "the staged paddock-supervisor package")
+	from := fs.String("from", "", "the installed paddock-supervisor version")
+	if err := fs.Parse(args); err != nil || *deb == "" {
+		fmt.Fprint(os.Stderr, usage)
+		return 1
+	}
+	if layout.Root == "/" && os.Geteuid() != 0 {
+		slog.Error("paddockd supervisor-upgrade must run as root")
+		return 1
+	}
+	u := supervisorpkg.Upgrader{Sys: reconcile.OS{Root: layout.Root}, Layout: layout, Now: time.Now, Sleep: sleep,
+		Poll: 10 * time.Second, Wait: supervisorpkg.CheckinWait, Hold: supervisorpkg.Stable}
+	u.Run(ctx, *deb, *from)
+	return 0
+}
+
+// sleep waits d or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
 }
 
 // runDiskSetup runs the first-boot disk setup on the console (stdin and stdout are the TTY of the unit). It always

@@ -278,6 +278,7 @@ fleetd-deb: ## Build the fleetd Debian package fleet-osquery (amd64) with fleetc
 agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd, sign them with the development release key and upload and publish them
 	@test -n "$(filter-out 0.0.0-dev,$(VERSION))" || { echo "usage: make agent-release VERSION=x.y.z [TAGS=...]"; exit 1; }
 	@test -z "$(REVOKE_TAGS)" || { echo "agent-release never builds paddock-revoke with REVOKE_TAGS ($(REVOKE_TAGS))"; exit 1; }
+	@test -z "$(filter paddock_testbroken_supervisor,$(subst $(comma), ,$(TAGS)))" || { echo "agent-release never builds a broken supervisor (TAGS=$(TAGS))"; exit 1; }
 	$(MAKE) --no-print-directory deb VERSION=$(VERSION) TAGS='$(TAGS)'
 	$(MAKE) --no-print-directory fleetd-deb
 	go run ./test/acceptance/cmd/agentrelease --version $(VERSION) --publish \

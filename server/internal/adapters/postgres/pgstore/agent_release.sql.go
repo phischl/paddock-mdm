@@ -662,6 +662,45 @@ func (q *Queries) SetAgentRolloutStatus(ctx context.Context, arg SetAgentRollout
 	return i, err
 }
 
+const supervisorPackages = `-- name: SupervisorPackages :many
+SELECT version::text, arch::text, package_version::text, sha256::text, object_key::text FROM paddock_supervisor_packages()
+`
+
+type SupervisorPackagesRow struct {
+	Version        string
+	Arch           string
+	PackageVersion string
+	Sha256         string
+	ObjectKey      string
+}
+
+// The paddock-supervisor packages of the current release, one per arch (plan M8d decision 30).
+func (q *Queries) SupervisorPackages(ctx context.Context) ([]SupervisorPackagesRow, error) {
+	rows, err := q.db.Query(ctx, supervisorPackages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SupervisorPackagesRow{}
+	for rows.Next() {
+		var i SupervisorPackagesRow
+		if err := rows.Scan(
+			&i.Version,
+			&i.Arch,
+			&i.PackageVersion,
+			&i.Sha256,
+			&i.ObjectKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertAgentArtifact = `-- name: UpsertAgentArtifact :one
 INSERT INTO agent_artifact (version, arch, sha256, size, minisig, object_key)
 VALUES ($1, $2, $3, $4, $5, $6)

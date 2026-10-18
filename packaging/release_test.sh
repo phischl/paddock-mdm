@@ -206,6 +206,13 @@ if make -s -C "$root" --no-print-directory release-merge-signed RELEASE_VERSION=
   RELEASE_SIGNED_DIR="$work/signed2" >/dev/null 2>&1; then got=0; else got=1; fi
 check "release-merge-signed refuses a file without its .minisig" "$got" 1
 
+# The broken supervisor of gate S-UP2b (plan M8d decision 34) never reaches a published release.
+for tags in paddock_testbroken_supervisor "paddock_dev,paddock_testbroken_supervisor"; do
+  out="$(make -s -C "$root" --no-print-directory agent-release VERSION=1.2.3 TAGS="$tags" 2>&1)" && got=0 || got=1
+  [[ "$out" == *"never builds a broken supervisor"* ]] || got="$got: $out"
+  check "agent-release refuses TAGS=$tags" "$got" 1
+done
+
 if ((failures > 0)); then
   echo "$failures failure(s)"
   exit 1
