@@ -328,8 +328,9 @@ fleet-bootstrap: ## Set up Fleet: admin user, API-only user paddock (token), glo
 dev-seed: ## Create organizations acme and globex and assign the dev users
 	go run ./test/acceptance/cmd/devseed
 
-# Guard against hangs; suite ~55 min since M6. Slower machines (CI runners) raise ACCEPTANCE_TIMEOUT.
-ACCEPTANCE_TIMEOUT ?= 75m
+# Guard against hangs; the suite takes ~85 min on a development machine and ~82 min on a GitHub runner since M8x
+# (measured 2026-10-18). Keep at least 20 % headroom when gates are added.
+ACCEPTANCE_TIMEOUT ?= 120m
 
 # paddockctl is static and has no runtime dependencies (plan M6c decision 24); Linux amd64 and arm64 only.
 PADDOCKCTL_LDFLAGS = -s -w -X main.version=$(VERSION)

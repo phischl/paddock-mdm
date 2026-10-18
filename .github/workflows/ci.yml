@@ -89,9 +89,9 @@ jobs:
   acceptance:
     needs: [lint, test, web, secrets, trivy]
     runs-on: ubuntu-24.04
-    timeout-minutes: 130
+    timeout-minutes: 180 # make up 8 min + acceptance 120 min + disruptive 1 min + e2e 10 min + logs
     env:
-      ACCEPTANCE_TIMEOUT: 90m # GitHub runners are slower than development machines
+      ACCEPTANCE_TIMEOUT: 120m # the suite took 82 min on a runner (2026-10-18); keep 20 % headroom
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
