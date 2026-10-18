@@ -27,6 +27,23 @@ CREATE TABLE openbao_auto_unseal (
 );
 INSERT INTO openbao_auto_unseal (id, state) VALUES (1, 'disabled');
 GRANT SELECT, UPDATE ON openbao_auto_unseal TO paddock_platform;
+-- The counters only ever grow: the worker records one platform.openbao_auto_unsealed event per growth beyond
+-- audited_*, so a lowered counter (the unsealer's column grant would allow any value) would suppress those events
+-- until it caught up again. Audit integrity wins over any reset, for every role (architect decision on PDK-303).
+-- +goose StatementBegin
+CREATE FUNCTION openbao_auto_unseal_counters_monotonic() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.unseal_count < OLD.unseal_count OR NEW.failure_count < OLD.failure_count THEN
+    RAISE EXCEPTION 'openbao_auto_unseal: unseal_count and failure_count never decrease'
+      USING ERRCODE = 'check_violation',
+            DETAIL = format('unseal_count %s -> %s, failure_count %s -> %s',
+              OLD.unseal_count, NEW.unseal_count, OLD.failure_count, NEW.failure_count);
+  END IF;
+  RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER openbao_auto_unseal_counters_monotonic BEFORE UPDATE ON openbao_auto_unseal
+  FOR EACH ROW EXECUTE FUNCTION openbao_auto_unseal_counters_monotonic();
 -- The unsealer's role exists only where the operator enabled automatic unseal; deploy/compose/scripts/
 -- postgres-unsealer-role.sh grants the same when it creates the role after this migration ran.
 -- +goose StatementBegin

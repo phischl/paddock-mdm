@@ -2,10 +2,12 @@ package unsealer
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/autounseal"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -89,5 +91,63 @@ func TestPGStore(t *testing.T) {
 		if _, err := conn.Exec(ctx, stmt); err == nil {
 			t.Errorf("paddock_unsealer may run %q", stmt)
 		}
+	}
+}
+
+// TestPGStoreCountersOnlyGrow: the role paddock_unsealer may raise its counters but never lower them, because a
+// lowered counter would suppress platform.openbao_auto_unsealed events (PDK-303, migration 00050's trigger).
+func TestPGStoreCountersOnlyGrow(t *testing.T) {
+	env := pgtest.StartPaddock(t)
+	ctx := context.Background()
+	super, err := pgx.Connect(ctx, env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = super.Close(ctx) }()
+	if _, err := super.Exec(ctx, unsealerRoleSQL); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(env.Super)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword("paddock_unsealer", "unsealer-pw")
+	conn, err := pgx.Connect(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	counters := func() (int64, int64) {
+		t.Helper()
+		var unseals, failures int64
+		if err := super.QueryRow(ctx, "SELECT unseal_count, failure_count FROM openbao_auto_unseal").Scan(&unseals, &failures); err != nil {
+			t.Fatal(err)
+		}
+		return unseals, failures
+	}
+
+	if _, err := conn.Exec(ctx, "UPDATE openbao_auto_unseal SET unseal_count = 3, failure_count = 2 WHERE id = 1"); err != nil {
+		t.Fatalf("raising the counters: %v", err)
+	}
+	if _, err := conn.Exec(ctx, "UPDATE openbao_auto_unseal SET unseal_count = unseal_count WHERE id = 1"); err != nil {
+		t.Fatalf("keeping the counters: %v", err)
+	}
+	for _, stmt := range []string{
+		"UPDATE openbao_auto_unseal SET unseal_count = 0 WHERE id = 1",
+		"UPDATE openbao_auto_unseal SET failure_count = 1 WHERE id = 1",
+		"UPDATE openbao_auto_unseal SET unseal_count = 4, failure_count = 0 WHERE id = 1",
+	} {
+		_, err := conn.Exec(ctx, stmt)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" ||
+			pgErr.Message != "openbao_auto_unseal: unseal_count and failure_count never decrease" {
+			t.Errorf("%q by paddock_unsealer: %v; want the refusal of the trigger", stmt, err)
+		}
+	}
+	if _, err := super.Exec(ctx, "UPDATE openbao_auto_unseal SET unseal_count = 0 WHERE id = 1"); err == nil {
+		t.Error("the superuser lowered unseal_count; want the refusal of the trigger for every role")
+	}
+	if unseals, failures := counters(); unseals != 3 || failures != 2 {
+		t.Fatalf("counters %d/%d, want 3/2", unseals, failures)
 	}
 }

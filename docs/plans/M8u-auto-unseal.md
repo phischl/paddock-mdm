@@ -192,6 +192,13 @@ once; `./paddock check` warns on a production host and passes on a lab host; eve
    -- +goose StatementEnd
    ```
 
+   Amendment 2026-10-18 (architect note, decided by the orchestrator as architect, 2026-10-18; PDK-303): the column
+   grant lets `paddock_unsealer` write any value into `unseal_count` and `failure_count`, and a lowered counter
+   would suppress `platform.openbao_auto_unsealed` events. Audit integrity wins: migration 00050 (amended before it
+   was merged) also creates the `BEFORE UPDATE` trigger `openbao_auto_unseal_counters_monotonic`, which rejects any
+   decrease of either counter, for every role, with SQLSTATE `23514` and the message `openbao_auto_unseal:
+   unseal_count and failure_count never decrease`. The grants stay as above.
+
 3. sqlc queries in `server/internal/adapters/postgres/queries/auto_unseal.sql` MUST provide: `GetAutoUnseal`
    (the row), `GetAutoUnsealForUpdate` (`… FOR UPDATE`), `EnableAutoUnseal` (sets `state='enabled'`,
    `disclaimer_version`, `acknowledgement`, `acknowledged_by`, `acknowledged_by_subject`, `acknowledged_at=now()`,
