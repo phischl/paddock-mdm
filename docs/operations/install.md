@@ -280,9 +280,10 @@ in this order:
 
 1. **Every administrator needs a browser or device with a WebAuthn authenticator** (security key, or a platform
    authenticator such as Windows Hello, Touch ID, Android, or a phone through the browser's QR code); the portal asks
-   for the enrolment at the first sign-in. The step-up and the portal sign-in accept WebAuthn only; a TOTP
-   authenticator stays usable for Authentik's own interfaces and the device login (`docs/operations/step-up.md`,
-   residual risk RR-62).
+   for the enrolment at the first sign-in, after the TOTP code when the administrator has TOTP only. The step-up
+   accepts WebAuthn only; a TOTP authenticator stays usable for Authentik's own interfaces and the device login
+   (`docs/operations/step-up.md`, residual risk RR-62). An administrator who reaches the portal through an existing
+   Authentik session is not asked to enrol: sign out of Authentik and sign in once through the portal's own sign-in.
 2. **Agents first, then the server.** From this release on the server no longer ships managed files on denied paths.
    An agent of this release keeps such a file on the device unchanged and stops tracking it (`left_denied_file`); an
    agent older than this release deletes every unchanged file that leaves its bundle, so it would delete those files

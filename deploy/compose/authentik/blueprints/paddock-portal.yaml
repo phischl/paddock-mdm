@@ -42,12 +42,34 @@ entries:
     identifiers:
       name: paddock-admin-login-mfa
     attrs:
-      # WebAuthn only, enrolled at the first portal sign-in when missing (ADR 0034 amendment 2026-10-18): the step-up
-      # accepts WebAuthn only, so an administrator who could sign in with TOTP alone would be refused at every step-up.
+      # Stage A (plan M8f decision 13 as amended on 2026-10-18): an administrator with any authenticator proves it
+      # before anything is enrolled, so the password alone never enrols a key. Authentik counts an account as not
+      # configured only when it has no WebAuthn and no TOTP device; only then is WebAuthn enrolled here (RR-62).
+      device_classes: [webauthn, totp]
+      not_configured_action: configure
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+
+  # Stage B: the step-up accepts WebAuthn only, so an administrator who has just proven TOTP in stage A and has no
+  # WebAuthn device enrols one now. The policy on its binding skips it for an account with a WebAuthn device, because
+  # the MFA cookie is bound to the stage that set it and a last_auth_threshold would ask a WebAuthn user twice.
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa-webauthn
+    identifiers:
+      name: paddock-admin-login-webauthn
+    attrs:
       device_classes: [webauthn]
       not_configured_action: configure
       configuration_stages:
         - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: webauthn-missing
+    identifiers:
+      name: paddock-admin-login-webauthn-missing
+    attrs:
+      expression: |
+        return not ak_user_has_authenticator(request.user, "webauthn")
 
   - model: authentik_stages_user_login.userloginstage
     id: login
@@ -75,6 +97,26 @@ entries:
     attrs:
       evaluate_on_plan: true
       re_evaluate_policies: true
+  # Re-evaluated when stage B is reached, after stage A, so that an account that enrolled WebAuthn in stage A skips it.
+  # "all": the development blueprint binds a policy that always fails to skip this stage as well.
+  - model: authentik_flows.flowstagebinding
+    id: mfa-webauthn-binding
+    identifiers:
+      target: !KeyOf login-flow
+      stage: !KeyOf mfa-webauthn
+      order: 31
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  # The policy identifies the binding, not the target (see the development blueprint): a target identifier never
+  # matches the stored policy binding model pk on a re-apply.
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-missing
+      order: 0
+    attrs:
+      target: !KeyOf mfa-webauthn-binding
   # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17): a user without an
   # authenticator must enrol one; a user who just validated one in the stage at order 30 is not asked twice.
   - model: authentik_stages_authenticator_validate.authenticatorvalidatestage

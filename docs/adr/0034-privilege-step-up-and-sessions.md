@@ -203,10 +203,17 @@ Decisions:
    after the api accepted the step-up.
 2. **`max_age` is 20 s** (`StepUpMaxAuthAge`): below the shortest consumer window (30 s), so a step-up that is too old
    for the escrow-reader is always old enough for Authentik to run `paddock-stepup` again; 10 s remain for clock skew.
-3. **WebAuthn-only portal login.** The stage `paddock-admin-login-mfa` validates `[webauthn]` only and configures
-   the WebAuthn setup stage when the administrator has none; an administrator with TOTP only enrols WebAuthn at the
-   next portal sign-in. The default-flow stage (every Authentik user) and the device-login stages keep both classes.
-   The pre-upgrade enrolment note of decision 6 is superseded by the enrolment at sign-in.
+3. **WebAuthn enrolment at the portal login, after an existing factor.** Stage A, `paddock-admin-login-mfa` at
+   order 30, validates `[webauthn, totp]` and configures only the WebAuthn setup stage, which Authentik runs only for
+   an account without any authenticator of these classes. Stage B, `paddock-admin-login-webauthn` at order 31,
+   validates `[webauthn]` and configures the WebAuthn setup; an expression policy on its binding
+   (`re_evaluate_policies`, mode *all*) runs it only for an account without a WebAuthn device. An administrator with
+   TOTP only therefore proves TOTP and then enrols WebAuthn; the password alone never enrols a key for an account with
+   an authenticator. A `last_auth_threshold` on stage B was rejected: Authentik binds the MFA cookie to the stage that
+   set it (`check_mfa_cookie`), so it would ask a WebAuthn administrator twice. The first enrolment of an account with
+   no authenticator still follows the password alone (RR-62). The default-flow stage (every Authentik user) and the
+   device-login stages keep both classes. The pre-upgrade enrolment note of decision 6 is superseded by the enrolment
+   at sign-in.
 4. **End all sessions** (decision 4) also deletes the identity provider's authenticated sessions of every portal user
    (platform administrators and the three role groups of every organization) through Authentik's
    `core/authenticated_sessions/bulk_delete`, inside the same audited action; the service account gains the two session

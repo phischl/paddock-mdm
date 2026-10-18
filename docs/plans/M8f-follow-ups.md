@@ -296,6 +296,34 @@ decided and deferred (PDK-180, PDK-187).
     first sign-in when the administrator has none; TOTP stays usable for the identity provider's own interfaces and
     the device login."
 
+**Architect note 2026-10-18 (fix round 1, Review 1 finding B1): decision 13 is amended.** The block above sent an
+administrator with TOTP only to the WebAuthn setup after the password alone (Authentik 2026.8.3
+`stages/authenticator_validate/stage.py:196-200` drops devices of other classes; `:280-289` then configures), so the
+password alone enrolled a key that passes every step-up. `paddock-portal.yaml` now carries two stages:
+
+- **Stage A**, `paddock-admin-login-mfa` at order 30: `device_classes: [webauthn, totp]`, `not_configured_action:
+  configure`, one configuration stage (the WebAuthn setup). Authentik treats an account as not configured only when it
+  has no device of an allowed class, so the enrolment here follows the password only for an account without any
+  authenticator (trust on first use, RR-62). `deny` was rejected: it locks out every new administrator.
+- **Stage B**, `paddock-admin-login-webauthn` at order 31: `device_classes: [webauthn]`, `not_configured_action:
+  configure`, one configuration stage (the WebAuthn setup). Its binding has `evaluate_on_plan: false`,
+  `re_evaluate_policies: true`, `policy_engine_mode: all` and the expression policy
+  `paddock-admin-login-webauthn-missing` (`return not ak_user_has_authenticator(request.user, "webauthn")`). A TOTP-only
+  administrator proves TOTP in stage A and enrols WebAuthn in stage B; a WebAuthn administrator and a new account that
+  enrolled in stage A skip stage B. A `last_auth_threshold` on stage B was rejected: the MFA cookie is bound to the
+  stage that set it (`check_mfa_cookie`, `payload["stage"] != stage.pk.hex`), so stage A's validation never skips
+  stage B and a WebAuthn administrator would be asked twice.
+- The development blueprint (`authentik/dev/paddock-dev.yaml`) MUST bind `paddock-dev-skip-mfa` to the binding at
+  order 31 as well (policy-binding order 2); mode *all* makes that skip win. This change to the development blueprint is
+  allowed by this amendment although PDK-181 listed it as out of scope.
+- An administrator with TOTP only who reaches the portal through an existing Authentik session (default flow, M8x
+  session reuse) never sees stage B and is refused at every step-up (fail closed); `docs/operations/step-up.md` tells
+  them to sign in once through the portal's own sign-in.
+- Tests: `TestPortalBlueprintLoginWebAuthnOnly` asserts both stages, their orders, the binding attributes and the
+  policy binding; `TestDevBlueprintSkipsPortalLoginMFA` asserts both development skips; `TestStepUpFactor` reads both
+  stages and the two policies on the order-31 binding. The flows themselves are checked on the lab
+  (`docs/operations/step-up.md` *Checking the portal sign-in factor*), because the development stack skips them.
+
 ### 3.4 End all sessions ends the administrators' Authentik sessions too (PDK-190) — ADR 0034 amendment 2026-10-18, ADR 0007 amendment
 
 16. `app.Sessions` MUST gain two dependencies and end the Authentik sessions inside the same action:

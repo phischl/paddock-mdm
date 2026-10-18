@@ -60,8 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it running again.
 - A repeated identity confirmation (step-up) is possible 20 seconds after the previous one instead of a minute; the
   step-up asks the identity provider to authenticate again after 20 seconds.
-- The portal sign-in accepts a WebAuthn authenticator only and enrols one at the first sign-in when the administrator
-  has none; TOTP stays usable for the identity provider's own interfaces and the device login.
+- The portal sign-in enrols a WebAuthn authenticator when the administrator has none: after the TOTP code for an
+  administrator with TOTP only, after the password for a new administrator without any authenticator. TOTP stays
+  usable for the identity provider's own interfaces and the device login.
 - *End all sessions* now also signs every portal user out of the identity provider, so a stolen browser session cannot
   sign in again without password and authenticator.
 - The dead man's switch setting says that a blocked connection triggers the lock like an outage.

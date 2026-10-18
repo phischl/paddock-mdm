@@ -83,9 +83,19 @@ tokens cannot complete a step-up`, recorded as one denied audit event. The GitOp
 everything else; an administrator applies root-equivalent changes from the portal (`docs/operations/paddockctl.md`).
 
 **Factor.** The shipped step-up flow accepts WebAuthn authenticators only (security key or platform authenticator).
-The portal sign-in accepts WebAuthn only as well and enrols a WebAuthn authenticator at the first sign-in when the
-administrator has none; a TOTP authenticator stays usable for Authentik's own interfaces and the device login
-(residual risk RR-62). Paddock checks the
+The portal sign-in makes sure that every administrator has a WebAuthn authenticator, in two stages of the flow
+`paddock-admin-login`:
+
+- Order 30, `paddock-admin-login-mfa`: the administrator proves an existing authenticator (WebAuthn or TOTP). Only an
+  account with no authenticator at all enrols a WebAuthn authenticator here, after the password (residual risk RR-62).
+- Order 31, `paddock-admin-login-webauthn`: runs only for an account without a WebAuthn device (policy
+  `paddock-admin-login-webauthn-missing`). An administrator with TOTP only has just proven the TOTP code and enrols a
+  WebAuthn authenticator now; the password alone never enrols a key for an account that has an authenticator.
+
+A TOTP authenticator stays usable for Authentik's own interfaces and the device login. A TOTP-only administrator who
+reaches the portal through an existing Authentik session (Authentik's default sign-in) never passes these stages and
+is refused at every step-up: sign out of Authentik (`https://auth.<domain>/if/user/` → Sign out) and sign in once
+through the portal's own sign-in to enrol the passkey. Paddock checks the
 authenticator classes the step-up validated (claim `paddock_mfa_classes` of the step-up token, emitted by the mapping
 `io.paddock/scope-stepup-mfa`) and refuses every step-up without a WebAuthn authenticator; `amr` alone does not tell
 WebAuthn from TOTP (residual risk RR-38). The api logs a refused class list as "step-up rejected … the step-up did not
@@ -138,8 +148,23 @@ next step-up asks for credentials again once it is older than 20 s.
 Earlier versions also accepted a TOTP code at the step-up and at the portal sign-in. Every administrator needs a
 browser or device with a WebAuthn authenticator (security key, or a platform authenticator such as Windows Hello,
 Touch ID, Android, or a phone through the browser's QR code). The portal sign-in now enrols a WebAuthn authenticator
-when the administrator has none and accepts no other factor; a TOTP authenticator stays usable for Authentik's own
-interfaces and the device login. No enrolment before the upgrade is required.
+when the administrator has none, after the administrator proved an existing TOTP authenticator (section *Factor*); a
+TOTP authenticator stays usable for Authentik's own interfaces and the device login. No enrolment before the upgrade
+is required.
+
+### Checking the portal sign-in factor (lab)
+
+The development stack skips both portal sign-in stages, so these cases are checked on a lab installation after the
+upgrade, each in a private browser window:
+
+1. An administrator with a TOTP authenticator only signs in through the portal: Authentik asks for the password, then
+   for the TOTP code, then for the WebAuthn enrolment; after the enrolment the portal opens and a step-up succeeds.
+2. The same kind of account (TOTP only, a second test administrator), with the password but a wrong TOTP code:
+   Authentik refuses the code and never offers a WebAuthn enrolment.
+3. An administrator with a WebAuthn authenticator signs in: Authentik asks for the password and once for the
+   authenticator, then the portal opens.
+4. A new administrator without any authenticator signs in: Authentik asks for the password and then for the WebAuthn
+   enrolment once; the enrolment appears in Authentik's event log (*Events* → `model_created`, WebAuthn device).
 
 ## Development stack
 
@@ -148,7 +173,9 @@ In the development stack `make dev-seed` gives the test users TOTP authenticator
 blueprint format cannot set an authenticator's key, so the seeder writes them through Authentik's shell. Because the
 shipped flow validates WebAuthn only, the development blueprint `authentik/dev/paddock-dev.yaml` (mounted by
 `compose.dev.yaml` only) skips the WebAuthn stage at order 30 with the policy `paddock-dev-skip-stepup-webauthn` and
-binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. Production carries neither. `compose.dev.yaml` sets
+binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. It also skips both portal sign-in stages
+(`paddock-admin-login` orders 30 and 31) with the policy `paddock-dev-skip-mfa`; the binding at order 31 evaluates its
+policies in mode *all*, so the skip wins over the WebAuthn-missing policy. Production carries neither. `compose.dev.yaml` sets
 `PADDOCK_STEPUP_MFA_CLASS=authentik_stages_authenticator_totp.totpdevice` on `paddock-api`, so the api accepts the
 development users' TOTP step-ups; the variable is development-only and fails `./paddock check` and the api's start in
 production.

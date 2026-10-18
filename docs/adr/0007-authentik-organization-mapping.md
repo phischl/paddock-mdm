@@ -69,8 +69,10 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
 - **Step-up authenticator classes.** The step-up provider `paddock-portal-stepup` carries the Paddock mapping
   `io.paddock/scope-stepup-mfa` (scope `paddock_stepup`), which reads the session's login event and emits
   `paddock_mfa_classes`; the api requires the WebAuthn device class in it.
-- **Portal login validates WebAuthn only** (`paddock-admin-login-mfa`: `device_classes: [webauthn]`, configure with
-  the WebAuthn setup stage); the default-flow and device-login stages are unchanged.
+- **Portal login enrols WebAuthn after an existing factor** (`paddock-admin-login-mfa`: `[webauthn, totp]`,
+  configure with the WebAuthn setup stage; `paddock-admin-login-webauthn`: `[webauthn]`, configure with the WebAuthn
+  setup stage, bound with the policy `paddock-admin-login-webauthn-missing`); the default-flow and device-login stages
+  are unchanged.
 - **Service account** `paddock-service` holds `authentik_core.view_authenticatedsession` and
   `authentik_core.delete_authenticatedsession`: *End all sessions* deletes the authenticated sessions of every portal
   user (`core/authenticated_sessions/bulk_delete`).
