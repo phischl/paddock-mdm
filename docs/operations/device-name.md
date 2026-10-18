@@ -21,13 +21,15 @@ out why a name is not applied.
 The name is applied at the device's next check-in (at most 5 minutes, earlier after an event-triggered check-in),
 without a reboot and without a logout. The agent:
 
-1. runs `hostnamectl hostname <name>`, which sets the static, transient and pretty hostname at once (hostnamed
-   writes `/etc/hostname` and `/etc/machine-info`; GNOME's *About* page and NetworkManager see the change at once);
-2. keeps the line `127.0.1.1 <name>` in `/etc/hosts` so that sudo resolves the host without a warning: it replaces
-   the first `127.0.1.1` line, inserts one after the `127.0.0.1` line when there is none, or creates the file with
-   both lines; every other line stays as it is;
-3. restarts `avahi-daemon.service` when it is running, because Avahi reads the host name only at startup and would
-   keep announcing the old one.
+1. runs `hostnamectl hostname <name>`, which sets the static and transient hostname and clears the pretty hostname,
+   because the name is a valid host name (hostnamed writes `/etc/hostname` and `/etc/machine-info`; GNOME's *About*
+   page and NetworkManager see the change at once); an empty pretty hostname counts as in sync;
+2. restarts `avahi-daemon.service` when it is running, because Avahi reads the host name only at startup and would
+   keep announcing the old one; a failed restart is retried at the next pass;
+3. keeps the line `127.0.1.1 <name>` in `/etc/hosts` so that sudo resolves the host without a warning: it replaces
+   the first host name of the first `127.0.1.1` line and keeps further names and aliases, inserts a line after the
+   `127.0.0.1` line when there is none, or creates the file with both lines; every other line stays as it is. A
+   symlinked `/etc/hosts` is left alone and logged once (RR-70).
 
 Open shells keep their old prompt until a new shell starts.
 

@@ -1269,7 +1269,8 @@ them; any change it made is reverted and reported as `config.playbook_touched_pr
 
 > **Amendment 2026-10-18 (M8h):** the agent maps the `hostname` section to the internal resource `hostname`,
 > applied **first** (`hostname → time → file → systemd_unit → updates → login → sudo`). The reconciler runs
-> `hostnamectl hostname <name>` (static, transient and pretty name), keeps the first `127.0.1.1` line of `/etc/hosts`
+> `hostnamectl hostname <name>` (static and transient name; systemd clears the pretty name for a valid host name, ADR
+> 0041 amendment 2026-10-18), keeps the first `127.0.1.1` line of `/etc/hosts`
 > at the name (unless the bundle manages `/etc/hosts` as a file) and restarts `avahi-daemon.service` when it is active,
 > because Avahi reads the host name only at startup. It never reboots and never touches NetworkManager, resolved, DNS
 > or `/etc/hostname` directly. A local rename is drift (`config.drift_corrected` with `resource_ids: ["hostname"]`),
