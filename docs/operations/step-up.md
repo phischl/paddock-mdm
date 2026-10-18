@@ -83,9 +83,9 @@ tokens cannot complete a step-up`, recorded as one denied audit event. The GitOp
 everything else; an administrator applies root-equivalent changes from the portal (`docs/operations/paddockctl.md`).
 
 **Factor.** The shipped step-up flow accepts WebAuthn authenticators only (security key or platform authenticator).
-Every administrator, including every new one, enrols a WebAuthn authenticator in Authentik's user settings
-(`https://auth.<domain>/if/user/` → MFA devices) before the first step-up. The portal login's MFA stage still offers
-TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot complete a step-up. Paddock checks the
+The portal sign-in accepts WebAuthn only as well and enrols a WebAuthn authenticator at the first sign-in when the
+administrator has none; a TOTP authenticator stays usable for Authentik's own interfaces and the device login
+(residual risk RR-62). Paddock checks the
 authenticator classes the step-up validated (claim `paddock_mfa_classes` of the step-up token, emitted by the mapping
 `io.paddock/scope-stepup-mfa`) and refuses every step-up without a WebAuthn authenticator; `amr` alone does not tell
 WebAuthn from TOTP (residual risk RR-38). The api logs a refused class list as "step-up rejected … the step-up did not
@@ -135,11 +135,11 @@ next step-up asks for credentials again once it is older than 20 s.
 
 ## Before upgrading to WebAuthn-only step-up
 
-Earlier versions also accepted a TOTP code at the step-up. Before the upgrade, every administrator enrols a WebAuthn
-authenticator (security key or platform authenticator) in Authentik's user settings,
-`https://auth.<domain>/if/user/` → MFA devices. After the upgrade an administrator with a TOTP authenticator only
-cannot complete a step-up, and so cannot reveal keys, lock or destroy devices, create API tokens or grant
-root-equivalent rights, until a WebAuthn authenticator exists. The portal login keeps accepting TOTP.
+Earlier versions also accepted a TOTP code at the step-up and at the portal sign-in. Every administrator needs a
+browser or device with a WebAuthn authenticator (security key, or a platform authenticator such as Windows Hello,
+Touch ID, Android, or a phone through the browser's QR code). The portal sign-in now enrols a WebAuthn authenticator
+when the administrator has none and accepts no other factor; a TOTP authenticator stays usable for Authentik's own
+interfaces and the device login. No enrolment before the upgrade is required.
 
 ## Development stack
 

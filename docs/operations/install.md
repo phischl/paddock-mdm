@@ -280,11 +280,11 @@ the device approval page — asks for a second factor and enrols one when missin
 **Release with the managed-file path tiers, server-side sessions and WebAuthn-only step-up (ADR 0034).** Four steps,
 in this order:
 
-1. **Before the upgrade, every administrator enrols a WebAuthn authenticator** (security key or platform
-   authenticator) in Authentik's user settings, `https://auth.<domain>/if/user/` → MFA devices. From this release
-   the step-up accepts WebAuthn only; an administrator with TOTP only can still sign in but cannot reveal keys, lock or
-   destroy devices, create API tokens or grant root-equivalent rights (`docs/operations/step-up.md`). The same
-   applies to every administrator added later.
+1. **Every administrator needs a browser or device with a WebAuthn authenticator** (security key, or a platform
+   authenticator such as Windows Hello, Touch ID, Android, or a phone through the browser's QR code); the portal asks
+   for the enrolment at the first sign-in. The step-up and the portal sign-in accept WebAuthn only; a TOTP
+   authenticator stays usable for Authentik's own interfaces and the device login (`docs/operations/step-up.md`,
+   residual risk RR-62).
 2. **Agents first, then the server.** From this release on the server no longer ships managed files on denied paths.
    An agent of this release keeps such a file on the device unchanged and stops tracking it (`left_denied_file`); an
    agent older than this release deletes every unchanged file that leaves its bundle, so it would delete those files
@@ -316,7 +316,8 @@ in this order:
 Paddock leaves risks that only your organization can accept, mitigate or transfer, for example the young WORM
 implementation of the bundled RustFS (ADR 0017) and the custody of the OpenBao unseal shares. Record each risk of
 `docs/compliance/residual-risks.md` in your ISMS's risk register with an owner and a decision. Among them: the step-up
-factor is enforced by Authentik only, because the ID token's `amr` does not tell WebAuthn from TOTP (RR-38).
+factor depends on the login event Authentik keeps for the session (RR-38), and the portal sign-in needs a WebAuthn
+authenticator (RR-62).
 
 ## Appendix: installing from source
 
