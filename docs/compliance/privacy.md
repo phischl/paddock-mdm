@@ -80,12 +80,14 @@ device's organization (row-level security, `docs/operations/fleet.md`):
 | Table | Content |
 | --- | --- |
 | `device_inventory_ref` | Fleet's host ID, last seen, OS version, fleetd (or osquery) version |
+| `device_inventory_ref` (hardware facts, ADR 0037 decision 7) | manufacturer, model, serial number, processor and its physical cores, memory size, total disk size; kept and purged with the inventory reference of the device (ADR 0032 amendment 2026-10-17) |
 | `installed_software` | name, version and source of each installed package |
 | `vulnerability_finding` | CVE, package name and version, first seen; CVSS score where the inventory system knows it (Fleet free does not); severity, fixed version and CVSS vector from Ubuntu's data for the device's release |
 | `inventory_policy_result` | pass or fail per policy, when it last changed |
 
-Hosts that map to no device or to several are never stored. Serial numbers, hardware details, disk space and uptime
-stay in Fleet; Paddock does not copy them.
+Hosts that map to no device or to several are never stored. Free disk space, uptime and network addresses stay in
+Fleet. The serial number identifies a person's laptop indirectly; it is shown to and searchable by every member of the
+device's organization (residual risk RR-49).
 
 Fleet free matches CVEs but reports no CVSS score, severity or fixed version. Paddock fills severity and fixed version
 from Ubuntu's public vulnerability data (OSV), which the server downloads (`docs/operations/vulnerability-data.md`):

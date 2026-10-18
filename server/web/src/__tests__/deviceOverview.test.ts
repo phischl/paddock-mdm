@@ -22,7 +22,7 @@ const device = {
   os_release: { VERSION_ID: '24.04' }, enrollment_token_id: null, enrolled_at: now, state_changed_at: now, bundle_version: 3,
   last_contact_at: now, applied_bundle_version: 3, agent_version: '1.9.1', groups: [], identity_keys: [], logins_suspended: false,
   login_assignment: { users: [], groups: [] }, schema_versions: [], login_management: true, login_status: { login: null, sudo: null },
-  sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, owners: [],
+  sudo_flavor: null, presumed_self_locked_at: null, presumed_lost_at: null, owners: [], hardware: null,
 } as DeviceDetail
 
 let wrapper: VueWrapper | null = null
@@ -31,7 +31,7 @@ afterEach(() => {
   wrapper = null
 })
 
-async function mountOverview() {
+async function mountOverview(overrides: Partial<DeviceDetail> = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', theme: 'system', organization: null, revocation_enabled: true } as never
@@ -43,7 +43,7 @@ async function mountOverview() {
     saved.value = true
   })
   const page = {
-    device: ref(device), groups: ref([{ id: 'g1', name: 'Laptops' }, { id: 'g2', name: 'Finance' }]), selectedGroups, saved,
+    device: ref({ ...device, ...overrides }), groups: ref([{ id: 'g1', name: 'Laptops' }, { id: 'g2', name: 'Finance' }]), selectedGroups, saved,
     diskState: ref(null), updates: ref(null), conditions: ref([]), refresh: ref(0), actions: ref([]), saveGroups, changed: vi.fn(),
     run: vi.fn(),
   } as unknown as DevicePage
@@ -65,6 +65,28 @@ async function mountOverview() {
   await flushPromises()
   return { saveGroups, savedSelections }
 }
+
+describe('device overview hardware (PDK-221)', () => {
+  it('shows the hardware facts in the identity panel with GiB and GB', async () => {
+    await mountOverview({
+      hardware: { vendor: 'LENOVO', model: '21HD003LGE', serial: 'PF4XK2QZ', cpu_brand: 'i7-1365U', cpu_cores: 10,
+        memory_bytes: 33328349184, disk_total_bytes: 510440000000 },
+    })
+    const value = (key: string) => document.querySelector(`[data-testid="hardware-${key}"] dd`)?.textContent?.trim()
+    expect(value('manufacturer')).toBe('LENOVO')
+    expect(value('serial')).toBe('PF4XK2QZ')
+    expect(value('cpu')).toBe('i7-1365U (10 cores)')
+    expect(value('memory')).toBe('31.0 GiB')
+    expect(value('disk')).toBe('510.4 GB')
+  })
+
+  it('shows a dash while the inventory has not reported the device', async () => {
+    await mountOverview()
+    const cell = document.querySelector('[data-testid="hardware-serial"] dd')
+    expect(cell?.textContent?.trim()).toBe('–')
+    expect(cell?.getAttribute('title')).toBe('Not reported by the inventory yet')
+  })
+})
 
 describe('device overview groups', () => {
   it('saves the group picked last when Save is clicked right after picking it, without leaving the field', async () => {

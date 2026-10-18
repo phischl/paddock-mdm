@@ -19,12 +19,17 @@ SELECT sqlc.embed(device), device_status.last_contact_at, device_status.applied_
        -- The owners as UserRef objects for the list column (plan M8d decision 3).
        (SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'username', u.username, 'display_name', u.display_name)
                                   ORDER BY u.username), '[]'::jsonb)
-        FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners
+        FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners,
+       -- Hardware facts (plan M8d decision 8): NULL while no inventory row exists.
+       inv.hardware_vendor, inv.hardware_model, inv.hardware_serial, inv.cpu_brand, inv.cpu_cores, inv.memory_bytes,
+       inv.disk_total_bytes
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
+LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
 WHERE (sqlc.narg(q_pattern)::text IS NULL
        OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
        OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+       OR inv.hardware_serial ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
        OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
                   AND (u.username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\' OR u.display_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')))
   AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))
@@ -57,9 +62,11 @@ LIMIT @max_rows OFFSET @skip_rows;
 SELECT count(*) FROM (
   SELECT 1 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
   LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
+  LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
   WHERE (sqlc.narg(q_pattern)::text IS NULL
          OR hostname ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
          OR hardware_uuid ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
+         OR inv.hardware_serial ILIKE sqlc.narg(q_pattern)::text ESCAPE '\'
          OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
                     AND (u.username ILIKE sqlc.narg(q_pattern)::text ESCAPE '\' OR u.display_name ILIKE sqlc.narg(q_pattern)::text ESCAPE '\')))
     AND (sqlc.narg(states)::text[] IS NULL OR state = ANY(sqlc.narg(states)::text[]))

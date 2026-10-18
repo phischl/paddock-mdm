@@ -256,6 +256,13 @@ type DeviceInventoryRef struct {
 	OsVersion      string
 	FleetdVersion  string
 	SyncedAt       time.Time
+	HardwareVendor string
+	HardwareModel  string
+	HardwareSerial string
+	CpuBrand       string
+	CpuCores       int32
+	MemoryBytes    int64
+	DiskTotalBytes int64
 }
 
 type DeviceLoginAssignment struct {

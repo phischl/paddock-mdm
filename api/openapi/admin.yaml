@@ -713,7 +713,7 @@ paths:
       x-paddock-list:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
-        search: [hostname, hardware_uuid, owners.username, owners.display_name]
+        search: [hostname, hardware_uuid, owners.username, owners.display_name, hardware.serial]
         filters: [state, device_group_id, disk_state, contact, security_updates, owner_id]
       parameters:
         - $ref: "#/components/parameters/Page"
@@ -4576,7 +4576,8 @@ components:
     Device:
       type: object
       required: [id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at,
-                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version, contact, owners]
+                 state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version, contact, owners,
+                 hardware]
       properties:
         id: { type: string, format: uuid }
         hostname: { type: string }
@@ -4599,6 +4600,25 @@ components:
           type: array
           description: The users responsible for the device, sorted by username (plan M8d decision 2). No login or sudo rights.
           items: { $ref: "#/components/schemas/UserRef" }
+        hardware:
+          description: The hardware facts of the inventory (plan M8d decision 8); null while the inventory has no row for the device.
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DeviceHardware"
+    DeviceHardware:
+      type: object
+      description: >-
+        Asset facts the inventory reports (ADR 0037 decision 7); empty strings and zeros where it reports none. Free disk
+        space, uptime and network addresses stay in Fleet.
+      required: [vendor, model, serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes]
+      properties:
+        vendor: { type: string }
+        model: { type: string }
+        serial: { type: string }
+        cpu_brand: { type: string }
+        cpu_cores: { type: integer, description: Physical cores. }
+        memory_bytes: { type: integer, format: int64 }
+        disk_total_bytes: { type: integer, format: int64 }
     DeviceGroupRef:
       type: object
       required: [id, name]

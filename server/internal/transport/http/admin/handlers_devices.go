@@ -155,6 +155,13 @@ func toDeviceRows(rows []pgstore.ListDevicesRow) []adminapi.Device {
 		items[i].Contact = adminapi.DeviceContact(r.Contact)
 		// Built by ListDevices with jsonb_build_object; an unreadable value leaves the column empty.
 		_ = json.Unmarshal(r.Owners, &items[i].Owners)
+		if r.HardwareVendor != nil {
+			items[i].Hardware = &adminapi.DeviceHardware{
+				Vendor: *r.HardwareVendor, Model: deref(r.HardwareModel, ""), Serial: deref(r.HardwareSerial, ""),
+				CpuBrand: deref(r.CpuBrand, ""), CpuCores: int(deref(r.CpuCores, 0)), MemoryBytes: deref(r.MemoryBytes, 0),
+				DiskTotalBytes: deref(r.DiskTotalBytes, 0),
+			}
+		}
 	}
 	return items
 }
@@ -176,13 +183,15 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 	base := toDevice(d.Device, d.Status)
 	base.Owners = toUserRefs(d.Owners)
+	base.Hardware = toDeviceHardware(d.Hardware)
 	out := adminapi.DeviceDetail{
 		Id: base.Id, Hostname: base.Hostname, State: base.State, Contact: adminapi.DeviceContact(d.Contact),
 		HardwareUuid: base.HardwareUuid, MachineId: base.MachineId,
 		OsRelease: base.OsRelease, EnrollmentTokenId: base.EnrollmentTokenId, EnrolledAt: base.EnrolledAt,
 		StateChangedAt: base.StateChangedAt, BundleVersion: base.BundleVersion, LastContactAt: base.LastContactAt,
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
-		Groups: make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
+		Hardware: base.Hardware,
+		Groups:   make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
 		LoginAssignment: adminapi.DeviceLoginAssignment{
 			Users: make([]adminapi.UserRef, len(d.Login.Users)), Groups: make([]adminapi.UserGroupRef, len(d.Login.Groups)),
@@ -287,6 +296,7 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	out := toDevice(d.Device, d.Status)
 	out.Contact = adminapi.DeviceContact(d.Contact)
 	out.Owners = toUserRefs(d.Owners)
+	out.Hardware = toDeviceHardware(d.Hardware)
 	return out, nil
 }
 
@@ -304,6 +314,16 @@ func (h *handlers) SetDeviceOwners(ctx context.Context, req adminapi.SetDeviceOw
 		return nil, err
 	}
 	return adminapi.SetDeviceOwners200JSONResponse(toDeviceDetail(d)), nil
+}
+
+func toDeviceHardware(h *pgstore.GetDeviceHardwareRow) *adminapi.DeviceHardware {
+	if h == nil {
+		return nil
+	}
+	return &adminapi.DeviceHardware{
+		Vendor: h.HardwareVendor, Model: h.HardwareModel, Serial: h.HardwareSerial, CpuBrand: h.CpuBrand, CpuCores: int(h.CpuCores),
+		MemoryBytes: h.MemoryBytes, DiskTotalBytes: h.DiskTotalBytes,
+	}
 }
 
 func toUserRefs(users []pgstore.AppUser) []adminapi.UserRef {

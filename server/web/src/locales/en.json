@@ -501,6 +501,16 @@
     "back": "Go to the start page"
   },
   "devices": {
+    "hardware": {
+      "manufacturer": "Manufacturer",
+      "model": "Model",
+      "serial": "Serial number",
+      "cpu": "Processor",
+      "cpuCores": "{cores, plural, one {# core} other {# cores}}",
+      "memory": "Memory",
+      "disk": "Disk size",
+      "pending": "Not reported by the inventory yet"
+    },
     "owners": {
       "title": "Owners",
       "column": "Owners",

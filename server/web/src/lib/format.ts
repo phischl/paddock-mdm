@@ -6,6 +6,18 @@ export function formatDateTime(iso: string, locale: string): string {
 }
 
 /** Formats the time of an RFC 3339 timestamp as hours and minutes in the browser's time zone and the locale's clock. */
+/** Formats a byte count in GiB with one decimal (memory, plan M8d decision 9); null for 0 (not reported). */
+export function formatGiB(bytes: number, locale: string): string | null {
+  if (!bytes) return null
+  return new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(bytes / 2 ** 30) + ' GiB'
+}
+
+/** Formats a byte count in GB with one decimal (disk size, plan M8d decision 9); null for 0 (not reported). */
+export function formatGB(bytes: number, locale: string): string | null {
+  if (!bytes) return null
+  return new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(bytes / 1e9) + ' GB'
+}
+
 export function formatTime(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { timeStyle: 'short' }).format(new Date(iso))
 }

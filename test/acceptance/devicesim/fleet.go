@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,7 +21,18 @@ type FleetHost struct {
 	FleetURL string
 	UUID     string
 	Packages [][2]string // name, version
+	// Hardware are the asset facts the host reports (plan M8d decision 6); nil reports none.
+	Hardware *FleetHardware
 	nodeKey  string
+}
+
+// FleetHardware are the asset facts of a simulated host as osquery reports them.
+type FleetHardware struct {
+	Vendor, Model, Serial, CPUBrand string
+	CPUCores                        int
+	MemoryBytes                     int64
+	// DiskTotalGB is the size of the root file system in gigabytes (Fleet's gigs_total_disk_space).
+	DiskTotalGB float64
 }
 
 // EnrollFleet enrolls a host whose hardware UUID is uuid (a simulated device's HardwareUUID, so that it maps to that
@@ -104,8 +116,16 @@ func (h *FleetHost) rows(query string) []map[string]string {
 		os["kernel_version"] = "7.0.0-38-generic"
 		return []map[string]string{os}
 	case query == "fleet_detail_query_system_info":
-		return []map[string]string{{"uuid": h.UUID, "hostname": "sim", "computer_name": "sim", "cpu_type": "x86_64",
-			"physical_memory": "4294967296", "cpu_physical_cores": "2", "cpu_logical_cores": "2"}}
+		row := map[string]string{"uuid": h.UUID, "hostname": "sim", "computer_name": "sim", "cpu_type": "x86_64",
+			"physical_memory": "4294967296", "cpu_physical_cores": "2", "cpu_logical_cores": "2"}
+		if hw := h.Hardware; hw != nil {
+			row["hardware_vendor"], row["hardware_model"], row["hardware_serial"], row["cpu_brand"] = hw.Vendor, hw.Model, hw.Serial, hw.CPUBrand
+			row["cpu_physical_cores"], row["physical_memory"] = strconv.Itoa(hw.CPUCores), strconv.FormatInt(hw.MemoryBytes, 10)
+		}
+		return []map[string]string{row}
+	case query == "fleet_detail_query_disk_space_unix" && h.Hardware != nil:
+		total := strconv.FormatFloat(h.Hardware.DiskTotalGB, 'f', 2, 64)
+		return []map[string]string{{"gigs_total_disk_space": total, "gigs_disk_space_available": total, "percent_disk_space_available": "100"}}
 	case query == "fleet_detail_query_osquery_info":
 		return []map[string]string{{"version": "5.23.1", "uuid": h.UUID, "build_platform": "ubuntu"}}
 	case query == "fleet_detail_query_software_linux":

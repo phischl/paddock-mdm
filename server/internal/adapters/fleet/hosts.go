@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/phischl/paddock-mdm/server/internal/ports"
 )
@@ -29,7 +31,16 @@ type host struct {
 	DetailUpdatedAt   time.Time  `json:"detail_updated_at"`
 	SoftwareUpdatedAt time.Time  `json:"software_updated_at"`
 	PolicyUpdatedAt   time.Time  `json:"policy_updated_at"`
-	Software          []struct {
+	// Asset facts (ADR 0037 decision 7). Free disk space, uptime and network addresses are deliberately not read:
+	// they stay in Fleet (plan M8d decision 6).
+	HardwareVendor     string  `json:"hardware_vendor"`
+	HardwareModel      string  `json:"hardware_model"`
+	HardwareSerial     string  `json:"hardware_serial"`
+	CPUBrand           string  `json:"cpu_brand"`
+	CPUPhysicalCores   int     `json:"cpu_physical_cores"`
+	Memory             int64   `json:"memory"`
+	GigsTotalDiskSpace float64 `json:"gigs_total_disk_space"`
+	Software           []struct {
 		Name            string `json:"name"`
 		Version         string `json:"version"`
 		Source          string `json:"source"`
@@ -106,6 +117,11 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 	if h.OrbitVersion != nil && *h.OrbitVersion != "" {
 		inv.AgentVersion = *h.OrbitVersion
 	}
+	inv.Hardware = ports.HostHardware{
+		Vendor: hardwareText(h.HardwareVendor), Model: hardwareText(h.HardwareModel), Serial: hardwareText(h.HardwareSerial),
+		CPUBrand: hardwareText(h.CPUBrand), CPUCores: max(h.CPUPhysicalCores, 0), MemoryBytes: max(h.Memory, 0),
+		DiskTotalBytes: int64(math.Round(max(h.GigsTotalDiskSpace, 0) * 1e9)),
+	}
 	for _, s := range h.Software {
 		p := ports.SoftwarePackage{Name: s.Name, Version: s.Version, Source: s.Source}
 		for _, v := range s.Vulnerabilities {
@@ -123,6 +139,17 @@ func (c *Client) HostInventory(ctx context.Context, ref ports.HostRef) (ports.Ho
 		}
 	}
 	return inv, nil
+}
+
+// maxHardwareRunes bounds every hardware string Paddock stores (plan M8d decision 6).
+const maxHardwareRunes = 128
+
+func hardwareText(s string) string {
+	s = strings.TrimSpace(s)
+	if utf8.RuneCountInString(s) <= maxHardwareRunes {
+		return s
+	}
+	return string([]rune(s)[:maxHardwareRunes])
 }
 
 // VulnerabilityState implements ports.Inventory: a digest of Fleet's vulnerable software versions and their CVEs.

@@ -2885,6 +2885,21 @@ export interface components {
             disk_state?: components["schemas"]["DiskState"];
             /** @description The users responsible for the device, sorted by username (plan M8d decision 2). No login or sudo rights. */
             owners: components["schemas"]["UserRef"][];
+            /** @description The hardware facts of the inventory (plan M8d decision 8); null while the inventory has no row for the device. */
+            hardware: components["schemas"]["DeviceHardware"] | null;
+        };
+        /** @description Asset facts the inventory reports (ADR 0037 decision 7); empty strings and zeros where it reports none. Free disk space, uptime and network addresses stay in Fleet. */
+        DeviceHardware: {
+            vendor: string;
+            model: string;
+            serial: string;
+            cpu_brand: string;
+            /** @description Physical cores. */
+            cpu_cores: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            /** Format: int64 */
+            disk_total_bytes: number;
         };
         DeviceGroupRef: {
             /** Format: uuid */

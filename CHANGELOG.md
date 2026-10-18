@@ -59,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A device has owners: the users responsible for it, set on the device page (at most 20, audited as
   `device.owners_changed`), shown and filterable in the device list, searchable by user name, and listed under
   *Devices owned* on the user page. Owners get no login or sudo rights through this setting.
+- The device page shows the hardware facts the inventory reports (manufacturer, model, serial number, processor,
+  memory, disk size); the device search finds a device by its serial number. Free disk space, uptime and network
+  addresses stay in Fleet.
 
 ### Changed
 

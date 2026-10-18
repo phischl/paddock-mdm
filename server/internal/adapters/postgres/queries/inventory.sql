@@ -5,11 +5,20 @@
 SELECT hardware_uuid::text, device_id::uuid, organization_id::uuid FROM paddock_inventory_devices(@uuids::text[]);
 
 -- name: UpsertInventoryRef :exec
-INSERT INTO device_inventory_ref (device_id, organization_id, external_id, last_seen_at, os_version, fleetd_version, synced_at)
-VALUES (@device_id, @organization_id, @external_id, sqlc.narg(last_seen_at), @os_version, @fleetd_version, now())
+INSERT INTO device_inventory_ref (device_id, organization_id, external_id, last_seen_at, os_version, fleetd_version, synced_at,
+                                  hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes)
+VALUES (@device_id, @organization_id, @external_id, sqlc.narg(last_seen_at), @os_version, @fleetd_version, now(),
+        @hardware_vendor, @hardware_model, @hardware_serial, @cpu_brand, @cpu_cores, @memory_bytes, @disk_total_bytes)
 ON CONFLICT (device_id) DO UPDATE
   SET external_id = EXCLUDED.external_id, last_seen_at = EXCLUDED.last_seen_at, os_version = EXCLUDED.os_version,
-      fleetd_version = EXCLUDED.fleetd_version, synced_at = now();
+      fleetd_version = EXCLUDED.fleetd_version, synced_at = now(),
+      hardware_vendor = EXCLUDED.hardware_vendor, hardware_model = EXCLUDED.hardware_model,
+      hardware_serial = EXCLUDED.hardware_serial, cpu_brand = EXCLUDED.cpu_brand, cpu_cores = EXCLUDED.cpu_cores,
+      memory_bytes = EXCLUDED.memory_bytes, disk_total_bytes = EXCLUDED.disk_total_bytes;
+
+-- name: GetDeviceHardware :one
+SELECT hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_cores, memory_bytes, disk_total_bytes
+FROM device_inventory_ref WHERE device_id = @device_id;
 
 -- name: InsertInstalledSoftware :exec
 INSERT INTO installed_software (device_id, organization_id, name, version, source)

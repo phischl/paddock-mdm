@@ -34,6 +34,14 @@ func enrollFleetHost(t *testing.T, uuid, hostname string, packages [][2]string) 
 	return h
 }
 
+// enrollFleetHostWithHardware enrolls a simulated osquery host like enrollFleetHost that also reports hardware facts.
+func enrollFleetHostWithHardware(t *testing.T, uuid, hostname string, hw devicesim.FleetHardware) *devicesim.FleetHost {
+	t.Helper()
+	h := enrollFleetHost(t, uuid, hostname, nil)
+	h.Hardware = &hw
+	return h
+}
+
 // triggerFleetVulnerabilities runs Fleet's vulnerability job now instead of at its next period, as the development
 // administrator through fleetctl in Fleet's network namespace. Fleet refuses a trigger while a run is still pending,
 // so callers that trigger repeatedly only log the error.

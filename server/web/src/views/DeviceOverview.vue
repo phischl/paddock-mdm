@@ -12,7 +12,7 @@ import TimeCell from '../components/TimeCell.vue'
 import UpdatesCard from '../components/UpdatesCard.vue'
 import { deviceDetailKey } from '../lib/deviceDetailPage'
 import { healthRows } from '../lib/deviceHealth'
-import { formatDateTime } from '../lib/format'
+import { formatDateTime, formatGB, formatGiB } from '../lib/format'
 import { listDeviceVulnerabilities } from '../lib/inventory'
 import { useSessionStore } from '../stores/session'
 import { usePending } from '../composables/usePending'
@@ -32,6 +32,21 @@ const findingCount = ref(0)
 const copied = ref(false)
 
 const d = computed(() => device.value!)
+/** The hardware rows of the identity panel (plan M8d decision 9): '–' while the inventory reports nothing. */
+const hardwareRows = computed(() => {
+  const hw = d.value.hardware
+  const cpu = hw?.cpu_brand
+    ? hw.cpu_brand + (hw.cpu_cores ? ' (' + t('devices.hardware.cpuCores', { cores: hw.cpu_cores }) + ')' : '')
+    : null
+  return [
+    { key: 'manufacturer', value: hw?.vendor || null, mono: false },
+    { key: 'model', value: hw?.model || null, mono: false },
+    { key: 'serial', value: hw?.serial || null, mono: true },
+    { key: 'cpu', value: cpu, mono: false },
+    { key: 'memory', value: hw ? formatGiB(hw.memory_bytes, locale.value) : null, mono: false },
+    { key: 'disk', value: hw ? formatGB(hw.disk_total_bytes, locale.value) : null, mono: false },
+  ]
+})
 const health = computed(() =>
   healthRows({ device: d.value, diskState: diskState.value, updates: updates.value, conditions: conditions.value }),
 )
@@ -131,6 +146,26 @@ async function copyId(): Promise<void> {
             <dt>{{ t('devices.hardwareUuid') }}</dt>
             <dd :class="d.hardware_uuid ? 'mono' : 'pd-muted'">
               {{ d.hardware_uuid ?? '–' }}
+            </dd>
+          </div>
+          <div
+            v-for="row in hardwareRows"
+            :key="row.key"
+            :data-testid="'hardware-' + row.key"
+          >
+            <dt>{{ t('devices.hardware.' + row.key) }}</dt>
+            <dd
+              v-if="row.value"
+              :class="row.mono ? 'mono' : ''"
+            >
+              {{ row.value }}
+            </dd>
+            <dd
+              v-else
+              class="pd-muted"
+              :title="t('devices.hardware.pending')"
+            >
+              –
             </dd>
           </div>
           <div>

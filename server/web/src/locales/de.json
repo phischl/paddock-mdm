@@ -501,6 +501,16 @@
     "back": "Zur Startseite"
   },
   "devices": {
+    "hardware": {
+      "manufacturer": "Hersteller",
+      "model": "Modell",
+      "serial": "Seriennummer",
+      "cpu": "Prozessor",
+      "cpuCores": "{cores, plural, one {# Kern} other {# Kerne}}",
+      "memory": "Arbeitsspeicher",
+      "disk": "Festplattengröße",
+      "pending": "Vom Inventar noch nicht gemeldet"
+    },
     "owners": {
       "title": "Besitzer",
       "column": "Besitzer",

@@ -18,9 +18,11 @@ const countDevices = `-- name: CountDevices :one
 SELECT count(*) FROM (
   SELECT 1 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
   LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
+  LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
   WHERE ($1::text IS NULL
          OR hostname ILIKE $1::text ESCAPE '\'
          OR hardware_uuid ILIKE $1::text ESCAPE '\'
+         OR inv.hardware_serial ILIKE $1::text ESCAPE '\'
          OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
                     AND (u.username ILIKE $1::text ESCAPE '\' OR u.display_name ILIKE $1::text ESCAPE '\')))
     AND ($2::text[] IS NULL OR state = ANY($2::text[]))
@@ -438,12 +440,17 @@ SELECT device.id, device.organization_id, device.hostname, device.state, device.
        -- The owners as UserRef objects for the list column (plan M8d decision 3).
        (SELECT coalesce(jsonb_agg(jsonb_build_object('id', u.id, 'username', u.username, 'display_name', u.display_name)
                                   ORDER BY u.username), '[]'::jsonb)
-        FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners
+        FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners,
+       -- Hardware facts (plan M8d decision 8): NULL while no inventory row exists.
+       inv.hardware_vendor, inv.hardware_model, inv.hardware_serial, inv.cpu_brand, inv.cpu_cores, inv.memory_bytes,
+       inv.disk_total_bytes
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
+LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
 WHERE ($1::text IS NULL
        OR hostname ILIKE $1::text ESCAPE '\'
        OR hardware_uuid ILIKE $1::text ESCAPE '\'
+       OR inv.hardware_serial ILIKE $1::text ESCAPE '\'
        OR EXISTS (SELECT 1 FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id
                   AND (u.username ILIKE $1::text ESCAPE '\' OR u.display_name ILIKE $1::text ESCAPE '\')))
   AND ($2::text[] IS NULL OR state = ANY($2::text[]))
@@ -494,6 +501,13 @@ type ListDevicesRow struct {
 	DiskState            string
 	Contact              string
 	Owners               json.RawMessage
+	HardwareVendor       *string
+	HardwareModel        *string
+	HardwareSerial       *string
+	CpuBrand             *string
+	CpuCores             *int32
+	MemoryBytes          *int64
+	DiskTotalBytes       *int64
 }
 
 // List queries (ADR 0018): see device_group.sql. Sort and search columns are unambiguous across the join.
@@ -536,6 +550,13 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.DiskState,
 			&i.Contact,
 			&i.Owners,
+			&i.HardwareVendor,
+			&i.HardwareModel,
+			&i.HardwareSerial,
+			&i.CpuBrand,
+			&i.CpuCores,
+			&i.MemoryBytes,
+			&i.DiskTotalBytes,
 		); err != nil {
 			return nil, err
 		}

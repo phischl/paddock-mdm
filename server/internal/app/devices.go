@@ -123,6 +123,8 @@ type DeviceDetail struct {
 	Login        LoginAssignment
 	// Owners are the users responsible for the device, sorted by username (plan M8d decision 2).
 	Owners []pgstore.AppUser
+	// Hardware are the asset facts of the inventory (plan M8d decision 8); nil while no inventory row exists.
+	Hardware *pgstore.GetDeviceHardwareRow
 }
 
 // LoginManagement reports whether the device's agent supports bundle schema v2 (login and sudo, plan M3a decision
@@ -175,6 +177,13 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 		return out, err
 	}
 	if out.Owners, err = listDeviceOwners(ctx, q, id); err != nil {
+		return out, err
+	}
+	hw, err := q.GetDeviceHardware(ctx, id)
+	switch {
+	case err == nil:
+		out.Hardware = &hw
+	case !db.IsNoRows(err):
 		return out, err
 	}
 	out.Login, err = loadLoginAssignment(ctx, q, id)
