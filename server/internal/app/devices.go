@@ -54,6 +54,8 @@ type DeviceQuery struct {
 	DiskStates []string   // disk encryption states of the last check-in (plan M4b decision 14)
 	Contacts   []string   // contact states (plan M7c §12 open point 1)
 	OwnerID    *uuid.UUID // devices owned by this user (plan M8d decision 3)
+	// ComponentOutdated selects devices with (true) or without (false) an outdated component (plan M8d decision 55).
+	ComponentOutdated *bool
 	// SecurityOverdue selects devices without a successful security run within SecurityOverdueWindow.
 	SecurityOverdue bool
 }
@@ -94,7 +96,7 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 	}
 	n, err := q.CountDevices(ctx, pgstore.CountDevicesParams{
 		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
-		SecurityOverdueWindow: overdue, OwnerID: nullID(query.OwnerID), CountLimit: countLimit,
+		SecurityOverdueWindow: overdue, OwnerID: nullID(query.OwnerID), ComponentOutdated: query.ComponentOutdated, CountLimit: countLimit,
 	})
 	if err != nil {
 		return fmt.Errorf("count devices: %w", err)
@@ -102,7 +104,7 @@ func listDevices(ctx context.Context, q *pgstore.Queries, query DeviceQuery, out
 	out.Count = int(n)
 	out.Items, err = q.ListDevices(ctx, pgstore.ListDevicesParams{
 		QPattern: query.Page.QPattern, States: query.States, DeviceGroupID: group, DiskStates: query.DiskStates, Contacts: query.Contacts,
-		SecurityOverdueWindow: overdue, OwnerID: nullID(query.OwnerID), Sort: query.Page.Sort, SkipRows: query.Page.Offset,
+		SecurityOverdueWindow: overdue, OwnerID: nullID(query.OwnerID), ComponentOutdated: query.ComponentOutdated, Sort: query.Page.Sort, SkipRows: query.Page.Offset,
 		MaxRows: query.Page.Limit,
 	})
 	if err != nil {
@@ -127,6 +129,8 @@ type DeviceDetail struct {
 	Hardware *pgstore.GetDeviceHardwareRow
 	// Uninstall is the device's uninstall with its command (plan M8d decision 42); nil without one.
 	Uninstall *pgstore.GetDeviceUninstallRow
+	// ComponentTargets are the platform's component targets (plan M8d decision 55).
+	ComponentTargets map[string]string
 }
 
 // LoginManagement reports whether the device's agent supports bundle schema v2 (login and sudo, plan M3a decision
@@ -186,6 +190,9 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 	case err == nil:
 		out.Hardware = &hw
 	case !db.IsNoRows(err):
+		return out, err
+	}
+	if out.ComponentTargets, err = ComponentTargets(ctx, q); err != nil {
 		return out, err
 	}
 	if out.Device.UninstallRequestedAt != nil {

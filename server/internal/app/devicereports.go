@@ -15,6 +15,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/ingest"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
@@ -44,10 +45,18 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 		for _, v := range hb.SchemaVersions {
 			versions = append(versions, int32(v)) //nolint:gosec // the gateway bounds versions to 1–1000
 		}
+		outdated := []string{}
+		if installed := HealthComponents(health); installed != nil {
+			targets, err := ComponentTargets(ctx, q)
+			if err != nil {
+				return err
+			}
+			outdated = components.Outdated(installed, targets)
+		}
 		if err := q.UpsertDeviceStatus(ctx, pgstore.UpsertDeviceStatusParams{
 			DeviceID: hb.DeviceID, OrganizationID: hb.OrganizationID, LastContactAt: &at,
 			AppliedBundleVersion: &hb.AppliedBundleVersion, AgentVersion: &hb.AgentVersion, LastSeq: hb.Seq, Health: health,
-			SchemaVersions: versions, Arch: hb.Arch,
+			SchemaVersions: versions, Arch: hb.Arch, ComponentsOutdated: outdated,
 		}); err != nil {
 			return err
 		}
@@ -57,6 +66,39 @@ func (d *DeviceReports) RecordStatus(ctx context.Context, hb ingest.Heartbeat) e
 		}
 		return nil
 	})
+}
+
+// HealthComponents reads health.components (plan M8d decision 52): the installed version per component, "" for one
+// that is not installed; nil when the agent reported none.
+func HealthComponents(health json.RawMessage) map[string]string {
+	var h struct {
+		Components map[string]string `json:"components"`
+	}
+	if json.Unmarshal(health, &h) != nil || h.Components == nil {
+		return nil
+	}
+	out := make(map[string]string, len(components.Names))
+	for _, name := range components.Names {
+		if v, ok := h.Components[name]; ok {
+			if s, ok := boundedString(v); ok {
+				out[name] = s
+			}
+		}
+	}
+	return out
+}
+
+// ComponentTargets returns the platform's component targets by component.
+func ComponentTargets(ctx context.Context, q *pgstore.Queries) (map[string]string, error) {
+	rows, err := q.ListComponentTargets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, r := range rows {
+		out[r.Component] = r.Version
+	}
+	return out, nil
 }
 
 // RootVolume is the LUKS UUID of the root volume a device reports in health.disk (PDK-009).

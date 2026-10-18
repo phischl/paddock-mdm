@@ -57,7 +57,10 @@ func (r *Rollouts) Round(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		return r.cache.PutOffer(ctx, offer)
+		if err := r.cache.PutOffer(ctx, offer); err != nil {
+			return err
+		}
+		return r.releases.UpsertReleaseTargets(ctx)
 	})
 	return err
 }

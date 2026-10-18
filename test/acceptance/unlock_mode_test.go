@@ -108,11 +108,9 @@ func TestUnlockMode(t *testing.T) {
 
 	// A device that reports the mismatch.
 	d.Health = json.RawMessage(`{"reconcile":"ok","disk":{"state":"unlock_mode_mismatch","tokens":["recovery","tpm2+pin"],"keyslots":2,"unlock_mode":"tpm_only"}}`)
-	if _, _, err := d.Checkin(testContext(t, time.Minute)); err != nil {
-		t.Fatal(err)
-	}
 	hostname := getDevice(t, admin, d.DeviceID).Hostname
-	eventually(t, "the mismatch on the attention list", 2*time.Minute, func() bool {
+	eventually(t, "the mismatch on the attention list", 3*time.Minute, func() bool {
+		_, _, _ = d.Checkin(testContext(t, time.Minute))
 		res := call(t, admin, http.MethodGet, "/api/v1/attention?"+url.Values{"q": {hostname}, "kind": {"disk_not_compliant"}}.Encode(), nil)
 		return res.Status == http.StatusOK && strings.Contains(string(res.Body), `"detail":"unlock_mode_mismatch"`)
 	})

@@ -22,7 +22,9 @@ SELECT sqlc.embed(device), device_status.last_contact_at, device_status.applied_
         FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners,
        -- Hardware facts (plan M8d decision 8): NULL while no inventory row exists.
        inv.hardware_vendor, inv.hardware_model, inv.hardware_serial, inv.cpu_brand, inv.cpu_cores, inv.memory_bytes,
-       inv.disk_total_bytes
+       inv.disk_total_bytes,
+       -- The components older than their targets at the last heartbeat (plan M8d decision 54).
+       coalesce(device_status.components_outdated, '{}')::text[] AS components_outdated
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
 LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
@@ -46,6 +48,8 @@ WHERE (sqlc.narg(q_pattern)::text IS NULL
         WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
   AND (sqlc.narg(owner_id)::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = sqlc.narg(owner_id)::uuid))
+  AND (sqlc.narg(component_outdated)::boolean IS NULL
+       OR (cardinality(device_status.components_outdated) > 0) = sqlc.narg(component_outdated)::boolean)
 ORDER BY
   CASE WHEN @sort::text = 'hostname' THEN hostname END ASC,
   CASE WHEN @sort::text = '-hostname' THEN hostname END DESC,
@@ -82,6 +86,8 @@ SELECT count(*) FROM (
           WHERE m.device_id = device.id AND m.device_group_id = sqlc.narg(device_group_id)::uuid))
     AND (sqlc.narg(owner_id)::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = sqlc.narg(owner_id)::uuid))
+    AND (sqlc.narg(component_outdated)::boolean IS NULL
+         OR (cardinality(device_status.components_outdated) > 0) = sqlc.narg(component_outdated)::boolean)
   LIMIT @count_limit
 ) matching;
 

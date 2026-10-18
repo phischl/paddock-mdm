@@ -57,7 +57,9 @@ SELECT count(*) FROM (
           WHERE m.device_id = device.id AND m.device_group_id = $6::uuid))
     AND ($7::uuid IS NULL OR EXISTS (
           SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = $7::uuid))
-  LIMIT $8
+    AND ($8::boolean IS NULL
+         OR (cardinality(device_status.components_outdated) > 0) = $8::boolean)
+  LIMIT $9
 ) matching
 `
 
@@ -69,6 +71,7 @@ type CountDevicesParams struct {
 	SecurityOverdueWindow pgtype.Interval
 	DeviceGroupID         uuid.NullUUID
 	OwnerID               uuid.NullUUID
+	ComponentOutdated     *bool
 	CountLimit            int32
 }
 
@@ -81,6 +84,7 @@ func (q *Queries) CountDevices(ctx context.Context, arg CountDevicesParams) (int
 		arg.SecurityOverdueWindow,
 		arg.DeviceGroupID,
 		arg.OwnerID,
+		arg.ComponentOutdated,
 		arg.CountLimit,
 	)
 	var count int64
@@ -180,7 +184,7 @@ func (q *Queries) GetDeviceIdentityKey(ctx context.Context, keyID string) (Devic
 }
 
 const getDeviceStatus = `-- name: GetDeviceStatus :one
-SELECT device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health, schema_versions, login_state, presumed_self_locked_at, presumed_lost_at, agent_version_key, arch FROM device_status WHERE device_id = $1
+SELECT device_id, organization_id, last_contact_at, applied_bundle_version, agent_version, last_seq, health, schema_versions, login_state, presumed_self_locked_at, presumed_lost_at, agent_version_key, arch, components_outdated FROM device_status WHERE device_id = $1
 `
 
 func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (DeviceStatus, error) {
@@ -200,6 +204,7 @@ func (q *Queries) GetDeviceStatus(ctx context.Context, deviceID uuid.UUID) (Devi
 		&i.PresumedLostAt,
 		&i.AgentVersionKey,
 		&i.Arch,
+		&i.ComponentsOutdated,
 	)
 	return i, err
 }
@@ -521,7 +526,9 @@ SELECT device.id, device.organization_id, device.hostname, device.state, device.
         FROM device_owner o JOIN app_user u ON u.id = o.user_id WHERE o.device_id = device.id)::jsonb AS owners,
        -- Hardware facts (plan M8d decision 8): NULL while no inventory row exists.
        inv.hardware_vendor, inv.hardware_model, inv.hardware_serial, inv.cpu_brand, inv.cpu_cores, inv.memory_bytes,
-       inv.disk_total_bytes
+       inv.disk_total_bytes,
+       -- The components older than their targets at the last heartbeat (plan M8d decision 54).
+       coalesce(device_status.components_outdated, '{}')::text[] AS components_outdated
 FROM device LEFT JOIN device_status ON device_status.device_id = device.id
 LEFT JOIN device_alert open_alert ON open_alert.device_id = device.id AND open_alert.cleared_at IS NULL
 LEFT JOIN device_inventory_ref inv ON inv.device_id = device.id
@@ -545,17 +552,19 @@ WHERE ($1::text IS NULL
         WHERE m.device_id = device.id AND m.device_group_id = $6::uuid))
   AND ($7::uuid IS NULL OR EXISTS (
         SELECT 1 FROM device_owner o WHERE o.device_id = device.id AND o.user_id = $7::uuid))
+  AND ($8::boolean IS NULL
+       OR (cardinality(device_status.components_outdated) > 0) = $8::boolean)
 ORDER BY
-  CASE WHEN $8::text = 'hostname' THEN hostname END ASC,
-  CASE WHEN $8::text = '-hostname' THEN hostname END DESC,
-  CASE WHEN $8::text = 'last_contact_at' THEN last_contact_at END ASC,
-  CASE WHEN $8::text = '-last_contact_at' THEN last_contact_at END DESC,
-  CASE WHEN $8::text = 'enrolled_at' THEN enrolled_at END ASC,
-  CASE WHEN $8::text = '-enrolled_at' THEN enrolled_at END DESC,
-  CASE WHEN $8::text = 'state' THEN state END ASC,
-  CASE WHEN $8::text = '-state' THEN state END DESC,
+  CASE WHEN $9::text = 'hostname' THEN hostname END ASC,
+  CASE WHEN $9::text = '-hostname' THEN hostname END DESC,
+  CASE WHEN $9::text = 'last_contact_at' THEN last_contact_at END ASC,
+  CASE WHEN $9::text = '-last_contact_at' THEN last_contact_at END DESC,
+  CASE WHEN $9::text = 'enrolled_at' THEN enrolled_at END ASC,
+  CASE WHEN $9::text = '-enrolled_at' THEN enrolled_at END DESC,
+  CASE WHEN $9::text = 'state' THEN state END ASC,
+  CASE WHEN $9::text = '-state' THEN state END DESC,
   device.id
-LIMIT $10 OFFSET $9
+LIMIT $11 OFFSET $10
 `
 
 type ListDevicesParams struct {
@@ -566,6 +575,7 @@ type ListDevicesParams struct {
 	SecurityOverdueWindow pgtype.Interval
 	DeviceGroupID         uuid.NullUUID
 	OwnerID               uuid.NullUUID
+	ComponentOutdated     *bool
 	Sort                  string
 	SkipRows              int32
 	MaxRows               int32
@@ -586,6 +596,7 @@ type ListDevicesRow struct {
 	CpuCores             *int32
 	MemoryBytes          *int64
 	DiskTotalBytes       *int64
+	ComponentsOutdated   []string
 }
 
 // List queries (ADR 0018): see device_group.sql. Sort and search columns are unambiguous across the join.
@@ -598,6 +609,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 		arg.SecurityOverdueWindow,
 		arg.DeviceGroupID,
 		arg.OwnerID,
+		arg.ComponentOutdated,
 		arg.Sort,
 		arg.SkipRows,
 		arg.MaxRows,
@@ -642,6 +654,7 @@ func (q *Queries) ListDevices(ctx context.Context, arg ListDevicesParams) ([]Lis
 			&i.CpuCores,
 			&i.MemoryBytes,
 			&i.DiskTotalBytes,
+			&i.ComponentsOutdated,
 		); err != nil {
 			return nil, err
 		}

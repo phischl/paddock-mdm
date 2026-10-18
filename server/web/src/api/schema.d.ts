@@ -2076,6 +2076,27 @@ export interface paths {
         patch: operations["updateIpAllowlistEntry"];
         trace?: never;
     };
+    "/api/platform/v1/component-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Roles: platform_admin. The versions devices are expected to run (plan M8d decision 55): paddockd, the
+         *     supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau
+         *     from the compiler. At most five rows, no list contract.
+         */
+        get: operations["listComponentTargets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/platform/v1/agent-releases": {
         parameters: {
             query?: never;
@@ -3027,6 +3048,32 @@ export interface components {
             uninstall?: components["schemas"]["DeviceUninstall"] | null;
             /** @description Why the device was retired, when not by an administrator; uninstalled after its removal report. */
             retired_reason?: string | null;
+            /** @description The components of the device with the installed and expected version (plan M8d decision 55), in the order paddockd, paddock_supervisor, paddock_revoke, himmelblau, fleetd. Filled on the device detail and the responses of device actions; empty in lists. */
+            components: components["schemas"]["DeviceComponent"][];
+            /** @description The components older than their target at the last heartbeat (the list column and filter). */
+            components_outdated: string[];
+        };
+        DeviceComponent: {
+            /** @enum {string} */
+            name: "paddockd" | "paddock_supervisor" | "paddock_revoke" | "himmelblau" | "fleetd";
+            /** @description The installed version; empty when not installed or not reported. */
+            installed: string;
+            /** @description The target version; null without a target. */
+            expected: string | null;
+            /**
+             * @description unknown when the agent reported no components (agents before this release).
+             * @enum {string}
+             */
+            status: "ok" | "outdated" | "missing" | "unknown";
+        };
+        ComponentTarget: {
+            /** @enum {string} */
+            component: "paddockd" | "paddock_supervisor" | "paddock_revoke" | "himmelblau" | "fleetd";
+            version: string;
+            /** @description agent_release (the current release) or PADDOCK_HIMMELBLAU_VERSION (the compiler's setting). */
+            source: string;
+            /** Format: date-time */
+            updated_at: string;
         };
         DeviceUninstall: {
             /** @enum {string} */
@@ -5283,6 +5330,8 @@ export interface operations {
                 security_updates?: "overdue";
                 /** @description Only devices this user owns (plan M8d decision 3). */
                 owner_id?: string;
+                /** @description true lists the devices with a component older than its target at their last heartbeat, false the others (plan M8d decision 55). */
+                component_outdated?: boolean;
             };
             header?: never;
             path?: never;
@@ -8450,6 +8499,30 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+        };
+    };
+    listComponentTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The component targets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        targets: components["schemas"]["ComponentTarget"][];
+                    };
+                };
+            };
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
         };
     };
     listAgentReleases: {

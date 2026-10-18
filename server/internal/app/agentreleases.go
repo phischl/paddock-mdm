@@ -16,6 +16,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -601,6 +602,71 @@ func (a *AgentReleases) EvaluateRollouts(ctx context.Context, now time.Time) (*a
 		}
 	}
 	return a.offer(ctx)
+}
+
+// TargetSourceRelease is the source of the component targets derived from the current release.
+const TargetSourceRelease = "agent_release"
+
+// releaseComponents are the component targets the current release determines.
+var releaseComponents = []string{components.Paddockd, components.Supervisor, components.Revoke, components.Fleetd}
+
+// UpsertReleaseTargets writes the component targets of the current release (plan M8d decision 53): paddockd and the
+// supervisor are the release version, paddock-revoke too when the release has its package, fleetd the newest
+// published fleet-osquery package. Without a completed current rollout (none, running or halted) the four rows go.
+func (a *AgentReleases) UpsertReleaseTargets(ctx context.Context) error {
+	return a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		current, err := q.CurrentAgentRollout(ctx)
+		if db.IsNoRows(err) || (err == nil && current.Status != agentrelease.RolloutCompleted) {
+			return q.DeleteComponentTargets(ctx, releaseComponents)
+		}
+		if err != nil {
+			return err
+		}
+		set := func(component, version string) error {
+			return q.UpsertComponentTarget(ctx, pgstore.UpsertComponentTargetParams{Component: component, Version: version, Source: TargetSourceRelease})
+		}
+		drop := func(component string) error { return q.DeleteComponentTargets(ctx, []string{component}) }
+		if err := set(components.Paddockd, current.Version); err != nil {
+			return err
+		}
+		if err := set(components.Supervisor, current.Version); err != nil {
+			return err
+		}
+		revoke, err := q.ReleaseHasPackage(ctx, pgstore.ReleaseHasPackageParams{Version: current.Version, Name: agentrelease.PackageRevoke})
+		switch {
+		case err != nil:
+			return err
+		case revoke:
+			err = set(components.Revoke, current.Version)
+		default:
+			err = drop(components.Revoke)
+		}
+		if err != nil {
+			return err
+		}
+		fleetd, err := q.NewestFleetdPackageVersion(ctx)
+		switch {
+		case db.IsNoRows(err):
+			return drop(components.Fleetd)
+		case err != nil:
+			return err
+		}
+		return set(components.Fleetd, fleetd)
+	})
+}
+
+// ComponentTargets lists the component targets for platform administrators (plan M8d decision 55).
+func (a *AgentReleases) ComponentTargets(ctx context.Context) ([]pgstore.ComponentTarget, error) {
+	if _, err := RequirePlatform(ctx); err != nil {
+		return nil, err
+	}
+	var out []pgstore.ComponentTarget
+	err := a.platform.InPlatform(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		var err error
+		out, err = q.ListPlatformComponentTargets(ctx)
+		return err
+	})
+	return out, err
 }
 
 func (a *AgentReleases) evaluate(ctx context.Context, r pgstore.AgentRollout, now time.Time) error {

@@ -136,13 +136,17 @@ func TestUninstall(t *testing.T) {
 
 	// A TPM keyslot refuses clear_tpm.
 	d.Health = json.RawMessage(`{"reconcile":"ok","disk":{"state":"compliant","tokens":["recovery","tpm2+pin"],"keyslots":2}}`)
-	if _, _, err := d.Checkin(testContext(t, time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "the health report", time.Minute, func() bool {
-		res := call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "reset", map[string]any{"clear_tpm": true}))
-		return res.ProblemCode() == "tpm_in_use_by_disk"
+	// The worker writes device_status at most once a minute per device: check in until the disk report is stored.
+	eventually(t, "the health report", 3*time.Minute, func() bool {
+		_, _, _ = d.Checkin(testContext(t, time.Minute))
+		var disk struct {
+			Tokens []string `json:"tokens"`
+		}
+		_ = call(t, alice, http.MethodGet, "/api/v1/devices/"+d.DeviceID+"/disk", nil).JSON(&disk)
+		return len(disk.Tokens) == 2
 	})
+	res = call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "reset", map[string]any{"clear_tpm": true}))
+	expectStatus(t, res, http.StatusConflict, "tpm_in_use_by_disk")
 
 	// Requested again; the check-in delivers it: no cancel any more.
 	res = call(t, admin.Portal, http.MethodPost, path, uninstallBody(d, hostname, "leave", nil))

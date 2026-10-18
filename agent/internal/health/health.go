@@ -42,6 +42,9 @@ type Report struct {
 	// capabilities`); nil — not reported — when the call failed (a build before PDK-009, no paddock-revoke, a
 	// timeout); the server then keeps the last reported value.
 	RevokeCapabilities *[]string `json:"revoke_capabilities,omitempty"`
+	// Components are the installed versions of paddockd, the supervisor, paddock-revoke, Himmelblau and fleetd (plan
+	// M8d decision 52), "" for a component that is not installed; nil until the first check-in.
+	Components map[string]string `json:"components,omitempty"`
 }
 
 // State is the current health, shared between the run loop (writer) and the socket server (reader).

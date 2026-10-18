@@ -6,6 +6,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
+	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 )
 
 // supervisorPackages returns the paddock-supervisor packages of the current release by arch (plan M8d decision 30):
@@ -30,4 +31,15 @@ func supervisorFor(packages map[string]bundle.PackageRef, agentVersion string) m
 		return nil
 	}
 	return packages
+}
+
+// himmelblauTarget records the Himmelblau version the compiler renders as the component target (plan M8d decision
+// 53); an unchanged target is not rewritten.
+func (c *Compiler) himmelblauTarget(ctx context.Context, q *pgstore.Queries) error {
+	if c.cfg.HimmelblauVersion == "" {
+		return nil
+	}
+	return q.UpsertComponentTarget(ctx, pgstore.UpsertComponentTargetParams{
+		Component: components.Himmelblau, Version: c.cfg.HimmelblauVersion, Source: "PADDOCK_HIMMELBLAU_VERSION",
+	})
 }

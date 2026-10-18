@@ -105,6 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The disk encryption card tells for an unencrypted device, and for one encrypted outside Paddock, that a reinstall
   with the Paddock autoinstall is needed, and names devices with a separate `/boot` as candidates for the in-place
   encryption planned for a later release; nothing on the disk changes.
+- Agents report the installed versions of paddockd, the supervisor, paddock-revoke, Himmelblau and fleetd at every
+  check-in. The server keeps the expected versions (the current release, the newest fleetd package, the compiler's
+  Himmelblau version; `GET /api/platform/v1/component-targets`), the device detail lists every component with its
+  status, and `GET /api/v1/devices?component_outdated=true` finds devices with an outdated component.
 
 ### Changed
 

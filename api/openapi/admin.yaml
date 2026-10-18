@@ -714,7 +714,7 @@ paths:
         sort: [hostname, last_contact_at, enrolled_at, state]
         default_sort: hostname
         search: [hostname, hardware_uuid, owners.username, owners.display_name, hardware.serial]
-        filters: [state, device_group_id, disk_state, contact, security_updates, owner_id]
+        filters: [state, device_group_id, disk_state, contact, security_updates, owner_id, component_outdated]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PageSize"
@@ -751,6 +751,10 @@ paths:
           in: query
           description: Only devices this user owns (plan M8d decision 3).
           schema: { type: string, format: uuid }
+        - name: component_outdated
+          in: query
+          description: true lists the devices with a component older than its target at their last heartbeat, false the others (plan M8d decision 55).
+          schema: { type: boolean }
       responses:
         "200":
           description: One page of devices.
@@ -3354,6 +3358,28 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+  /api/platform/v1/component-targets:
+    get:
+      operationId: listComponentTargets
+      tags: [platform]
+      description: |
+        Roles: platform_admin. The versions devices are expected to run (plan M8d decision 55): paddockd, the
+        supervisor and paddock-revoke from the current release, fleetd from the newest published release, Himmelblau
+        from the compiler. At most five rows, no list contract.
+      responses:
+        "200":
+          description: The component targets.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [targets]
+                properties:
+                  targets:
+                    type: array
+                    items: { $ref: "#/components/schemas/ComponentTarget" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
   /api/platform/v1/agent-releases:
     get:
       operationId: listAgentReleases
@@ -4763,7 +4789,7 @@ components:
       type: object
       required: [id, hostname, state, hardware_uuid, machine_id, os_release, enrollment_token_id, enrolled_at,
                  state_changed_at, bundle_version, last_contact_at, applied_bundle_version, agent_version, contact, owners,
-                 hardware]
+                 hardware, components, components_outdated]
       properties:
         id: { type: string, format: uuid }
         hostname: { type: string }
@@ -4808,6 +4834,36 @@ components:
           type: string
           nullable: true
           description: Why the device was retired, when not by an administrator; uninstalled after its removal report.
+        components:
+          type: array
+          description: >-
+            The components of the device with the installed and expected version (plan M8d decision 55), in the order
+            paddockd, paddock_supervisor, paddock_revoke, himmelblau, fleetd. Filled on the device detail and the
+            responses of device actions; empty in lists.
+          items: { $ref: "#/components/schemas/DeviceComponent" }
+        components_outdated:
+          type: array
+          description: The components older than their target at the last heartbeat (the list column and filter).
+          items: { type: string }
+    DeviceComponent:
+      type: object
+      required: [name, installed, expected, status]
+      properties:
+        name: { type: string, enum: [paddockd, paddock_supervisor, paddock_revoke, himmelblau, fleetd] }
+        installed: { type: string, description: The installed version; empty when not installed or not reported. }
+        expected: { type: string, nullable: true, description: The target version; null without a target. }
+        status:
+          type: string
+          enum: [ok, outdated, missing, unknown]
+          description: unknown when the agent reported no components (agents before this release).
+    ComponentTarget:
+      type: object
+      required: [component, version, source, updated_at]
+      properties:
+        component: { type: string, enum: [paddockd, paddock_supervisor, paddock_revoke, himmelblau, fleetd] }
+        version: { type: string }
+        source: { type: string, description: "agent_release (the current release) or PADDOCK_HIMMELBLAU_VERSION (the compiler's setting)." }
+        updated_at: { type: string, format: date-time }
     DeviceUninstall:
       type: object
       required: [mode, requested_at, command_id, command_status, uninstalled_at, local_admin, tpm]

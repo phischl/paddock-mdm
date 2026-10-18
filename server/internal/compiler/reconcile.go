@@ -55,8 +55,10 @@ func (c *Compiler) Reconcile(ctx context.Context) error {
 			if keys.Inventory, err = c.inventory(ctx, q); err != nil {
 				return err
 			}
-			keys.Supervisor, err = supervisorPackages(ctx, q)
-			return err
+			if keys.Supervisor, err = supervisorPackages(ctx, q); err != nil {
+				return err
+			}
+			return c.himmelblauTarget(ctx, q)
 		})
 		if err != nil {
 			return err

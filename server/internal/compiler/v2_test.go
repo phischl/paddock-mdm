@@ -575,3 +575,18 @@ func TestDiskUnlockMode(t *testing.T) {
 		}
 	}
 }
+
+// TestHimmelblauTarget (plan M8d decision 53): the reconcile round records the compiler's Himmelblau version as the
+// component target.
+func TestHimmelblauTarget(t *testing.T) {
+	w := newWorld(t)
+	w.exec("DELETE FROM component_target WHERE component = 'himmelblau'")
+	if err := w.comp.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var version, source string
+	if err := w.super.QueryRow(context.Background(), "SELECT version, source FROM component_target WHERE component = 'himmelblau'").
+		Scan(&version, &source); err != nil || version != "4.0.4" || source != "PADDOCK_HIMMELBLAU_VERSION" {
+		t.Fatalf("target %q %q, %v", version, source, err)
+	}
+}

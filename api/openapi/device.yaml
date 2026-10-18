@@ -359,6 +359,14 @@ components:
         health:
           type: object
           additionalProperties: true
+          description: |
+            The agent's health report. Since plan M8d: components maps paddockd, paddock_supervisor, paddock_revoke,
+            himmelblau and fleetd to their installed versions ("" when not installed), and disk carries unlock_mode
+            and, in state not_encrypted, boot_separate.
+          properties:
+            components:
+              type: object
+              additionalProperties: { type: string }
         event_seq_high: { type: integer, format: int64, minimum: 0 }
         arch: { type: string, enum: [amd64, arm64], description: "Agent architecture; selects the artifact of an agent_update." }
     BundleRef:

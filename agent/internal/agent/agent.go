@@ -81,6 +81,9 @@ type Deps struct {
 	RunUnit func(ctx context.Context, name string, args ...string) error
 	// Executable is the running binary the uninstall copies to /run (tests); "" asks the OS.
 	Executable string
+	// SupervisorVersion runs `paddock-supervisor version`; nil runs the installed supervisor ("" when it is not
+	// installed).
+	SupervisorVersion func(ctx context.Context) (string, error)
 	// Download fetches a package from the package store with at most limit bytes; nil uses Client.Download.
 	Download func(ctx context.Context, url string, limit int64) ([]byte, error)
 	Now      func() time.Time
@@ -215,6 +218,9 @@ func New(d Deps) (*Agent, error) {
 	}
 	if a.d.RunUnit == nil {
 		a.d.RunUnit = runUnit
+	}
+	if a.d.SupervisorVersion == nil {
+		a.d.SupervisorVersion = func(ctx context.Context) (string, error) { return supervisorVersion(ctx, a.d.Layout) }
 	}
 	if a.d.Download == nil && a.d.Client != nil {
 		a.d.Download = a.d.Client.Download
@@ -385,6 +391,7 @@ func (a *Agent) checkinRequest(ctx context.Context) protocol.CheckinRequest {
 	a.refreshSudoFlavor(ctx)
 	a.refreshRebootRequired()
 	a.refreshRevokeCapabilities(ctx)
+	a.refreshComponents(ctx)
 	health, err := json.Marshal(a.d.Health.Report())
 	if err != nil {
 		health = nil

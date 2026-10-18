@@ -177,6 +177,13 @@ type ChangeSet struct {
 	Plan           json.RawMessage
 }
 
+type ComponentTarget struct {
+	Component string
+	Version   string
+	Source    string
+	UpdatedAt time.Time
+}
+
 type Device struct {
 	ID                          uuid.UUID
 	OrganizationID              uuid.UUID
@@ -313,6 +320,7 @@ type DeviceStatus struct {
 	PresumedLostAt       *time.Time
 	AgentVersionKey      *string
 	Arch                 string
+	ComponentsOutdated   []string
 }
 
 type DeviceUserSeen struct {

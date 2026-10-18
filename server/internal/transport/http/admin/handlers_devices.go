@@ -11,6 +11,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/app"
+	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 	"github.com/phischl/paddock-mdm/server/internal/domain/enrollment"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/adminapi"
 	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin/listing"
@@ -120,7 +121,8 @@ func (h *handlers) ListDevices(ctx context.Context, req adminapi.ListDevicesRequ
 		return nil, err
 	}
 	res, err := h.devices.List(ctx, app.DeviceQuery{Page: params.ListPage(), States: states, GroupID: req.Params.DeviceGroupId,
-		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0, OwnerID: req.Params.OwnerId})
+		DiskStates: diskStates, Contacts: contacts, SecurityOverdue: len(overdue) > 0, OwnerID: req.Params.OwnerId,
+		ComponentOutdated: req.Params.ComponentOutdated})
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +157,7 @@ func toDeviceRows(rows []pgstore.ListDevicesRow) []adminapi.Device {
 			items[i].DiskState = &s
 		}
 		items[i].Contact = adminapi.DeviceContact(r.Contact)
+		items[i].ComponentsOutdated = r.ComponentsOutdated
 		// Built by ListDevices with jsonb_build_object; an unreadable value leaves the column empty.
 		_ = json.Unmarshal(r.Owners, &items[i].Owners)
 		if r.HardwareVendor != nil {
@@ -173,12 +176,35 @@ func toDevice(d pgstore.Device, status *pgstore.DeviceStatus) adminapi.Device {
 		Id: d.ID, Hostname: d.Hostname, State: adminapi.DeviceState(d.State), HardwareUuid: d.HardwareUuid,
 		MachineId: d.MachineID, OsRelease: map[string]string{}, EnrollmentTokenId: idPtr(d.EnrollmentTokenID),
 		EnrolledAt: d.EnrolledAt.UTC(), StateChangedAt: d.StateChangedAt.UTC(), BundleVersion: d.BundleSeq,
-		Owners: []adminapi.UserRef{}, AgentUpdateRequestedVersion: d.AgentUpdateRequestedVersion,
-		AgentUpdateRequestedAt: utcPtr(d.AgentUpdateRequestedAt), RetiredReason: d.RetiredReason,
+		Owners: []adminapi.UserRef{}, Components: []adminapi.DeviceComponent{}, ComponentsOutdated: []string{},
+		AgentUpdateRequestedVersion: d.AgentUpdateRequestedVersion,
+		AgentUpdateRequestedAt:      utcPtr(d.AgentUpdateRequestedAt), RetiredReason: d.RetiredReason,
 	}
 	_ = json.Unmarshal(d.OsRelease, &out.OsRelease) // written by the worker from a map[string]string
 	if status != nil {
 		out.LastContactAt, out.AppliedBundleVersion, out.AgentVersion = utcPtr(status.LastContactAt), status.AppliedBundleVersion, status.AgentVersion
+		if status.ComponentsOutdated != nil {
+			out.ComponentsOutdated = status.ComponentsOutdated
+		}
+	}
+	return out
+}
+
+// toDeviceComponents is the component list of a device from its last health report and the targets (plan M8d
+// decision 55).
+func toDeviceComponents(status *pgstore.DeviceStatus, targets map[string]string) []adminapi.DeviceComponent {
+	var installed map[string]string
+	if status != nil {
+		installed = app.HealthComponents(status.Health)
+	}
+	out := make([]adminapi.DeviceComponent, 0, len(components.Names))
+	for _, name := range components.Names {
+		c := adminapi.DeviceComponent{Name: adminapi.DeviceComponentName(name), Installed: installed[name],
+			Status: adminapi.DeviceComponentStatus(components.Status(name, installed, targets))}
+		if v, ok := targets[name]; ok {
+			c.Expected = &v
+		}
+		out = append(out, c)
 	}
 	return out
 }
@@ -195,8 +221,9 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
 		Hardware: base.Hardware, AgentUpdateRequestedVersion: base.AgentUpdateRequestedVersion,
 		AgentUpdateRequestedAt: base.AgentUpdateRequestedAt, RetiredReason: base.RetiredReason,
-		Uninstall: toDeviceUninstall(d.Uninstall),
-		Groups:    make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
+		Uninstall: toDeviceUninstall(d.Uninstall), Components: toDeviceComponents(d.Status, d.ComponentTargets),
+		ComponentsOutdated: base.ComponentsOutdated,
+		Groups:             make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
 		LoginAssignment: adminapi.DeviceLoginAssignment{
 			Users: make([]adminapi.UserRef, len(d.Login.Users)), Groups: make([]adminapi.UserGroupRef, len(d.Login.Groups)),
@@ -303,6 +330,7 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	out.Owners = toUserRefs(d.Owners)
 	out.Hardware = toDeviceHardware(d.Hardware)
 	out.Uninstall = toDeviceUninstall(d.Uninstall)
+	out.Components = toDeviceComponents(d.Status, d.ComponentTargets)
 	return out, nil
 }
 

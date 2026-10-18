@@ -16,6 +16,20 @@ import (
 // agentReleaseList is the list definition of GET /api/platform/v1/agent-releases (plan M2b decision 20).
 var agentReleaseList = listing.Spec{Sort: []string{"version", "created_at", "status"}, DefaultSort: "-created_at"}
 
+// ListComponentTargets returns the component targets (plan M8d decision 55).
+func (h *handlers) ListComponentTargets(ctx context.Context, _ adminapi.ListComponentTargetsRequestObject) (adminapi.ListComponentTargetsResponseObject, error) {
+	rows, err := h.releases.ComponentTargets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := adminapi.ListComponentTargets200JSONResponse{Targets: make([]adminapi.ComponentTarget, len(rows))}
+	for i, r := range rows {
+		out.Targets[i] = adminapi.ComponentTarget{Component: adminapi.ComponentTargetComponent(r.Component), Version: r.Version,
+			Source: r.Source, UpdatedAt: r.UpdatedAt.UTC()}
+	}
+	return out, nil
+}
+
 func (h *handlers) ListAgentReleases(ctx context.Context, req adminapi.ListAgentReleasesRequestObject) (adminapi.ListAgentReleasesResponseObject, error) {
 	params, err := listing.Parse(agentReleaseList, listing.Query{
 		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
