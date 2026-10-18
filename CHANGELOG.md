@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compose.auto-unseal.yaml`, its own PostgreSQL role `paddock_unsealer`, no AppRole); `disable` stops it, deletes the
   shares and sets `PADDOCK_AUTO_UNSEAL=no`. `./paddock secrets` now also creates `db_paddock_unsealer_password` and
   `db_paddock_unsealer_url`.
+- `./paddock check` gains the item `openbao auto-unseal` and the status `WARN`: it fails when the unsealer and
+  `PADDOCK_AUTO_UNSEAL` disagree, on the audit host, when another service mounts the shares or the unsealer holds an
+  AppRole or another database URL; it warns on every run on a production control plane with automatic unseal
+  (residual risk RR-43) and passes on a lab host. A warning does not change the exit code.
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.

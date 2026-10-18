@@ -141,8 +141,8 @@ func TestProductionConfigurationPasses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected all PASS:\n%s", out)
 	}
-	if strings.Count(out, "PASS") != 15 {
-		t.Fatalf("expected 15 items:\n%s", out)
+	if strings.Count(out, "PASS") != 16 {
+		t.Fatalf("expected 16 items:\n%s", out)
 	}
 }
 
@@ -520,6 +520,7 @@ var labItems = []string{
 	"secret files present, not empty and not world-readable",
 	"secret files readable by the Paddock services",
 	"secrets the services reference are mounted",
+	"openbao auto-unseal",
 	"only Caddy's HTTP port published, on the bind address",
 	"links between the hosts use TLS",
 	"container hardening",

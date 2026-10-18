@@ -144,6 +144,12 @@ func ComposeProductionHost(ctx context.Context, env []string, host string, args 
 	return composeFiles(ctx, env, nil, "prod.env.example", files, args)
 }
 
+// ComposeProductionFiles runs `docker compose` over the given files of deploy/compose with the settings template
+// envFile (prod.env.example or lab.env.example), e.g. a host's files plus an overlay (plan M8u gate U5).
+func ComposeProductionFiles(ctx context.Context, env []string, envFile string, files []string, args ...string) (string, error) {
+	return composeFiles(ctx, env, nil, envFile, files, args)
+}
+
 func composeFiles(ctx context.Context, env []string, stdin io.Reader, envFile string, files, args []string) (string, error) {
 	root, err := RepoRoot()
 	if err != nil {
