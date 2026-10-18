@@ -445,10 +445,10 @@ const dmsPeriod = 8
 
 // setDMS turns the acme dead man's switch on (period dmsPeriod, warnings 3 and 1 before) or off, as alice, signed in
 // again: the gate outlasts a portal session.
-func setDMS(s *Stack, enabled bool) {
-	s.Login()
-	s.StepUp()
-	s.Call(http.MethodPut, "/api/v1/settings/dms", map[string]any{"enabled": enabled, "period_days": dmsPeriod, "warn_days": []int{3, 1}},
+func setDMS(t *testing.T, s *Stack, enabled bool) {
+	s.Login(t)
+	s.StepUp(t)
+	s.Call(t, http.MethodPut, "/api/v1/settings/dms", map[string]any{"enabled": enabled, "period_days": dmsPeriod, "warn_days": []int{3, 1}},
 		http.StatusOK)
 }
 
@@ -490,8 +490,10 @@ func TestDeadMansSwitchGate(t *testing.T) {
 		vm.Gate(t, "R6")
 		d := Install(t, s, vm, debDir(s))
 		target := loopTarget(t, d)
-		t.Cleanup(func() { vm.Together(t, "R6", "switch off at the end", func() string { setDMS(s, false); return "" }) })
-		vm.Together(t, "R6", "switch on", func() string { setDMS(s, true); return "" })
+		t.Cleanup(func() {
+			vm.Together(t, "R6", "switch off at the end", func() string { setDMS(t, s, false); return "" })
+		})
+		vm.Together(t, "R6", "switch on", func() string { setDMS(t, s, true); return "" })
 		Until(t, vm.Name+": self-lock token stored", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
 			at, _ := dmsState(t, d)
 			return !at.IsZero() && d.Must("sudo test -s /var/lib/paddock/revoke/self-lock.dsse && echo stored || true") == "stored"
@@ -554,7 +556,7 @@ func TestDeadMansSwitchGate(t *testing.T) {
 		t.Run("switch off: nothing happens", func(t *testing.T) {
 			vm.Bind(t)
 			before := d.bundleVersion()
-			vm.Together(t, "R6", "switch off", func() string { setDMS(s, false); return "" })
+			vm.Together(t, "R6", "switch off", func() string { setDMS(t, s, false); return "" })
 			Until(t, vm.Name+": self-lock token deleted", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
 				return d.Must("sudo test -e /var/lib/paddock/revoke/self-lock.dsse && echo stored || echo gone") == "gone"
 			})

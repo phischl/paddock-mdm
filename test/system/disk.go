@@ -234,7 +234,7 @@ func stored(es []diskEscrow) int {
 func (d *Device) Disk() diskInfo {
 	d.t.Helper()
 	var i diskInfo
-	if err := json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID+"/disk", nil, http.StatusOK).Body, &i); err != nil {
+	if err := json.Unmarshal(d.s.Call(d.t, http.MethodGet, "/api/v1/devices/"+d.ID+"/disk", nil, http.StatusOK).Body, &i); err != nil {
 		d.t.Fatal(err)
 	}
 	return i

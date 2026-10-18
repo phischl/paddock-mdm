@@ -36,8 +36,8 @@ func (d *Device) hold(pkg, version string) string {
 	if version != "" {
 		body["version"] = version
 	}
-	id := d.s.ID(d.s.Call(http.MethodPost, "/api/v1/package-holds", body, http.StatusCreated))
-	d.s.DeleteOnCleanup("/api/v1/package-holds/" + id)
+	id := d.s.ID(d.t, d.s.Call(d.t, http.MethodPost, "/api/v1/package-holds", body, http.StatusCreated))
+	d.s.DeleteOnCleanup(d.t, "/api/v1/package-holds/"+id)
 	return id
 }
 
@@ -76,7 +76,7 @@ func gateU1(t *testing.T, d *Device) {
 	}
 
 	for _, id := range holds {
-		d.s.Call(http.MethodDelete, "/api/v1/package-holds/"+id, nil, http.StatusNoContent)
+		d.s.Call(t, http.MethodDelete, "/api/v1/package-holds/"+id, nil, http.StatusNoContent)
 	}
 	Until(t, d.Name+": holds released", 5*time.Minute, 10*time.Second, d.Checkin, func() bool {
 		return !strings.Contains(d.Must("apt-mark showhold"), free) &&
@@ -93,7 +93,7 @@ func gateU2(t *testing.T, d *Device) {
 	if out := d.Must("dpkg-query -W -f '${Status}' " + pkg + " 2>/dev/null || true"); out == "install ok installed" {
 		t.Fatalf("%s: %s is installed before the gate", d.Name, pkg)
 	}
-	command := d.s.ID(d.s.Call(http.MethodPost, "/api/v1/devices/"+d.ID+"/install-now", map[string]any{"packages": []string{pkg}}, http.StatusAccepted))
+	command := d.s.ID(t, d.s.Call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/install-now", map[string]any{"packages": []string{pkg}}, http.StatusAccepted))
 	start := time.Now()
 	Until(t, d.Name+": "+pkg+" installed", 10*time.Minute, 10*time.Second, d.Checkin, func() bool {
 		return d.Must("dpkg-query -W -f '${Status}' "+pkg+" 2>/dev/null || true") == "install ok installed"
@@ -107,7 +107,7 @@ func gateU2(t *testing.T, d *Device) {
 				Result map[string]any `json:"result"`
 			} `json:"items"`
 		}
-		res := d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID+"/commands?type=install_now", nil, http.StatusOK)
+		res := d.s.Call(t, http.MethodGet, "/api/v1/devices/"+d.ID+"/commands?type=install_now", nil, http.StatusOK)
 		if err := json.Unmarshal(res.Body, &page); err != nil {
 			t.Fatal(err)
 		}
@@ -152,20 +152,20 @@ func gateU3(t *testing.T, d *Device) {
 	// apt-daily-upgrade.timer catches up on the missed security run (Persistent=true) right away instead of up to an
 	// hour later, when it would upgrade the downgraded packages again before the regular run.
 	at := d.Together(t, "updates", "regular schedule", func() string {
-		previous := d.s.Call(http.MethodGet, "/api/v1/settings/updates", nil, http.StatusOK)
+		previous := d.s.Call(t, http.MethodGet, "/api/v1/settings/updates", nil, http.StatusOK)
 		var settings map[string]any
 		if err := json.Unmarshal(previous.Body, &settings); err != nil {
 			t.Fatal(err)
 		}
 		delete(settings, "updated_at")
-		t.Cleanup(func() { d.s.Call(http.MethodPut, "/api/v1/settings/updates", settings, http.StatusOK) })
+		t.Cleanup(func() { d.s.Call(t, http.MethodPut, "/api/v1/settings/updates", settings, http.StatusOK) })
 		next := map[string]any{}
 		for k, v := range settings {
 			next[k] = v
 		}
 		at := d.Must("date -d '+15 min' +%H:%M")
 		next["regular_schedule"], next["regular_updates_enabled"], next["max_random_delay_min"] = at, true, 0
-		d.s.Call(http.MethodPut, "/api/v1/settings/updates", next, http.StatusOK)
+		d.s.Call(t, http.MethodPut, "/api/v1/settings/updates", next, http.StatusOK)
 		return at
 	})
 	Until(t, d.Name+": timer at "+at, 4*time.Minute, 10*time.Second, d.Checkin, func() bool {
@@ -219,7 +219,7 @@ func gateU3(t *testing.T, d *Device) {
 			} `json:"last_regular_run"`
 			RebootRequired bool `json:"reboot_required"`
 		}
-		res := d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID+"/updates", nil, http.StatusOK)
+		res := d.s.Call(t, http.MethodGet, "/api/v1/devices/"+d.ID+"/updates", nil, http.StatusOK)
 		return json.Unmarshal(res.Body, &u) == nil && u.LastRegularRun != nil && u.RebootRequired
 	})
 
