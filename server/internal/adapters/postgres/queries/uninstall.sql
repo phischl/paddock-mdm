@@ -16,7 +16,8 @@ RETURNING *;
 SELECT d.uninstall_mode::text AS mode, d.uninstall_requested_at::timestamptz AS requested_at,
        d.uninstall_command_id::uuid AS command_id, coalesce(c.status, '')::text AS command_status,
        d.uninstalled_at, coalesce(c.result ->> 'local_admin', '')::text AS local_admin,
-       coalesce(c.result ->> 'tpm', '')::text AS tpm
+       coalesce(c.result ->> 'tpm', '')::text AS tpm, c.delivered_at AS command_delivered_at,
+       c.finished_at AS command_finished_at
 FROM device d LEFT JOIN device_command c ON c.id = d.uninstall_command_id
 WHERE d.id = @id AND d.uninstall_requested_at IS NOT NULL;
 

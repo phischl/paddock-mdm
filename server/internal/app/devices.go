@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -129,6 +130,9 @@ type DeviceDetail struct {
 	Hardware *pgstore.GetDeviceHardwareRow
 	// Uninstall is the device's uninstall with its command (plan M8d decision 42); nil without one.
 	Uninstall *pgstore.GetDeviceUninstallRow
+	// UninstallReportOverdue: the pending uninstall's removal report is overdue, so it can be cancelled or requested
+	// again (UninstallReportTimeout).
+	UninstallReportOverdue bool
 	// ComponentTargets are the platform's component targets (plan M8d decision 55).
 	ComponentTargets map[string]string
 }
@@ -201,6 +205,8 @@ func loadDeviceDetail(ctx context.Context, q *pgstore.Queries, id uuid.UUID) (De
 			return out, err
 		}
 		out.Uninstall = &u
+		out.UninstallReportOverdue = u.UninstalledAt == nil &&
+			UninstallReportOverdue(u.CommandStatus, u.CommandFinishedAt, u.CommandDeliveredAt, time.Now())
 	}
 	out.Login, err = loadLoginAssignment(ctx, q, id)
 	return out, err

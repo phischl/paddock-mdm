@@ -4866,11 +4866,16 @@ components:
         updated_at: { type: string, format: date-time }
     DeviceUninstall:
       type: object
-      required: [mode, requested_at, command_id, command_status, uninstalled_at, local_admin, tpm]
+      required: [mode, requested_at, command_id, command_status, uninstalled_at, local_admin, tpm, report_overdue]
       properties:
         mode: { type: string, enum: [leave, reset] }
         requested_at: { type: string, format: date-time }
         command_id: { type: string, format: uuid }
+        report_overdue:
+          type: boolean
+          description: >-
+            The device received the command more than 24 hours ago and no removal report arrived; the request can be
+            cancelled or made again.
         command_status: { type: string, description: "The status of the command uninstall: pending, delivered, succeeded, failed or expired." }
         uninstalled_at: { type: string, format: date-time, nullable: true, description: When the device reported the removal. }
         local_admin: { type: string, nullable: true, description: "From the removal report: removed, kept or kept_last_admin." }

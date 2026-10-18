@@ -81,7 +81,7 @@ async function type(testid: string, value: string): Promise<void> {
 
 const pending: DeviceUninstall = {
   mode: 'leave', requested_at: '2026-10-18T09:00:00Z', command_id: 'c1', command_status: 'pending', uninstalled_at: null,
-  local_admin: null, tpm: null,
+  local_admin: null, tpm: null, report_overdue: false,
 }
 
 describe('remove Paddock (plan M8d decision 42)', () => {
@@ -153,10 +153,16 @@ describe('remove Paddock (plan M8d decision 42)', () => {
     expect(el('uninstall-cancel-request')).toBeNull()
   })
 
+  it('offers the cancel again once the removal report is overdue', async () => {
+    await mountZone({ uninstall: { ...pending, command_status: 'succeeded', report_overdue: true } })
+    expect(el('uninstall-cancel-request')).not.toBeNull()
+  })
+
   it('knows when a pending removal can be cancelled and when a disk uses the TPM', () => {
     expect(uninstallCancellable(pending)).toBe(true)
     expect(uninstallCancellable({ ...pending, command_status: 'failed' })).toBe(true)
     expect(uninstallCancellable({ ...pending, command_status: 'delivered' })).toBe(false)
+    expect(uninstallCancellable({ ...pending, command_status: 'delivered', report_overdue: true })).toBe(true)
     expect(uninstallCancellable({ ...pending, uninstalled_at: '2026-10-18T10:00:00Z' })).toBe(false)
     expect(uninstallCancellable(null)).toBe(false)
     expect(diskUsesTpm({ tokens: ['recovery', 'tpm2+pin'], volumes: [] })).toBe(true)

@@ -221,7 +221,7 @@ func toDeviceDetail(d app.DeviceDetail) adminapi.DeviceDetail {
 		AppliedBundleVersion: base.AppliedBundleVersion, AgentVersion: base.AgentVersion, Owners: base.Owners,
 		Hardware: base.Hardware, AgentUpdateRequestedVersion: base.AgentUpdateRequestedVersion,
 		AgentUpdateRequestedAt: base.AgentUpdateRequestedAt, RetiredReason: base.RetiredReason,
-		Uninstall: toDeviceUninstall(d.Uninstall), Components: toDeviceComponents(d.Status, d.ComponentTargets),
+		Uninstall: toDeviceUninstall(d.Uninstall, d.UninstallReportOverdue), Components: toDeviceComponents(d.Status, d.ComponentTargets),
 		ComponentsOutdated: base.ComponentsOutdated,
 		Groups:             make([]adminapi.DeviceGroupRef, len(d.Groups)), IdentityKeys: make([]adminapi.DeviceIdentityKey, len(d.IdentityKeys)),
 		LoginsSuspended: d.Device.LoginsSuspended, LoginManagement: d.LoginManagement(), SchemaVersions: []int{},
@@ -329,7 +329,7 @@ func (h *handlers) transition(ctx context.Context, id uuid.UUID, fn func(context
 	out.Contact = adminapi.DeviceContact(d.Contact)
 	out.Owners = toUserRefs(d.Owners)
 	out.Hardware = toDeviceHardware(d.Hardware)
-	out.Uninstall = toDeviceUninstall(d.Uninstall)
+	out.Uninstall = toDeviceUninstall(d.Uninstall, d.UninstallReportOverdue)
 	out.Components = toDeviceComponents(d.Status, d.ComponentTargets)
 	return out, nil
 }
@@ -363,12 +363,12 @@ func (h *handlers) CancelDeviceUninstall(ctx context.Context, req adminapi.Cance
 }
 
 // toDeviceUninstall is the uninstall of a device; nil without one.
-func toDeviceUninstall(u *pgstore.GetDeviceUninstallRow) *adminapi.DeviceUninstall {
+func toDeviceUninstall(u *pgstore.GetDeviceUninstallRow, overdue bool) *adminapi.DeviceUninstall {
 	if u == nil {
 		return nil
 	}
 	out := &adminapi.DeviceUninstall{Mode: adminapi.DeviceUninstallMode(u.Mode), RequestedAt: u.RequestedAt.UTC(),
-		CommandId: u.CommandID, CommandStatus: u.CommandStatus, UninstalledAt: utcPtr(u.UninstalledAt)}
+		CommandId: u.CommandID, CommandStatus: u.CommandStatus, UninstalledAt: utcPtr(u.UninstalledAt), ReportOverdue: overdue}
 	if u.LocalAdmin != "" {
 		out.LocalAdmin = &u.LocalAdmin
 	}

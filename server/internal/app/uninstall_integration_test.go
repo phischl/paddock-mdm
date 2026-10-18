@@ -495,7 +495,13 @@ func TestUninstallReportOverdue(t *testing.T) {
 	_, err = w.uninstalls.Request(admin, w.device, w.leave())
 	expectUninstallProblem(t, err, "invalid_state", 409, "an uninstall is already requested")
 
+	if detail, err := w.devices.Get(admin, w.device); err != nil || detail.UninstallReportOverdue {
+		t.Fatalf("overdue after 23 hours: %v", err)
+	}
 	w.exec(t, "UPDATE device_command SET finished_at = now() - interval '25 hours' WHERE id = $1", old)
+	if detail, err := w.devices.Get(admin, w.device); err != nil || !detail.UninstallReportOverdue {
+		t.Fatalf("not overdue after 25 hours: %v", err)
+	}
 	dev, err = w.uninstalls.Request(admin, w.device, w.leave())
 	if err != nil || dev.UninstallCommandID.UUID == old {
 		t.Fatalf("request again: %+v, %v", dev, err)

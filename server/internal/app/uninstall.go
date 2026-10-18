@@ -46,15 +46,20 @@ func NewUninstalls(runner *ActionRunner, org *db.OrgPool, cache UninstallCache) 
 // tmpfs (/run), so a reboot during the removal loses it and no report ever arrives (review finding 8).
 const UninstallReportTimeout = 24 * time.Hour
 
-// reportOverdue reports whether the device received the uninstall command at least UninstallReportTimeout ago and
-// no removal report arrived.
-func reportOverdue(cmd pgstore.DeviceCommand, now time.Time) bool {
-	at := cmd.FinishedAt
+// UninstallReportOverdue reports whether the device received the uninstall command (status delivered or succeeded)
+// at least UninstallReportTimeout before now, counted from its result or else from the delivery; the caller checks
+// that no removal report arrived.
+func UninstallReportOverdue(status string, finishedAt, deliveredAt *time.Time, now time.Time) bool {
+	at := finishedAt
 	if at == nil {
-		at = cmd.DeliveredAt
+		at = deliveredAt
 	}
-	return (cmd.Status == devicecommand.StatusDelivered || cmd.Status == devicecommand.StatusSucceeded) && at != nil &&
+	return (status == devicecommand.StatusDelivered || status == devicecommand.StatusSucceeded) && at != nil &&
 		now.Sub(*at) >= UninstallReportTimeout
+}
+
+func reportOverdue(cmd pgstore.DeviceCommand, now time.Time) bool {
+	return UninstallReportOverdue(cmd.Status, cmd.FinishedAt, cmd.DeliveredAt, now)
 }
 
 // Specs of the uninstall actions.

@@ -20,9 +20,9 @@ export function uninstallPending(u: DeviceUninstall | null | undefined): u is De
   return !!u && !u.uninstalled_at
 }
 
-/** Whether a pending uninstall can be cancelled: its command has not reached the device. */
+/** Whether a pending uninstall can be cancelled: its command has not reached the device, or its removal report is overdue. */
 export function uninstallCancellable(u: DeviceUninstall | null | undefined): boolean {
-  return uninstallPending(u) && cancellable.includes(u.command_status)
+  return uninstallPending(u) && (cancellable.includes(u.command_status) || u.report_overdue)
 }
 
 /** Whether a disk report lists a TPM keyslot on any volume: then the TPM cannot be cleared. */

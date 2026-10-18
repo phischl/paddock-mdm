@@ -3082,6 +3082,8 @@ export interface components {
             requested_at: string;
             /** Format: uuid */
             command_id: string;
+            /** @description The device received the command more than 24 hours ago and no removal report arrived; the request can be cancelled or made again. */
+            report_overdue: boolean;
             /** @description The status of the command uninstall: pending, delivered, succeeded, failed or expired. */
             command_status: string;
             /**
