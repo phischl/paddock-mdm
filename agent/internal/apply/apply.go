@@ -1,5 +1,6 @@
 // Package apply applies a verified bundle to the device (plan M2b decisions 9 and 10, M3b decision 6): resources in
-// the order time → file → systemd_unit → updates (the bundle's updates section, plan M5b decision 5) → login → sudo,
+// the order hostname (the bundle's hostname section, plan M8h decision 14) → time → file → systemd_unit → updates
+// (the bundle's updates section, plan M5b decision 5) → login → sudo,
 // then the inventory section (plan M5a decision 5), each independently (an error does not stop the others), then the
 // removal of files that left the bundle.
 package apply
@@ -21,8 +22,9 @@ import (
 var SchemaVersions = []int{bundle.SchemaVersion, bundle.SchemaVersion2}
 
 // order is the apply order of resource types: units may depend on files; sudo rights follow the login component
-// that resolves their users. The updates section takes the place of bundle.TypeUpdates.
-var order = []string{bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit, bundle.TypeUpdates, bundle.TypeLogin, bundle.TypeSudo}
+// that resolves their users. The updates and hostname sections take the places of bundle.TypeUpdates and
+// bundle.TypeHostname; the hostname comes first so that everything after it runs under the device's name.
+var order = []string{bundle.TypeHostname, bundle.TypeTime, bundle.TypeFile, bundle.TypeSystemdUnit, bundle.TypeUpdates, bundle.TypeLogin, bundle.TypeSudo}
 
 // ResourceError is one entry of Report.Errors.
 type ResourceError struct {
@@ -48,6 +50,7 @@ type Planned struct {
 
 // Applier applies bundles with a set of reconcilers.
 type Applier struct {
+	sys       reconcile.System
 	recs      map[string]reconcile.Reconciler
 	updates   *reconcile.Updates
 	file      *reconcile.File
@@ -67,6 +70,7 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 	file := &reconcile.File{Sys: sys, Managed: managed}
 	login := &reconcile.Login{Sys: sys, Events: events}
 	return &Applier{
+		sys:     sys,
 		file:    file,
 		login:   login,
 		updates: &reconcile.Updates{Sys: sys, Events: events},
@@ -77,7 +81,8 @@ func New(sys reconcile.System, managed *reconcile.Managed, events *reconcile.Eve
 	}
 }
 
-// sorted returns the resources of b in apply order with the updates section as a resource, filtered by keep, and,
+// sorted returns the resources of b in apply order with the updates and hostname sections as resources, filtered by
+// keep, and,
 // with an inventory reconciler, the inventory section last.
 func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bundle.Resource {
 	var out []bundle.Resource
@@ -85,6 +90,14 @@ func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bu
 		if typ == bundle.TypeUpdates && b.Updates != nil {
 			if r, err := bundle.UpdatesResource(*b.Updates); err == nil && keep(r) {
 				out = append(out, r)
+			}
+			continue
+		}
+		if typ == bundle.TypeHostname {
+			if b.Hostname != nil {
+				if r, err := bundle.HostnameResource(*b.Hostname); err == nil && keep(r) {
+					out = append(out, r)
+				}
 			}
 			continue
 		}
@@ -107,8 +120,11 @@ func (a *Applier) sorted(b *bundle.Bundle, keep func(bundle.Resource) bool) []bu
 	return out
 }
 
-// reconciler returns the reconciler of a resource type.
-func (a *Applier) reconciler(typ string) (reconcile.Reconciler, bool) {
+// reconciler returns the reconciler of a resource type of bundle b.
+func (a *Applier) reconciler(b *bundle.Bundle, typ string) (reconcile.Reconciler, bool) {
+	if typ == bundle.TypeHostname {
+		return &reconcile.Hostname{Sys: a.sys, HostsManaged: func() bool { return managesHosts(b) }}, true
+	}
 	if typ == reconcile.InventoryID && a.inventory != nil {
 		return a.inventory, true
 	}
@@ -150,7 +166,7 @@ func (a *Applier) ApplyResources(ctx context.Context, b *bundle.Bundle, ids []st
 func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.Resource) bool) Report {
 	rep := Report{Version: b.BundleVersion, Errors: []ResourceError{}}
 	for _, res := range a.sorted(b, keep) {
-		rec, ok := a.reconciler(res.Type)
+		rec, ok := a.reconciler(b, res.Type)
 		if !ok {
 			rep.Errors = append(rep.Errors, ResourceError{ID: res.ID, Message: "unsupported resource type " + res.Type})
 			continue
@@ -173,6 +189,12 @@ func (a *Applier) apply(ctx context.Context, b *bundle.Bundle, keep func(bundle.
 		}
 	}
 	return rep
+}
+
+// managesHosts reports whether b manages /etc/hosts as a file; the hostname reconciler then leaves it alone (ADR
+// 0041 decision 6).
+func managesHosts(b *bundle.Bundle) bool {
+	return slices.ContainsFunc(b.Resources, func(r bundle.Resource) bool { return r.ID == "file:"+reconcile.HostsFile })
 }
 
 // hasLogin reports whether b has a login resource; without one, the applier keeps the deny list of the PAM profile
@@ -212,7 +234,7 @@ func (a *Applier) Plan(ctx context.Context, b *bundle.Bundle) []Planned {
 	var out []Planned
 	for _, res := range a.sorted(b, all) {
 		p := Planned{ID: res.ID}
-		if rec, ok := a.reconciler(res.Type); !ok {
+		if rec, ok := a.reconciler(b, res.Type); !ok {
 			p.Error = "unsupported resource type " + res.Type
 		} else if changes, err := rec.Plan(ctx, res); err != nil {
 			p.Error = err.Error()

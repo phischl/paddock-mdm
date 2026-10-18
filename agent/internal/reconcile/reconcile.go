@@ -48,6 +48,8 @@ type System interface {
 	Owner(info fs.FileInfo) (uid, gid int)
 	Systemctl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	Timedatectl(ctx context.Context, args ...string) (stdout string, exit int, err error)
+	// Hostnamectl runs hostnamectl (--json=short, hostname <name>; plan M8h decision 12).
+	Hostnamectl(ctx context.Context, args ...string) (stdout string, exit int, err error)
 	PackageInstalled(name string) bool
 	// PackageVersion returns the version of an installed package, "" if it is not installed.
 	PackageVersion(name string) string

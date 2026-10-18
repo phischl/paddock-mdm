@@ -4,6 +4,7 @@ package fakesys
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -69,7 +70,12 @@ type System struct {
 	Held map[string]bool
 	// Shows are the answers of `systemctl show … <unit>` by unit.
 	Shows map[string]string
+	// Hostnames are the static, transient and pretty hostname hostnamectl reports and sets.
+	Hostnames Hostnames
 }
+
+// Hostnames are the three hostnames of hostnamed.
+type Hostnames struct{ Static, Transient, Pretty string }
 
 // Session is a fake logind session.
 type Session struct {
@@ -235,6 +241,29 @@ func (s *System) Timedatectl(_ context.Context, args ...string) (string, int, er
 	s.Calls = append(s.Calls, "timedatectl "+strings.Join(args, " "))
 	s.NTP = args[len(args)-1] == "true"
 	return "", 0, nil
+}
+
+// Hostnamectl implements reconcile.System for --json=short and hostname <name>, which sets all three names;
+// FailCmd ("hostnamectl hostname x") fails it with exit 1.
+func (s *System) Hostnamectl(_ context.Context, args ...string) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cmd := "hostnamectl " + strings.Join(args, " ")
+	if cmd == s.FailCmd {
+		return "Could not set hostname: Access denied\n", 1, nil
+	}
+	switch {
+	case len(args) == 1 && args[0] == "--json=short":
+		out, err := json.Marshal(map[string]string{
+			"Hostname": s.Hostnames.Transient, "StaticHostname": s.Hostnames.Static, "PrettyHostname": s.Hostnames.Pretty,
+		})
+		return string(out) + "\n", 0, err
+	case len(args) == 2 && args[0] == "hostname":
+		s.Calls = append(s.Calls, cmd)
+		s.Hostnames = Hostnames{Static: args[1], Transient: args[1], Pretty: args[1]}
+		return "", 0, nil
+	}
+	return "", 1, fmt.Errorf("fake hostnamectl: unsupported %v", args)
 }
 
 // PackageInstalled implements reconcile.System.

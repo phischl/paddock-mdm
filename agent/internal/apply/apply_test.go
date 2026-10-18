@@ -229,3 +229,61 @@ func TestUpdatesSection(t *testing.T) {
 		t.Fatalf("plan without the section %+v", plan)
 	}
 }
+
+// TestHostnameSection (plan M8h decision 14): the hostname section is applied as resource "hostname" before the
+// time resource, corrected as drift after a local rename, and leaves a managed /etc/hosts alone; a bundle without it
+// plans nothing for the hostname.
+func TestHostnameSection(t *testing.T) {
+	ctx := context.Background()
+	sys, a := fixture(t)
+	sys.NTP = false
+	sys.Hostnames = fakesys.Hostnames{Static: "ubuntu", Transient: "ubuntu", Pretty: "ubuntu"}
+	sys.Files[reconcile.HostsFile] = &fakesys.File{Data: []byte("127.0.0.1 localhost\n127.0.1.1 ubuntu\n"), Mode: 0o644}
+	b := newBundle(t, 1, nil)
+	b.SchemaVersion = bundle.SchemaVersion2
+	b.Hostname = &bundle.HostnameSpec{Name: "lap-0421"}
+	if err := a.CheckTypes(b); err != nil {
+		t.Fatal(err)
+	}
+	rep := a.Apply(ctx, b)
+	if len(rep.Errors) != 0 || !slices.Equal(rep.ChangedIDs, []string{"hostname", "time"}) {
+		t.Fatalf("report %+v", rep)
+	}
+	want := []string{"hostnamectl hostname lap-0421", "write /etc/hosts", "timedatectl set-ntp true"}
+	if calls := sys.TakeCalls(); !slices.Equal(calls, want) {
+		t.Fatalf("calls %v, want hostname first %v", calls, want)
+	}
+	if drifted := apply.Drifted(a.Plan(ctx, b)); len(drifted) != 0 {
+		t.Fatalf("drift after apply %v", drifted)
+	}
+	sys.Hostnames = fakesys.Hostnames{Static: "other", Transient: "other", Pretty: "other"}
+	drifted := apply.Drifted(a.Plan(ctx, b))
+	if !slices.Equal(drifted, []string{"hostname"}) {
+		t.Fatalf("drift %v", drifted)
+	}
+	if rep := a.ApplyResources(ctx, b, drifted); !slices.Equal(rep.ChangedIDs, []string{"hostname"}) || sys.Hostnames.Static != "lap-0421" {
+		t.Fatalf("drift apply %+v, names %+v", rep, sys.Hostnames)
+	}
+
+	managed, err := bundle.FileResource(bundle.FileSpec{Path: reconcile.HostsFile, Mode: "0644", Owner: "root", Group: "root",
+		Content: "127.0.0.1 localhost\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Resources = append(b.Resources, managed)
+	bundle.SortResources(b.Resources)
+	sys.Hostnames.Pretty = "other"
+	a.Apply(ctx, b)
+	if string(sys.Files[reconcile.HostsFile].Data) != "127.0.0.1 localhost\n" || sys.Hostnames.Pretty != "lap-0421" {
+		t.Fatalf("managed hosts %q, names %+v", sys.Files[reconcile.HostsFile].Data, sys.Hostnames)
+	}
+	if drifted := apply.Drifted(a.Plan(ctx, b)); len(drifted) != 0 {
+		t.Fatalf("drift with a managed /etc/hosts %v", drifted)
+	}
+
+	b.Hostname = nil
+	sys.Hostnames = fakesys.Hostnames{Static: "other", Transient: "other", Pretty: "other"}
+	if plan := a.Plan(ctx, b); slices.ContainsFunc(plan, func(p apply.Planned) bool { return p.ID == "hostname" }) {
+		t.Fatalf("plan without the section %+v", plan)
+	}
+}
