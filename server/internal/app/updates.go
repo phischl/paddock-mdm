@@ -63,7 +63,7 @@ func LoadUpdateSettings(ctx context.Context, q *pgstore.Queries) (UpdateSettings
 		Settings: updates.Settings{
 			SecurityDailyAt: s.SecurityDailyAt, RegularSchedule: s.RegularSchedule, RegularUpdatesEnabled: s.RegularUpdatesEnabled,
 			MaxRandomDelayMin: int(s.MaxRandomDelayMin), StalenessWarningH: int(s.StalenessWarningH),
-			StalenessCriticalH: int(s.StalenessCriticalH),
+			StalenessCriticalH: int(s.StalenessCriticalH), AgentUpdatePolicy: s.AgentUpdatePolicy,
 		},
 		UpdatedAt: &s.UpdatedAt,
 	}, nil
@@ -84,7 +84,7 @@ func (u *Updates) GetSettings(ctx context.Context) (UpdateSettings, error) {
 }
 
 // UpdateSettings replaces the organization's update settings (audited: settings.updates_changed); every device is
-// recompiled.
+// recompiled. An empty AgentUpdatePolicy keeps the stored one (clients and documents that predate it).
 func (u *Updates) UpdateSettings(ctx context.Context, in updates.Settings) (UpdateSettings, error) {
 	spec := SpecUpdateSettings
 	if org, err := orgOf(ctx); err == nil {
@@ -97,6 +97,14 @@ func (u *Updates) UpdateSettings(ctx context.Context, in updates.Settings) (Upda
 	}
 	var out UpdateSettings
 	err := u.runner.RunTx(ctx, ScopeOrg, spec, func(ctx context.Context, q *pgstore.Queries, rec Recorder) error {
+		if in.AgentUpdatePolicy == "" {
+			cur, err := LoadUpdateSettings(ctx, q)
+			if err != nil {
+				return err
+			}
+			in.AgentUpdatePolicy = cur.AgentUpdatePolicy
+		}
+		rec.SetParam("agent_update_policy", in.AgentUpdatePolicy)
 		if err := in.Validate(); errors.Is(err, updates.ErrSchedule) {
 			return problem.InvalidSchedule.WithDetail(err.Error())
 		} else if err != nil {
@@ -109,6 +117,7 @@ func (u *Updates) UpdateSettings(ctx context.Context, in updates.Settings) (Upda
 			MaxRandomDelayMin:     int32(in.MaxRandomDelayMin),  //nolint:gosec // validated
 			StalenessWarningH:     int32(in.StalenessWarningH),  //nolint:gosec // validated
 			StalenessCriticalH:    int32(in.StalenessCriticalH), //nolint:gosec // validated
+			AgentUpdatePolicy:     in.AgentUpdatePolicy,
 			UpdatedBy:             uuid.NullUUID{UUID: p.ID, Valid: p.ID != uuid.Nil},
 		})
 		if err != nil {

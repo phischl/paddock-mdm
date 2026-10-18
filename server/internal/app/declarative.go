@@ -84,6 +84,7 @@ func (d *Declarative) Plan(ctx context.Context, raw []byte) (declarative.Plan, e
 		if err != nil {
 			return err
 		}
+		inheritOmitted(&desired, st.doc)
 		plan = declarative.Diff(st.doc, desired)
 		ex := &configExec{q: q, st: st, desired: desired, p: p, stepUp: func() error { return d.runner.checkStepUp(p) }}
 		if err := ex.run(ctx, plan); err != nil {
@@ -123,6 +124,7 @@ func (d *Declarative) Apply(ctx context.Context, raw []byte, expectedPlan string
 		if err != nil {
 			return err
 		}
+		inheritOmitted(&desired, st.doc)
 		plan = declarative.Diff(st.doc, desired)
 		if d.afterRead != nil {
 			if err := d.afterRead(ctx); err != nil {
@@ -254,6 +256,17 @@ func parseDocument(raw []byte) (declarative.Document, error) {
 	return doc, nil
 }
 
+// inheritOmitted fills the optional fields a document leaves out with the stored values, so that a document written
+// before a field existed shows no change for it: the agent update policy (plan M8d decision 24).
+func inheritOmitted(desired *declarative.Document, current declarative.Document) {
+	if desired.Settings == nil || desired.Settings.Updates == nil || desired.Settings.Updates.AgentUpdatePolicy != "" {
+		return
+	}
+	if current.Settings != nil && current.Settings.Updates != nil {
+		desired.Settings.Updates.AgentUpdatePolicy = current.Settings.Updates.AgentUpdatePolicy
+	}
+}
+
 func normalize(doc *declarative.Document) {
 	if doc.DeviceGroups != nil {
 		for i, g := range *doc.DeviceGroups {
@@ -315,6 +328,7 @@ func loadConfig(ctx context.Context, q *pgstore.Queries) (configState, error) {
 	doc.Settings = &declarative.Settings{Login: loginDocOfRow(login), Updates: &declarative.UpdateSettings{
 		SecurityDailyAt: upd.SecurityDailyAt, RegularSchedule: upd.RegularSchedule, RegularUpdatesEnabled: upd.RegularUpdatesEnabled,
 		MaxRandomDelayMin: upd.MaxRandomDelayMin, StalenessWarningH: upd.StalenessWarningH, StalenessCriticalH: upd.StalenessCriticalH,
+		AgentUpdatePolicy: upd.AgentUpdatePolicy,
 	}, ManagedFiles: &declarative.ManagedFileSettings{OperatorRoots: roots}}
 
 	groups, err := q.ListAllDeviceGroups(ctx)

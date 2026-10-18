@@ -5014,9 +5014,14 @@ components:
         max_random_delay_min: { type: integer }
         staleness_warning_h: { type: integer }
         staleness_critical_h: { type: integer }
+        agent_update_policy:
+          description: Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it.
+          allOf:
+            - $ref: "#/components/schemas/AgentUpdatePolicy"
     UpdateSettings:
       type: object
-      required: [security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h]
+      required: [security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h,
+                 agent_update_policy]
       properties:
         security_daily_at: { type: string }
         regular_schedule: { type: string }
@@ -5024,6 +5029,7 @@ components:
         max_random_delay_min: { type: integer }
         staleness_warning_h: { type: integer }
         staleness_critical_h: { type: integer }
+        agent_update_policy: { $ref: "#/components/schemas/AgentUpdatePolicy" }
         updated_at: { type: string, format: date-time }
     PackageHold:
       type: object

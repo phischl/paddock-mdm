@@ -128,7 +128,16 @@ type SigningKey struct {
 // AgentCfg configures the agent itself.
 type AgentCfg struct {
 	CheckinIntervalS int `json:"checkin_interval_s"`
+	// UpdatePolicy is the agent update policy of the device (ADR 0037 decision 1): "" (absent) and automatic follow the
+	// rollout waves, manual installs an offered release only when an administrator requested it for the device.
+	UpdatePolicy string `json:"update_policy,omitempty"`
 }
+
+// Agent update policies of AgentCfg.UpdatePolicy.
+const (
+	UpdatePolicyAutomatic = "automatic"
+	UpdatePolicyManual    = "manual"
+)
 
 // Resource is one managed resource.
 type Resource struct {

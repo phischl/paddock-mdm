@@ -431,6 +431,7 @@ func (ex *configExec) updateSettings(ctx context.Context) error {
 	in := updates.Settings{
 		SecurityDailyAt: s.SecurityDailyAt, RegularSchedule: s.RegularSchedule, RegularUpdatesEnabled: s.RegularUpdatesEnabled,
 		MaxRandomDelayMin: s.MaxRandomDelayMin, StalenessWarningH: s.StalenessWarningH, StalenessCriticalH: s.StalenessCriticalH,
+		AgentUpdatePolicy: s.AgentUpdatePolicy,
 	}
 	if err := in.Validate(); errors.Is(err, updates.ErrSchedule) {
 		return problem.InvalidSchedule.WithDetail(err.Error())
@@ -443,6 +444,7 @@ func (ex *configExec) updateSettings(ctx context.Context) error {
 		MaxRandomDelayMin:     int32(in.MaxRandomDelayMin),  //nolint:gosec // validated
 		StalenessWarningH:     int32(in.StalenessWarningH),  //nolint:gosec // validated
 		StalenessCriticalH:    int32(in.StalenessCriticalH), //nolint:gosec // validated
+		AgentUpdatePolicy:     in.AgentUpdatePolicy,
 		UpdatedBy:             uuid.NullUUID{UUID: ex.p.ID, Valid: ex.p.ID != uuid.Nil},
 	})
 	return err

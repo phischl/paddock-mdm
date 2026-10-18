@@ -3193,6 +3193,8 @@ export interface components {
             max_random_delay_min: number;
             staleness_warning_h: number;
             staleness_critical_h: number;
+            /** @description Agent update policy (ADR 0037 decision 1); absent keeps the stored policy. Device groups can override it. */
+            agent_update_policy?: components["schemas"]["AgentUpdatePolicy"];
         };
         UpdateSettings: {
             security_daily_at: string;
@@ -3201,6 +3203,7 @@ export interface components {
             max_random_delay_min: number;
             staleness_warning_h: number;
             staleness_critical_h: number;
+            agent_update_policy: components["schemas"]["AgentUpdatePolicy"];
             /** Format: date-time */
             updated_at?: string;
         };

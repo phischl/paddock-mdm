@@ -1,5 +1,11 @@
 {
   "updateSettings": {
+    "agentUpdates": {
+      "title": "Agent updates",
+      "automatic": "Automatic: devices install every agent release the platform rolls out, in their wave",
+      "manual": "Manual: devices install an agent release only when an administrator requests it per device",
+      "hint": "The policy also covers the supervisor and fleetd packages. Device groups can override it. Devices on an old agent appear on the attention page."
+    },
     "staleness": {
       "groupsHint": "Device groups can override these thresholds, for example for laptops."
     }
@@ -128,6 +134,10 @@
     "typeToConfirm": "Type {text} to confirm"
   },
   "deviceGroups": {
+    "agentUpdates": {
+      "label": "Agent updates"
+    },
+    "inherit": "Organization setting",
     "staleness": {
       "title": "Contact thresholds",
       "override": "Override the organization's thresholds for this group",

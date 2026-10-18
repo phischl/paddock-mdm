@@ -190,3 +190,31 @@ func TestInventoryRefusesBadPackages(t *testing.T) {
 		t.Fatalf("after the back-off: %+v", res)
 	}
 }
+
+// TestInventoryUpdatePolicy (plan M8d decision 23): while the update policy holds back upgrades a missing fleetd is
+// still installed, an installed older fleetd stays; once allowed, it is upgraded.
+func TestInventoryUpdatePolicy(t *testing.T) {
+	ctx := context.Background()
+	sys, inv, _, downloads := inventoryFixture(t)
+	allowed := false
+	inv.UpdatesAllowed = func() bool { return allowed }
+	r := inventoryResource(t, "enroll-secret", nil)
+	if res := inv.Apply(ctx, r); res.Status != reconcile.Changed || sys.PackageVersion(reconcile.FleetdPackage) != "1.61.0" {
+		t.Fatalf("missing fleetd not installed under manual: %+v", res)
+	}
+	newer := inventoryResource(t, "enroll-secret", func(i *bundle.Inventory) {
+		i.Package.Version, i.Package.URLPath = "1.62.0", "packages/1.3.0/fleet-osquery_1.62.0_amd64.deb"
+	})
+	if changes, err := inv.Plan(ctx, newer); err != nil || slices.Contains(changes, "package 1.62.0") {
+		t.Fatalf("plan under manual %v, %v", changes, err)
+	}
+	before := len(*downloads)
+	if res := inv.Apply(ctx, newer); res.Status == reconcile.Error || len(*downloads) != before {
+		t.Fatalf("upgrade under manual: %+v, downloads %v", res, *downloads)
+	}
+	allowed = true
+	if changes, err := inv.Plan(ctx, newer); err != nil || !slices.Contains(changes, "package 1.62.0") {
+		t.Fatalf("plan when allowed %v, %v", changes, err)
+	}
+}
+

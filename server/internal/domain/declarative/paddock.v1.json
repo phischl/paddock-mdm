@@ -89,7 +89,11 @@
         "regular_updates_enabled": { "type": "boolean" },
         "max_random_delay_min": { "type": "integer" },
         "staleness_warning_h": { "type": "integer" },
-        "staleness_critical_h": { "type": "integer" }
+        "staleness_critical_h": { "type": "integer" },
+        "agent_update_policy": {
+          "description": "Optional: automatic (follow the platform's rollout waves) or manual (install only on an administrator's request per device); omitted keeps the stored policy.",
+          "type": "string", "enum": ["automatic", "manual"]
+        }
       }
     },
     "managedFileSettings": {

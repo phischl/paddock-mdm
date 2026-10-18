@@ -68,7 +68,7 @@ func (q *Queries) GetPackageHold(ctx context.Context, id uuid.UUID) (PackageHold
 
 const getUpdateSettings = `-- name: GetUpdateSettings :one
 
-SELECT organization_id, security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h, updated_at, updated_by FROM organization_update_settings
+SELECT organization_id, security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h, updated_at, updated_by, agent_update_policy FROM organization_update_settings
 `
 
 // Update management (plan M5b decisions 1–4 and 9). Without a settings row the defaults apply.
@@ -85,6 +85,7 @@ func (q *Queries) GetUpdateSettings(ctx context.Context) (OrganizationUpdateSett
 		&i.StalenessCriticalH,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
+		&i.AgentUpdatePolicy,
 	)
 	return i, err
 }
@@ -336,15 +337,15 @@ func (q *Queries) UpdatePackageHold(ctx context.Context, arg UpdatePackageHoldPa
 
 const upsertUpdateSettings = `-- name: UpsertUpdateSettings :one
 INSERT INTO organization_update_settings (organization_id, security_daily_at, regular_schedule, regular_updates_enabled,
-  max_random_delay_min, staleness_warning_h, staleness_critical_h, updated_at, updated_by)
+  max_random_delay_min, staleness_warning_h, staleness_critical_h, agent_update_policy, updated_at, updated_by)
 VALUES ($1, $2, $3, $4, $5,
-  $6, $7, now(), $8)
+  $6, $7, $8, now(), $9)
 ON CONFLICT (organization_id) DO UPDATE
 SET security_daily_at = excluded.security_daily_at, regular_schedule = excluded.regular_schedule,
     regular_updates_enabled = excluded.regular_updates_enabled, max_random_delay_min = excluded.max_random_delay_min,
     staleness_warning_h = excluded.staleness_warning_h, staleness_critical_h = excluded.staleness_critical_h,
-    updated_at = excluded.updated_at, updated_by = excluded.updated_by
-RETURNING organization_id, security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h, updated_at, updated_by
+    agent_update_policy = excluded.agent_update_policy, updated_at = excluded.updated_at, updated_by = excluded.updated_by
+RETURNING organization_id, security_daily_at, regular_schedule, regular_updates_enabled, max_random_delay_min, staleness_warning_h, staleness_critical_h, updated_at, updated_by, agent_update_policy
 `
 
 type UpsertUpdateSettingsParams struct {
@@ -355,6 +356,7 @@ type UpsertUpdateSettingsParams struct {
 	MaxRandomDelayMin     int32
 	StalenessWarningH     int32
 	StalenessCriticalH    int32
+	AgentUpdatePolicy     string
 	UpdatedBy             uuid.NullUUID
 }
 
@@ -367,6 +369,7 @@ func (q *Queries) UpsertUpdateSettings(ctx context.Context, arg UpsertUpdateSett
 		arg.MaxRandomDelayMin,
 		arg.StalenessWarningH,
 		arg.StalenessCriticalH,
+		arg.AgentUpdatePolicy,
 		arg.UpdatedBy,
 	)
 	var i OrganizationUpdateSetting
@@ -380,6 +383,7 @@ func (q *Queries) UpsertUpdateSettings(ctx context.Context, arg UpsertUpdateSett
 		&i.StalenessCriticalH,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
+		&i.AgentUpdatePolicy,
 	)
 	return i, err
 }

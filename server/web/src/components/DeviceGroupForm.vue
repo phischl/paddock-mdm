@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { hasErrors, validateDeviceGroup } from '../lib/validation'
 import { useProblemText } from '../lib/problems'
-import type { DeviceGroupStaleness } from '../api/client'
+import type { AgentUpdatePolicy, DeviceGroupStaleness } from '../api/client'
 import type { DeviceGroupInput } from '../lib/deviceGroupPage'
 import { laptopStaleness } from '../lib/deviceGroups'
 
@@ -13,11 +13,12 @@ const props = withDefaults(
     initialName?: string
     initialDescription?: string
     initialStaleness?: DeviceGroupStaleness | null
+    initialAgentUpdatePolicy?: AgentUpdatePolicy | null
     problem?: string
     idPrefix?: string
     pending?: boolean
   }>(),
-  { initialName: '', initialDescription: '', initialStaleness: null, problem: '', idPrefix: 'device-group', pending: false },
+  { initialName: '', initialDescription: '', initialStaleness: null, initialAgentUpdatePolicy: null, problem: '', idPrefix: 'device-group', pending: false },
 )
 const emit = defineEmits<{
   submit: [form: DeviceGroupInput]
@@ -32,6 +33,12 @@ const touched = ref(false)
 const override = ref(props.initialStaleness !== null)
 const warningH = ref<number>(props.initialStaleness?.warning_h ?? laptopStaleness.warning_h)
 const criticalH = ref<number>(props.initialStaleness?.critical_h ?? laptopStaleness.critical_h)
+const agentUpdatePolicy = ref<AgentUpdatePolicy | null>(props.initialAgentUpdatePolicy)
+const policyItems = computed(() => [
+  { value: null, title: t('deviceGroups.inherit') },
+  { value: 'automatic', title: t('updateSettings.agentUpdates.automatic') },
+  { value: 'manual', title: t('updateSettings.agentUpdates.manual') },
+])
 
 function laptopPreset(): void {
   override.value = true
@@ -48,6 +55,7 @@ function submit(): void {
   emit('submit', {
     name: name.value, description: description.value,
     staleness: override.value ? { warning_h: Number(warningH.value), critical_h: Number(criticalH.value) } : null,
+    agent_update_policy: agentUpdatePolicy.value,
   })
 }
 </script>
@@ -118,6 +126,13 @@ function submit(): void {
         {{ t('deviceGroups.staleness.hint') }}
       </p>
     </fieldset>
+    <v-select
+      :id="idPrefix + '-agent-updates'"
+      v-model="agentUpdatePolicy"
+      :items="policyItems"
+      :label="t('deviceGroups.agentUpdates.label')"
+      data-testid="group-agent-updates"
+    />
     <p
       v-if="problem"
       class="form-error"

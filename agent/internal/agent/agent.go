@@ -45,6 +45,8 @@ type Deps struct {
 	Client  *client.Client
 	Health  *health.State
 	Applier *apply.Applier
+	// Inventory is the fleetd reconciler of Applier; New lets the update policy gate its upgrades (plan M8d decision 23).
+	Inventory *reconcile.Inventory
 	// Commands executes the commands of check-ins; nil means the handlers of this build (commands.Handlers).
 	Commands *commands.Executor
 	// Events receives the device events of the reconcilers; New connects it to the spool.
@@ -94,6 +96,11 @@ type Agent struct {
 	// installJobs feeds the install worker, installDone returns its results to the loop (plan M5b decision 7).
 	installJobs chan installJob
 	installDone chan installDone
+	// updateRequested is whether the last check-in's offer was requested by an administrator (plan M8d decision 23):
+	// under the manual policy it allows the fleetd and supervisor upgrades of that check-in.
+	updateRequested bool
+	// policySkipped is the last offered version the manual policy declined, so that it is logged once per version.
+	policySkipped string
 }
 
 // Load reads configuration, trust anchor, identity and state from the layout.
@@ -122,7 +129,7 @@ func Load(l paths.Layout) (Deps, error) {
 	events := &reconcile.Events{}
 	inventory := &reconcile.Inventory{Sys: sys, Events: events, Download: c.Download, BundlesURL: BundlesURL(cfg.ServerURL)}
 	d := Deps{
-		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys,
+		Layout: l, Config: cfg, Trust: trust, Key: key, Client: c, Events: events, Sys: sys, Accounts: sys, Inventory: inventory,
 		Applier: apply.New(sys, managed, events).WithInventory(inventory),
 	}
 	if l.Root == "" || l.Root == "/" {
@@ -151,6 +158,9 @@ func New(d Deps) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{d: d, st: st, installJobs: make(chan installJob, installQueue), installDone: make(chan installDone, installQueue)}
+	if d.Inventory != nil {
+		d.Inventory.UpdatesAllowed = a.updatesAllowed
+	}
 	a.localAdmin = &localadmin.Manager{Sys: d.Accounts, Escrow: escrowClient{a}, State: &a.st.LocalAdmin, Save: a.persist,
 		Emit: a.event, Result: a.commandResult, Now: d.Now}
 	if d.LUKS != nil {

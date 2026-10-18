@@ -80,6 +80,8 @@ type UpdateSettings struct {
 	MaxRandomDelayMin     int    `json:"max_random_delay_min"`
 	StalenessWarningH     int    `json:"staleness_warning_h"`
 	StalenessCriticalH    int    `json:"staleness_critical_h"`
+	// AgentUpdatePolicy is automatic or manual (ADR 0037 decision 1); omitted keeps the stored policy.
+	AgentUpdatePolicy string `json:"agent_update_policy,omitempty"`
 }
 
 // DeviceGroup is a device group; key: Name.

@@ -345,6 +345,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	var omitted []omittedEntry
 	var v2 v2Trust
 	var updatesSection *bundle.UpdatesSpec
+	agent := bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}
 	if t.v2 {
 		v2 = keys
 		id, err := identity.get(ctx)
@@ -360,13 +361,14 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 		resources = append(resources, extra...)
 		if keys.Updates != nil {
 			updatesSection = keys.Updates.section(groups)
+			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
 		}
 		bundle.SortResources(resources)
 	}
 	b := bundle.Bundle{
 		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
-		Agent: bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}, Resources: resources, Keys: v2.Keys,
+		Agent: agent, Resources: resources, Keys: v2.Keys,
 		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection,
 	}
 	content, err := bundle.ContentSHA256(b)

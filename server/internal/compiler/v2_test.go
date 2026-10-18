@@ -495,3 +495,31 @@ func TestUpdatesSection(t *testing.T) {
 		t.Fatalf("v1 bundle with updates %+v", b.Updates)
 	}
 }
+
+// TestAgentUpdatePolicy (plan M8d decision 22): organization manual renders manual; a group with automatic lifts it;
+// a group with manual wins over automatic; automatic without overrides is absent.
+func TestAgentUpdatePolicy(t *testing.T) {
+	w := newWorld(t)
+	g1, g2 := w.g1, w.g2
+	both, auto, plain := w.v2Device("{1,2}", g1, g2), w.v2Device("{1,2}", g1), w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := w.fetch(plain).Agent.UpdatePolicy; p != "" {
+		t.Fatalf("default policy %q", p)
+	}
+	w.exec("INSERT INTO organization_update_settings (organization_id, agent_update_policy) VALUES ($1, 'manual')", w.org)
+	w.exec("UPDATE device_group SET agent_update_policy = 'automatic' WHERE id = $1", g1)
+	w.exec("UPDATE device_group SET agent_update_policy = 'manual' WHERE id = $1", g2)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for d, want := range map[uuid.UUID]string{plain: "manual", auto: "automatic", both: "manual"} {
+		if got := w.fetch(d).Agent.UpdatePolicy; got != want {
+			t.Errorf("policy %q, want %q", got, want)
+		}
+	}
+	w.exec("UPDATE organization_update_settings SET agent_update_policy = 'automatic' WHERE organization_id = $1", w.org)
+	w.exec("UPDATE device_group SET agent_update_policy = NULL")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := w.fetch(both).Agent.UpdatePolicy; p != "" {
+		t.Fatalf("back to automatic: %q", p)
+	}
+}
+

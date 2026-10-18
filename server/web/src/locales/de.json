@@ -1,5 +1,11 @@
 {
   "updateSettings": {
+    "agentUpdates": {
+      "title": "Agent-Updates",
+      "automatic": "Automatisch: Geräte installieren jedes Agent-Release, das die Plattform ausrollt, in ihrer Welle",
+      "manual": "Manuell: Geräte installieren ein Agent-Release nur, wenn ein Administrator es pro Gerät anfordert",
+      "hint": "Die Richtlinie gilt auch für die Pakete des Supervisors und von fleetd. Gerätegruppen können sie überschreiben. Geräte mit altem Agent erscheinen unter Handlungsbedarf."
+    },
     "staleness": {
       "groupsHint": "Gerätegruppen können diese Schwellen überschreiben, zum Beispiel für Laptops."
     }
@@ -128,6 +134,10 @@
     "typeToConfirm": "Geben Sie zur Bestätigung {text} ein"
   },
   "deviceGroups": {
+    "agentUpdates": {
+      "label": "Agent-Updates"
+    },
+    "inherit": "Einstellung der Organisation",
     "staleness": {
       "title": "Kontaktschwellen",
       "override": "Schwellen der Organisation für diese Gruppe überschreiben",

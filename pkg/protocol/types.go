@@ -93,6 +93,11 @@ type AgentUpdate struct {
 	SHA256  string `json:"sha256"`  // hex SHA-256 of the binary
 	Size    int64  `json:"size"`    // bytes
 	Minisig string `json:"minisig"` // standard base64 of the .minisig file
+	// Requested is set when an administrator asked this device to install the release now (plan M8d decision 27):
+	// the offer ignores the rollout wave, and the agent ignores its update policy for it. Older agents ignore it.
+	Requested bool `json:"requested,omitempty"`
+	// RequestedAt is when the request was made; the agent handles each request once.
+	RequestedAt *time.Time `json:"requested_at,omitempty"`
 }
 
 // BundleRef points to a bundle newer than the applied one.

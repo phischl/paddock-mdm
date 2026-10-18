@@ -812,7 +812,7 @@ var registry = map[Code]Definition{
 		Code: CodeSettingsUpdatesChanged, Emitted: true,
 		Description: "An organization administrator changed the update settings: the time of the daily security updates, the schedule of regular updates, the random delay and the staleness thresholds.",
 		Params: []string{"security_daily_at", "regular_schedule", "regular_updates_enabled", "max_random_delay_min",
-			"staleness_warning_h", "staleness_critical_h"},
+			"staleness_warning_h", "staleness_critical_h", "agent_update_policy"},
 		Outcomes: adminOutcomes,
 		Note:     "failure with invalid_schedule for a schedule outside the accepted subset.",
 	},

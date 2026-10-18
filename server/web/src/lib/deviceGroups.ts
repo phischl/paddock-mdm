@@ -28,7 +28,10 @@ export async function listDeviceGroups(p: ListParams): Promise<Page<DeviceGroup>
 export async function createDeviceGroup(form: DeviceGroupInput): Promise<string | null> {
   const { error } = await api.POST('/api/v1/device-groups', {
     params: { header: { 'X-Paddock-CSRF': '1' } },
-    body: { name: form.name.trim(), description: form.description.trim(), staleness: form.staleness },
+    body: {
+      name: form.name.trim(), description: form.description.trim(), staleness: form.staleness,
+      agent_update_policy: form.agent_update_policy,
+    },
   })
   return error ? problemCode(error) : null
 }
@@ -37,7 +40,10 @@ export async function createDeviceGroup(form: DeviceGroupInput): Promise<string 
 export async function updateDeviceGroup(id: string, form: DeviceGroupInput): Promise<string | null> {
   const { error } = await api.PATCH('/api/v1/device-groups/{id}', {
     params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
-    body: { name: form.name.trim(), description: form.description.trim(), staleness: form.staleness },
+    body: {
+      name: form.name.trim(), description: form.description.trim(), staleness: form.staleness,
+      agent_update_policy: form.agent_update_policy,
+    },
   })
   return error ? problemCode(error) : null
 }

@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { DeviceGroup, DeviceGroupStaleness } from '../api/client'
+import type { AgentUpdatePolicy, DeviceGroup, DeviceGroupStaleness } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { createDeviceGroup, deleteDeviceGroup, updateDeviceGroup } from './deviceGroups'
 
@@ -9,6 +9,8 @@ export interface DeviceGroupInput {
   description: string
   /** The group's contact thresholds; null inherits the organization's (plan M8d decision 11). */
   staleness: DeviceGroupStaleness | null
+  /** The group's agent update policy; null inherits the organization's (plan M8d decision 24). */
+  agent_update_policy: AgentUpdatePolicy | null
 }
 
 /** Dialog state and handlers of the device group page; reload refreshes the list after a change. */

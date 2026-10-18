@@ -6,6 +6,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -51,9 +52,32 @@ func (a *Agent) sweepStaging() {
 }
 
 // handleUpdate stages an offered release and asks the supervisor to install it. The agent never replaces itself.
+// Under the manual update policy only a requested offer is staged (plan M8d decision 23).
+// updatePolicy is the agent update policy of the applied bundle ("" = automatic).
+func (a *Agent) updatePolicy() string {
+	if a.current == nil {
+		return ""
+	}
+	return a.current.Agent.UpdatePolicy
+}
+
+// updatesAllowed reports whether package upgrades (fleetd, the supervisor) may run now: the policy is automatic, or
+// the last check-in carried a requested update (plan M8d decision 23).
+func (a *Agent) updatesAllowed() bool {
+	return a.updatePolicy() != bundle.UpdatePolicyManual || a.updateRequested
+}
+
 func (a *Agent) handleUpdate(ctx context.Context, offer *protocol.AgentUpdate) {
 	a.sweepStaging()
+	a.updateRequested = offer != nil && offer.Requested
 	if offer == nil || offer.Version == buildinfo.Version || offer.Version == a.st.FailedUpdateVersion || update.Pending(a.d.Layout) {
+		return
+	}
+	if a.updatePolicy() == bundle.UpdatePolicyManual && !offer.Requested {
+		if a.policySkipped != offer.Version {
+			a.policySkipped = offer.Version
+			slog.InfoContext(ctx, "agent update offer ignored by the organization's policy", "version", offer.Version)
+		}
 		return
 	}
 	pid, err := a.d.Supervisor()

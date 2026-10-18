@@ -415,7 +415,8 @@ func (a ProfileAssignment) fields() []field {
 func (s UpdateSettings) fields() []field {
 	return []field{{"security_daily_at", s.SecurityDailyAt}, {"regular_schedule", s.RegularSchedule},
 		{"regular_updates_enabled", s.RegularUpdatesEnabled}, {"max_random_delay_min", s.MaxRandomDelayMin},
-		{"staleness_warning_h", s.StalenessWarningH}, {"staleness_critical_h", s.StalenessCriticalH}}
+		{"staleness_warning_h", s.StalenessWarningH}, {"staleness_critical_h", s.StalenessCriticalH},
+		{"agent_update_policy", s.AgentUpdatePolicy}}
 }
 
 func (s ManagedFileSettings) fields() []field {

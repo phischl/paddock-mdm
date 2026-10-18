@@ -140,6 +140,7 @@ const columns = computed<ListColumn[]>(() => [
             :initial-name="editTarget.name"
             :initial-description="editTarget.description"
             :initial-staleness="editTarget.staleness"
+            :initial-agent-update-policy="editTarget.agent_update_policy"
             :submit-label="t('common.save')"
             :problem="editProblem"
             :pending="pending"

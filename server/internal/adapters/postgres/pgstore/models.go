@@ -476,6 +476,7 @@ type OrganizationUpdateSetting struct {
 	StalenessCriticalH    int32
 	UpdatedAt             time.Time
 	UpdatedBy             uuid.NullUUID
+	AgentUpdatePolicy     string
 }
 
 type OsvSyncState struct {

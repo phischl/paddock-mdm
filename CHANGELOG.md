@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *Login & privileges* has a *Login history* section with the privacy notice (works council agreement), and the device
   page a *Logins* tab. With the history on, agents of this release report every session start instead of once per
   user and day.
+- Agent update policy (*Updates* → *Agent updates*, `agent_update_policy` of the update settings and of device groups,
+  also in the declarative document): with *Manual*, devices install no agent release, and no newer fleetd, unless an
+  administrator requests it for the device; *Automatic* (default) follows the rollout waves. A group set to manual
+  wins over automatic.
 
 ### Changed
 

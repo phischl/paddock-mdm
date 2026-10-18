@@ -458,6 +458,12 @@ components:
         sha256: { type: string, description: Hex SHA-256 of the binary. }
         size: { type: integer, format: int64, description: Size of the binary in bytes. }
         minisig: { type: string, description: Standard base64 of the minisign signature file. }
+        requested:
+          type: boolean
+          description: >-
+            An administrator asked this device to install the release now (plan M8d decision 27): the offer ignores the
+            rollout wave and the agent its update policy. Absent otherwise; older agents ignore it.
+        requested_at: { type: string, format: date-time, description: When the request was made; each request is handled once. }
     Event:
       type: object
       required: [event_seq, type, occurred_at]

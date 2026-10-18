@@ -14,6 +14,7 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
+	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -149,6 +150,35 @@ func TestUpdateNotStaged(t *testing.T) {
 				t.Fatalf("staged (pending %v, signalled %d)", update.Pending(a.d.Layout), signalled)
 			}
 		})
+	}
+}
+
+// TestUpdatePolicyManual (plan M8d decision 23): under the manual policy an offer is not staged and the supervisor is
+// not asked, logged once per version; a requested offer is staged; the fleetd gate follows the same rule.
+func TestUpdatePolicyManual(t *testing.T) {
+	g := testgw.New(t)
+	a := newAgent(t, g)
+	signalled := 0
+	a.d.Supervisor = func() (int, error) { return 1, nil }
+	a.d.Signal = func(int) error { signalled++; return nil }
+	a.current = &bundle.Bundle{Agent: bundle.AgentCfg{UpdatePolicy: bundle.UpdatePolicyManual}}
+	offer(g, "9.1.0", []byte("x"))
+	a.Cycle(context.Background())
+	a.Cycle(context.Background())
+	if update.Pending(a.d.Layout) || signalled != 0 || a.policySkipped != "9.1.0" || a.updatesAllowed() {
+		t.Fatalf("staged under manual (pending %v, signalled %d, skipped %q)", update.Pending(a.d.Layout), signalled, a.policySkipped)
+	}
+	g.Mu.Lock()
+	g.Checkin.AgentUpdate.Requested = true
+	g.Mu.Unlock()
+	a.Cycle(context.Background())
+	if !update.Pending(a.d.Layout) || signalled != 1 || !a.updatesAllowed() {
+		t.Fatalf("requested offer not staged (pending %v, signalled %d)", update.Pending(a.d.Layout), signalled)
+	}
+	a.current = &bundle.Bundle{}
+	a.updateRequested = false
+	if !a.updatesAllowed() {
+		t.Fatal("automatic policy does not allow updates")
 	}
 }
 
