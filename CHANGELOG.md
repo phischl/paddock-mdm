@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-10-18
+
+Fixes from the first lab installation on real hardware (milestone M8x). **Upgrade order: update the agents on the
+devices first, then the server** (`docs/operations/upgrade.md`): the Hello PIN fix and the sudo-group fix live in the
+agent. After the upgrade every Authentik sign-in asks for a second factor and enrols one when missing.
+
 ### Security
 
 - Every portal sign-in is now refused without a second factor; the default brand's authentication flow and
   Authentik's default authentication flow ask for a second factor as well. After the upgrade every Authentik sign-in
   (the portal, Authentik's own interfaces including `akadmin`, the device approval page) asks for a second factor and
-  enrols one when missing.
+  enrols one when missing (GHSA-34qw-8jfm-g64v, medium).
 - A step-up (identity confirmation) is refused when Authentik answered it without authenticating again, that is with
   a token whose authentication predates the step-up; the user is asked to confirm again instead of the earlier sign-in
   counting as a step-up. The portal's failure message suggests waiting a minute after a recent confirmation.
@@ -905,7 +911,8 @@ acceptance.
   in `net/http`, which every Paddock binary uses; `golang.org/x/net` v0.60.0 in the server fixes the HTTP/2 issues
   GO-2026-6617, GO-2026-6612, GO-2026-6611, GO-2026-6610 and GO-2026-6603 of its copy.
 
-[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.3...HEAD
+[Unreleased]: https://github.com/phischl/paddock-mdm/compare/v0.1.0-alpha.4...HEAD
+[0.1.0-alpha.4]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/phischl/paddock-mdm/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/phischl/paddock-mdm/tree/1ab53f4499a354981a06240627ea97a15d9bdc54
