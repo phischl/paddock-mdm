@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -616,6 +617,26 @@ func currentLoginSettings(t *testing.T, p *env.Portal) map[string]any {
 	}
 	delete(s, "updated_at")
 	return s
+}
+
+func sendSessionLogins(t *testing.T, d *devicesim.Device, seq int64, user string, at ...time.Time) {
+	t.Helper()
+	var events []protocol.Event
+	for i, a := range at {
+		data, _ := json.Marshal(protocol.SessionLogin{Username: user, At: a})
+		events = append(events, protocol.Event{EventSeq: seq + int64(i), Type: protocol.EventSessionLogin, OccurredAt: a, Data: data})
+	}
+	res, err := d.SendEvents(testContext(t, time.Minute), events)
+	if err != nil || res.Status != http.StatusAccepted && res.Status != http.StatusOK {
+		t.Fatalf("send events: %v %d", err, res.Status)
+	}
+}
+
+func putLoginHistory(t *testing.T, p *env.Portal, enabled bool, days int) env.Response {
+	t.Helper()
+	s := currentLoginSettings(t, p)
+	s["login_history_enabled"], s["login_history_days"] = enabled, days
+	return call(t, p, http.MethodPut, "/api/v1/settings/login", s)
 }
 
 // currentUpdateSettings returns acme's update settings as an update body (unchanged values).

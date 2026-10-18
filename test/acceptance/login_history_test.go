@@ -1,13 +1,10 @@
 package acceptance
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
 
-	"github.com/phischl/paddock-mdm/pkg/protocol"
-	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -29,26 +26,6 @@ func deviceLogins(t *testing.T, p *env.Portal, deviceID, query string) loginPage
 		t.Fatal(err)
 	}
 	return page
-}
-
-func sendSessionLogins(t *testing.T, d *devicesim.Device, seq int64, user string, at ...time.Time) {
-	t.Helper()
-	var events []protocol.Event
-	for i, a := range at {
-		data, _ := json.Marshal(protocol.SessionLogin{Username: user, At: a})
-		events = append(events, protocol.Event{EventSeq: seq + int64(i), Type: protocol.EventSessionLogin, OccurredAt: a, Data: data})
-	}
-	res, err := d.SendEvents(testContext(t, time.Minute), events)
-	if err != nil || res.Status != http.StatusAccepted && res.Status != http.StatusOK {
-		t.Fatalf("send events: %v %d", err, res.Status)
-	}
-}
-
-func putLoginHistory(t *testing.T, p *env.Portal, enabled bool, days int) env.Response {
-	t.Helper()
-	s := currentLoginSettings(t, p)
-	s["login_history_enabled"], s["login_history_days"] = enabled, days
-	return call(t, p, http.MethodPut, "/api/v1/settings/login", s)
 }
 
 // TestLoginHistory is gate A4 of plan M8d (AC4, server part): off by default and nothing recorded; enabled, every
