@@ -194,3 +194,19 @@ Two rows join the retention matrix of decision 1:
 
 `device_user_seen` is unchanged (fixed 365 days, lock coverage). An uninstall (ADR 0037 decision 4) retires the
 device; the escrowed secrets of the retired device stay as in the row "Escrowed secrets of retired devices".
+
+## Amendment 2026-10-18 (M8f, PDK-180) — periods of the remaining control-plane tables
+Decided now, implemented after the worker's retention round (plan M10, PDK-137) and the M8b tables exist; PDK-180
+holds the implementation. The rows marked "follow-up ticket" in decision 1 become:
+
+| Store | Retention | Purge (role, event) |
+| --- | --- | --- |
+| `action` | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `occurred_at` (never ahead of the audit index) | Worker retention round, per organization, batches of 1 000; `retention.purged` (store `action`) |
+| `device_command` (finished rows: `done`, `failed`, `expired`, `cancelled`) | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at` | Worker; `retention.purged` (store `device_command`) |
+| `device_alert` (cleared rows) | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `cleared_at`; open alerts never | Worker; `retention.purged` (store `device_alert`) |
+| `revocation_request` with its `revocation_approval` rows (finished: `completed`, `rejected`, `cancelled`, `expired`, `failed`) | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `finished_at`; unfinished requests never | Worker; `retention.purged` (store `revocation_request`) |
+| `organization_role_member`, `platform_role_member` (M8b snapshots) | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after the snapshot's `taken_at`, keeping the newest snapshot of every group | Worker; `retention.purged` (store `role_member_snapshot`) |
+| `device_event_dropped`, `device_event_gap` (M8b) | `PADDOCK_AUDIT_INDEX_RETENTION_DAYS` after `recorded_at` | Worker; `retention.purged` (store `device_event_gap`) |
+
+The period equals the audit index retention (≥ the WORM retention): these rows explain audit events and must not
+disappear while the index still shows them. The escrow of retired devices stays open (question 1 of plan M10).

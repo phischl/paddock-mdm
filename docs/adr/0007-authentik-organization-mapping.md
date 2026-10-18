@@ -64,3 +64,13 @@ Depends on A2 PoC (refresh tokens for Hello PIN).
   The development blueprint skips that stage like the login stage.
 - **Device provider tokens** (ADR 0019 amendment): `access_code_validity: minutes=10`; `refresh_token_threshold`
   stays at Authentik's default `seconds=0` (a threshold above zero makes Himmelblau deny every PIN login).
+
+## Amendment 2026-10-18 (M8f, ADR 0034 amendment)
+- **Step-up authenticator classes.** The step-up provider `paddock-portal-stepup` carries the Paddock mapping
+  `io.paddock/scope-stepup-mfa` (scope `paddock_stepup`), which reads the session's login event and emits
+  `paddock_mfa_classes`; the api requires the WebAuthn device class in it.
+- **Portal login validates WebAuthn only** (`paddock-admin-login-mfa`: `device_classes: [webauthn]`, configure with
+  the WebAuthn setup stage); the default-flow and device-login stages are unchanged.
+- **Service account** `paddock-service` holds `authentik_core.view_authenticatedsession` and
+  `authentik_core.delete_authenticatedsession`: *End all sessions* deletes the authenticated sessions of every portal
+  user (`core/authenticated_sessions/bulk_delete`).

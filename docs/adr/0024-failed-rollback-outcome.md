@@ -87,3 +87,13 @@ server does not know blocks every later event of that device. Every probation en
 Follow-ups: PDK-043 (implementation), a stub for the attention kind if the implementer splits it off, and the
 unreadable-log recovery of PDK-062, which resumes a pending rollback as defined in rule 5 (plan M2b, amendment
 2026-10-12).
+
+## Amendment 2026-10-18 (M8f, PDK-300) — the result precedes the restart
+A durable flip back wrote `update-result.json` only after the previous agent had been restarted. An agent that
+checked in before the result existed received the release offer again (the server offers the current release to every
+older agent at every check-in), staged it, and the supervisor — with no probation and no pending rollback — installed
+and rolled it back a second time (lab, 2026-10-17, two `rolled_back` events 64 s apart under disk pressure). Rule 4 is
+completed: the supervisor concludes the probation (log, result, removal of the request) **before** it restarts the
+previous agent, on the immediate rollback and on a rollback made by a retry alike; the restarted agent then reads the
+result at its first check-in and never stages the version it was rolled back from. Nothing changes for the pending
+rollback (the new agent keeps running) or the not-yet-durable flip (the request stays until the result is written).
