@@ -82,8 +82,11 @@ func TestLoginHistory(t *testing.T) {
 	if ev.Params["login_history_enabled"] != true || ev.Params["login_history_days"] != float64(30) {
 		t.Fatalf("enabled params %v", ev.Params)
 	}
+	// Milliseconds apart: the rows cross the purge cutoff together, so one round deletes all three (the purge runs
+	// every 15 s and the development stack counts days in seconds).
 	now = time.Now().UTC().Truncate(time.Millisecond)
-	sendSessionLogins(t, d, 10, "dave@"+slug+".test", now.Add(-3*time.Second), now.Add(-2*time.Second), now.Add(-time.Second))
+	newest := now.Add(-time.Millisecond)
+	sendSessionLogins(t, d, 10, "dave@"+slug+".test", now.Add(-3*time.Millisecond), now.Add(-2*time.Millisecond), newest)
 	var page loginPage
 	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(time.Second) {
 		if page = deviceLogins(t, admin, d.DeviceID, ""); page.Total == 3 || time.Now().After(deadline) {
@@ -101,7 +104,9 @@ func TestLoginHistory(t *testing.T) {
 	}
 	expectStatus(t, call(t, login(t, env.Carol), http.MethodGet, "/api/v1/devices/"+d.DeviceID+"/logins", nil), http.StatusNotFound, "not_found")
 
-	// Development counts the days in seconds: with 7 days every row is older than the cutoff within a round.
+	// Development counts the days in seconds: with 7 days every row is older than the cutoff within a round. Waiting
+	// until the newest row is 8 s old makes the first round after the change delete all three at once.
+	time.Sleep(time.Until(newest.Add(8 * time.Second)))
 	expectStatus(t, putLoginHistory(t, admin, true, 7), http.StatusOK, "")
 	for deadline := time.Now().Add(time.Minute); deviceLogins(t, admin, d.DeviceID, "").Total != 0; time.Sleep(2 * time.Second) {
 		if time.Now().After(deadline) {
