@@ -10,5 +10,6 @@ SET hello_enabled = @hello_enabled, hello_pin_min_length = @hello_pin_min_length
     sudoers_d_allowlist = @sudoers_d_allowlist, sudo_lecture_text = @sudo_lecture_text,
     local_admin_username = @local_admin_username, local_admin_rotation_days = @local_admin_rotation_days,
     rotate_after_reveal_hours = sqlc.narg(rotate_after_reveal_hours), notice_text = @notice_text,
-    boot_pin_min_length = @boot_pin_min_length, updated_at = now()
+    boot_pin_min_length = @boot_pin_min_length, login_history_enabled = @login_history_enabled,
+    login_history_days = @login_history_days, updated_at = now()
 RETURNING *;

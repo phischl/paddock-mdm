@@ -919,6 +919,40 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+  /api/v1/devices/{id}/logins:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listDeviceLogins
+      tags: [devices]
+      description: |
+        Roles: org_admin, org_operator, org_auditor. The login history of the device (plan M8d decision 18): every
+        session start of a directory user while the organization's login history is on, for login_history_days. Empty
+        while the history is off.
+      x-paddock-list:
+        sort: [at, username]
+        default_sort: -at
+        search: [username]
+        filters: [username]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/DeviceLoginSort"
+        - $ref: "#/components/parameters/Search"
+        - name: username
+          in: query
+          description: Only this user (exact, lower case).
+          schema: { type: string, maxLength: 256 }
+      responses:
+        "200":
+          description: One page of logins.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceLoginEventPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
   /api/v1/devices/{id}/owners:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -3746,6 +3780,14 @@ components:
         type: string
         enum: [hostname, -hostname, last_contact_at, -last_contact_at, enrolled_at, -enrolled_at, state, -state]
         default: hostname
+    DeviceLoginSort:
+      name: sort
+      in: query
+      description: Sort field; "-" prefix sorts descending. The id is the tie-breaker.
+      schema:
+        type: string
+        enum: [at, -at, username, -username]
+        default: -at
     OwnedDeviceSort:
       name: sort
       in: query
@@ -5506,6 +5548,25 @@ components:
         total: { type: integer, description: "Matching items, counted up to 10000." }
         total_capped: { type: boolean, description: "More than 10000 items match; total is 10000." }
         sort: { type: string, description: Applied sort. }
+    DeviceLoginEvent:
+      type: object
+      required: [id, username, at]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        at: { type: string, format: date-time, description: Start of the session as the device reported it. }
+    DeviceLoginEventPage:
+      type: object
+      required: [items, page, page_size, total, total_capped, sort]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceLoginEvent" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+        total_capped: { type: boolean }
+        sort: { type: string }
     DeviceOwnersUpdate:
       type: object
       required: [user_ids]
@@ -5871,11 +5932,22 @@ components:
             Shortest boot PIN (TPM2+PIN disk unlock) the first-boot disk setup of a device installed with the Paddock
             autoinstall accepts (plan M4b decision 4). It is embedded in autoinstalls generated afterwards; installed
             devices keep the value they were installed with.
+        login_history_enabled:
+          type: boolean
+          description: |
+            Record every session start of directory users per device (ADR 0037 decision 6); absent keeps the value.
+            Switching it off deletes every recorded login of the organization (param login_history_deleted).
+        login_history_days:
+          type: integer
+          minimum: 7
+          maximum: 365
+          description: How long a recorded login is kept; absent keeps the value.
     LoginSettings:
       type: object
       required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
                  sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days,
-                 rotate_after_reveal_hours, notice_text, boot_pin_min_length, updated_at]
+                 rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days,
+                 updated_at]
       properties:
         hello_enabled: { type: boolean }
         hello_pin_min_length: { type: integer }
@@ -5892,6 +5964,10 @@ components:
         rotate_after_reveal_hours: { type: integer, nullable: true }
         notice_text: { type: string }
         boot_pin_min_length: { type: integer }
+        login_history_enabled:
+          type: boolean
+          description: Every session start of directory users is stored per device (ADR 0037 decision 6); off by default.
+        login_history_days: { type: integer, description: How long the login history is kept (7–365 days). }
         updated_at: { type: string, format: date-time }
     LoginAssignmentUpdate:
       type: object

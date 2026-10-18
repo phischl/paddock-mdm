@@ -33,6 +33,11 @@ type Settings struct {
 	// BootPinMinLength is the shortest boot PIN the first-boot disk setup accepts (plan M4b decision 4); it reaches
 	// devices only through the Paddock autoinstall.
 	BootPinMinLength int
+	// LoginHistoryEnabled records every session start of the devices (ADR 0037 decision 6); nil keeps the stored
+	// value (clients and documents that predate the setting).
+	LoginHistoryEnabled *bool
+	// LoginHistoryDays is how long the login history is kept; nil keeps the stored value.
+	LoginHistoryDays *int
 }
 
 // Bounds of the settings.
@@ -48,6 +53,9 @@ const (
 	MaxRotateAfterRevealHours     = 168
 	MaxNoticeChars                = 2000
 	DefaultBootPinMinLength       = 8
+	MinLoginHistoryDays           = 7
+	MaxLoginHistoryDays           = 365
+	DefaultLoginHistoryDays       = 90
 )
 
 // Validation errors.
@@ -62,6 +70,7 @@ var (
 	ErrRevealHours   = errors.New("rotate_after_reveal_hours must be empty or 1 to 168")
 	ErrNotice        = errors.New("notice_text must be plain text of at most 2000 characters (line breaks and tabs allowed)")
 	ErrBootPinLength = errors.New("boot_pin_min_length must be 6 to 32")
+	ErrHistoryDays   = errors.New("login_history_days must be 7 to 365")
 )
 
 // allowlistPattern matches the file names sudo reads from an includedir (no "." and no trailing "~").
@@ -92,6 +101,9 @@ func Validate(s Settings) error {
 	}
 	if s.BootPinMinLength < MinPinLength || s.BootPinMinLength > MaxPinLength {
 		return ErrBootPinLength
+	}
+	if d := s.LoginHistoryDays; d != nil && (*d < MinLoginHistoryDays || *d > MaxLoginHistoryDays) {
+		return ErrHistoryDays
 	}
 	if s.UserLockSessionAction != bundle.SessionActionLockScreen && s.UserLockSessionAction != bundle.SessionActionTerminate {
 		return ErrSessionAction

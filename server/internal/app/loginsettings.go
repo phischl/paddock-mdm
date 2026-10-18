@@ -56,7 +56,8 @@ func (s *LoginSettings) Get(ctx context.Context) (pgstore.OrganizationLoginSetti
 }
 
 // Update replaces the login settings and recompiles every device (audited: settings.login_changed with the names
-// of the changed settings).
+// of the changed settings). Switching the login history off deletes every recorded login of the organization in the
+// same transaction (login_history_deleted).
 func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (pgstore.OrganizationLoginSetting, error) {
 	var out pgstore.OrganizationLoginSetting
 	in = loginsettings.Normalize(in)
@@ -66,6 +67,15 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 			return err
 		}
 		rec.SetTarget(audit.Target{Type: "organization", ID: cur.OrganizationID.String()})
+		historyOn, historyDays := cur.LoginHistoryEnabled, int(cur.LoginHistoryDays)
+		if in.LoginHistoryEnabled != nil {
+			historyOn = *in.LoginHistoryEnabled
+		}
+		if in.LoginHistoryDays != nil {
+			historyDays = *in.LoginHistoryDays
+		}
+		rec.SetParam("login_history_enabled", historyOn)
+		rec.SetParam("login_history_days", historyDays)
 		changed := []string{}
 		for name, differs := range map[string]bool{
 			"hello_enabled":             cur.HelloEnabled != in.HelloEnabled,
@@ -79,6 +89,8 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 			"rotate_after_reveal_hours": !equalHours(cur.RotateAfterRevealHours, in.RotateAfterRevealHours),
 			"notice_text":               cur.NoticeText != in.NoticeText,
 			"boot_pin_min_length":       int(cur.BootPinMinLength) != in.BootPinMinLength,
+			"login_history_enabled":     cur.LoginHistoryEnabled != historyOn,
+			"login_history_days":        int(cur.LoginHistoryDays) != historyDays,
 		} {
 			if differs {
 				changed = append(changed, name)
@@ -104,10 +116,18 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 			SudoersDAllowlist: in.SudoersDAllowlist, SudoLectureText: in.SudoLectureText,
 			LocalAdminUsername: in.LocalAdminUsername, LocalAdminRotationDays: int32(in.LocalAdminRotationDays), //nolint:gosec // validated 1–365
 			RotateAfterRevealHours: int32Ptr(in.RotateAfterRevealHours), NoticeText: in.NoticeText,
-			BootPinMinLength: int32(in.BootPinMinLength), //nolint:gosec // validated 6–32
+			BootPinMinLength:    int32(in.BootPinMinLength),                      //nolint:gosec // validated 6–32
+			LoginHistoryEnabled: historyOn, LoginHistoryDays: int32(historyDays), //nolint:gosec // validated 7–365
 		})
 		if err != nil {
 			return err
+		}
+		if cur.LoginHistoryEnabled && !historyOn {
+			deleted, err := q.DeleteAllDeviceLoginEvents(ctx)
+			if err != nil {
+				return err
+			}
+			rec.SetParam("login_history_deleted", deleted)
 		}
 		rec.StateChanged(statechange.ScopeOrg, cur.OrganizationID)
 		return nil

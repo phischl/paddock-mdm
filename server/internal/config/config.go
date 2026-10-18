@@ -258,6 +258,23 @@ func StalenessUnit(l *Loader, c Common) time.Duration {
 	return time.Hour
 }
 
+// RetentionUnit reads PADDOCK_RETENTION_UNIT, the length of a "day" of the retention periods (plan M10 decision 14,
+// plan M8d decision 19): "days" (default) or, with PADDOCK_ENV=development only, "seconds" for the acceptance gates.
+func RetentionUnit(l *Loader, c Common) time.Duration {
+	v, ok := l.get("PADDOCK_RETENTION_UNIT")
+	switch {
+	case !ok || v == "days":
+		return 24 * time.Hour
+	case v != "seconds":
+		l.Invalid("PADDOCK_RETENTION_UNIT", fmt.Sprintf("not days or seconds: %q", v))
+	case !c.Development():
+		l.Invalid("PADDOCK_RETENTION_UNIT", "seconds is only allowed with PADDOCK_ENV=development")
+	default:
+		return time.Second
+	}
+	return 24 * time.Hour
+}
+
 // AMQP is the RabbitMQ connection of relay, audit-writer and provision.
 type AMQP struct {
 	URL      string

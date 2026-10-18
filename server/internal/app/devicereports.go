@@ -147,10 +147,19 @@ func (d *DeviceReports) RecordEvent(ctx context.Context, deviceID uuid.UUID, ev 
 // redelivery skips them by (device_id, event_seq).
 func (d *DeviceReports) RecordEvents(ctx context.Context, deviceID uuid.UUID, events []protocol.Event) error {
 	entries := make([]OnceEntry, 0, len(events))
+	var history *bool
 	for _, ev := range events {
 		entry, ok := eventEntry(deviceID, ev)
 		if ev.Type == protocol.EventSessionLogin {
-			entry, ok = sessionLoginEntry(deviceID, ev)
+			// The organization's setting is read once per batch, not per event (plan M8d decision 16).
+			if history == nil {
+				on, err := d.loginHistoryEnabled(ctx)
+				if err != nil {
+					return err
+				}
+				history = &on
+			}
+			entry, ok = sessionLoginEntry(deviceID, ev, *history)
 		}
 		if ok {
 			entries = append(entries, entry)
@@ -214,7 +223,11 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 // recordSessionLogin notes that a user logged in on a device (device_user_seen, plan M3a decision 10); logins are not
 // audited (privacy, volume), and a redelivered event only repeats the same upsert. A malformed event is ignored.
 func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UUID, ev protocol.Event) error {
-	entry, ok := sessionLoginEntry(deviceID, ev)
+	history, err := d.loginHistoryEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	entry, ok := sessionLoginEntry(deviceID, ev, history)
 	if !ok {
 		return nil
 	}
@@ -224,9 +237,21 @@ func (d *DeviceReports) recordSessionLogin(ctx context.Context, deviceID uuid.UU
 	})
 }
 
-// sessionLoginEntry is the unaudited batch entry of a session login (an upsert of device_user_seen); false for a
-// malformed event, including a username with control characters.
-func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
+// loginHistoryEnabled reports whether the context's organization records its login history.
+func (d *DeviceReports) loginHistoryEnabled(ctx context.Context) (bool, error) {
+	var on bool
+	err := d.org.InOrg(ctx, func(ctx context.Context, q *pgstore.Queries) error {
+		s, err := q.GetLoginSettings(ctx)
+		on = s.LoginHistoryEnabled
+		return err
+	})
+	return on, err
+}
+
+// sessionLoginEntry is the unaudited batch entry of a session login (an upsert of device_user_seen and, while the
+// organization records its login history, a device_login_event row; plan M8d decision 16); false for a malformed
+// event, including a username with control characters.
+func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event, history bool) (OnceEntry, bool) {
 	var login protocol.SessionLogin
 	if json.Unmarshal(ev.Data, &login) != nil {
 		return OnceEntry{}, false
@@ -240,8 +265,13 @@ func sessionLoginEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) 
 		at = ev.OccurredAt
 	}
 	return OnceEntry{Claim: func(ctx context.Context, q *pgstore.Queries) (bool, error) {
-		return false, q.UpsertDeviceUserSeen(ctx, pgstore.UpsertDeviceUserSeenParams{
+		if err := q.UpsertDeviceUserSeen(ctx, pgstore.UpsertDeviceUserSeenParams{
 			OrganizationID: mustOrg(ctx), DeviceID: deviceID, Username: username, LastSeenAt: at.UTC(),
+		}); err != nil || !history {
+			return false, err
+		}
+		return false, q.InsertDeviceLoginEvent(ctx, pgstore.InsertDeviceLoginEventParams{
+			ID: uuid.Must(uuid.NewV7()), OrganizationID: mustOrg(ctx), DeviceID: deviceID, Username: username, At: at.UTC(),
 		})
 	}}, true
 }

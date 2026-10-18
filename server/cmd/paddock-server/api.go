@@ -174,6 +174,7 @@ func serveAPI(ctx context.Context, l *config.Loader, common config.Common) error
 		UserGroups:     app.NewUserGroups(runner, orgPool, ak),
 		Logins:         app.NewLogins(runner, orgPool, ak),
 		LoginSettings:  app.NewLoginSettings(runner, orgPool),
+		LoginHistory:   app.NewLoginHistory(runner, orgPool, 24*time.Hour),
 		Privileges:     app.NewPrivileges(runner, orgPool),
 		Commands:       app.NewDeviceCommands(orgPool),
 		LocalAdmin:     app.NewLocalAdmin(runner, orgPool, escrowAccess),

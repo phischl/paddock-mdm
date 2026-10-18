@@ -276,6 +276,14 @@ type DeviceLoginAssignment struct {
 	SubjectID      uuid.UUID
 }
 
+type DeviceLoginEvent struct {
+	ID             uuid.UUID
+	OrganizationID uuid.UUID
+	DeviceID       uuid.UUID
+	Username       string
+	At             time.Time
+}
+
 type DeviceOwner struct {
 	OrganizationID uuid.UUID
 	DeviceID       uuid.UUID
@@ -447,6 +455,8 @@ type OrganizationLoginSetting struct {
 	RotateAfterRevealHours *int32
 	NoticeText             string
 	BootPinMinLength       int32
+	LoginHistoryEnabled    bool
+	LoginHistoryDays       int32
 }
 
 type OrganizationManagedFileSetting struct {

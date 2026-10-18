@@ -108,6 +108,7 @@ export const auditCodes = [
   'profile_assignment.created',
   'profile_assignment.deleted',
   'profile_assignment.updated',
+  'retention.purged',
   'revocation.approved',
   'revocation.cancelled',
   'revocation.issue_refused',

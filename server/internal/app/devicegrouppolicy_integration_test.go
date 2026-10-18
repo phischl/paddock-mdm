@@ -81,4 +81,3 @@ func TestDeviceGroupPolicyOverrides(t *testing.T) {
 		t.Fatalf("invalid patch = %v", err)
 	}
 }
-

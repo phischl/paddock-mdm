@@ -39,6 +39,7 @@ type handlers struct {
 	userGroups    *app.UserGroups
 	logins        *app.Logins
 	loginSettings *app.LoginSettings
+	loginHistory  *app.LoginHistory
 	privileges    *app.Privileges
 
 	commands    *app.DeviceCommands

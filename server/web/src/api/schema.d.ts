@@ -589,6 +589,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/logins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        /**
+         * @description Roles: org_admin, org_operator, org_auditor. The login history of the device (plan M8d decision 18): every
+         *     session start of a directory user while the organization's login history is on, for login_history_days. Empty
+         *     while the history is off.
+         */
+        get: operations["listDeviceLogins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/owners": {
         parameters: {
             query?: never;
@@ -3663,6 +3686,24 @@ export interface components {
             /** @description Applied sort. */
             sort: string;
         };
+        DeviceLoginEvent: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            /**
+             * Format: date-time
+             * @description Start of the session as the device reported it.
+             */
+            at: string;
+        };
+        DeviceLoginEventPage: {
+            items: components["schemas"]["DeviceLoginEvent"][];
+            page: number;
+            page_size: number;
+            total: number;
+            total_capped: boolean;
+            sort: string;
+        };
         DeviceOwnersUpdate: {
             user_ids: string[];
         };
@@ -3967,6 +4008,13 @@ export interface components {
              *     devices keep the value they were installed with.
              */
             boot_pin_min_length: number;
+            /**
+             * @description Record every session start of directory users per device (ADR 0037 decision 6); absent keeps the value.
+             *     Switching it off deletes every recorded login of the organization (param login_history_deleted).
+             */
+            login_history_enabled?: boolean;
+            /** @description How long a recorded login is kept; absent keeps the value. */
+            login_history_days?: number;
         };
         LoginSettings: {
             hello_enabled: boolean;
@@ -3980,6 +4028,10 @@ export interface components {
             rotate_after_reveal_hours: number | null;
             notice_text: string;
             boot_pin_min_length: number;
+            /** @description Every session start of directory users is stored per device (ADR 0037 decision 6); off by default. */
+            login_history_enabled: boolean;
+            /** @description How long the login history is kept (7–365 days). */
+            login_history_days: number;
             /** Format: date-time */
             updated_at: string;
         };
@@ -4230,6 +4282,8 @@ export interface components {
         SeverityFilter: components["schemas"]["Severity"][];
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
         DeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at" | "enrolled_at" | "-enrolled_at" | "state" | "-state";
+        /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+        DeviceLoginSort: "at" | "-at" | "username" | "-username";
         /** @description Sort field; "-" prefix sorts descending. Devices without contact sort last. The id is the tie-breaker. */
         OwnedDeviceSort: "hostname" | "-hostname" | "last_contact_at" | "-last_contact_at";
         /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
@@ -5304,6 +5358,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceDetail"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+        };
+    };
+    listDeviceLogins: {
+        parameters: {
+            query?: {
+                /** @description Page number. page × page_size may not exceed 10000 (400 page_out_of_range). */
+                page?: components["parameters"]["Page"];
+                page_size?: components["parameters"]["PageSize"];
+                /** @description Sort field; "-" prefix sorts descending. The id is the tie-breaker. */
+                sort?: components["parameters"]["DeviceLoginSort"];
+                /** @description Case-insensitive substring search over the fields listed in x-paddock-list.search. */
+                q?: components["parameters"]["Search"];
+                /** @description Only this user (exact, lower case). */
+                username?: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of logins. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceLoginEventPage"];
                 };
             };
             400: components["responses"]["Problem"];

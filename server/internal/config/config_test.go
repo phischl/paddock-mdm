@@ -138,6 +138,30 @@ func TestRevocationEnabled(t *testing.T) {
 	}
 }
 
+// TestRetentionUnit: retention periods count days; seconds only in development (plan M8d decision 19).
+func TestRetentionUnit(t *testing.T) {
+	for _, tc := range []struct {
+		env, value string
+		want       time.Duration
+		fails      bool
+	}{
+		{"production", "", 24 * time.Hour, false},
+		{"production", "days", 24 * time.Hour, false},
+		{"development", "seconds", time.Second, false},
+		{"production", "seconds", 24 * time.Hour, true},
+		{"development", "minutes", 24 * time.Hour, true},
+	} {
+		vars := map[string]string{}
+		if tc.value != "" {
+			vars["PADDOCK_RETENTION_UNIT"] = tc.value
+		}
+		l := NewLoaderFrom(vars)
+		if got := RetentionUnit(l, Common{Env: tc.env}); got != tc.want || (l.Err() != nil) != tc.fails {
+			t.Errorf("%s %q: %s, %v", tc.env, tc.value, got, l.Err())
+		}
+	}
+}
+
 // TestStalenessUnit: thresholds count hours; minutes only in development (plan M5b decision 9).
 func TestStalenessUnit(t *testing.T) {
 	for _, tc := range []struct {

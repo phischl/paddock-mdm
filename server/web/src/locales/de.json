@@ -207,6 +207,9 @@
     "disclaimer_outdated": "Der Hinweistext hat sich geändert. Lesen Sie den neuen Text und bestätigen Sie erneut."
   },
   "audit": {
+    "retention": {
+      "purged": "{deleted, plural, one {# abgelaufener Eintrag} other {# abgelaufene Einträge}} von {store} gelöscht"
+    },
     "title": "Audit-Protokoll",
     "from": "Von",
     "to": "Bis",

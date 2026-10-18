@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ var (
 	deviceList          = listing.Spec{Sort: []string{"hostname", "last_contact_at", "enrolled_at", "state"}, DefaultSort: "hostname"}
 	managedFileList     = listing.Spec{Sort: []string{"path", "created_at", "updated_at"}, DefaultSort: "path"}
 	managedUnitList     = listing.Spec{Sort: []string{"unit", "created_at", "updated_at"}, DefaultSort: "unit"}
+	deviceLoginList     = listing.Spec{Sort: []string{"at", "username"}, DefaultSort: "-at"}
 )
 
 func (h *handlers) ListEnrollmentTokens(ctx context.Context, req adminapi.ListEnrollmentTokensRequestObject) (adminapi.ListEnrollmentTokensResponseObject, error) {
@@ -306,6 +308,29 @@ func (h *handlers) SetDeviceGroups(ctx context.Context, req adminapi.SetDeviceGr
 		return nil, err
 	}
 	return adminapi.SetDeviceGroups200JSONResponse(toDeviceDetail(d)), nil
+}
+
+func (h *handlers) ListDeviceLogins(ctx context.Context, req adminapi.ListDeviceLoginsRequestObject) (adminapi.ListDeviceLoginsResponseObject, error) {
+	params, err := listing.Parse(deviceLoginList, listing.Query{
+		Page: req.Params.Page, PageSize: (*int)(req.Params.PageSize), Sort: (*string)(req.Params.Sort), Q: req.Params.Q,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var username *string
+	if u := req.Params.Username; u != nil {
+		lower := strings.ToLower(strings.TrimSpace(*u))
+		username = &lower
+	}
+	res, err := h.loginHistory.List(ctx, req.Id, app.LoginEventQuery{Page: params.ListPage(), Username: username})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]adminapi.DeviceLoginEvent, len(res.Items))
+	for i, e := range res.Items {
+		items[i] = adminapi.DeviceLoginEvent{Id: e.ID, Username: e.Username, At: e.At.UTC()}
+	}
+	return adminapi.ListDeviceLogins200JSONResponse(listing.NewPage(items, params, res.Count)), nil
 }
 
 func (h *handlers) SetDeviceOwners(ctx context.Context, req adminapi.SetDeviceOwnersRequestObject) (adminapi.SetDeviceOwnersResponseObject, error) {

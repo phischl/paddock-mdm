@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/phischl/paddock-mdm/server/internal/adapters/authentik"
 	"github.com/phischl/paddock-mdm/server/internal/adapters/fleet"
@@ -50,6 +51,8 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	}
 	// Development stacks count the staleness thresholds in minutes (plan M5b decision 9, gate U4).
 	stalenessUnit := config.StalenessUnit(l, common)
+	// Development stacks count the retention days in seconds (plan M8d decision 19, the login history purge gate).
+	retentionDay := config.RetentionUnit(l, common)
 	if err := l.Err(); err != nil {
 		return err
 	}
@@ -108,6 +111,11 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 	dms := worker.NewDMS(app.NewDMS(runner, pool, cache, false, false), pool, platformPool)
 	staleness := worker.NewStaleness(app.NewStaleness(runner, pool, stalenessUnit), pool, platformPool,
 		min(worker.StalenessInterval, stalenessUnit/4))
+	loginHistoryEvery := worker.LoginHistoryInterval
+	if retentionDay < time.Hour {
+		loginHistoryEvery = 15 * time.Second
+	}
+	loginHistory := worker.NewLoginHistory(app.NewLoginHistory(runner, pool, retentionDay), pool, platformPool, loginHistoryEvery)
 	rollouts := worker.NewRollouts(app.NewAgentReleases(runner, platformPool, nil, nil, nil, common.Development()), platformPool, cache)
 	ak := authentik.New(authentikURL, authentikToken)
 	identity := worker.NewIdentity(app.NewIdentitySync(runner, pool, ak, ak, ak),
@@ -148,6 +156,7 @@ func serveWorker(ctx context.Context, l *config.Loader, common config.Common) er
 		cacheSync.Run,
 		dms.Run,
 		staleness.Run,
+		loginHistory.Run,
 		rollouts.Run,
 		identity.RunSync,
 		identity.RunReconcile,

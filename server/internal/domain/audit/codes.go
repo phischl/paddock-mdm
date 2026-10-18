@@ -61,6 +61,7 @@ const (
 	CodeUserGroupMemberAdded        Code = "user_group.member_added"
 	CodeUserGroupMemberRemoved      Code = "user_group.member_removed"
 	CodeSettingsLoginChanged        Code = "settings.login_changed"
+	CodeRetentionPurged             Code = "retention.purged"
 	CodeDeviceLoginAssignmentChange Code = "device.login_assignment_changed"
 	CodeDeviceLoginsSuspended       Code = "device.logins_suspended"
 	CodeDeviceLoginsResumed         Code = "device.logins_resumed"
@@ -561,8 +562,15 @@ var registry = map[Code]Definition{
 	CodeSettingsLoginChanged: {
 		Code: CodeSettingsLoginChanged, Emitted: true,
 		Description: "The organization's login settings were changed (Hello PIN, session action of a lock, break-glass accounts, sudoers.d allow list, sudo lecture text).",
-		Params:      []string{"changed"},
+		Params:      []string{"changed", "login_history_enabled", "login_history_days", "login_history_deleted"},
 		Outcomes:    adminOutcomes,
+	},
+	CodeRetentionPurged: {
+		Code: CodeRetentionPurged, Emitted: true,
+		Description: "A retention job deleted expired rows of one store (actor: system). store is device_login_event (recorded in the organization, only when rows were deleted), device_user_seen, read_audit_window (recorded in the organization, only when rows were deleted), audit_index (one event per dropped partition, platform pseudo-organization) or audit_exports (one event per expired export, in its organization).",
+		Params:      []string{"store", "deleted", "cutoff", "partition", "export_id"},
+		Outcomes:    []Outcome{OutcomeSuccess, OutcomeFailure},
+		Note:        "Deletion evidence (ISO/IEC 27001 A.8.10); ADR 0032.",
 	},
 	CodeDeviceLoginAssignmentChange: {
 		Code: CodeDeviceLoginAssignmentChange, Emitted: true,

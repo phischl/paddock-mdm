@@ -291,6 +291,7 @@ var isolationFixtures = map[string]isolationFixture{
 	"POST /api/v1/devices/{id}/retire":             itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/retire" }, nil),
 	"PUT /api/v1/devices/{id}/groups": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/groups" },
 		map[string]any{"device_group_ids": []string{}}),
+	"GET /api/v1/devices/{id}/logins": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/logins" }, nil),
 	"PUT /api/v1/devices/{id}/owners": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/owners" },
 		map[string]any{"user_ids": []string{}}),
 	"GET /api/v1/devices/{id}/effective-config": itemFixture(func(w *isolationWorld) string { return "/api/v1/devices/" + w.globexDevice + "/effective-config" }, nil),

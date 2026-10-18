@@ -65,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A device group can override the organization's contact thresholds (*Contact thresholds*, with a laptop preset of
   5 days / 35 days): its members are warned and presumed lost by the group's values, a device in several groups takes
   the most lenient ones, and `device.stale_warning` / `device.stale_critical` name the source of the threshold.
+- Login history (off by default): `PUT /api/v1/settings/login` takes `login_history_enabled` and
+  `login_history_days` (7–365, default 90); while it is on every session start a device reports is stored and listed
+  by `GET /api/v1/devices/{id}/logins`; the worker deletes older entries every 6 hours (`retention.purged`, store
+  `device_login_event`), and switching it off deletes every entry at once.
 
 ### Changed
 

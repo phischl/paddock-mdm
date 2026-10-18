@@ -207,6 +207,9 @@
     "disclaimer_outdated": "The disclaimer has changed. Read the new text and confirm it again."
   },
   "audit": {
+    "retention": {
+      "purged": "{deleted, plural, one {# expired entry} other {# expired entries}} of {store} were deleted"
+    },
     "title": "Audit log",
     "from": "From",
     "to": "To",

@@ -35,6 +35,7 @@ type Deps struct {
 	UserGroups    *app.UserGroups
 	Logins        *app.Logins
 	LoginSettings *app.LoginSettings
+	LoginHistory  *app.LoginHistory
 	Privileges    *app.Privileges
 	Commands      *app.DeviceCommands
 	LocalAdmin    *app.LocalAdmin
@@ -184,7 +185,7 @@ func NewHandler(d Deps) http.Handler {
 	h := &handlers{
 		groups: d.DeviceGroups, orgs: d.Organizations, accounts: d.Accounts, audit: d.AuditLog, tokens: d.Tokens,
 		devices: d.Devices, managed: d.Managed, releases: d.Releases, users: d.Users, userGroups: d.UserGroups,
-		logins: d.Logins, loginSettings: d.LoginSettings, privileges: d.Privileges, commands: d.Commands,
+		logins: d.Logins, loginSettings: d.LoginSettings, loginHistory: d.LoginHistory, privileges: d.Privileges, commands: d.Commands,
 		localAdmin: d.LocalAdmin, autoinstall: d.Autoinstall, disk: d.Disk, revocations: d.Revocations, dms: d.DMS,
 		inventory: d.Inventory, updates: d.Updates, attention: d.Attention, overview: d.Overview, apiTokens: d.APITokens,
 		securityReview: d.SecurityReview,
