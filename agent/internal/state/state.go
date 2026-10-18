@@ -62,6 +62,9 @@ type State struct {
 	// PendingInstalls are the install_now commands accepted but not finished; a restarted agent reports them as
 	// interrupted.
 	PendingInstalls []PendingInstall `json:"pending_installs,omitempty"`
+	// PendingUninstall is the accepted uninstall command whose removal the agent starts once its result was accepted
+	// (plan M8d decision 39).
+	PendingUninstall *PendingUninstall `json:"pending_uninstall,omitempty"`
 	// CommandResults are the results the server has not accepted yet.
 	CommandResults []CommandResult `json:"command_results,omitempty"`
 	// LocalAdmin is the managed local administrator (plan M4a decision 15).
@@ -74,6 +77,13 @@ type State struct {
 type PendingInstall struct {
 	CommandID string   `json:"command_id"`
 	Packages  []string `json:"packages"`
+}
+
+// PendingUninstall is an accepted uninstall command; LaunchedAt is set once the removal was started.
+type PendingUninstall struct {
+	CommandID  string     `json:"command_id"`
+	Mode       string     `json:"mode"`
+	LaunchedAt *time.Time `json:"launched_at,omitempty"`
 }
 
 // LUKS is the persistent state of the luks reconciler. Secrets — the recovery key, the install passphrase — are

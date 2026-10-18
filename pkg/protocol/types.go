@@ -185,10 +185,13 @@ const (
 	EventAgentUninstalled = "agent.uninstalled"
 )
 
-// Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial.
+// Outcomes of EventAgentUninstalled: completed when every step is done or skipped, else partial; helper_failed when
+// the removal did not start.
 const (
 	UninstallCompleted = "completed"
 	UninstallPartial   = "partial"
+	// UninstallHelperFailed: the agent could not start the removal; nothing was removed.
+	UninstallHelperFailed = "helper_failed"
 )
 
 // MaxUninstallSteps bounds the steps of EventAgentUninstalled.

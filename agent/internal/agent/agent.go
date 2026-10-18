@@ -79,6 +79,8 @@ type Deps struct {
 	Signal     func(pid int) error
 	// RunUnit runs systemd-run to start a transient unit (the supervisor upgrade, plan M8d decision 31); nil runs it.
 	RunUnit func(ctx context.Context, name string, args ...string) error
+	// Executable is the running binary the uninstall copies to /run (tests); "" asks the OS.
+	Executable string
 	// Download fetches a package from the package store with at most limit bytes; nil uses Client.Download.
 	Download func(ctx context.Context, url string, limit int64) ([]byte, error)
 	Now      func() time.Time
@@ -178,6 +180,7 @@ func New(d Deps) (*Agent, error) {
 			command.TypeRotateAdminPassword: a.rotateCommand,
 			command.TypeDeleteSelfLock:      a.deleteSelfLock,
 			command.TypeInstallNow:          a.installNowCommand,
+			command.TypeUninstall:           a.uninstallCommand,
 		}), d.Now)
 	}
 	if a.d.Spool == nil {
@@ -370,6 +373,7 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 	a.handleSupervisorPackage(ctx)
 	a.flush(ctx)
 	a.postResults(ctx)
+	a.launchUninstall(ctx)
 	a.clearUpdateResult()
 	a.clearSupervisorResult()
 	return afterSuccess(resp.NextCheckinS, a.d.Rand())

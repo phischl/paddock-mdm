@@ -315,3 +315,30 @@ func TestUninstalledRetiresTheDevice(t *testing.T) {
 		t.Fatalf("retired %v, %v", retired, err)
 	}
 }
+
+// TestUninstallHelperFailed (plan M8d decision 39): a device that could not start the removal reports helper_failed;
+// the device stays active, the request ends and can be made again.
+func TestUninstallHelperFailed(t *testing.T) {
+	w := newUninstallWorld(t)
+	dev, err := w.uninstalls.Request(w.as(w.org, principal.RoleOrgAdmin, true), w.device, w.leave())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.exec(t, "UPDATE device_command SET status = 'succeeded', result = '{\"accepted\": true}' WHERE id = $1", dev.UninstallCommandID.UUID)
+	data, _ := json.Marshal(protocol.AgentUninstalled{CommandID: dev.UninstallCommandID.UUID.String(), Mode: "leave",
+		Outcome: protocol.UninstallHelperFailed, LocalAdmin: "kept", TPM: "not_requested", Steps: map[string]string{}})
+	if _, err := w.reports.RecordEvent(systemCtx(w.org), w.device, protocol.Event{EventSeq: 3, Type: protocol.EventAgentUninstalled,
+		OccurredAt: time.Now(), Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	if retired, err := w.reports.RetireUninstalled(systemCtx(w.org), w.device); err != nil || retired {
+		t.Fatalf("retired %v, %v", retired, err)
+	}
+	detail, err := w.devices.Get(w.as(w.org, principal.RoleOrgAuditor, false), w.device)
+	if err != nil || detail.Device.State != "active" || detail.Uninstall != nil || detail.Device.UninstalledAt != nil {
+		t.Fatalf("device %+v uninstall %+v, %v", detail.Device, detail.Uninstall, err)
+	}
+	if _, err := w.uninstalls.Request(w.as(w.org, principal.RoleOrgAdmin, true), w.device, w.leave()); err != nil {
+		t.Fatalf("request again: %v", err)
+	}
+}

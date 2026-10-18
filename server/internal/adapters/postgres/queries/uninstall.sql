@@ -42,6 +42,11 @@ WITH marked AS (
 UPDATE device_command c SET result = coalesce(c.result, '{}'::jsonb) || @outcome::jsonb
 FROM marked m WHERE c.id = m.uninstall_command_id;
 
+-- name: EndFailedUninstall :execrows
+-- The device could not start the removal of the request's command: the request ends.
+UPDATE device SET uninstall_requested_at = NULL, uninstall_mode = NULL, uninstall_command_id = NULL
+WHERE id = @id AND uninstall_command_id = @command_id::uuid AND uninstalled_at IS NULL;
+
 -- name: SetDeviceRetiredReason :exec
 UPDATE device SET retired_reason = @reason WHERE id = @id;
 

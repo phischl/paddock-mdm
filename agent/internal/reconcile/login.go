@@ -42,8 +42,8 @@ const (
 //go:embed himmelblau.gpg
 var himmelblauKey []byte
 
-// himmelblauPackages is the upstream installer's selection for a GDM desktop with sshd (PoC M1).
-var himmelblauPackages = []string{"himmelblau", "pam-himmelblau", "nss-himmelblau", "himmelblau-qr-greeter", "himmelblau-sshd-config"}
+// HimmelblauPackages is the upstream installer's selection for a GDM desktop with sshd (PoC M1).
+var HimmelblauPackages = []string{"himmelblau", "pam-himmelblau", "nss-himmelblau", "himmelblau-qr-greeter", "himmelblau-sshd-config"}
 
 // himmelblauUnits read pam_allow_groups only at start and are restarted after every configuration change.
 var himmelblauUnits = []string{"himmelblaud.service", "himmelblaud-tasks.service"}
@@ -387,7 +387,7 @@ func (l *Login) now() time.Time {
 
 // installed reports whether every Himmelblau package is installed in version (Debian versions "<version>-…").
 func (l *Login) installed(version string) bool {
-	for _, p := range himmelblauPackages {
+	for _, p := range HimmelblauPackages {
 		if v := l.Sys.PackageVersion(p); v != version && !strings.HasPrefix(v, version+"-") {
 			return false
 		}
@@ -417,7 +417,7 @@ func (l *Login) install(ctx context.Context, version string) error {
 		return err
 	}
 	args := append([]string{"install", "-y", "-q", "-o", "DPkg::Lock::Timeout=600", "-o", "Dpkg::Options::=--force-confdef",
-		"-o", "Dpkg::Options::=--force-confold"}, himmelblauPackages...)
+		"-o", "Dpkg::Options::=--force-confold"}, HimmelblauPackages...)
 	out, err := l.apt(ctx, args...)
 	if err != nil && strings.Contains(out, "dpkg was interrupted") {
 		// An installation killed at its timeout: dpkg finishes it first.

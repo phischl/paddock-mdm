@@ -19,15 +19,20 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/agent"
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
+	"github.com/phischl/paddock-mdm/agent/internal/client"
+	"github.com/phischl/paddock-mdm/agent/internal/config"
 	"github.com/phischl/paddock-mdm/agent/internal/disksetup"
 	"github.com/phischl/paddock-mdm/agent/internal/enroll"
+	"github.com/phischl/paddock-mdm/agent/internal/identity"
 	"github.com/phischl/paddock-mdm/agent/internal/luks"
 	"github.com/phischl/paddock-mdm/agent/internal/osupdates"
 	"github.com/phischl/paddock-mdm/agent/internal/paths"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile"
 	"github.com/phischl/paddock-mdm/agent/internal/selftest"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/triggers"
+	"github.com/phischl/paddock-mdm/agent/internal/uninstall"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
@@ -44,6 +49,9 @@ commands:
   supervisor-upgrade --deb FILE --from VERSION
                  install a staged paddock-supervisor package and roll it back when the agent does not check in
                  (started by the agent in the transient unit paddock-supervisor-upgrade)
+  uninstall --plan FILE
+                 remove Paddock from this device as the accepted uninstall command says and report it
+                 (started by the agent in the transient unit paddock-uninstall)
   version        print the version
 `
 
@@ -80,6 +88,8 @@ func run(args []string, stdout io.Writer) int {
 		return runUpdates(ctx, layout, rest)
 	case "supervisor-upgrade":
 		return runSupervisorUpgrade(ctx, layout, rest)
+	case "uninstall":
+		return runUninstall(ctx, layout, rest)
 	case "self-test":
 		r := selftest.Run(ctx, layout)
 		enc := json.NewEncoder(stdout)
@@ -222,6 +232,47 @@ func runSupervisorUpgrade(ctx context.Context, layout paths.Layout, args []strin
 	u := supervisorpkg.Upgrader{Sys: reconcile.OS{Root: layout.Root}, Layout: layout, Now: time.Now, Sleep: sleep,
 		Poll: 10 * time.Second, Wait: supervisorpkg.CheckinWait, Hold: supervisorpkg.Stable}
 	u.Run(ctx, *deb, *from)
+	return 0
+}
+
+// runUninstall removes Paddock from the device (plan M8d decision 40). It runs from /run in a transient unit, outside
+// the supervisor, and exits 0 once it wrote its summary; the device is retired by its report.
+func runUninstall(ctx context.Context, layout paths.Layout, args []string) int {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	planFile := fs.String("plan", "", "the plan the agent wrote when it accepted the command")
+	if err := fs.Parse(args); err != nil || *planFile == "" {
+		fmt.Fprint(os.Stderr, usage)
+		return 1
+	}
+	if layout.Root == "/" && os.Geteuid() != 0 {
+		slog.Error("paddockd uninstall must run as root")
+		return 1
+	}
+	plan, err := uninstall.ReadPlan(*planFile)
+	if err != nil {
+		slog.ErrorContext(ctx, "uninstall plan unreadable; nothing removed", "error", err)
+		return 1
+	}
+	h := &uninstall.Helper{Root: layout.Root, Run: uninstall.RunOS, Now: time.Now, Sleep: sleep, ReportFor: uninstall.ReportFor,
+		TPM: uninstall.DeviceTPM{Tools: luks.OS{}, Root: layout.Root, Run: uninstall.RunOS}}
+	// The identity, configuration and state are read before anything is removed: the report needs them at the end.
+	st, err := state.Load(layout.State())
+	if err != nil {
+		slog.WarnContext(ctx, "agent state unreadable; the local administrator is kept", "error", err)
+	}
+	h.LocalAdmin, h.EventSeq = st.LocalAdmin.Username, st.EventSeq
+	if cfg, err := config.LoadAgent(layout.AgentConfig()); err != nil {
+		slog.ErrorContext(ctx, "agent configuration unreadable; the removal is not reported", "error", err)
+	} else if key, err := identity.Load(layout.IdentityKey()); err != nil {
+		slog.ErrorContext(ctx, "device identity unreadable; the removal is not reported", "error", err)
+	} else if c, err := client.New(cfg.ServerURL, cfg.Proxy, key); err != nil {
+		slog.ErrorContext(ctx, "device API client failed; the removal is not reported", "error", err)
+	} else {
+		h.Send = func(ctx context.Context, events []protocol.Event) error {
+			return c.Events(ctx, plan.DeviceID, st.Seq, events)
+		}
+	}
+	h.Execute(ctx, plan)
 	return 0
 }
 

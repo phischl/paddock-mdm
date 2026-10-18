@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -454,6 +455,16 @@ func eventParams(ev protocol.Event) map[string]any {
 
 // markUninstalled sets device.uninstalled_at and keeps the reported outcome with the uninstall command.
 func markUninstalled(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, ev protocol.Event, params map[string]any) error {
+	// The agent could not start the helper (plan M8d decision 39): nothing was removed, and the request ends so that
+	// an administrator can request it again.
+	if params["outcome"] == protocol.UninstallHelperFailed {
+		cmd, err := uuid.Parse(fmt.Sprint(params["command_id"]))
+		if err != nil {
+			return nil
+		}
+		_, err = q.EndFailedUninstall(ctx, pgstore.EndFailedUninstallParams{ID: deviceID, CommandID: cmd})
+		return err
+	}
 	outcome := map[string]any{}
 	for _, key := range []string{"outcome", "local_admin", "tpm"} {
 		if v, ok := params[key]; ok {

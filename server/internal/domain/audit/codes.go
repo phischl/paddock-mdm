@@ -290,7 +290,7 @@ var registry = map[Code]Definition{
 		Description: "The device removed Paddock as requested and reported the outcome of every step (actor: the device); the device is retired by the next event.",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
-		Note:        "The param outcome is completed or partial (a step failed); steps maps every step to done, skipped or failed:<message>.",
+		Note:        "The param outcome is completed or partial (a step failed); steps maps every step to done, skipped or failed:<message>. helper_failed: the agent could not start the removal, nothing was removed, the request ends and the device is not retired.",
 	},
 	CodeDeviceGroupsChanged: {
 		Code: CodeDeviceGroupsChanged, Emitted: true,

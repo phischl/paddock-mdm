@@ -80,6 +80,25 @@ func (q *Queries) DeviceHasOpenRevocation(ctx context.Context, deviceID uuid.UUI
 	return column_1, err
 }
 
+const endFailedUninstall = `-- name: EndFailedUninstall :execrows
+UPDATE device SET uninstall_requested_at = NULL, uninstall_mode = NULL, uninstall_command_id = NULL
+WHERE id = $1 AND uninstall_command_id = $2::uuid AND uninstalled_at IS NULL
+`
+
+type EndFailedUninstallParams struct {
+	ID        uuid.UUID
+	CommandID uuid.UUID
+}
+
+// The device could not start the removal of the request's command: the request ends.
+func (q *Queries) EndFailedUninstall(ctx context.Context, arg EndFailedUninstallParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endFailedUninstall, arg.ID, arg.CommandID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getDeviceUninstall = `-- name: GetDeviceUninstall :one
 SELECT d.uninstall_mode::text AS mode, d.uninstall_requested_at::timestamptz AS requested_at,
        d.uninstall_command_id::uuid AS command_id, coalesce(c.status, '')::text AS command_status,

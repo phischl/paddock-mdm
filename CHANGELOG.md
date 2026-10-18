@@ -89,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the request can be cancelled until the device received it; the device retires itself after reporting the
   removal (`device.uninstalled`, `device.retired` with reason `uninstalled`). Pending removals appear on the attention
   page.
+- Agents of this release carry out the removal in the transient unit `paddock-uninstall`: they stop and purge
+  Paddock's services and packages, keep every user file and the disk encryption, keep the managed local administrator
+  when it is the last local administrator, and leave a summary in `/root/paddock-uninstall/result.json`.
 
 ### Changed
 

@@ -59,6 +59,13 @@ func (l Layout) SupervisorUpgradeResult() string {
 	return l.Join("/var/lib/paddock/state/supervisor-upgrade-result.json")
 }
 
+// UninstallPlan is the plan of an accepted uninstall command; UninstallBinary the copy of paddockd that runs it from
+// /run, so that removing the paddock-agent package does not remove the running helper (plan M8d decision 39).
+func (l Layout) UninstallPlan() string { return l.Join("/run/paddock/uninstall/plan.json") }
+
+// UninstallBinary is the copy of paddockd the uninstall helper runs as.
+func (l Layout) UninstallBinary() string { return l.Join("/run/paddock/uninstall/paddockd") }
+
 // Socket is the health socket.
 func (l Layout) Socket() string { return l.Join("/run/paddock/agent.sock") }
 
