@@ -374,7 +374,8 @@ describe('app bar: organization name and step-up freshness (plan M8x decisions 3
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
     vi.setSystemTime(new Date('2026-10-17T10:00:00Z'))
     const until = '2026-10-17T10:00:05Z'
-    const time = new Date(until).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    const time = new Intl.DateTimeFormat('en', { timeStyle: 'short' }).format(new Date(until))
+    expect(time).toMatch(/^\d{1,2}:\d{2}\s[AP]M$/)
     const { w } = await mountApp({ ...admin, step_up_valid_until: until })
     expect(w.get('[data-testid="stepup-chip"]').text()).toBe(`Confirmed until ${time}`)
     await w.get('[data-testid="user-menu"]').trigger('click')

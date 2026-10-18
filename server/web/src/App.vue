@@ -11,6 +11,7 @@ import PdIcon from './components/PdIcon'
 import { pendingConfirm, settleConfirm } from './composables/useConfirm'
 import { modifierLabel, useShortcuts } from './composables/useShortcuts'
 import { attentionCount } from './lib/updates'
+import { formatTime } from './lib/format'
 import { shortcutRoutes, visibleNavigation } from './lib/navigation'
 import { fetchPaletteDevices, fetchPaletteGroups, type Density, type PaletteContext } from './lib/commands'
 import { currentDevice } from './lib/pageContext'
@@ -41,7 +42,7 @@ onBeforeUnmount(() => clearInterval(ticker))
 const stepUpUntil = computed(() => {
   const iso = session.me?.step_up_valid_until
   if (!iso || Date.parse(iso) <= now.value) return null
-  return new Date(iso).toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return formatTime(iso, locale.value)
 })
 
 // Drawer states (plan M7c decision 15): expanded by default from 1280 px, a rail by default between 600 and

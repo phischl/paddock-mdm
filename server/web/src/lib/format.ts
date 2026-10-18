@@ -5,6 +5,11 @@ export function formatDateTime(iso: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(iso))
 }
 
+/** Formats the time of an RFC 3339 timestamp as hours and minutes in the browser's time zone and the locale's clock. */
+export function formatTime(iso: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { timeStyle: 'short' }).format(new Date(iso))
+}
+
 type Translate = (key: string, values?: Record<string, unknown>) => string
 type Exists = (key: string) => boolean
 
