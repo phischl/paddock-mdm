@@ -146,8 +146,9 @@ func (h releaseHarness) requested(t *testing.T, dev uuid.UUID) string {
 }
 
 // TestUpdateNowFollowsTheSupervisor (review finding 5): under the manual policy only an open request lets a device
-// upgrade paddock-supervisor and fleetd, so the request stays open after the agent's report while either is outdated
-// and ends with the supervisor's result; a device on the release can be asked again while either is outdated.
+// upgrade paddock-supervisor and fleetd, so the request stays open after the agent's report while the device reports
+// another supervisor and ends with the supervisor's result; a device on the release can be asked again while its
+// supervisor is older or fleetd is outdated.
 func TestUpdateNowFollowsTheSupervisor(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	h.exec(t, "UPDATE agent_rollout SET status = 'halted' WHERE status IN ('running', 'completed')")
@@ -155,8 +156,8 @@ func TestUpdateNowFollowsTheSupervisor(t *testing.T) {
 	updates := app.NewAgentUpdates(h.runner, h.workerPool(t), evaluatedOffer{h})
 	op := h.operatorIn(t, org, principal.RoleOrgOperator)
 	v := h.completedRollout(t, time.Now().Add(2*time.Minute))
-	h.exec(t, `INSERT INTO device_status (device_id, organization_id, agent_version, arch, components_outdated)
-		VALUES ($1, $2, '0.9.0', 'amd64', '{paddockd,paddock_supervisor}')`, dev, org)
+	h.exec(t, `INSERT INTO device_status (device_id, organization_id, agent_version, arch, health)
+		VALUES ($1, $2, '0.9.0', 'amd64', '{"components": {"paddockd": "0.9.0", "paddock_supervisor": "0.9.0"}}')`, dev, org)
 	if _, err := updates.RequestNow(op, dev); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +176,12 @@ func TestUpdateNowFollowsTheSupervisor(t *testing.T) {
 		t.Fatalf("the supervisor's result did not end the request: %s", r)
 	}
 
-	h.exec(t, "UPDATE device_status SET agent_version = $2, components_outdated = '{fleetd}' WHERE device_id = $1", dev, v)
+	h.exec(t, "UPDATE device_status SET agent_version = $2 WHERE device_id = $1", dev, v)
+	if _, err := updates.RequestNow(op, dev); err != nil {
+		t.Fatalf("device on the release with an older supervisor: %v", err)
+	}
+	h.exec(t, `UPDATE device_status SET health = jsonb_build_object('components', jsonb_build_object('paddock_supervisor', replace($2, '-', '~'))),
+		components_outdated = '{fleetd}' WHERE device_id = $1`, dev, v)
 	if _, err := updates.RequestNow(op, dev); err != nil {
 		t.Fatalf("device on the release with an outdated fleetd: %v", err)
 	}

@@ -73,9 +73,8 @@ func (u *AgentUpdates) RequestNow(ctx context.Context, deviceID uuid.UUID) (pgst
 			from = *status.AgentVersion
 		}
 		rec.SetParam("from_version", from)
-		if !offer.Newer(from) && (from != offer.Version || !slices.ContainsFunc(status.ComponentsOutdated, func(c string) bool {
-			return c == components.Supervisor || c == components.Fleetd
-		})) {
+		if !offer.Newer(from) && (from != offer.Version ||
+			!SupervisorBehind(status, offer.Version, false) && !slices.Contains(status.ComponentsOutdated, components.Fleetd)) {
 			return problem.InvalidState.WithDetail("the device already runs " + from)
 		}
 		if status.Arch != "" {

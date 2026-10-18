@@ -368,9 +368,9 @@ the bundles at the compiler's next reconcile. An agent installs the package only
 - it runs that release itself (agent first, supervisor second, in the same waves),
 - `dpkg` reports an older `paddock-supervisor` (the Debian form `0.1.0~alpha.4` of a pre-release counts as
   `0.1.0-alpha.4`),
-- the update policy is automatic or an *Update agent now* request is open (it stays open after the agent update
-  until the supervisor's result arrives while the supervisor or fleetd are outdated, at most 24 hours; a device that
-  already runs the release can be asked again while either is outdated),
+- the update policy is automatic or an *Update agent now* request is open (after the agent update it stays open
+  until the supervisor's result arrives while the device reports an older supervisor or an outdated fleetd, at most
+  24 hours; a device that already runs the release can be asked again under the same condition),
 - no agent update is pending, no supervisor upgrade runs, the version did not fail on the device before and is not
   waiting for its retry.
 

@@ -1217,13 +1217,14 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
 
 ### 15.1 Update now and the supervisor (decisions 23, 26, 27, 29)
 
-- 23/26: `RequestNow` also accepts a device that runs the offered release while `device_status.components_outdated`
-  contains `paddock_supervisor` or `fleetd`; otherwise 409 `the device already runs <version>` as before.
+- 23/26: `RequestNow` also accepts a device that runs the offered release while its health reports another
+  `paddock_supervisor` than that version (`app.SupervisorBehind`, Debian form normalized) or `components_outdated`
+  contains `fleetd`; otherwise 409 `the device already runs <version>` as before.
 - 27: the gateway reads `au:<device_id>` also for a device on the offered version and then answers its own version
   marked `requested` (not while the rollout is halted, only with an artifact for its arch). The agent never stages its
   own version; the flag only opens `updatesAllowed` for the supervisor package and fleetd.
-- 29: `agent.updated` of the requested version clears the request only when `components_outdated` names neither
-  `paddock_supervisor` nor `fleetd`; `agent.supervisor_updated` of that version (any outcome) clears it; the 24-hour
+- 29: `agent.updated` of the requested version clears the request only when the health reports `paddock_supervisor`
+  at that version (or none at all) and `components_outdated` does not name `fleetd`; `agent.supervisor_updated` of that version (any outcome) clears it; the 24-hour
   expiry stays. `handleUpdate` returns without staging while `supervisor-upgrade.json` exists (review finding 12).
 
 ### 15.2 Supervisor package in waves (decisions 30 and 33, design contract 6)

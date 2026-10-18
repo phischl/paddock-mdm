@@ -298,10 +298,11 @@ for good. The rollback itself stays: the helper cannot tell whether the new supe
 
 **III. Update now and the supervisor (decision 2, review finding 5).** Under the manual policy only an open update-now
 request lets a device upgrade `paddock-supervisor` and fleetd, but the request ended with the agent's report. Now the
-request stays open after `agent.updated` while the device's `components_outdated` names `paddock_supervisor` or
-`fleetd`, and ends with `agent.supervisor_updated` (any outcome) or after 24 hours; the gateway marks the device's own
-version `requested` for a device on the release while the request is open (the agent never stages its own version);
-`RequestNow` accepts a device on the release while either component is outdated.
+request stays open after `agent.updated` while the device's last health report names another `paddock_supervisor`
+than the requested version (the component target follows only completed rollouts, so it is no reference here) or
+`components_outdated` names `fleetd`, and ends with `agent.supervisor_updated` (any outcome) or after 24 hours; the
+gateway marks the device's own version `requested` for a device on the release while the request is open (the agent
+never stages its own version); `RequestNow` accepts a device on the release under the same condition.
 
 Consequences: + No supervisor change reaches every device at once, and a server outage no longer blocks a supervisor
 version for good. − A supervisor wave follows the compiler's reconcile interval rather than the gateway's offer; a

@@ -420,20 +420,33 @@ func endsUpdateRequest(eventType string) bool {
 }
 
 // clearUpdateRequest ends the device's update-now request for version. After agent.updated the request stays open
-// while the device's paddock-supervisor or fleetd is outdated: under the manual policy only an open request lets the
-// device upgrade them (ADR 0037 decision 3); the supervisor's result or the 24-hour expiry ends it then.
+// until the device reports paddock-supervisor at that version, or while fleetd is outdated: under the manual policy only
+// an open request lets the device upgrade them (ADR 0037 decision 3); the supervisor's result or the 24-hour expiry
+// ends it then. A release without a supervisor package keeps the request until the expiry.
 func clearUpdateRequest(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, eventType, version string) error {
 	if eventType == protocol.EventAgentUpdated {
 		status, err := q.GetDeviceStatus(ctx, deviceID)
 		if err != nil && !db.IsNoRows(err) {
 			return err
 		}
-		if slices.ContainsFunc(status.ComponentsOutdated, func(c string) bool { return c == components.Supervisor || c == components.Fleetd }) {
+		if SupervisorBehind(status, version, false) || slices.Contains(status.ComponentsOutdated, components.Fleetd) {
 			return nil
 		}
 	}
 	_, err := q.ClearAgentUpdateRequest(ctx, pgstore.ClearAgentUpdateRequestParams{DeviceID: deviceID, Version: &version})
 	return err
+}
+
+// SupervisorBehind reports whether the device's last health report names a paddock-supervisor other than version
+// (the Debian form 0.1.0~alpha.1 counts as 0.1.0-alpha.1); unknown is what a device without a report counts as. The
+// component target is no reference here: it follows the completed rollout only, while the supervisor package of a
+// running rollout already reaches the waves (ADR 0037 amendment 2026-10-18).
+func SupervisorBehind(status pgstore.DeviceStatus, version string, unknown bool) bool {
+	installed, ok := HealthComponents(status.Health)[components.Supervisor]
+	if !ok {
+		return unknown
+	}
+	return strings.Replace(installed, "~", "-", 1) != version
 }
 
 // updateOutcome returns the agent_update_report outcome of an agent update event, if the rollout evaluation counts
