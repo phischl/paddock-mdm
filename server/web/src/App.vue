@@ -561,9 +561,11 @@ onBeforeUnmount(() => observer.disconnect())
                 class="pd-nav-shortcut pd-type-kbd"
                 aria-hidden="true"
               >{{ item.shortcut }}</kbd>
+              <!-- Eager like the org-name tooltip: named so axe accepts it while hidden (aria-tooltip-name). -->
               <v-tooltip
                 v-if="rail"
                 activator="parent"
+                :aria-label="t(item.label)"
                 location="end"
               >
                 {{ t(item.label) }}

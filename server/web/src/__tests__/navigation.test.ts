@@ -267,6 +267,18 @@ describe('navigation drawer', () => {
     expect(localStorage.getItem('paddock.navigation.collapsed')).toBe('false')
   })
 
+  it('gives every rail tooltip an accessible name before it is ever shown', async () => {
+    resize(1279)
+    const { w } = await mountApp()
+    const links = drawer(w).findAll('a.pd-nav-item')
+    expect(links.length).toBeGreaterThan(0)
+    for (const link of links) {
+      const tooltip = document.getElementById(link.attributes('aria-describedby')!)
+      expect(tooltip?.getAttribute('role')).toBe('tooltip')
+      expect(tooltip?.getAttribute('aria-label')).toBe(link.attributes('aria-label'))
+    }
+  })
+
   it('is a temporary drawer behind a hamburger button below 600 px', async () => {
     resize(599)
     const { w, router } = await mountApp()
