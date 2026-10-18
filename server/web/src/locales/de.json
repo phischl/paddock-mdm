@@ -609,6 +609,22 @@
     "keyFacts": "{id}… ({protection}, {status})",
     "groups": "Gerätegruppen",
     "groupsSaved": "Gerätegruppen gespeichert.",
+    "name": {
+      "title": "Gerätename",
+      "label": "Name",
+      "hint": "Ein kleingeschriebenes Label aus 1–63 Buchstaben, Ziffern oder Bindestrichen. Das Gerät übernimmt es beim nächsten Check-in als Hostnamen.",
+      "save": "Speichern",
+      "clear": "Namen entfernen",
+      "saved": "Gerätename gespeichert.",
+      "conflict": "Ein anderes Gerät dieser Organisation trägt diesen Namen bereits.",
+      "state": {
+        "unmanaged": "Nicht verwaltet: das Gerät behält seinen eigenen Hostnamen.",
+        "pending": "Ausstehend: das Gerät meldet noch {hostname}.",
+        "applied": "Übernommen: das Gerät meldet diesen Namen."
+      },
+      "pendingChip": "Name ausstehend",
+      "pendingTooltip": "Verwalteter Name: {name}"
+    },
     "effectiveConfig": "Wirksame Konfiguration",
     "conflict": "{resource} wird {count, plural, one {von einer weiteren Gerätegruppe} other {von # weiteren Gerätegruppen}} definiert; es gilt die Definition mit der kleinsten ID.",
     "actions": {

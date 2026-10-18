@@ -74,6 +74,14 @@ const columns: ListColumn[] = [
         <RouterLink :to="{ name: 'device', params: { id: item.id }, query: paneQuery(route.query) }">
           {{ item.hostname }}
         </RouterLink>
+        <StatusChip
+          v-if="item.name_state === 'pending'"
+          status="warn"
+          :label="t('devices.name.pendingChip')"
+          :title="t('devices.name.pendingTooltip', { name: item.name ?? '' })"
+          class="pd-name-pending"
+          data-testid="device-name-pending"
+        />
       </template>
       <template #[`item.state`]="{ item }: { item: Device }">
         <StatusChip
@@ -120,3 +128,7 @@ const columns: ListColumn[] = [
     </DataList>
   </section>
 </template>
+
+<style scoped>
+.pd-name-pending { margin-inline-start: var(--pd-space-2); }
+</style>

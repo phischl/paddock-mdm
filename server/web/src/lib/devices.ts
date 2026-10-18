@@ -151,6 +151,25 @@ export function agentUpdateProblemKey(res: { problem: string; detail?: string })
   return null
 }
 
+/**
+ * Sets or clears (null) the managed name of a device (ADR 0041); the device on success, otherwise the problem code and
+ * the server's detail.
+ */
+export async function setDeviceName(id: string, name: string | null): Promise<DeviceDetail | { problem: string; detail?: string }> {
+  const { data, error } = await api.PUT('/api/v1/devices/{id}/name', {
+    params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
+    body: { name },
+  })
+  if (data) return data
+  const detail = error && typeof error === 'object' && 'detail' in error && typeof error.detail === 'string' ? error.detail : undefined
+  return { problem: problemCode(error), detail }
+}
+
+/** The state line of the device name panel (plan M8h decision 17): its message key and values. */
+export function nameStateView(d: Pick<Device, 'name_state' | 'hostname'>): { key: string; values: Record<string, string> } {
+  return { key: 'devices.name.state.' + d.name_state, values: { hostname: d.hostname } }
+}
+
 /** All device groups by name (selection lists), paged through the list contract (at most its depth limit). */
 export async function allGroups(): Promise<{ id: string; name: string }[]> {
   const out: { id: string; name: string }[] = []

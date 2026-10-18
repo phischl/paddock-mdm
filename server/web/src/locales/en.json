@@ -609,6 +609,22 @@
     "keyFacts": "{id}… ({protection}, {status})",
     "groups": "Device groups",
     "groupsSaved": "Device groups saved.",
+    "name": {
+      "title": "Device name",
+      "label": "Name",
+      "hint": "One lowercase label of 1–63 letters, digits or hyphens. The device uses it as its hostname at its next check-in.",
+      "save": "Save",
+      "clear": "Clear name",
+      "saved": "Device name saved.",
+      "conflict": "Another device of this organization already has this name.",
+      "state": {
+        "unmanaged": "Not managed: the device keeps its own hostname.",
+        "pending": "Pending: the device still reports {hostname}.",
+        "applied": "Applied: the device reports this name."
+      },
+      "pendingChip": "Name pending",
+      "pendingTooltip": "Managed name: {name}"
+    },
     "effectiveConfig": "Effective configuration",
     "conflict": "{resource} is defined by {count, plural, one {one more device group} other {# more device groups}}; the definition with the smallest ID applies.",
     "actions": {

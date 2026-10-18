@@ -86,6 +86,15 @@ test('organization admin enrolls, configures and retires a device', async ({ pag
   await page.getByTestId('save-device-groups').click()
   await expect(page.getByRole('main').getByRole('status')).toHaveText('Device groups saved.')
 
+  // Device name (ADR 0041): saved inline without a dialog, pending until the device reports it.
+  const namePanel = page.getByTestId('device-name-panel')
+  await expect(namePanel.getByTestId('device-name-state')).toHaveText('Not managed: the device keeps its own hostname.')
+  await namePanel.getByLabel('Name').fill(`e2e-name-${stamp}`)
+  await namePanel.getByTestId('save-device-name').click()
+  await expect(namePanel.getByRole('status')).toHaveText('Device name saved.')
+  await expect(namePanel.getByTestId('device-name-state')).toHaveText(`Pending: the device still reports ${hostname}.`)
+  await expectAccessible(page)
+
   // Files outside an operator root need a step-up (ADR 0034 amendment 2026-10-16): the administrator adds the
   // e2e directory as an operator root once, with the typed confirmation and the step-up.
   await mainNav(page).getByRole('link', { name: 'Operator roots' }).click()
