@@ -587,7 +587,6 @@ func TestUninstallOverdueWithdrawsTheDeliveredCommand(t *testing.T) {
 	}
 }
 
-
 // stepUpTokens hands out a step-up ID token for every jti.
 type stepUpTokens struct{}
 
