@@ -177,6 +177,7 @@ func expectCreated(t *testing.T, res env.Response) env.Response {
 
 // TestStepUpFactor is gate S16 of plan M8s (decision 40): the shipped step-up flow validates with WebAuthn only at
 // order 30, the development blueprint adds the stage at order 31 that also accepts TOTP, and both blueprints applied.
+// The portal sign-in's stage validates and enrols WebAuthn only (plan M8f decision 14).
 func TestStepUpFactor(t *testing.T) {
 	ctx := testContext(t, time.Minute)
 	ak, err := env.NewAuthentik()
@@ -229,6 +230,20 @@ func TestStepUpFactor(t *testing.T) {
 	}
 	if got := classes(31); fmt.Sprint(got) != "[webauthn totp]" {
 		t.Errorf("order 31 (development) validates %v, want [webauthn totp]", got)
+	}
+	var login struct {
+		Results []struct {
+			DeviceClasses       []string `json:"device_classes"`
+			NotConfiguredAction string   `json:"not_configured_action"`
+			ConfigurationStages []string `json:"configuration_stages"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/stages/authenticator/validate/?name=paddock-admin-login-mfa", &login); err != nil || len(login.Results) != 1 {
+		t.Fatalf("stage paddock-admin-login-mfa: %+v %v", login, err)
+	}
+	if s := login.Results[0]; fmt.Sprint(s.DeviceClasses) != "[webauthn]" || s.NotConfiguredAction != "configure" ||
+		len(s.ConfigurationStages) != 1 {
+		t.Errorf("paddock-admin-login-mfa: %+v, want [webauthn], configure and one configuration stage", s)
 	}
 }
 

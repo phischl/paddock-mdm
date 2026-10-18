@@ -381,6 +381,41 @@ func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 	}
 }
 
+// TestPortalBlueprintLoginWebAuthnOnly (plan M8f decision 14): the portal sign-in validates and enrols WebAuthn only;
+// the default flow's stage, which serves every Authentik user, keeps accepting TOTP.
+func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-portal.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	portal := string(b)
+	block := func(name string) string {
+		t.Helper()
+		start := strings.Index(portal, "name: "+name+"\n")
+		if start < 0 {
+			t.Fatalf("paddock-portal.yaml has no stage %s", name)
+		}
+		end := strings.Index(portal[start:], "\n  - model:")
+		if end < 0 {
+			end = len(portal) - start
+		}
+		return portal[start : start+end]
+	}
+	login := block("paddock-admin-login-mfa")
+	for _, want := range []string{"\n      device_classes: [webauthn]\n", "\n      not_configured_action: configure\n",
+		"[name, default-authenticator-webauthn-setup]"} {
+		if !strings.Contains(login, want) {
+			t.Errorf("paddock-admin-login-mfa lacks %q", want)
+		}
+	}
+	if n := strings.Count(login, "        - !Find"); n != 1 || strings.Contains(login, "totp") {
+		t.Errorf("paddock-admin-login-mfa has %d configuration stages or mentions totp:\n%s", n, login)
+	}
+	if !strings.Contains(block("paddock-default-login-mfa"), "\n      device_classes: [webauthn, totp]\n") {
+		t.Error("paddock-default-login-mfa no longer accepts WebAuthn and TOTP")
+	}
+}
+
 func TestStepUpBlueprintWebAuthnOnly(t *testing.T) {
 	read := func(path string) string {
 		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))
