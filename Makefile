@@ -287,6 +287,7 @@ agent-release: ## Build paddockd, the Debian packages VERSION (TAGS) and fleetd,
 .PHONY: up
 up: ## Start the full stack (infrastructure, OpenBao/bucket bootstrap, Paddock roles) and wait until healthy (BACKUP=1: with backups)
 	$(COMPOSE) up -d $(if $(BACKUP),--build,)
+	$(COMPOSE_DIR)/scripts/postgres-unsealer-role.sh
 	$(COMPOSE_DIR)/scripts/wait-healthy.sh
 	$(COMPOSE_DIR)/scripts/openbao-bootstrap.sh
 	$(COMPOSE_DIR)/scripts/rustfs-audit-bootstrap.sh

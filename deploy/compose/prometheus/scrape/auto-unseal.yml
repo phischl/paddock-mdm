@@ -1,0 +1,7 @@
+# Scrape target of the unsealer (ADR 0035, plan M8u decision 15), mounted by compose.auto-unseal.yaml only: the
+# target exists exactly where the unsealer runs.
+scrape_configs:
+  - job_name: paddock-unsealer
+    static_configs:
+      - targets: ["paddock-unsealer:9090"]
+        labels: { role: paddock-unsealer }

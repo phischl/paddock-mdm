@@ -171,6 +171,16 @@ services:
     environment:
       PADDOCK_ENV: development
 
+  # The development unsealer (plan M8u decision 14) talks plain HTTP to the development OpenBao, which has no internal
+  # CA; its shares are the first three of .secrets/openbao/init.txt (openbao-bootstrap.sh).
+  paddock-unsealer:
+    build: *paddock-build
+    environment:
+      PADDOCK_ENV: development
+      PADDOCK_OPENBAO_ADDR: http://openbao:8200
+      BAO_CACERT: !reset null
+    secrets: !override [db_paddock_unsealer_url, openbao_auto_unseal_shares]
+
 secrets:
   dev_platform_admin_password: { file: ./.secrets/dev_platform_admin_password }
   dev_alice_password: { file: ./.secrets/dev_alice_password }

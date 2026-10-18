@@ -22,6 +22,8 @@ usage: ./paddock <command> [arguments]
   bootstrap openbao|buckets|audit-bucket|fleet
                                   configure OpenBao, the buckets or Fleet (docs/operations/install.md)
   agent-release <version> <dir>   upload and publish signed agent artifacts (control plane)
+  auto-unseal status|enable|disable
+                                  automatic unseal of OpenBao on this host (docs/operations/openbao.md section 6)
   migrate-from <old dir>          take over .env and .secrets/ of the bundle directory of the running version
 EOF
   exit 2
@@ -58,7 +60,7 @@ case "$cmd" in
     echo "copied .env and .secrets/ from $old"
     exit 0
     ;;
-  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release) ;;
+  secrets | pull | check | up | down | ps | logs | compose | bao | bootstrap | agent-release | auto-unseal) ;;
   *) usage ;;
 esac
 
@@ -81,6 +83,21 @@ tty_flag() { [[ -t 0 && -t 1 ]] || printf -- '-T'; }
 # require_host <host> lab <command>: the command runs on that host, or on a lab host, which holds both (ADR 0029).
 require_host() {
   [[ "$PADDOCK_HOST" == "$1" || "$PADDOCK_HOST" == "$2" ]] || die "$3 runs on the $1 host (PADDOCK_HOST is $PADDOCK_HOST)" 2
+}
+
+# set_dotenv <name> <value>: replaces the line name=… of .env, or appends it; keeps the file's mode.
+set_dotenv() {
+  local name="$1" value="$2" env="$BUNDLE_DIR/.env" tmp
+  tmp="$(mktemp "$BUNDLE_DIR/.env.XXXXXX")"
+  if grep -q "^${name}=" "$env"; then
+    sed "s|^${name}=.*|${name}=${value}|" "$env" >"$tmp"
+  else
+    cat "$env" >"$tmp"
+    [[ -z "$(tail -c 1 "$env")" ]] || echo >>"$tmp"
+    printf '%s=%s\n' "$name" "$value" >>"$tmp"
+  fi
+  chmod --reference="$env" "$tmp"
+  mv "$tmp" "$env"
 }
 
 # lab_warning prints the lab profile's warning as the command's first output line.
@@ -181,5 +198,72 @@ case "$cmd" in
     # shellcheck disable=SC2046
     compose run --rm --no-deps $(tty_flag) -v "$release_dir:/release:ro" paddock-api \
       admin agent-release --version "$1" --dir /release
+    ;;
+  auto-unseal)
+    # Automatic unseal of OpenBao (ADR 0035, plan M8u decision 18). A share is never printed, logged or put on a
+    # command line: it is read from stdin and written to its file only.
+    shares_file="$SECRETS_DIR/openbao/auto-unseal-shares"
+    case "${1:-}" in
+      status)
+        [[ $# -eq 1 ]] || die "usage: ./paddock auto-unseal status|enable|disable" 2
+        echo "PADDOCK_AUTO_UNSEAL=$(dotenv PADDOCK_AUTO_UNSEAL)"
+        if [[ -e "$shares_file" ]]; then echo "shares file: present"; else echo "shares file: absent"; fi
+        line="$(PADDOCK_AUTO_UNSEAL=yes compose --profile paddock ps --format '{{.Name}} {{.Status}}' paddock-unsealer 2>/dev/null || true)"
+        echo "paddock-unsealer: ${line:-not running}"
+        sealed="$(compose exec -T -e BAO_ADDR=https://127.0.0.1:8200 -e BAO_CACERT=/run/secrets/internal_ca_bundle \
+          openbao bao status 2>/dev/null | grep '^Sealed' || true)"
+        echo "${sealed:-Sealed          unknown (OpenBao did not answer)}"
+        ;;
+      enable)
+        [[ $# -eq 1 ]] || die "usage: ./paddock auto-unseal status|enable|disable" 2
+        require_host controlplane lab "auto-unseal enable"
+        lab_warning
+        [[ "$(dotenv PADDOCK_AUTO_UNSEAL)" != yes && ! -e "$shares_file" ]] ||
+          die "automatic unseal is already set up on this host: run ./paddock auto-unseal disable first"
+        "$BUNDLE_DIR/scripts/gen-prod-secrets.sh" "$PADDOCK_HOST" >/dev/null
+        # The portal acknowledgement first: no share reaches the host without it.
+        if ! verified="$(compose run --rm --no-deps -T paddock-worker admin auto-unseal verify 2>/dev/null)"; then
+          die "$(grep -m1 '^automatic unseal' <<<"$verified" || echo 'automatic unseal is not enabled: a platform administrator enables it in the portal first (Platform → OpenBao)')"
+        fi
+        grep -m1 '^automatic unseal' <<<"$verified" || true
+        "$BUNDLE_DIR/scripts/postgres-unsealer-role.sh"
+        shares=()
+        for n in 1 2 3; do
+          share=""
+          IFS= read -rs -p "Unseal share $n of 3 (from a custodian, not echoed): " share || true
+          [[ ! -t 0 ]] || echo >&2
+          [[ -n "$share" ]] || die "share $n is empty"
+          [[ ! "$share" =~ [[:space:]] ]] || die "share $n contains whitespace"
+          for s in "${shares[@]}"; do
+            [[ "$s" != "$share" ]] || die "share $n equals an earlier share: three different custodians' shares are needed"
+          done
+          shares+=("$share")
+        done
+        mkdir -p "$SECRETS_DIR/openbao"
+        chmod 700 "$SECRETS_DIR" "$SECRETS_DIR/openbao"
+        tmp="$(umask 077 && mktemp "$SECRETS_DIR/openbao/.auto-unseal-shares.XXXXXX")"
+        printf '%s\n' "${shares[@]}" >"$tmp"
+        unset shares share s
+        mv "$tmp" "$shares_file"
+        # Readable by the unsealer's user (65532) through the Compose secret; the 0700 directory protects it.
+        chmod 644 "$shares_file"
+        set_dotenv PADDOCK_AUTO_UNSEAL yes
+        compose --profile paddock up -d paddock-unsealer
+        echo "automatic unseal is enabled on this host. Verify it now: ./paddock compose restart openbao, then ./paddock bao status shows \"Sealed false\" within 30 s. Remove every other unseal automation (for example a cron job) and its copies of the shares."
+        ;;
+      disable)
+        [[ $# -eq 1 ]] || die "usage: ./paddock auto-unseal status|enable|disable" 2
+        require_host controlplane lab "auto-unseal disable"
+        # With the overlay forced into the file set, so that an unsealer left running is found whatever .env says.
+        PADDOCK_AUTO_UNSEAL=yes compose --profile paddock stop paddock-unsealer >/dev/null 2>&1 || true
+        PADDOCK_AUTO_UNSEAL=yes compose --profile paddock rm -f paddock-unsealer >/dev/null 2>&1 || true
+        if [[ -e "$shares_file" ]]; then
+          if command -v shred >/dev/null; then shred -u "$shares_file"; else rm -f "$shares_file"; fi
+        fi
+        set_dotenv PADDOCK_AUTO_UNSEAL no
+        echo "the shares are deleted from this host. If the host, its disk or its backups may have been copied while automatic unseal was on, rotate the shares with three custodians (docs/operations/openbao.md section 6). If the portal still shows automatic unseal as enabled, a platform administrator disables it there."
+        ;;
+      *) die "usage: ./paddock auto-unseal status|enable|disable" 2 ;;
+    esac
     ;;
 esac

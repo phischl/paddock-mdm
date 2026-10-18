@@ -113,7 +113,7 @@ func ComposeProduction(ctx context.Context, env []string, args ...string) (strin
 }
 
 func compose(ctx context.Context, env []string, stdin io.Reader, args []string) (string, error) {
-	return composeFiles(ctx, env, stdin, ".env", []string{"compose.yaml", "compose.audit.yaml", "compose.dev.yaml"}, args)
+	return composeFiles(ctx, env, stdin, ".env", []string{"compose.yaml", "compose.audit.yaml", "compose.auto-unseal.yaml", "compose.dev.yaml"}, args)
 }
 
 // ProdFiles returns the Compose files of a production host from deploy/compose/scripts/lib.sh (PROD_FILES_<host>,

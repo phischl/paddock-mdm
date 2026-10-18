@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disclaimer version, the unsealer on the host and its last unseal or failure. Enabling shows the disclaimer with its
   four risks and needs the typed sentence "I understand and accept the risk" (German: "Ich verstehe und akzeptiere das
   Risiko") and a step-up; disabling asks for confirmation and a step-up.
+- `./paddock auto-unseal status|enable|disable` on a control-plane or lab host: `enable` refuses without the portal
+  acknowledgement, asks for three unseal shares without echo, stores them in `.secrets/openbao/auto-unseal-shares`,
+  sets `PADDOCK_AUTO_UNSEAL=yes` in `.env` and starts the new `paddock-unsealer` service (overlay
+  `compose.auto-unseal.yaml`, its own PostgreSQL role `paddock_unsealer`, no AppRole); `disable` stops it, deletes the
+  shares and sets `PADDOCK_AUTO_UNSEAL=no`. `./paddock secrets` now also creates `db_paddock_unsealer_password` and
+  `db_paddock_unsealer_url`.
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.

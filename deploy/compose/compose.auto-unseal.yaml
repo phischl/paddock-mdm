@@ -1,0 +1,54 @@
+# Automatic unseal of OpenBao (ADR 0035, plan M8u decision 14): the unsealer holds three unseal shares and unseals
+# OpenBao while a platform administrator's acknowledged setting allows it. ./paddock adds this file to the file set of
+# a control-plane or lab host when .env has PADDOCK_AUTO_UNSEAL=yes (scripts/lib.sh, AUTO_UNSEAL_FILES); the
+# development stack always includes it. See docs/operations/openbao.md section 6 and residual risk RR-43.
+#
+# YAML anchors do not cross files, so the hardening of the x-paddock anchor of compose.yaml is spelled out here.
+
+services:
+  paddock-unsealer:
+    image: ${PADDOCK_IMAGE:-paddock-server:dev}
+    profiles: [paddock]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/paddock-server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    command: ["serve", "unsealer"]
+    # Only its own database credential, the OpenBao address and the shares: no AppRole, no Valkey, no RabbitMQ.
+    environment:
+      PADDOCK_ENV: ${PADDOCK_ENV:-production}
+      PADDOCK_LOG_LEVEL: ${PADDOCK_LOG_LEVEL:-info}
+      PADDOCK_OPS_ADDR: ":9090"
+      PADDOCK_DB_UNSEALER_URL_FILE: /run/secrets/db_paddock_unsealer_url
+      PADDOCK_OPENBAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/secrets/internal_ca_bundle
+      PADDOCK_OPENBAO_UNSEAL_SHARES_FILE: /run/secrets/openbao_auto_unseal_shares
+    secrets:
+      - db_paddock_unsealer_url
+      - openbao_auto_unseal_shares
+      - internal_ca_bundle
+    networks: [cp]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+      paddock-migrate:
+        condition: service_completed_successfully
+
+  # The scrape target exists exactly when the unsealer does, so PaddockRoleDown never fires for an absent service.
+  prometheus:
+    volumes:
+      - ./prometheus/scrape/auto-unseal.yml:/etc/prometheus/scrape/auto-unseal.yml:ro
+
+secrets:
+  db_paddock_unsealer_url: { file: ./.secrets/db_paddock_unsealer_url }
+  openbao_auto_unseal_shares: { file: ./.secrets/openbao/auto-unseal-shares }
