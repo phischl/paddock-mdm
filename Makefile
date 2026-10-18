@@ -406,8 +406,8 @@ load-test: ## Run the k6 scenario SCENARIO=checkin|ingest against the running st
 ci: lint test web ## Everything CI runs
 
 .PHONY: logs
-logs: ## Show logs of the stack
-	$(COMPOSE) --profile paddock logs --no-color --tail 300
+logs: ## Show logs of the stack (token= values redacted, RR-63)
+	set -o pipefail; . $(LIB_SH) && $(COMPOSE) --profile paddock logs --no-color --tail 300 | redact_tokens
 
 # --- Release (plan M6b decision 4, plan M7b decisions 4–7 and 20, docs/operations/agent-releases.md) ---------------
 # The release workflow (.github/workflows/release.yml, tags v*.*.*) and the edge job of ci.yml call these targets, in

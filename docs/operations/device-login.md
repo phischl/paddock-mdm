@@ -93,6 +93,11 @@ The worker sets the token values on the device provider of every organization (`
 `refresh_token_threshold` at zero: with a threshold Authentik leaves the refresh token out of its refresh response,
 and Himmelblau then refuses every PIN login.
 
+Authentik's server log prints the raw refresh token when a revoked, expired or unknown token is presented;
+`./paddock logs` redacts `token=` values (and the `"token"` field of Authentik's JSON lines), `docker compose logs`
+does not. Treat the Authentik container log as confidential and keep its retention short (Docker rotation of plan
+M10; residual risk RR-63).
+
 The agent sets `cache_timeout = 2592000` (30 days) in `himmelblau.conf`. Himmelblau 4.0.x seals the refresh token
 with the Hello key at every PIN authentication and presents the sealed token at the next one; with its default
 `cache_timeout` of 300 s it would refresh a signed-in user in the background, Authentik would renew the refresh token

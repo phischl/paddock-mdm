@@ -13,6 +13,12 @@ PROD_FILES_audit="compose.audit.yaml compose.audit.prod.yaml"
 PROD_FILES_lab="compose.yaml compose.prod.yaml compose.audit.yaml compose.lab.yaml"
 LAB_BACKUP_FILES="compose.backup.yaml"
 
+# redact_tokens replaces the value of every token=<value> field, and of every "token": "<value>" field of the JSON
+# lines Authentik writes in a container, in a log stream: Authentik 2026.8.3 logs the raw refresh token of a refused
+# refresh ("Refresh token is revoked", providers/oauth2/token/refresh_token.py), and Paddock's rule is that no secret
+# is ever printed (RR-63). -u keeps `logs -f` live instead of block-buffered.
+redact_tokens() { sed -u -E -e 's/(token=)[A-Za-z0-9._~+\/=-]+/\1<redacted>/g' -e 's/("token": ?")[^"]*/\1<redacted>/g'; }
+
 # env_value <name>: value from the process environment, else from .env, else from .env.example.
 env_value() {
   local name="$1" file

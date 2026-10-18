@@ -94,6 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minutes; Paddock alone manages sudo.
 - Public portal pages such as the sign-in refusal use the browser's language (German or English) before a session
   exists.
+- `./paddock logs` and `make logs` redact token values that the identity provider prints for refused token refreshes.
 
 ## [0.1.0-alpha.3] - 2026-10-17
 

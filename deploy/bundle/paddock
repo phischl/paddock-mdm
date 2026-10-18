@@ -139,7 +139,7 @@ case "$cmd" in
     compose --profile '*' ps "$@"
     ;;
   logs)
-    compose --profile '*' logs --no-color --tail 300 "$@"
+    compose --profile '*' logs --no-color --tail 300 "$@" | redact_tokens
     ;;
   compose)
     compose "$@"
