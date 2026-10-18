@@ -153,7 +153,7 @@ func newStepUpWorldFor(t *testing.T, maxAuthAge time.Duration, p principal.Princ
 	if err != nil {
 		t.Fatal(err)
 	}
-	maxAge := "60"
+	maxAge := "20"
 	if maxAuthAge > 0 {
 		maxAge = strconv.Itoa(int(maxAuthAge.Seconds()))
 	}
@@ -258,7 +258,7 @@ func TestStepUp(t *testing.T) {
 	})
 	for name, claims := range map[string]func(w *stepUpWorld) map[string]any{
 		"another user":       func(w *stepUpWorld) map[string]any { return with(w, "sub", "sub-carol") },
-		"old authentication": func(w *stepUpWorld) map[string]any { return with(w, "auth_time", w.clock.Unix()-61) },
+		"old authentication": func(w *stepUpWorld) map[string]any { return with(w, "auth_time", w.clock.Unix()-21) },
 		"no auth_time":       func(w *stepUpWorld) map[string]any { return with(w, "auth_time", 0) },
 		"without MFA":        func(w *stepUpWorld) map[string]any { return with(w, "amr", []string{"pwd"}) },
 		"without jti":        func(w *stepUpWorld) map[string]any { return with(w, "jti", "") },
@@ -317,6 +317,29 @@ func TestStepUp(t *testing.T) {
 		res := w.serve("/api/auth/stepup/callback?code=c&state="+url.QueryEscape(loc.Query().Get("state")), state)
 		if res.Header().Get("Location") != "/devices/x?stepup=failed" || cookieOf(res, admin.SessionCookie) != nil {
 			t.Fatalf("callback: %d %s", res.Code, res.Header().Get("Location"))
+		}
+	})
+	t.Run("production maximum auth age", func(t *testing.T) {
+		// max_age stays below the 30 s window of the escrow-reader and the revocation-issuer (ADR 0034 amendment
+		// 2026-10-18), so a repeated step-up is never refused for being too early.
+		if admin.StepUpMaxAuthAge != 20*time.Second {
+			t.Fatalf("StepUpMaxAuthAge = %s", admin.StepUpMaxAuthAge)
+		}
+		w := newStepUpWorld(t)
+		value, err := w.keys.Seal(admin.SessionCookie, w.session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := w.serve("/api/auth/stepup?return_to=%2F", &http.Cookie{Name: admin.SessionCookie, Value: value})
+		loc, _ := url.Parse(start.Header().Get("Location"))
+		if start.Code != http.StatusFound || loc.Query().Get("max_age") != "20" {
+			t.Fatalf("start: %d %s", start.Code, loc)
+		}
+		w = newStepUpWorld(t)
+		begin := w.clock
+		w.onAuthorize = func() { w.clock = w.clock.Add(25 * time.Second) }
+		if res := w.stepUp(with(w, "auth_time", begin.Add(4*time.Second).Unix())); res.Header().Get("Location") != "/devices/x?stepup=failed" {
+			t.Fatalf("21 s old login: %s", res.Header().Get("Location"))
 		}
 	})
 	t.Run("shortened maximum auth age", func(t *testing.T) {

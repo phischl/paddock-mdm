@@ -90,7 +90,7 @@ paths:
       summary: Start a step-up authentication (plan M4a decision 6)
       description: |
         Requires a valid session. Redirects to the authorization endpoint of the OIDC application
-        paddock-portal-stepup with prompt=login, max_age=60 and the session's username as login_hint; Authentik runs
+        paddock-portal-stepup with prompt=login, max_age=20 and the session's username as login_hint; Authentik runs
         the flow paddock-stepup (password and MFA). Actions that need a step-up answer 403 step_up_required when the
         session has none within the last 300 s.
       parameters:

@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   organization's silence threshold applies (contact filter `unseen`, overview field `devices.no_recent_contact`, part
   of the Silent tile); a stopped agent reported by fleetd is the attention kind `agent_not_running` until fleetd sees
   it running again.
+- A repeated identity confirmation (step-up) is possible 20 seconds after the previous one instead of a minute; the
+  step-up asks the identity provider to authenticate again after 20 seconds.
 
 ### Fixed
 

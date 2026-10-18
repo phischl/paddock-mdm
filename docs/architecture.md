@@ -1007,6 +1007,10 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > `multiple_roles`, `platform_and_organization`, `organization_inactive`, `key_store_sealed`). `GET /api/v1/me` carries
 > `step_up_valid_until`, which the portal shows (ADR 0034 amendment 2026-10-17).
 
+> **Amendment 2026-10-18 (M8f):** the step-up's authorization request carries `max_age=20` (below the 30 s window of
+> the escrow-reader and the revocation-issuer), so a repeated step-up is possible 20 s after the previous one
+> (ADR 0034 amendment 2026-10-18).
+
 ---
 
 ## 10. Permission profiles and sudo

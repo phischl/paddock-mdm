@@ -30,8 +30,9 @@ const (
 	StepUpCookie   = "paddock_stepup"
 	StepUpLifetime = 10 * time.Minute
 	// StepUpMaxAuthAge is the oldest auth_time the callback accepts (Deps.StepUpMaxAuthAge may shorten it in
-	// development).
-	StepUpMaxAuthAge = 60 * time.Second
+	// development). It stays below the escrow-reader's and revocation-issuer's 30 s window, so a step-up too old for
+	// them is always old enough for Authentik to authenticate again (ADR 0034 amendment 2026-10-18).
+	StepUpMaxAuthAge = 20 * time.Second
 )
 
 // stepUpState is the payload of the paddock_stepup cookie.
