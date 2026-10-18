@@ -29,6 +29,8 @@ func TestRLSLint(t *testing.T) {
 		"ip_allowlist_entry": true,
 		// Automatic unseal of OpenBao (plan M8u decision 2), roles paddock_platform and paddock_unsealer only.
 		"openbao_auto_unseal": true,
+		// Expected component versions (plan M8d decision 53), platform data without organization data.
+		"component_target": true,
 	}
 	rows, err := conn.Query(ctx, `
 		SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity,
