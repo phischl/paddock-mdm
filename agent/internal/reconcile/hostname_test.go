@@ -48,7 +48,31 @@ func TestHostnameInSync(t *testing.T) {
 	}
 }
 
-// TestHostnamePrettyDiffers: any of the three names differing renames, and the rename sets all three.
+// TestHostnameConverges: hostnamectl clears the pretty name when it sets a valid host name, so an empty pretty name
+// is in sync and the passes after a rename change nothing (review 1 finding 1).
+func TestHostnameConverges(t *testing.T) {
+	sys, h, _ := hostnameFixture(t)
+	sys.Hostnames = fakesys.Hostnames{Static: "lap-0421", Transient: "lap-0421"}
+	r := hostnameResource(t, "lap-0421")
+	if changes, err := h.Plan(context.Background(), r); err != nil || len(changes) != 0 {
+		t.Fatalf("plan with an empty pretty name %v, %v", changes, err)
+	}
+	sys.Hostnames = fakesys.Hostnames{Static: "local", Transient: "local", Pretty: "local"}
+	if res := h.Apply(context.Background(), r); res.Status != reconcile.Changed {
+		t.Fatalf("rename %+v", res)
+	}
+	for pass := range 2 {
+		if res := h.Apply(context.Background(), r); res.Status != reconcile.OK {
+			t.Fatalf("pass %d after the rename %+v, names %+v", pass+1, res, sys.Hostnames)
+		}
+	}
+	if !slices.Equal(sys.Calls, []string{"hostnamectl hostname lap-0421"}) {
+		t.Fatalf("calls %v", sys.Calls)
+	}
+}
+
+// TestHostnamePrettyDiffers: a pretty name of its own renames like a differing static or transient name, and the
+// rename leaves the pretty name empty.
 func TestHostnamePrettyDiffers(t *testing.T) {
 	sys, h, _ := hostnameFixture(t)
 	sys.Hostnames.Pretty = "Phillip's laptop"
@@ -60,7 +84,7 @@ func TestHostnamePrettyDiffers(t *testing.T) {
 		t.Fatalf("apply %+v", res)
 	}
 	if !slices.Equal(sys.Calls, []string{"hostnamectl hostname lap-0421"}) ||
-		sys.Hostnames != (fakesys.Hostnames{Static: "lap-0421", Transient: "lap-0421", Pretty: "lap-0421"}) {
+		sys.Hostnames != (fakesys.Hostnames{Static: "lap-0421", Transient: "lap-0421"}) {
 		t.Fatalf("calls %v, names %+v", sys.Calls, sys.Hostnames)
 	}
 }

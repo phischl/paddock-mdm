@@ -12,9 +12,10 @@ import (
 )
 
 // TestHostnameGate runs gate S-HN1 of plan M8h on each VM, from a fresh base install: a name set in the portal
-// becomes the static, transient and pretty hostname without a reboot, /etc/hosts and Avahi follow and sudo keeps
-// resolving the host; a local rename is corrected as drift; a cleared name is left alone; the inventory mapping
-// survives; the VM ends with its original hostname.
+// becomes the static and transient hostname without a reboot (systemd leaves the pretty hostname empty, ADR 0041
+// amendment 2026-10-18), /etc/hosts and Avahi follow and sudo keeps resolving the host; a local rename is corrected as
+// drift and the device then converges; a cleared name is left alone; the inventory mapping survives; the VM ends with
+// its original hostname.
 func TestHostnameGate(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
@@ -52,6 +53,19 @@ func (d *Device) setName(name any) {
 // hostnames are the static, transient and pretty hostname of the device.
 func (d *Device) hostnames() [3]string {
 	return [3]string{d.Must("hostnamectl --static"), d.Must("hostname"), d.Must("hostnamectl --pretty")}
+}
+
+// namedAs reports whether hostnames carry name: static and transient are the name; the pretty name is empty, which
+// hostnamectl leaves for a valid host name, or the name.
+func namedAs(names [3]string, name string) bool {
+	return names[0] == name && names[1] == name && (names[2] == "" || names[2] == name)
+}
+
+// hostnameDriftPasses counts the agent's journal lines since the unix time since that report a drift correction, or
+// a failed one, of the hostname resource.
+func hostnameDriftPasses(d *Device, since int64) string {
+	return d.Must("sudo journalctl -u paddock-supervisor --since @" + strconv.FormatInt(since, 10) +
+		" --no-pager -o cat | grep -E 'drift correct(ed|ion failed)' | grep -c hostname || true")
 }
 
 // checkinTick triggers a check-in at most once per 65 s (the agent's limit).
@@ -104,8 +118,7 @@ func gateHN1(t *testing.T, d *Device) {
 	}
 	d.setName(name)
 	time.Sleep(5 * time.Second) // the compiler publishes the bundle
-	want := [3]string{name, name, name}
-	Until(t, d.Name+": hostnames "+name, 10*time.Minute, 5*time.Second, tick, func() bool { return d.hostnames() == want })
+	Until(t, d.Name+": hostnames "+name, 10*time.Minute, 5*time.Second, tick, func() bool { return namedAs(d.hostnames(), name) })
 	version := float64(d.nameState(t).Bundle)
 	d.WaitEvent(t, "device.bundle_applied", 5*time.Minute, func(p map[string]any) bool {
 		if v, _ := p["bundle_version"].(float64); v < version {
@@ -151,7 +164,8 @@ func gateHN1(t *testing.T, d *Device) {
 		ids, _ := p["resource_ids"].([]any)
 		return slices.Contains(ids, any("hostname"))
 	})
-	Until(t, d.Name+": name restored after the local rename", 2*time.Minute, 5*time.Second, nil, func() bool { return d.hostnames() == want })
+	Until(t, d.Name+": name restored after the local rename", 2*time.Minute, 5*time.Second, nil, func() bool { return namedAs(d.hostnames(), name) })
+	hn1Converged(t, d, name)
 
 	// (c) A cleared name is not managed: the device keeps it and a local rename stays.
 	d.setName(nil)
@@ -161,8 +175,8 @@ func gateHN1(t *testing.T, d *Device) {
 		st := d.nameState(t)
 		return st.Applied != nil && *st.Applied >= cleared
 	})
-	if got := d.hostnames(); got != want {
-		t.Errorf("%s: hostnames after clearing %v, want %v", d.Name, got, want)
+	if got := d.hostnames(); !namedAs(got, name) {
+		t.Errorf("%s: hostnames after clearing %v, want %s", d.Name, got, name)
 	}
 	local := "local-" + d.run
 	d.Must("sudo hostnamectl hostname " + local)
@@ -170,4 +184,57 @@ func gateHN1(t *testing.T, d *Device) {
 	if got := d.Must("hostnamectl --static"); got != local {
 		t.Errorf("%s: a local rename of an unmanaged name was changed to %q", d.Name, got)
 	}
+}
+
+// hn1Converged checks that the device converges after a correction (review 1 finding 1): two consecutive drift passes
+// change nothing, report no config.drift_corrected for the hostname and leave avahi-daemon running as it was.
+func hn1Converged(t *testing.T, d *Device, name string) {
+	t.Helper()
+	time.Sleep(15 * time.Second) // the correcting pass's event reaches the audit log
+	corrected := len(hostnameDriftEvents(d))
+	avahi := d.Must("systemctl show -p ActiveEnterTimestamp --value --timestamp=unix avahi-daemon.service")
+	since, err := strconv.ParseInt(d.Must("date +%s"), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(70 * time.Second) // two drift passes of the development build (30 s)
+	if n := hostnameDriftPasses(d, since); n != "0" {
+		t.Errorf("%s: %s drift passes corrected the hostname again after it converged", d.Name, n)
+	}
+	var plan struct {
+		Resources []struct {
+			ID      string   `json:"id"`
+			Changes []string `json:"changes"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(d.Must("sudo paddockd plan")), &plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range plan.Resources {
+		if r.ID == "hostname" && len(r.Changes) > 0 {
+			t.Errorf("%s: the converged hostname plans %v", d.Name, r.Changes)
+		}
+	}
+	if got := d.hostnames(); !namedAs(got, name) {
+		t.Errorf("%s: hostnames after two drift passes %v, want %s", d.Name, got, name)
+	}
+	if got := d.Must("systemctl show -p ActiveEnterTimestamp --value --timestamp=unix avahi-daemon.service"); got != avahi {
+		t.Errorf("%s: avahi-daemon restarted after the device converged: %s, before %s", d.Name, got, avahi)
+	}
+	d.Checkin()
+	time.Sleep(15 * time.Second) // a config.drift_corrected spooled by the two passes reaches the audit log
+	if n := len(hostnameDriftEvents(d)); n != corrected {
+		t.Errorf("%s: %d config.drift_corrected events for the hostname after it converged", d.Name, n-corrected)
+	}
+}
+
+// hostnameDriftEvents are the device's config.drift_corrected audit events that name the hostname resource.
+func hostnameDriftEvents(d *Device) []map[string]any {
+	var out []map[string]any
+	for _, e := range d.s.Events("device.config_drift_corrected", d.ID) {
+		if ids, _ := e.Params["resource_ids"].([]any); slices.Contains(ids, any("hostname")) {
+			out = append(out, e.Params)
+		}
+	}
+	return out
 }

@@ -243,8 +243,8 @@ func (s *System) Timedatectl(_ context.Context, args ...string) (string, int, er
 	return "", 0, nil
 }
 
-// Hostnamectl implements reconcile.System for --json=short and hostname <name>, which sets all three names;
-// FailCmd ("hostnamectl hostname x") fails it with exit 1.
+// Hostnamectl implements reconcile.System for --json=short and hostname <name>, which sets the static and transient
+// name and, like systemd's set_hostname for a valid host name, clears the pretty name; FailCmd ("hostnamectl hostname x") fails it with exit 1.
 func (s *System) Hostnamectl(_ context.Context, args ...string) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -260,7 +260,7 @@ func (s *System) Hostnamectl(_ context.Context, args ...string) (string, int, er
 		return string(out) + "\n", 0, err
 	case len(args) == 2 && args[0] == "hostname":
 		s.Calls = append(s.Calls, cmd)
-		s.Hostnames = Hostnames{Static: args[1], Transient: args[1], Pretty: args[1]}
+		s.Hostnames = Hostnames{Static: args[1], Transient: args[1]}
 		return "", 0, nil
 	}
 	return "", 1, fmt.Errorf("fake hostnamectl: unsupported %v", args)

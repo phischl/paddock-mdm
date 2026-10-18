@@ -274,7 +274,7 @@ func TestHostnameSection(t *testing.T) {
 	bundle.SortResources(b.Resources)
 	sys.Hostnames.Pretty = "other"
 	a.Apply(ctx, b)
-	if string(sys.Files[reconcile.HostsFile].Data) != "127.0.0.1 localhost\n" || sys.Hostnames.Pretty != "lap-0421" {
+	if string(sys.Files[reconcile.HostsFile].Data) != "127.0.0.1 localhost\n" || sys.Hostnames.Pretty != "" {
 		t.Fatalf("managed hosts %q, names %+v", sys.Files[reconcile.HostsFile].Data, sys.Hostnames)
 	}
 	if drifted := apply.Drifted(a.Plan(ctx, b)); len(drifted) != 0 {

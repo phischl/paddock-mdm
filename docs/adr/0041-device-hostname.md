@@ -153,3 +153,16 @@ Facts that bound the design (verified 2026-10-18 in `main` at `177c234` and upst
 − One restart of `avahi-daemon.service` per applied rename on devices that run it.
 Follow-ups: plan `docs/plans/M8h-device-hostname.md` (PDK-329 to PDK-332); architecture §7.2, §11.3, §16.1 and
 §17.1 amendments in PDK-332; naming templates as an open question for the maintainer.
+
+## Amendment 2026-10-18 — the pretty hostname after `hostnamectl hostname` (architect, M8h review 1)
+
+The context's systemd fact is incomplete. `hostnamectl hostname NAME` without `--static`, `--transient` or `--pretty`
+sets the pretty hostname only when `NAME` is not itself a valid host name; for a valid one it **clears** the pretty
+hostname (systemd `hostnamectl.c::set_hostname`: `p = ""` when `arg_static && hostname_is_valid(...)`). Every managed
+name is a valid host name (decision 1), so after the agent's rename the pretty hostname is empty.
+
+Decision 4 is refined accordingly: Plan changes when the static or transient hostname differs from `name`, or when
+the pretty hostname is neither empty nor `name`. An empty pretty hostname is in sync. The agent does not pass
+explicit flags to keep a pretty hostname. Without this refinement every drift pass would rename again, restart
+Avahi and report `config.drift_corrected` (decision 5 would never converge). Gate S-HN1 accepts an empty or equal
+pretty hostname and checks that two consecutive drift passes after a correction change nothing.

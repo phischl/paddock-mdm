@@ -20,8 +20,8 @@ const (
 	hostsLocalIP = "127.0.0.1"
 )
 
-// Hostname reconciles the hostname resource (plan M8h decision 13): the static, transient and pretty hostname,
-// the 127.0.1.1 line of /etc/hosts and a running avahi-daemon.
+// Hostname reconciles the hostname resource (plan M8h decision 13): the static and transient hostname, a pretty
+// hostname that is empty or the name, the 127.0.1.1 line of /etc/hosts and a running avahi-daemon.
 type Hostname struct {
 	Sys System
 	// HostsManaged reports whether the current bundle manages /etc/hosts as a file; then the reconciler leaves
@@ -50,7 +50,9 @@ func (h *Hostname) Plan(ctx context.Context, r bundle.Resource) ([]string, error
 		return nil, fmt.Errorf("hostnamed unavailable: %w", err)
 	}
 	var changes []string
-	if names.StaticHostname != name || names.Hostname != name || names.PrettyHostname != name {
+	// hostnamectl clears the pretty name when it sets a valid host name (systemd set_hostname, ADR 0041 amendment
+	// 2026-10-18), so an empty pretty name is in sync; only a pretty name of its own is drift.
+	if names.StaticHostname != name || names.Hostname != name || (names.PrettyHostname != "" && names.PrettyHostname != name) {
 		changes = append(changes, "hostnamectl hostname "+name)
 	}
 	if h.HostsManaged == nil || !h.HostsManaged() {
