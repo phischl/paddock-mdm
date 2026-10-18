@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/protocol"
+	"github.com/phischl/paddock-mdm/test/acceptance/devicesim"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -20,6 +21,10 @@ type isolationWorld struct {
 	globexGroups []string
 	// Globex device control plane resources (seedGlobexDevices).
 	globexToken, globexDevice, globexFile, globexUnit, globexDeviceGroup string
+	// globexSim is the simulated agent of globexDevice.
+	globexSim *devicesim.Device
+	// globexLogin is the user name of the session start globexSim reported (seedGlobexOwnersAndLogins).
+	globexLogin string
 	// globexEnrollment is the enrollment configuration of globexToken.
 	globexEnrollment protocol.EnrollmentConfig
 	// Globex identity resources (seedGlobexIdentity).
@@ -111,6 +116,21 @@ func seedGlobexIdentity(t *testing.T, w *isolationWorld) {
 	w.globexIDs = append(w.globexIDs, w.globexUser, w.globexUserGroup, w.globexProfile, w.globexAssignment)
 }
 
+// seedGlobexOwnersAndLogins makes, as carol, globexUser the owner of globexDevice and records one session start of
+// globexDevice with login history on (restored when the gate ends), so the user's devices and the device's logins
+// have globex data to find.
+func seedGlobexOwnersAndLogins(t *testing.T, w *isolationWorld) {
+	t.Helper()
+	res := call(t, w.carol, http.MethodPut, "/api/v1/devices/"+w.globexDevice+"/owners", map[string]any{"user_ids": []string{w.globexUser}})
+	expectStatus(t, res, http.StatusOK, "")
+	original := currentLoginSettings(t, w.carol)
+	w.top.Cleanup(func() { _ = call(w.top, w.carol, http.MethodPut, "/api/v1/settings/login", original) })
+	expectStatus(t, putLoginHistory(t, w.carol, true, 365), http.StatusOK, "")
+	// A session start before the switch-on is not recorded: at is taken after the PUT returned.
+	w.globexLogin = "globex-iso-" + uniqueSuffix() + "@globex.test"
+	sendSessionLogins(t, w.globexSim, 1, w.globexLogin, time.Now().UTC().Truncate(time.Millisecond))
+}
+
 // seedGlobexDevices creates, as carol, a device group with an enrolled device (through the device API), an
 // enrollment token, a managed file and a managed unit of that group — all named "globex-iso…" so the list searches
 // find them.
@@ -123,7 +143,7 @@ func seedGlobexDevices(t *testing.T, w *isolationWorld) {
 	if s.Status != "active" {
 		t.Fatalf("globex device enrollment %+v", s)
 	}
-	w.globexDevice = dev.DeviceID
+	w.globexDevice, w.globexSim = dev.DeviceID, dev
 	// One check-in without any update run makes it a device with overdue security updates (security_updates filter).
 	if _, _, err := dev.Checkin(testContext(t, time.Minute)); err != nil {
 		t.Fatal(err)
@@ -514,6 +534,8 @@ var listParents = map[string]func(w *isolationWorld) string{
 	"/api/v1/devices/{id}/software":         func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/devices/{id}/vulnerabilities":  func(w *isolationWorld) string { return w.globexDevice },
 	"/api/v1/vulnerabilities/{cve}/devices": func(w *isolationWorld) string { return w.globexCVE },
+	"/api/v1/users/{id}/devices":            func(w *isolationWorld) string { return w.globexUser },
+	"/api/v1/devices/{id}/logins":           func(w *isolationWorld) string { return w.globexDevice },
 }
 
 func fixtureKey(method, path string) string { return strings.ToUpper(method) + " " + path }
@@ -578,6 +600,9 @@ var listIsolationQueries = map[string][]url.Values{
 		{"q": {"globex-iso"}},
 		{"action": {"destroy"}, "status": {"requested"}, "page_size": {"100"}},
 	},
+	// globexUser owns globexDevice, which reported one session start (seedGlobexOwnersAndLogins).
+	"/api/v1/users/{id}/devices":  {{"q": {"globex-iso"}}, {"sort": {"-last_contact_at"}}},
+	"/api/v1/devices/{id}/logins": {{"q": {"globex-iso"}}, {"sort": {"username"}}},
 }
 
 // currentLoginSettings returns acme's login settings as an update body (unchanged values).
@@ -609,6 +634,9 @@ func currentUpdateSettings(t *testing.T, p *env.Portal) map[string]any {
 // listIsolationDynamicQueries are list searches whose values are globex IDs known only at run time (plan M7c
 // decision 31: the audit log's target_id); the gate runs them like listIsolationQueries.
 var listIsolationDynamicQueries = map[string][]func(w *isolationWorld) url.Values{
+	"/api/v1/devices/{id}/logins": {
+		func(w *isolationWorld) url.Values { return url.Values{"username": {strings.ToLower(w.globexLogin)}} },
+	},
 	"/api/v1/attention/devices": {
 		func(w *isolationWorld) url.Values { return url.Values{"device_id": {w.globexDevice}} },
 	},

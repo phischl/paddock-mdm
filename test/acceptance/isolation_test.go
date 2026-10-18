@@ -34,6 +34,7 @@ func TestOrganizationIsolation(t *testing.T) {
 	globexGroup(t, w)
 	seedGlobexDevices(t, w)
 	seedGlobexIdentity(t, w)
+	seedGlobexOwnersAndLogins(t, w)
 	seedGlobexUpstream(t, w)
 	seedGlobexChangeSet(t, w)
 	ctx := testContext(t, time.Minute)
