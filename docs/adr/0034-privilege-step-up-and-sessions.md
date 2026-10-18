@@ -179,3 +179,40 @@ browser). Decisions: (A) the portal login sends no `prompt` (ADR 0007 amendment 
 callback refuses an ID token whose `auth_time` is missing or earlier than the step-up start, compared in whole
 seconds (`auth_time >= started_at`), next to the existing subject, `max_age` and `amr` checks. (B) holds whatever
 Authentik does with `prompt`: a token for a login event older than the step-up start never satisfies a step-up.
+
+## Amendment 2026-10-18 (M8f) — step-up factor proven in Paddock, `max_age` 20 s, WebAuthn-only portal login, end-all ends Authentik sessions
+Context (Authentik 2026.8.3 sources, plan M8f §2): the ID token's `amr` says `mfa` for WebAuthn and TOTP alike; a
+held authorize URL of a started step-up can be satisfied by a later TOTP sign-in through any Authentik flow reachable
+by slug (`last_login_uid` set by the first pass, `auth_time` after the start), so decision 6 was enforced by the
+Authentik stage alone (RR-38). `max_age=60` collided with the 30 s window of the escrow-reader and the
+revocation-issuer: a repeated step-up between 30 s and 60 s after the previous one was refused. New administrators
+could enrol TOTP at the portal login and were refused at every step-up (PDK-181). After *end all sessions* a live
+Authentik session signed in again without a prompt (PDK-190).
+
+Decisions:
+1. **Factor claim.** The step-up provider carries the Paddock mapping `io.paddock/scope-stepup-mfa` (scope
+   `paddock_stepup`), which emits `paddock_mfa_classes`: the `<app>.<model_name>` of every authenticator the
+   session's login event validated (`auth_method_args.mfa_devices`, the same event Authentik uses for `amr`). The
+   step-up callback refuses a token whose claim is missing or does not contain
+   `authentik_stages_authenticator_webauthn.webauthndevice`. The development stack sets the required class to the TOTP
+   device through `PADDOCK_STEPUP_MFA_CLASS` (development only, a production-check finding). Options weighed: binding
+   the token to the step-up *flow* (the login event does not record the flow; an expression policy would have to
+   mutate the plan context — fragile); `ak_user_has_authenticator` (says the user *has* a WebAuthn device, not that it
+   was *used*); keeping the Authentik-only enforcement (status quo, RR-38). Chosen: the factor used, read from the login
+   event. The escrow-reader and the revocation-issuer keep verifying `amr` on the proof token; they receive it only
+   after the api accepted the step-up.
+2. **`max_age` is 20 s** (`StepUpMaxAuthAge`): below the shortest consumer window (30 s), so a step-up that is too old
+   for the escrow-reader is always old enough for Authentik to run `paddock-stepup` again; 10 s remain for clock skew.
+3. **WebAuthn-only portal login.** The stage `paddock-admin-login-mfa` validates `[webauthn]` only and configures
+   the WebAuthn setup stage when the administrator has none; an administrator with TOTP only enrols WebAuthn at the
+   next portal sign-in. The default-flow stage (every Authentik user) and the device-login stages keep both classes.
+   The pre-upgrade enrolment note of decision 6 is superseded by the enrolment at sign-in.
+4. **End all sessions** (decision 4) also deletes the identity provider's authenticated sessions of every portal user
+   (platform administrators and the three role groups of every organization) through Authentik's
+   `core/authenticated_sessions/bulk_delete`, inside the same audited action; the service account gains the two session
+   permissions. A single account's revocation (role change, step-up mismatch, deactivation) stays Paddock-only: the
+   account signs in again with its current role, and a deactivation already ended everything in Authentik.
+
+Consequences: RR-38 is reworded (the factor now depends on Authentik's login event, not on its stage alone); RR-62
+(WebAuthn-capable browser needed) and RR-66 (end-all scope) are added; `docs/operations/step-up.md` and the upgrade
+runbook change; plan M8f implements (PDK-297, PDK-299, PDK-181, PDK-190).
