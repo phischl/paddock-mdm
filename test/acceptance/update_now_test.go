@@ -2,6 +2,7 @@ package acceptance
 
 import (
 	"encoding/json"
+	"hash/fnv"
 	"net/http"
 	"testing"
 	"time"
@@ -26,6 +27,14 @@ func requestOf(t *testing.T, p *env.Portal, id string) requestState {
 	return s
 }
 
+// rolloutBucket mirrors agentrelease.Bucket (FNV-1a of the device UUID text modulo 100), so a gate can place its
+// devices inside and outside a wave without waiting on chance.
+func rolloutBucket(deviceID string) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(deviceID))
+	return int(h.Sum32() % 100)
+}
+
 // TestUpdateNow is gate A6 of plan M8d (AC6): with a rollout whose first wave excludes the device, an operator's
 // update-now request makes the next check-in carry a requested offer; the device's report clears the request; a
 // second request while the device runs the release, a request without a rollout and one for a halted rollout are
@@ -36,7 +45,16 @@ func TestUpdateNow(t *testing.T) {
 	t.Cleanup(func() { haltRunningRollouts(t, root) })
 	requireNoCompletedRollout(t, root)
 	d := activeDevice(t, alice, "", "a6-"+uniqueSuffix())
-	d.Arch = protocol.ArchAMD64
+	// Only the worker's rollout round (every 60 s) publishes or withdraws the offer, and a device outside the wave sees
+	// neither. The probe sits in the first wave, so its offer tells when the round has run.
+	probe := activeDevice(t, alice, "", "a6-"+uniqueSuffix())
+	for rolloutBucket(probe.DeviceID) == rolloutBucket(d.DeviceID) {
+		probe = activeDevice(t, alice, "", "a6-"+uniqueSuffix())
+	}
+	if rolloutBucket(probe.DeviceID) > rolloutBucket(d.DeviceID) {
+		d, probe = probe, d
+	}
+	d.Arch, probe.Arch = protocol.ArchAMD64, protocol.ArchAMD64
 	path := "/api/v1/devices/" + d.DeviceID + "/update-agent"
 	operator := operatorUser(t)
 
@@ -48,16 +66,16 @@ func TestUpdateNow(t *testing.T) {
 
 	v := gateRelease(t, root, true, true)
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/rollout", map[string]any{
-		"waves": []int{1, 100}, "min_wave_minutes": 60, "failure_threshold_min": 1000, "failure_threshold_percent": 100,
+		"waves": []int{rolloutBucket(probe.DeviceID) + 1, 100}, "min_wave_minutes": 60, "failure_threshold_min": 1000, "failure_threshold_percent": 100,
 	}), http.StatusCreated, "")
 	waitRolloutStatus(t, root, v, "running", time.Minute)
-	time.Sleep(10 * time.Second) // the worker's rollout round writes the offer
+	checkinUntil(t, probe, 2*time.Minute, func(r protocol.CheckinResponse) bool { return r.AgentUpdate != nil && r.AgentUpdate.Version == v })
 	out, _, err := d.Checkin(testContext(t, time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.AgentUpdate != nil && !out.AgentUpdate.Requested {
-		t.Skip("the simulated device fell into the 1 % wave; the gate needs a device outside it")
+	if out.AgentUpdate != nil {
+		t.Fatalf("offered outside its wave: %+v", out.AgentUpdate)
 	}
 
 	expectStatus(t, call(t, bob, http.MethodPost, path, nil), http.StatusForbidden, "forbidden")
@@ -97,7 +115,7 @@ func TestUpdateNow(t *testing.T) {
 
 	d.AgentVersion = "0.0.0-devicesim"
 	expectStatus(t, call(t, root, http.MethodPost, "/api/platform/v1/agent-releases/"+v+"/rollout/halt", nil), http.StatusOK, "")
-	time.Sleep(10 * time.Second)
+	checkinUntil(t, probe, 2*time.Minute, func(r protocol.CheckinResponse) bool { return r.AgentUpdate == nil })
 	res = call(t, operator.Portal, http.MethodPost, path, nil)
 	expectStatus(t, res, http.StatusConflict, "invalid_state")
 	if out, _, err := d.Checkin(testContext(t, time.Minute)); err != nil || out.AgentUpdate != nil {
