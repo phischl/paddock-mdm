@@ -102,6 +102,9 @@ services:
       # production).
       PADDOCK_STEPUP_WINDOW: ${PADDOCK_STEPUP_WINDOW:-30s}
       PADDOCK_STEPUP_MAX_AUTH_AGE: ${PADDOCK_STEPUP_MAX_AUTH_AGE:-15s}
+      # The development users step up with TOTP (the dev blueprint's stage at order 31); production requires WebAuthn
+      # (development only; refused in production).
+      PADDOCK_STEPUP_MFA_CLASS: ${PADDOCK_STEPUP_MFA_CLASS:-authentik_stages_authenticator_totp.totpdevice}
       # The development users sign in without an authenticator (the dev blueprint skips the MFA stages); production
       # refuses a portal sign-in without a second factor (development only; refused in production).
       PADDOCK_LOGIN_MFA_OPTIONAL: "true"

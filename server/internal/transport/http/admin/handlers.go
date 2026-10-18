@@ -62,6 +62,9 @@ type handlers struct {
 // stepUpTiming is the step-up window of the action runner and the maximum auth age of the step-up callback.
 type stepUpTiming struct{ window, maxAuthAge time.Duration }
 
+// stepUpClassesKey carries the session's step-up authenticator classes to GET /api/v1/me (development only).
+type stepUpClassesKey struct{}
+
 var _ adminapi.StrictServerInterface = (*handlers)(nil)
 
 func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (adminapi.GetMeResponseObject, error) {
@@ -81,6 +84,9 @@ func (h *handlers) GetMe(ctx context.Context, _ adminapi.GetMeRequestObject) (ad
 		if !p.StepUpAt.IsZero() {
 			at := p.StepUpAt.UTC()
 			out.StepUp.At = &at
+			if classes, ok := ctx.Value(stepUpClassesKey{}).([]string); ok {
+				out.StepUp.MfaClasses = &classes
+			}
 		}
 	}
 	return adminapi.GetMe200JSONResponse(out), nil

@@ -9,6 +9,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/server/internal/domain/organization"
 	"github.com/phischl/paddock-mdm/server/internal/principal"
+	"github.com/phischl/paddock-mdm/server/internal/transport/http/admin"
 )
 
 // TestStepUpRoleMismatch covers plan M8s decision 20: a step-up whose groups grant the session's role is accepted;
@@ -40,7 +41,7 @@ func TestStepUpRoleMismatch(t *testing.T) {
 		t.Helper()
 		w := newStepUpWorldFor(t, 0, p, e.accounts)
 		res := w.stepUp(map[string]any{"sub": p.Subject, "auth_time": w.clock.Unix(), "amr": []string{"pwd", "mfa"},
-			"jti": uuid.NewString(), "groups": groups})
+			"jti": uuid.NewString(), "groups": groups, "paddock_mfa_classes": []string{admin.StepUpWebAuthnClass}})
 		if res.Code != http.StatusFound {
 			t.Fatalf("callback: %d", res.Code)
 		}

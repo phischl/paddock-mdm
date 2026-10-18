@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/authflow"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
+	"github.com/phischl/paddock-mdm/test/acceptance/internal/stack"
 )
 
 // stepUpState is the development-only step_up of GET /api/v1/me: the session's last step-up as the server recorded
@@ -16,6 +18,8 @@ type stepUpState struct {
 	At         *time.Time
 	Window     time.Duration
 	MaxAuthAge time.Duration
+	// MFAClasses are the authenticator classes the session's last step-up validated (plan M8f decision 10).
+	MFAClasses []string
 }
 
 func serverStepUp(t *testing.T, p *env.Portal) stepUpState {
@@ -25,6 +29,7 @@ func serverStepUp(t *testing.T, p *env.Portal) stepUpState {
 			At                *time.Time `json:"at"`
 			WindowSeconds     int        `json:"window_seconds"`
 			MaxAuthAgeSeconds int        `json:"max_auth_age_seconds"`
+			MFAClasses        []string   `json:"mfa_classes"`
 		} `json:"step_up"`
 	}
 	res := call(t, p, http.MethodGet, "/api/v1/me", nil)
@@ -33,7 +38,7 @@ func serverStepUp(t *testing.T, p *env.Portal) stepUpState {
 		t.Fatalf("GET /api/v1/me has no step_up (needs PADDOCK_ENV=development): %v %s", err, res.Body)
 	}
 	return stepUpState{At: me.StepUp.At, Window: time.Duration(me.StepUp.WindowSeconds) * time.Second,
-		MaxAuthAge: time.Duration(me.StepUp.MaxAuthAgeSeconds) * time.Second}
+		MaxAuthAge: time.Duration(me.StepUp.MaxAuthAgeSeconds) * time.Second, MFAClasses: me.StepUp.MFAClasses}
 }
 
 // freshStepUp steps up as user unless the session's step-up has at least 10 s of its window left, so a gate that
@@ -250,5 +255,79 @@ func TestStepUpValidUntilInMe(t *testing.T) {
 	now := time.Now()
 	if v := validUntil(); v == nil || v.Before(now.Add(-expirySlack)) || v.After(now.Add(300*time.Second+expirySlack)) {
 		t.Fatalf("after a step-up: step_up_valid_until %v, want within [now, now+300 s]", v)
+	}
+}
+
+// totpClass is the authenticator class the development stack's step-up accepts (PADDOCK_STEPUP_MFA_CLASS).
+const totpClass = "authentik_stages_authenticator_totp.totpdevice"
+
+// TestStepUpFactorClaim (plan M8f decision 11): the step-up token names the authenticator classes the step-up
+// validated (claim paddock_mfa_classes of the mapping io.paddock/scope-stepup-mfa), and the api records them: the
+// development users step up with TOTP. An Authentik upgrade that changes the login event fails this gate.
+func TestStepUpFactorClaim(t *testing.T) {
+	alice := login(t, env.Alice)
+	stepUp(t, alice, env.Alice, true)
+	if got := serverStepUp(t, alice).MFAClasses; fmt.Sprint(got) != "["+totpClass+"]" {
+		t.Fatalf("step_up.mfa_classes %v, want [%s]", got, totpClass)
+	}
+}
+
+// TestStepUpHeldAuthorizeURL (plan M8f decisions 5 and 11) opens the authorization URL of a started step-up after a
+// sign-in through another Authentik flow of the same browser: it records whether Authentik answered it without
+// running paddock-stepup and, when the api accepted it, that the api names the factor of the login it received, so
+// that the production class check refuses a TOTP login (unit tests of stepup.go).
+func TestStepUpHeldAuthorizeURL(t *testing.T) {
+	u := steppedUpTempUser(t, "pdk297", env.RoleGroup("acme", "admins"))
+	ctx := testContext(t, 3*time.Minute)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, stack.AdminURL()+"/api/auth/stepup?return_to=%2Fsettings", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().Truncate(time.Second)
+	resp, err := u.Client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	held := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusFound || !strings.Contains(held, "/application/o/authorize/") {
+		t.Fatalf("step-up start: %d %s", resp.StatusCode, held)
+	}
+	// Another flow of the same browser, after the start: Authentik's default authentication flow with password and
+	// TOTP (the development blueprint skips Paddock's stage at order 31; Authentik's own stage validates TOTP).
+	flow := stack.AuthURL() + "/if/flow/default-authentication-flow/"
+	if _, err := authflow.RunFlow(ctx, u.Client, flow, u.username, u.password, u.totp); err != nil {
+		t.Fatalf("sign-in through %s: %v", flow, err)
+	}
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, held, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = u.Client.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	next := resp.Header.Get("Location")
+	if resp.StatusCode != http.StatusFound || next == "" {
+		t.Fatalf("held authorization URL: HTTP %d, Location %q", resp.StatusCode, next)
+	}
+	skipped := !strings.Contains(next, "/if/flow/")
+	res, err := authflow.Follow(ctx, u.Client, stack.AdminURL(), next, u.username, u.password, u.totp)
+	if err != nil {
+		t.Fatalf("follow the held authorization URL: %v", err)
+	}
+	passed := !strings.Contains(res.Final, "stepup=failed")
+	t.Logf("held authorization URL: Authentik skipped paddock-stepup %v (redirect %s), step-up accepted %v (returned to %s)",
+		skipped, next, passed, res.Final)
+	if !passed {
+		return
+	}
+	s := serverStepUp(t, u.Portal)
+	if s.At == nil || s.At.Before(started) {
+		t.Fatalf("step_up.at %v, want after the start %s", s.At, started)
+	}
+	if fmt.Sprint(s.MFAClasses) != "["+totpClass+"]" {
+		t.Fatalf("step_up.mfa_classes %v, want [%s]", s.MFAClasses, totpClass)
 	}
 }

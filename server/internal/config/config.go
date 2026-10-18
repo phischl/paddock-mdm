@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -199,11 +200,24 @@ func trustedProxies(l *Loader) []netip.Prefix {
 type DevStepUp struct {
 	Window     time.Duration
 	MaxAuthAge time.Duration
+	// MFAClass replaces the authenticator class a step-up must validate (PADDOCK_STEPUP_MFA_CLASS, "<app>.<model>";
+	// empty keeps WebAuthn): the development users step up with TOTP (plan M8f decision 9).
+	MFAClass string
 }
 
-// LoadDevStepUp reads PADDOCK_STEPUP_WINDOW and PADDOCK_STEPUP_MAX_AUTH_AGE.
+// LoadDevStepUp reads PADDOCK_STEPUP_WINDOW, PADDOCK_STEPUP_MAX_AUTH_AGE and PADDOCK_STEPUP_MFA_CLASS.
 func LoadDevStepUp(l *Loader, c Common) DevStepUp {
 	var d DevStepUp
+	if v, ok := l.get("PADDOCK_STEPUP_MFA_CLASS"); ok {
+		switch {
+		case !c.Development():
+			l.Invalid("PADDOCK_STEPUP_MFA_CLASS", "only allowed with PADDOCK_ENV=development")
+		case !regexp.MustCompile(`^[a-z0-9_]+\.[a-z0-9_]+$`).MatchString(v):
+			l.Invalid("PADDOCK_STEPUP_MFA_CLASS", fmt.Sprintf("not an authenticator class <app>.<model>: %q", v))
+		default:
+			d.MFAClass = v
+		}
+	}
 	for name, dst := range map[string]*time.Duration{"PADDOCK_STEPUP_WINDOW": &d.Window, "PADDOCK_STEPUP_MAX_AUTH_AGE": &d.MaxAuthAge} {
 		v, ok := l.get(name)
 		if !ok {

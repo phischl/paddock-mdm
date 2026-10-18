@@ -122,7 +122,9 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
 - A shorter step-up: `PADDOCK_STEPUP_WINDOW` (default 300s; the dev stack sets 30s) is how long a step-up satisfies a
   privileged action, `PADDOCK_STEPUP_MAX_AUTH_AGE` (default 20s; the dev stack sets 15s) the oldest Authentik login a
   step-up accepts (`max_age`). Both are Go durations for `paddock-api`; with `PADDOCK_ENV=production` either variable
-  stops the start with a configuration error. `GET /api/v1/me` then also returns `step_up` (the session's last
+  stops the start with a configuration error. `PADDOCK_STEPUP_MFA_CLASS` (the dev stack sets
+  `authentik_stages_authenticator_totp.totpdevice`) replaces the WebAuthn class a step-up must validate, so the dev
+  users step up with TOTP; it is development-only as well. `GET /api/v1/me` then also returns `step_up` (the session's last
   step-up and both values), which the acceptance gates use instead of the client clock.
 - A TOTP step-up: the shipped step-up flow accepts WebAuthn only; the development blueprint skips that stage and adds
   `paddock-dev-stepup-mfa` (WebAuthn or TOTP), so the test users complete step-ups with their seeded TOTP keys

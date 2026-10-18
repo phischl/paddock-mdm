@@ -400,3 +400,22 @@ func TestStepUpBlueprintWebAuthnOnly(t *testing.T) {
 		t.Error("the development blueprint has no stage paddock-dev-stepup-mfa")
 	}
 }
+
+// TestStepUpBlueprintEmitsMFAClasses (plan M8f decision 11): the step-up provider carries the mapping that names the
+// validated authenticator classes, which the api requires in every step-up token.
+func TestStepUpBlueprintEmitsMFAClasses(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-stepup.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepup := string(b)
+	for _, want := range []string{"managed: io.paddock/scope-stepup-mfa", "scope_name: paddock_stepup",
+		"paddock_mfa_classes", "        - !KeyOf scope-stepup-mfa\n", "get_login_event(token.session)"} {
+		if !strings.Contains(stepup, want) {
+			t.Errorf("paddock-stepup.yaml lacks %q", want)
+		}
+	}
+	if mapping, provider := strings.Index(stepup, "id: scope-stepup-mfa"), strings.Index(stepup, "id: provider"); mapping < 0 || mapping > provider {
+		t.Error("the mapping scope-stepup-mfa must precede the provider that references it")
+	}
+}

@@ -85,9 +85,11 @@ everything else; an administrator applies root-equivalent changes from the porta
 **Factor.** The shipped step-up flow accepts WebAuthn authenticators only (security key or platform authenticator).
 Every administrator, including every new one, enrols a WebAuthn authenticator in Authentik's user settings
 (`https://auth.<domain>/if/user/` → MFA devices) before the first step-up. The portal login's MFA stage still offers
-TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot complete a step-up. Paddock checks
-`mfa` in the token's `amr`, which does not tell WebAuthn from TOTP; only the Authentik stage enforces the factor
-(residual risk RR-38).
+TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot complete a step-up. Paddock checks the
+authenticator classes the step-up validated (claim `paddock_mfa_classes` of the step-up token, emitted by the mapping
+`io.paddock/scope-stepup-mfa`) and refuses every step-up without a WebAuthn authenticator; `amr` alone does not tell
+WebAuthn from TOTP (residual risk RR-38). The api logs a refused class list as "step-up rejected … the step-up did not
+validate the required authenticator class" with the classes, never the token.
 
 ## How it works
 
@@ -100,7 +102,9 @@ TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot c
   `max_age=20` and the session's username as `login_hint` (the flow skips the identification stage).
 - `GET /api/auth/stepup/callback` accepts the ID token only for the same user (`sub`), with `auth_time` at most
   20 s old and not earlier than the step-up's start, and MFA in `amr`, and then stores the time and the token ID in
-  the session cookie. Otherwise the session stays as it was and the browser returns with `stepup=failed`. Both
+  the session cookie. It also requires the class `authentik_stages_authenticator_webauthn.webauthndevice` in the
+  token's `paddock_mfa_classes` (the api requests the scope `paddock_stepup` from the step-up provider). Otherwise the
+  session stays as it was and the browser returns with `stepup=failed`. Both
   checks compare Authentik's `auth_time` with the api's clock, so the hosts of `paddock-api` and Authentik must keep
   their clocks in sync (NTP): an api clock ahead of Authentik's refuses step-ups, one behind it accepts older logins.
 - The callback also requires that the token's `groups` grant the session's role in the session's organization (the
@@ -144,4 +148,7 @@ In the development stack `make dev-seed` gives the test users TOTP authenticator
 blueprint format cannot set an authenticator's key, so the seeder writes them through Authentik's shell. Because the
 shipped flow validates WebAuthn only, the development blueprint `authentik/dev/paddock-dev.yaml` (mounted by
 `compose.dev.yaml` only) skips the WebAuthn stage at order 30 with the policy `paddock-dev-skip-stepup-webauthn` and
-binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. Production carries neither.
+binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. Production carries neither. `compose.dev.yaml` sets
+`PADDOCK_STEPUP_MFA_CLASS=authentik_stages_authenticator_totp.totpdevice` on `paddock-api`, so the api accepts the
+development users' TOTP step-ups; the variable is development-only and fails `./paddock check` and the api's start in
+production.

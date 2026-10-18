@@ -33,6 +33,8 @@ type OIDCConfig struct {
 	PublicURL    string // https://admin.<domain>[:port]
 	// RedirectPath is the path of the redirect URI below PublicURL; default /api/auth/callback.
 	RedirectPath string
+	// Scopes are the requested scopes; default openid profile email groups.
+	Scopes []string
 }
 
 // OIDC holds the discovered provider. Discovery is retried in the background until Authentik answers.
@@ -88,11 +90,18 @@ func (o *OIDC) discoverOnce(ctx context.Context) error {
 	o.oauth = &oauth2.Config{
 		ClientID: o.cfg.ClientID, ClientSecret: o.cfg.ClientSecret, Endpoint: provider.Endpoint(),
 		RedirectURL: o.cfg.PublicURL + o.redirectPath(),
-		Scopes:      []string{oidc.ScopeOpenID, "profile", "email", "groups"},
+		Scopes:      o.scopes(),
 	}
 	o.verifier = provider.Verifier(&oidc.Config{ClientID: o.cfg.ClientID})
 	o.endSession = claims.EndSession
 	return nil
+}
+
+func (o *OIDC) scopes() []string {
+	if len(o.cfg.Scopes) == 0 {
+		return []string{oidc.ScopeOpenID, "profile", "email", "groups"}
+	}
+	return o.cfg.Scopes
 }
 
 func (o *OIDC) redirectPath() string {
@@ -129,6 +138,8 @@ type bff struct {
 	now      func() time.Time
 	// maxAuthAge is the oldest login a step-up callback accepts.
 	maxAuthAge time.Duration
+	// mfaClass is the authenticator class a step-up must have validated (StepUpWebAuthnClass outside development).
+	mfaClass string
 	// tokens keeps the raw step-up ID token for tokenTTL, the step-up window.
 	tokens   StepUpTokenStore
 	tokenTTL time.Duration

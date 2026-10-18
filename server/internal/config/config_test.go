@@ -67,6 +67,22 @@ func TestDevStepUp(t *testing.T) {
 			t.Fatalf("production with %s: %+v, %v", name, d, l.Err())
 		}
 	}
+	const totp = "authentik_stages_authenticator_totp.totpdevice"
+	l = NewLoaderFrom(map[string]string{"PADDOCK_STEPUP_MFA_CLASS": totp})
+	if d := LoadDevStepUp(l, Common{Env: "development"}); d.MFAClass != totp || l.Err() != nil {
+		t.Fatalf("development class: %+v, %v", d, l.Err())
+	}
+	l = NewLoaderFrom(map[string]string{"PADDOCK_STEPUP_MFA_CLASS": totp})
+	if d := LoadDevStepUp(l, Common{Env: "production"}); d.MFAClass != "" || l.Err() == nil ||
+		!strings.Contains(l.Err().Error(), "PADDOCK_STEPUP_MFA_CLASS: only allowed with PADDOCK_ENV=development") {
+		t.Fatalf("production class: %+v, %v", d, l.Err())
+	}
+	for _, v := range []string{"totp", "Authentik.TOTP", "a.b.c", "a.b c"} {
+		l = NewLoaderFrom(map[string]string{"PADDOCK_STEPUP_MFA_CLASS": v})
+		if d := LoadDevStepUp(l, Common{Env: "development"}); d.MFAClass != "" || l.Err() == nil {
+			t.Fatalf("class %q: %+v, %v", v, d, l.Err())
+		}
+	}
 	for _, v := range []string{"0s", "-5s", "soon"} {
 		l = NewLoaderFrom(map[string]string{"PADDOCK_STEPUP_WINDOW": v})
 		if d := LoadDevStepUp(l, Common{Env: "development"}); d.Window != 0 || l.Err() == nil {

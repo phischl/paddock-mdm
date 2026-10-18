@@ -165,6 +165,8 @@ type Session struct {
 	// StepUpAt (unix) and StepUpJTI identify the last step-up authentication of the session (plan M4a decision 6).
 	StepUpAt  int64  `json:"stepup_at,omitempty"`
 	StepUpJTI string `json:"stepup_jti,omitempty"`
+	// StepUpClasses are the authenticator classes the last step-up validated (plan M8f decision 10).
+	StepUpClasses []string `json:"stepup_classes,omitempty"`
 }
 
 // sessionVersion is the version of the session cookie payload.
