@@ -169,6 +169,26 @@ onBeforeUnmount(hide)
           }) }}
         </v-alert>
         <v-alert
+          v-if="disk.state === 'not_encrypted' || disk.state === 'unmanaged'"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="disk-reinstall"
+        >
+          <template v-if="disk.state === 'unmanaged'">
+            {{ t('devices.disk.unmanaged.reinstall') }}
+          </template>
+          <template v-else>
+            <p>{{ t('devices.disk.notEncrypted.reinstall') }}</p>
+            <p
+              v-if="disk.boot_separate"
+              data-testid="disk-conversion-planned"
+            >
+              {{ t('devices.disk.notEncrypted.conversionPlanned') }}
+            </p>
+          </template>
+        </v-alert>
+        <v-alert
           v-if="disk.state === 'unlock_mode_mismatch'"
           type="warning"
           variant="tonal"

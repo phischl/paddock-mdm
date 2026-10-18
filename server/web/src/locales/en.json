@@ -778,7 +778,14 @@
         "tpm_only": "TPM only"
       },
       "unlockModeMismatch": "Unlock mode differs from the policy",
-      "unlockModeRunbook": "Runbook: changing the unlock mode"
+      "unlockModeRunbook": "Runbook: changing the unlock mode",
+      "notEncrypted": {
+        "reinstall": "This device is not encrypted. Encrypt it by reinstalling it with the Paddock autoinstall after a backup; Paddock does not encrypt a running device in place.",
+        "conversionPlanned": "Its disk layout (separate /boot) qualifies for the in-place encryption planned for a later release."
+      },
+      "unmanaged": {
+        "reinstall": "This device was encrypted outside Paddock: no recovery key or header is escrowed, and a Lock cannot be restored. Reinstall it with the Paddock autoinstall to manage its encryption."
+      }
     },
     "revocation": {
       "title": "Lock and Destroy",

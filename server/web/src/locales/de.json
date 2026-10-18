@@ -778,7 +778,14 @@
         "tpm_only": "Nur TPM"
       },
       "unlockModeMismatch": "Entsperrmodus weicht von der Richtlinie ab",
-      "unlockModeRunbook": "Runbook: Entsperrmodus ändern"
+      "unlockModeRunbook": "Runbook: Entsperrmodus ändern",
+      "notEncrypted": {
+        "reinstall": "Dieses Gerät ist nicht verschlüsselt. Verschlüsseln Sie es, indem Sie es nach einer Sicherung mit dem Paddock-Autoinstall neu installieren; Paddock verschlüsselt ein laufendes Gerät nicht nachträglich.",
+        "conversionPlanned": "Sein Festplattenlayout (separates /boot) kommt für die nachträgliche Verschlüsselung in Frage, die für ein späteres Release geplant ist."
+      },
+      "unmanaged": {
+        "reinstall": "Dieses Gerät wurde außerhalb von Paddock verschlüsselt: Kein Wiederherstellungsschlüssel und kein Header sind hinterlegt, und eine Sperre lässt sich nicht aufheben. Installieren Sie es mit dem Paddock-Autoinstall neu, um seine Verschlüsselung zu verwalten."
+      }
     },
     "revocation": {
       "title": "Sperre und Vernichtung",

@@ -81,3 +81,34 @@ describe('disk unlock mode (plan M8d decision 49)', () => {
     expect(alert.querySelector('a')?.getAttribute('href')).toContain('disk-recovery.md#changing-the-unlock-mode')
   })
 })
+
+describe('unencrypted devices (plan M8d decision 50)', () => {
+  const base = { tokens: [], keyslots: 0, recovery_keys: [], headers: [], volumes: [], unresolved: [] }
+  const texts = () => [...(el('disk-reinstall')?.querySelectorAll('p') ?? [])].map((p) => p.textContent?.trim())
+
+  it('asks for a reinstall and names a separate /boot as a conversion candidate', async () => {
+    disk = { ...base, state: 'not_encrypted', boot_separate: true }
+    await mountIn(DiskEncryptionCard, { deviceId: 'd1', hostname: 'lt-1' })
+    expect(texts()).toEqual([
+      'This device is not encrypted. Encrypt it by reinstalling it with the Paddock autoinstall after a backup; Paddock does not encrypt a running device in place.',
+      'Its disk layout (separate /boot) qualifies for the in-place encryption planned for a later release.',
+    ])
+  })
+
+  it('shows only the reinstall without a separate /boot', async () => {
+    disk = { ...base, state: 'not_encrypted', boot_separate: false }
+    await mountIn(DiskEncryptionCard, { deviceId: 'd1', hostname: 'lt-1' })
+    expect(texts()).toHaveLength(1)
+    expect(el('disk-conversion-planned')).toBeNull()
+  })
+
+  it('asks for a reinstall of a device encrypted outside Paddock and says nothing for a compliant one', async () => {
+    disk = { ...base, state: 'unmanaged' }
+    await mountIn(DiskEncryptionCard, { deviceId: 'd1', hostname: 'lt-1' })
+    expect(el('disk-reinstall')?.textContent?.trim()).toBe('This device was encrypted outside Paddock: no recovery key or header is escrowed, and a Lock cannot be restored. Reinstall it with the Paddock autoinstall to manage its encryption.')
+    wrapper?.unmount()
+    disk = { ...base, state: 'compliant', tokens: ['recovery', 'tpm2+pin'], keyslots: 2 }
+    await mountIn(DiskEncryptionCard, { deviceId: 'd1', hostname: 'lt-1' })
+    expect(el('disk-reinstall')).toBeNull()
+  })
+})

@@ -102,6 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the disk while Secure Boot is unchanged), count the recovery key and the mode's TPM keyslot as compliant, and report
   a disk enrolled for the other mode as `unlock_mode_mismatch`; they never enroll or wipe a TPM keyslot of an
   installed device.
+- The disk encryption card tells for an unencrypted device, and for one encrypted outside Paddock, that a reinstall
+  with the Paddock autoinstall is needed, and names devices with a separate `/boot` as candidates for the in-place
+  encryption planned for a later release; nothing on the disk changes.
 
 ### Changed
 
