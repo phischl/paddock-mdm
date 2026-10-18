@@ -39,9 +39,13 @@ production configuration as `deploy/compose/`. The Compose file sets of every ho
 | `compose.yaml` | Control plane: Caddy, PostgreSQL, RabbitMQ, Valkey, RustFS (bundles), OpenBao, Authentik, Paddock roles (`api`, `gateway`, `worker`, `compiler`, `outbox-relay`, `escrow-reader`) |
 | `compose.audit.yaml` | Audit domain: `audit-postgres`, `audit-rustfs`, audit writer |
 | `compose.dev.yaml` | Development overrides: `PADDOCK_ENV=development`, dev blueprint, loopback port mappings |
-| `versions.env` | Pinned images (tag and digest) |
+| `versions.env` | Pinned images (tag and digest); `PLAYWRIGHT_IMAGE` and `@playwright/test` (`server/web/package.json`) are one version |
 | `.env` | Non-secret settings (copied from `.env.example`) |
 | `.secrets/` | Development secrets, OpenBao unseal shares, AppRole credentials, Caddy root certificate (git-ignored) |
+
+`@playwright/test` (`server/web/package.json`) and `PLAYWRIGHT_IMAGE` (`versions.env`) are one version: the image
+ships the browsers of exactly that package. Dependabot ignores the package; bump both by hand and run `make e2e`,
+which refuses a mismatch (`make e2e-check-playwright`).
 
 Paddock services carry the Compose profile `paddock`.
 

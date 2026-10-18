@@ -18,6 +18,8 @@ updates:
       # openapi-typescript requires TypeScript ^5; TypeScript 7 has no compiler API. Revisit when that changes.
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+      - dependency-name: "@playwright/test"
+        # Moves only together with PLAYWRIGHT_IMAGE in deploy/compose/versions.env (make e2e refuses a mismatch).
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
