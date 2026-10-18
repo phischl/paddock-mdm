@@ -3159,12 +3159,13 @@ export interface components {
         };
         /**
          * @description Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
-         *     with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
-         *     a header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, escrowed with the
-         *     current header of every LUKS volume, PDK-009).
+         *     with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), unlock_mode_mismatch (enrolled
+         *     for the other unlock mode than the device's policy, plan M8d decision 48), escrow_pending (recovery key, a
+         *     header or keyslot set not yet as required), compliant (the TPM keyslot of the unlock mode and the recovery key
+         *     only, escrowed with the current header of every LUKS volume, PDK-009).
          * @enum {string}
          */
-        DiskState: "not_encrypted" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "escrow_pending" | "compliant";
+        DiskState: "not_encrypted" | "unmanaged" | "tpm_missing" | "tpm_pin_missing" | "unlock_mode_mismatch" | "escrow_pending" | "compliant";
         DiskEscrow: {
             generation: number;
             /** @enum {string} */
@@ -3209,6 +3210,10 @@ export interface components {
             /** @description Kind of every keyslot, sorted (tpm2+pin, tpm2, recovery, password, or another token type). */
             tokens: string[];
             keyslots: number;
+            /** @description The unlock mode the agent applied (plan M8d decision 48); absent from agents before it. */
+            unlock_mode?: components["schemas"]["DiskUnlockMode"];
+            /** @description In state not_encrypted only, whether /boot is a file system of its own (ADR 0038). */
+            boot_separate?: boolean;
             /**
              * Format: date-time
              * @description Check-in the state is from.
@@ -4140,6 +4145,11 @@ export interface components {
             login_history_enabled?: boolean;
             /** @description How long a recorded login is kept; absent keeps the value. */
             login_history_days?: number;
+            /**
+             * @description Disk unlock mode of devices installed with the Paddock autoinstall from now on (ADR 0038 decision 1);
+             *     device groups override it. Absent keeps the value. Installed devices keep their mode.
+             */
+            disk_unlock_mode?: components["schemas"]["DiskUnlockMode"];
         };
         LoginSettings: {
             hello_enabled: boolean;
@@ -4157,6 +4167,7 @@ export interface components {
             login_history_enabled: boolean;
             /** @description How long the login history is kept (7–365 days). */
             login_history_days: number;
+            disk_unlock_mode: components["schemas"]["DiskUnlockMode"];
             /** Format: date-time */
             updated_at: string;
         };

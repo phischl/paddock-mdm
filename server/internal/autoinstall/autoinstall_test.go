@@ -183,7 +183,7 @@ func TestRenderContent(t *testing.T) {
 			if pass == nil || !strings.Contains(strings.Join(pass, " "), "umask 077") || !strings.Contains(strings.Join(pass, " "), "/target/var/lib/paddock/install-passphrase") {
 				t.Errorf("passphrase file: %q", pass)
 			}
-			if find(cmds, `{"boot_pin_min_length":10}`) == nil || find(cmds, "touch", "/target/var/lib/paddock/disk-setup-pending") == nil {
+			if find(cmds, `{"boot_pin_min_length":10,"unlock_mode":"tpm_pin"}`) == nil || find(cmds, "touch", "/target/var/lib/paddock/disk-setup-pending") == nil {
 				t.Error("disk setup configuration or pending marker missing")
 			}
 			if find(cmds, "sed", "/etc/crypttab") == nil || find(cmds, "dracut", "-f", "--regenerate-all") == nil {
@@ -305,5 +305,14 @@ func TestFetchScript(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "bad.deb")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("a package with the wrong SHA-256 was written")
+	}
+}
+
+// TestRenderUnlockMode (plan M8d decision 45): disk-setup.json carries the unlock mode next to the PIN length.
+func TestRenderUnlockMode(t *testing.T) {
+	in := input("24.04")
+	in.UnlockMode = "tpm_only"
+	if cmds := render(t, in).commands(t); find(cmds, `{"boot_pin_min_length":10,"unlock_mode":"tpm_only"}`) == nil {
+		t.Fatal("disk-setup.json without unlock_mode tpm_only")
 	}
 }

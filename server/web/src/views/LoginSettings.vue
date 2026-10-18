@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { SessionAction } from '../api/client'
+import type { DiskUnlockMode, SessionAction } from '../api/client'
 import { formatDateTime } from '../lib/format'
 import { getLoginSettings, lines, saveLoginSettings } from '../lib/loginSettings'
 import { useProblemText } from '../lib/problems'
@@ -28,6 +28,8 @@ const rotationDays = ref('30')
 const revealHours = ref('')
 const notice = ref('')
 const bootPinLength = ref('8')
+const unlockMode = ref<DiskUnlockMode>('tpm_pin')
+const unlockModes: DiskUnlockMode[] = ['tpm_pin', 'tpm_only']
 const historyEnabled = ref(false)
 const historyDays = ref('90')
 /** Whether the stored setting records the login history: switching it off deletes the rows (plan M8d decision 20). */
@@ -48,6 +50,7 @@ function apply(s: Exclude<Awaited<ReturnType<typeof getLoginSettings>>, string>)
   revealHours.value = s.rotate_after_reveal_hours === null ? '' : String(s.rotate_after_reveal_hours)
   notice.value = s.notice_text
   bootPinLength.value = String(s.boot_pin_min_length)
+  unlockMode.value = s.disk_unlock_mode
   historyEnabled.value = s.login_history_enabled
   historyStored.value = s.login_history_enabled
   historyDays.value = String(s.login_history_days)
@@ -79,6 +82,7 @@ async function save(): Promise<void> {
     rotate_after_reveal_hours: revealHours.value.trim() === '' ? null : Number(revealHours.value),
     notice_text: notice.value.trim(), boot_pin_min_length: Number(bootPinLength.value),
     login_history_enabled: historyEnabled.value, login_history_days: Number(historyDays.value),
+    disk_unlock_mode: unlockMode.value,
   })
   if (typeof res === 'string') {
     problem.value = res
@@ -236,6 +240,28 @@ async function save(): Promise<void> {
           min="6"
           max="32"
         />
+        <v-radio-group
+          v-model="unlockMode"
+          :label="t('loginSettings.unlockMode.label')"
+          :hint="t('loginSettings.unlockMode.hint')"
+          persistent-hint
+          data-testid="settings-unlock-mode"
+        >
+          <v-radio
+            v-for="m in unlockModes"
+            :key="m"
+            :value="m"
+            :label="t('loginSettings.unlockMode.' + m)"
+          />
+        </v-radio-group>
+        <v-alert
+          v-if="unlockMode === 'tpm_only'"
+          type="warning"
+          variant="tonal"
+          data-testid="settings-tpm-only-notice"
+        >
+          {{ t('loginSettings.unlockMode.tpmOnlyNotice') }}
+        </v-alert>
       </fieldset>
       <p
         v-if="problem"

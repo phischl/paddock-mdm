@@ -30,7 +30,7 @@ export async function createDeviceGroup(form: DeviceGroupInput): Promise<string 
     params: { header: { 'X-Paddock-CSRF': '1' } },
     body: {
       name: form.name.trim(), description: form.description.trim(), staleness: form.staleness,
-      agent_update_policy: form.agent_update_policy,
+      agent_update_policy: form.agent_update_policy, disk_unlock_mode: form.disk_unlock_mode,
     },
   })
   return error ? problemCode(error) : null
@@ -42,7 +42,7 @@ export async function updateDeviceGroup(id: string, form: DeviceGroupInput): Pro
     params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
     body: {
       name: form.name.trim(), description: form.description.trim(), staleness: form.staleness,
-      agent_update_policy: form.agent_update_policy,
+      agent_update_policy: form.agent_update_policy, disk_unlock_mode: form.disk_unlock_mode,
     },
   })
   return error ? problemCode(error) : null

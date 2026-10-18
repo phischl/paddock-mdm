@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/policy"
+	"github.com/phischl/paddock-mdm/server/internal/domain/disk"
 )
 
 // Settings are the login settings of one organization.
@@ -38,6 +39,9 @@ type Settings struct {
 	LoginHistoryEnabled *bool
 	// LoginHistoryDays is how long the login history is kept; nil keeps the stored value.
 	LoginHistoryDays *int
+	// DiskUnlockMode is the unlock mode of new installations (ADR 0038 decision 1, disk.UnlockModeTPMPIN or
+	// disk.UnlockModeTPMOnly); nil keeps the stored value.
+	DiskUnlockMode *string
 }
 
 // Bounds of the settings.
@@ -71,6 +75,7 @@ var (
 	ErrNotice        = errors.New("notice_text must be plain text of at most 2000 characters (line breaks and tabs allowed)")
 	ErrBootPinLength = errors.New("boot_pin_min_length must be 6 to 32")
 	ErrHistoryDays   = errors.New("login_history_days must be 7 to 365")
+	ErrUnlockMode    = errors.New("disk_unlock_mode must be tpm_pin or tpm_only")
 )
 
 // allowlistPattern matches the file names sudo reads from an includedir (no "." and no trailing "~").
@@ -104,6 +109,9 @@ func Validate(s Settings) error {
 	}
 	if d := s.LoginHistoryDays; d != nil && (*d < MinLoginHistoryDays || *d > MaxLoginHistoryDays) {
 		return ErrHistoryDays
+	}
+	if m := s.DiskUnlockMode; m != nil && !disk.ValidUnlockMode(*m) {
+		return ErrUnlockMode
 	}
 	if s.UserLockSessionAction != bundle.SessionActionLockScreen && s.UserLockSessionAction != bundle.SessionActionTerminate {
 		return ErrSessionAction

@@ -465,6 +465,7 @@ type OrganizationLoginSetting struct {
 	BootPinMinLength       int32
 	LoginHistoryEnabled    bool
 	LoginHistoryDays       int32
+	DiskUnlockMode         string
 }
 
 type OrganizationManagedFileSetting struct {

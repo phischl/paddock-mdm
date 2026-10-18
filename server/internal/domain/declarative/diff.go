@@ -429,5 +429,5 @@ func (s LoginSettings) fields() []field {
 		{"sudoers_d_allowlist", list(s.SudoersDAllowlist)}, {"sudo_lecture_text", s.SudoLectureText},
 		{"local_admin_username", s.LocalAdminUsername}, {"local_admin_rotation_days", s.LocalAdminRotationDays},
 		{"rotate_after_reveal_hours", optional(s.RotateAfterRevealHours)}, {"notice_text", s.NoticeText},
-		{"boot_pin_min_length", s.BootPinMinLength}}
+		{"boot_pin_min_length", s.BootPinMinLength}, {"disk_unlock_mode", s.DiskUnlockMode}}
 }

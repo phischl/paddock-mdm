@@ -4,7 +4,9 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { DiskEncryption, DiskRecoveryKey, DiskVolume } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
-import { downloadHeader, getDisk, headerDevice, latestStored, revealRecoveryKey, saveFile, volumeHeaders } from '../lib/disk'
+import {
+  diskStateLabel, downloadHeader, getDisk, headerDevice, latestStored, revealRecoveryKey, saveFile, unlockModeRunbook, volumeHeaders,
+} from '../lib/disk'
 import { formatDateTime } from '../lib/format'
 import { useProblemText } from '../lib/problems'
 import { resumeStepUp, startStepUp, withoutStepUpParam } from '../lib/stepUp'
@@ -166,13 +168,35 @@ onBeforeUnmount(hide)
             after: disk.last_keyslot_change.after.join(', '),
           }) }}
         </v-alert>
+        <v-alert
+          v-if="disk.state === 'unlock_mode_mismatch'"
+          type="warning"
+          variant="tonal"
+          class="conflict"
+          data-testid="disk-unlock-mode-mismatch"
+        >
+          {{ t('devices.disk.states.unlock_mode_mismatch') }}
+          <a
+            :href="unlockModeRunbook"
+            target="_blank"
+            rel="noopener"
+          >{{ t('devices.disk.unlockModeRunbook') }}</a>
+        </v-alert>
         <dl class="pd-facts">
           <div>
             <dt>
               {{ t('devices.disk.state') }}
             </dt>
             <dd data-testid="disk-state">
-              {{ disk.state ? t('devices.disk.states.' + disk.state) : t('devices.disk.notReported') }}
+              {{ disk.state ? t(diskStateLabel(disk.state)) : t('devices.disk.notReported') }}
+            </dd>
+          </div>
+          <div v-if="disk.unlock_mode">
+            <dt>
+              {{ t('devices.disk.unlockMode') }}
+            </dt>
+            <dd data-testid="disk-unlock-mode">
+              {{ t('devices.disk.unlockModes.' + disk.unlock_mode) }}
             </dd>
           </div>
           <div v-if="disk.state">

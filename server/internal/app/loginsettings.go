@@ -74,8 +74,13 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 		if in.LoginHistoryDays != nil {
 			historyDays = *in.LoginHistoryDays
 		}
+		unlockMode := cur.DiskUnlockMode
+		if in.DiskUnlockMode != nil {
+			unlockMode = *in.DiskUnlockMode
+		}
 		rec.SetParam("login_history_enabled", historyOn)
 		rec.SetParam("login_history_days", historyDays)
+		rec.SetParam("disk_unlock_mode", unlockMode)
 		changed := []string{}
 		for name, differs := range map[string]bool{
 			"hello_enabled":             cur.HelloEnabled != in.HelloEnabled,
@@ -91,6 +96,7 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 			"boot_pin_min_length":       int(cur.BootPinMinLength) != in.BootPinMinLength,
 			"login_history_enabled":     cur.LoginHistoryEnabled != historyOn,
 			"login_history_days":        int(cur.LoginHistoryDays) != historyDays,
+			"disk_unlock_mode":          cur.DiskUnlockMode != unlockMode,
 		} {
 			if differs {
 				changed = append(changed, name)
@@ -118,6 +124,7 @@ func (s *LoginSettings) Update(ctx context.Context, in loginsettings.Settings) (
 			RotateAfterRevealHours: int32Ptr(in.RotateAfterRevealHours), NoticeText: in.NoticeText,
 			BootPinMinLength:    int32(in.BootPinMinLength),                      //nolint:gosec // validated 6–32
 			LoginHistoryEnabled: historyOn, LoginHistoryDays: int32(historyDays), //nolint:gosec // validated 7–365
+			DiskUnlockMode: unlockMode,
 		})
 		if err != nil {
 			return err

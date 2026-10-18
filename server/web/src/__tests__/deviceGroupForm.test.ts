@@ -42,7 +42,7 @@ describe('DeviceGroupForm', () => {
     await wrapper.find('#device-group-name').setValue('Laptops')
     await wrapper.find('#device-group-description').setValue('All laptops')
     await wrapper.find('form').trigger('submit')
-    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Laptops', description: 'All laptops', staleness: null, agent_update_policy: null }]])
+    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Laptops', description: 'All laptops', staleness: null, agent_update_policy: null, disk_unlock_mode: null }]])
   })
 
   it('fills the laptop preset and submits the override (PDK-222)', async () => {
@@ -53,7 +53,7 @@ describe('DeviceGroupForm', () => {
     expect((wrapper.find('#device-group-staleness-warning').element as HTMLInputElement).value).toBe('120')
     expect((wrapper.find('#device-group-staleness-critical').element as HTMLInputElement).value).toBe('840')
     await wrapper.find('form').trigger('submit')
-    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Laptops', description: '', staleness: { warning_h: 120, critical_h: 840 }, agent_update_policy: null }]])
+    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Laptops', description: '', staleness: { warning_h: 120, critical_h: 840 }, agent_update_policy: null, disk_unlock_mode: null }]])
   })
 
   it('prefills an existing override and clears it when switched off', async () => {
@@ -61,13 +61,20 @@ describe('DeviceGroupForm', () => {
     expect((wrapper.find('#device-group-staleness-warning').element as HTMLInputElement).value).toBe('2')
     await wrapper.find('#device-group-staleness-override').setValue(false)
     await wrapper.find('form').trigger('submit')
-    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Servers', description: '', staleness: null, agent_update_policy: null }]])
+    expect(wrapper.emitted('submit')).toEqual([[{ name: 'Servers', description: '', staleness: null, agent_update_policy: null, disk_unlock_mode: null }]])
   })
 
   it('keeps the agent update policy override of a group (PDK-225)', async () => {
     const wrapper = mountForm({ initialName: 'Kiosks', initialAgentUpdatePolicy: 'manual' })
     await wrapper.find('form').trigger('submit')
     expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({ agent_update_policy: 'manual' })
+  })
+
+  it('keeps the disk unlock mode override of a group (PDK-231)', async () => {
+    const wrapper = mountForm({ initialName: 'Kiosks', initialDiskUnlockMode: 'tpm_only' })
+    expect(wrapper.find('[data-testid="group-unlock-mode"]').text()).toContain('TPM only')
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({ disk_unlock_mode: 'tpm_only' })
   })
 
   it('prefills values and shows server problems', () => {

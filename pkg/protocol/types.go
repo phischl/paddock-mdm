@@ -270,12 +270,15 @@ const (
 	DiskUnmanaged     = "unmanaged"       // encrypted, but not installed with the Paddock autoinstall
 	DiskTPMMissing    = "tpm_missing"     // no TPM 2.0: the disk keeps its passphrase
 	DiskTPMPINMissing = "tpm_pin_missing" // the boot PIN was skipped: the disk keeps its passphrase
-	DiskEscrowPending = "escrow_pending"  // recovery key, a header or the keyslot set not yet as required
-	DiskCompliant     = "compliant"       // TPM2+PIN and recovery key only, escrowed with the current header of every volume
+	// DiskUnlockModeMismatch: the disk is enrolled for the other unlock mode than its policy (plan M8d decision 48).
+	DiskUnlockModeMismatch = "unlock_mode_mismatch"
+	DiskEscrowPending      = "escrow_pending" // recovery key, a header or the keyslot set not yet as required
+	DiskCompliant          = "compliant"      // the mode's TPM keyslot and the recovery key only, escrowed with the current header of every volume
 )
 
 // DiskStates are the states in DiskHealth.
-var DiskStates = []string{DiskNotEncrypted, DiskUnmanaged, DiskTPMMissing, DiskTPMPINMissing, DiskEscrowPending, DiskCompliant}
+var DiskStates = []string{DiskNotEncrypted, DiskUnmanaged, DiskTPMMissing, DiskTPMPINMissing, DiskUnlockModeMismatch,
+	DiskEscrowPending, DiskCompliant}
 
 // DiskHealth is the disk encryption of the device in the check-in health (health.disk, plan M4b decision 8).
 // State, LUKSVersion, Tokens and Keyslots are those of the root volume; Volumes lists every LUKS volume, the root
@@ -287,6 +290,12 @@ type DiskHealth struct {
 	Keyslots    int          `json:"keyslots"`
 	Volumes     []DiskVolume `json:"volumes,omitempty"`
 	Unresolved  []string     `json:"unresolved,omitempty"`
+	// UnlockMode is the unlock mode the agent applied (tpm_pin or tpm_only, plan M8d decision 48); "" from older
+	// agents.
+	UnlockMode string `json:"unlock_mode,omitempty"`
+	// BootSeparate tells, in state not_encrypted only, whether /boot is a file system of its own (the layout an
+	// in-place encryption could convert, ADR 0038).
+	BootSeparate *bool `json:"boot_separate,omitempty"`
 }
 
 // DiskVolume is one LUKS volume in health.disk. Escrowed is true when the server stored a header of its current

@@ -35,6 +35,7 @@ The device page (*Disk encryption*) and the device list filter show the state of
 | `compliant` | Only TPM2+PIN and the recovery key unlock the root volume; the recovery key and the current header of every LUKS volume are escrowed. |
 | `escrow_pending` | Being set up (recovery key or a header not escrowed yet, install passphrase still present), the keyslots of the root volume differ from TPM2+PIN and recovery key — for example after a keyslot was added locally —, or another volume's current header is not escrowed (also a volume whose LUKS UUID cannot be read). |
 | `tpm_pin_missing` | The boot PIN was skipped; the disk keeps the install passphrase. |
+| `unlock_mode_mismatch` | The root volume is enrolled for the other unlock mode than the device's policy (a `tpm2` keyslot under `tpm_pin`, or a `tpm2+pin` keyslot under `tpm_only`); see "Changing the unlock mode". |
 | `tpm_missing` | The device has no TPM 2.0. |
 | `unmanaged` | Encrypted, but not installed with the Paddock autoinstall (no in-place conversion). |
 | `not_encrypted` | The root file system is not encrypted. |
@@ -46,6 +47,36 @@ escrowed and do not keep the device from being `compliant`.
 The agent records the keyslots of every volume. Any other change — a keyslot added or removed outside Paddock — is
 reported as `device.tamper_keyslot_changed` (the volume's LUKS UUID, keyslot kinds before and after), shown on the
 device page, and that volume's header is escrowed again. The agent never wipes a keyslot it did not create.
+
+## Changing the unlock mode
+
+The unlock mode (*Login & privileges → Disk encryption → Disk unlock mode*, overridable per device group) is either
+`tpm_pin` (TPM2 + boot PIN, the default) or `tpm_only` (the TPM alone while Secure Boot is unchanged; ADR 0038). The
+autoinstall embeds the mode of the token's device group, else the organization's, in `/etc/paddock/disk-setup.json`:
+a `tpm_only` device asks for no PIN at its first boot and enrolls `systemd-cryptenroll --tpm2-device=auto
+--tpm2-pcrs=7` instead. A change of the setting applies to new installations only; the agent never enrolls or wipes a
+TPM keyslot of an installed device. An installed device whose keyslots do not match its policy is reported
+`unlock_mode_mismatch` (attention *Disk encryption not compliant*, detail `unlock_mode_mismatch`). An operator
+converts it at the device with the recovery key (reveal it first, see below):
+
+From TPM + PIN to TPM only:
+
+```sh
+systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7 /dev/<luks partition>
+# asks for an existing key: type the recovery key
+```
+
+From TPM only to TPM + PIN:
+
+```sh
+systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-with-pin=yes --tpm2-pcrs=7 /dev/<luks partition>
+# asks for an existing key (the recovery key), then twice for the new boot PIN
+```
+
+The agent reports the keyslot change as `device.tamper_keyslot_changed` (expected after a conversion), escrows the
+header again and reports `compliant` with the keyslots of the new mode (`recovery` and `tpm2`, or `recovery` and
+`tpm2+pin`). Check before the next reboot that the new keyslot exists (`cryptsetup luksDump`); the recovery key still
+opens the disk if it does not.
 
 ## Recovering a device
 

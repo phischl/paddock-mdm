@@ -67,7 +67,21 @@ type Bundle struct {
 	// Updates configures security updates, regular updates and package holds (schema v2 only, plan M5b decision 4).
 	// It is a section, not a resource, so agents that do not know it ignore it instead of rejecting the bundle.
 	Updates *UpdatesSpec `json:"updates,omitempty"`
+	// Disk is the disk encryption policy of the device (schema v2 only, plan M8d decision 46). Agents that do not know
+	// it ignore it.
+	Disk *DiskSpec `json:"disk,omitempty"`
 }
+
+// DiskSpec is the disk encryption policy of a device: the unlock mode its keyslots must match.
+type DiskSpec struct {
+	UnlockMode string `json:"unlock_mode"`
+}
+
+// Disk unlock modes of DiskSpec (ADR 0038 decision 1).
+const (
+	UnlockModeTPMPIN  = "tpm_pin"
+	UnlockModeTPMOnly = "tpm_only"
+)
 
 // Inventory is fleetd's installation and enrollment. The enroll secret only lets a host enroll into Fleet; Paddock
 // ignores hosts it cannot map to a device (architecture §15).

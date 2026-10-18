@@ -165,6 +165,9 @@
     "empty": {
       "title": "No device groups yet",
       "description": "Groups scope configuration, package holds and login rules to a set of devices."
+    },
+    "unlockMode": {
+      "label": "Disk unlock mode"
     }
   },
   "validation": {
@@ -723,7 +726,8 @@
         "tpm_missing": "No TPM: passphrase only",
         "tpm_pin_missing": "Boot PIN skipped",
         "escrow_pending": "Being set up",
-        "compliant": "Compliant"
+        "compliant": "Compliant",
+        "unlock_mode_mismatch": "The disk is enrolled for the other unlock mode than its policy says. An operator changes it at the device with the recovery key (see the runbook)."
       },
       "notReported": "Not reported yet",
       "keyslots": "Keyslots",
@@ -767,7 +771,14 @@
         "copy": "Copy",
         "copied": "Copied",
         "close": "Hide"
-      }
+      },
+      "unlockMode": "Unlock mode",
+      "unlockModes": {
+        "tpm_pin": "TPM + boot PIN",
+        "tpm_only": "TPM only"
+      },
+      "unlockModeMismatch": "Unlock mode differs from the policy",
+      "unlockModeRunbook": "Runbook: changing the unlock mode"
     },
     "revocation": {
       "title": "Lock and Destroy",
@@ -1423,7 +1434,14 @@
     "diskEncryption": "Disk encryption",
     "bootPinLength": "Minimum boot PIN length",
     "bootPinLengthHint": "The boot PIN unlocks the disk at every start. Devices installed with the Paddock autoinstall ask for it at their first boot; autoinstalls generated from now on use this length.",
-    "saved": "Login settings saved."
+    "saved": "Login settings saved.",
+    "unlockMode": {
+      "label": "Disk unlock mode for new installations",
+      "tpm_pin": "TPM + boot PIN: the disk asks for a PIN at every start",
+      "tpm_only": "TPM only: the disk unlocks automatically while Secure Boot is unchanged",
+      "hint": "Applies to devices installed with the Paddock autoinstall from now on. Device groups can override it. Installed devices keep their mode until an operator changes it at the device.",
+      "tpmOnlyNotice": "TPM only protects the data against a removed disk, not against someone who has the device: it unlocks at boot and the login screen is the remaining barrier. Use it for shared devices and kiosks, not for laptops with personal data."
+    }
   },
   "commands": {
     "title": "Commands",

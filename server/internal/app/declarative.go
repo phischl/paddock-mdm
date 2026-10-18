@@ -257,13 +257,17 @@ func parseDocument(raw []byte) (declarative.Document, error) {
 }
 
 // inheritOmitted fills the optional fields a document leaves out with the stored values, so that a document written
-// before a field existed shows no change for it: the agent update policy (plan M8d decision 24).
+// before a field existed shows no change for it: the agent update policy (plan M8d decision 24) and the disk unlock
+// mode (decision 44).
 func inheritOmitted(desired *declarative.Document, current declarative.Document) {
-	if desired.Settings == nil || desired.Settings.Updates == nil || desired.Settings.Updates.AgentUpdatePolicy != "" {
+	if desired.Settings == nil || current.Settings == nil {
 		return
 	}
-	if current.Settings != nil && current.Settings.Updates != nil {
-		desired.Settings.Updates.AgentUpdatePolicy = current.Settings.Updates.AgentUpdatePolicy
+	if u := desired.Settings.Updates; u != nil && u.AgentUpdatePolicy == "" && current.Settings.Updates != nil {
+		u.AgentUpdatePolicy = current.Settings.Updates.AgentUpdatePolicy
+	}
+	if l := desired.Settings.Login; l != nil && l.DiskUnlockMode == "" && current.Settings.Login != nil {
+		l.DiskUnlockMode = current.Settings.Login.DiskUnlockMode
 	}
 }
 
@@ -459,12 +463,18 @@ func loginDocOfRow(r pgstore.OrganizationLoginSetting) *declarative.LoginSetting
 		BreakGlassAccounts: nonNil(r.BreakGlassAccounts), SudoersDAllowlist: nonNil(r.SudoersDAllowlist), SudoLectureText: r.SudoLectureText,
 		LocalAdminUsername: r.LocalAdminUsername, LocalAdminRotationDays: int(r.LocalAdminRotationDays),
 		RotateAfterRevealHours: hours, NoticeText: r.NoticeText, BootPinMinLength: int(r.BootPinMinLength),
+		DiskUnlockMode: r.DiskUnlockMode,
 	}
 }
 
 func loginSettingsOf(l declarative.LoginSettings) loginsettings.Settings {
+	var mode *string
+	if l.DiskUnlockMode != "" {
+		mode = &l.DiskUnlockMode
+	}
 	return loginsettings.Settings{
-		HelloEnabled: l.HelloEnabled, HelloPinMinLength: l.HelloPinMinLength, UserLockSessionAction: l.UserLockSessionAction,
+		DiskUnlockMode: mode,
+		HelloEnabled:   l.HelloEnabled, HelloPinMinLength: l.HelloPinMinLength, UserLockSessionAction: l.UserLockSessionAction,
 		BreakGlassAccounts: l.BreakGlassAccounts, SudoersDAllowlist: l.SudoersDAllowlist, SudoLectureText: l.SudoLectureText,
 		LocalAdminUsername: l.LocalAdminUsername, LocalAdminRotationDays: l.LocalAdminRotationDays,
 		RotateAfterRevealHours: l.RotateAfterRevealHours, NoticeText: l.NoticeText, BootPinMinLength: l.BootPinMinLength,
@@ -477,6 +487,7 @@ func loginDocOf(s loginsettings.Settings) declarative.LoginSettings {
 		BreakGlassAccounts: nonNil(s.BreakGlassAccounts), SudoersDAllowlist: nonNil(s.SudoersDAllowlist), SudoLectureText: s.SudoLectureText,
 		LocalAdminUsername: s.LocalAdminUsername, LocalAdminRotationDays: s.LocalAdminRotationDays,
 		RotateAfterRevealHours: s.RotateAfterRevealHours, NoticeText: s.NoticeText, BootPinMinLength: s.BootPinMinLength,
+		DiskUnlockMode: deref(s.DiskUnlockMode, ""),
 	}
 }
 

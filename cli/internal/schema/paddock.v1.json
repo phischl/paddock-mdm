@@ -74,7 +74,11 @@
         "local_admin_rotation_days": { "type": "integer", "minimum": 1, "maximum": 365 },
         "rotate_after_reveal_hours": { "type": ["integer", "null"], "minimum": 1, "maximum": 168 },
         "notice_text": { "type": "string", "maxLength": 2000 },
-        "boot_pin_min_length": { "type": "integer", "minimum": 6, "maximum": 32 }
+        "boot_pin_min_length": { "type": "integer", "minimum": 6, "maximum": 32 },
+        "disk_unlock_mode": {
+          "description": "Optional: tpm_pin (TPM2 + boot PIN) or tpm_only for new installations; omitted keeps the stored mode.",
+          "type": "string", "enum": ["tpm_pin", "tpm_only"]
+        }
       }
     },
     "updateSettings": {

@@ -94,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when it is the last local administrator, and leave a summary in `/root/paddock-uninstall/result.json`.
 - Runbook `docs/operations/uninstall.md`: both removal modes step by step, what stays, the last-administrator guard,
   the TPM clear and its firmware fallback, cancelling, and what to do when a device's removal report never arrived.
+- Disk unlock mode for new installations (*Login & privileges → Disk encryption*, device groups can override it, also
+  in the declarative document): TPM + boot PIN (default) or TPM only, with a security notice. The autoinstall embeds
+  the mode of the token's group, bundles carry it, and devices whose keyslots do not match are reported as
+  `unlock_mode_mismatch`; `docs/operations/disk-recovery.md` describes the conversion with the recovery key.
 
 ### Changed
 

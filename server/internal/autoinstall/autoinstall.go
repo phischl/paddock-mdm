@@ -46,6 +46,9 @@ type Input struct {
 	AgentVersion     string
 	Packages         []Package
 	BootPINMinLength int
+	// UnlockMode is the disk unlock mode of the first-boot disk setup (tpm_pin or tpm_only, plan M8d decision 45);
+	// "" is tpm_pin.
+	UnlockMode string
 }
 
 // Validation errors.
@@ -131,7 +134,14 @@ func Render(in Input, now time.Time) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	diskSetup, err := json.Marshal(map[string]int{"boot_pin_min_length": in.BootPINMinLength})
+	mode := in.UnlockMode
+	if mode == "" {
+		mode = "tpm_pin"
+	}
+	diskSetup, err := json.Marshal(struct {
+		BootPINMinLength int    `json:"boot_pin_min_length"`
+		UnlockMode       string `json:"unlock_mode"`
+	}{in.BootPINMinLength, mode})
 	if err != nil {
 		return nil, err
 	}

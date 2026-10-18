@@ -165,6 +165,9 @@
     "empty": {
       "title": "Noch keine Gerätegruppen",
       "description": "Gruppen begrenzen Konfiguration, zurückgehaltene Pakete und Anmelderegeln auf eine Menge von Geräten."
+    },
+    "unlockMode": {
+      "label": "Entsperrmodus der Festplatte"
     }
   },
   "validation": {
@@ -723,7 +726,8 @@
         "tpm_missing": "Kein TPM: nur Passphrase",
         "tpm_pin_missing": "Boot-PIN übersprungen",
         "escrow_pending": "Wird eingerichtet",
-        "compliant": "Konform"
+        "compliant": "Konform",
+        "unlock_mode_mismatch": "Die Festplatte ist für den anderen Entsperrmodus eingerichtet, als ihre Richtlinie vorsieht. Ein Operator ändert ihn am Gerät mit dem Wiederherstellungsschlüssel (siehe Runbook)."
       },
       "notReported": "Noch nicht gemeldet",
       "keyslots": "Keyslots",
@@ -767,7 +771,14 @@
         "copy": "Kopieren",
         "copied": "Kopiert",
         "close": "Ausblenden"
-      }
+      },
+      "unlockMode": "Entsperrmodus",
+      "unlockModes": {
+        "tpm_pin": "TPM + Boot-PIN",
+        "tpm_only": "Nur TPM"
+      },
+      "unlockModeMismatch": "Entsperrmodus weicht von der Richtlinie ab",
+      "unlockModeRunbook": "Runbook: Entsperrmodus ändern"
     },
     "revocation": {
       "title": "Sperre und Vernichtung",
@@ -1423,7 +1434,14 @@
     "diskEncryption": "Festplattenverschlüsselung",
     "bootPinLength": "Mindestlänge der Boot-PIN",
     "bootPinLengthHint": "Die Boot-PIN entsperrt die Festplatte bei jedem Start. Mit der Paddock-Autoinstallation installierte Geräte fragen sie beim ersten Start ab; ab jetzt erzeugte Autoinstallationen verwenden diese Länge.",
-    "saved": "Anmeldeeinstellungen gespeichert."
+    "saved": "Anmeldeeinstellungen gespeichert.",
+    "unlockMode": {
+      "label": "Entsperrmodus der Festplatte für neue Installationen",
+      "tpm_pin": "TPM + Boot-PIN: Die Festplatte fragt bei jedem Start nach einer PIN",
+      "tpm_only": "Nur TPM: Die Festplatte entsperrt sich automatisch, solange Secure Boot unverändert ist",
+      "hint": "Gilt ab jetzt für Geräte, die mit dem Paddock-Autoinstall installiert werden. Gerätegruppen können ihn überschreiben. Installierte Geräte behalten ihren Modus, bis ein Operator ihn am Gerät ändert.",
+      "tpmOnlyNotice": "Nur TPM schützt die Daten gegen eine ausgebaute Festplatte, nicht gegen jemanden, der das Gerät in der Hand hat: Sie entsperrt sich beim Start, und die Anmeldemaske ist die verbleibende Hürde. Verwenden Sie ihn für geteilte Geräte und Kioske, nicht für Laptops mit personenbezogenen Daten."
+    }
   },
   "commands": {
     "title": "Befehle",

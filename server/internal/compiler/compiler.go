@@ -201,6 +201,9 @@ func (c *Compiler) compileOrg(ctx context.Context, org uuid.UUID, events []state
 		if keys.Updates, err = loadUpdates(ctx, q); err != nil {
 			return err
 		}
+		if keys.Disk, err = loadDisk(ctx, q); err != nil {
+			return err
+		}
 		rows, err := q.ListCompileTargets(ctx, ids)
 		if err != nil {
 			return err
@@ -349,6 +352,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 	var omitted []omittedEntry
 	var v2 v2Trust
 	var updatesSection *bundle.UpdatesSpec
+	var diskSection *bundle.DiskSpec
 	agent := bundle.AgentCfg{CheckinIntervalS: CheckinIntervalS}
 	if t.v2 {
 		v2 = keys
@@ -368,13 +372,16 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
 		}
 		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.agent)
+		if keys.Disk != nil {
+			diskSection = keys.Disk.section(groups)
+		}
 		bundle.SortResources(resources)
 	}
 	b := bundle.Bundle{
 		SchemaVersion: schema, BundleVersion: t.seq + 1, DeviceID: t.id.String(),
 		OrganizationID: org.String(), IssuedAt: c.now().UTC().Truncate(time.Second),
 		Agent: agent, Resources: resources, Keys: v2.Keys,
-		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection,
+		Revocation: v2.Revocation, DMS: v2.DMS, Inventory: v2.Inventory, Updates: updatesSection, Disk: diskSection,
 	}
 	content, err := bundle.ContentSHA256(b)
 	if err != nil {
@@ -410,6 +417,9 @@ type v2Trust struct {
 	Supervisor map[string]bundle.PackageRef `json:"supervisor"`
 	// Updates are the organization's update settings and holds (plan M5b decision 4), not part of the digest.
 	Updates *orgUpdates `json:"-"`
+	// Disk is the organization's disk unlock mode and its groups' overrides (plan M8d decision 46), not part of the
+	// digest.
+	Disk *orgDisk `json:"-"`
 }
 
 // keys returns the keys object of v2 bundles — every version of command-signing and the latest of escrow-wrap

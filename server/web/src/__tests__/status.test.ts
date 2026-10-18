@@ -14,7 +14,7 @@ const resolve = (key: string): unknown => key.split('.').reduce<unknown>((o, k) 
 // Every enum value is listed, so a new value fails to compile here before it can slip through a mapping.
 const deviceStates = ['pending', 'active', 'rejected', 'quarantined', 'retired'] as const satisfies readonly DeviceState[]
 const contacts = ['never', 'ok', 'unseen', 'stale_warning', 'stale_critical', 'presumed_lost'] as const satisfies readonly DeviceContact[]
-const diskStates = ['not_encrypted', 'unmanaged', 'tpm_missing', 'tpm_pin_missing', 'escrow_pending', 'compliant'] as const satisfies readonly DiskState[]
+const diskStates = ['not_encrypted', 'unmanaged', 'tpm_missing', 'tpm_pin_missing', 'unlock_mode_mismatch', 'escrow_pending', 'compliant'] as const satisfies readonly DiskState[]
 const outcomes = ['success', 'failure', 'denied', 'unknown'] as const satisfies readonly AuditOutcome[]
 const kinds = [
   'stale_warning', 'stale_critical', 'presumed_lost', 'quarantined', 'disk_not_compliant', 'agent_outdated', 'login_apply_failed',
@@ -51,6 +51,7 @@ describe('status mappings (plan M7c decision 19)', () => {
   it('maps every disk state and the missing report', () => {
     const want: Record<DiskState, Status> = {
       compliant: 'ok', escrow_pending: 'warn', unmanaged: 'warn', tpm_missing: 'warn', tpm_pin_missing: 'warn', not_encrypted: 'critical',
+      unlock_mode_mismatch: 'warn',
     }
     for (const state of diskStates) {
       const v = encryptionStatus(state)

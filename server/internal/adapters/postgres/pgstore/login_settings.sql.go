@@ -11,7 +11,7 @@ import (
 
 const getLoginSettings = `-- name: GetLoginSettings :one
 
-SELECT organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days FROM organization_login_settings
+SELECT organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days, disk_unlock_mode FROM organization_login_settings
 `
 
 // Login settings (plan M3a decision 8): one row per organization, created with the defaults by a trigger.
@@ -34,6 +34,7 @@ func (q *Queries) GetLoginSettings(ctx context.Context) (OrganizationLoginSettin
 		&i.BootPinMinLength,
 		&i.LoginHistoryEnabled,
 		&i.LoginHistoryDays,
+		&i.DiskUnlockMode,
 	)
 	return i, err
 }
@@ -46,8 +47,8 @@ SET hello_enabled = $1, hello_pin_min_length = $2,
     local_admin_username = $7, local_admin_rotation_days = $8,
     rotate_after_reveal_hours = $9, notice_text = $10,
     boot_pin_min_length = $11, login_history_enabled = $12,
-    login_history_days = $13, updated_at = now()
-RETURNING organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days
+    login_history_days = $13, disk_unlock_mode = $14, updated_at = now()
+RETURNING organization_id, hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts, sudoers_d_allowlist, sudo_lecture_text, updated_at, local_admin_username, local_admin_rotation_days, rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days, disk_unlock_mode
 `
 
 type UpdateLoginSettingsParams struct {
@@ -64,6 +65,7 @@ type UpdateLoginSettingsParams struct {
 	BootPinMinLength       int32
 	LoginHistoryEnabled    bool
 	LoginHistoryDays       int32
+	DiskUnlockMode         string
 }
 
 func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettingsParams) (OrganizationLoginSetting, error) {
@@ -81,6 +83,7 @@ func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettin
 		arg.BootPinMinLength,
 		arg.LoginHistoryEnabled,
 		arg.LoginHistoryDays,
+		arg.DiskUnlockMode,
 	)
 	var i OrganizationLoginSetting
 	err := row.Scan(
@@ -99,6 +102,7 @@ func (q *Queries) UpdateLoginSettings(ctx context.Context, arg UpdateLoginSettin
 		&i.BootPinMinLength,
 		&i.LoginHistoryEnabled,
 		&i.LoginHistoryDays,
+		&i.DiskUnlockMode,
 	)
 	return i, err
 }

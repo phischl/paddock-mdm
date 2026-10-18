@@ -1003,7 +1003,7 @@ var registry = map[Code]Definition{
 	CodeAutoinstallGenerated: {
 		Code: CodeAutoinstallGenerated, Emitted: true,
 		Description: "An administrator or operator generated a Paddock autoinstall for one device from an enrollment configuration; the disk passphrase and the token in it are never recorded.",
-		Params:      []string{"release", "agent_version"},
+		Params:      []string{"release", "agent_version", "unlock_mode"},
 		Outcomes:    adminOutcomes,
 		Note:        "release is the Ubuntu release (24.04 or 26.04); agent_version is the release whose packages the device installs.",
 	},

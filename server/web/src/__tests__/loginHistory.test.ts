@@ -27,7 +27,7 @@ const stored: LoginSettings = {
   hello_enabled: true, hello_pin_min_length: 6, user_lock_session_action: 'lock_screen', break_glass_accounts: [],
   sudoers_d_allowlist: ['README'], sudo_lecture_text: 'Be careful.', local_admin_username: 'paddock-admin',
   local_admin_rotation_days: 30, rotate_after_reveal_hours: null, notice_text: '', boot_pin_min_length: 8,
-  login_history_enabled: true, login_history_days: 90, updated_at: '2026-10-17T10:00:00Z',
+  login_history_enabled: true, login_history_days: 90, disk_unlock_mode: 'tpm_pin', updated_at: '2026-10-17T10:00:00Z',
 } as LoginSettings
 const saveLoginSettings = vi.fn<(s: LoginSettingsUpdate) => Promise<LoginSettings | string>>()
 vi.mock('../lib/loginSettings', async (original) => ({

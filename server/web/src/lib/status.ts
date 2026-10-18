@@ -55,6 +55,8 @@ export function encryptionStatus(state: DiskState | '' | null | undefined): Stat
       return { status: 'warn', label: 'devices.disk.states.tpm_missing' }
     case 'tpm_pin_missing':
       return { status: 'warn', label: 'devices.disk.states.tpm_pin_missing' }
+    case 'unlock_mode_mismatch':
+      return { status: 'warn', label: 'devices.disk.unlockModeMismatch' }
     case 'not_encrypted':
       return { status: 'critical', label: 'devices.disk.states.not_encrypted' }
     case '':

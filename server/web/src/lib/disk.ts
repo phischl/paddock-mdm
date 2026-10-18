@@ -2,12 +2,23 @@ import { api, problemCode, type DiskEncryption, type DiskEscrow, type DiskRecove
 import type { ListFilter } from './listQuery'
 
 /** The disk encryption states (plan M4b decision 8), from the least to the most complete. */
-export const diskStates: DiskState[] = ['not_encrypted', 'unmanaged', 'tpm_missing', 'tpm_pin_missing', 'escrow_pending', 'compliant']
+export const diskStates: DiskState[] = [
+  'not_encrypted', 'unmanaged', 'tpm_missing', 'tpm_pin_missing', 'unlock_mode_mismatch', 'escrow_pending', 'compliant',
+]
+
+/** The runbook section on converting a disk to the other unlock mode with the recovery key. */
+export const unlockModeRunbook =
+  'https://github.com/phischl/paddock-mdm/blob/main/docs/operations/disk-recovery.md#changing-the-unlock-mode'
+
+/** The short label of a disk state (the mismatch's state text is a full hint, plan M8d decision 49). */
+export function diskStateLabel(state: DiskState): string {
+  return state === 'unlock_mode_mismatch' ? 'devices.disk.unlockModeMismatch' : 'devices.disk.states.' + state
+}
 
 /** The disk state filter of the device list (plan M4b decision 14). */
 export const diskStateFilter: ListFilter = {
   kind: 'enum', key: 'disk_state', label: 'devices.disk.state',
-  options: diskStates.map((value) => ({ value, title: 'devices.disk.states.' + value })),
+  options: diskStates.map((value) => ({ value, title: diskStateLabel(value) })),
 }
 
 /** The disk encryption of a device; the problem code on failure. */

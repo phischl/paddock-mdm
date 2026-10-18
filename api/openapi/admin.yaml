@@ -4948,10 +4948,11 @@ components:
       type: string
       description: |
         Disk encryption of a device (plan M4b decision 8): not_encrypted (root not on LUKS), unmanaged (not installed
-        with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), escrow_pending (recovery key,
-        a header or keyslot set not yet as required), compliant (TPM2+PIN and recovery key only, escrowed with the
-        current header of every LUKS volume, PDK-009).
-      enum: [not_encrypted, unmanaged, tpm_missing, tpm_pin_missing, escrow_pending, compliant]
+        with the Paddock autoinstall), tpm_missing, tpm_pin_missing (boot PIN skipped), unlock_mode_mismatch (enrolled
+        for the other unlock mode than the device's policy, plan M8d decision 48), escrow_pending (recovery key, a
+        header or keyslot set not yet as required), compliant (the TPM keyslot of the unlock mode and the recovery key
+        only, escrowed with the current header of every LUKS volume, PDK-009).
+      enum: [not_encrypted, unmanaged, tpm_missing, tpm_pin_missing, unlock_mode_mismatch, escrow_pending, compliant]
     DiskEscrow:
       type: object
       required: [generation, status, created_at]
@@ -4993,6 +4994,13 @@ components:
           description: Kind of every keyslot, sorted (tpm2+pin, tpm2, recovery, password, or another token type).
           items: { type: string }
         keyslots: { type: integer }
+        unlock_mode:
+          description: The unlock mode the agent applied (plan M8d decision 48); absent from agents before it.
+          allOf:
+            - $ref: "#/components/schemas/DiskUnlockMode"
+        boot_separate:
+          type: boolean
+          description: In state not_encrypted only, whether /boot is a file system of its own (ADR 0038).
         reported_at: { type: string, format: date-time, description: Check-in the state is from. }
         recovery_keys:
           type: array
@@ -6061,12 +6069,18 @@ components:
           minimum: 7
           maximum: 365
           description: How long a recorded login is kept; absent keeps the value.
+        disk_unlock_mode:
+          description: |
+            Disk unlock mode of devices installed with the Paddock autoinstall from now on (ADR 0038 decision 1);
+            device groups override it. Absent keeps the value. Installed devices keep their mode.
+          allOf:
+            - $ref: "#/components/schemas/DiskUnlockMode"
     LoginSettings:
       type: object
       required: [hello_enabled, hello_pin_min_length, user_lock_session_action, break_glass_accounts,
                  sudoers_d_allowlist, sudo_lecture_text, local_admin_username, local_admin_rotation_days,
                  rotate_after_reveal_hours, notice_text, boot_pin_min_length, login_history_enabled, login_history_days,
-                 updated_at]
+                 disk_unlock_mode, updated_at]
       properties:
         hello_enabled: { type: boolean }
         hello_pin_min_length: { type: integer }
@@ -6087,6 +6101,7 @@ components:
           type: boolean
           description: Every session start of directory users is stored per device (ADR 0037 decision 6); off by default.
         login_history_days: { type: integer, description: How long the login history is kept (7–365 days). }
+        disk_unlock_mode: { $ref: "#/components/schemas/DiskUnlockMode" }
         updated_at: { type: string, format: date-time }
     LoginAssignmentUpdate:
       type: object

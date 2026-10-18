@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { hasErrors, validateDeviceGroup } from '../lib/validation'
 import { useProblemText } from '../lib/problems'
-import type { AgentUpdatePolicy, DeviceGroupStaleness } from '../api/client'
+import type { AgentUpdatePolicy, DeviceGroupStaleness, DiskUnlockMode } from '../api/client'
 import type { DeviceGroupInput } from '../lib/deviceGroupPage'
 import { laptopStaleness } from '../lib/deviceGroups'
 
@@ -14,11 +14,12 @@ const props = withDefaults(
     initialDescription?: string
     initialStaleness?: DeviceGroupStaleness | null
     initialAgentUpdatePolicy?: AgentUpdatePolicy | null
+    initialDiskUnlockMode?: DiskUnlockMode | null
     problem?: string
     idPrefix?: string
     pending?: boolean
   }>(),
-  { initialName: '', initialDescription: '', initialStaleness: null, initialAgentUpdatePolicy: null, problem: '', idPrefix: 'device-group', pending: false },
+  { initialName: '', initialDescription: '', initialStaleness: null, initialAgentUpdatePolicy: null, initialDiskUnlockMode: null, problem: '', idPrefix: 'device-group', pending: false },
 )
 const emit = defineEmits<{
   submit: [form: DeviceGroupInput]
@@ -39,6 +40,12 @@ const policyItems = computed(() => [
   { value: 'automatic', title: t('updateSettings.agentUpdates.automatic') },
   { value: 'manual', title: t('updateSettings.agentUpdates.manual') },
 ])
+const diskUnlockMode = ref<DiskUnlockMode | null>(props.initialDiskUnlockMode)
+const unlockItems = computed(() => [
+  { value: null, title: t('deviceGroups.inherit') },
+  { value: 'tpm_pin', title: t('devices.disk.unlockModes.tpm_pin') },
+  { value: 'tpm_only', title: t('devices.disk.unlockModes.tpm_only') },
+])
 
 function laptopPreset(): void {
   override.value = true
@@ -56,6 +63,7 @@ function submit(): void {
     name: name.value, description: description.value,
     staleness: override.value ? { warning_h: Number(warningH.value), critical_h: Number(criticalH.value) } : null,
     agent_update_policy: agentUpdatePolicy.value,
+    disk_unlock_mode: diskUnlockMode.value,
   })
 }
 </script>
@@ -132,6 +140,13 @@ function submit(): void {
       :items="policyItems"
       :label="t('deviceGroups.agentUpdates.label')"
       data-testid="group-agent-updates"
+    />
+    <v-select
+      :id="idPrefix + '-unlock-mode'"
+      v-model="diskUnlockMode"
+      :items="unlockItems"
+      :label="t('deviceGroups.unlockMode.label')"
+      data-testid="group-unlock-mode"
     />
     <p
       v-if="problem"

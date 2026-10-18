@@ -11,5 +11,5 @@ SET hello_enabled = @hello_enabled, hello_pin_min_length = @hello_pin_min_length
     local_admin_username = @local_admin_username, local_admin_rotation_days = @local_admin_rotation_days,
     rotate_after_reveal_hours = sqlc.narg(rotate_after_reveal_hours), notice_text = @notice_text,
     boot_pin_min_length = @boot_pin_min_length, login_history_enabled = @login_history_enabled,
-    login_history_days = @login_history_days, updated_at = now()
+    login_history_days = @login_history_days, disk_unlock_mode = @disk_unlock_mode, updated_at = now()
 RETURNING *;

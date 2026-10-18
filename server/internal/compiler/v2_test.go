@@ -554,3 +554,24 @@ func TestSupervisorPackages(t *testing.T) {
 		t.Fatalf("halted release still rendered: %+v", p)
 	}
 }
+
+// TestDiskUnlockMode (plan M8d decision 46): every v2 bundle carries disk.unlock_mode, the organization's mode unless
+// a group of the device overrides it; tpm_pin wins across groups.
+func TestDiskUnlockMode(t *testing.T) {
+	w := newWorld(t)
+	g1, g2 := w.g1, w.g2
+	both, only, plain := w.v2Device("{1,2}", g1, g2), w.v2Device("{1,2}", g2), w.v2Device("{1,2}")
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if d := w.fetch(plain).Disk; d == nil || d.UnlockMode != "tpm_pin" {
+		t.Fatalf("default disk section %+v", d)
+	}
+	w.exec("UPDATE organization_login_settings SET disk_unlock_mode = 'tpm_only' WHERE organization_id = $1", w.org)
+	w.exec("UPDATE device_group SET disk_unlock_mode = 'tpm_pin' WHERE id = $1", g1)
+	w.exec("UPDATE device_group SET disk_unlock_mode = 'tpm_only' WHERE id = $1", g2)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	for d, want := range map[uuid.UUID]string{plain: "tpm_only", only: "tpm_only", both: "tpm_pin"} {
+		if got := w.fetch(d).Disk; got == nil || got.UnlockMode != want {
+			t.Errorf("disk %+v, want %s", got, want)
+		}
+	}
+}

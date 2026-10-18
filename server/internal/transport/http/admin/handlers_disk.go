@@ -35,6 +35,10 @@ func (h *handlers) GetDeviceDisk(ctx context.Context, req adminapi.GetDeviceDisk
 			out.Volumes = append(out.Volumes, toDiskVolume(v))
 		}
 		out.Unresolved = nonNil(d.Unresolved)
+		if m := adminapi.DiskUnlockMode(d.UnlockMode); m.Valid() {
+			out.UnlockMode = &m
+		}
+		out.BootSeparate = d.BootSeparate
 	}
 	for _, e := range s.Escrows {
 		if e.Kind == escrow.KindLUKSHeader {

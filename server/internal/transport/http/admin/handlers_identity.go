@@ -299,6 +299,7 @@ func (h *handlers) UpdateLoginSettings(ctx context.Context, req adminapi.UpdateL
 		LocalAdminUsername: b.LocalAdminUsername, LocalAdminRotationDays: b.LocalAdminRotationDays,
 		RotateAfterRevealHours: b.RotateAfterRevealHours, NoticeText: b.NoticeText, BootPinMinLength: b.BootPinMinLength,
 		LoginHistoryEnabled: b.LoginHistoryEnabled, LoginHistoryDays: b.LoginHistoryDays,
+		DiskUnlockMode: (*string)(b.DiskUnlockMode),
 	})
 	if err != nil {
 		return nil, err
@@ -314,7 +315,7 @@ func toLoginSettings(s pgstore.OrganizationLoginSetting) adminapi.LoginSettings 
 		LocalAdminUsername: s.LocalAdminUsername, LocalAdminRotationDays: int(s.LocalAdminRotationDays),
 		RotateAfterRevealHours: intPtr(s.RotateAfterRevealHours), NoticeText: s.NoticeText,
 		BootPinMinLength: int(s.BootPinMinLength), LoginHistoryEnabled: s.LoginHistoryEnabled,
-		LoginHistoryDays: int(s.LoginHistoryDays),
+		LoginHistoryDays: int(s.LoginHistoryDays), DiskUnlockMode: adminapi.DiskUnlockMode(s.DiskUnlockMode),
 	}
 }
 

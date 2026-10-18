@@ -70,6 +70,8 @@ type LoginSettings struct {
 	RotateAfterRevealHours *int     `json:"rotate_after_reveal_hours"`
 	NoticeText             string   `json:"notice_text"`
 	BootPinMinLength       int      `json:"boot_pin_min_length"`
+	// DiskUnlockMode is tpm_pin or tpm_only (ADR 0038 decision 1); omitted keeps the stored mode.
+	DiskUnlockMode string `json:"disk_unlock_mode,omitempty"`
 }
 
 // UpdateSettings are the fields of PUT /api/v1/settings/updates.
