@@ -389,9 +389,10 @@ supervisor must then keep running with the same process for a minute. It writes
 | `rolled_back` | `device.supervisor_update_failed` | No check-in within 10 minutes, or the new supervisor kept restarting: the backup was copied back and the supervisor restarted. |
 | `rolled_back_unreachable` | `device.supervisor_update_failed` | The new supervisor ran stable, but the agent's check-ins did not reach the server within 10 minutes (`/run/paddock/last-checkin-failed`): the backup was copied back. The device retries the version 24 hours later at the earliest, at most 3 times (`supervisor_retry` in `/var/lib/paddock/state/state.json`). |
 
-Every failed outcome counts once per device toward the failure threshold of the release's rollout, exactly like a
-failed agent update (`agent_update_report` outcome `supervisor_failed`): enough failures halt the rollout, and a
-halted rollout offers neither the agent nor the supervisor. After a rollback `dpkg -l paddock-supervisor` may name the
+`install_failed` and `rolled_back` count once per device toward the failure threshold of the release's rollout,
+exactly like a failed agent update (`agent_update_report` outcome `supervisor_failed`): enough failures halt the
+rollout, and a halted rollout offers neither the agent nor the supervisor. `rolled_back_unreachable` never counts: a
+server outage is no defect of the release. After a rollback `dpkg -l paddock-supervisor` may name the
 new version while the previous binary runs (`/usr/sbin/paddock-supervisor version`) until the next successful
 upgrade. A failed version is not installed again on that device (`failed_supervisor_version` in
 `/var/lib/paddock/state/state.json`); a newer release is. Troubleshooting:

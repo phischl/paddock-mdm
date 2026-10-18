@@ -733,7 +733,8 @@ func TestListReleasesSortsByVersion(t *testing.T) {
 // TestSupervisorUpdatedEvents (plan M8d decision 33): agent.supervisor_updated is audited as device.supervisor_updated
 // for the outcome updated and as device.supervisor_update_failed for install_failed and rolled_back; the failed
 // outcomes count once per device toward the release's failure counts as supervisor_failed (ADR 0037 amendment
-// 2026-10-18, PDK-326), the successful one not.
+// 2026-10-18, PDK-326), the successful one not; rolled_back_unreachable is audited as failed but never counts (review
+// 2 finding B).
 func TestSupervisorUpdatedEvents(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	h.haltAll(t)
@@ -772,6 +773,18 @@ func TestSupervisorUpdatedEvents(t *testing.T) {
 	if n := count("SELECT count(*) FROM agent_update_report WHERE device_id = $1 AND outcome <> 'supervisor_failed'", dev); n != 0 {
 		t.Fatalf("%d other agent update reports from supervisor outcomes", n)
 	}
+	org2, unreachable := h.device(t)
+	data, _ := json.Marshal(map[string]string{"version": v, "from_version": "0.9.0", "outcome": protocol.SupervisorOutcomeRolledBackUnreachable})
+	if _, err := h.reports.RecordEvent(systemCtx(org2), unreachable, protocol.Event{EventSeq: 1, Type: protocol.EventAgentSupervisorUpdated,
+		OccurredAt: time.Now(), Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(byOutcome, "device.supervisor_update_failed", unreachable.String(), "rolled_back_unreachable"); n != 1 {
+		t.Fatalf("%d device.supervisor_update_failed events with rolled_back_unreachable, want 1", n)
+	}
+	if n := count("SELECT count(*) FROM agent_update_report WHERE device_id = $1", unreachable); n != 0 {
+		t.Fatalf("%d agent update reports from a rollback because the server was unreachable, want 0", n)
+	}
 	var failed int64
 	if err := h.super.QueryRow(ctx, "SELECT failed FROM paddock_agent_rollout_stats($1, 100)", v).Scan(&failed); err != nil || failed != 1 {
 		t.Fatalf("rollout failures %d (%v) after supervisor outcomes, want 1", failed, err)
@@ -779,7 +792,8 @@ func TestSupervisorUpdatedEvents(t *testing.T) {
 }
 
 // TestSupervisorFailureHaltsTheRollout (ADR 0037 amendment 2026-10-18, PDK-326): a failed supervisor package upgrade
-// of the release counts toward the rollout's failure threshold like a failed agent update; a successful one does not.
+// of the release counts toward the rollout's failure threshold like a failed agent update; a successful one does not,
+// nor does a rollback only because the server was unreachable (review 2 finding B).
 func TestSupervisorFailureHaltsTheRollout(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	h.haltAll(t)
@@ -801,7 +815,11 @@ func TestSupervisorFailureHaltsTheRollout(t *testing.T) {
 	if offer, err := h.releases.EvaluateRollouts(sys, time.Now()); err != nil || offer == nil || offer.Version != v {
 		t.Fatalf("a successful supervisor upgrade halted the rollout: %+v, %v", offer, err)
 	}
-	report(2, protocol.SupervisorOutcomeRolledBack)
+	report(2, protocol.SupervisorOutcomeRolledBackUnreachable)
+	if offer, err := h.releases.EvaluateRollouts(sys, time.Now()); err != nil || offer == nil || offer.Version != v {
+		t.Fatalf("a rollback because the server was unreachable halted the rollout: %+v, %v", offer, err)
+	}
+	report(3, protocol.SupervisorOutcomeRolledBack)
 	if offer, err := h.releases.EvaluateRollouts(sys, time.Now()); err != nil || offer != nil {
 		t.Fatalf("after a failed supervisor upgrade: offer %+v, %v; want halted", offer, err)
 	}

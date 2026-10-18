@@ -452,10 +452,13 @@ func SupervisorBehind(status pgstore.DeviceStatus, version string, unknown bool)
 // updateOutcome returns the agent_update_report outcome of an agent update event, if the rollout evaluation counts
 // it. A refused downgrade never counts toward the failure rate (PDK-025): the device keeps its newer agent, so the
 // release did not fail on it. A failed rollback is recorded as such, so the counts take it once with a later
-// rolled_back of the same device. A failed supervisor upgrade counts as supervisor_failed.
+// rolled_back of the same device. A supervisor upgrade that failed its local health (install_failed, rolled_back)
+// counts as supervisor_failed; a rollback only because the server was unreachable (rolled_back_unreachable) does not:
+// a server outage is no defect of the release (ADR 0037 amendment 2026-10-18, review 2 finding B).
 func updateOutcome(eventType string, params map[string]any) (string, bool) {
 	if eventType == protocol.EventAgentSupervisorUpdated {
-		return outcomeSupervisorFailed, params["outcome"] != protocol.SupervisorOutcomeUpdated
+		outcome := params["outcome"]
+		return outcomeSupervisorFailed, outcome == protocol.SupervisorOutcomeInstallFailed || outcome == protocol.SupervisorOutcomeRolledBack
 	}
 	outcome, ok := updateOutcomes[eventType]
 	if !ok || params["outcome"] == outcomeDowngradeRefused {

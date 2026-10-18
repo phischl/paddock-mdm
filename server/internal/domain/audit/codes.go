@@ -369,7 +369,7 @@ var registry = map[Code]Definition{
 	},
 	CodeDeviceSupervisorUpdateFailed: {
 		Code: CodeDeviceSupervisorUpdateFailed, Emitted: true,
-		Description: "Installing the supervisor package failed, or the supervisor was restored from its backup because the agent did not check in within 10 minutes (actor: the device). It counts toward the failure threshold of the release's rollout like a failed agent update.",
+		Description: "Installing the supervisor package failed, or the supervisor was restored from its backup because the agent did not check in within 10 minutes (actor: the device). It counts toward the failure threshold of the release's rollout like a failed agent update, except the outcome rolled_back_unreachable (the agent's check-ins did not reach the server).",
 		Params:      deviceEventParams,
 		Outcomes:    []Outcome{OutcomeSuccess},
 		Note:        "Reported as agent.supervisor_updated (ADR 0024); outcome is install_failed, rolled_back, or rolled_back_unreachable (the server was unreachable; the device retries the version after 24 hours, at most 3 times).",

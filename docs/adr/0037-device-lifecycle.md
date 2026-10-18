@@ -282,10 +282,11 @@ once its rollout completed — no waves, no failure stop. Now the package follow
 rollout: the bundle carries it for a device only once the rollout's current wave reached the device's bucket (the
 gate of the agent offer, `agentrelease.Eligible`), only while the rollout is `running` or `completed`, never while it
 is `halted`. `paddock_supervisor_packages()` returns the current rollout's status and waves (migration 00062, a new
-forward migration rather than a change of 00059). `device.supervisor_update_failed` counts toward the rollout's failure
-threshold exactly like a failed agent update (`agent_update_report` outcome `supervisor_failed`, counted once per
-device in the rollout, current-release and evaluation statistics), so enough supervisor failures halt the rollout and
-stop both the agent and the supervisor offer.
+forward migration rather than a change of 00059). A `device.supervisor_update_failed` for a local-health failure
+(`install_failed`, `rolled_back`) counts toward the rollout's failure threshold exactly like a failed agent update
+(`agent_update_report` outcome `supervisor_failed`, counted once per device in the rollout, current-release and
+evaluation statistics), so enough supervisor failures halt the rollout and stop both the agent and the supervisor
+offer. `rolled_back_unreachable` (II) never counts: a server outage is no defect of the release (review 2 finding B).
 
 **II. Fail safe (contract 8).** As written, a server outage longer than the helper's 10-minute check-in wait rolled a
 healthy supervisor back and `failed_supervisor_version` blocked that version for good. Now the helper reports the

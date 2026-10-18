@@ -1234,9 +1234,10 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   The compiler keeps `{packages, percent}` (`agentrelease.Percent`) in the reconcile digest, so a new wave recompiles
   every device, and renders the packages for a device only when `agentrelease.Eligible(device, percent)`. A halted
   rollout renders nothing.
-- 33 (replaces "The outcome does not count toward any rollout threshold"): every failed outcome writes
-  `agent_update_report` outcome `supervisor_failed` for the version; the rollout, current-release and evaluation
-  statistics count it like `update_failed` (distinct devices).
+- 33 (replaces "The outcome does not count toward any rollout threshold"): a local-health failure (`install_failed`,
+  `rolled_back`) writes `agent_update_report` outcome `supervisor_failed` for the version; the rollout, current-release
+  and evaluation statistics count it like `update_failed` (distinct devices). `rolled_back_unreachable` writes no
+  report and never counts (fix round 2, review 2 finding B).
 
 ### 15.3 Retry after an unreachable server (decisions 31 and 32, design contract 8)
 
