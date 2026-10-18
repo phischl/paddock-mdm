@@ -289,8 +289,11 @@ onBeforeUnmount(() => observer.disconnect())
               class="pd-brand-sep"
               aria-hidden="true"
             >/</span>
+            <!-- Vuetify 4 tooltips are eager: the role=tooltip element is in the DOM before any hover and needs a
+                 name of its own (axe aria-tooltip-name). -->
             <v-tooltip
               :text="session.me.organization.name"
+              :aria-label="session.me.organization.name"
               location="bottom"
               open-on-click
               open-on-hover

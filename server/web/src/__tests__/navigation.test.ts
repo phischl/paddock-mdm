@@ -354,6 +354,14 @@ describe('app bar: organization name and step-up freshness (plan M8x decisions 3
     expect(name.attributes('title')).toBe(long)
   })
 
+  it('gives the organization name tooltip an accessible name before it is ever shown', async () => {
+    const { w } = await mountApp()
+    const describedBy = w.get('[data-testid="org-name"]').attributes('aria-describedby')
+    const tooltip = document.getElementById(describedBy!)
+    expect(tooltip?.getAttribute('role')).toBe('tooltip')
+    expect(tooltip?.getAttribute('aria-label')).toBe('Acme')
+  })
+
   it('shows no confirmation without a current step-up', async () => {
     const { w } = await mountApp()
     expect(w.find('[data-testid="stepup-chip"]').exists()).toBe(false)
