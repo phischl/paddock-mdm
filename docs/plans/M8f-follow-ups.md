@@ -531,6 +531,19 @@ error (`upstream_unavailable`). Test: `sessions_integration_test.go::TestEndAllS
     rolled back from." CHANGELOG `### Fixed`: "A release that failed its probation is rolled back exactly once; the
     restarted agent no longer re-installs it before the rollback is recorded."
 
+**Architect note 2026-10-18 (fix round 1, Review 1 finding M3, PDK-323): decision 31 is completed.** The non-durable
+flip back (`RollingBack`) and the retried flip back that is not durable yet keep the restart before `conclude`:
+`conclude` writes `rolled_back`, removes the request and removes the probation log, so concluding before the flip is
+durable would let a power loss that loses the flip boot the failed release without a probation log to resume the
+rollback from (contract 4), and with a false result. Instead `onRequest` MUST remove a request whose release the update
+result on disk already names, without processing it and without a new result (the rule `resumeRequest` already applies
+after a restart, now in `onRequest` alone). That closes the double rollback on every path, including the window in
+`finishAt` between the request's removal and the result. Server-side suppression of the offer was considered and not
+taken: the racing check-in carries no report yet, so the server cannot know; the device's stop
+(`FailedUpdateVersion`) stays the mechanism. Test: `supervisor_test.go::TestRollbackConfirmedLaterIsNotStagedAgain`
+(injected `SyncDir` failure, the rollback concludes later, the release is staged again: the request is removed, the
+staging directory is clean, the result keeps its `at`; without the rule a second `rolled_back` follows).
+
 ### 3.9 System-test Stack helpers fail the calling subtest (PDK-298)
 
 34. Every `Stack` method that reports a failure MUST take `t *testing.T` as its first parameter and use it for

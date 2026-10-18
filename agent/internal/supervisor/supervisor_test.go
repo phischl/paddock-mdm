@@ -876,6 +876,33 @@ func TestRollbackWaitsForADurableFlipBack(t *testing.T) {
 	sf.expectProvenByNewRename(t)
 }
 
+// TestRollbackConfirmedLaterIsNotStagedAgain (PDK-323): a flip back whose directory sync failed concludes while
+// the previous agent runs, so that agent can stage the release again before it read the result. The supervisor removes
+// that request instead of installing the release a second time, and the result stays the one rolled_back.
+func TestRollbackConfirmedLaterIsNotStagedAgain(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	f.resumeFailingProbation(nil)
+	f.start()
+	f.waitSyncs(sf, 2)
+	sf.set(false)
+	r := f.waitResult(10 * time.Second)
+	if r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.stage("1.1.0", script("1.1.0", 0, "exit 1"), nil)
+	f.waitFor("the request for the rolled-back release was removed", func() bool {
+		_, err := os.Stat(filepath.Join(f.cfg.Staging, "request.json"))
+		return os.IsNotExist(err)
+	})
+	f.expectStagingClean()
+	time.Sleep(500 * time.Millisecond)
+	if again := f.waitResult(time.Second); again.At != r.At || again.Outcome != outcomeRolledBack || f.active() != "A" {
+		t.Fatalf("result %+v after %+v, current %s", again, r, f.active())
+	}
+}
+
 // TestUpdateWaitsForADurableSwitch (PDK-045): a switch whose directory sync failed still starts the new agent and its
 // probation; the synced probation log stays, and "updated" follows only after a new flip was synced.
 func TestUpdateWaitsForADurableSwitch(t *testing.T) {
