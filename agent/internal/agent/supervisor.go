@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/update"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -29,7 +30,9 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 	result, rerr := supervisorpkg.ReadResult(a.d.Layout)
 	busy := marker != nil || result != nil || err != nil || rerr != nil || update.Pending(a.d.Layout)
 	installed := a.d.Sys.PackageVersion(supervisorpkg.Package)
-	install, reason := supervisorpkg.Plan(ref, installed, a.updatesAllowed(), a.st.FailedSupervisorVersion, busy)
+	retry := a.st.SupervisorRetry
+	backoff := retry != nil && retry.Version == ref.Version && a.d.Now().Before(retry.NotBefore)
+	install, reason := supervisorpkg.Plan(ref, installed, a.updatesAllowed(), a.st.FailedSupervisorVersion, busy, backoff)
 	if !install {
 		if key := ref.Version + "\x00" + reason; a.supervisorSkipped != key && reason != supervisorpkg.ReasonInProgress {
 			a.supervisorSkipped = key
@@ -59,8 +62,9 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 }
 
 // reportSupervisorUpgrade turns the result of `paddockd supervisor-upgrade` into the event agent.supervisor_updated,
-// once (plan M8d decision 32). A version that failed is not installed again. A marker older than
-// supervisorpkg.StaleAfter without a result counts as install_failed: the helper died.
+// once (plan M8d decision 32). A version that failed is not installed again; one rolled back only because the server
+// was unreachable is retried after supervisorpkg.RetryAfter, up to supervisorpkg.MaxAttempts times (design contract
+// 8). A marker older than supervisorpkg.StaleAfter without a result counts as install_failed: the helper died.
 func (a *Agent) reportSupervisorUpgrade() {
 	r, err := supervisorpkg.ReadResult(a.d.Layout)
 	if err != nil {
@@ -77,12 +81,32 @@ func (a *Agent) reportSupervisorUpgrade() {
 	}
 	slog.Info("supervisor upgrade finished", "version", r.Version, "from_version", r.FromVersion, "outcome", r.Outcome)
 	a.event(protocol.EventAgentSupervisorUpdated, map[string]string{"version": r.Version, "from_version": r.FromVersion, "outcome": r.Outcome})
-	if r.Outcome != protocol.SupervisorOutcomeUpdated {
+	switch r.Outcome {
+	case protocol.SupervisorOutcomeUpdated:
+		a.st.SupervisorRetry = nil
+	case protocol.SupervisorOutcomeRolledBackUnreachable:
+		a.retrySupervisor(r)
+	default:
 		a.st.FailedSupervisorVersion = r.Version
 	}
 	at := r.At
 	a.st.ReportedSupervisorUpgradeAt = &at
 	a.saveState()
+}
+
+// retrySupervisor schedules the next attempt of a version rolled back because the server was unreachable, or marks it
+// failed after supervisorpkg.MaxAttempts such rollbacks.
+func (a *Agent) retrySupervisor(r *supervisorpkg.Result) {
+	retry := a.st.SupervisorRetry
+	if retry == nil || retry.Version != r.Version {
+		retry = &state.SupervisorRetry{Version: r.Version}
+	}
+	retry.Attempts++
+	retry.NotBefore = r.At.Add(supervisorpkg.RetryAfter)
+	a.st.SupervisorRetry = retry
+	if retry.Attempts >= supervisorpkg.MaxAttempts {
+		a.st.FailedSupervisorVersion, a.st.SupervisorRetry = r.Version, nil
+	}
 }
 
 // staleSupervisorUpgrade writes and returns an install_failed result for a marker older than StaleAfter.

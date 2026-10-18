@@ -747,13 +747,20 @@ func TestCheckinAgentUpdate(t *testing.T) {
 	if u := checkin("amd64", "1.0.0"); u == nil || !u.Requested || u.RequestedAt == nil || !u.RequestedAt.Equal(requestedAt) {
 		t.Fatalf("requested offer %+v", u)
 	}
-	if u := checkin("amd64", "1.1.0"); u != nil {
-		t.Fatalf("requested device on the version offered %+v", u)
+	// A requested device on the version keeps the request (review finding 5): its own version, marked requested, so
+	// that it may upgrade paddock-supervisor and fleetd under the manual policy.
+	if u := checkin("amd64", "1.1.0"); u == nil || u.Version != "1.1.0" || !u.Requested || !u.RequestedAt.Equal(requestedAt) {
+		t.Fatalf("requested device on the version: %+v", u)
+	}
+	if u := checkin("arm64", "1.1.0"); u != nil {
+		t.Fatalf("requested device on the version without an artifact: %+v", u)
 	}
 	offer.Status = agentrelease.RolloutHalted
 	_ = e.cache.PutOffer(context.Background(), &offer)
-	if u := checkin("amd64", "1.0.0"); u != nil {
-		t.Fatalf("halted rollout offered to a requested device %+v", u)
+	for _, version := range []string{"1.0.0", "1.1.0"} {
+		if u := checkin("amd64", version); u != nil {
+			t.Fatalf("halted rollout offered to a requested device on %s: %+v", version, u)
+		}
 	}
 	_ = e.cache.DeleteUpdateRequest(context.Background(), id)
 	_ = e.cache.PutOffer(context.Background(), nil)

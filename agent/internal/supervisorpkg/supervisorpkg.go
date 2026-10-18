@@ -46,6 +46,11 @@ const (
 	// StaleAfter is the age of a marker without a result at which the agent counts the upgrade as failed (the helper
 	// died): longer than dpkg's 15 minutes plus CheckinWait.
 	StaleAfter = 30 * time.Minute
+	// RetryAfter and MaxAttempts bound the retries of a version rolled back only because the server was unreachable
+	// (design contract 8, ADR 0037 amendment 2026-10-18): the next attempt waits at least RetryAfter after the
+	// rollback, and the version counts as failed after MaxAttempts such rollbacks.
+	RetryAfter  = 24 * time.Hour
+	MaxAttempts = 3
 )
 
 // Reasons Plan declines an installation.
@@ -57,6 +62,7 @@ const (
 	ReasonNotInstalled = "not_installed"
 	ReasonCurrent      = "current"
 	ReasonPolicy       = "policy"
+	ReasonBackoff      = "backoff"
 )
 
 var (
@@ -77,8 +83,8 @@ func Validate(ref bundle.PackageRef) error {
 // Plan decides whether the supervisor package of the bundle is installed on this device (ADR 0037 decision 3):
 // the policy allows updates (automatic, or requested since the last check-in), the agent runs the package's
 // release (buildinfo.Version == ref.Version), dpkg reports an older paddock-supervisor version, no upgrade is in
-// progress and the version did not fail before.
-func Plan(ref bundle.PackageRef, installed string, policyAllows bool, failed string, inProgress bool) (install bool, reason string) {
+// progress, the version did not fail before and is not waiting for its retry after an unreachable server (backoff).
+func Plan(ref bundle.PackageRef, installed string, policyAllows bool, failed string, inProgress, backoff bool) (install bool, reason string) {
 	switch {
 	case inProgress:
 		return false, ReasonInProgress
@@ -88,6 +94,8 @@ func Plan(ref bundle.PackageRef, installed string, policyAllows bool, failed str
 		return false, ReasonAgentVersion
 	case ref.Version == failed:
 		return false, ReasonFailed
+	case backoff:
+		return false, ReasonBackoff
 	case installed == "":
 		return false, ReasonNotInstalled
 	case semver.Compare(fromDebian(installed), ref.Version) >= 0:

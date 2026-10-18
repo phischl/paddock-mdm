@@ -307,7 +307,7 @@ the policy of their device group says.
     fresh request: it ignores the policy (decision 23) and `FailedUpdateVersion` once, stages, signals, and records
     `UpdateRequestHandledAt = RequestedAt`. A requested offer that is not newer than the handled one follows the
     normal rules.
-29. Clearing: the claim of `eventEntry` for `agent.updated`, `agent.update_failed` and `agent.rolled_back` MUST set
+29. *(Amended 2026-10-18, §15.1: the request stays open after `agent.updated` while the supervisor or fleetd is outdated.)* Clearing: the claim of `eventEntry` for `agent.updated`, `agent.update_failed` and `agent.rolled_back` MUST set
     both request columns to NULL when `params.version` equals `agent_update_requested_version` (query
     `ClearAgentUpdateRequest(device_id, version)`); the worker's command round (`worker/commands.go::Round`) MUST
     also clear requests older than 24 h (`ExpireAgentUpdateRequests(before)`), unaudited. `Device` (API) gains
@@ -318,7 +318,7 @@ the policy of their device group says.
 
 ### 3.7 Supervisor package updates (L32, PDK-227)
 
-30. `pkg/bundle.AgentCfg` gains `SupervisorPackages map[string]PackageRef json:"supervisor_packages,omitempty"`
+30. *(Amended 2026-10-18, §15.2: rendered while the rollout runs or completed, per device once its wave is reached.)* `pkg/bundle.AgentCfg` gains `SupervisorPackages map[string]PackageRef json:"supervisor_packages,omitempty"`
     keyed by arch, with `type PackageRef struct { Version string; URLPath string; SHA256 string }` (JSON
     `version`, `url_path`, `sha256`; `bundle.InventoryPackage` is left as it is). The compiler (new
     `compiler/supervisor.go`) renders, on v2 bundles only, the `paddock-supervisor` packages of the **current
@@ -351,13 +351,13 @@ the policy of their device group says.
     afterwards); `rolled_back` when the check-in mark does not arrive: the backup binary and unit file are copied
     back, `systemctl daemon-reload && systemctl restart paddock-supervisor.service`. It writes
     `<state>/supervisor-upgrade-result.json {version, from_version, outcome, at}` and removes `supervisor-upgrade.json`.
-32. The agent's run loop (`Cycle`, after `reportUpdate`): `reportSupervisorUpgrade` turns the result into the event
+32. *(Amended 2026-10-18, §15.3: `rolled_back_unreachable` is retried, not failed.)* The agent's run loop (`Cycle`, after `reportUpdate`): `reportSupervisorUpgrade` turns the result into the event
     `agent.supervisor_updated{version, from_version, outcome}` once (`state.ReportedSupervisorUpgradeAt`), sets
     `state.FailedSupervisorVersion` on `install_failed` and `rolled_back`, and removes the result once the spool is
     empty (as `clearUpdateResult`). A `supervisor-upgrade.json` older than 30 min without a result counts as
     `install_failed` (the helper died). The health report gains `SupervisorVersion string json:"supervisor_version"`
     (output of `/usr/sbin/paddock-supervisor version`, refreshed per check-in; "" when unreadable).
-33. Server: `protocol.EventAgentSupervisorUpdated = "agent.supervisor_updated"` with the outcomes
+33. *(Amended 2026-10-18, §15.2: failed outcomes count toward the rollout's threshold.)* Server: `protocol.EventAgentSupervisorUpdated = "agent.supervisor_updated"` with the outcomes
     `SupervisorOutcomeUpdated = "updated"`, `SupervisorOutcomeInstallFailed = "install_failed"`,
     `SupervisorOutcomeRolledBack = "rolled_back"`; `eventCodes` maps it to `device.supervisor_updated`, and
     `eventEntry` switches to `device.supervisor_update_failed` for the other two outcomes (the ADR 0024 pattern).
@@ -1209,3 +1209,62 @@ Decided in ADR 0037, amendment 2026-10-17. Supplements §3; the decision numberi
 - Stop conditions: **S12** a registry of `versions.env` refuses anonymous tag listing (report which; do not add a
   secret without a decision). **S13** the label `upstream` cannot be created with `issues: write` (report; do not
   widen the permissions).
+
+## 15. Amendment 2026-10-18 — review 1 of M8d (PDK-234), fix round 1
+
+The maintainer's architect decisions on PDK-326 (ADR 0037 amendment 2026-10-18) and the review's blocking findings
+change these decisions; the result document of PDK-234 (*Fix Round 1*) records the implementation.
+
+### 15.1 Update now and the supervisor (decisions 23, 26, 27, 29)
+
+- 23/26: `RequestNow` also accepts a device that runs the offered release while `device_status.components_outdated`
+  contains `paddock_supervisor` or `fleetd`; otherwise 409 `the device already runs <version>` as before.
+- 27: the gateway reads `au:<device_id>` also for a device on the offered version and then answers its own version
+  marked `requested` (not while the rollout is halted, only with an artifact for its arch). The agent never stages its
+  own version; the flag only opens `updatesAllowed` for the supervisor package and fleetd.
+- 29: `agent.updated` of the requested version clears the request only when `components_outdated` names neither
+  `paddock_supervisor` nor `fleetd`; `agent.supervisor_updated` of that version (any outcome) clears it; the 24-hour
+  expiry stays. `handleUpdate` returns without staging while `supervisor-upgrade.json` exists (review finding 12).
+
+### 15.2 Supervisor package in waves (decisions 30 and 33, design contract 6)
+
+- 30: migration `00062_supervisor_package_waves.sql` replaces `paddock_supervisor_packages()`; it returns the current
+  rollout's packages while its status is `running` or `completed`, with `status`, `waves` and `current_wave_index`.
+  The compiler keeps `{packages, percent}` (`agentrelease.Percent`) in the reconcile digest, so a new wave recompiles
+  every device, and renders the packages for a device only when `agentrelease.Eligible(device, percent)`. A halted
+  rollout renders nothing.
+- 33 (replaces "The outcome does not count toward any rollout threshold"): every failed outcome writes
+  `agent_update_report` outcome `supervisor_failed` for the version; the rollout, current-release and evaluation
+  statistics count it like `update_failed` (distinct devices).
+
+### 15.3 Retry after an unreachable server (decisions 31 and 32, design contract 8)
+
+- 31: `Plan` gains `backoff bool` (reason `backoff`). The helper's wait tracks the supervisor's PID separately from the
+  check-in; at the deadline without a check-in it reports `rolled_back_unreachable` when the supervisor kept one PID
+  for `Stable` and `/run/paddock/last-checkin-failed` (written by the agent after a check-in without an answer or with
+  502/503/504) is newer than the installation; else `rolled_back`.
+- 32: `rolled_back_unreachable` sets `state.supervisor_retry {version, attempts, not_before = at + 24 h}`; the third such
+  rollback of a version sets `failed_supervisor_version`; `updated` clears the retry. Every other failure is permanent
+  as before.
+
+### 15.4 Uninstall (decisions 38, 39, 41)
+
+- 38: `Cancel` claims the command's result (`cres:<command_id>`) as `cancelled` in its transaction — refused when the
+  device's result was claimed first — and deletes the `cmd:<device_id>` field after the commit; the worker's command
+  round stays as the fallback. A request whose removal report is overdue (`UninstallReportTimeout`, 24 h after the
+  command's result, or its delivery) can be cancelled or requested again; audited with `report_overdue`, and
+  `DeviceUninstall.report_overdue` lets the portal offer the cancel.
+- 39: the agent starts the helper only after the server accepted the result with 2xx; a 404/409 drops the pending
+  uninstall and removes its plan and binary copy; `LaunchedAt` is saved after `systemd-run` succeeded.
+- 41: `MarkDeviceUninstalled` requires the open request, the event's `command_id` and the command `succeeded`; a report
+  before the worker recorded the result (`pending`/`delivered`, not expired) is retried; any other report is audited
+  only. `RetireUninstalled` runs through `RecordOnceWith` keyed on `uninstalled_at IS NOT NULL AND state = 'active'`
+  under the device's row lock.
+
+### 15.5 Login history (decisions 14–17)
+
+- The worker reads `login_history_enabled` in the inserting transaction after `pg_advisory_xact_lock_shared` on the
+  organization's login history key; `LoginSettings.Update` takes the exclusive lock first.
+- A login time is capped at the server's time plus `protocol.MaxClockSkew`; logins older than `login_history_days`
+  or before `organization_login_settings.login_history_enabled_at` (migration `00061`, set on the switch-on, cleared
+  on the switch-off) are not stored.

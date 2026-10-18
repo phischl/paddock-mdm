@@ -40,6 +40,7 @@ func TestPlan(t *testing.T) {
 		allows     bool
 		failed     string
 		inProgress bool
+		backoff    bool
 		install    bool
 		reason     string
 	}{
@@ -52,12 +53,13 @@ func TestPlan(t *testing.T) {
 		{name: "policy", ref: current, installed: "0.0.0~alpha.1", allows: false, reason: ReasonPolicy},
 		{name: "agent on another release", ref: ref("9.9.9", []byte("x")), installed: "0.0.0~alpha.1", allows: true, reason: ReasonAgentVersion},
 		{name: "failed before", ref: current, installed: "0.0.0~alpha.1", allows: true, failed: buildinfo.Version, reason: ReasonFailed},
+		{name: "waiting for its retry", ref: current, installed: "0.0.0~alpha.1", allows: true, backoff: true, reason: ReasonBackoff},
 		{name: "in progress", ref: current, installed: "0.0.0~alpha.1", allows: true, inProgress: true, reason: ReasonInProgress},
 		{name: "not installed by its package", ref: current, installed: "", allows: true, reason: ReasonNotInstalled},
 		{name: "invalid reference", ref: bad, installed: "0.0.0~alpha.1", allows: true, reason: ReasonInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			install, reason := Plan(tc.ref, tc.installed, tc.allows, tc.failed, tc.inProgress)
+			install, reason := Plan(tc.ref, tc.installed, tc.allows, tc.failed, tc.inProgress, tc.backoff)
 			if install != tc.install || reason != tc.reason {
 				t.Fatalf("Plan = %v %q, want %v %q", install, reason, tc.install, tc.reason)
 			}
@@ -224,6 +226,46 @@ func TestUpgradeRolledBack(t *testing.T) {
 	calls := w.sys.TakeCalls()
 	if i := slices.Index(calls, "systemctl daemon-reload"); i < 0 || !slices.Contains(calls[i:], "systemctl restart "+Service) {
 		t.Fatalf("calls %v, want daemon-reload then restart", calls)
+	}
+}
+
+// TestUpgradeRolledBackUnreachable (design contract 8): the new supervisor runs stable, but the agent's check-ins
+// fail to reach the server → the backup is restored and the outcome rolled_back_unreachable lets the agent retry; a
+// failed check-in before the installation does not count.
+func TestUpgradeRolledBackUnreachable(t *testing.T) {
+	w := newUpgradeWorld(t)
+	mark := func(at time.Time) {
+		_ = fsutil.WriteFile(w.l.LastCheckinFailed(), []byte(at.Format(time.RFC3339Nano)+"\n"), 0o644, 0o755)
+	}
+	mark(w.now.Add(-time.Minute))
+	if r := w.upgrader().Run(context.Background(), w.deb, "1.1.0"); r.Outcome != protocol.SupervisorOutcomeRolledBack {
+		t.Fatalf("an old failed check-in: outcome %s", r.Outcome)
+	}
+
+	w = newUpgradeWorld(t)
+	w.checkin = func(w *upgradeWorld) {
+		w.sys.Shows[Service] = "MainPID=200\nActiveState=active\n"
+		mark(w.now)
+	}
+	r := w.upgrader().Run(context.Background(), w.deb, "1.1.0")
+	if r.Outcome != protocol.SupervisorOutcomeRolledBackUnreachable {
+		t.Fatalf("outcome %s", r.Outcome)
+	}
+	w.result(t, protocol.SupervisorOutcomeRolledBackUnreachable)
+	if string(w.sys.Files[Binary].Data) != "old supervisor" || !slices.Contains(w.sys.TakeCalls(), "systemctl restart "+Service) {
+		t.Fatal("the previous supervisor was not restored")
+	}
+
+	// A supervisor that does not stay up while check-ins fail is a local failure.
+	w = newUpgradeWorld(t)
+	pid := 200
+	w.checkin = func(w *upgradeWorld) {
+		pid++
+		w.sys.Shows[Service] = "MainPID=" + strings.Repeat("1", pid%3+1) + "\nActiveState=active\n"
+		mark(w.now)
+	}
+	if r := w.upgrader().Run(context.Background(), w.deb, "1.1.0"); r.Outcome != protocol.SupervisorOutcomeRolledBack {
+		t.Fatalf("unstable supervisor: outcome %s", r.Outcome)
 	}
 }
 

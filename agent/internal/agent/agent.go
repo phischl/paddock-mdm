@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net/http"
 	"runtime"
 	"strconv"
 	"sync"
@@ -360,6 +361,10 @@ func (a *Agent) Cycle(ctx context.Context) time.Duration {
 		}
 		d := afterFailure(a.failures, a.d.Rand(), retryAfter)
 		slog.WarnContext(ctx, "check-in failed", "error", err, "failures", a.failures, "retry_in", d.Round(time.Second))
+		if !errors.As(err, &apiErr) || apiErr.Status == http.StatusBadGateway || apiErr.Status == http.StatusServiceUnavailable ||
+			apiErr.Status == http.StatusGatewayTimeout {
+			a.markCheckinFailed()
+		}
 		a.setError(fmt.Sprintf("check-in: %v", err))
 		return d
 	}
@@ -426,6 +431,15 @@ func (a *Agent) checkedIn(resp protocol.CheckinResponse) error {
 	}
 	a.refreshHealth()
 	return fsutil.WriteFile(a.d.Layout.LastCheckin(), []byte(now.Format(time.RFC3339Nano)+"\n"), 0o644, 0o755)
+}
+
+// markCheckinFailed records a check-in that did not reach the server, for the supervisor upgrade helper (design
+// contract 8). A failure to write it is logged only: the helper then counts a rollback as permanent, never the reverse.
+func (a *Agent) markCheckinFailed() {
+	at := a.d.Now().UTC().Format(time.RFC3339Nano) + "\n"
+	if err := fsutil.WriteFile(a.d.Layout.LastCheckinFailed(), []byte(at), 0o644, 0o755); err != nil {
+		slog.Warn("recording the failed check-in failed", "error", err)
+	}
 }
 
 func (a *Agent) setError(msg string) {

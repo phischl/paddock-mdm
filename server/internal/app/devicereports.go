@@ -277,10 +277,11 @@ func eventEntry(deviceID uuid.UUID, ev protocol.Event) (OnceEntry, bool) {
 				})
 			}
 		}
-		// The device's report of a requested version ends the update-now request (plan M8d decision 29).
-		if _, isUpdate := updateOutcomes[ev.Type]; isUpdate && err == nil {
+		// The device's report of a requested version ends the update-now request (plan M8d decision 29) — once its
+		// supervisor result arrived, when the supervisor or fleetd still have to follow (review finding 5).
+		if err == nil && endsUpdateRequest(ev.Type) {
 			if version, ok := spec.Params["version"].(string); ok {
-				_, err = q.ClearAgentUpdateRequest(ctx, pgstore.ClearAgentUpdateRequestParams{DeviceID: deviceID, Version: &version})
+				err = clearUpdateRequest(ctx, q, deviceID, ev.Type, version)
 			}
 		}
 		// The removal report marks the device; the report consumer retires it (plan M8d decision 41).
@@ -407,11 +408,42 @@ const outcomeDowngradeRefused = "downgrade_refused"
 // (agent/internal/update.OutcomeRollbackFailed, ADR 0024); it is also the agent_update_report outcome.
 const outcomeRollbackFailed = "rollback_failed"
 
+// outcomeSupervisorFailed is the agent_update_report outcome of a failed supervisor package upgrade: it counts toward
+// the failure threshold of its release's rollout like a failed agent update (ADR 0037 amendment 2026-10-18, PDK-326).
+const outcomeSupervisorFailed = "supervisor_failed"
+
+// endsUpdateRequest reports whether a device event can end its update-now request: an agent update outcome or the
+// supervisor package result.
+func endsUpdateRequest(eventType string) bool {
+	_, isUpdate := updateOutcomes[eventType]
+	return isUpdate || eventType == protocol.EventAgentSupervisorUpdated
+}
+
+// clearUpdateRequest ends the device's update-now request for version. After agent.updated the request stays open
+// while the device's paddock-supervisor or fleetd is outdated: under the manual policy only an open request lets the
+// device upgrade them (ADR 0037 decision 3); the supervisor's result or the 24-hour expiry ends it then.
+func clearUpdateRequest(ctx context.Context, q *pgstore.Queries, deviceID uuid.UUID, eventType, version string) error {
+	if eventType == protocol.EventAgentUpdated {
+		status, err := q.GetDeviceStatus(ctx, deviceID)
+		if err != nil && !db.IsNoRows(err) {
+			return err
+		}
+		if slices.ContainsFunc(status.ComponentsOutdated, func(c string) bool { return c == components.Supervisor || c == components.Fleetd }) {
+			return nil
+		}
+	}
+	_, err := q.ClearAgentUpdateRequest(ctx, pgstore.ClearAgentUpdateRequestParams{DeviceID: deviceID, Version: &version})
+	return err
+}
+
 // updateOutcome returns the agent_update_report outcome of an agent update event, if the rollout evaluation counts
 // it. A refused downgrade never counts toward the failure rate (PDK-025): the device keeps its newer agent, so the
 // release did not fail on it. A failed rollback is recorded as such, so the counts take it once with a later
-// rolled_back of the same device.
+// rolled_back of the same device. A failed supervisor upgrade counts as supervisor_failed.
 func updateOutcome(eventType string, params map[string]any) (string, bool) {
+	if eventType == protocol.EventAgentSupervisorUpdated {
+		return outcomeSupervisorFailed, params["outcome"] != protocol.SupervisorOutcomeUpdated
+	}
 	outcome, ok := updateOutcomes[eventType]
 	if !ok || params["outcome"] == outcomeDowngradeRefused {
 		return "", false

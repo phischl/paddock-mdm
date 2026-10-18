@@ -94,7 +94,9 @@ type AgentUpdate struct {
 	Size    int64  `json:"size"`    // bytes
 	Minisig string `json:"minisig"` // standard base64 of the .minisig file
 	// Requested is set when an administrator asked this device to install the release now (plan M8d decision 27):
-	// the offer ignores the rollout wave, and the agent ignores its update policy for it. Older agents ignore it.
+	// the offer ignores the rollout wave, and the agent ignores its update policy for it. Older agents ignore it. A
+	// device that already runs the release gets its own version marked requested while the request is open, so that
+	// it may upgrade paddock-supervisor and fleetd under the manual policy.
 	Requested bool `json:"requested,omitempty"`
 	// RequestedAt is when the request was made; the agent handles each request once.
 	RequestedAt *time.Time `json:"requested_at,omitempty"`
@@ -212,6 +214,10 @@ const (
 	SupervisorOutcomeUpdated       = "updated"
 	SupervisorOutcomeInstallFailed = "install_failed"
 	SupervisorOutcomeRolledBack    = "rolled_back"
+	// SupervisorOutcomeRolledBackUnreachable: the new supervisor ran stable, but the agent could not reach the server
+	// within the wait, so the helper rolled back; the agent retries the version later (design contract 8, ADR 0037
+	// amendment 2026-10-18).
+	SupervisorOutcomeRolledBackUnreachable = "rolled_back_unreachable"
 )
 
 // Kinds and results of UpdatesRun.

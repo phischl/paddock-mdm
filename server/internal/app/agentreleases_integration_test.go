@@ -731,8 +731,9 @@ func TestListReleasesSortsByVersion(t *testing.T) {
 }
 
 // TestSupervisorUpdatedEvents (plan M8d decision 33): agent.supervisor_updated is audited as device.supervisor_updated
-// for the outcome updated and as device.supervisor_update_failed for install_failed and rolled_back; no outcome
-// counts toward the release's failure counts or writes an agent update report.
+// for the outcome updated and as device.supervisor_update_failed for install_failed and rolled_back; the failed
+// outcomes count once per device toward the release's failure counts as supervisor_failed (ADR 0037 amendment
+// 2026-10-18, PDK-326), the successful one not.
 func TestSupervisorUpdatedEvents(t *testing.T) {
 	h := newReleaseHarness(t, true)
 	h.haltAll(t)
@@ -765,11 +766,47 @@ func TestSupervisorUpdatedEvents(t *testing.T) {
 			t.Fatalf("%d device.supervisor_update_failed events with %s, want 1", n, outcome)
 		}
 	}
-	if n := count("SELECT count(*) FROM agent_update_report WHERE device_id = $1", dev); n != 0 {
-		t.Fatalf("%d agent update reports from supervisor outcomes", n)
+	if n := count("SELECT count(*) FROM agent_update_report WHERE device_id = $1 AND outcome = 'supervisor_failed'", dev); n != 1 {
+		t.Fatalf("%d supervisor_failed reports, want 1", n)
+	}
+	if n := count("SELECT count(*) FROM agent_update_report WHERE device_id = $1 AND outcome <> 'supervisor_failed'", dev); n != 0 {
+		t.Fatalf("%d other agent update reports from supervisor outcomes", n)
 	}
 	var failed int64
-	if err := h.super.QueryRow(ctx, "SELECT failed FROM paddock_agent_rollout_stats($1, 100)", v).Scan(&failed); err != nil || failed != 0 {
-		t.Fatalf("rollout failures %d (%v) after supervisor outcomes, want 0", failed, err)
+	if err := h.super.QueryRow(ctx, "SELECT failed FROM paddock_agent_rollout_stats($1, 100)", v).Scan(&failed); err != nil || failed != 1 {
+		t.Fatalf("rollout failures %d (%v) after supervisor outcomes, want 1", failed, err)
+	}
+}
+
+// TestSupervisorFailureHaltsTheRollout (ADR 0037 amendment 2026-10-18, PDK-326): a failed supervisor package upgrade
+// of the release counts toward the rollout's failure threshold like a failed agent update; a successful one does not.
+func TestSupervisorFailureHaltsTheRollout(t *testing.T) {
+	h := newReleaseHarness(t, true)
+	h.haltAll(t)
+	v := h.published(t)
+	one, wave := 1, 1
+	if _, err := h.releases.StartRollout(platformAdmin(), v, app.RolloutOptions{Waves: []int{100}, FailureThresholdMin: &one, MinWaveMinutes: &wave}); err != nil {
+		t.Fatal(err)
+	}
+	sys := systemCtx(uuid.Nil)
+	org, dev := h.device(t)
+	report := func(seq int64, outcome string) {
+		data, _ := json.Marshal(map[string]string{"version": v, "from_version": "0.9.0", "outcome": outcome})
+		if _, err := h.reports.RecordEvent(systemCtx(org), dev, protocol.Event{EventSeq: seq, Type: protocol.EventAgentSupervisorUpdated,
+			OccurredAt: time.Now(), Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report(1, protocol.SupervisorOutcomeUpdated)
+	if offer, err := h.releases.EvaluateRollouts(sys, time.Now()); err != nil || offer == nil || offer.Version != v {
+		t.Fatalf("a successful supervisor upgrade halted the rollout: %+v, %v", offer, err)
+	}
+	report(2, protocol.SupervisorOutcomeRolledBack)
+	if offer, err := h.releases.EvaluateRollouts(sys, time.Now()); err != nil || offer != nil {
+		t.Fatalf("after a failed supervisor upgrade: offer %+v, %v; want halted", offer, err)
+	}
+	d, _ := h.releases.Get(platformAdmin(), v)
+	if d.Rollout.Status != agentrelease.RolloutHalted || d.Stats.Failed != 1 {
+		t.Fatalf("rollout %+v stats %+v", d.Rollout, d.Stats)
 	}
 }

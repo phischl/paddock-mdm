@@ -371,7 +371,7 @@ func (c *Compiler) render(ctx context.Context, q *pgstore.Queries, org uuid.UUID
 			updatesSection = keys.Updates.section(groups)
 			agent.UpdatePolicy = keys.Updates.updatePolicy(groups)
 		}
-		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.agent)
+		agent.SupervisorPackages = supervisorFor(keys.Supervisor, t.id, t.agent)
 		if keys.Disk != nil {
 			diskSection = keys.Disk.section(groups)
 		}
@@ -412,9 +412,9 @@ type v2Trust struct {
 	DMS        *bundle.DMS        `json:"-"` // per organization, not part of the reconcile digest
 	// Inventory is the same for every organization; a new fleetd package recompiles every device (reconcile digest).
 	Inventory *bundle.Inventory `json:"inventory"`
-	// Supervisor are the supervisor packages of the current release; a completed rollout recompiles every device
-	// (reconcile digest).
-	Supervisor map[string]bundle.PackageRef `json:"supervisor"`
+	// Supervisor are the supervisor packages of the current rollout and the share of devices its waves reached; a new
+	// wave recompiles every device (reconcile digest).
+	Supervisor *supervisorRelease `json:"supervisor"`
 	// Updates are the organization's update settings and holds (plan M5b decision 4), not part of the digest.
 	Updates *orgUpdates `json:"-"`
 	// Disk is the organization's disk unlock mode and its groups' overrides (plan M8d decision 46), not part of the

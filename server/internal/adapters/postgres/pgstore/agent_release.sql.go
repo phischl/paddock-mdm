@@ -663,18 +663,24 @@ func (q *Queries) SetAgentRolloutStatus(ctx context.Context, arg SetAgentRollout
 }
 
 const supervisorPackages = `-- name: SupervisorPackages :many
-SELECT version::text, arch::text, package_version::text, sha256::text, object_key::text FROM paddock_supervisor_packages()
+SELECT version::text, arch::text, package_version::text, sha256::text, object_key::text, status::text,
+       waves::int[], current_wave_index::int
+FROM paddock_supervisor_packages()
 `
 
 type SupervisorPackagesRow struct {
-	Version        string
-	Arch           string
-	PackageVersion string
-	Sha256         string
-	ObjectKey      string
+	Version          string
+	Arch             string
+	PackageVersion   string
+	Sha256           string
+	ObjectKey        string
+	Status           string
+	Waves            []int32
+	CurrentWaveIndex int32
 }
 
-// The paddock-supervisor packages of the current release, one per arch (plan M8d decision 30).
+// The paddock-supervisor packages of the current rollout while it runs or completed, one per arch, with its waves
+// (plan M8d decision 30, ADR 0037 amendment 2026-10-18).
 func (q *Queries) SupervisorPackages(ctx context.Context) ([]SupervisorPackagesRow, error) {
 	rows, err := q.db.Query(ctx, supervisorPackages)
 	if err != nil {
@@ -690,6 +696,9 @@ func (q *Queries) SupervisorPackages(ctx context.Context) ([]SupervisorPackagesR
 			&i.PackageVersion,
 			&i.Sha256,
 			&i.ObjectKey,
+			&i.Status,
+			&i.Waves,
+			&i.CurrentWaveIndex,
 		); err != nil {
 			return nil, err
 		}

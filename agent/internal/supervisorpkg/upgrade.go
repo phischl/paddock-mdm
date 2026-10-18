@@ -44,7 +44,8 @@ func (u *Upgrader) backups() [][2]string {
 // Run installs the staged package deb and returns the result it wrote: updated when the agent checked in after the
 // installation and the supervisor kept running; install_failed when the backup or dpkg failed (the backup is restored
 // only if the supervisor is not active afterwards); rolled_back when the check-in did not come within Wait: the backup
-// is copied back and the supervisor restarted.
+// is copied back and the supervisor restarted. A rollback while the new supervisor ran stable and the agent's
+// check-ins failed to reach the server is rolled_back_unreachable: the version is retried later (design contract 8).
 func (u *Upgrader) Run(ctx context.Context, deb, from string) Result {
 	version, err := VersionOf(deb)
 	if err != nil {
@@ -77,42 +78,56 @@ func (u *Upgrader) install(ctx context.Context, deb string) string {
 		}
 		return protocol.SupervisorOutcomeInstallFailed
 	}
-	if u.wait(ctx, u.Now()) {
+	updated, unreachable := u.wait(ctx, u.Now())
+	if updated {
 		return protocol.SupervisorOutcomeUpdated
 	}
-	slog.ErrorContext(ctx, "the agent did not check in after the supervisor upgrade; restoring the previous supervisor")
+	slog.ErrorContext(ctx, "the agent did not check in after the supervisor upgrade; restoring the previous supervisor",
+		"server_unreachable", unreachable)
 	u.restore(ctx)
+	if unreachable {
+		return protocol.SupervisorOutcomeRolledBackUnreachable
+	}
 	return protocol.SupervisorOutcomeRolledBack
 }
 
 // wait reports whether the agent checked in after installed and the supervisor then kept one PID for Hold, within
-// Wait. The check-in mark holds the time of the check-in (agent.checkedIn).
-func (u *Upgrader) wait(ctx context.Context, installed time.Time) bool {
+// Wait. The check-in mark holds the time of the check-in (agent.checkedIn). When it did not, unreachable reports
+// whether only the server was missing: the supervisor kept one PID for Hold and the agent's check-ins after installed
+// failed to reach the server.
+func (u *Upgrader) wait(ctx context.Context, installed time.Time) (updated, unreachable bool) {
 	deadline := installed.Add(u.Wait)
-	var stablePID string
-	var since time.Time
+	var stablePID, supPID string
+	var since, supSince time.Time
 	for {
 		now := u.Now()
 		pid, active := u.supervisor(ctx)
 		switch {
-		case !active || pid == "" || !u.checkedInAfter(installed):
+		case !active || pid == "":
+			supPID = ""
+		case pid != supPID:
+			supPID, supSince = pid, now
+		}
+		switch {
+		case !active || pid == "" || !u.markedAfter(u.Layout.LastCheckin(), installed):
 			stablePID = ""
 		case pid != stablePID:
 			stablePID, since = pid, now
 		case now.Sub(since) >= u.Hold:
-			return true
+			return true, false
 		}
 		if !now.Before(deadline) {
-			return false
+			return false, supPID != "" && now.Sub(supSince) >= u.Hold && u.markedAfter(u.Layout.LastCheckinFailed(), installed)
 		}
 		if err := u.Sleep(ctx, u.Poll); err != nil {
-			return false
+			return false, false
 		}
 	}
 }
 
-func (u *Upgrader) checkedInAfter(t time.Time) bool {
-	data, err := os.ReadFile(u.Layout.LastCheckin())
+// markedAfter reports whether a time mark file (LastCheckin, LastCheckinFailed) holds a time after t.
+func (u *Upgrader) markedAfter(file string, t time.Time) bool {
+	data, err := os.ReadFile(file) //nolint:gosec // path of the agent layout
 	if err != nil {
 		return false
 	}

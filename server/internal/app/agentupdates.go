@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,6 +10,7 @@ import (
 	"github.com/phischl/paddock-mdm/server/internal/adapters/postgres/pgstore"
 	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/audit"
+	"github.com/phischl/paddock-mdm/server/internal/domain/components"
 	"github.com/phischl/paddock-mdm/server/internal/domain/device"
 	"github.com/phischl/paddock-mdm/server/internal/platform/db"
 	"github.com/phischl/paddock-mdm/server/internal/problem"
@@ -36,8 +38,10 @@ func NewAgentUpdates(runner *ActionRunner, org *db.OrgPool, offers OfferSource) 
 }
 
 // RequestNow asks an active device to install the offered agent release at its next check-in, outside its rollout
-// wave and regardless of its update policy (audited: device.agent_update_requested). The request is cleared by the
-// device's report for that version or after 24 hours.
+// wave and regardless of its update policy (audited: device.agent_update_requested). A device that already runs the
+// release can be asked again while its paddock-supervisor or fleetd is outdated: the request lets it upgrade them
+// under the manual policy. The request is cleared by the device's report for that version — its supervisor result
+// when the supervisor or fleetd still have to follow — or after 24 hours.
 func (u *AgentUpdates) RequestNow(ctx context.Context, deviceID uuid.UUID) (pgstore.Device, error) {
 	var out pgstore.Device
 	spec := SpecAgentUpdateRequest
@@ -69,7 +73,9 @@ func (u *AgentUpdates) RequestNow(ctx context.Context, deviceID uuid.UUID) (pgst
 			from = *status.AgentVersion
 		}
 		rec.SetParam("from_version", from)
-		if !offer.Newer(from) {
+		if !offer.Newer(from) && (from != offer.Version || !slices.ContainsFunc(status.ComponentsOutdated, func(c string) bool {
+			return c == components.Supervisor || c == components.Fleetd
+		})) {
 			return problem.InvalidState.WithDetail("the device already runs " + from)
 		}
 		if status.Arch != "" {

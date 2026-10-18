@@ -271,3 +271,38 @@ Consequences: + Administrators see per device which component is behind and what
 maintainer learns of every upstream patch within a week without a new dependency. − One more platform table and
 health field; the watch depends on anonymous registry tag listings (Docker Hub, ghcr.io, gcr.io, mcr.microsoft.com)
 staying available. Tickets PDK-235, PDK-236, PDK-237.
+
+## Amendment 2026-10-18 — supervisor package in waves, retry after an unreachable server
+
+The M8d review (PDK-234, review 1, findings 6 and 11; PDK-326) found two conflicts of decision 3 with the design
+contract. The maintainer's architect decision of the same day:
+
+**I. Waves (contract 6).** As written, the supervisor package went to every device of a release in the same compile
+once its rollout completed — no waves, no failure stop. Now the package follows the wave plan of its release's agent
+rollout: the bundle carries it for a device only once the rollout's current wave reached the device's bucket (the
+gate of the agent offer, `agentrelease.Eligible`), only while the rollout is `running` or `completed`, never while it
+is `halted`. `paddock_supervisor_packages()` returns the current rollout's status and waves (migration 00062, a new
+forward migration rather than a change of 00059). `device.supervisor_update_failed` counts toward the rollout's failure
+threshold exactly like a failed agent update (`agent_update_report` outcome `supervisor_failed`, counted once per
+device in the rollout, current-release and evaluation statistics), so enough supervisor failures halt the rollout and
+stop both the agent and the supervisor offer.
+
+**II. Fail safe (contract 8).** As written, a server outage longer than the helper's 10-minute check-in wait rolled a
+healthy supervisor back and `failed_supervisor_version` blocked that version for good. Now the helper reports the
+outcome `rolled_back_unreachable` when the new supervisor kept one process for the hold time and the agent's
+check-ins after the installation failed to reach the server (`/run/paddock/last-checkin-failed`: no answer or 502–504).
+The agent then retries the version no earlier than 24 hours after the rollback and marks it failed after 3 such
+rollbacks (`state.supervisor_retry`). Only local health failures — `dpkg` or the backup failed, the helper died, the
+supervisor did not stay up, or the agent did not check in although the server was reachable — mark the version failed
+for good. The rollback itself stays: the helper cannot tell whether the new supervisor would have worked.
+
+**III. Update now and the supervisor (decision 2, review finding 5).** Under the manual policy only an open update-now
+request lets a device upgrade `paddock-supervisor` and fleetd, but the request ended with the agent's report. Now the
+request stays open after `agent.updated` while the device's `components_outdated` names `paddock_supervisor` or
+`fleetd`, and ends with `agent.supervisor_updated` (any outcome) or after 24 hours; the gateway marks the device's own
+version `requested` for a device on the release while the request is open (the agent never stages its own version);
+`RequestNow` accepts a device on the release while either component is outdated.
+
+Consequences: + No supervisor change reaches every device at once, and a server outage no longer blocks a supervisor
+version for good. − A supervisor wave follows the compiler's reconcile interval rather than the gateway's offer; a
+device whose server stays unreachable retries for up to three days.

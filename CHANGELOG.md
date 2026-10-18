@@ -82,10 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operators, audited as `device.agent_update_requested`): the device installs the offered agent release at its next
   check-in, outside its rollout wave and regardless of the update policy, with the usual self-test, probation and
   rollback. The request ends with the device's report or after 24 hours.
-- Devices update `paddock-supervisor` themselves: once the rollout of a release with a supervisor package completed,
-  an agent of that release installs the package through a transient unit, waits up to 10 minutes for its next
-  check-in and restores the previous supervisor otherwise (audited as `device.supervisor_updated` or
-  `device.supervisor_update_failed`). The update policy applies; a failed version is not installed again.
+- Devices update `paddock-supervisor` themselves, in the waves of the release's rollout: once a device's wave is
+  reached, an agent of that release installs the package through a transient unit, waits up to 10 minutes for its
+  next check-in and restores the previous supervisor otherwise (audited as `device.supervisor_updated` or
+  `device.supervisor_update_failed`). Failed supervisor upgrades count toward the rollout's failure threshold, and a
+  halted rollout offers no supervisor package. The update policy applies, and *Update agent now* stays open until
+  the supervisor followed; a failed version is not installed again, except after a rollback only because the server
+  was unreachable, which is retried after 24 hours, up to 3 times.
 - Devices can be removed from Paddock from the portal (*Danger zone* → *Remove Paddock*, organization administrators
   with a step-up and the typed hostname, `POST /api/v1/devices/{id}/uninstall`) in two modes, leave as is or reset,
   and the request can be cancelled until the device received it, or requested again or cancelled once the device's

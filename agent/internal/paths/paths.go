@@ -72,6 +72,10 @@ func (l Layout) Socket() string { return l.Join("/run/paddock/agent.sock") }
 // LastCheckin is touched after every successful check-in.
 func (l Layout) LastCheckin() string { return l.Join("/run/paddock/last-checkin") }
 
+// LastCheckinFailed holds the time of the last check-in that did not reach the server (no answer, or 502–504 from the
+// reverse proxy); the supervisor upgrade helper tells an unreachable server from a broken supervisor by it.
+func (l Layout) LastCheckinFailed() string { return l.Join("/run/paddock/last-checkin-failed") }
+
 // EnrollConfig is the enrollment configuration the Paddock autoinstall leaves for the first start of the agent
 // (plan M4b decision 7).
 func (l Layout) EnrollConfig() string { return l.Join("/etc/paddock/enroll.json") }

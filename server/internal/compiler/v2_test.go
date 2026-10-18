@@ -18,6 +18,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/sudoers"
 	"github.com/phischl/paddock-mdm/pkg/timeticket"
 	"github.com/phischl/paddock-mdm/server/internal/compiler"
+	"github.com/phischl/paddock-mdm/server/internal/domain/agentrelease"
 	"github.com/phischl/paddock-mdm/server/internal/domain/statechange"
 	"github.com/phischl/paddock-mdm/server/internal/platform/bao"
 )
@@ -525,8 +526,8 @@ func TestAgentUpdatePolicy(t *testing.T) {
 }
 
 // TestSupervisorPackages (plan M8d decision 30): v2 bundles of devices with a semantic agent version carry the
-// paddock-supervisor package of the current completed release per arch; none while the rollout is halted, and none
-// for an agent version that is not semantic.
+// paddock-supervisor package of the current release per arch once its waves reached the device; none while the
+// rollout is halted, and none for an agent version that is not semantic.
 func TestSupervisorPackages(t *testing.T) {
 	w := newWorld(t)
 	v := "7.0." + strconv.FormatInt(time.Now().UnixNano()%1000000, 10)
@@ -552,6 +553,20 @@ func TestSupervisorPackages(t *testing.T) {
 	w.mustCompile(statechange.ScopeOrg, w.org)
 	if p := w.fetch(semantic).Agent.SupervisorPackages; p != nil {
 		t.Fatalf("halted release still rendered: %+v", p)
+	}
+
+	// A running rollout carries the package only once its waves reached the device's bucket (design contract 6,
+	// ADR 0037 amendment 2026-10-18).
+	b := agentrelease.Bucket(semantic)
+	w.exec("UPDATE agent_rollout SET status = 'running', waves = $2, current_wave_index = 0 WHERE version = $1", v, []int{b, b + 1})
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if p := w.fetch(semantic).Agent.SupervisorPackages; p != nil {
+		t.Fatalf("device outside the current wave got %+v", p)
+	}
+	w.exec("UPDATE agent_rollout SET current_wave_index = 1 WHERE version = $1", v)
+	w.mustCompile(statechange.ScopeOrg, w.org)
+	if got := w.fetch(semantic).Agent.SupervisorPackages; len(got) != 1 || got["amd64"] != want {
+		t.Fatalf("device inside the current wave got %+v", got)
 	}
 }
 

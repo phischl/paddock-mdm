@@ -45,6 +45,9 @@ type State struct {
 	// result already turned into an event.
 	FailedSupervisorVersion     string     `json:"failed_supervisor_version,omitempty"`
 	ReportedSupervisorUpgradeAt *time.Time `json:"reported_supervisor_upgrade_at,omitempty"`
+	// SupervisorRetry is the supervisor package version rolled back only because the server was unreachable, with
+	// its attempts and the earliest next attempt (design contract 8, ADR 0037 amendment 2026-10-18).
+	SupervisorRetry *SupervisorRetry `json:"supervisor_retry,omitempty"`
 	// ReportedRegularAt and ReportedSecurityAt are the ends of the last regular and security update runs reported as
 	// updates.run (plan M5b decision 6).
 	ReportedRegularAt  *time.Time `json:"reported_regular_at,omitempty"`
@@ -77,6 +80,13 @@ type State struct {
 type PendingInstall struct {
 	CommandID string   `json:"command_id"`
 	Packages  []string `json:"packages"`
+}
+
+// SupervisorRetry is a supervisor package version waiting for another attempt.
+type SupervisorRetry struct {
+	Version   string    `json:"version"`
+	Attempts  int       `json:"attempts"`
+	NotBefore time.Time `json:"not_before"`
 }
 
 // PendingUninstall is an accepted uninstall command; Reported is set once the server accepted its result (2xx),

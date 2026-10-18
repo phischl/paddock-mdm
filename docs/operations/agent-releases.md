@@ -358,16 +358,21 @@ architecture. The request ends with the device's report of that version (`device
 
 ## Supervisor package
 
-A device updates `paddock-supervisor` from the current release (ADR 0037 decision 3): once a release's rollout
-completed, the v2 bundle of every device whose agent reports a semantic version carries the release's
-`paddock-supervisor` package per architecture (`agent.supervisor_packages`, SHA-256 in the signed bundle). Nothing is
-offered while the latest rollout runs or after it was halted. An agent installs the package only when
+A device updates `paddock-supervisor` from the current release (ADR 0037 decision 3, amendment 2026-10-18): while a
+release's rollout runs or after it completed, the v2 bundle of every device whose agent reports a semantic version
+and whose rollout bucket the waves reached carries the release's `paddock-supervisor` package per architecture
+(`agent.supervisor_packages`, SHA-256 in the signed bundle) — the same wave gate as the agent offer, so the
+supervisor never goes to every device at once. Nothing is offered after the rollout was halted. A new wave reaches
+the bundles at the compiler's next reconcile. An agent installs the package only when
 
 - it runs that release itself (agent first, supervisor second, in the same waves),
 - `dpkg` reports an older `paddock-supervisor` (the Debian form `0.1.0~alpha.4` of a pre-release counts as
   `0.1.0-alpha.4`),
-- the update policy is automatic or an administrator requested *Update agent now* at that check-in,
-- no agent update is pending, no supervisor upgrade runs, and the version did not fail on the device before.
+- the update policy is automatic or an *Update agent now* request is open (it stays open after the agent update
+  until the supervisor's result arrives while the supervisor or fleetd are outdated, at most 24 hours; a device that
+  already runs the release can be asked again while either is outdated),
+- no agent update is pending, no supervisor upgrade runs, the version did not fail on the device before and is not
+  waiting for its retry.
 
 The agent downloads the package to `/var/lib/paddock/packages/`, writes `/var/lib/paddock/state/supervisor-upgrade.json`
 and starts `paddockd supervisor-upgrade` in the transient unit `paddock-supervisor-upgrade.service` (`systemd-run`,
@@ -382,10 +387,13 @@ supervisor must then keep running with the same process for a minute. It writes
 | `updated` | `device.supervisor_updated` | The new supervisor runs and its agent checked in. |
 | `install_failed` | `device.supervisor_update_failed` | The backup or `dpkg -i` failed, or the helper did not finish within 30 minutes; the backup is restored only if the supervisor is not running afterwards. |
 | `rolled_back` | `device.supervisor_update_failed` | No check-in within 10 minutes, or the new supervisor kept restarting: the backup was copied back and the supervisor restarted. |
+| `rolled_back_unreachable` | `device.supervisor_update_failed` | The new supervisor ran stable, but the agent's check-ins did not reach the server within 10 minutes (`/run/paddock/last-checkin-failed`): the backup was copied back. The device retries the version 24 hours later at the earliest, at most 3 times (`supervisor_retry` in `/var/lib/paddock/state/state.json`). |
 
-Supervisor outcomes never count toward a rollout's failure threshold. After a rollback `dpkg -l paddock-supervisor`
-may name the new version while the previous binary runs (`/usr/sbin/paddock-supervisor version`) until the next
-successful upgrade. A failed version is not installed again on that device (`failed_supervisor_version` in
+Every failed outcome counts once per device toward the failure threshold of the release's rollout, exactly like a
+failed agent update (`agent_update_report` outcome `supervisor_failed`): enough failures halt the rollout, and a
+halted rollout offers neither the agent nor the supervisor. After a rollback `dpkg -l paddock-supervisor` may name the
+new version while the previous binary runs (`/usr/sbin/paddock-supervisor version`) until the next successful
+upgrade. A failed version is not installed again on that device (`failed_supervisor_version` in
 `/var/lib/paddock/state/state.json`); a newer release is. Troubleshooting:
 
 ```sh

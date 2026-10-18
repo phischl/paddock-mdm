@@ -13,8 +13,10 @@ import (
 	"github.com/phischl/paddock-mdm/agent/internal/buildinfo"
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/reconcile/fakesys"
+	"github.com/phischl/paddock-mdm/agent/internal/state"
 	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
+	"github.com/phischl/paddock-mdm/agent/internal/update"
 	"github.com/phischl/paddock-mdm/pkg/bundle"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
@@ -159,5 +161,101 @@ func TestSupervisorUpgradeStale(t *testing.T) {
 	}
 	if m, _ := supervisorpkg.ReadMarker(a.d.Layout); m != nil {
 		t.Fatalf("stale marker left: %+v", m)
+	}
+}
+
+// TestSupervisorRetryAfterUnreachable (design contract 8, ADR 0037 amendment 2026-10-18): a rollback only because the
+// server was unreachable does not mark the version failed; the next attempt waits 24 hours, and the third such
+// rollback marks it failed. A successful upgrade forgets the retry.
+func TestSupervisorRetryAfterUnreachable(t *testing.T) {
+	a, _, launched := supervisorAgent(t, "")
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	a.d.Now = func() time.Time { return now }
+	unreachable := func(at time.Time) {
+		t.Helper()
+		r := supervisorpkg.Result{Version: buildinfo.Version, FromVersion: "0.0.0~alpha.1", Outcome: protocol.SupervisorOutcomeRolledBackUnreachable, At: at}
+		if err := supervisorpkg.WriteResult(a.d.Layout, r); err != nil {
+			t.Fatal(err)
+		}
+		a.reportSupervisorUpgrade()
+		if err := supervisorpkg.RemoveResult(a.d.Layout); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for attempt := 1; attempt < supervisorpkg.MaxAttempts; attempt++ {
+		unreachable(now)
+		if a.st.FailedSupervisorVersion != "" || a.st.SupervisorRetry == nil || a.st.SupervisorRetry.Attempts != attempt {
+			t.Fatalf("attempt %d: failed %q, retry %+v", attempt, a.st.FailedSupervisorVersion, a.st.SupervisorRetry)
+		}
+		now = now.Add(supervisorpkg.RetryAfter - time.Minute)
+		a.handleSupervisorPackage(context.Background())
+		if len(*launched) != attempt-1 {
+			t.Fatalf("attempt %d: retried before 24 hours: %v", attempt, *launched)
+		}
+		now = now.Add(2 * time.Minute)
+		a.handleSupervisorPackage(context.Background())
+		if len(*launched) != attempt {
+			t.Fatalf("attempt %d: not retried after 24 hours: %v", attempt, *launched)
+		}
+		if err := os.Remove(a.d.Layout.SupervisorUpgrade()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unreachable(now)
+	if a.st.FailedSupervisorVersion != buildinfo.Version || a.st.SupervisorRetry != nil {
+		t.Fatalf("after %d attempts: failed %q, retry %+v", supervisorpkg.MaxAttempts, a.st.FailedSupervisorVersion, a.st.SupervisorRetry)
+	}
+
+	b, _, _ := supervisorAgent(t, "")
+	b.st.SupervisorRetry = &state.SupervisorRetry{Version: buildinfo.Version, Attempts: 1}
+	if err := supervisorpkg.WriteResult(b.d.Layout, supervisorpkg.Result{Version: buildinfo.Version, Outcome: protocol.SupervisorOutcomeUpdated,
+		At: now}); err != nil {
+		t.Fatal(err)
+	}
+	b.reportSupervisorUpgrade()
+	if b.st.SupervisorRetry != nil || b.st.FailedSupervisorVersion != "" {
+		t.Fatalf("after an update: retry %+v, failed %q", b.st.SupervisorRetry, b.st.FailedSupervisorVersion)
+	}
+}
+
+// TestCheckinFailureMarked (design contract 8): a check-in that does not reach the server (5xx of the proxy) leaves
+// the mark the supervisor upgrade helper reads; a refusal by the server does not.
+func TestCheckinFailureMarked(t *testing.T) {
+	a, g, _ := supervisorAgent(t, "")
+	g.CheckinFail = 401
+	a.Cycle(context.Background())
+	if _, err := os.Stat(a.d.Layout.LastCheckinFailed()); !os.IsNotExist(err) {
+		t.Fatalf("a refused check-in was marked: %v", err)
+	}
+	g.CheckinFail = 503
+	a.Cycle(context.Background())
+	if _, err := os.Stat(a.d.Layout.LastCheckinFailed()); err != nil {
+		t.Fatalf("an unreachable server was not marked: %v", err)
+	}
+}
+
+// TestAgentUpdateWaitsForSupervisorUpgrade (review finding 12): an agent update offered while a supervisor upgrade
+// runs is not staged.
+func TestAgentUpdateWaitsForSupervisorUpgrade(t *testing.T) {
+	a, g, _ := supervisorAgent(t, "")
+	signalled := 0
+	a.d.Supervisor = func() (int, error) { return 1, nil }
+	a.d.Signal = func(int) error { signalled++; return nil }
+	marker := `{"version":"` + buildinfo.Version + `","from_version":"0.0.0~alpha.1","started_at":"2026-10-18T11:40:00Z"}`
+	if err := fsutil.WriteFile(a.d.Layout.SupervisorUpgrade(), []byte(marker), 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a.d.Now = func() time.Time { return time.Date(2026, 10, 18, 11, 45, 0, 0, time.UTC) }
+	offer(g, "9.1.0", []byte("new agent"))
+	a.Cycle(context.Background())
+	if signalled != 0 || update.Pending(a.d.Layout) {
+		t.Fatalf("staged during a supervisor upgrade: signalled %d", signalled)
+	}
+	if err := os.Remove(a.d.Layout.SupervisorUpgrade()); err != nil {
+		t.Fatal(err)
+	}
+	a.Cycle(context.Background())
+	if signalled != 1 {
+		t.Fatalf("not staged after the supervisor upgrade: signalled %d", signalled)
 	}
 }

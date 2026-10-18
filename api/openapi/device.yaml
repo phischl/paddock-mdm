@@ -470,7 +470,9 @@ components:
           type: boolean
           description: >-
             An administrator asked this device to install the release now (plan M8d decision 27): the offer ignores the
-            rollout wave and the agent its update policy. Absent otherwise; older agents ignore it.
+            rollout wave and the agent its update policy. Absent otherwise; older agents ignore it. A device that
+            already runs the release gets its own version marked requested while the request is open: it never stages
+            it, but may upgrade paddock-supervisor and fleetd under the manual policy.
         requested_at: { type: string, format: date-time, description: When the request was made; each request is handled once. }
     Event:
       type: object
