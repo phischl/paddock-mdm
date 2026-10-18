@@ -32,7 +32,7 @@ var (
 	})
 	metricAutoUnsealSharesPresent = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_auto_unseal_shares_present",
-		Help: "1 when the unsealer last reported three shares on the host, else 0.",
+		Help: "1 when a running unsealer reports three shares on the host, else 0.",
 	})
 	metricAutoUnsealUnsealerUp = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "paddock_auto_unseal_unsealer_up",
@@ -84,7 +84,7 @@ func (o *AutoUnsealObserver) Round(ctx context.Context) error {
 		}
 		s := app.AutoUnsealSetting(row)
 		metricAutoUnsealEnabled.Set(gauge(s.State == autounseal.StateEnabled))
-		metricAutoUnsealSharesPresent.Set(gauge(s.Report.SharesPresent))
+		metricAutoUnsealSharesPresent.Set(gauge(s.Report.SharesOnHost(o.now())))
 		metricAutoUnsealUnsealerUp.Set(gauge(s.Report.UnsealerRunning(o.now())))
 
 		if row.UnsealCount > row.AuditedUnsealCount {

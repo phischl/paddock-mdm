@@ -311,6 +311,25 @@ tests:
         alertname: PaddockAutoUnsealerDown
         exp_alerts: []
 
+  - name: the shares warning resolves once the host step removed the unsealer and the worker reports no shares
+    interval: 1m
+    input_series:
+      - series: 'paddock_auto_unseal_enabled{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "0x80"
+      - series: 'paddock_auto_unseal_shares_present{job="paddock", role="paddock-worker", instance="paddock-worker:9090"}'
+        values: "1x70 0x10"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: PaddockAutoUnsealWithdrawn
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Automatic unseal was disabled in the portal, but the shares are still on the host"
+              description: "Run ./paddock auto-unseal disable on the control-plane host (docs/operations/openbao.md section 6)."
+      - eval_time: 75m
+        alertname: PaddockAutoUnsealWithdrawn
+        exp_alerts: []
+
   - name: an enabled automatic unseal without a reporting unsealer warns after 10 minutes
     interval: 1m
     input_series:

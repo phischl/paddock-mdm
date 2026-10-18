@@ -217,7 +217,7 @@ bao operator rekey -key-shares=5 -key-threshold=3   # three custodians each ente
 
 | Alert | Fires when | Action |
 | --- | --- | --- |
-| `PaddockAutoUnsealWithdrawn` (warning) | automatic unseal was disabled in the portal, but the unsealer reported shares on the host for 1 h | `./paddock auto-unseal disable` on the host |
+| `PaddockAutoUnsealWithdrawn` (warning) | automatic unseal was disabled in the portal, but a running unsealer reported shares on the host for 1 h (resolves once `./paddock auto-unseal disable` removed the unsealer) | `./paddock auto-unseal disable` on the host |
 | `PaddockAutoUnsealerDown` (warning) | automatic unseal is enabled, but the unsealer has not reported for 10 min | check `./paddock auto-unseal status` and `./paddock logs paddock-unsealer`; OpenBao stays sealed after the next restart until the unsealer runs or three custodians unseal it |
 
 Metrics: the worker exports `paddock_auto_unseal_enabled`, `paddock_auto_unseal_shares_present` and

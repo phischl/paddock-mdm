@@ -2452,6 +2452,7 @@ export interface components {
             running: boolean;
             /** Format: date-time */
             seen_at: string | null;
+            /** @description Three shares are on the host; only the report of a running unsealer counts. */
             shares_present: boolean;
             /** Format: int64 */
             unseal_count: number;

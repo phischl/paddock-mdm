@@ -210,6 +210,13 @@ describe('PlatformOpenBao (plan M8u decisions 21–23)', () => {
     expect(w.find('[data-testid="openbao-unsealer"]').text()).toContain('Running, shares present')
   })
 
+  it('clears the shares warning once the host step removed the unsealer', async () => {
+    current = statusOf({ state: 'disabled' }, { running: false, shares_present: true, seen_at: '2026-10-17T10:00:00Z' })
+    const w = await mountView()
+    expect(w.find('[data-testid="openbao-alert-sharesLeft"]').exists()).toBe(false)
+    expect(w.find('[data-testid="openbao-alert-hostStep"]').exists()).toBe(false)
+  })
+
   it('tells the host step while the unsealer does not run, and the outdated acknowledgement', async () => {
     current = statusOf({
       state: 'enabled', acknowledgement_version: '2026-01-01', acknowledgement: 'I understand and accept the risk',

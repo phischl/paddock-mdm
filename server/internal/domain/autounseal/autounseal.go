@@ -76,6 +76,13 @@ func (r Report) UnsealerRunning(now time.Time) bool {
 	return !r.SeenAt.IsZero() && now.Sub(r.SeenAt) <= UnsealerStaleAfter
 }
 
+// SharesOnHost reports whether the shares count as present on the host: only the report of a running unsealer counts,
+// because `./paddock auto-unseal disable` removes the unsealer before it deletes the file and nothing reports the
+// deletion afterwards (plan M8u decisions 13 and 22, amended 2026-10-18).
+func (r Report) SharesOnHost(now time.Time) bool {
+	return r.SharesPresent && r.UnsealerRunning(now)
+}
+
 // Failure reasons the unsealer reports (never a share, never an OpenBao error text).
 const (
 	FailureReasonUnreachable  = "unreachable"

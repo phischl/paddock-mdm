@@ -35,7 +35,9 @@ export async function disableAutoUnseal(): Promise<AutoUnsealStatus | string> {
 
 /** Which alert the page shows (plan M8u decision 22): shares left on the host, or the host step still to do. */
 export function autoUnsealAlert(s: AutoUnsealStatus): 'sharesLeft' | 'hostStep' | null {
-  if (s.state === 'disabled' && s.unsealer.shares_present) return 'sharesLeft'
+  // Only a running unsealer's report counts: the host step removes the unsealer before it deletes the file, so a stale
+  // `shares_present` would never clear (plan M8u decision 22, amended 2026-10-18).
+  if (s.state === 'disabled' && s.unsealer.running && s.unsealer.shares_present) return 'sharesLeft'
   if (s.state === 'enabled' && (!s.unsealer.running || !s.unsealer.shares_present)) return 'hostStep'
   return null
 }

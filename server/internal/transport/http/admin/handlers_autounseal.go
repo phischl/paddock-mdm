@@ -47,7 +47,7 @@ func (h *handlers) autoUnsealStatus(st app.AutoUnsealStatus) adminapi.AutoUnseal
 		Unsealer: adminapi.UnsealerReport{
 			Running:       r.UnsealerRunning(h.now()),
 			SeenAt:        optTime(r.SeenAt),
-			SharesPresent: r.SharesPresent,
+			SharesPresent: r.SharesOnHost(h.now()),
 			UnsealCount:   r.UnsealCount,
 			LastUnsealAt:  optTime(r.LastUnsealAt),
 			FailureCount:  r.FailureCount,

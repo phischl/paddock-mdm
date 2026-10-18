@@ -4114,7 +4114,7 @@ components:
       properties:
         running: { type: boolean, description: The unsealer reported within the last 60 s. }
         seen_at: { type: string, format: date-time, nullable: true }
-        shares_present: { type: boolean }
+        shares_present: { type: boolean, description: Three shares are on the host; only the report of a running unsealer counts. }
         unseal_count: { type: integer, format: int64 }
         last_unseal_at: { type: string, format: date-time, nullable: true }
         failure_count: { type: integer, format: int64 }

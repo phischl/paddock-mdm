@@ -134,6 +134,9 @@ func TestAutoUnsealObserver(t *testing.T) {
 	if testutil.ToFloat64(metricAutoUnsealUnsealerUp) != 0 {
 		t.Fatal("an unsealer silent for two minutes counts as up")
 	}
+	if testutil.ToFloat64(metricAutoUnsealSharesPresent) != 0 {
+		t.Fatal("the last report of a removed unsealer still counts as shares on the host")
+	}
 	if got := events(); len(got) != 2 {
 		t.Fatalf("a round without a change recorded: %+v", got)
 	}

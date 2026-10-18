@@ -119,6 +119,15 @@ func TestAutoUnsealAPI(t *testing.T) {
 	}
 	e.expectEvent(r, "platform.auto_unseal_disabled:success:")
 
+	if _, err := e.super.Exec(context.Background(), "UPDATE openbao_auto_unseal SET unsealer_seen_at = now() - interval '2 minutes' WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	r = e.do(call{method: "GET", path: autoUnsealPath, cookie: root})
+	r.decode(t, &st)
+	if st.Unsealer.Running || st.Unsealer.SharesPresent {
+		t.Fatalf("the last report of a removed unsealer still counts as shares on the host: %s", r.body)
+	}
+
 	r = e.do(call{method: "POST", path: autoUnsealPath + "/disable", cookie: stepped, noCSRF: true, skipReqCheck: true})
 	if r.status != http.StatusForbidden || r.problemCode(t) != "csrf_missing" {
 		t.Fatalf("disable without CSRF header: %d %s", r.status, r.body)

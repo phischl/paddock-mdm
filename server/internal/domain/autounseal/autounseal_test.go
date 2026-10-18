@@ -84,3 +84,22 @@ func TestUnsealerRunning(t *testing.T) {
 		}
 	}
 }
+
+func TestSharesOnHost(t *testing.T) {
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	stale := now.Add(-UnsealerStaleAfter - time.Second)
+	for _, tc := range []struct {
+		name   string
+		report Report
+		want   bool
+	}{
+		{"running with shares", Report{SeenAt: now, SharesPresent: true}, true},
+		{"running without shares", Report{SeenAt: now}, false},
+		{"removed after reporting shares", Report{SeenAt: stale, SharesPresent: true}, false},
+		{"never reported", Report{SharesPresent: true}, false},
+	} {
+		if got := tc.report.SharesOnHost(now); got != tc.want {
+			t.Errorf("%s: SharesOnHost = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
