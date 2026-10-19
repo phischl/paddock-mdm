@@ -436,12 +436,12 @@ the policy of their device group says.
 39. Agent handler (`agent/internal/agent/uninstall.go`): on the verified command it validates the params (unknown
     mode → `failed {reason: invalid_params}`), refuses while a revocation envelope was handed to `paddock-revoke`
     within the last 24 h (`state.HandedRevocations`) with `failed {reason: revocation_pending}`, writes the plan
-    `/run/paddock/uninstall/plan.json {command_id, mode, clear_tpm, keep_local_admin, device_id, event_seq_base,
-    requested_at}` (0600) and copies the running binary to `/run/paddock/uninstall/paddockd` (0700), stores
+    `/root/paddock-uninstall/plan.json {command_id, mode, clear_tpm, keep_local_admin, device_id, event_seq_base,
+    requested_at}` (0600) and copies the running binary to `/root/paddock-uninstall/paddockd` (0700), stores
     `state.PendingUninstall{CommandID}` and returns `succeeded {accepted: true}`. In `Cycle`, after `postResults`
     returned and the result of that command is no longer in `state.CommandResults`, the agent launches
     `systemd-run --unit=paddock-uninstall --collect --no-block --property=KillMode=process
-    /run/paddock/uninstall/paddockd uninstall --plan /run/paddock/uninstall/plan.json` once and records
+    /root/paddock-uninstall/paddockd uninstall --plan /root/paddock-uninstall/plan.json` once and records
     `state.PendingUninstall.LaunchedAt`. A launch failure is reported as the final event with
     `outcome: helper_failed` and the pending mark is cleared (the administrator cancels and retries).
 40. `paddockd uninstall --plan <file>` (new `agent/internal/uninstall/uninstall.go`, root only, runs inside the
@@ -476,7 +476,8 @@ the policy of their device group says.
        `/var/lib/AccountsService/users/<name>`; result `local_admin: removed`. Without such an account the account is
        kept: `local_admin: kept_last_admin`. With `keep_local_admin`: `kept`. Mode `leave`: `kept`.
     8. `apt-get remove --purge -y fleet-osquery paddock-revoke paddock-agent paddock-supervisor` (one apt run,
-       bounded 15 min; the uninstall helper runs from `/run`, so the removal of its own package is harmless). Then
+       bounded 15 min; the uninstall helper runs from a copy in `/root/paddock-uninstall/`, so the removal of its own package is
+       harmless). Then
        remove `/opt/orbit/`, `/etc/paddock/orbit.env`, `/etc/systemd/system/orbit.service.d/`, `/opt/paddock/`,
        `/var/lib/paddock/packages/`, `/var/lib/paddock/staging/`, `/var/lib/paddock/rollback/`,
        `/var/lib/paddock/quarantine/` (copied in step 4).
@@ -1290,6 +1291,13 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   assert that `paddock` is still in `sudo`; S-UN3 removes `paddock` from `sudo` before the request and re-adds it in
   its cleanup. The break-glass setting stays `paddock`: the sudo reconciler only removes members of privileged
   groups and never adds one back.
+- 39, amendment 2026-10-19, helper location (gate S-UN1 on Ubuntu 24.04; decided by the orchestrator as architect,
+  2026-10-19; ADR 0037 amendment of the same title): the plan and the binary copy moved from `/run/paddock/uninstall/`
+  to `/root/paddock-uninstall/`, next to `result.json`. initramfs-tools mounts `/run` `noexec`, and `systemd-run`
+  failed with `Failed to find executable /run/paddock/uninstall/paddockd: Permission denied`. The helper deletes the
+  copy and the plan after writing `result.json`; a `helper_failed` and a withdrawn request delete them too. Before
+  `systemd-run` the agent checks with `statfs` (`ST_NOEXEC`) that the directory is executable and otherwise reports
+  `helper_failed` with the reason in its log.
 
 ### 15.5 Login history (decisions 14–17)
 

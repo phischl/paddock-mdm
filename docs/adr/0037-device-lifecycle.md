@@ -328,3 +328,16 @@ The uninstall defers while a supervisor upgrade runs; decided by the orchestrato
 upgrade's rollback would otherwise restore the supervisor the removal purged. The wait is bounded by the 30 minutes
 after which the agent counts the upgrade as failed, and no supervisor upgrade starts while an uninstall is accepted
 (plan M8d §15.4, decision 39 amendment).
+
+## Amendment 2026-10-19 — helper location
+
+The uninstall helper runs from a copy in `/root/paddock-uninstall/` instead of `/run/paddock/uninstall/`; decided by
+the orchestrator as architect, 2026-10-19. initramfs-tools (Ubuntu 24.04, Debian) mounts `/run` with `noexec`, and
+systemd refuses to start a binary from there, so the removal never began on those systems (system gate S-UN1 on
+Ubuntu 24.04). The copy of `paddockd` (0700) and `plan.json` (0600) lie next to `result.json` in the root-owned
+directory (0700) on the root file system, which the removal does not purge and which is no protected Paddock path.
+The helper deletes both once it wrote `result.json`; the summary stays. Before `systemd-run` the agent checks with
+`statfs` that the directory is not mounted `noexec` and otherwise reports `helper_failed`, with the reason in its log,
+instead of the opaque systemd error. A reboot during the removal still ends the helper (its transient unit is not
+started again); the copy and the plan then remain in the directory until removed by hand (plan M8d §15.4, decision 39
+amendment).
