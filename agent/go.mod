@@ -6,7 +6,7 @@ toolchain go1.27.2
 
 require (
 	aead.dev/minisign v0.3.0
-	github.com/godbus/dbus/v5 v5.2.2
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/phischl/paddock-mdm/pkg v0.0.0
 )
 
