@@ -12,8 +12,9 @@ import (
 )
 
 type requestState struct {
-	Version *string `json:"agent_update_requested_version"`
-	At      *string `json:"agent_update_requested_at"`
+	Version      *string `json:"agent_update_requested_version"`
+	At           *string `json:"agent_update_requested_at"`
+	AgentVersion *string `json:"agent_version"`
 }
 
 func requestOf(t *testing.T, p *env.Portal, id string) requestState {
@@ -103,10 +104,12 @@ func TestUpdateNow(t *testing.T) {
 		}
 	}
 	d.AgentVersion = v
-	if _, _, err := d.Checkin(testContext(t, time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(5 * time.Second) // the heartbeat is materialized by the worker
+	// The worker materializes one heartbeat per device and minute and drops the others (plan M2a decision 12), so the
+	// device keeps checking in until its status reports the release.
+	checkinUntil(t, d, 3*time.Minute, func(protocol.CheckinResponse) bool {
+		s := requestOf(t, alice, d.DeviceID)
+		return s.AgentVersion != nil && *s.AgentVersion == v
+	})
 	res = call(t, operator.Portal, http.MethodPost, path, nil)
 	expectStatus(t, res, http.StatusConflict, "invalid_state")
 	if detail := problemDetail(t, res); detail != "the device already runs "+v {
