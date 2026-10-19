@@ -18,6 +18,8 @@ type vmGroup struct {
 	finished map[string]map[string]bool
 	rounds   map[string]*round
 	locks    map[string]*sync.Mutex
+	// afterAll run once every VM's subtest ended, in reverse order of registration.
+	afterAll []func(t *testing.T)
 }
 
 // round is one rendezvous: the VMs that arrived and, once it started, the result of its step.
@@ -103,6 +105,30 @@ func (g *vmGroup) complete(r *round, gate string) bool {
 		}
 	}
 	return true
+}
+
+// AfterAll runs fn once every VM's subtest of the test ended (in the parent test's cleanup); a nil *vmGroup runs it
+// when t ends. A step shared by the VMs, such as a release, is undone there: a VM that finishes first must not undo
+// it under another VM still in the gate.
+func (g *vmGroup) AfterAll(t *testing.T, fn func(t *testing.T)) {
+	if g == nil {
+		t.Cleanup(func() { fn(t) })
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.afterAll = append(g.afterAll, fn)
+}
+
+// runAfterAll runs the functions AfterAll registered; t is the parent test of the VMs' subtests.
+func (g *vmGroup) runAfterAll(t *testing.T) {
+	g.mu.Lock()
+	fns := g.afterAll
+	g.afterAll = nil
+	g.mu.Unlock()
+	for i := len(fns) - 1; i >= 0; i-- {
+		fns[i](t)
+	}
 }
 
 // Lock locks the section name for one VM at a time and returns the unlock function.

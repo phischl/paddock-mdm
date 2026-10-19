@@ -258,6 +258,9 @@ func (v *VM) SetLink(on bool) {
 // Gate marks t as gate of this VM for the rendezvous of the VMs running in parallel (vmGroup.Gate).
 func (v *VM) Gate(t *testing.T, gate string) { v.group.Gate(t, v.Name, gate) }
 
+// AfterAll runs fn once the subtests of every VM running in parallel ended (vmGroup.AfterAll).
+func (v *VM) AfterAll(t *testing.T, fn func(t *testing.T)) { v.group.AfterAll(t, fn) }
+
 // Together runs fn once for all VMs running in parallel when each of them arrived at step of gate (vmGroup.Together).
 func (v *VM) Together(t *testing.T, gate, step string, fn func() string) string {
 	t.Helper()

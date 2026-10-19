@@ -7,24 +7,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
-
-	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
-
-// haltRollout halts the rollout of version as the platform administrator (cleanup of the update gates).
-func haltRollout(t *testing.T, version string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	root, err := portal.Login(ctx, portal.PlatformAdmin)
-	if err != nil {
-		t.Log(err)
-		return
-	}
-	if res, err := root.Do(ctx, http.MethodPost, "/api/platform/v1/agent-releases/"+version+"/rollout/halt", nil); err != nil {
-		t.Logf("halt %s: %v %s", version, err, res.Body)
-	}
-}
 
 // requestUpdate asks the device to install the offered release now and waits for its report.
 func requestUpdate(t *testing.T, s *Stack, d *Device, version string) {
@@ -66,7 +49,7 @@ func TestUpdateNow(t *testing.T) {
 		}
 		v := version(8, "now")
 		s.Release(t, v, nil, "--waves", strconv.Itoa(first)+",100", "--min-wave-minutes", "60")
-		t.Cleanup(func() { haltRollout(t, v) })
+		t.Cleanup(func() { retractRelease(t, v) })
 		for range 2 {
 			d.Checkin()
 			time.Sleep(30 * time.Second)

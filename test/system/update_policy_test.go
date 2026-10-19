@@ -39,7 +39,9 @@ func TestUpdatePolicyManual(t *testing.T) {
 		before := d.AgentVersion()
 		start := time.Now()
 		v := version(7, "manual")
-		s.Release(t, v, nil)
+		// The gate needs a completed rollout; threshold 1 lets its cleanup retract it by a failure report.
+		s.Release(t, v, nil, "--min-wave-minutes", "1", "--failure-threshold-min", "1", "--failure-threshold-percent", "0")
+		t.Cleanup(func() { retractRelease(t, v) })
 		Until(t, "rollout of "+v+" completed", 5*time.Minute, 10*time.Second, nil, func() bool { return s.Rollout(t, v) == "completed" })
 		for range 3 {
 			d.Checkin()

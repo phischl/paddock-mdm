@@ -32,5 +32,9 @@ the whole organization shares is coordinated through the VMs' `vmGroup` (`parall
   ended early (a failure) is no longer waited for.
 - `Exclusive` and `Lock` let one VM at a time through a section: the organization's login notice (N1) and reading the
   device code the greeter shows (`gdmLogin`, the newest pending code of the organization).
+- `AfterAll` undoes a shared step once every VM's subtest ended. Every release a gate starts is retracted there or in
+  the gate's cleanup (`retractRelease`), so that no gate's release stays the one later gates' devices update to: a
+  release's single wave lasts a day, so its rollout stays running and is halted by hand; a gate that needs a completed
+  rollout (S-UP3) starts it with the failure threshold 1, and a simulated device reports a failed update to halt it.
 
 A new gate that changes shared state uses one of them; anything else it creates gets the run's suffix.

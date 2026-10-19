@@ -18,9 +18,9 @@ func supervisorRelease(t *testing.T, d *Device, gate, label string, tags []strin
 	v := d.Together(t, gate, "release", func() string {
 		v := version(8, label)
 		d.s.ReleaseSupervisor(t, v, tags)
+		d.AfterAll(t, func(t *testing.T) { retractRelease(t, v) })
 		return v
 	})
-	t.Cleanup(func() { haltRollout(t, v) })
 	d.WaitEvent(t, "device.agent_updated", 12*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 	return v
 }
