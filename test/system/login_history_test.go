@@ -79,7 +79,8 @@ func gateLH1(t *testing.T, w *identityWorld) {
 			return len(w.UserSessions(w.dave.name)) == 0
 		})
 		time.Sleep(10 * time.Second) // GDM shows the greeter again
-		w.gdmLogin(t, w.dave, 1, false)
+		// The greeter lists Paddock Test and dave, who enrolled a Hello PIN in L1: the login asks for the PIN.
+		w.gdmPINLogin(t, w.dave, 2)
 		Until(t, fmt.Sprintf("session %d in the login history", i), 3*time.Minute, 5*time.Second, w.Checkin, func() bool {
 			return loginRows(t, w, w.dave.name) == fmt.Sprint(i)
 		})

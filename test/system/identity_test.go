@@ -327,6 +327,32 @@ func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int, new
 		w.Shot(t, "04-confirm-pin")
 		w.Type(u.pin)
 	}
+	return w.seat0Session(t, u)
+}
+
+// gdmPINLogin logs u, who enrolled a Hello PIN at an earlier login, in at the GDM greeter with the PIN: "Not listed?"
+// (after listed users), the user name and the PIN. It waits for the user's session on seat0.
+func (w *identityWorld) gdmPINLogin(t *testing.T, u *directoryUser, listed int) Session {
+	t.Helper()
+	w.Shot(t, "01-greeter")
+	// "Not listed?" instead of u's own entry: the greeter lists u once u logged in, but the order of its entries is
+	// AccountsService's, and the Tab count to "Not listed?" is the number of entries whatever their order.
+	for range listed {
+		w.Key(keyTab...)
+		time.Sleep(time.Second)
+	}
+	w.Key(keyEnter...)
+	time.Sleep(2 * time.Second)
+	w.Type(u.name)
+	time.Sleep(5 * time.Second)
+	w.Shot(t, "02-pin")
+	w.Type(u.pin)
+	return w.seat0Session(t, u)
+}
+
+// seat0Session waits for u's session on seat0 after a greeter login and returns it.
+func (w *identityWorld) seat0Session(t *testing.T, u *directoryUser) Session {
+	t.Helper()
 	var session Session
 	Until(t, u.name+" session on seat0", 3*time.Minute, 3*time.Second, nil, func() bool {
 		for _, s := range w.UserSessions(u.name) {
