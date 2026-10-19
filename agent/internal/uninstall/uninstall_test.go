@@ -27,6 +27,8 @@ type world struct {
 	now   time.Time
 	// eventSeq is the agent state's last event sequence number.
 	eventSeq int64
+	// out is the output of a tool run by command line prefix.
+	out map[string]string
 	// onRun is called with every tool run before its result.
 	onRun func(line string)
 	// sendErr fails the next sends.
@@ -113,6 +115,11 @@ func (w *world) helper() *Helper {
 			w.calls = append(w.calls, line)
 			if w.onRun != nil {
 				w.onRun(line)
+			}
+			for prefix, out := range w.out {
+				if strings.HasPrefix(line, prefix) {
+					return out, 0, nil
+				}
 			}
 			for prefix, exit := range w.fail {
 				if strings.HasPrefix(line, prefix) {
@@ -337,6 +344,21 @@ func TestReport(t *testing.T) {
 	if s.Delivered || w.now.Sub(start) > ReportFor || w.exists("/var/lib/paddock") || w.exists("/etc/paddock") ||
 		!w.exists("/root/paddock-uninstall/result.json") {
 		t.Fatalf("delivered %v after %s", s.Delivered, w.now.Sub(start))
+	}
+}
+
+// TestResetPurgesHimmelblauDependencies: packages named himmelblau* that dpkg lists as installed or with configuration
+// files left (himmelblau-apparmor, a dependency on Ubuntu 26.04) are purged with the installer's selection; one dpkg
+// knows only as not installed is not named.
+func TestResetPurgesHimmelblauDependencies(t *testing.T) {
+	w := newWorld(t)
+	w.out = map[string]string{"dpkg-query -W": "himmelblau ii \nhimmelblau-apparmor ii \nhimmelblau-old rc \n" +
+		"himmelblau-qr-greeter ii \nhimmelblau-unused un \n"}
+	s := w.helper().Execute(context.Background(), Plan{CommandID: "c9", Mode: "reset", DeviceID: "d1"})
+	want := "apt-get remove --purge -y himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config " +
+		"himmelblau-apparmor himmelblau-old"
+	if s.Steps[StepHimmelblau] != "done" || !slices.Contains(w.calls, want) {
+		t.Fatalf("step %s, calls %v", s.Steps[StepHimmelblau], w.calls)
 	}
 }
 
