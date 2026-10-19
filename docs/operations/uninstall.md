@@ -28,7 +28,8 @@ keep_local_admin}`) and `POST /api/v1/devices/{id}/uninstall/cancel`.
 
 The agent accepts the command (result `{accepted: true}`), writes the plan and a copy of itself to
 `/run/paddock/uninstall/` and, once the server accepted the result, starts `paddockd uninstall` in the transient unit
-`paddock-uninstall.service`, outside the supervisor. The helper runs these steps in order; a failed step never stops
+`paddock-uninstall.service`, outside the supervisor. While a supervisor upgrade runs, the start waits for it, at most
+30 minutes. The helper runs these steps in order; a failed step never stops
 the following ones and is reported as `failed:<message>`:
 
 | Step | `leave` | `reset` |
@@ -92,7 +93,8 @@ A device that removed Paddock but could not reach the server within 30 minutes s
 the attention page. On the device, `/root/paddock-uninstall/result.json` is the evidence of what happened (mode,
 outcome, every step, local administrator and TPM result, `"delivered": false`). Check it, then retire the device by
 hand in the portal (*Retire*); the retirement revokes its identity keys. If the helper never ran (no result file, the
-packages still installed — for example a reboot during the removal lost the helper, which runs from `/run`), cancel
+packages still installed more than 30 minutes after the device's command result, the longest the start waits for a
+supervisor upgrade — for example a reboot during the removal lost the helper, which runs from `/run`), cancel
 the request or request it again once the report is 24 hours overdue (counted from the device's command result, or
 from the delivery when there is none; audited with `report_overdue`), or remove the packages by hand. A command the
 device received but has not answered yet (`delivered`) is cancelled with the request: a device that comes back with
