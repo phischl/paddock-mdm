@@ -12,6 +12,7 @@ import (
 
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/uninstall"
 	"github.com/phischl/paddock-mdm/pkg/command"
 	"github.com/phischl/paddock-mdm/pkg/protocol"
@@ -90,11 +91,18 @@ func (a *Agent) withdrawUninstall(ctx context.Context) {
 
 // launchUninstall starts the accepted removal once the server accepted its command result (2xx), exactly once.
 // LaunchedAt is saved only after systemd-run succeeded, so a crash before the start retries it. A start that fails is
-// reported as agent.uninstalled with outcome helper_failed, and the mark is cleared.
+// reported as agent.uninstalled with outcome helper_failed, and the mark is cleared. The start waits while a supervisor
+// upgrade runs: its helper restores and restarts the previous supervisor on a rollback, which would bring back what
+// the removal purged; the agent counts an upgrade without a result as failed after supervisorpkg.StaleAfter, so the
+// wait ends.
 func (a *Agent) launchUninstall(ctx context.Context) {
 	p := a.st.PendingUninstall
 	if p == nil || p.LaunchedAt != nil || !p.Reported ||
 		slices.ContainsFunc(a.st.CommandResults, func(r state.CommandResult) bool { return r.CommandID == p.CommandID }) {
+		return
+	}
+	if marker, err := supervisorpkg.ReadMarker(a.d.Layout); marker != nil || err != nil {
+		slog.InfoContext(ctx, "removal of Paddock waits for the running supervisor upgrade", "command_id", p.CommandID, "error", err)
 		return
 	}
 	err := a.d.RunUnit(ctx, "systemd-run", "--unit="+UninstallUnit, "--collect", "--no-block", "--property=KillMode=process",
@@ -102,6 +110,12 @@ func (a *Agent) launchUninstall(ctx context.Context) {
 	// A crash between systemd-run and saving LaunchedAt reruns the launch while the removal still runs; systemd-run
 	// then fails because the unit is loaded, and reporting helper_failed would end the request under the running
 	// removal (review 2 finding E). The transient unit is Type=simple, so a running helper is active.
+	// The agent is being stopped (a supervisor restart cancels ctx and with it systemd-run): nothing was started, and
+	// the next start launches the removal instead of ending the request with helper_failed.
+	if err != nil && ctx.Err() != nil {
+		slog.WarnContext(ctx, "starting the removal of Paddock interrupted; retrying at the next start", "command_id", p.CommandID, "error", err)
+		return
+	}
 	if err != nil && a.d.RunUnit(ctx, "systemctl", "is-active", "--quiet", UninstallUnit+".service") == nil {
 		slog.WarnContext(ctx, "the removal of Paddock is already running; adopting it", "command_id", p.CommandID, "error", err)
 		err = nil

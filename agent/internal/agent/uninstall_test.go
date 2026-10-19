@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
 	"github.com/phischl/paddock-mdm/agent/internal/state"
+	"github.com/phischl/paddock-mdm/agent/internal/supervisorpkg"
 	"github.com/phischl/paddock-mdm/agent/internal/testgw"
 	"github.com/phischl/paddock-mdm/agent/internal/uninstall"
 	"github.com/phischl/paddock-mdm/pkg/command"
@@ -208,5 +210,58 @@ func TestUninstallLaunchedAtAfterStart(t *testing.T) {
 	a.launchUninstall(context.Background())
 	if seen != nil || a.st.PendingUninstall.LaunchedAt == nil {
 		t.Fatalf("LaunchedAt saved before the start (%v) or not after it (%v)", seen, a.st.PendingUninstall.LaunchedAt)
+	}
+}
+
+// TestUninstallInterruptedLaunchRetries: a start interrupted because the agent is being stopped (a supervisor restart
+// cancels its context) is no helper failure: the request stays pending and the next start launches the removal.
+func TestUninstallInterruptedLaunchRetries(t *testing.T) {
+	a, launched := uninstallAgent(t)
+	if status, _ := a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`)); status != protocol.CommandSucceeded {
+		t.Fatal(status)
+	}
+	a.st.PendingUninstall.Reported = true
+	run := a.d.RunUnit
+	a.d.RunUnit = func(ctx context.Context, _ string, _ ...string) error { return ctx.Err() }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.launchUninstall(ctx)
+	if pending, err := a.d.Spool.Pending(); err != nil || len(pending) != 0 {
+		t.Fatalf("spool %+v, %v; want no helper_failed", pending, err)
+	}
+	if a.st.PendingUninstall == nil || a.st.PendingUninstall.LaunchedAt != nil {
+		t.Fatalf("pending uninstall %+v, want pending and not launched", a.st.PendingUninstall)
+	}
+	a.d.RunUnit = run
+	a.launchUninstall(context.Background())
+	if len(*launched) != 1 || a.st.PendingUninstall.LaunchedAt == nil {
+		t.Fatalf("launched %v after the restart", *launched)
+	}
+}
+
+// TestUninstallWaitsForSupervisorUpgrade: while a supervisor upgrade runs (its marker exists) the removal does not
+// start, since the upgrade's rollback would restore the supervisor the removal purges; it starts once the upgrade
+// wrote its result.
+func TestUninstallWaitsForSupervisorUpgrade(t *testing.T) {
+	a, launched := uninstallAgent(t)
+	marker := `{"version":"1.2.0","from_version":"1.1.0","started_at":"2026-10-18T09:00:00Z"}`
+	if err := fsutil.WriteFile(a.d.Layout.SupervisorUpgrade(), []byte(marker), 0o600, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`)); status != protocol.CommandSucceeded {
+		t.Fatal(status)
+	}
+	a.st.PendingUninstall.Reported = true
+	a.launchUninstall(context.Background())
+	if len(*launched) != 0 || a.st.PendingUninstall.LaunchedAt != nil {
+		t.Fatalf("started during the supervisor upgrade: %v", *launched)
+	}
+	if err := supervisorpkg.WriteResult(a.d.Layout, supervisorpkg.Result{Version: "1.2.0", FromVersion: "1.1.0",
+		Outcome: protocol.SupervisorOutcomeRolledBack, At: a.d.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	a.launchUninstall(context.Background())
+	if len(*launched) != 1 || a.st.PendingUninstall.LaunchedAt == nil {
+		t.Fatalf("launched %v after the upgrade finished", *launched)
 	}
 }

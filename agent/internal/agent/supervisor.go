@@ -17,7 +17,7 @@ import (
 
 // handleSupervisorPackage installs the supervisor package of the applied bundle when supervisorpkg.Plan allows it
 // (plan M8d decision 31): it stages the package and starts `paddockd supervisor-upgrade` in a transient unit. A
-// pending agent update or a running upgrade waits.
+// pending agent update, a running upgrade or an accepted uninstall waits.
 func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 	if a.current == nil || a.d.Sys == nil {
 		return
@@ -28,7 +28,8 @@ func (a *Agent) handleSupervisorPackage(ctx context.Context) {
 	}
 	marker, err := supervisorpkg.ReadMarker(a.d.Layout)
 	result, rerr := supervisorpkg.ReadResult(a.d.Layout)
-	busy := marker != nil || result != nil || err != nil || rerr != nil || update.Pending(a.d.Layout)
+	// An accepted uninstall removes the supervisor package; an upgrade started now would race the removal.
+	busy := marker != nil || result != nil || err != nil || rerr != nil || update.Pending(a.d.Layout) || a.st.PendingUninstall != nil
 	installed := a.d.Sys.PackageVersion(supervisorpkg.Package)
 	retry := a.st.SupervisorRetry
 	backoff := retry != nil && retry.Version == ref.Version && a.d.Now().Before(retry.NotBefore)
