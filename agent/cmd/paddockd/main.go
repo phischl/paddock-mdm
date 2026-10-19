@@ -260,7 +260,14 @@ func runUninstall(ctx context.Context, layout paths.Layout, args []string) int {
 	if err != nil {
 		slog.WarnContext(ctx, "agent state unreadable; the local administrator is kept", "error", err)
 	}
-	h.LocalAdmin, h.EventSeq = st.LocalAdmin.Username, st.EventSeq
+	h.LocalAdmin = st.LocalAdmin.Username
+	h.EventSeq = func() int64 {
+		now, err := state.Load(layout.State())
+		if err != nil {
+			slog.WarnContext(ctx, "agent state unreadable at the report; using the sequence read at the start", "error", err)
+		}
+		return max(st.EventSeq, now.EventSeq)
+	}
 	if cfg, err := config.LoadAgent(layout.AgentConfig()); err != nil {
 		slog.ErrorContext(ctx, "agent configuration unreadable; the removal is not reported", "error", err)
 	} else if key, err := identity.Load(layout.IdentityKey()); err != nil {

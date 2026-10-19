@@ -108,8 +108,10 @@ type Helper struct {
 	ReportFor time.Duration
 	// LocalAdmin is the managed local administrator of the agent state ("" when there is none).
 	LocalAdmin string
-	// EventSeq is the agent state's last event sequence number.
-	EventSeq int64
+	// EventSeq reads the agent state's last event sequence number. The report calls it after the agent was stopped:
+	// events the agent spooled and delivered while the helper started would otherwise share the final event's
+	// sequence number, and the server drops a seen (device, event_seq) without a trace.
+	EventSeq func() int64
 }
 
 // Summary is /root/paddock-uninstall/result.json and the data of the final event.

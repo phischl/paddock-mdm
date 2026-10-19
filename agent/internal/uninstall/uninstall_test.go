@@ -25,6 +25,10 @@ type world struct {
 	tpm   *fakeTPM
 	sent  [][]protocol.Event
 	now   time.Time
+	// eventSeq is the agent state's last event sequence number.
+	eventSeq int64
+	// onRun is called with every tool run before its result.
+	onRun func(line string)
 	// sendErr fails the next sends.
 	sendErr int
 }
@@ -55,7 +59,8 @@ const (
 )
 
 func newWorld(t *testing.T) *world {
-	w := &world{t: t, root: t.TempDir(), fail: map[string]int{}, tpm: &fakeTPM{}, now: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)}
+	w := &world{t: t, root: t.TempDir(), fail: map[string]int{}, tpm: &fakeTPM{}, now: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC),
+		eventSeq: 9}
 	managed := "unchanged content"
 	sum := sha256.Sum256([]byte(managed))
 	managedJSON, _ := json.Marshal(map[string]any{"files": map[string]string{
@@ -102,10 +107,13 @@ func (w *world) exists(file string) bool {
 
 func (w *world) helper() *Helper {
 	return &Helper{Root: w.root, Now: func() time.Time { return w.now }, TPM: w.tpm, ReportFor: ReportFor, LocalAdmin: "paddock-admin",
-		EventSeq: 9,
+		EventSeq: func() int64 { return w.eventSeq },
 		Run: func(_ context.Context, _ time.Duration, name string, args ...string) (string, int, error) {
 			line := strings.Join(append([]string{name}, args...), " ")
 			w.calls = append(w.calls, line)
+			if w.onRun != nil {
+				w.onRun(line)
+			}
 			for prefix, exit := range w.fail {
 				if strings.HasPrefix(line, prefix) {
 					return "error: " + line, exit, nil
@@ -329,6 +337,23 @@ func TestReport(t *testing.T) {
 	if s.Delivered || w.now.Sub(start) > ReportFor || w.exists("/var/lib/paddock") || w.exists("/etc/paddock") ||
 		!w.exists("/root/paddock-uninstall/result.json") {
 		t.Fatalf("delivered %v after %s", s.Delivered, w.now.Sub(start))
+	}
+}
+
+// TestReportSequenceAfterStop: the agent keeps running until the helper stops it and may spool and deliver events in
+// that window; the final event takes the sequence number the agent state has after the stop, so it never repeats one
+// the server has already seen (and would drop). Hardening: suspected but not the cause of the S-UN1 failure of
+// 2026-10-19, whose reports used the next free number.
+func TestReportSequenceAfterStop(t *testing.T) {
+	w := newWorld(t)
+	w.onRun = func(line string) {
+		if strings.HasPrefix(line, "systemctl stop paddock-supervisor.service") {
+			w.eventSeq = 14
+		}
+	}
+	s := w.helper().Execute(context.Background(), Plan{CommandID: "c8", Mode: "leave", DeviceID: "d1", EventSeqBase: 9})
+	if !s.Delivered || len(w.sent) != 1 || w.sent[0][0].EventSeq != 15 {
+		t.Fatalf("delivered %v, sent %+v", s.Delivered, w.sent)
 	}
 }
 

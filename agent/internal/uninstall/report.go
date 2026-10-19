@@ -30,7 +30,10 @@ func (h *Helper) report(ctx context.Context, plan Plan, data protocol.AgentUnins
 	if err != nil {
 		return false
 	}
-	seq := max(h.EventSeq, plan.EventSeqBase)
+	seq := plan.EventSeqBase
+	if h.EventSeq != nil {
+		seq = max(seq, h.EventSeq())
+	}
 	for _, ev := range pending {
 		seq = max(seq, ev.EventSeq)
 	}
