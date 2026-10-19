@@ -23,14 +23,18 @@ func setUpdatePolicy(t *testing.T, s *Stack, policy string) {
 
 // TestUpdatePolicyManual is gate S-UP3 of plan M8d (AC5): with the organization on manual, a completed rollout of a
 // newer release is offered but not installed within three check-ins, and the agent's journal names the policy;
-// *Update agent now* installs it.
+// *Update agent now* installs it. The VMs share the organization's policy and one release.
 func TestUpdatePolicyManual(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
 		d.WaitEvent(t, "device.bundle_applied", 5*time.Minute, nil)
-		setUpdatePolicy(t, s, "manual")
-		t.Cleanup(func() { setUpdatePolicy(t, s, "automatic") })
+		d.Gate(t, "S-UP3")
+		d.Together(t, "S-UP3", "policy", func() string {
+			setUpdatePolicy(t, s, "manual")
+			d.AfterAll(t, func(t *testing.T) { setUpdatePolicy(t, s, "automatic") })
+			return ""
+		})
 		// The settings change recompiles every device; two check-ins apply the bundle with update_policy manual.
 		for range 2 {
 			d.Checkin()
@@ -38,10 +42,13 @@ func TestUpdatePolicyManual(t *testing.T) {
 		}
 		before := d.AgentVersion()
 		start := time.Now()
-		v := version(7, "manual")
-		// The gate needs a completed rollout; threshold 1 lets its cleanup retract it by a failure report.
-		s.Release(t, v, nil, "--min-wave-minutes", "1", "--failure-threshold-min", "1", "--failure-threshold-percent", "0")
-		t.Cleanup(func() { retractRelease(t, v) })
+		v := d.Together(t, "S-UP3", "release", func() string {
+			v := version(7, "manual")
+			// The gate needs a completed rollout; threshold 1 lets its retraction halt it by a failure report.
+			s.Release(t, v, nil, "--min-wave-minutes", "1", "--failure-threshold-min", "1", "--failure-threshold-percent", "0")
+			d.AfterAll(t, func(t *testing.T) { retractRelease(t, v) })
+			return v
+		})
 		Until(t, "rollout of "+v+" completed", 5*time.Minute, 10*time.Second, nil, func() bool { return s.Rollout(t, v) == "completed" })
 		for range 3 {
 			d.Checkin()

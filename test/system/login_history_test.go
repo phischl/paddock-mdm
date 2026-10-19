@@ -55,9 +55,15 @@ func gateLH1(t *testing.T, w *identityWorld) {
 	if n := loginRows(t, w, w.dave.name); n != "0" {
 		t.Fatalf("login history rows while it is off: %s", n)
 	}
-	// Development counts the retention days in seconds: 365 keeps the rows for the gate's minutes.
-	setLoginHistory(t, w, true, 365)
-	t.Cleanup(func() { setLoginHistory(t, w, false, 90) })
+	// The history is one setting of the organization, and switching it off deletes every row: it is switched on once
+	// for all VMs and off only after every VM's identity gates ended. Development counts the retention days in
+	// seconds: 365 keeps the rows for the gate's minutes.
+	w.Gate(t, "LH1")
+	w.Together(t, "LH1", "switch on", func() string {
+		setLoginHistory(t, w, true, 365)
+		w.AfterAll(t, func(t *testing.T) { setLoginHistory(t, w, false, 90) })
+		return ""
+	})
 	Until(t, "the open session reported and delivered", 4*time.Minute, 5*time.Second, w.Checkin, func() bool {
 		reported, _ := w.State()["sessions_reported"].(map[string]any)
 		for key := range reported {

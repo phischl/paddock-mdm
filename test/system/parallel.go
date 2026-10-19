@@ -20,6 +20,8 @@ type vmGroup struct {
 	locks    map[string]*sync.Mutex
 	// afterAll run once every VM's subtest ended, in reverse order of registration.
 	afterAll []func(t *testing.T)
+	// shared holds, per key, the value each VM shared for a step that Together runs for all of them.
+	shared map[string]map[string]string
 }
 
 // round is one rendezvous: the VMs that arrived and, once it started, the result of its step.
@@ -33,7 +35,7 @@ type round struct {
 
 func newVMGroup() *vmGroup {
 	g := &vmGroup{active: map[string]bool{}, finished: map[string]map[string]bool{}, rounds: map[string]*round{},
-		locks: map[string]*sync.Mutex{}}
+		locks: map[string]*sync.Mutex{}, shared: map[string]map[string]string{}}
 	g.cond = sync.NewCond(&g.mu)
 	return g
 }
@@ -105,6 +107,34 @@ func (g *vmGroup) complete(r *round, gate string) bool {
 		}
 	}
 	return true
+}
+
+// Share records vm's value under key, for the step that Together runs once for all VMs (Shared); a VM shares before it
+// arrives at the rendezvous.
+func (g *vmGroup) Share(vm, key, value string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.shared[key] == nil {
+		g.shared[key] = map[string]string{}
+	}
+	g.shared[key][vm] = value
+}
+
+// Shared returns the values the VMs shared under key, by VM; nil for a nil *vmGroup.
+func (g *vmGroup) Shared(key string) map[string]string {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := map[string]string{}
+	for vm, v := range g.shared[key] {
+		out[vm] = v
+	}
+	return out
 }
 
 // AfterAll runs fn once every VM's subtest of the test ended (in the parent test's cleanup); a nil *vmGroup runs it
