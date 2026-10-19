@@ -235,8 +235,9 @@ func runSupervisorUpgrade(ctx context.Context, layout paths.Layout, args []strin
 	return 0
 }
 
-// runUninstall removes Paddock from the device (plan M8d decision 40). It runs from /run in a transient unit, outside
-// the supervisor, and exits 0 once it wrote its summary; the device is retired by its report.
+// runUninstall removes Paddock from the device (plan M8d decision 40). It runs from a copy in /root/paddock-uninstall
+// in a transient unit, outside the supervisor, and exits 0 once it wrote its summary; the device is retired by its
+// report.
 func runUninstall(ctx context.Context, layout paths.Layout, args []string) int {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	planFile := fs.String("plan", "", "the plan the agent wrote when it accepted the command")
@@ -254,7 +255,8 @@ func runUninstall(ctx context.Context, layout paths.Layout, args []string) int {
 		return 1
 	}
 	h := &uninstall.Helper{Root: layout.Root, Run: uninstall.RunOS, Now: time.Now, Sleep: sleep, ReportFor: uninstall.ReportFor,
-		TPM: uninstall.DeviceTPM{Tools: luks.OS{}, Root: layout.Root, Run: uninstall.RunOS}}
+		TPM:         uninstall.DeviceTPM{Tools: luks.OS{}, Root: layout.Root, Run: uninstall.RunOS},
+		Preparation: []string{layout.UninstallPlan(), layout.UninstallBinary()}}
 	// The identity, configuration and state are read before anything is removed: the report needs them at the end.
 	st, err := state.Load(layout.State())
 	if err != nil {

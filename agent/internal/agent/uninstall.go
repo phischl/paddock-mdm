@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/phischl/paddock-mdm/agent/internal/fsutil"
@@ -26,7 +29,7 @@ const revocationWindow = 24 * time.Hour
 
 // uninstallCommand accepts an uninstall command (plan M8d decision 39): it validates the params, refuses while a
 // revocation was handed over within 24 hours, writes the plan and a copy of the running binary below
-// /run/paddock/uninstall and marks the removal pending; the run loop starts it once the result was accepted.
+// /root/paddock-uninstall and marks the removal pending; the run loop starts it once the result was accepted.
 func (a *Agent) uninstallCommand(_ context.Context, c *command.Command) (string, map[string]any) {
 	var p command.UninstallParams
 	dec := json.NewDecoder(bytes.NewReader(c.Params))
@@ -60,7 +63,7 @@ func (a *Agent) uninstallCommand(_ context.Context, c *command.Command) (string,
 	return protocol.CommandSucceeded, map[string]any{"accepted": true}
 }
 
-// copySelf copies the running paddockd to /run/paddock/uninstall/paddockd (0700): removing the paddock-agent package
+// copySelf copies the running paddockd to /root/paddock-uninstall/paddockd (0700): removing the paddock-agent package
 // must not remove the binary the removal runs as.
 func (a *Agent) copySelf() error {
 	self := a.d.Executable
@@ -81,12 +84,17 @@ func (a *Agent) copySelf() error {
 func (a *Agent) withdrawUninstall(ctx context.Context) {
 	p := a.st.PendingUninstall
 	slog.WarnContext(ctx, "uninstall withdrawn by the server; Paddock stays installed", "command_id", p.CommandID)
+	a.removeUninstallPreparation(ctx)
+	a.st.PendingUninstall = nil
+}
+
+// removeUninstallPreparation removes the plan and the binary copy of a removal that will not run.
+func (a *Agent) removeUninstallPreparation(ctx context.Context) {
 	for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary()} {
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
 			slog.WarnContext(ctx, "removing the uninstall preparation failed", "file", f, "error", err)
 		}
 	}
-	a.st.PendingUninstall = nil
 }
 
 // launchUninstall starts the accepted removal once the server accepted its command result (2xx), exactly once.
@@ -102,6 +110,10 @@ func (a *Agent) launchUninstall(ctx context.Context) {
 		return
 	}
 	if a.supervisorUpgradeRuns(ctx, p.CommandID) {
+		return
+	}
+	if err := a.helperExecutable(); err != nil {
+		a.uninstallHelperFailed(ctx, err)
 		return
 	}
 	err := a.d.RunUnit(ctx, "systemd-run", "--unit="+UninstallUnit, "--collect", "--no-block", "--property=KillMode=process",
@@ -127,12 +139,46 @@ func (a *Agent) launchUninstall(ctx context.Context) {
 		slog.InfoContext(ctx, "removal of Paddock started", "command_id", p.CommandID, "unit", UninstallUnit)
 		return
 	}
+	a.uninstallHelperFailed(ctx, err)
+}
+
+// uninstallHelperFailed reports a removal that could not be started as agent.uninstalled with outcome helper_failed,
+// removes its preparation and clears the mark.
+func (a *Agent) uninstallHelperFailed(ctx context.Context, err error) {
+	p := a.st.PendingUninstall
 	slog.ErrorContext(ctx, "starting the removal of Paddock failed", "command_id", p.CommandID, "error", err)
 	a.event(protocol.EventAgentUninstalled, protocol.AgentUninstalled{CommandID: p.CommandID, Mode: p.Mode,
 		Outcome: protocol.UninstallHelperFailed, LocalAdmin: uninstall.LocalAdminKept, TPM: uninstall.TPMNotRequested,
 		Steps: map[string]string{}})
+	a.removeUninstallPreparation(ctx)
 	a.st.PendingUninstall = nil
 	a.saveState()
+}
+
+// stNoexec is ST_NOEXEC of statvfs(3), which package syscall does not define.
+const stNoexec = 0x8
+
+// noexec reports whether the file system holding dir is mounted noexec.
+func noexec(dir string) (bool, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return false, err
+	}
+	return st.Flags&stNoexec != 0, nil
+}
+
+// helperExecutable fails when the binary copy cannot be executed where it lies: systemd-run then only reports
+// "Permission denied", which names neither the mount nor the option.
+func (a *Agent) helperExecutable() error {
+	dir := filepath.Dir(a.d.Layout.UninstallBinary())
+	off, err := a.d.NoExec(dir)
+	if err != nil {
+		return fmt.Errorf("check the mount options of %s: %w", dir, err)
+	}
+	if off {
+		return fmt.Errorf("%s is on a file system mounted noexec; the removal helper cannot run from it", dir)
+	}
+	return nil
 }
 
 // supervisorUpgradeRuns reports whether a supervisor upgrade holds back the removal. An unreadable marker holds it

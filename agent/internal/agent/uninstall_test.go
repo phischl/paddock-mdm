@@ -36,6 +36,7 @@ func uninstallAgentGW(t *testing.T) (*Agent, *[][]string, *testgw.Gateway) {
 		t.Fatal(err)
 	}
 	a.d.Executable = self
+	a.d.NoExec = func(string) (bool, error) { return false, nil }
 	launched := &[][]string{}
 	a.d.RunUnit = func(_ context.Context, name string, args ...string) error {
 		*launched = append(*launched, append([]string{name}, args...))
@@ -167,6 +168,62 @@ func TestUninstallHelperFailed(t *testing.T) {
 	}
 	if a.st.PendingUninstall != nil {
 		t.Fatalf("pending mark kept: %+v", a.st.PendingUninstall)
+	}
+	for _, f := range []string{a.d.Layout.UninstallPlan(), a.d.Layout.UninstallBinary()} {
+		if _, err := os.Stat(f); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s kept after helper_failed: %v", f, err)
+		}
+	}
+}
+
+// TestUninstallHelperDirNoexec (ADR 0037 amendment 2026-10-19): when the helper's directory is on a file system
+// mounted noexec, or its mount options cannot be read, systemd-run is not called; the removal is reported as
+// helper_failed and its preparation removed.
+func TestUninstallHelperDirNoexec(t *testing.T) {
+	for name, noexec := range map[string]func(string) (bool, error){
+		"noexec":     func(string) (bool, error) { return true, nil },
+		"statfs err": func(string) (bool, error) { return false, errors.New("statfs: permission denied") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, launched := uninstallAgent(t)
+			var checked string
+			a.d.NoExec = func(dir string) (bool, error) { checked = dir; return noexec(dir) }
+			if status, _ := a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`)); status != protocol.CommandSucceeded {
+				t.Fatal(status)
+			}
+			a.st.PendingUninstall.Reported = true
+			a.launchUninstall(context.Background())
+			if checked != filepath.Dir(a.d.Layout.UninstallBinary()) {
+				t.Fatalf("checked %q, want the helper's directory", checked)
+			}
+			if len(*launched) != 0 {
+				t.Fatalf("systemd-run called: %v", *launched)
+			}
+			pending, err := a.d.Spool.Pending()
+			if err != nil || len(pending) != 1 || pending[0].Type != protocol.EventAgentUninstalled {
+				t.Fatalf("spool %+v, %v", pending, err)
+			}
+			var data protocol.AgentUninstalled
+			if err := json.Unmarshal(pending[0].Data, &data); err != nil || data.Outcome != protocol.UninstallHelperFailed {
+				t.Fatalf("event %+v, %v", data, err)
+			}
+			if a.st.PendingUninstall != nil {
+				t.Fatalf("pending mark kept: %+v", a.st.PendingUninstall)
+			}
+			if _, err := os.Stat(a.d.Layout.UninstallBinary()); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("binary copy kept: %v", err)
+			}
+		})
+	}
+}
+
+// TestNoexecStatfs: the statfs check reads the mount options of an existing directory.
+func TestNoexecStatfs(t *testing.T) {
+	if _, err := noexec(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := noexec(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("no error for a missing directory")
 	}
 }
 

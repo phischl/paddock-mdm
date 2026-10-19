@@ -8,6 +8,7 @@ package uninstall
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,7 +21,7 @@ import (
 	"github.com/phischl/paddock-mdm/pkg/protocol"
 )
 
-// Plan is /run/paddock/uninstall/plan.json, written by the agent when it accepted the command.
+// Plan is /root/paddock-uninstall/plan.json, written by the agent when it accepted the command.
 type Plan struct {
 	CommandID      string    `json:"command_id"`
 	Mode           string    `json:"mode"`
@@ -86,7 +87,8 @@ const (
 	TPMFailed               = "failed"
 )
 
-// ResultDir keeps the quarantine copy and the summary (0700); the only place below /root the helper writes.
+// ResultDir keeps the quarantine copy and the summary (0700), and until the summary is written the plan and the binary
+// copy the helper runs as; the only place below /root the helper writes.
 const ResultDir = "/root/paddock-uninstall"
 
 // Runner runs a tool non-interactively in a process group of its own, killed with the group at timeout; exit is -1
@@ -112,6 +114,9 @@ type Helper struct {
 	// events the agent spooled and delivered while the helper started would otherwise share the final event's
 	// sequence number, and the server drops a seen (device, event_seq) without a trace.
 	EventSeq func() int64
+	// Preparation is the plan and the binary copy the agent left for the helper, removed once the summary was written;
+	// paths as given, not below Root.
+	Preparation []string
 }
 
 // Summary is /root/paddock-uninstall/result.json and the data of the final event.
@@ -160,6 +165,11 @@ func (h *Helper) Execute(ctx context.Context, plan Plan) Summary {
 	data, _ := json.MarshalIndent(s, "", "  ")
 	if err := fsutil.WriteFile(h.path(filepath.Join(ResultDir, "result.json")), append(data, '\n'), 0o600, 0o700); err != nil {
 		slog.ErrorContext(ctx, "writing the uninstall summary failed", "error", err)
+	}
+	for _, f := range h.Preparation {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.ErrorContext(ctx, "removing the uninstall preparation failed", "file", f, "error", err)
+		}
 	}
 	slog.InfoContext(ctx, "Paddock removed", "command_id", plan.CommandID, "mode", plan.Mode, "outcome", s.Outcome,
 		"local_admin", s.LocalAdmin, "tpm", s.TPM, "reported", s.Delivered, "summary", filepath.Join(ResultDir, "result.json"))

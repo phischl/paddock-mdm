@@ -81,8 +81,10 @@ type Deps struct {
 	Signal     func(pid int) error
 	// RunUnit runs systemd-run to start a transient unit (the supervisor upgrade, plan M8d decision 31); nil runs it.
 	RunUnit func(ctx context.Context, name string, args ...string) error
-	// Executable is the running binary the uninstall copies to /run (tests); "" asks the OS.
+	// Executable is the running binary the uninstall copies (tests); "" asks the OS.
 	Executable string
+	// NoExec reports whether the file system holding a directory is mounted noexec; nil asks statfs.
+	NoExec func(dir string) (bool, error)
 	// SupervisorVersion runs `paddock-supervisor version`; nil runs the installed supervisor ("" when it is not
 	// installed).
 	SupervisorVersion func(ctx context.Context) (string, error)
@@ -220,6 +222,9 @@ func New(d Deps) (*Agent, error) {
 	}
 	if a.d.RunUnit == nil {
 		a.d.RunUnit = runUnit
+	}
+	if a.d.NoExec == nil {
+		a.d.NoExec = noexec
 	}
 	if a.d.SupervisorVersion == nil {
 		a.d.SupervisorVersion = func(ctx context.Context) (string, error) { return supervisorVersion(ctx, a.d.Layout) }

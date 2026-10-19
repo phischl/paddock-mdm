@@ -84,7 +84,7 @@ func newWorld(t *testing.T) *world {
 		"/opt/paddock/agent/A/paddockd": "bin", "/opt/orbit/secret.txt": "s",
 		"/var/lib/AccountsService/users/paddock-admin": "a",
 		"/home/alice/thesis.odt":                       "user data", "/home/paddock-admin/notes": "admin data", "/srv/share/x": "data",
-		"/root/.bashrc": "rc",
+		"/root/.bashrc": "rc", "/root/paddock-uninstall/paddockd": "helper", "/root/paddock-uninstall/plan.json": "{}",
 	} {
 		w.write(file, data)
 	}
@@ -109,7 +109,8 @@ func (w *world) exists(file string) bool {
 
 func (w *world) helper() *Helper {
 	return &Helper{Root: w.root, Now: func() time.Time { return w.now }, TPM: w.tpm, ReportFor: ReportFor, LocalAdmin: "paddock-admin",
-		EventSeq: func() int64 { return w.eventSeq },
+		EventSeq:    func() int64 { return w.eventSeq },
+		Preparation: []string{filepath.Join(w.root, "/root/paddock-uninstall/plan.json"), filepath.Join(w.root, "/root/paddock-uninstall/paddockd")},
 		Run: func(_ context.Context, _ time.Duration, name string, args ...string) (string, int, error) {
 			line := strings.Join(append([]string{name}, args...), " ")
 			w.calls = append(w.calls, line)
@@ -172,7 +173,7 @@ func TestLeave(t *testing.T) {
 	for _, gone := range []string{"/etc/sudoers.d/paddock-u-alice", "/etc/sudoers.d/paddock-u-bob", "/etc/paddock", "/var/lib/paddock",
 		"/etc/issue.d/90-paddock.issue", "/etc/ssh/sshd_config.d/90-paddock-banner.conf", "/etc/dconf/db/gdm.d/90-paddock-notice",
 		"/etc/apt/preferences.d/50paddock", "/etc/apt/apt.conf.d/52paddock-unattended", "/etc/systemd/system/paddock-updates.timer",
-		"/opt/paddock", "/opt/orbit"} {
+		"/opt/paddock", "/opt/orbit", "/root/paddock-uninstall/paddockd", "/root/paddock-uninstall/plan.json"} {
 		if w.exists(gone) {
 			t.Fatalf("%s left", gone)
 		}

@@ -75,7 +75,8 @@ func TestUninstallLeave(t *testing.T) {
 			t.Fatalf("device.uninstalled %v", p)
 		}
 		w.packagesGone(t)
-		w.absent(t, "/etc/paddock", "/var/lib/paddock", "/opt/paddock", "/opt/orbit")
+		w.absent(t, "/etc/paddock", "/var/lib/paddock", "/opt/paddock", "/opt/orbit", "/root/paddock-uninstall/paddockd",
+			"/root/paddock-uninstall/plan.json")
 		if out := w.Must("sudo find /etc/sudoers.d -name 'paddock-u-*'"); out != "" {
 			t.Fatalf("sudoers files left: %s", out)
 		}

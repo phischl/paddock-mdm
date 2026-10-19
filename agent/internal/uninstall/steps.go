@@ -228,8 +228,8 @@ func (h *Helper) himmelblauPackages(ctx context.Context) []string {
 	return pkgs
 }
 
-// packages purges Paddock's packages and fleetd and removes what they leave. The helper runs from /run, so removing
-// paddock-agent does not remove it.
+// packages purges Paddock's packages and fleetd and removes what they leave. The helper runs from a copy in ResultDir,
+// so removing paddock-agent does not remove it.
 func (h *Helper) packages(ctx context.Context) string {
 	var errs []string
 	if err := h.run(ctx, "apt-get", "remove", "--purge", "-y", reconcile.FleetdPackage, "paddock-revoke", "paddock-agent",
