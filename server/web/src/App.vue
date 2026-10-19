@@ -173,6 +173,16 @@ const densityDefaults = computed(() => {
   return { VBtn: d, VTextField: d, VSelect: d, VTextarea: d, VAutocomplete: d, VDataTableServer: d, VListItem: d }
 })
 
+/**
+ * Whether the organization name tooltip is open. Hover, focus and a tap or click only open it; it closes on leaving
+ * without focus, blur, Escape or a click elsewhere. Vuetify's own open-on-click toggled it shut on the same tap that
+ * hover had just opened it with (PDK-336, same defect as the device list's name-pending chip).
+ */
+const orgTipOpen = ref(false)
+function leaveOrgTip(e: MouseEvent): void {
+  if (e.currentTarget !== document.activeElement) orgTipOpen.value = false
+}
+
 // The command palette and the shortcut help (plan M7c decisions 16–18).
 const paletteOpen = ref(false)
 const helpOpen = ref(false)
@@ -293,11 +303,13 @@ onBeforeUnmount(() => observer.disconnect())
             <!-- Vuetify 4 tooltips are eager: the role=tooltip element is in the DOM before any hover and needs a
                  name of its own (axe aria-tooltip-name). -->
             <v-tooltip
+              v-model="orgTipOpen"
               :text="session.me.organization.name"
               :aria-label="session.me.organization.name"
               location="bottom"
-              open-on-click
-              open-on-hover
+              :open-on-click="false"
+              :open-on-focus="false"
+              :open-on-hover="false"
             >
               <template #activator="{ props: tip }">
                 <span
@@ -305,6 +317,11 @@ onBeforeUnmount(() => observer.disconnect())
                   class="org-name"
                   :title="session.me.organization.name"
                   data-testid="org-name"
+                  @mouseenter="orgTipOpen = true"
+                  @mouseleave="leaveOrgTip"
+                  @focus="orgTipOpen = true"
+                  @blur="orgTipOpen = false"
+                  @click="orgTipOpen = true"
                 >{{ session.me.organization.name }}</span>
               </template>
             </v-tooltip>
