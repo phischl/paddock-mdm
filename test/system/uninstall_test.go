@@ -102,9 +102,26 @@ func TestUninstallReset(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		w := newUninstallWorld(t, s, vm)
 		unchanged, modified := w.managedPath("a"), w.managedPath("b")
-		w.Must("echo 'changed at the device' | sudo tee -a " + modified + " >/dev/null")
 		homes := w.Must("ls -1 /home | sort")
+		// Managed files stay enforced until the removal starts, so b is modified while the agent is stopped and the
+		// agent comes back with a drift interval the removal never reaches. After its start the agent corrects files
+		// only in a drift pass (first one a drift interval after its run loop started) or by applying a newer bundle
+		// (handleBundle, first in Cycle); its first Cycle checks in at once and, without a newer bundle, accepts the
+		// command (handleCommands), reports it (postResults) and starts the removal (launchUninstall), whose first
+		// step stops the agent. A request compiles no bundle, so the compiled version is applied first and checked
+		// unchanged.
+		Until(t, "the compiled bundle applied", 5*time.Minute, 5*time.Second, w.Checkin, func() bool {
+			applied, _ := w.State()["applied_bundle_version"].(float64)
+			return applied == w.bundleVersion()
+		})
+		compiled := w.bundleVersion()
+		w.Must("sudo systemctl stop paddock-supervisor && echo 'changed at the device' | sudo tee -a " + modified + " >/dev/null" +
+			" && echo 'drift_interval_s: 86400' | sudo tee -a /etc/paddock/agent.yml >/dev/null")
 		w.RequestUninstall("reset", map[string]any{"clear_tpm": true}, http.StatusOK)
+		if v := w.bundleVersion(); v != compiled {
+			t.Fatalf("bundle %v compiled after %v while the agent was stopped: it would restore %s before the removal", v, compiled, modified)
+		}
+		w.Must("sudo systemctl start paddock-supervisor")
 		p := w.WaitRetired(t, 15*time.Minute)
 		if p["outcome"] != "completed" || p["local_admin"] != "removed" || (p["tpm"] != "cleared" && p["tpm"] != "requested_at_next_boot") {
 			t.Fatalf("device.uninstalled %v", p)
