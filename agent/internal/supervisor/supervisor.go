@@ -421,15 +421,11 @@ func (s *Supervisor) confirmRollback() {
 	if retried && !s.retryFlipBack(p) {
 		return
 	}
-	if !s.confirmFlip(p.FromSlot) {
-		if retried {
-			s.restartChild()
-		}
-		return
+	if s.confirmFlip(p.FromSlot) {
+		s.rolledBack = nil
+		s.conclude(p, outcomeRolledBack)
 	}
-	s.rolledBack = nil
-	s.conclude(p, outcomeRolledBack)
-	// As in rollback: the old agent starts only after the result exists.
+	// As in rollback: the old agent starts only after the result exists, when the flip is confirmed.
 	if retried {
 		s.restartChild()
 	}
