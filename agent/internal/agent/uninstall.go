@@ -101,8 +101,7 @@ func (a *Agent) launchUninstall(ctx context.Context) {
 		slices.ContainsFunc(a.st.CommandResults, func(r state.CommandResult) bool { return r.CommandID == p.CommandID }) {
 		return
 	}
-	if marker, err := supervisorpkg.ReadMarker(a.d.Layout); marker != nil || err != nil {
-		slog.InfoContext(ctx, "removal of Paddock waits for the running supervisor upgrade", "command_id", p.CommandID, "error", err)
+	if a.supervisorUpgradeRuns(ctx, p.CommandID) {
 		return
 	}
 	err := a.d.RunUnit(ctx, "systemd-run", "--unit="+UninstallUnit, "--collect", "--no-block", "--property=KillMode=process",
@@ -133,4 +132,29 @@ func (a *Agent) launchUninstall(ctx context.Context) {
 		Steps: map[string]string{}})
 	a.st.PendingUninstall = nil
 	a.saveState()
+}
+
+// supervisorUpgradeRuns reports whether a supervisor upgrade holds back the removal. An unreadable marker holds it
+// back only until its mtime is older than supervisorpkg.StaleAfter: staleSupervisorUpgrade cannot clear a marker it
+// cannot read, and the removal must not wait longer than the 30 minutes of the ADR 0037 amendment.
+func (a *Agent) supervisorUpgradeRuns(ctx context.Context, commandID string) bool {
+	marker, err := supervisorpkg.ReadMarker(a.d.Layout)
+	if marker != nil {
+		slog.InfoContext(ctx, "removal of Paddock waits for the running supervisor upgrade", "command_id", commandID)
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	info, statErr := os.Stat(a.d.Layout.SupervisorUpgrade())
+	if errors.Is(statErr, os.ErrNotExist) {
+		return false
+	}
+	if statErr == nil && a.d.Now().Sub(info.ModTime()) >= supervisorpkg.StaleAfter {
+		slog.WarnContext(ctx, "unreadable supervisor upgrade marker is stale; starting the removal of Paddock",
+			"command_id", commandID, "error", err)
+		return false
+	}
+	slog.InfoContext(ctx, "removal of Paddock waits for the running supervisor upgrade", "command_id", commandID, "error", err)
+	return true
 }

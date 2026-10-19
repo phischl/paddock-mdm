@@ -265,3 +265,36 @@ func TestUninstallWaitsForSupervisorUpgrade(t *testing.T) {
 		t.Fatalf("launched %v after the upgrade finished", *launched)
 	}
 }
+
+// TestUninstallUnreadableSupervisorMarker: an unreadable supervisor-upgrade marker holds back the removal only until
+// it is older than supervisorpkg.StaleAfter, so the removal never waits for it forever.
+func TestUninstallUnreadableSupervisorMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		age    time.Duration
+		starts bool
+	}{
+		{"younger than StaleAfter", supervisorpkg.StaleAfter - time.Minute, false},
+		{"older than StaleAfter", supervisorpkg.StaleAfter + time.Minute, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, launched := uninstallAgent(t)
+			marker := a.d.Layout.SupervisorUpgrade()
+			if err := fsutil.WriteFile(marker, []byte("{not json"), 0o600, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			mtime := a.d.Now().Add(-tc.age)
+			if err := os.Chtimes(marker, mtime, mtime); err != nil {
+				t.Fatal(err)
+			}
+			if status, _ := a.uninstallCommand(context.Background(), uninstallCmd(`{"mode":"leave"}`)); status != protocol.CommandSucceeded {
+				t.Fatal(status)
+			}
+			a.st.PendingUninstall.Reported = true
+			a.launchUninstall(context.Background())
+			if started := len(*launched) == 1 && a.st.PendingUninstall.LaunchedAt != nil; started != tc.starts {
+				t.Fatalf("started %v, want %v: %v", started, tc.starts, *launched)
+			}
+		})
+	}
+}
