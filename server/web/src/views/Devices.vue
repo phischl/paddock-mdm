@@ -28,6 +28,22 @@ onMounted(async () => {
   users.value = u
 })
 
+/**
+ * The device whose "Name pending" tooltip is open. Hover, focus and a tap or click all only open it, and it closes on
+ * leaving without focus, blur, Escape or a click elsewhere: Vuetify's own open-on-click toggled it shut on the same tap
+ * that hover and focus had just opened it with (browser check of PDK-332, defect 2).
+ */
+const nameTip = ref<string | null>(null)
+function showNameTip(id: string): void {
+  nameTip.value = id
+}
+function hideNameTip(id: string): void {
+  if (nameTip.value === id) nameTip.value = null
+}
+function leaveNameTip(id: string, e: MouseEvent): void {
+  if (e.currentTarget !== document.activeElement) hideNameTip(id)
+}
+
 const filters = computed(() => [
   stateFilter, contactFilter, groupFilter(groups.value), diskStateFilter, securityFilter, ownerFilter(users.value), componentFilter,
 ])
@@ -74,12 +90,17 @@ const columns: ListColumn[] = [
         <RouterLink :to="{ name: 'device', params: { id: item.id }, query: paneQuery(route.query) }">
           {{ item.hostname }}
         </RouterLink>
+        <!-- Eager like the org-name tooltip: named so axe accepts it while hidden (aria-tooltip-name). -->
         <v-tooltip
           v-if="item.name_state === 'pending'"
+          :model-value="nameTip === item.id"
           :text="t('devices.name.pendingTooltip', { name: item.name ?? '' })"
+          :aria-label="t('devices.name.pendingTooltip', { name: item.name ?? '' })"
           location="top"
-          open-on-click
-          open-on-hover
+          :open-on-click="false"
+          :open-on-focus="false"
+          :open-on-hover="false"
+          @update:model-value="(open: boolean) => open || hideNameTip(item.id)"
         >
           <template #activator="{ props: tip }">
             <span
@@ -87,6 +108,11 @@ const columns: ListColumn[] = [
               class="pd-name-pending"
               tabindex="0"
               data-testid="device-name-pending"
+              @mouseenter="showNameTip(item.id)"
+              @mouseleave="leaveNameTip(item.id, $event)"
+              @focus="showNameTip(item.id)"
+              @blur="hideNameTip(item.id)"
+              @click="showNameTip(item.id)"
             >
               <StatusChip
                 status="warn"

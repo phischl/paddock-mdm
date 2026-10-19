@@ -5,7 +5,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { VApp } from 'vuetify/components'
 import { createPinia, setActivePinia } from 'pinia'
 import type { DeviceDetail } from '../api/client'
-import { createPortalI18n } from '../i18n'
+import { createPortalI18n, type PortalLocale } from '../i18n'
 import { deviceDetailKey, type DevicePage } from '../lib/deviceDetailPage'
 import { vuetify } from '../plugins/vuetify'
 import { useSessionStore } from '../stores/session'
@@ -39,7 +39,7 @@ afterEach(() => {
   setDeviceName.mockReset()
 })
 
-async function mountOverview(opts: { device?: Partial<DeviceDetail>; role?: string } = {}) {
+async function mountOverview(opts: { device?: Partial<DeviceDetail>; role?: string; locale?: PortalLocale } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: opts.role ?? 'org_admin', locale: 'en', theme: 'system', organization: null, revocation_enabled: true } as never
@@ -65,7 +65,7 @@ async function mountOverview(opts: { device?: Partial<DeviceDetail>; role?: stri
   await router.push('/')
   wrapper = mount(Frame, {
     global: {
-      plugins: [createPortalI18n(), vuetify, router, pinia],
+      plugins: [createPortalI18n(opts.locale), vuetify, router, pinia],
       stubs: { DiskEncryptionCard: true, UpdatesCard: true, LocalAdminCard: true, DangerZone: true },
     },
     attachTo: document.body,
@@ -172,6 +172,8 @@ const panel = () => document.querySelector('[data-testid="device-name-panel"]') 
 const nameField = () => panel().querySelector('input') as HTMLInputElement | null
 const stateLine = () => panel().querySelector('[data-testid="device-name-state"]')?.textContent?.trim()
 const button = (testid: string) => panel().querySelector(`[data-testid="${testid}"]`) as HTMLButtonElement | null
+const fieldMessage = () => document.getElementById(nameField()!.getAttribute('aria-describedby') ?? '')?.textContent?.trim()
+const hint = 'One lowercase label of 1–63 letters, digits or hyphens. The device uses it as its hostname at its next check-in.'
 
 async function type(value: string): Promise<void> {
   const field = nameField()!
@@ -213,16 +215,63 @@ describe('device name panel', () => {
     expect(button('clear-device-name')).toBeNull()
   })
 
-  it('shows the server detail of a 400 and the conflict message of a 409 and keeps the typed value', async () => {
+  const invalidNames = [
+    ['LAP-0421', 'Use lowercase letters only.', 'Nur Kleinbuchstaben verwenden.'],
+    ['bad_label!', 'Use only lowercase letters, digits and hyphens.', 'Nur Kleinbuchstaben, Ziffern und Bindestriche verwenden.'],
+    ['-lap', 'The name must not start or end with a hyphen.', 'Der Name darf nicht mit einem Bindestrich beginnen oder enden.'],
+    ['lap-', 'The name must not start or end with a hyphen.', 'Der Name darf nicht mit einem Bindestrich beginnen oder enden.'],
+    ['a'.repeat(64), 'The name can have at most 63 characters.', 'Der Name darf höchstens 63 Zeichen lang sein.'],
+    ['localhost', '“localhost” cannot be used as a device name.', '„localhost“ ist als Gerätename nicht zulässig.'],
+    ['lap.example.com', 'Enter only the host name, without a domain: no dots.', 'Nur den Hostnamen ohne Domain eingeben: keine Punkte.'],
+  ]
+
+  it.each(invalidNames)('names the broken rule of %s on save in English and German without asking the server', async (name, en, de) => {
+    for (const [locale, message] of [['en', en], ['de', de]] as const) {
+      await mountOverview({ locale })
+      await type(name)
+      button('save-device-name')!.click()
+      await flushPromises()
+      expect(setDeviceName).not.toHaveBeenCalled()
+      expect(fieldMessage()).toBe(message)
+      expect(nameField()!.getAttribute('aria-invalid')).toBe('true')
+      expect(nameField()!.value).toBe(name)
+      wrapper?.unmount()
+      wrapper = null
+    }
+  })
+
+  it('checks the name from the first blur on, and the error clears once the name is valid', async () => {
     await mountOverview()
-    await type('A1')
-    setDeviceName.mockResolvedValue({ problem: 'invalid_request', detail: 'name must be a lowercase host name label' })
-    button('save-device-name')!.click()
+    await type('lap-')
+    expect(fieldMessage()).toBe(hint)
+    expect(nameField()!.hasAttribute('aria-invalid')).toBe(false)
+    nameField()!.dispatchEvent(new FocusEvent('blur'))
     await flushPromises()
-    expect(panel().textContent).toContain('name must be a lowercase host name label')
-    expect(nameField()!.value).toBe('A1')
+    expect(fieldMessage()).toBe('The name must not start or end with a hyphen.')
     await type('lap-0421')
-    setDeviceName.mockResolvedValue({ problem: 'conflict', detail: 'name is used by another device of this organization' })
+    expect(fieldMessage()).toBe(hint)
+    expect(nameField()!.hasAttribute('aria-invalid')).toBe(false)
+  })
+
+  it('translates a 400 the client did not catch and shows the conflict message of a 409, keeping the typed value', async () => {
+    for (const [locale, message] of [
+      ['en', 'Not a valid device name. Use one lowercase label of 1–63 letters, digits or hyphens that does not start or end with a hyphen and is not “localhost”.'],
+      ['de', 'Kein gültiger Gerätename. Erlaubt ist ein kleingeschriebenes Label aus 1–63 Buchstaben, Ziffern oder Bindestrichen, das nicht mit einem Bindestrich beginnt oder endet und nicht „localhost“ lautet.'],
+    ] as const) {
+      await mountOverview({ locale })
+      await type('lap-0420')
+      setDeviceName.mockResolvedValue({ problem: 'invalid_request' })
+      button('save-device-name')!.click()
+      await flushPromises()
+      expect(fieldMessage()).toBe(message)
+      expect(nameField()!.getAttribute('aria-invalid')).toBe('true')
+      expect(nameField()!.value).toBe('lap-0420')
+      wrapper?.unmount()
+      wrapper = null
+    }
+    await mountOverview()
+    await type('lap-0421')
+    setDeviceName.mockResolvedValue({ problem: 'conflict' })
     button('save-device-name')!.click()
     await flushPromises()
     expect(panel().textContent).toContain('Another device of this organization already has this name.')

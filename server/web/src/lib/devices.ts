@@ -151,18 +151,32 @@ export function agentUpdateProblemKey(res: { problem: string; detail?: string })
   return null
 }
 
-/**
- * Sets or clears (null) the managed name of a device (ADR 0041); the device on success, otherwise the problem code and
- * the server's detail.
- */
-export async function setDeviceName(id: string, name: string | null): Promise<DeviceDetail | { problem: string; detail?: string }> {
+/** Sets or clears (null) the managed name of a device (ADR 0041); the device on success, otherwise the problem code. */
+export async function setDeviceName(id: string, name: string | null): Promise<DeviceDetail | { problem: string }> {
   const { data, error } = await api.PUT('/api/v1/devices/{id}/name', {
     params: { path: { id }, header: { 'X-Paddock-CSRF': '1' } },
     body: { name },
   })
   if (data) return data
-  const detail = error && typeof error === 'object' && 'detail' in error && typeof error.detail === 'string' ? error.detail : undefined
-  return { problem: problemCode(error), detail }
+  return { problem: problemCode(error) }
+}
+
+/** A rule of the managed device name, as the last segment of its message key under devices.name.invalid. */
+export type DeviceNameRule = 'fqdn' | 'uppercase' | 'characters' | 'hyphen' | 'tooLong' | 'localhost'
+
+/**
+ * The first rule of a managed device name that name breaks, or null. It mirrors the server's bundle.ValidHostname
+ * (pkg/bundle/bundle.go), which stays the single source: a lowercase RFC 1123 label of 1 to 63 characters that is not
+ * "localhost". The client only names the broken rule early; the server still decides.
+ */
+export function deviceNameRule(name: string): DeviceNameRule | null {
+  if (name.includes('.')) return 'fqdn'
+  if (/[A-Z]/.test(name)) return 'uppercase'
+  if (/[^a-z0-9-]/.test(name)) return 'characters'
+  if (name.startsWith('-') || name.endsWith('-')) return 'hyphen'
+  if (name.length > 63) return 'tooLong'
+  if (name === 'localhost') return 'localhost'
+  return null
 }
 
 /** The state line of the device name panel (plan M8h decision 17): its message key and values. */

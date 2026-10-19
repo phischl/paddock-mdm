@@ -39,6 +39,82 @@ afterEach(() => {
   wrapper = null
 })
 
+async function mountList(): Promise<HTMLElement[]> {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  useSessionStore().me = { id: 'a', username: 'alice', display_name: 'Alice', role: 'org_admin', locale: 'en', theme: 'system', organization: null } as never
+  const empty = { render: () => null }
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/devices', name: 'devices', component: Devices },
+      { path: '/devices/:id', name: 'device', component: empty },
+      { path: '/enrollment-tokens', name: 'enrollment-tokens', component: empty },
+    ],
+  })
+  await router.push('/devices')
+  await router.isReady()
+  const App = () => h(VApp, null, { default: () => h(RouterView) })
+  wrapper = mount(App, { global: { plugins: [createPortalI18n(), vuetify, router, pinia] }, attachTo: document.body })
+  await flushPromises()
+  return [...document.querySelectorAll<HTMLElement>('[data-testid="device-name-pending"]')]
+}
+
+const tooltip = () => document.querySelector<HTMLElement>('[role="tooltip"]')!
+async function settle(): Promise<void> {
+  await flushPromises()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+}
+const tooltipOpen = () => tooltip().classList.contains('v-overlay--active')
+
+describe('device list name-pending tooltip (browser check of PDK-332)', () => {
+  it('names the role=tooltip element, which Vuetify keeps in the page while closed (axe aria-tooltip-name)', async () => {
+    await mountList()
+    expect(tooltipOpen()).toBe(false)
+    expect(tooltip().getAttribute('aria-label')).toBe('Managed name: lap-0421')
+  })
+
+  it('stays open after a tap or click, which also fires hover and focus, until a click elsewhere or Escape', async () => {
+    const [chip] = await mountList()
+    for (const type of ['touchstart', 'touchend', 'mouseenter', 'mousedown']) chip.dispatchEvent(new Event(type))
+    chip.focus()
+    chip.click()
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    chip.dispatchEvent(new MouseEvent('mouseleave'))
+    chip.click()
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await settle()
+    expect(tooltipOpen()).toBe(false)
+    chip.click()
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    chip.blur()
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    document.body.click()
+    await settle()
+    expect(tooltipOpen()).toBe(false)
+  })
+
+  it('opens on keyboard focus and on hover, and a hover without focus closes on leaving', async () => {
+    const [chip] = await mountList()
+    chip.focus()
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    chip.blur()
+    await settle()
+    expect(tooltipOpen()).toBe(false)
+    chip.dispatchEvent(new MouseEvent('mouseenter'))
+    await settle()
+    expect(tooltipOpen()).toBe(true)
+    chip.dispatchEvent(new MouseEvent('mouseleave'))
+    await settle()
+    expect(tooltipOpen()).toBe(false)
+  })
+})
+
 describe('device list', () => {
   it('marks a device whose managed name is pending, with the name for screen readers and as an accessible tooltip (plan M8h decision 18)', async () => {
     const pinia = createPinia()

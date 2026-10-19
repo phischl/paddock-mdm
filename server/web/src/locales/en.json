@@ -618,6 +618,15 @@
       "clear": "Clear name",
       "saved": "Device name saved.",
       "conflict": "Another device of this organization already has this name.",
+      "invalid": {
+        "fqdn": "Enter only the host name, without a domain: no dots.",
+        "uppercase": "Use lowercase letters only.",
+        "characters": "Use only lowercase letters, digits and hyphens.",
+        "hyphen": "The name must not start or end with a hyphen.",
+        "tooLong": "The name can have at most 63 characters.",
+        "localhost": "“localhost” cannot be used as a device name.",
+        "server": "Not a valid device name. Use one lowercase label of 1–63 letters, digits or hyphens that does not start or end with a hyphen and is not “localhost”."
+      },
       "state": {
         "unmanaged": "Not managed: the device keeps its own hostname.",
         "pending": "Pending: the device still reports {hostname}.",

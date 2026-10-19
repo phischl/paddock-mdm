@@ -618,6 +618,15 @@
       "clear": "Namen entfernen",
       "saved": "Gerätename gespeichert.",
       "conflict": "Ein anderes Gerät dieser Organisation trägt diesen Namen bereits.",
+      "invalid": {
+        "fqdn": "Nur den Hostnamen ohne Domain eingeben: keine Punkte.",
+        "uppercase": "Nur Kleinbuchstaben verwenden.",
+        "characters": "Nur Kleinbuchstaben, Ziffern und Bindestriche verwenden.",
+        "hyphen": "Der Name darf nicht mit einem Bindestrich beginnen oder enden.",
+        "tooLong": "Der Name darf höchstens 63 Zeichen lang sein.",
+        "localhost": "„localhost“ ist als Gerätename nicht zulässig.",
+        "server": "Kein gültiger Gerätename. Erlaubt ist ein kleingeschriebenes Label aus 1–63 Buchstaben, Ziffern oder Bindestrichen, das nicht mit einem Bindestrich beginnt oder endet und nicht „localhost“ lautet."
+      },
       "state": {
         "unmanaged": "Nicht verwaltet: das Gerät behält seinen eigenen Hostnamen.",
         "pending": "Ausstehend: das Gerät meldet noch {hostname}.",

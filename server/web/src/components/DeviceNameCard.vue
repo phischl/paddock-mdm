@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DeviceDetail } from '../api/client'
 import { usePending } from '../composables/usePending'
-import { nameStateView, setDeviceName } from '../lib/devices'
+import { deviceNameRule, nameStateView, setDeviceName } from '../lib/devices'
 import { useProblemText } from '../lib/problems'
 import { useSessionStore } from '../stores/session'
 
@@ -20,7 +20,8 @@ const problemText = useProblemText()
 const session = useSessionStore()
 
 const value = ref(props.device.name ?? '')
-const error = ref('')
+const serverError = ref('')
+const touched = ref(false)
 const saved = ref(false)
 
 watch(
@@ -29,18 +30,28 @@ watch(
     value.value = name ?? ''
   },
 )
+watch(value, () => {
+  serverError.value = ''
+})
 
 const state = computed(() => nameStateView(props.device))
 const changed = computed(() => value.value !== '' && value.value !== (props.device.name ?? ''))
+const rule = computed(() => deviceNameRule(value.value))
+// Checked from the first blur or save on, so a half-typed name such as "lap-" is not flagged while typing.
+const error = computed(() => (touched.value && rule.value ? t('devices.name.invalid.' + rule.value) : serverError.value))
 
 async function submit(name: string | null): Promise<void> {
-  error.value = ''
+  serverError.value = ''
   saved.value = false
+  if (name !== null) {
+    touched.value = true
+    if (rule.value) return
+  }
   const res = await setDeviceName(props.device.id, name)
   if ('problem' in res) {
-    error.value = res.problem === 'conflict'
+    serverError.value = res.problem === 'conflict'
       ? t('devices.name.conflict')
-      : res.problem === 'invalid_request' && res.detail ? res.detail : problemText(res.problem)
+      : res.problem === 'invalid_request' ? t('devices.name.invalid.server') : problemText(res.problem)
     return
   }
   saved.value = true
@@ -73,11 +84,13 @@ async function submit(name: string | null): Promise<void> {
         :label="t('devices.name.label')"
         :hint="t('devices.name.hint')"
         :error-messages="error"
+        :aria-invalid="error ? 'true' : undefined"
         persistent-hint
         autocapitalize="off"
         spellcheck="false"
         maxlength="63"
         data-testid="device-name"
+        @blur="touched = true"
       />
       <p
         class="pd-muted"

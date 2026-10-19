@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not report). Lab hosts that unseal with a cron job move to it as `docs/operations/lab-install.md` section 11
   describes. `./paddock secrets` now also creates the unsealer's database secrets.
 - A device can be named from the portal; the device applies the name as its hostname at its next check-in and keeps
-  it; the device page shows whether the name is pending or applied.
+  it; the device page shows whether the name is pending or applied, and an invalid name is rejected with the rule it
+  breaks (uppercase, invalid characters, a leading or trailing hyphen, too long, `localhost`, a domain).
 - A platform administrator sets an organization's domains in the portal: the create dialog of *Platform* →
   *Organizations* takes them, the list shows them, and the row action *Domains* changes them. A create with domains
   records `organization.created` and `organization.domains_changed`.
