@@ -14,6 +14,7 @@ const now = '2026-10-10T12:00:00Z'
 const base = {
   state: 'active', contact: 'ok', hardware_uuid: null, machine_id: null, os_release: {}, enrollment_token_id: null,
   enrolled_at: now, state_changed_at: now, bundle_version: 1, last_contact_at: now, applied_bundle_version: 1, agent_version: '1.0.0',
+  owners: [], hardware: null, components: [], components_outdated: [],
 }
 const items = [
   { ...base, id: 'd1', hostname: 'ubuntu', name: 'lap-0421', name_state: 'pending' },
@@ -25,6 +26,11 @@ vi.mock('../lib/devices', async (original) => ({
   ...(await original<typeof import('../lib/devices')>()),
   allGroups: () => Promise.resolve([]),
   listDevices: () => Promise.resolve({ items, page: 1, page_size: 25, total: 3, total_capped: false, sort: 'hostname' }),
+}))
+
+vi.mock('../lib/users', async (original) => ({
+  ...(await original<typeof import('../lib/users')>()),
+  allUsers: () => Promise.resolve([]),
 }))
 
 let wrapper: VueWrapper | null = null
