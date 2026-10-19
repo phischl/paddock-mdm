@@ -150,14 +150,16 @@ func (g *vmGroup) AfterAll(t *testing.T, fn func(t *testing.T)) {
 	g.afterAll = append(g.afterAll, fn)
 }
 
-// runAfterAll runs the functions AfterAll registered; t is the parent test of the VMs' subtests.
+// runAfterAll registers the functions AfterAll registered as cleanups of t, the parent test of the VMs' subtests, so
+// they run in reverse order of registration. Each is its own cleanup: a function that fails the test (t.Fatal) must
+// not skip the others, such as one retract skipping the next.
 func (g *vmGroup) runAfterAll(t *testing.T) {
 	g.mu.Lock()
 	fns := g.afterAll
 	g.afterAll = nil
 	g.mu.Unlock()
-	for i := len(fns) - 1; i >= 0; i-- {
-		fns[i](t)
+	for _, fn := range fns {
+		t.Cleanup(func() { fn(t) })
 	}
 }
 
