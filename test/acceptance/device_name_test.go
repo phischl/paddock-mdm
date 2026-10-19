@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/phischl/paddock-mdm/pkg/bundle"
+	"github.com/phischl/paddock-mdm/pkg/protocol"
 	"github.com/phischl/paddock-mdm/test/acceptance/internal/env"
 )
 
@@ -74,16 +75,13 @@ func TestDeviceName(t *testing.T) {
 	}
 
 	d.Health = json.RawMessage(`{"reconcile":"ok","hostname":"` + name + `"}`)
-	if _, _, err := d.Checkin(testContext(t, time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(time.Minute)
-	for got := getDeviceName(t, admin, d.DeviceID); got.Hostname != name || got.NameState != "applied"; got = getDeviceName(t, admin, d.DeviceID) {
-		if time.Now().After(deadline) {
-			t.Fatalf("after the check-in: %+v", got)
-		}
-		time.Sleep(time.Second)
-	}
+	// The worker writes the reported status at most once per device and devicecache.HeartbeatInterval (60 s) and drops
+	// coalesced heartbeats, so the earlier check-ins of this gate can swallow a single one; keep checking in.
+	var got deviceName
+	checkinUntil(t, d, 2*time.Minute, func(protocol.CheckinResponse) bool {
+		got = getDeviceName(t, admin, d.DeviceID)
+		return got.Hostname == name && got.NameState == "applied"
+	})
 
 	taken := call(t, operator.Portal, http.MethodPut, "/api/v1/devices/"+other.DeviceID+"/name", map[string]any{"name": name})
 	expectStatus(t, taken, http.StatusConflict, "conflict")
