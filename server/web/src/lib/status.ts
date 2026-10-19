@@ -94,6 +94,7 @@ export function attentionStatus(kind: AttentionKind): StatusView {
     case 'agent_rollback_pending':
     case 'agent_not_running':
     case 'uninstall_pending':
+    case 'config_behind':
     case 'login_apply_failed':
     case 'sudo_apply_failed':
       return { status: 'warn', label }

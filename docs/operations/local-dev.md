@@ -39,9 +39,13 @@ production configuration as `deploy/compose/`. The Compose file sets of every ho
 | `compose.yaml` | Control plane: Caddy, PostgreSQL, RabbitMQ, Valkey, RustFS (bundles), OpenBao, Authentik, Paddock roles (`api`, `gateway`, `worker`, `compiler`, `outbox-relay`, `escrow-reader`) |
 | `compose.audit.yaml` | Audit domain: `audit-postgres`, `audit-rustfs`, audit writer |
 | `compose.dev.yaml` | Development overrides: `PADDOCK_ENV=development`, dev blueprint, loopback port mappings |
-| `versions.env` | Pinned images (tag and digest) |
+| `versions.env` | Pinned images (tag and digest); `PLAYWRIGHT_IMAGE` and `@playwright/test` (`server/web/package.json`) are one version |
 | `.env` | Non-secret settings (copied from `.env.example`) |
 | `.secrets/` | Development secrets, OpenBao unseal shares, AppRole credentials, Caddy root certificate (git-ignored) |
+
+`@playwright/test` (`server/web/package.json`) and `PLAYWRIGHT_IMAGE` (`versions.env`) are one version: the image
+ships the browsers of exactly that package. Dependabot ignores the package; bump both by hand and run `make e2e`,
+which refuses a mismatch (`make e2e-check-playwright`).
 
 Paddock services carry the Compose profile `paddock`.
 
@@ -120,9 +124,11 @@ Only active with `PADDOCK_ENV=development` (scripts refuse otherwise):
   stage of the admin login flow (a failing policy on that stage binding).
 - Loopback port mappings for databases, RabbitMQ (incl. management UI), Valkey, OpenBao and the audit RustFS.
 - A shorter step-up: `PADDOCK_STEPUP_WINDOW` (default 300s; the dev stack sets 30s) is how long a step-up satisfies a
-  privileged action, `PADDOCK_STEPUP_MAX_AUTH_AGE` (default 60s; the dev stack sets 15s) the oldest Authentik login a
+  privileged action, `PADDOCK_STEPUP_MAX_AUTH_AGE` (default 20s; the dev stack sets 15s) the oldest Authentik login a
   step-up accepts (`max_age`). Both are Go durations for `paddock-api`; with `PADDOCK_ENV=production` either variable
-  stops the start with a configuration error. `GET /api/v1/me` then also returns `step_up` (the session's last
+  stops the start with a configuration error. `PADDOCK_STEPUP_MFA_CLASS` (the dev stack sets
+  `authentik_stages_authenticator_totp.totpdevice`) replaces the WebAuthn class a step-up must validate, so the dev
+  users step up with TOTP; it is development-only as well. `GET /api/v1/me` then also returns `step_up` (the session's last
   step-up and both values), which the acceptance gates use instead of the client clock.
 - A TOTP step-up: the shipped step-up flow accepts WebAuthn only; the development blueprint skips that stage and adds
   `paddock-dev-stepup-mfa` (WebAuthn or TOTP), so the test users complete step-ups with their seeded TOTP keys

@@ -2,8 +2,10 @@ package acceptance
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -143,21 +145,46 @@ func TestLoginMFAPath(t *testing.T) {
 	}
 	var bindings struct {
 		Results []struct {
-			Order int    `json:"order"`
-			Stage string `json:"stage"`
+			Order      int    `json:"order"`
+			Stage      string `json:"stage"`
+			PolicyPK   string `json:"policybindingmodel_ptr_id"`
+			EngineMode string `json:"policy_engine_mode"`
 		} `json:"results"`
 	}
 	if err := ak.Get(ctx, "/flows/bindings/?target="+flows.Results[0].PK, &bindings); err != nil {
 		t.Fatal(err)
 	}
-	stage := ""
+	stage, policyPK := "", ""
 	for _, b := range bindings.Results {
 		if b.Order == 31 {
-			stage = b.Stage
+			stage, policyPK = b.Stage, b.PolicyPK
+			if b.EngineMode != "all" {
+				t.Errorf("order 31 evaluates its policies in mode %q, want all", b.EngineMode)
+			}
 		}
 	}
 	if stage == "" {
 		t.Fatalf("no stage binding at order 31: %+v", bindings.Results)
+	}
+	// The stage is skipped only after a WebAuthn or TOTP validation at order 30 in the same sign-in (PDK-324); the
+	// development blueprint skips it entirely.
+	var pb struct {
+		Results []struct {
+			PolicyObj struct {
+				Name string `json:"name"`
+			} `json:"policy_obj"`
+		} `json:"results"`
+	}
+	if err := ak.Get(ctx, "/policies/bindings/?target="+policyPK, &pb); err != nil {
+		t.Fatal(err)
+	}
+	var policies []string
+	for _, p := range pb.Results {
+		policies = append(policies, p.PolicyObj.Name)
+	}
+	slices.Sort(policies)
+	if fmt.Sprint(policies) != "[paddock-default-login-mfa-missing paddock-dev-skip-mfa]" {
+		t.Errorf("order 31 policies %v, want the authenticator-missing policy and the development skip", policies)
 	}
 	var v struct {
 		Name                string `json:"name"`

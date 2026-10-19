@@ -29,7 +29,7 @@ func haltRollout(t *testing.T, version string) {
 // requestUpdate asks the device to install the offered release now and waits for its report.
 func requestUpdate(t *testing.T, s *Stack, d *Device, version string) {
 	t.Helper()
-	s.Call(http.MethodPost, "/api/v1/devices/"+d.ID+"/update-agent", nil, http.StatusOK)
+	s.Call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/update-agent", nil, http.StatusOK)
 	d.WaitEvent(t, "device.agent_updated", 10*time.Minute, func(p map[string]any) bool { return p["version"] == version })
 	if got := d.AgentVersion(); got != version {
 		t.Fatalf("paddockd version %q after the update, want %s", got, version)
@@ -65,7 +65,7 @@ func TestUpdateNow(t *testing.T) {
 			}
 		}
 		v := version(8, "now")
-		s.Release(v, nil, "--waves", strconv.Itoa(first)+",100", "--min-wave-minutes", "60")
+		s.Release(t, v, nil, "--waves", strconv.Itoa(first)+",100", "--min-wave-minutes", "60")
 		t.Cleanup(func() { haltRollout(t, v) })
 		for range 2 {
 			d.Checkin()
@@ -75,7 +75,7 @@ func TestUpdateNow(t *testing.T) {
 			t.Fatalf("the device outside the wave installed %s", got)
 		}
 		requestUpdate(t, s, d, v)
-		if events := s.Events("device.agent_update_requested", d.ID); len(events) != 1 {
+		if events := s.Events(t, "device.agent_update_requested", d.ID); len(events) != 1 {
 			t.Fatalf("%d device.agent_update_requested events", len(events))
 		}
 	})

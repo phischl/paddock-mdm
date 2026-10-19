@@ -203,13 +203,28 @@ Decisions:
    after the api accepted the step-up.
 2. **`max_age` is 20 s** (`StepUpMaxAuthAge`): below the shortest consumer window (30 s), so a step-up that is too old
    for the escrow-reader is always old enough for Authentik to run `paddock-stepup` again; 10 s remain for clock skew.
-3. **WebAuthn-only portal login.** The stage `paddock-admin-login-mfa` validates `[webauthn]` only and configures
-   the WebAuthn setup stage when the administrator has none; an administrator with TOTP only enrols WebAuthn at the
-   next portal sign-in. The default-flow stage (every Authentik user) and the device-login stages keep both classes.
-   The pre-upgrade enrolment note of decision 6 is superseded by the enrolment at sign-in.
+3. **WebAuthn enrolment at the portal login, after an existing factor.** Stage A, `paddock-admin-login-mfa` at
+   order 30, validates `[webauthn, totp]` and configures only the WebAuthn setup stage, which Authentik runs only for
+   an account without any authenticator of these classes. Stage B, `paddock-admin-login-webauthn` at order 31,
+   validates `[webauthn]` and configures the WebAuthn setup; an expression policy on its binding
+   (`re_evaluate_policies`, mode *all*) runs it only for an account without a WebAuthn device. An administrator with
+   TOTP only therefore proves TOTP and then enrols WebAuthn; the password alone never enrols a key for an account with
+   an authenticator. A `last_auth_threshold` on stage B was rejected: Authentik binds the MFA cookie to the stage that
+   set it (`check_mfa_cookie`), so it would ask a WebAuthn administrator twice. The first enrolment of an account with
+   no authenticator still follows the password alone (RR-62). The default-flow stage (every Authentik user) and the
+   device-login stages keep both classes. The pre-upgrade enrolment note of decision 6 is superseded by the enrolment
+   at sign-in.
+   *Note 2026-10-18 (M8f Review 3, B3): recovery codes count as a second factor; decided by the maintainer
+   2026-10-18 (option a).* Authentik accepts one of the account's recovery codes wherever it asks for a TOTP code, so
+   "proves TOTP" in this decision includes entering a recovery code: the password and one recovery code of a TOTP-only
+   administrator enrol WebAuthn in stage B. No deny stage enforces the factor class; RR-62 names the risk and the
+   custody of administrators' recovery codes.
 4. **End all sessions** (decision 4) also deletes the identity provider's authenticated sessions of every portal user
    (platform administrators and the three role groups of every organization) through Authentik's
-   `core/authenticated_sessions/bulk_delete`, inside the same audited action; the service account gains the two session
+   `core/authenticated_sessions/bulk_delete`, inside the same audited action, run as its external part
+   (`ActionRunner.RunExternal`: the started action is committed before Valkey and Authentik are called, so a crash
+   leaves an action the reaper records as `unknown`; the Authentik part has 80 s, below the 120 s HTTP write timeout);
+   the service account gains the two session
    permissions. A single account's revocation (role change, step-up mismatch, deactivation) stays Paddock-only: the
    account signs in again with its current role, and a deactivation already ended everything in Authentik.
 

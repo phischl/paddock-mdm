@@ -208,6 +208,16 @@ func (s *Supervisor) onRequest(ctx context.Context) {
 		s.cleanup("")
 		return
 	}
+	// The agent staged a release whose result it has not read yet: a result is written after the request's removal,
+	// and a rollback whose flip back was not durable at once concludes while the previous agent runs (PDK-323).
+	// Processing it would install a release that just failed and replace the result before the agent reported it; the
+	// agent marks the release as failed once it reads the result.
+	var res struct{ Version string }
+	if data, err := os.ReadFile(s.cfg.Result); err == nil && json.Unmarshal(data, &res) == nil && res.Version == req.Version {
+		slog.Warn("removing an update request for a release whose result is not delivered yet", "version", req.Version)
+		s.cleanup(req.Version)
+		return
+	}
 	dir := filepath.Join(s.cfg.Staging, req.Version)
 	from := s.version(s.current())
 	bin, err := os.ReadFile(filepath.Join(dir, "paddockd")) //nolint:gosec // version validated above
@@ -364,14 +374,17 @@ func (s *Supervisor) rollback(reason string) {
 		slog.Warn("rolled back; the result waits until the flip back is durable", "version", p.Version, "slot", p.FromSlot)
 		return
 	}
-	s.restartChild()
 	if err != nil {
+		s.restartChild()
 		slog.Error("rollback failed: current still points at the new agent; retrying", "version", p.Version, "active_slot", s.activeSlot(),
 			"previous_slot", p.FromSlot, "attempts", rollbackAttempts, "error", err)
 		s.keepRollbackPending(p)
 		return
 	}
+	// The result is written and the request removed before the previous agent starts: it checks in at once and would
+	// otherwise stage the release it was just rolled back from (ADR 0024 amendment 2026-10-18).
 	s.conclude(p, outcomeRolledBack)
+	s.restartChild()
 }
 
 // flipBack points current at slot in up to attempts attempts, retrying with back-off. It succeeds exactly when current then points at slot: a
@@ -404,18 +417,22 @@ func (s *Supervisor) flipBack(slot string, attempts int) (durable bool, err erro
 func (s *Supervisor) confirmRollback() {
 	p := s.rolledBack
 	s.recordPending(p)
-	if p.RollbackPending && !s.retryFlipBack(p) {
+	retried := p.RollbackPending
+	if retried && !s.retryFlipBack(p) {
 		return
 	}
-	if !s.confirmFlip(p.FromSlot) {
-		return
+	if s.confirmFlip(p.FromSlot) {
+		s.rolledBack = nil
+		s.conclude(p, outcomeRolledBack)
 	}
-	s.rolledBack = nil
-	s.conclude(p, outcomeRolledBack)
+	// As in rollback: the old agent starts only after the result exists, when the flip is confirmed.
+	if retried {
+		s.restartChild()
+	}
 }
 
 // retryFlipBack makes one attempt per retry slot to flip current back to FromSlot. A current that already points there
-// (an operator flipped it by hand) succeeds as well; the old agent is restarted and the flip must still become durable.
+// (an operator flipped it by hand) succeeds as well; the caller restarts the old agent and makes the flip durable.
 func (s *Supervisor) retryFlipBack(p *probation) bool {
 	if s.cfg.Now().Before(p.retryAt) {
 		return false
@@ -430,7 +447,6 @@ func (s *Supervisor) retryFlipBack(p *probation) bool {
 	}
 	slog.Info("rolled back on a retry", "version", p.Version, "attempt", p.retries, "slot", p.FromSlot)
 	p.RollbackPending = false
-	s.restartChild()
 	return true
 }
 
@@ -506,24 +522,19 @@ func (s *Supervisor) cleanup(version string) {
 // reported for it yet, and the agent does not signal again while the request keeps update.Pending true, so the
 // request is processed as SIGUSR1 would: signature, version and self-test are checked anew from the staged files,
 // and it ends in exactly one result or a switch with its own probation. A request whose release the existing result
-// already names outlived that result through a power loss; it is removed instead, because processing it again would
-// report the release a second time. So is a request for the version that current already runs (PDK-066): it outlived
-// the result of its own switch, whose staging sync failed, and the agent has since deleted that result.
+// already names outlived that result through a power loss; onRequest removes it, because processing it again would
+// report the release a second time. A request for the version that current already runs is removed here (PDK-066):
+// it outlived the result of its own switch, whose staging sync failed, and the agent has since deleted that result.
 func (s *Supervisor) resumeRequest(ctx context.Context) {
 	if s.probation != nil || s.rolledBack != nil {
 		return
 	}
-	var req, res struct{ Version string }
+	var req struct{ Version string }
 	data, err := os.ReadFile(filepath.Join(s.cfg.Staging, "request.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	}
 	if err == nil && json.Unmarshal(data, &req) == nil && versionPattern.MatchString(req.Version) {
-		if data, err := os.ReadFile(s.cfg.Result); err == nil && json.Unmarshal(data, &res) == nil && res.Version == req.Version {
-			slog.Warn("removing an update request whose result was already written", "version", req.Version)
-			s.cleanup(req.Version)
-			return
-		}
 		// Processing it would write downgrade_refused for the running release: a second, false event that counts
 		// against its rollout and makes the agent mark its own version as failed. Removing it loses no result: the
 		// agent never stages the version it runs (a re-install of the same version), and onRequest would refuse one

@@ -205,7 +205,7 @@
     "invalid_command": "Ein Befehl ist nicht erlaubt: Verwenden Sie einen absoluten Pfad mit optionalen Argumenten, ohne ALL, !, # und die Zeichen , : = \\ ^ $ * ? [ ].",
     "setting_locked": "Diese Einstellung kann nicht mehr geändert werden: Geräte verwenden sie bereits.",
     "step_up_required": "Bestätigen Sie Ihre Identität, um fortzufahren.",
-    "step_up_failed": "Die Identitätsbestätigung ist fehlgeschlagen. Versuchen Sie es erneut mit Ihrem eigenen Konto. Haben Sie Ihre Identität vor weniger als einer Minute bestätigt, warten Sie zuerst eine Minute.",
+    "step_up_failed": "Die Identitätsbestätigung ist fehlgeschlagen. Versuchen Sie es erneut mit Ihrem eigenen Konto. Haben Sie Ihre Identität vor weniger als 20 Sekunden bestätigt, warten Sie zuerst 20 Sekunden.",
     "revocation_disabled": "Der Widerruf ist in dieser Installation nicht aktiviert (Abnahme ausstehend).",
     "revocation_frozen": "Sie können 24 Stunden lang keine Widerrufe anfordern oder freigeben, weil Sie ein Widerrufslimit überschritten haben.",
     "revocation_rejected": "Der Widerruf wurde abgelehnt.",
@@ -1108,10 +1108,10 @@
   },
   "sessions": {
     "title": "Portal-Sitzungen",
-    "summary": "Beendet jede Portal-Sitzung der Installation, auch Ihre eigene. Alle Administratoren melden sich neu an; API-Tokens funktionieren weiter.",
+    "summary": "Beendet jede Portalsitzung der Installation, auch Ihre eigene, und meldet jeden Portalbenutzer beim Identitätsanbieter (Authentik) ab. Jeder Administrator meldet sich mit Passwort und Authenticator neu an; API-Token und Geräteanmeldungen arbeiten weiter.",
     "endAll": "Alle Sitzungen beenden",
     "confirmTitle": "Alle Sitzungen beenden?",
-    "confirmMessage": "Alle Administratoren, auch Sie, werden bei der nächsten Anfrage abgemeldet. Geben Sie END zur Bestätigung ein."
+    "confirmMessage": "Jeder Administrator, Sie eingeschlossen, wird bei der nächsten Anfrage vom Portal und vom Identitätsanbieter abgemeldet. Geben Sie END ein, um zu bestätigen."
   },
   "openbao": {
     "title": "OpenBao",
@@ -1563,7 +1563,7 @@
   },
   "dms": {
     "title": "Totmannschalter",
-    "warning": "Ist Paddock länger als diese Frist nicht erreichbar, sperrt sich jedes Gerät mit eingeschaltetem Schalter selbst.",
+    "warning": "Ist Paddock länger als diese Frist nicht erreichbar, sperrt sich jedes Gerät mit eingeschaltetem Schalter selbst. Das gilt auch für ein Gerät, dessen Verbindung zu Paddock absichtlich blockiert wird: Ein Angreifer, der das Gerät von Paddock fernhält, kann die Sperre auslösen.",
     "enabled": "Totmannschalter einschalten",
     "period": "Frist (Tage)",
     "periodHint": "Tage Betriebszeit ohne Kontakt zu Paddock, nach denen sich ein Gerät selbst sperrt.",
@@ -1575,7 +1575,7 @@
     "saved": "Die Einstellungen wurden gespeichert. Die Geräte erhalten sie bei ihrem nächsten Check-in.",
     "confirm": {
       "title": "Totmannschalter einschalten",
-      "message": "Jedes Gerät der Organisation sperrt sich nach {days, plural, one {# Tag} other {# Tagen}} Betriebszeit ohne Kontakt zu Paddock selbst, auch wenn Paddock selbst ausgefallen ist. Ein gesperrtes Gerät muss mit seinem hinterlegten Header und dem Wiederherstellungsschlüssel wiederhergestellt werden.",
+      "message": "Jedes Gerät der Organisation sperrt sich nach {days, plural, one {# Tag} other {# Tagen}} Betriebszeit ohne Kontakt zu Paddock selbst, auch wenn Paddock selbst ausgefallen ist oder die Verbindung des Geräts absichtlich blockiert wird. Ein gesperrtes Gerät muss mit seinem hinterlegten Header und dem Wiederherstellungsschlüssel wiederhergestellt werden.",
       "label": "Einschalten"
     }
   },
@@ -1719,7 +1719,8 @@
       "revocation_expired": "Sperre oder Vernichtung abgelaufen",
       "agent_rollback_pending": "Agent-Rücksetzung ausstehend",
       "agent_not_running": "Agent läuft nicht",
-      "uninstall_pending": "Entfernung von Paddock ausstehend"
+      "uninstall_pending": "Entfernung von Paddock ausstehend",
+      "config_behind": "Konfiguration im Rückstand"
     },
     "action": {
       "stale_warning": "Gerät öffnen",
@@ -1734,7 +1735,8 @@
       "revocation_expired": "Gerät öffnen",
       "agent_rollback_pending": "Gerät öffnen",
       "agent_not_running": "Gerät öffnen",
-      "uninstall_pending": "Gerät öffnen"
+      "uninstall_pending": "Gerät öffnen",
+      "config_behind": "Gerät öffnen"
     },
     "more": "+{count}",
     "empty": {

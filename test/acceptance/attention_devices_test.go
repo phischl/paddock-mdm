@@ -2,6 +2,7 @@ package acceptance
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -167,5 +168,51 @@ func TestAttentionAgentNotRunning(t *testing.T) {
 	}
 	if n := listCount(t, alice, "/api/v1/attention", q); n != 0 {
 		t.Fatalf("agent_not_running rows for %s after the policy passed: %d", hostname, n)
+	}
+}
+
+// TestAttentionConfigBehind (PDK-293, plan M8f decisions 23–24): the attention list accepts the kind config_behind and
+// lists a device that keeps checking in while it applies an older bundle than its newest one, compiled more than an
+// hour ago, with the detail "<applied> < <newest>"; another organization never sees it.
+func TestAttentionConfigBehind(t *testing.T) {
+	alice := login(t, env.Alice)
+	d := activeDevice(t, alice, namedGroup(t, alice, "config behind"), "att-cfg-"+uniqueSuffix())
+	ctx := testContext(t, time.Minute)
+	if _, _, err := d.Checkin(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hostname := getDevice(t, alice, d.DeviceID).Hostname
+	q := url.Values{"q": {hostname}, "kind": {"config_behind"}, "page_size": {"10"}}
+	if n := listCount(t, alice, "/api/v1/attention", q); n != 0 {
+		t.Fatalf("config_behind rows for %s right after its check-in: %d, want 0", hostname, n)
+	}
+	// A newest bundle compiled two hours ago that the device, checking in now, has not applied.
+	db := ownerDB(t)
+	var newest int64
+	if err := db.QueryRow(ctx, `INSERT INTO bundle (device_id, version, organization_id, content_sha256, envelope_sha256, object_key, created_at)
+		SELECT d.id, coalesce((SELECT max(version) FROM bundle WHERE device_id = d.id), 0) + 1000, d.organization_id, '\x00', '\x00',
+		       'acceptance/config-behind', now() - interval '2 hours'
+		FROM device d WHERE d.id = $1 RETURNING version`, d.DeviceID).Scan(&newest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, "UPDATE device_status SET last_contact_at = now(), applied_bundle_version = 0 WHERE device_id = $1", d.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	res := call(t, alice, http.MethodGet, "/api/v1/attention?"+q.Encode(), nil)
+	expectStatus(t, res, http.StatusOK, "")
+	var page struct {
+		Items []struct {
+			Kind   string `json:"kind"`
+			Detail string `json:"detail"`
+		} `json:"items"`
+	}
+	if err := res.JSON(&page); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("0 < %d", newest); len(page.Items) != 1 || page.Items[0].Kind != "config_behind" || page.Items[0].Detail != want {
+		t.Fatalf("config_behind of %s: %+v, want one row with detail %q", hostname, page.Items, want)
+	}
+	if n := listCount(t, login(t, env.Carol), "/api/v1/attention", q); n != 0 {
+		t.Fatalf("carol sees config_behind of the acme device %s", hostname)
 	}
 }

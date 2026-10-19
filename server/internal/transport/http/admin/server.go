@@ -74,6 +74,9 @@ type Deps struct {
 	Now        func() time.Time
 	// StepUpMaxAuthAge replaces the production StepUpMaxAuthAge (development only; zero keeps it).
 	StepUpMaxAuthAge time.Duration
+	// StepUpMFAClass replaces StepUpWebAuthnClass, the authenticator class a step-up must validate (development only;
+	// empty keeps it).
+	StepUpMFAClass string
 	// ExposeStepUp adds the session's step-up time and the step-up timing to GET /api/v1/me (development only, for
 	// the acceptance gates).
 	ExposeStepUp bool
@@ -178,12 +181,15 @@ func NewHandler(d Deps) http.Handler {
 	if d.StepUpMaxAuthAge == 0 {
 		d.StepUpMaxAuthAge = StepUpMaxAuthAge
 	}
+	if d.StepUpMFAClass == "" {
+		d.StepUpMFAClass = StepUpWebAuthnClass
+	}
 	tokenTTL := app.StepUpValidity
 	if d.Runner != nil {
 		tokenTTL = d.Runner.StepUpWindow()
 	}
 	s := &server{d: d, bff: &bff{oidc: d.OIDC, stepUp: d.StepUp, keys: d.Keys, accounts: d.Accounts, now: d.Now,
-		maxAuthAge: d.StepUpMaxAuthAge, tokens: d.StepUpTokens, tokenTTL: tokenTTL, sessions: d.Sessions,
+		maxAuthAge: d.StepUpMaxAuthAge, mfaClass: d.StepUpMFAClass, tokens: d.StepUpTokens, tokenTTL: tokenTTL, sessions: d.Sessions,
 		roles: d.StepUpAccounts, loginMFAOptional: d.LoginMFAOptional}}
 
 	api := http.NewServeMux()
@@ -281,6 +287,9 @@ func (s *server) session(next http.Handler) http.Handler {
 			}
 		}
 		ctx := principal.With(r.Context(), sess.Principal(httpx.ClientIP(r)))
+		if s.d.ExposeStepUp {
+			ctx = context.WithValue(ctx, stepUpClassesKey{}, sess.StepUpClasses)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

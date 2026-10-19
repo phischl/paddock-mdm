@@ -97,3 +97,15 @@ completed: the supervisor concludes the probation (log, result, removal of the r
 previous agent, on the immediate rollback and on a rollback made by a retry alike; the restarted agent then reads the
 result at its first check-in and never stages the version it was rolled back from. Nothing changes for the pending
 rollback (the new agent keeps running) or the not-yet-durable flip (the request stays until the result is written).
+
+The not-yet-durable flip back (and a retried flip back that is not durable yet) keeps "restart before conclude" on
+purpose (fix round 1 of M8f, PDK-323): concluding writes `rolled_back`, removes the request and removes the probation
+log. If the power then took the flip back with it, the device would boot into the failed release with no probation log
+left to resume the rollback from, and with a result claiming the opposite; design contract 4 would be broken. The old
+agent must run meanwhile (contract 8), so it runs while the request still exists. The race this leaves (the result is
+written while that agent is between reading the result and staging the offer, or the request is already removed and
+the result not yet written) is closed in the supervisor: **a request for a release that the update result on disk
+already names is removed without being processed and without a new result**, the same rule a restarted supervisor
+applies to a leftover request. The agent reads the result at its next check-in and never stages that release again.
+The server keeps offering the current release to every older agent (plan M2b decision 21); the per-device stop stays
+on the device.

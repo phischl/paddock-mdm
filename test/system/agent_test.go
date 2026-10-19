@@ -85,7 +85,7 @@ func gateS1(t *testing.T, d *Device) {
 	var dev struct {
 		State string `json:"state"`
 	}
-	if err := json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev); err != nil || dev.State != "active" {
+	if err := json.Unmarshal(d.s.Call(t, http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev); err != nil || dev.State != "active" {
 		t.Fatalf("device state %q, %v", dev.State, err)
 	}
 	// Only this run's resources and the time resource must apply without error; other definitions of the
@@ -146,7 +146,7 @@ func gateS2(t *testing.T, d *Device) {
 	// agent applied: an agent still busy with an earlier bundle (e.g. installing Himmelblau) lags behind the server.
 	remove := func(path string) {
 		before := d.bundleVersion()
-		d.s.Call(http.MethodDelete, "/api/v1/managed-files/"+d.Files[path], nil, http.StatusNoContent)
+		d.s.Call(t, http.MethodDelete, "/api/v1/managed-files/"+d.Files[path], nil, http.StatusNoContent)
 		delete(d.Files, path)
 		Until(t, "bundle without "+path+" compiled", time.Minute, 2*time.Second, nil, func() bool { return d.bundleVersion() > before })
 	}
@@ -203,10 +203,10 @@ func gateS3(t *testing.T, d *Device) {
 	d.Gate(t, "S3")
 	unit := "/etc/systemd/system/" + d.Unit
 	want := fileFacts(d, unit)
-	d.Together(t, "S3", "stack down", func() string { d.s.Make("down"); return "" })
+	d.Together(t, "S3", "stack down", func() string { d.s.Make(t, "down"); return "" })
 	t.Cleanup(func() {
 		if t.Failed() {
-			d.s.Make("up") // never leave the stack down
+			d.s.Make(t, "up") // never leave the stack down
 		}
 	})
 	start := time.Now()
@@ -235,8 +235,8 @@ func gateS3(t *testing.T, d *Device) {
 		t.Errorf("health while offline: %s", health)
 	}
 
-	d.Together(t, "S3", "stack up", func() string { d.s.Make("up"); return "" })
-	d.s.Login()
+	d.Together(t, "S3", "stack up", func() string { d.s.Make(t, "up"); return "" })
+	d.s.Login(t)
 	upAt := time.Now()
 	d.SetLink(false)
 	time.Sleep(10 * time.Second)
@@ -253,7 +253,7 @@ func gateS3(t *testing.T, d *Device) {
 	seen := map[float64]int{}
 	Until(t, "spooled drift events audited", 2*time.Minute, 5*time.Second, nil, func() bool {
 		seen = map[float64]int{}
-		for _, e := range d.s.Events("device.config_drift_corrected", d.ID) {
+		for _, e := range d.s.Events(t, "device.config_drift_corrected", d.ID) {
 			seen[e.Params["event_seq"].(float64)]++
 		}
 		for _, seq := range drift {
@@ -277,7 +277,7 @@ func release(t *testing.T, d *Device, gate string, minor int, label string, tags
 	d.Gate(t, gate)
 	return d.Together(t, gate, "release", func() string {
 		v := version(minor, label)
-		d.s.Release(v, tags)
+		d.s.Release(t, v, tags)
 		return v
 	})
 }
@@ -338,6 +338,20 @@ func gateS4(t *testing.T, d *Device) {
 		if p["from_version"] != good || d.AgentVersion() != good || d.Slot() != slot {
 			t.Fatalf("after the rollback: %v, version %s slot %s; want %s in %s", p, d.AgentVersion(), d.Slot(), good, slot)
 		}
+		// Rolled back exactly once (PDK-300): the restarted agent must not stage the release again, also over the
+		// check-ins of the next three minutes.
+		for end := time.Now().Add(3 * time.Minute); time.Now().Before(end); time.Sleep(time.Minute) {
+			d.Checkin()
+		}
+		n := 0
+		for _, e := range d.s.Events(t, "device.agent_rolled_back", d.ID) {
+			if e.Params["version"] == v {
+				n++
+			}
+		}
+		if n != 1 || d.AgentVersion() != good {
+			t.Fatalf("%d device.agent_rolled_back events for %s, agent %s; want exactly one and %s", n, v, d.AgentVersion(), good)
+		}
 	})
 
 	t.Run("self-test failure", func(t *testing.T) {
@@ -356,7 +370,7 @@ func gateS4(t *testing.T, d *Device) {
 		// AC4 of plan M4b.1: a correctly signed release older than the active one is refused, staged on the device
 		// directly as the agent would stage it (the server offers only newer releases).
 		v := version(1, "downgrade")
-		data, err := os.ReadFile(d.s.BuildAgent(v, nil))
+		data, err := os.ReadFile(d.s.BuildAgent(t, v, nil))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -374,7 +388,7 @@ func gateS4(t *testing.T, d *Device) {
 		// The server refuses binaries that do not verify, so the forged release is staged on the device directly,
 		// exactly as the agent would stage a downloaded one, signed with a key the supervisor does not trust.
 		v := version(5, "forged")
-		bin := d.s.BuildAgent(v, nil)
+		bin := d.s.BuildAgent(t, v, nil)
 		_, forger, err := minisign.GenerateKey(rand.Reader)
 		if err != nil {
 			t.Fatal(err)

@@ -83,15 +83,15 @@ func gateDiskFlow(t *testing.T, w *diskWorld) {
 func gateDESC(t *testing.T, w *diskWorld) string {
 	hostname := w.Must("hostname")
 	body := map[string]any{"confirm_hostname": hostname}
-	w.s.StepUp()
+	w.s.StepUp(t)
 	var revealed struct {
 		Generation  int    `json:"generation"`
 		RecoveryKey string `json:"recovery_key"`
 	}
-	if err := json.Unmarshal(w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/disk/recovery-key", body, http.StatusOK).Body, &revealed); err != nil {
+	if err := json.Unmarshal(w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/disk/recovery-key", body, http.StatusOK).Body, &revealed); err != nil {
 		t.Fatal(err)
 	}
-	header := w.s.Call(http.MethodPost, "/api/v1/devices/"+w.ID+"/disk/header", body, http.StatusOK).Body
+	header := w.s.Call(t, http.MethodPost, "/api/v1/devices/"+w.ID+"/disk/header", body, http.StatusOK).Body
 	if !w.Opens(t, revealed.RecoveryKey) {
 		t.Fatal("the escrowed recovery key does not open the disk")
 	}
@@ -104,7 +104,7 @@ trap "losetup -d $loop; rm -f $f /run/paddock-gate-header.img" EXIT
 cryptsetup luksHeaderRestore -q $loop --header-backup-file /run/paddock-gate-header.img
 cryptsetup open --test-passphrase --key-file=- $loop'`)
 	for _, code := range []string{"disk.recovery_key_revealed", "disk.header_downloaded"} {
-		Until(t, "one audit event "+code, time.Minute, 2*time.Second, nil, func() bool { return len(w.s.Events(code, w.ID)) == 1 })
+		Until(t, "one audit event "+code, time.Minute, 2*time.Second, nil, func() bool { return len(w.s.Events(t, code, w.ID)) == 1 })
 	}
 	return revealed.RecoveryKey
 }
@@ -132,7 +132,7 @@ cryptsetup luksAddKey -q --key-file=- `+w.LUKSDevice()+` /run/paddock-gate-newke
 	if info.state() == "compliant" {
 		t.Fatalf("a device with a foreign keyslot is reported compliant: %+v", info)
 	}
-	if len(w.s.Events("device.tamper_keyslot_changed", w.ID)) != 1 {
+	if len(w.s.Events(t, "device.tamper_keyslot_changed", w.ID)) != 1 {
 		t.Fatal("the keyslot change was reported more than once")
 	}
 }

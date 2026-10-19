@@ -34,7 +34,7 @@ func TestRolloutAutoStop(t *testing.T) {
 	// count as eligible; with the default 2 % the threshold would exceed one failure. The single wave lasts an hour,
 	// so the rollout is still running (not completed) when the failure arrives.
 	v := version(6, "autostop")
-	s.Release(v, []string{"paddock_testbroken_selftest"}, "--failure-threshold-min", "1", "--failure-threshold-percent", "0",
+	s.Release(t, v, []string{"paddock_testbroken_selftest"}, "--failure-threshold-min", "1", "--failure-threshold-percent", "0",
 		"--min-wave-minutes", "60")
 	a.WaitEvent(t, "device.agent_update_failed", 10*time.Minute, func(p map[string]any) bool { return p["version"] == v })
 
@@ -56,8 +56,8 @@ func TestRolloutAutoStop(t *testing.T) {
 		}
 		return len(events) > 0
 	})
-	if len(halted) != 1 || halted[0] != "worker/success" || s.Rollout(v) != "halted" {
-		t.Fatalf("halt events %v, rollout %s; want exactly one successful halt by the worker", halted, s.Rollout(v))
+	if len(halted) != 1 || halted[0] != "worker/success" || s.Rollout(t, v) != "halted" {
+		t.Fatalf("halt events %v, rollout %s; want exactly one successful halt by the worker", halted, s.Rollout(t, v))
 	}
 
 	// The second device checks in only now (agent start); it must not be offered the halted release.
@@ -76,7 +76,7 @@ func TestRolloutAutoStop(t *testing.T) {
 	}
 	// Earlier completed rollouts of the development stack may have offered other releases; only v matters here.
 	for _, code := range []string{"device.agent_updated", "device.agent_update_failed", "device.agent_rolled_back"} {
-		for _, e := range s.Events(code, b.ID) {
+		for _, e := range s.Events(t, code, b.ID) {
 			if e.Params["version"] == v {
 				t.Fatalf("second device reported %s for %s: %v", code, v, e.Params)
 			}

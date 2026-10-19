@@ -85,7 +85,7 @@ func TestSupervisorRollback(t *testing.T) {
 			d.Checkin()
 			time.Sleep(30 * time.Second)
 		}
-		if n := len(d.s.Events("device.supervisor_update_failed", d.ID)) + len(d.s.Events("device.supervisor_updated", d.ID)); n != 1 {
+		if n := len(d.s.Events(t, "device.supervisor_update_failed", d.ID)) + len(d.s.Events(t, "device.supervisor_updated", d.ID)); n != 1 {
 			t.Fatalf("%d supervisor events, want 1 (the failed version was installed again)", n)
 		}
 		if got := d.supervisorVersion(); got != before {

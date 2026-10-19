@@ -47,6 +47,10 @@ The first runs missed both targets and found two hot spots, fixed before the fig
 
 ## Attention list and overview
 
+The kind `config_behind` (plan M8f, ADR 0040) lists an active device whose newest bundle was compiled more than an
+hour ago, which checked in after that hour and still applies an older bundle. It adds one lookup of the newest bundle
+per active device through the primary key `bundle(device_id, version)`; the measurements below predate it.
+
 Measured on 2026-10-12 on the same reference machine and development stack, with one organization of **10 103 active
 devices** enrolled with `make load-identities` (10 000 load devices and 103 that never checked in). The load
 devices checked in once each, with agent versions mixed against the current release `0.3.1791801809-probation`:

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,5 +54,47 @@ func TestWaitReady(t *testing.T) {
 				t.Fatalf("WaitReady() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestDoRepeatsAuthentikStarting: a request Authentik answers with 503 "authentik starting" is sent again, with its
+// body; any other 503 is returned at once.
+func TestDoRepeatsAuthentikStarting(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := make([]byte, 16)
+		n, _ := r.Body.Read(body)
+		if string(body[:n]) != "answer" {
+			http.Error(w, "body "+string(body[:n]), http.StatusBadRequest)
+			return
+		}
+		switch calls.Add(1) {
+		case 1:
+			http.Error(w, "authentik starting", http.StatusServiceUnavailable)
+		case 2:
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.Error(w, "maintenance", http.StatusServiceUnavailable)
+		}
+	}))
+	defer srv.Close()
+	send := func() int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, strings.NewReader("answer"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := Do(newTestClient(t), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if status := send(); status != http.StatusOK || calls.Load() != 2 {
+		t.Fatalf("status %d after %d calls, want 200 after 2", status, calls.Load())
+	}
+	if status := send(); status != http.StatusServiceUnavailable || calls.Load() != 3 {
+		t.Fatalf("status %d after %d calls, want 503 after 3", status, calls.Load())
 	}
 }

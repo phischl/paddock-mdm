@@ -42,11 +42,36 @@ entries:
     identifiers:
       name: paddock-admin-login-mfa
     attrs:
+      # Stage A (plan M8f decision 13 as amended on 2026-10-18): an administrator with any authenticator proves it
+      # before anything is enrolled, so the password alone never enrols a key. Authentik accepts one of the account's
+      # recovery codes in place of the TOTP code (maintainer decision 2026-10-18, RR-62). Authentik counts an account
+      # as not configured only when it has no WebAuthn and no TOTP device; only then is WebAuthn enrolled here.
       device_classes: [webauthn, totp]
       not_configured_action: configure
       configuration_stages:
         - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
-        - !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
+
+  # Stage B: the step-up accepts WebAuthn only, so an administrator who has just proven TOTP (or entered a recovery
+  # code) in stage A and has no WebAuthn device enrols one now. The policy on its binding skips it for an account with
+  # a WebAuthn device, because the MFA cookie is bound to the stage that set it and a last_auth_threshold would ask a
+  # WebAuthn user twice.
+  - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
+    id: mfa-webauthn
+    identifiers:
+      name: paddock-admin-login-webauthn
+    attrs:
+      device_classes: [webauthn]
+      not_configured_action: configure
+      configuration_stages:
+        - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
+
+  - model: authentik_policies_expression.expressionpolicy
+    id: webauthn-missing
+    identifiers:
+      name: paddock-admin-login-webauthn-missing
+    attrs:
+      expression: |
+        return not ak_user_has_authenticator(request.user, "webauthn")
 
   - model: authentik_stages_user_login.userloginstage
     id: login
@@ -74,8 +99,33 @@ entries:
     attrs:
       evaluate_on_plan: true
       re_evaluate_policies: true
-  # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17): a user without an
-  # authenticator must enrol one; a user who just validated one in the stage at order 30 is not asked twice.
+  # Re-evaluated when stage B is reached, after stage A, so that an account that enrolled WebAuthn in stage A skips it.
+  # "all": the development blueprint binds a policy that always fails to skip this stage as well.
+  - model: authentik_flows.flowstagebinding
+    id: mfa-webauthn-binding
+    identifiers:
+      target: !KeyOf login-flow
+      stage: !KeyOf mfa-webauthn
+      order: 31
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: all
+  # The policy identifies the binding, not the target (see the development blueprint): a target identifier never
+  # matches the stored policy binding model pk on a re-apply.
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf webauthn-missing
+      order: 0
+    attrs:
+      target: !KeyOf mfa-webauthn-binding
+  # Second factor on Authentik's default authentication flow as well (lab finding of 2026-10-17, plan M8x decision 5):
+  # every sign-in validates a WebAuthn or TOTP device; a user without one enrols one here. The policy below skips this
+  # stage only when Authentik's own stage at order 30 has just validated a WebAuthn or TOTP device in this flow
+  # (PDK-324): the MFA cookie of a last_auth_threshold is bound to the stage that set it and never let this stage skip
+  # a validation of the stage at order 30. Owning such a device is not enough: order 30 also accepts recovery codes,
+  # e-mail, SMS and Duo, and a sign-in with one of those is asked again here. Authentik accepts a further recovery code
+  # at this TOTP prompt as well, so the guarantee is a second factor of the user's own devices (RR-62).
   - model: authentik_stages_authenticator_validate.authenticatorvalidatestage
     id: default-flow-mfa
     identifiers:
@@ -83,7 +133,7 @@ entries:
     attrs:
       device_classes: [webauthn, totp]
       not_configured_action: configure
-      last_auth_threshold: minutes=5
+      last_auth_threshold: seconds=0
       configuration_stages:
         - !Find [authentik_stages_authenticator_webauthn.authenticatorwebauthnstage, [name, default-authenticator-webauthn-setup]]
         - !Find [authentik_stages_authenticator_totp.authenticatortotpstage, [name, default-authenticator-totp-setup]]
@@ -94,8 +144,30 @@ entries:
       stage: !KeyOf default-flow-mfa
       order: 31
     attrs:
-      evaluate_on_plan: true
+      # Evaluated when the stage is reached, for the identified user; "all": the development blueprint binds a policy
+      # that always fails to skip this stage.
+      evaluate_on_plan: false
       re_evaluate_policies: true
+      policy_engine_mode: all
+  - model: authentik_policies_expression.expressionpolicy
+    id: default-flow-mfa-missing
+    identifiers:
+      name: paddock-default-login-mfa-missing
+    attrs:
+      # The name stays as first shipped although the policy checks the factor used, not the devices owned: the policy
+      # binding is identified by the policy, so a renamed policy would leave the old binding on order 31 after a
+      # re-apply.
+      expression: |
+        method_args = request.context.get("auth_method_args") or {}
+        return not any(d.__class__.__name__ in ("TOTPDevice", "WebAuthnDevice") for d in method_args.get("mfa_devices") or [])
+  - model: authentik_policies.policybinding
+    identifiers:
+      policy: !KeyOf default-flow-mfa-missing
+      order: 0
+    attrs:
+      target: !KeyOf default-flow-mfa-binding
+      # Authentik's default failure result (false) would remove the stage if the expression raised; true fails closed.
+      failure_result: true
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf login-flow
@@ -193,6 +265,9 @@ entries:
         - authentik_core.change_user
         - authentik_core.delete_user
         - authentik_core.reset_user_password
+        # End all sessions also ends the portal users' Authentik sessions (plan M8f decision 17).
+        - authentik_core.view_authenticatedsession
+        - authentik_core.delete_authenticatedsession
         - authentik_core.view_application
         - authentik_core.add_application
         - authentik_core.change_application

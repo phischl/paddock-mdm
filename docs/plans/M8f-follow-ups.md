@@ -296,6 +296,74 @@ decided and deferred (PDK-180, PDK-187).
     first sign-in when the administrator has none; TOTP stays usable for the identity provider's own interfaces and
     the device login."
 
+**Architect note 2026-10-18 (fix round 1, Review 1 finding B1): decision 13 is amended.** The block above sent an
+administrator with TOTP only to the WebAuthn setup after the password alone (Authentik 2026.8.3
+`stages/authenticator_validate/stage.py:196-200` drops devices of other classes; `:280-289` then configures), so the
+password alone enrolled a key that passes every step-up. `paddock-portal.yaml` now carries two stages:
+
+- **Stage A**, `paddock-admin-login-mfa` at order 30: `device_classes: [webauthn, totp]`, `not_configured_action:
+  configure`, one configuration stage (the WebAuthn setup). Authentik treats an account as not configured only when it
+  has no device of an allowed class, so the enrolment here follows the password only for an account without any
+  authenticator (trust on first use, RR-62). `deny` was rejected: it locks out every new administrator.
+- **Stage B**, `paddock-admin-login-webauthn` at order 31: `device_classes: [webauthn]`, `not_configured_action:
+  configure`, one configuration stage (the WebAuthn setup). Its binding has `evaluate_on_plan: false`,
+  `re_evaluate_policies: true`, `policy_engine_mode: all` and the expression policy
+  `paddock-admin-login-webauthn-missing` (`return not ak_user_has_authenticator(request.user, "webauthn")`). A TOTP-only
+  administrator proves TOTP in stage A and enrols WebAuthn in stage B; a WebAuthn administrator and a new account that
+  enrolled in stage A skip stage B. A `last_auth_threshold` on stage B was rejected: the MFA cookie is bound to the
+  stage that set it (`check_mfa_cookie`, `payload["stage"] != stage.pk.hex`), so stage A's validation never skips
+  stage B and a WebAuthn administrator would be asked twice.
+- The development blueprint (`authentik/dev/paddock-dev.yaml`) MUST bind `paddock-dev-skip-mfa` to the binding at
+  order 31 as well (policy-binding order 2); mode *all* makes that skip win. This change to the development blueprint is
+  allowed by this amendment although PDK-181 listed it as out of scope.
+- An administrator with TOTP only who reaches the portal through an existing Authentik session (default flow, M8x
+  session reuse) never sees stage B and is refused at every step-up (fail closed); `docs/operations/step-up.md` tells
+  them to sign in once through the portal's own sign-in.
+- Tests: `TestPortalBlueprintLoginWebAuthnOnly` asserts both stages, their orders, the binding attributes and the
+  policy binding; `TestDevBlueprintSkipsPortalLoginMFA` asserts both development skips; `TestStepUpFactor` reads both
+  stages and the two policies on the order-31 binding. The flows themselves are checked on the lab
+  (`docs/operations/step-up.md` *Checking the portal sign-in factor*), because the development stack skips them.
+
+**Note 2026-10-18 (Review 3, B3): recovery codes count as a second factor; decided by the maintainer 2026-10-18
+(option a).** Authentik checks a code against every device of the user, recovery codes included
+(`stages/authenticator_validate/challenge.py:144-157`, `stage.py:80-85`). Stage A therefore accepts one recovery code
+of a TOTP-only administrator in place of the TOTP code, and stage B then enrols WebAuthn: "proves TOTP" above means
+"proves TOTP or enters one of the account's recovery codes". No deny stage is added; RR-62 names the risk and the
+measures (recovery codes of administrators in custody, regenerated after a suspected disclosure).
+
+**Implementer note 2026-10-18 (fix rounds 1 and 2, PDK-324), approved by the orchestrator acting as architect on
+2026-10-18 for the B2 decision: the default-flow stage of M8x.** `paddock-default-login-mfa` at order 31 of
+`default-authentication-flow` asked every user with an authenticator a second time: Authentik's own stage
+`default-authentication-mfa-validation` at order 30 validates any device class (`static`, `totp`, `webauthn`, `duo`,
+`sms`, `email`; `not_configured_action: skip`, `last_auth_threshold: seconds=0`, verified in the 2026.8.3 database of the
+development stack), and the `last_auth_threshold: minutes=5` of order 31 could not skip it, because the MFA cookie is
+bound to the stage that set it. The binding has `evaluate_on_plan: false`, `re_evaluate_policies: true`,
+`policy_engine_mode: all` and the expression policy `paddock-default-login-mfa-missing`, bound with
+`failure_result: true` so an expression error keeps the stage. The policy decides by the factor validated in this
+sign-in, not by the devices the user owns: the validate stage appends the validated device to
+`auth_method_args.mfa_devices` of the plan context (`stages/authenticator_validate/stage.py`), and the
+`ReevaluateMarker` merges the plan context into `request.context` (`flows/markers.py`). It skips order 31 only when that
+list holds a `TOTPDevice` or `WebAuthnDevice`. Consequences:
+- A user who validated TOTP or WebAuthn at order 30 is asked once.
+- A user who signed in at order 30 with a recovery code, e-mail, SMS or Duo is asked for TOTP or WebAuthn at order 31
+  (sent on, not refused: the user owns such a device, so no legitimate user is locked out, and the sign-in finishes
+  only after a WebAuthn or TOTP validation, so no session from a weaker factor can enrol a passkey).
+- A user without TOTP or WebAuthn (no device, or recovery codes, SMS, e-mail or Duo only) enrols one at order 31, as
+  decision 5 of M8x requires; for such an account the enrolment trusts the factors before it (RR-62).
+
+The ownership-based policy of fix round 1 let a recovery code replace the second factor (Review 2, B2). The stage sets
+`last_auth_threshold: seconds=0` explicitly, so a re-apply resets the old value; the policy keeps its name, because its
+binding is identified by the policy. Mode *all* keeps the development skip effective. Tests:
+`TestPortalBlueprintBindsMFAOnTheDefaultFlow` (attributes, the factor-based expression, no ownership check,
+`failure_result`) and acceptance `TestLoginMFAPath` (mode *all*, both policies on order 31); lab case 5 in
+`docs/operations/step-up.md`.
+
+**Note 2026-10-18 (Review 3, B3): recovery codes count as a second factor; decided by the maintainer 2026-10-18
+(option a).** Order 31 also accepts a recovery code, because Authentik counts it as the TOTP factor
+(`challenge.py:144-157`). A sign-in that used a recovery code at order 30 finishes after a second factor of the user's
+own devices, recovery codes included, not necessarily after a WebAuthn or TOTP validation; the consequence above that
+"no session from a weaker factor can enrol a passkey" holds only for e-mail, SMS and Duo. RR-62 names the risk.
+
 ### 3.4 End all sessions ends the administrators' Authentik sessions too (PDK-190) — ADR 0034 amendment 2026-10-18, ADR 0007 amendment
 
 16. `app.Sessions` MUST gain two dependencies and end the Authentik sessions inside the same action:
@@ -358,6 +426,17 @@ decided and deferred (PDK-180, PDK-187).
     simply signs in again with its current role", RR-66 (§6.7). CHANGELOG `### Changed`: "*End all sessions* now also
     signs every portal user out of the identity provider, so a stolen browser session cannot sign in again without
     password and authenticator."
+
+**Architect note 2026-10-18 (fix round 1, Review 1 finding M2, PDK-322): decision 16 is amended.** "Inside the same
+action" now means the external part of `ActionRunner.RunExternal`, not `RunTx`: `prepare` is empty, so the first
+transaction only records the started action; `external` ends the Paddock sessions (`store.EndAll`, Valkey) and then
+lists the portal users and sends the chunked bulk deletes under a context deadline of 80 s
+(`identitySessionBudget`: the HTTP write timeout is 120 s and the final transaction may take up to 30 s); `finalize`
+records `generation`, `identity_users` and `identity_sessions_ended` as far as they are known. A crash after the
+started action leaves an action the reaper finalizes as `unknown`, so every attempt has an audit event, and no
+database transaction stays open during the directory calls. A call past the deadline fails like any other Authentik
+error (`upstream_unavailable`). Test: `sessions_integration_test.go::TestEndAllSessionsCallsOutsideTheTransaction`
+(the action is `started` during the bulk delete, the call has a deadline, a deadline error records a failure).
 
 ### 3.5 Public pages follow the browser language (PDK-301)
 
@@ -491,6 +570,19 @@ decided and deferred (PDK-180, PDK-187).
     writes the result before it restarts the previous agent, so the restarted agent never stages the release it just
     rolled back from." CHANGELOG `### Fixed`: "A release that failed its probation is rolled back exactly once; the
     restarted agent no longer re-installs it before the rollback is recorded."
+
+**Architect note 2026-10-18 (fix round 1, Review 1 finding M3, PDK-323): decision 31 is completed.** The non-durable
+flip back (`RollingBack`) and the retried flip back that is not durable yet keep the restart before `conclude`:
+`conclude` writes `rolled_back`, removes the request and removes the probation log, so concluding before the flip is
+durable would let a power loss that loses the flip boot the failed release without a probation log to resume the
+rollback from (contract 4), and with a false result. Instead `onRequest` MUST remove a request whose release the update
+result on disk already names, without processing it and without a new result (the rule `resumeRequest` already applies
+after a restart, now in `onRequest` alone). That closes the double rollback on every path, including the window in
+`finishAt` between the request's removal and the result. Server-side suppression of the offer was considered and not
+taken: the racing check-in carries no report yet, so the server cannot know; the device's stop
+(`FailedUpdateVersion`) stays the mechanism. Test: `supervisor_test.go::TestRollbackConfirmedLaterIsNotStagedAgain`
+(injected `SyncDir` failure, the rollback concludes later, the release is staged again: the request is removed, the
+staging directory is clean, the result keeps its `at`; without the rule a second `rolled_back` follows).
 
 ### 3.9 System-test Stack helpers fail the calling subtest (PDK-298)
 

@@ -16,22 +16,22 @@ import (
 func setUnlockMode(t *testing.T, s *Stack, mode string) {
 	t.Helper()
 	var set map[string]any
-	if err := json.Unmarshal(s.Call(http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &set); err != nil {
+	if err := json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &set); err != nil {
 		t.Fatal(err)
 	}
 	delete(set, "updated_at")
 	set["disk_unlock_mode"] = mode
-	s.Call(http.MethodPut, "/api/v1/settings/login", set, http.StatusOK)
+	s.Call(t, http.MethodPut, "/api/v1/settings/login", set, http.StatusOK)
 }
 
 // revealRecoveryKey reveals the device's recovery key as alice after a step-up.
 func (d *Device) revealRecoveryKey(t *testing.T) string {
 	t.Helper()
-	d.s.StepUp()
+	d.s.StepUp(t)
 	var revealed struct {
 		RecoveryKey string `json:"recovery_key"`
 	}
-	if err := json.Unmarshal(d.s.Call(http.MethodPost, "/api/v1/devices/"+d.ID+"/disk/recovery-key",
+	if err := json.Unmarshal(d.s.Call(t, http.MethodPost, "/api/v1/devices/"+d.ID+"/disk/recovery-key",
 		map[string]any{"confirm_hostname": d.Must("hostname")}, http.StatusOK).Body, &revealed); err != nil || revealed.RecoveryKey == "" {
 		t.Fatalf("reveal: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestDiskUnlockModeTPMOnly(t *testing.T) {
 	setUnlockMode(t, s, "tpm_only")
 	t.Cleanup(func() { setUnlockMode(t, s, "tpm_pin") })
 
-	tok := s.Call(http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{
+	tok := s.Call(t, http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{
 		"name": "systest du1 " + unique(), "max_uses": 1, "auto_approve": true,
 		"expires_at": time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339),
 	}, http.StatusCreated)
@@ -69,8 +69,8 @@ func TestDiskUnlockModeTPMOnly(t *testing.T) {
 	if err := json.Unmarshal(tok.Body, &created); err != nil {
 		t.Fatal(err)
 	}
-	s.RevokeOnCleanup(created.Token.ID)
-	userData := s.Call(http.MethodPost, "/api/v1/autoinstall", map[string]any{
+	s.RevokeOnCleanup(t, created.Token.ID)
+	userData := s.Call(t, http.MethodPost, "/api/v1/autoinstall", map[string]any{
 		"enrollment_config": created.EnrollmentConfig, "release": "26.04", "hostname": aiVMName,
 		"locale": "en_US.UTF-8", "keyboard_layout": "us", "timezone": "Europe/Berlin",
 	}, http.StatusOK).Body
@@ -97,7 +97,7 @@ func TestDiskUnlockModeTPMOnly(t *testing.T) {
 				ID string `json:"id"`
 			} `json:"items"`
 		}
-		_ = json.Unmarshal(s.Call(http.MethodGet, "/api/v1/devices?q="+aiVMName+"&state=active", nil, http.StatusOK).Body, &page)
+		_ = json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/devices?q="+aiVMName+"&state=active", nil, http.StatusOK).Body, &page)
 		if len(page.Items) > 0 {
 			d.ID = page.Items[0].ID
 		}
@@ -127,13 +127,13 @@ func TestDiskUnlockModeMismatch(t *testing.T) {
 		vm.Fresh()
 		d := Install(t, s, vm, debDir(s))
 		gateDiskFlow(t, &diskWorld{Device: d, pin: randomDigits(t, 8)})
-		s.Call(http.MethodPatch, "/api/v1/device-groups/"+d.Group, map[string]any{"disk_unlock_mode": "tpm_only"}, http.StatusOK)
+		s.Call(t, http.MethodPatch, "/api/v1/device-groups/"+d.Group, map[string]any{"disk_unlock_mode": "tpm_only"}, http.StatusOK)
 		d.WaitDisk(t, "unlock_mode_mismatch", 10*time.Minute, func(i diskInfo) bool {
 			return i.state() == "unlock_mode_mismatch" && i.UnlockMode == "tpm_only"
 		})
 		hostname := d.Must("hostname")
 		Until(t, "attention lists the mismatch", 3*time.Minute, 10*time.Second, nil, func() bool {
-			res := s.Call(http.MethodGet, "/api/v1/attention?kind=disk_not_compliant&q="+hostname, nil, http.StatusOK)
+			res := s.Call(t, http.MethodGet, "/api/v1/attention?kind=disk_not_compliant&q="+hostname, nil, http.StatusOK)
 			return strings.Contains(string(res.Body), `"detail":"unlock_mode_mismatch"`)
 		})
 		key := d.revealRecoveryKey(t)

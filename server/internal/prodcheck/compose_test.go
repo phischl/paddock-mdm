@@ -362,7 +362,11 @@ func TestContainerHardening(t *testing.T) {
 // TestStepUpBlueprintWebAuthnOnly (plan M8s decision 40): the shipped step-up flow validates with WebAuthn only; only
 // the development blueprint adds a stage that accepts TOTP.
 // TestPortalBlueprintBindsMFAOnTheDefaultFlow: the portal blueprint adds a second factor at order 31 of Authentik's
-// default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a).
+// default authentication flow and the development blueprint skips it (plan M8x decisions 5 and 7a). The stage is
+// skipped only when order 30 has validated a WebAuthn or TOTP device in this sign-in, because a last_auth_threshold
+// cannot skip a stage after another stage's validation (PDK-324). Owning such a device does not skip it, so a sign-in
+// with a recovery code, e-mail, SMS or Duo is asked again (where Authentik also accepts a further recovery code), and
+// an expression error keeps the stage.
 func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 	read := func(path string) string {
 		b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", path))
@@ -372,15 +376,119 @@ func TestPortalBlueprintBindsMFAOnTheDefaultFlow(t *testing.T) {
 		return string(b)
 	}
 	portal := read(filepath.Join("blueprints", "paddock-portal.yaml"))
-	for _, want := range []string{"name: paddock-default-login-mfa", "slug, default-authentication-flow", "order: 31",
-		"not_configured_action: configure", "last_auth_threshold: minutes=5"} {
-		if !strings.Contains(portal, want) {
-			t.Errorf("paddock-portal.yaml does not contain %q", want)
+	block := func(marker string) string {
+		t.Helper()
+		start := strings.Index(portal, marker)
+		if start < 0 {
+			t.Fatalf("paddock-portal.yaml has no entry %q", marker)
 		}
+		end := strings.Index(portal[start:], "\n  - model:")
+		if end < 0 {
+			end = len(portal) - start
+		}
+		return portal[start : start+end]
+	}
+	for _, c := range []struct{ marker, want string }{
+		{"name: paddock-default-login-mfa\n", "not_configured_action: configure"},
+		{"name: paddock-default-login-mfa\n", "last_auth_threshold: seconds=0"},
+		{"id: default-flow-mfa-binding\n", "slug, default-authentication-flow"},
+		{"id: default-flow-mfa-binding\n", "order: 31"},
+		{"id: default-flow-mfa-binding\n", "evaluate_on_plan: false"},
+		{"id: default-flow-mfa-binding\n", "re_evaluate_policies: true"},
+		{"id: default-flow-mfa-binding\n", "policy_engine_mode: all"},
+		{"name: paddock-default-login-mfa-missing\n",
+			`method_args = request.context.get("auth_method_args") or {}`},
+		{"name: paddock-default-login-mfa-missing\n",
+			`return not any(d.__class__.__name__ in ("TOTPDevice", "WebAuthnDevice") for d in method_args.get("mfa_devices") or [])`},
+		{"policy: !KeyOf default-flow-mfa-missing\n", "target: !KeyOf default-flow-mfa-binding"},
+		{"policy: !KeyOf default-flow-mfa-missing\n", "failure_result: true"},
+	} {
+		if !strings.Contains(block(c.marker), c.want) {
+			t.Errorf("the entry with %q lacks %q", strings.TrimSpace(c.marker), c.want)
+		}
+	}
+	if strings.Contains(block("name: paddock-default-login-mfa-missing\n"), "ak_user_has_authenticator") {
+		t.Error("paddock-default-login-mfa-missing decides by the devices the user owns, not by the factor of this sign-in")
 	}
 	dev := read(filepath.Join("dev", "paddock-dev.yaml"))
 	if !strings.Contains(dev, "[slug, default-authentication-flow]]], [order, 31]]") {
 		t.Error("paddock-dev.yaml does not skip the stage at order 31 of default-authentication-flow")
+	}
+}
+
+// TestPortalBlueprintLoginWebAuthnOnly (plan M8f decision 13 as amended on 2026-10-18): stage A at order 30 validates
+// any existing authenticator and enrols WebAuthn only for an account without one; stage B at order 31 enrols WebAuthn
+// after a TOTP validation (Authentik counts a recovery code as TOTP) and runs only for an account without a WebAuthn
+// device. The default flow's stage, which serves every Authentik user, keeps accepting TOTP.
+func TestPortalBlueprintLoginWebAuthnOnly(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-portal.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	portal := string(b)
+	block := func(marker string) string {
+		t.Helper()
+		start := strings.Index(portal, marker)
+		if start < 0 {
+			t.Fatalf("paddock-portal.yaml has no entry %q", marker)
+		}
+		end := strings.Index(portal[start:], "\n  - model:")
+		if end < 0 {
+			end = len(portal) - start
+		}
+		return portal[start : start+end]
+	}
+	stage := func(name, classes string) {
+		t.Helper()
+		s := block("name: " + name + "\n")
+		for _, want := range []string{"\n      device_classes: " + classes + "\n", "\n      not_configured_action: configure\n",
+			"[name, default-authenticator-webauthn-setup]"} {
+			if !strings.Contains(s, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+		if n := strings.Count(s, "        - !Find"); n != 1 || strings.Contains(s, "totp-setup") {
+			t.Errorf("%s has %d configuration stages or enrols TOTP:\n%s", name, n, s)
+		}
+	}
+	stage("paddock-admin-login-mfa", "[webauthn, totp]")
+	stage("paddock-admin-login-webauthn", "[webauthn]")
+	for _, c := range []struct{ marker, want string }{
+		{"stage: !KeyOf mfa\n", "order: 30"},
+		{"stage: !KeyOf mfa-webauthn\n", "order: 31"},
+		{"stage: !KeyOf mfa-webauthn\n", "re_evaluate_policies: true"},
+		{"stage: !KeyOf mfa-webauthn\n", "policy_engine_mode: all"},
+		{"name: paddock-admin-login-webauthn-missing\n", `return not ak_user_has_authenticator(request.user, "webauthn")`},
+		{"policy: !KeyOf webauthn-missing\n", "target: !KeyOf mfa-webauthn-binding"},
+	} {
+		if !strings.Contains(block(c.marker), c.want) {
+			t.Errorf("the entry with %q lacks %q", strings.TrimSpace(c.marker), c.want)
+		}
+	}
+	if !strings.Contains(block("name: paddock-default-login-mfa\n"), "\n      device_classes: [webauthn, totp]\n") {
+		t.Error("paddock-default-login-mfa no longer accepts WebAuthn and TOTP")
+	}
+}
+
+// TestDevBlueprintSkipsPortalLoginMFA: the development users have TOTP only, so the development blueprint must skip
+// both portal login stages; a missing skip of stage B sends every development sign-in to the WebAuthn enrolment.
+func TestDevBlueprintSkipsPortalLoginMFA(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "dev", "paddock-dev.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := string(b)
+	for _, order := range []string{"30", "31"} {
+		target := "[slug, paddock-admin-login]]], [order, " + order + "]]"
+		i := strings.Index(dev, target)
+		if i < 0 {
+			t.Errorf("the development blueprint binds no policy to paddock-admin-login's order %s", order)
+			continue
+		}
+		entry := dev[strings.LastIndex(dev[:i], "  - model:"):i]
+		if !strings.Contains(entry, "authentik_policies.policybinding") || !strings.Contains(entry, "policy: !KeyOf skip-mfa") {
+			t.Errorf("paddock-admin-login's order %s is not skipped by skip-mfa:\n%s", order, entry)
+		}
 	}
 }
 
@@ -401,5 +509,24 @@ func TestStepUpBlueprintWebAuthnOnly(t *testing.T) {
 	}
 	if !strings.Contains(read(filepath.Join("dev", "paddock-dev.yaml")), "paddock-dev-stepup-mfa") {
 		t.Error("the development blueprint has no stage paddock-dev-stepup-mfa")
+	}
+}
+
+// TestStepUpBlueprintEmitsMFAClasses (plan M8f decision 11): the step-up provider carries the mapping that names the
+// validated authenticator classes, which the api requires in every step-up token.
+func TestStepUpBlueprintEmitsMFAClasses(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(composeDir(t), "authentik", "blueprints", "paddock-stepup.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepup := string(b)
+	for _, want := range []string{"managed: io.paddock/scope-stepup-mfa", "scope_name: paddock_stepup",
+		"paddock_mfa_classes", "        - !KeyOf scope-stepup-mfa\n", "get_login_event(token.session)"} {
+		if !strings.Contains(stepup, want) {
+			t.Errorf("paddock-stepup.yaml lacks %q", want)
+		}
+	}
+	if mapping, provider := strings.Index(stepup, "id: scope-stepup-mfa"), strings.Index(stepup, "id: provider"); mapping < 0 || mapping > provider {
+		t.Error("the mapping scope-stepup-mfa must precede the provider that references it")
 	}
 }

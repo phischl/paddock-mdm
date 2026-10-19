@@ -412,6 +412,21 @@ organization A and IDs of organization B and requires 404 for every one.
 Integrity and confidentiality of what matters do not depend on TLS: bundles and commands are
 signed end-to-end, secrets in bundles are encrypted to the device's key. TLS protects metadata.
 
+> **Amendment 2026-10-18 (M8f, ADR 0040) — what TLS protects.**
+>
+> 1. **What the connection protects.** TLS protects the confidentiality of reports and of the enrollment token and
+>    the authenticity of the device login's and fleetd's endpoints; integrity and the revocation path never depend on
+>    it (unchanged, architecture §6.1). Pinning (A), report encryption (B) and a signed pointer (C) are **deferred**;
+>    the residual risk is recorded (RR-64).
+> 2. **Freeze detection on the server.** The attention kind `config_behind` lists an active device whose newest bundle
+>    was compiled more than one hour ago, which checked in after that hour, and whose applied bundle version is older
+>    than the newest (plan M8f §3.6). The grace period is one hour (bundles are compiled within seconds and applied at
+>    the next check-in, at most ~6 minutes later; an hour tolerates a sealed OpenBao or a compiler restart). No audit
+>    event: the kind is a derived condition like `agent_outdated`.
+> 3. **Blocking and the dead man's switch.** A blocked connection is treated like an outage: staleness alerts and,
+>    when enabled, the self-lock after the period. The setting says so (plan M8f §3.6 decision 25; RR-65).
+> 4. **Enrollment token.** Unchanged: expiry, maximum uses, revocation and approval unless auto-approve is set (RR-05).
+
 ### 6.2 Keys on the device
 
 | Key | Algorithm | Storage | Purpose |
@@ -1015,6 +1030,20 @@ action "end all sessions" end them immediately. The step-up flow validates with 
 > `multiple_roles`, `platform_and_organization`, `organization_inactive`, `key_store_sealed`). `GET /api/v1/me` carries
 > `step_up_valid_until`, which the portal shows (ADR 0034 amendment 2026-10-17).
 
+> **Amendment 2026-10-18 (M8f):** the step-up's authorization request carries `max_age=20` (below the 30 s window of
+> the escrow-reader and the revocation-issuer), so a repeated step-up is possible 20 s after the previous one
+> (ADR 0034 amendment 2026-10-18). The step-up provider carries the mapping `io.paddock/scope-stepup-mfa` (scope
+> `paddock_stepup`), whose claim `paddock_mfa_classes` names the authenticator classes the step-up's login validated;
+> the callback refuses every step-up token without the WebAuthn class, so Paddock itself checks the factor that
+> Authentik's `amr` does not distinguish (ADR 0034 amendment 2026-10-18, ADR 0007 amendment 2026-10-18).
+> The portal sign-in validates an existing authenticator (WebAuthn or TOTP, a recovery code counts as TOTP, RR-62;
+> stage `paddock-admin-login-mfa`) and then
+> enrols WebAuthn for an account without a WebAuthn device (stage `paddock-admin-login-webauthn`); TOTP stays usable
+> for Authentik's own interfaces and the device login. *End all sessions* also ends the Authentik browser sessions of every
+> portal user (the platform admins group and every organization's role groups) through Authentik's bulk delete, inside
+> the same audited action as an external call (`ActionRunner.RunExternal`, at most 80 s for the Authentik part); a
+> failure there is recorded after the Paddock sessions ended (ADR 0034 and ADR 0007 amendments 2026-10-18).
+
 ---
 
 ## 10. Permission profiles and sudo
@@ -1469,6 +1498,7 @@ test is replaced by the pilot feedback of the reference deployment.
   valid only when `elapsed ≥ period` as stated inside the signed token). The regular revocation
   sequence follows, the confirmation POST is attempted once.
 - The worker marks devices silent past the period as `presumed_self_locked`.
+- A blocked connection triggers the switch like an outage; the portal says so at the setting.
 
 ---
 

@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enrols one when missing.
 - A step-up (identity confirmation) is refused when Authentik answered it without authenticating again, that is with
   a token whose authentication predates the step-up; the user is asked to confirm again instead of the earlier sign-in
-  counting as a step-up. The portal's failure message suggests waiting a minute after a recent confirmation.
+  counting as a step-up. The portal's failure message suggests waiting 20 seconds after a recent confirmation.
+- A step-up (identity confirmation) now proves a WebAuthn authenticator to Paddock itself: the identity provider names
+  the authenticator classes it validated and the portal refuses any other factor.
 
 ### Added
 
@@ -126,6 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *Component outdated*, and the platform's *Agent releases* page the card *Rollout targets*. The target is the last
   completed release (a running rollout does not move it), and a component newer than its target counts as up to
   date; all three places say so.
+- The attention page lists a device that keeps checking in but has not applied its newest configuration for more than
+  an hour (kind *Configuration behind*).
 
 ### Changed
 
@@ -148,9 +152,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   organization's silence threshold applies (contact filter `unseen`, overview field `devices.no_recent_contact`, part
   of the Silent tile); a stopped agent reported by fleetd is the attention kind `agent_not_running` until fleetd sees
   it running again.
+- A repeated identity confirmation (step-up) is possible 20 seconds after the previous one instead of a minute; the
+  step-up asks the identity provider to authenticate again after 20 seconds.
+- The portal sign-in enrols a WebAuthn authenticator when the administrator has none: after the TOTP code (or one of
+  the account's recovery codes, which the identity provider counts as the TOTP factor) for an administrator with TOTP
+  only, after the password for a new administrator without any authenticator. Keep administrators' recovery codes in
+  custody. TOTP stays
+  usable for the identity provider's own interfaces and the device login.
+- *End all sessions* now also signs every portal user out of the identity provider, so a stolen browser session cannot
+  sign in again without password and authenticator.
+- The dead man's switch setting says that a blocked connection triggers the lock like an outage.
 
 ### Fixed
 
+- A portal sign-in or step-up no longer fails with "Sign-in failed" when Authentik answers "authentik starting" for a
+  moment while it completes the sign-in; the portal repeats the request for up to about two seconds.
 - When Valkey stalls or is unreachable, the device API now answers 503 with `Retry-After` (problem code
   `backpressure`) instead of 500. Devices back off and retry instead of reporting a server fault.
 - The permission profile form no longer leaves an unhandled error in the browser console when the root-equivalence
@@ -179,6 +195,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enrolment of a device whose administrators are not managed by Paddock.
 - The login component no longer removes accounts from the sudo group or re-adds them to local groups every five
   minutes; Paddock alone manages sudo.
+- Public portal pages such as the sign-in refusal use the browser's language (German or English) before a session
+  exists.
+- `./paddock logs` and `make logs` redact token values that the identity provider prints for refused token refreshes.
+- A release that failed its probation is rolled back exactly once; the restarted agent no longer re-installs it before
+  the rollback is recorded.
+- Authentik's own sign-in asks a user with an authenticator for the second factor once instead of twice; a sign-in
+  with a recovery code, e-mail, SMS or Duo code is still followed by a prompt for a second factor of the user's own
+  devices, where a further recovery code is accepted as well.
 
 ## [0.1.0-alpha.3] - 2026-10-17
 

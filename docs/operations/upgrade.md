@@ -9,8 +9,13 @@ then the server.** The new server stops shipping managed files on denied paths, 
 deletes every unchanged file that leaves its bundle. Upload B's agent release to the running server of A (same minor
 version) and roll it out to every device first; upgrade the control plane only when no active device runs an older
 agent (`docs/operations/agent-releases.md`). See residual risk RR-36 for devices that are offline meanwhile. That
-release also needs a WebAuthn authenticator for every administrator before the upgrade, signs every administrator out
-once and asks for one security review afterwards: follow the four steps in `docs/operations/install.md`, section 12.
+release also needs a WebAuthn authenticator for every administrator (the portal enrols one at the first sign-in),
+signs every administrator out once and asks for one security review afterwards: follow the four steps in `docs/operations/install.md`, section 12.
+
+**Release with *End all sessions* for the identity provider (ADR 0034 amendment 2026-10-18).** Authentik grants
+Paddock's service account the two permissions on authenticated sessions when it applies `paddock-portal.yaml` at its
+start: restart Authentik once after the upgrade (`./paddock compose restart authentik-server authentik-worker`), or
+*End all sessions* records a failure with `upstream_unavailable` after it ended the portal sessions.
 
 ## Before you start
 

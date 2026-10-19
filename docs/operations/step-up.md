@@ -74,7 +74,7 @@ These actions always need a fresh step-up, whatever their content:
 | `PUT /api/v1/settings/dms` | organization administrators, when the dead man's switch is enabled |
 | `POST /api/v1/api-tokens` | organization administrators and operators |
 | `POST`, `PATCH`, `DELETE /api/platform/v1/ip-allowlist…` | platform administrators |
-| `POST /api/platform/v1/sessions/end-all` | platform administrators |
+| `POST /api/platform/v1/sessions/end-all` (also ends every portal user's Authentik sessions) | platform administrators |
 | `PUT /api/v1/settings/managed-files` | organization administrators (operator roots) |
 
 **API tokens** (ADR 0034 decision 3): a request authenticated with an API token never satisfies a step-up. Such a
@@ -83,11 +83,25 @@ tokens cannot complete a step-up`, recorded as one denied audit event. The GitOp
 everything else; an administrator applies root-equivalent changes from the portal (`docs/operations/paddockctl.md`).
 
 **Factor.** The shipped step-up flow accepts WebAuthn authenticators only (security key or platform authenticator).
-Every administrator, including every new one, enrols a WebAuthn authenticator in Authentik's user settings
-(`https://auth.<domain>/if/user/` → MFA devices) before the first step-up. The portal login's MFA stage still offers
-TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot complete a step-up. Paddock checks
-`mfa` in the token's `amr`, which does not tell WebAuthn from TOTP; only the Authentik stage enforces the factor
-(residual risk RR-38).
+The portal sign-in makes sure that every administrator has a WebAuthn authenticator, in two stages of the flow
+`paddock-admin-login`:
+
+- Order 30, `paddock-admin-login-mfa`: the administrator proves an existing authenticator (WebAuthn or TOTP). Authentik
+  counts one of the account's recovery codes as the TOTP factor and accepts it here as well. Only an account with no
+  WebAuthn or TOTP authenticator enrols a WebAuthn authenticator here, after the password (residual risk RR-62).
+- Order 31, `paddock-admin-login-webauthn`: runs only for an account without a WebAuthn device (policy
+  `paddock-admin-login-webauthn-missing`). An administrator with TOTP only has just proven the TOTP code or entered a
+  recovery code and enrols a WebAuthn authenticator now; the password alone never enrols a key for an account with
+  TOTP or WebAuthn, but the password and one recovery code do (RR-62: keep administrators' recovery codes in custody).
+
+A TOTP authenticator stays usable for Authentik's own interfaces and the device login. A TOTP-only administrator who
+reaches the portal through an existing Authentik session (Authentik's default sign-in) never passes these stages and
+is refused at every step-up: sign out of Authentik (`https://auth.<domain>/if/user/` → Sign out) and sign in once
+through the portal's own sign-in to enrol the passkey. Paddock checks the
+authenticator classes the step-up validated (claim `paddock_mfa_classes` of the step-up token, emitted by the mapping
+`io.paddock/scope-stepup-mfa`) and refuses every step-up without a WebAuthn authenticator; `amr` alone does not tell
+WebAuthn from TOTP (residual risk RR-38). The api logs a refused class list as "step-up rejected … the step-up did not
+validate the required authenticator class" with the classes, never the token.
 
 ## How it works
 
@@ -97,10 +111,12 @@ TOTP enrolment: an administrator who enrolled only TOTP can sign in but cannot c
   portal's client secret and the portal's access policy. Authentik has no per-request flow override, hence the
   second application.
 - `GET /api/auth/stepup?return_to=` sends the administrator to `paddock-portal-stepup` with `prompt=login`,
-  `max_age=60` and the session's username as `login_hint` (the flow skips the identification stage).
+  `max_age=20` and the session's username as `login_hint` (the flow skips the identification stage).
 - `GET /api/auth/stepup/callback` accepts the ID token only for the same user (`sub`), with `auth_time` at most
-  60 s old and not earlier than the step-up's start, and MFA in `amr`, and then stores the time and the token ID in
-  the session cookie. Otherwise the session stays as it was and the browser returns with `stepup=failed`. Both
+  20 s old and not earlier than the step-up's start, and MFA in `amr`, and then stores the time and the token ID in
+  the session cookie. It also requires the class `authentik_stages_authenticator_webauthn.webauthndevice` in the
+  token's `paddock_mfa_classes` (the api requests the scope `paddock_stepup` from the step-up provider). Otherwise the
+  session stays as it was and the browser returns with `stepup=failed`. Both
   checks compare Authentik's `auth_time` with the api's clock, so the hosts of `paddock-api` and Authentik must keep
   their clocks in sync (NTP): an api clock ahead of Authentik's refuses step-ups, one behind it accepts older logins.
 - The callback also requires that the token's `groups` grant the session's role in the session's organization (the
@@ -114,13 +130,14 @@ The portal shows how long the last step-up stays valid: a chip *Confirmed until 
 *Identity confirmed until …* in the user menu (*No current identity confirmation* otherwise), from
 `step_up_valid_until` of `GET /api/v1/me`; both disappear when the window ends.
 
-`max_age` is 60, not 0: Authentik ignores `max_age=0` and forces a new login for `prompt=login` only once per
-Authentik login, so a second step-up would otherwise receive a token of the first one. With `max_age=60`, any step-up
-more than 60 s after the previous Authentik login authenticates again; within 60 s Authentik may hand out the earlier
-login, whose `auth_time` predates the step-up, so the callback refuses it and the administrator tries again a minute
-later.
+`max_age` is 20, not 0: Authentik ignores `max_age=0` and forces a new login for `prompt=login` only once per
+Authentik login, so a second step-up would otherwise receive a token of the first one. With `max_age=20`, any step-up
+more than 20 s after the previous Authentik login authenticates again; within 20 s Authentik may hand out the earlier
+login, whose `auth_time` predates the step-up, so the callback refuses it and the administrator waits 20 seconds
+and tries again. 20 s stays below the 30 s for which the escrow-reader and the revocation-issuer accept a step-up, so
+a step-up that is too old for them is always old enough for Authentik to authenticate again.
 After a step-up that was refused because another account authenticated, Authentik keeps that account's login; the
-next step-up asks for credentials again once it is older than 60 s.
+next step-up asks for credentials again once it is older than 20 s.
 
 ## Configuration
 
@@ -130,11 +147,44 @@ next step-up asks for credentials again once it is older than 60 s.
 
 ## Before upgrading to WebAuthn-only step-up
 
-Earlier versions also accepted a TOTP code at the step-up. Before the upgrade, every administrator enrols a WebAuthn
-authenticator (security key or platform authenticator) in Authentik's user settings,
-`https://auth.<domain>/if/user/` → MFA devices. After the upgrade an administrator with a TOTP authenticator only
-cannot complete a step-up, and so cannot reveal keys, lock or destroy devices, create API tokens or grant
-root-equivalent rights, until a WebAuthn authenticator exists. The portal login keeps accepting TOTP.
+Earlier versions also accepted a TOTP code at the step-up and at the portal sign-in. Every administrator needs a
+browser or device with a WebAuthn authenticator (security key, or a platform authenticator such as Windows Hello,
+Touch ID, Android, or a phone through the browser's QR code). The portal sign-in now enrols a WebAuthn authenticator
+when the administrator has none, after the administrator proved an existing TOTP authenticator or entered one of
+its recovery codes (section *Factor*); a
+TOTP authenticator stays usable for Authentik's own interfaces and the device login. No enrolment before the upgrade
+is required.
+
+### Checking the portal sign-in factor (lab)
+
+The development stack skips both portal sign-in stages, so these cases are checked on a lab installation after the
+upgrade, each in a private browser window:
+
+1. An administrator with a TOTP authenticator only signs in through the portal: Authentik asks for the password, then
+   for the TOTP code, then for the WebAuthn enrolment; after the enrolment the portal opens and a step-up succeeds.
+2. The same kind of account (TOTP only, a second test administrator), with the password but a wrong TOTP code:
+   Authentik refuses the code and never offers a WebAuthn enrolment. An unused recovery code of the same account in
+   place of the TOTP code is accepted (Authentik counts it as the TOTP factor) and leads to the WebAuthn enrolment;
+   the enrolment appears in Authentik's event log (*Events* → `model_created`, WebAuthn device). Regenerate the
+   account's recovery codes afterwards.
+3. An administrator with a WebAuthn authenticator signs in: Authentik asks for the password and once for the
+   authenticator, then the portal opens.
+4. A new administrator without any authenticator signs in: Authentik asks for the password and then for the WebAuthn
+   enrolment once; the enrolment appears in Authentik's event log (*Events* → `model_created`, WebAuthn device).
+5. Authentik's own sign-in (`https://auth.<domain>/if/user/`, flow `default-authentication-flow`). Paddock's stage
+   `paddock-default-login-mfa` at order 31 is skipped by the policy `paddock-default-login-mfa-missing` only when
+   Authentik's stage at order 30 has validated a TOTP or WebAuthn device in the same sign-in:
+   1. A user with TOTP signs in with the TOTP code: Authentik asks for the code once, then the user interface opens.
+   2. A user with WebAuthn signs in with the WebAuthn authenticator: Authentik asks for it once, then the user
+      interface opens.
+   3. A user with TOTP and recovery codes chooses a recovery code at order 30: Authentik then asks again at order 31
+      (TOTP code or WebAuthn authenticator) and offers no enrolment. Authentik also accepts a second, unused recovery
+      code there, because it counts a recovery code as the TOTP factor. The sign-in therefore finishes only after a
+      second factor of the user's own devices, recovery codes included; the password and a single recovery code are
+      not enough (a used code is spent). Whoever holds the password and two recovery codes gets a session and can
+      enrol a passkey in the user settings (RR-62).
+   4. A user without TOTP or WebAuthn (no device, or recovery codes only) is asked to enrol one (WebAuthn or TOTP)
+      after the password and any factor order 30 asks for.
 
 ## Development stack
 
@@ -143,4 +193,9 @@ In the development stack `make dev-seed` gives the test users TOTP authenticator
 blueprint format cannot set an authenticator's key, so the seeder writes them through Authentik's shell. Because the
 shipped flow validates WebAuthn only, the development blueprint `authentik/dev/paddock-dev.yaml` (mounted by
 `compose.dev.yaml` only) skips the WebAuthn stage at order 30 with the policy `paddock-dev-skip-stepup-webauthn` and
-binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. Production carries neither.
+binds `paddock-dev-stepup-mfa` (WebAuthn or TOTP) at order 31. It also skips both portal sign-in stages
+(`paddock-admin-login` orders 30 and 31) with the policy `paddock-dev-skip-mfa`; the binding at order 31 evaluates its
+policies in mode *all*, so the skip wins over the WebAuthn-missing policy. Production carries neither. `compose.dev.yaml` sets
+`PADDOCK_STEPUP_MFA_CLASS=authentik_stages_authenticator_totp.totpdevice` on `paddock-api`, so the api accepts the
+development users' TOTP step-ups; the variable is development-only and fails `./paddock check` and the api's start in
+production.

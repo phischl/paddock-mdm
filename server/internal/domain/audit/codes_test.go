@@ -15,7 +15,7 @@ func TestM8sCodes(t *testing.T) {
 		outcomes []Outcome
 	}{
 		{CodeAdminSessionsRevoked, []string{"reason", "sessions", "old_role", "new_role"}, []Outcome{OutcomeSuccess, OutcomeFailure}},
-		{CodePlatformSessionsEnded, []string{"generation"}, all},
+		{CodePlatformSessionsEnded, []string{"generation", "identity_users", "identity_sessions_ended"}, all},
 		{CodePermissionProfileRootGrantConfirmed, []string{"name", "effective_class", "commands"}, all},
 		{CodeManagedFileSensitiveConfirmed, []string{"path", "device_group_id", "tier"}, all},
 		{CodeOrganizationSecurityReviewRequired, []string{"root_grant_profiles", "sensitive_files", "denied_files"}, []Outcome{OutcomeSuccess}},

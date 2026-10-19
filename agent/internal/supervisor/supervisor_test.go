@@ -414,6 +414,40 @@ func TestRollbackOnCrashLoop(t *testing.T) {
 	}
 }
 
+// TestRollbackWritesTheResultBeforeTheOldAgentStarts (PDK-300, ADR 0024 amendment 2026-10-18): the previous agent
+// checks in at its start and would stage the release it was rolled back from again if the request were still there
+// and no result named the release; so the result exists and the request is gone before it starts, and the release is
+// rolled back exactly once.
+func TestRollbackWritesTheResultBeforeTheOldAgentStarts(t *testing.T) {
+	f := newFake(t)
+	seen, gone := filepath.Join(f.dir, "result-seen-at-start"), filepath.Join(f.dir, "request-gone-at-start")
+	request := filepath.Join(f.cfg.Staging, "request.json")
+	f.writeExec(filepath.Join(f.cfg.Slots, "A", "paddockd"), script("1.0.0", 0,
+		"[ -e "+f.cfg.Result+" ] && : >"+seen+"; [ -e "+request+" ] || : >"+gone+"; "+f.good()))
+	f.start()
+	f.waitFor("the first agent checked in", f.checkedIn)
+	// Only the start after the rollback counts.
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	f.stage("1.1.0", script("1.1.0", 0, "exit 1"), nil)
+	r := f.waitResult(20 * time.Second)
+	if r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.waitFor("the previous agent started again", func() bool { _, err := os.Stat(gone); return err == nil })
+	if _, err := os.Stat(seen); err != nil {
+		t.Fatal("the previous agent started before the update result existed")
+	}
+	if _, err := os.Stat(request); !os.IsNotExist(err) {
+		t.Fatalf("request.json after the rollback: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if again := f.waitResult(time.Second); again.At != r.At || again.Outcome != outcomeRolledBack {
+		t.Fatalf("a second result %+v after %+v", again, r)
+	}
+}
+
 func TestRollbackOnProbationTimeout(t *testing.T) {
 	f := newFake(t)
 	f.start()
@@ -840,6 +874,33 @@ func TestRollbackWaitsForADurableFlipBack(t *testing.T) {
 	}
 	f.waitNoProbationLog()
 	sf.expectProvenByNewRename(t)
+}
+
+// TestRollbackConfirmedLaterIsNotStagedAgain (PDK-323): a flip back whose directory sync failed concludes while
+// the previous agent runs, so that agent can stage the release again before it read the result. The supervisor removes
+// that request instead of installing the release a second time, and the result stays the one rolled_back.
+func TestRollbackConfirmedLaterIsNotStagedAgain(t *testing.T) {
+	f := newFake(t)
+	sf := &syncFault{broken: true}
+	f.cfg.SyncDir = sf.sync
+	f.resumeFailingProbation(nil)
+	f.start()
+	f.waitSyncs(sf, 2)
+	sf.set(false)
+	r := f.waitResult(10 * time.Second)
+	if r.Outcome != outcomeRolledBack || r.Version != "1.1.0" || f.active() != "A" {
+		t.Fatalf("result %+v, current %s", r, f.active())
+	}
+	f.stage("1.1.0", script("1.1.0", 0, "exit 1"), nil)
+	f.waitFor("the request for the rolled-back release was removed", func() bool {
+		_, err := os.Stat(filepath.Join(f.cfg.Staging, "request.json"))
+		return os.IsNotExist(err)
+	})
+	f.expectStagingClean()
+	time.Sleep(500 * time.Millisecond)
+	if again := f.waitResult(time.Second); again.At != r.At || again.Outcome != outcomeRolledBack || f.active() != "A" {
+		t.Fatalf("result %+v after %+v, current %s", again, r, f.active())
+	}
 }
 
 // TestUpdateWaitsForADurableSwitch (PDK-045): a switch whose directory sync failed still starts the new agent and its

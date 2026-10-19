@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import LoginDenied from '../views/LoginDenied.vue'
-import { createPortalI18n } from '../i18n'
+import { createPortalI18n, type PortalLocale } from '../i18n'
 
 let wrapper: VueWrapper | null = null
 
@@ -11,10 +11,10 @@ afterEach(() => {
   wrapper = null
 })
 
-async function mountView(reason: string): Promise<VueWrapper> {
+async function mountView(reason: string, locale: PortalLocale = 'en'): Promise<VueWrapper> {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/login-denied', component: LoginDenied }] })
   await router.push('/login-denied?reason=' + encodeURIComponent(reason))
-  wrapper = mount(LoginDenied, { global: { plugins: [createPortalI18n(), router] } })
+  wrapper = mount(LoginDenied, { global: { plugins: [createPortalI18n(locale), router] } })
   await flushPromises()
   return wrapper
 }
@@ -25,6 +25,12 @@ describe('login denied', () => {
     expect(w.get('[data-testid="login-denied-message"]').text()).toBe(
       'Your sign-in did not include a second factor. Sign in again: the portal asks for your password and your authenticator.')
     expect(w.get('a').attributes('href')).toBe('/api/auth/login')
+  })
+
+  it('speaks the browser language before a session exists (plan M8f decision 22)', async () => {
+    const w = await mountView('mfa_required', 'de')
+    expect(w.get('[data-testid="login-denied-message"]').text()).toBe(
+      'Ihre Anmeldung enthielt keinen zweiten Faktor. Melden Sie sich erneut an: Das Portal fragt nach Ihrem Passwort und Ihrem Authenticator.')
   })
 
   it('names a sealed key store (plan M8x decision 28)', async () => {

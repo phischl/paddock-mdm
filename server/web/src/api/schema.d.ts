@@ -48,7 +48,7 @@ export interface paths {
         /**
          * Start a step-up authentication (plan M4a decision 6)
          * @description Requires a valid session. Redirects to the authorization endpoint of the OIDC application
-         *     paddock-portal-stepup with prompt=login, max_age=60 and the session's username as login_hint; Authentik runs
+         *     paddock-portal-stepup with prompt=login, max_age=20 and the session's username as login_hint; Authentik runs
          *     the flow paddock-stepup (password and MFA). Actions that need a step-up answer 403 step_up_required when the
          *     session has none within the last 300 s.
          */
@@ -2274,7 +2274,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal session of the installation, the caller's own with its next request; every administrator signs in again. API tokens are not affected. 503 session_store_unavailable while the session store is unreachable. */
+        /** @description Roles: platform_admin, with a step-up within the last 5 minutes (403 step_up_required). Ends every portal session and every identity-provider browser session of every portal user (platform administrators and organization role members); device logins and API tokens are not affected. The caller's own session ends with its next request; every administrator signs in again. 503 session_store_unavailable while the session store is unreachable; 502 upstream_unavailable when the identity provider's sessions could not be ended (the portal sessions are ended already; end all sessions again). */
         post: operations["endAllSessions"];
         delete?: never;
         options?: never;
@@ -2445,6 +2445,8 @@ export interface components {
             window_seconds: number;
             /** @description The oldest login a step-up callback accepts (max_age). */
             max_auth_age_seconds: number;
+            /** @description Authenticator classes ("<app>.<model>") the session's last step-up validated (claim paddock_mfa_classes); absent without a step-up. */
+            mfa_classes?: string[];
         };
         /** @description A patch of the account settings; at least one field. */
         MeUpdate: {
@@ -3463,7 +3465,7 @@ export interface components {
             conflicts: components["schemas"]["DeviceUpdateConflict"][];
         };
         /** @enum {string} */
-        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending";
+        AttentionKind: "stale_warning" | "stale_critical" | "presumed_lost" | "quarantined" | "disk_not_compliant" | "agent_outdated" | "login_apply_failed" | "sudo_apply_failed" | "revocation_pending" | "revocation_expired" | "agent_rollback_pending" | "agent_not_running" | "uninstall_pending" | "config_behind";
         Attention: {
             /** @description Unique key of the row: the kind and its source (alert, device or revocation request). */
             id: string;
@@ -3473,10 +3475,10 @@ export interface components {
             hostname: string;
             /**
              * Format: date-time
-             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported).
+             * @description When the condition began (for disk and agent the last contact; for a pending rollback the first rollback_failed report; for agent_not_running when the stopped agent was reported; for config_behind when the newest bundle was compiled).
              */
             since: string;
-            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; otherwise empty. */
+            /** @description disk_not_compliant: the disk state; agent_outdated: the agent version; agent_rollback_pending: the agent version whose rollback failed; *_apply_failed: the stage; revocation_*: action:status; uninstall_pending: mode:command status; config_behind: the applied and the newest bundle version as "<applied> < <newest>"; otherwise empty. */
             detail: string;
         };
         AttentionPage: {
@@ -8823,6 +8825,7 @@ export interface operations {
             };
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            502: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
         };
     };
