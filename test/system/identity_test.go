@@ -294,10 +294,9 @@ func (w *identityWorld) toggleLink(t *testing.T) {
 	})
 }
 
-// gdmLogin logs u in at the GDM greeter: "Not listed?" (after listed users), the user name, the device code approved
-// on a second device, and the Hello PIN (enrolled with newPIN on the first login). It waits for the user's session on
-// seat0.
-func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int, newPIN bool) Session {
+// gdmLogin logs u in at the GDM greeter for the first time: "Not listed?" (after listed users), the user name, the
+// device code approved on a second device, and the Hello PIN it enrolls. It waits for the user's session on seat0.
+func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int) Session {
 	t.Helper()
 	func() {
 		// The greeter's code is read as the newest pending one of the organization: one VM at a time until approved.
@@ -321,12 +320,10 @@ func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int, new
 	}()
 	time.Sleep(10 * time.Second) // Himmelblau polls every 5 s
 	w.Shot(t, "03-after-approval")
-	if newPIN {
-		w.Type(u.pin)
-		time.Sleep(6 * time.Second) // the confirmation field appears with a delay (PoC M1)
-		w.Shot(t, "04-confirm-pin")
-		w.Type(u.pin)
-	}
+	w.Type(u.pin)
+	time.Sleep(6 * time.Second) // the confirmation field appears with a delay (PoC M1)
+	w.Shot(t, "04-confirm-pin")
+	w.Type(u.pin)
 	return w.seat0Session(t, u)
 }
 
@@ -372,7 +369,7 @@ func (w *identityWorld) seat0Session(t *testing.T, u *directoryUser) Session {
 // (password + TOTP at Authentik) and enrolls a Hello PIN; a globex user and an unassigned user are refused; the
 // login reaches device_user_seen.
 func gateL1(t *testing.T, w *identityWorld) {
-	session := w.gdmLogin(t, w.dave, 1, true)
+	session := w.gdmLogin(t, w.dave, 1)
 	t.Logf("%s logged in at GDM: session %+v", w.dave.name, session)
 	// The fixed idmap_range keeps directory UIDs within the 9 digits sudo-rs handles.
 	if uid, err := strconv.Atoi(w.Must("id -u " + w.dave.name)); err != nil || uid < 200000 || uid > 999999999 {
