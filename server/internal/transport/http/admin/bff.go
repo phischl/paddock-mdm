@@ -253,7 +253,7 @@ func (b *bff) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := httpx.ClientIP(r)
-	token, err := oauth.Exchange(ctx, q.Get("code"), oauth2.VerifierOption(st.Verifier))
+	token, err := oauth.Exchange(exchangeContext(ctx), q.Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		slog.WarnContext(ctx, "code exchange failed", "error", err)
 		b.accounts.RecordLoginFailure(ctx, ip, "", app.ReasonLoginFailed, errLoginFailed)

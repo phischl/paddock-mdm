@@ -313,7 +313,7 @@ func (a *Authentik) do(ctx context.Context, method, path string, body, out any) 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := a.client.Do(req)
+	resp, err := authflow.Do(a.client, req)
 	if err != nil {
 		return err
 	}

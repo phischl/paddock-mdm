@@ -232,3 +232,43 @@ func TestLoginNamesASealedKeyStore(t *testing.T) {
 		}
 	}
 }
+
+// TestLoginRepeatsAnUnavailableTokenRequest is the regression test of a CI failure: Authentik's front server answers
+// 503 "authentik starting" for a moment while its backend is not ready, and the sign-in failed with login_failed. The
+// code exchange repeats the token request with the same, still unused code instead.
+func TestLoginRepeatsAnUnavailableTokenRequest(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	w.idp.mu.Lock()
+	w.idp.unavailable = 2
+	w.idp.mu.Unlock()
+	res := w.login(context.Background(), w.adminClaims("erin@acme.test", []string{"pwd", "mfa"}))
+	if res.Code != http.StatusFound || cookieOf(res, admin.SessionCookie) == nil ||
+		strings.HasPrefix(res.Header().Get("Location"), "/login-denied") {
+		t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+	}
+	w.idp.mu.Lock()
+	defer w.idp.mu.Unlock()
+	if strings.Join(w.idp.tokenCodes, ",") != "c,c,c" {
+		t.Fatalf("token requests with codes %q, want code c three times", w.idp.tokenCodes)
+	}
+}
+
+// TestLoginGivesUpOnAnUnavailableTokenEndpoint: the repeats are bounded; a provider that stays unavailable fails the
+// sign-in with login_failed.
+func TestLoginGivesUpOnAnUnavailableTokenEndpoint(t *testing.T) {
+	w := newLoginWorld(t, nil)
+	w.idp.mu.Lock()
+	w.idp.unavailable = 100
+	w.idp.mu.Unlock()
+	res := w.login(context.Background(), w.adminClaims("erin@acme.test", []string{"pwd", "mfa"}))
+	if res.Code != http.StatusFound || res.Header().Get("Location") != "/login-denied?reason=login_failed" ||
+		cookieOf(res, admin.SessionCookie) != nil {
+		t.Fatalf("login: %d %s", res.Code, res.Header().Get("Location"))
+	}
+	w.idp.mu.Lock()
+	defer w.idp.mu.Unlock()
+	// Four attempts for each of the two client authentication styles oauth2 tries when the endpoint's is unknown.
+	if n := len(w.idp.tokenCodes); n != 8 {
+		t.Fatalf("%d token requests, want 8", n)
+	}
+}

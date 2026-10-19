@@ -165,6 +165,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A portal sign-in or step-up no longer fails with "Sign-in failed" when Authentik answers "authentik starting" for a
+  moment while it completes the sign-in; the portal repeats the request for up to about two seconds.
 - When Valkey stalls or is unreachable, the device API now answers 503 with `Retry-After` (problem code
   `backpressure`) instead of 500. Devices back off and retry instead of reporting a server fault.
 - The permission profile form no longer leaves an unhandled error in the browser console when the root-equivalence

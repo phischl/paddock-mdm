@@ -216,7 +216,7 @@ func (b *bff) stepUpToken(r *http.Request, st stepUpState) (stepUpClaims, string
 	if oauth == nil {
 		return claims, "", errors.New("step-up provider not discovered")
 	}
-	token, err := oauth.Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(st.Verifier))
+	token, err := oauth.Exchange(exchangeContext(r.Context()), r.URL.Query().Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		return claims, "", err
 	}

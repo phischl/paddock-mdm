@@ -34,6 +34,10 @@ type fakeStepUpIdP struct {
 	mu     sync.Mutex
 	claims map[string]any // claims of the next token; nonce is filled from the authorization request
 	nonce  string
+	// unavailable is the number of token requests still answered with Authentik's 503 "authentik starting".
+	unavailable int
+	// tokenCodes are the codes of the token requests received, in order.
+	tokenCodes []string
 }
 
 func newFakeStepUpIdP(t *testing.T) *fakeStepUpIdP {
@@ -57,8 +61,15 @@ func newFakeStepUpIdP(t *testing.T) *fakeStepUpIdP {
 			"n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes()),
 		}}})
 	})
-	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
+		f.tokenCodes = append(f.tokenCodes, r.FormValue("code"))
+		if f.unavailable > 0 {
+			f.unavailable--
+			f.mu.Unlock()
+			http.Error(w, "authentik starting", http.StatusServiceUnavailable)
+			return
+		}
 		claims := map[string]any{"iss": f.URL, "aud": "paddock-portal-stepup", "exp": time.Now().Add(time.Minute).Unix(),
 			"iat": time.Now().Unix(), "nonce": f.nonce}
 		for k, v := range f.claims {
@@ -295,6 +306,23 @@ func TestStepUp(t *testing.T) {
 			}
 		})
 	}
+	// Authentik's front server answers 503 "authentik starting" for a moment while its backend is not ready; the
+	// still unused code is exchanged again (regression test of a CI failure).
+	t.Run("token endpoint unavailable for a moment", func(t *testing.T) {
+		w := newStepUpWorld(t)
+		w.idp.mu.Lock()
+		w.idp.unavailable = 1
+		w.idp.mu.Unlock()
+		res := w.stepUp(good(w))
+		if res.Code != http.StatusFound || res.Header().Get("Location") != "/devices/x" || cookieOf(res, admin.SessionCookie) == nil {
+			t.Fatalf("callback: %d %s", res.Code, res.Header().Get("Location"))
+		}
+		w.idp.mu.Lock()
+		defer w.idp.mu.Unlock()
+		if len(w.idp.tokenCodes) != 2 {
+			t.Fatalf("token requests %q, want 2", w.idp.tokenCodes)
+		}
+	})
 	t.Run("WebAuthn and TOTP", func(t *testing.T) {
 		w := newStepUpWorld(t)
 		res := w.stepUp(with(w, "paddock_mfa_classes", []string{totpClass, admin.StepUpWebAuthnClass}))

@@ -262,7 +262,7 @@ func executor(ctx context.Context, client *http.Client, method string, u *url.UR
 			req.Header.Set("X-authentik-CSRF", c.Value)
 		}
 	}
-	resp, err := client.Do(req)
+	resp, err := Do(client, req)
 	if err != nil {
 		return challenge{}, err
 	}
@@ -292,7 +292,45 @@ func get(ctx context.Context, client *http.Client, u string) (*http.Response, er
 	if err != nil {
 		return nil, err
 	}
-	return client.Do(req)
+	return Do(client, req)
+}
+
+// unavailableAttempts and unavailableWait bound the repeats of a request Authentik answered with 503 "authentik
+// starting": its front server sends that, without passing the request on, while its backend is not ready, which a busy
+// CI runner shows for a moment in the middle of a run (CI of PR #86).
+const (
+	unavailableAttempts = 10
+	unavailableWait     = time.Second
+)
+
+// Do sends req with client and repeats it while Authentik answers 503 "authentik starting"; every other answer is
+// returned as is.
+func Do(client *http.Client, req *http.Request) (*http.Response, error) {
+	for attempt := 1; ; attempt++ {
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != http.StatusServiceUnavailable {
+			return resp, err
+		}
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(data))
+		if !strings.Contains(string(data), "authentik starting") || attempt >= unavailableAttempts ||
+			(req.Body != nil && req.GetBody == nil) {
+			return resp, nil
+		}
+		select {
+		case <-req.Context().Done():
+			return resp, nil
+		case <-time.After(unavailableWait):
+		}
+		next := req.Clone(req.Context())
+		if req.GetBody != nil {
+			if next.Body, err = req.GetBody(); err != nil {
+				return nil, err
+			}
+		}
+		req = next
+	}
 }
 
 func truncate(b []byte) string {
