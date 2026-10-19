@@ -294,10 +294,9 @@ func (w *identityWorld) toggleLink(t *testing.T) {
 	})
 }
 
-// gdmLogin logs u in at the GDM greeter: "Not listed?" (after listed users), the user name, the device code approved
-// on a second device, and the Hello PIN (enrolled with newPIN on the first login). It waits for the user's session on
-// seat0.
-func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int, newPIN bool) Session {
+// gdmLogin logs u in at the GDM greeter for the first time: "Not listed?" (after listed users), the user name, the
+// device code approved on a second device, and the Hello PIN it enrolls. It waits for the user's session on seat0.
+func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int) Session {
 	t.Helper()
 	func() {
 		// The greeter's code is read as the newest pending one of the organization: one VM at a time until approved.
@@ -321,12 +320,36 @@ func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int, new
 	}()
 	time.Sleep(10 * time.Second) // Himmelblau polls every 5 s
 	w.Shot(t, "03-after-approval")
-	if newPIN {
-		w.Type(u.pin)
-		time.Sleep(6 * time.Second) // the confirmation field appears with a delay (PoC M1)
-		w.Shot(t, "04-confirm-pin")
-		w.Type(u.pin)
+	w.Type(u.pin)
+	time.Sleep(6 * time.Second) // the confirmation field appears with a delay (PoC M1)
+	w.Shot(t, "04-confirm-pin")
+	w.Type(u.pin)
+	return w.seat0Session(t, u)
+}
+
+// gdmPINLogin logs u, who enrolled a Hello PIN at an earlier login, in at the GDM greeter with the PIN: "Not listed?"
+// (after listed users), the user name and the PIN. It waits for the user's session on seat0.
+func (w *identityWorld) gdmPINLogin(t *testing.T, u *directoryUser, listed int) Session {
+	t.Helper()
+	w.Shot(t, "01-greeter")
+	// "Not listed?" instead of u's own entry: the greeter lists u once u logged in, but the order of its entries is
+	// AccountsService's, and the Tab count to "Not listed?" is the number of entries whatever their order.
+	for range listed {
+		w.Key(keyTab...)
+		time.Sleep(time.Second)
 	}
+	w.Key(keyEnter...)
+	time.Sleep(2 * time.Second)
+	w.Type(u.name)
+	time.Sleep(5 * time.Second)
+	w.Shot(t, "02-pin")
+	w.Type(u.pin)
+	return w.seat0Session(t, u)
+}
+
+// seat0Session waits for u's session on seat0 after a greeter login and returns it.
+func (w *identityWorld) seat0Session(t *testing.T, u *directoryUser) Session {
+	t.Helper()
 	var session Session
 	Until(t, u.name+" session on seat0", 3*time.Minute, 3*time.Second, nil, func() bool {
 		for _, s := range w.UserSessions(u.name) {
@@ -346,7 +369,7 @@ func (w *identityWorld) gdmLogin(t *testing.T, u *directoryUser, listed int, new
 // (password + TOTP at Authentik) and enrolls a Hello PIN; a globex user and an unassigned user are refused; the
 // login reaches device_user_seen.
 func gateL1(t *testing.T, w *identityWorld) {
-	session := w.gdmLogin(t, w.dave, 1, true)
+	session := w.gdmLogin(t, w.dave, 1)
 	t.Logf("%s logged in at GDM: session %+v", w.dave.name, session)
 	// The fixed idmap_range keeps directory UIDs within the 9 digits sudo-rs handles.
 	if uid, err := strconv.Atoi(w.Must("id -u " + w.dave.name)); err != nil || uid < 200000 || uid > 999999999 {

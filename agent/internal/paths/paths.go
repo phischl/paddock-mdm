@@ -59,12 +59,14 @@ func (l Layout) SupervisorUpgradeResult() string {
 	return l.Join("/var/lib/paddock/state/supervisor-upgrade-result.json")
 }
 
-// UninstallPlan is the plan of an accepted uninstall command; UninstallBinary the copy of paddockd that runs it from
-// /run, so that removing the paddock-agent package does not remove the running helper (plan M8d decision 39).
-func (l Layout) UninstallPlan() string { return l.Join("/run/paddock/uninstall/plan.json") }
+// UninstallPlan is the plan of an accepted uninstall command; UninstallBinary the copy of paddockd that runs it, so
+// that removing the paddock-agent package does not remove the running helper (plan M8d decision 39). Both lie next to
+// the removal's summary on the root file system, not below /run: initramfs-tools mounts /run noexec, and systemd
+// refuses to start a binary from there (ADR 0037 amendment 2026-10-19).
+func (l Layout) UninstallPlan() string { return l.Join("/root/paddock-uninstall/plan.json") }
 
 // UninstallBinary is the copy of paddockd the uninstall helper runs as.
-func (l Layout) UninstallBinary() string { return l.Join("/run/paddock/uninstall/paddockd") }
+func (l Layout) UninstallBinary() string { return l.Join("/root/paddock-uninstall/paddockd") }
 
 // Socket is the health socket.
 func (l Layout) Socket() string { return l.Join("/run/paddock/agent.sock") }

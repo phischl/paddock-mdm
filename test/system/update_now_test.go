@@ -7,24 +7,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
-
-	"github.com/phischl/paddock-mdm/test/acceptance/portal"
 )
-
-// haltRollout halts the rollout of version as the platform administrator (cleanup of the update gates).
-func haltRollout(t *testing.T, version string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	root, err := portal.Login(ctx, portal.PlatformAdmin)
-	if err != nil {
-		t.Log(err)
-		return
-	}
-	if res, err := root.Do(ctx, http.MethodPost, "/api/platform/v1/agent-releases/"+version+"/rollout/halt", nil); err != nil {
-		t.Logf("halt %s: %v %s", version, err, res.Body)
-	}
-}
 
 // requestUpdate asks the device to install the offered release now and waits for its report.
 func requestUpdate(t *testing.T, s *Stack, d *Device, version string) {
@@ -39,7 +22,8 @@ func requestUpdate(t *testing.T, s *Stack, d *Device, version string) {
 // TestUpdateNow is gate S-UP1 of plan M8d (AC6): a release whose first wave excludes the device is not installed
 // within two check-ins; *Update agent now* installs it (self-test, probation and the switch as usual) and the
 // device reports device.agent_updated with the release. A device in bucket 0 (no wave can exclude it) is held back by
-// the manual policy instead.
+// the manual policy instead. The VMs share one release and the organization's policy: the first wave stops below
+// every VM's bucket, and the policy is manual for all when one VM is in bucket 0.
 func TestUpdateNow(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		vm.Fresh()
@@ -50,23 +34,47 @@ func TestUpdateNow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		bucket, err := strconv.Atoi(out)
-		if err != nil {
+		if _, err := strconv.Atoi(out); err != nil {
 			t.Fatalf("bucket %q: %v", out, err)
 		}
-		first := bucket
-		if bucket == 0 {
-			first = 1
+		d.Gate(t, "S-UP1")
+		d.Share("S-UP1 bucket", out)
+		buckets := func() (first int, manual bool) {
+			first = 100
+			for _, b := range d.Shared("S-UP1 bucket") {
+				switch n, _ := strconv.Atoi(b); {
+				case n == 0:
+					manual = true
+				case n < first:
+					first = n
+				}
+			}
+			if first == 100 {
+				first = 1
+			}
+			return first, manual
+		}
+		policy := d.Together(t, "S-UP1", "policy", func() string {
+			if _, manual := buckets(); !manual {
+				return "automatic"
+			}
 			setUpdatePolicy(t, s, "manual")
-			t.Cleanup(func() { setUpdatePolicy(t, s, "automatic") })
+			d.AfterAll(t, func(t *testing.T) { setUpdatePolicy(t, s, "automatic") })
+			return "manual"
+		})
+		if policy == "manual" {
 			for range 2 {
 				d.Checkin()
 				time.Sleep(20 * time.Second)
 			}
 		}
-		v := version(8, "now")
-		s.Release(t, v, nil, "--waves", strconv.Itoa(first)+",100", "--min-wave-minutes", "60")
-		t.Cleanup(func() { haltRollout(t, v) })
+		v := d.Together(t, "S-UP1", "release", func() string {
+			first, _ := buckets()
+			v := version(8, "now")
+			s.Release(t, v, nil, "--waves", strconv.Itoa(first)+",100", "--min-wave-minutes", "60")
+			d.AfterAll(t, func(t *testing.T) { retractRelease(t, v) })
+			return v
+		})
 		for range 2 {
 			d.Checkin()
 			time.Sleep(30 * time.Second)

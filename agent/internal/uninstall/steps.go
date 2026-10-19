@@ -195,7 +195,7 @@ var himmelblauPaths = []string{"/etc/himmelblau", "/var/cache/himmelblau", "/var
 // himmelblau purges the Himmelblau packages and removes their configuration and caches.
 func (h *Helper) himmelblau(ctx context.Context) string {
 	var errs []string
-	if err := h.run(ctx, "apt-get", append([]string{"remove", "--purge", "-y"}, reconcile.HimmelblauPackages...)...); err != nil {
+	if err := h.run(ctx, "apt-get", append([]string{"remove", "--purge", "-y"}, h.himmelblauPackages(ctx)...)...); err != nil {
 		errs = append(errs, err.Error())
 	}
 	for _, p := range himmelblauPaths {
@@ -209,8 +209,27 @@ func (h *Helper) himmelblau(ctx context.Context) string {
 	return stepDone
 }
 
-// packages purges Paddock's packages and fleetd and removes what they leave. The helper runs from /run, so removing
-// paddock-agent does not remove it.
+// himmelblauPackages is the installer's selection plus every other package named himmelblau* that dpkg knows as
+// installed or with configuration files left: Himmelblau's packages depend on further ones (himmelblau-apparmor on
+// Ubuntu 26.04), and a purge of the selection alone leaves them installed.
+func (h *Helper) himmelblauPackages(ctx context.Context) []string {
+	pkgs := slices.Clone(reconcile.HimmelblauPackages)
+	// dpkg-query exits 1 when the pattern matches no package; the output is used either way.
+	out, _, err := h.Run(ctx, packageTimeout, "dpkg-query", "-W", "-f", "${Package} ${db:Status-Abbrev}\n", "himmelblau*")
+	if err != nil {
+		return pkgs
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && len(f[1]) >= 2 && f[1][1] != 'n' && !slices.Contains(pkgs, f[0]) {
+			pkgs = append(pkgs, f[0])
+		}
+	}
+	return pkgs
+}
+
+// packages purges Paddock's packages and fleetd and removes what they leave. The helper runs from a copy in ResultDir,
+// so removing paddock-agent does not remove it.
 func (h *Helper) packages(ctx context.Context) string {
 	var errs []string
 	if err := h.run(ctx, "apt-get", "remove", "--purge", "-y", reconcile.FleetdPackage, "paddock-revoke", "paddock-agent",

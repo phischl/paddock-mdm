@@ -96,6 +96,14 @@ func TestSupervisorPackagePolicy(t *testing.T) {
 		t.Fatalf("installed while an agent update is pending: %v", *launched)
 	}
 
+	// An accepted uninstall removes the supervisor package: no upgrade starts under it.
+	u, _, launched := supervisorAgent(t, "")
+	u.st.PendingUninstall = &state.PendingUninstall{CommandID: "c-un", Mode: "leave"}
+	u.Cycle(context.Background())
+	if len(*launched) != 0 {
+		t.Fatalf("installed while an uninstall is pending: %v", *launched)
+	}
+
 	b, _, launched := supervisorAgent(t, "")
 	b.st.FailedSupervisorVersion = buildinfo.Version
 	b.Cycle(context.Background())

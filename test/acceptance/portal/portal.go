@@ -8,6 +8,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,9 @@ func Login(ctx context.Context, user string) (*Session, error) { return env.Logi
 
 // NewAuditIndex connects to the audit index.
 func NewAuditIndex(ctx context.Context) (*AuditIndex, error) { return env.NewAuditIndex(ctx) }
+
+// NewHTTPClient returns a client that trusts the stack's Caddy CA (the device API of a simulated device).
+func NewHTTPClient() (*http.Client, error) { return env.NewHTTPClient() }
 
 // SecretsDir is deploy/compose/.secrets.
 func SecretsDir() (string, error) { return stack.SecretsDir() }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -33,28 +34,63 @@ func loginRows(t *testing.T, w *identityWorld, user string) string {
 	return out
 }
 
+// loginRowsBeforeSwitchOn counts the login history rows of the device dated before the organization switched the
+// history on.
+func loginRowsBeforeSwitchOn(t *testing.T, w *identityWorld) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := paddockSQL(ctx, fmt.Sprintf("SELECT count(*) FROM device_login_event e JOIN organization_login_settings s "+
+		"ON s.organization_id = e.organization_id WHERE e.device_id = '%s' AND e.at < s.login_history_enabled_at", w.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 // gateLH1 is gate S-LH1 of plan M8d (AC4, device part), run after L1 with dave's GDM session open: with the login
-// history off the session only refreshed device_user_seen; switched on, the agent reports every session start, so
-// dave's open session and a second GDM login are two rows.
+// history off the session only refreshed device_user_seen; switched on, the agent reports every session start, dave's
+// session that was open before the switch-on is not stored (plan M8d §15.5), and two GDM logins after it are two rows.
 func gateLH1(t *testing.T, w *identityWorld) {
 	if n := loginRows(t, w, w.dave.name); n != "0" {
 		t.Fatalf("login history rows while it is off: %s", n)
 	}
-	// Development counts the retention days in seconds: 365 keeps the rows for the gate's six minutes.
-	setLoginHistory(t, w, true, 365)
-	t.Cleanup(func() { setLoginHistory(t, w, false, 90) })
-	Until(t, "the open session in the login history", 4*time.Minute, 5*time.Second, w.Checkin, func() bool {
-		return loginRows(t, w, w.dave.name) == "1"
+	// The history is one setting of the organization, and switching it off deletes every row: it is switched on once
+	// for all VMs and off only after every VM's identity gates ended. Development counts the retention days in
+	// seconds: 365 keeps the rows for the gate's minutes.
+	w.Gate(t, "LH1")
+	w.Together(t, "LH1", "switch on", func() string {
+		setLoginHistory(t, w, true, 365)
+		w.AfterAll(t, func(t *testing.T) { setLoginHistory(t, w, false, 90) })
+		return ""
 	})
-	w.Must("sudo loginctl terminate-user " + w.dave.name)
-	Until(t, "no session of "+w.dave.name, time.Minute, 2*time.Second, nil, func() bool {
-		return len(w.UserSessions(w.dave.name)) == 0
+	Until(t, "the open session reported and delivered", 4*time.Minute, 5*time.Second, w.Checkin, func() bool {
+		reported, _ := w.State()["sessions_reported"].(map[string]any)
+		for key := range reported {
+			if user, _, ok := strings.Cut(key, "\x00"); ok && (user == w.dave.short() || user == w.dave.name) {
+				return w.Must("sudo sh -c 'test -s /var/lib/paddock/spool/events.jsonl && echo pending || echo empty'") == "empty"
+			}
+		}
+		return false
 	})
-	time.Sleep(10 * time.Second) // GDM shows the greeter again
-	w.gdmLogin(t, w.dave, 1, false)
-	Until(t, "the second session in the login history", 3*time.Minute, 5*time.Second, w.Checkin, func() bool {
-		return loginRows(t, w, w.dave.name) == "2"
-	})
+	for i := 1; i <= 2; i++ {
+		w.Must("sudo loginctl terminate-user " + w.dave.name)
+		Until(t, "no session of "+w.dave.name, time.Minute, 2*time.Second, nil, func() bool {
+			return len(w.UserSessions(w.dave.name)) == 0
+		})
+		time.Sleep(10 * time.Second) // GDM shows the greeter again
+		// The greeter lists Paddock Test and dave, who enrolled a Hello PIN in L1: the login asks for the PIN.
+		w.gdmPINLogin(t, w.dave, 2)
+		Until(t, fmt.Sprintf("session %d in the login history", i), 3*time.Minute, 5*time.Second, w.Checkin, func() bool {
+			return loginRows(t, w, w.dave.name) == fmt.Sprint(i)
+		})
+	}
+	if n := loginRowsBeforeSwitchOn(t, w); n != "0" {
+		t.Fatalf("%s login history rows of sessions started before the switch-on", n)
+	}
+	if n := loginRows(t, w, w.dave.name); n != "2" {
+		t.Fatalf("login history rows: %s, want 2", n)
+	}
 	res := w.s.Call(t, http.MethodGet, "/api/v1/devices/"+w.ID+"/logins", nil, http.StatusOK)
 	var page struct {
 		Total int `json:"total"`

@@ -1308,7 +1308,7 @@ Expired commands are marked `expired` and never executed (platform outage questi
 `POST /v1/commands/{id}/result`; the agent stores executed command IDs for 60 days to drop duplicates.
 
 > **Amendment 2026-10-17 (M8d, ADR 0037):** command `uninstall` (7 d, params `mode` = `leave` | `reset`,
-> `clear_tpm`, `keep_local_admin`): the agent accepts it, copies itself to `/run/paddock/uninstall/` and, once the
+> `clear_tpm`, `keep_local_admin`): the agent accepts it, copies itself to `/root/paddock-uninstall/` and, once the
 > result was accepted, runs `paddockd uninstall` in the transient unit `paddock-uninstall`; the final event
 > `agent.uninstalled` retires the device (`device.retired` with reason `uninstalled`). The request can be cancelled
 > while the command is not delivered. Runbook `docs/operations/uninstall.md`.

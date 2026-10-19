@@ -40,6 +40,7 @@ func forEachVM(t *testing.T, body func(t *testing.T, s *Stack, vm *VM)) {
 	for _, name := range names {
 		g.active[name] = true
 	}
+	t.Cleanup(func() { g.runAfterAll(t) })
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -278,6 +279,7 @@ func release(t *testing.T, d *Device, gate string, minor int, label string, tags
 	return d.Together(t, gate, "release", func() string {
 		v := version(minor, label)
 		d.s.Release(t, v, tags)
+		d.AfterAll(t, func(t *testing.T) { retractRelease(t, v) })
 		return v
 	})
 }

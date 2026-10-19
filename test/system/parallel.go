@@ -18,6 +18,10 @@ type vmGroup struct {
 	finished map[string]map[string]bool
 	rounds   map[string]*round
 	locks    map[string]*sync.Mutex
+	// afterAll run once every VM's subtest ended, in reverse order of registration.
+	afterAll []func(t *testing.T)
+	// shared holds, per key, the value each VM shared for a step that Together runs for all of them.
+	shared map[string]map[string]string
 }
 
 // round is one rendezvous: the VMs that arrived and, once it started, the result of its step.
@@ -31,7 +35,7 @@ type round struct {
 
 func newVMGroup() *vmGroup {
 	g := &vmGroup{active: map[string]bool{}, finished: map[string]map[string]bool{}, rounds: map[string]*round{},
-		locks: map[string]*sync.Mutex{}}
+		locks: map[string]*sync.Mutex{}, shared: map[string]map[string]string{}}
 	g.cond = sync.NewCond(&g.mu)
 	return g
 }
@@ -103,6 +107,60 @@ func (g *vmGroup) complete(r *round, gate string) bool {
 		}
 	}
 	return true
+}
+
+// Share records vm's value under key, for the step that Together runs once for all VMs (Shared); a VM shares before it
+// arrives at the rendezvous.
+func (g *vmGroup) Share(vm, key, value string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.shared[key] == nil {
+		g.shared[key] = map[string]string{}
+	}
+	g.shared[key][vm] = value
+}
+
+// Shared returns the values the VMs shared under key, by VM; nil for a nil *vmGroup.
+func (g *vmGroup) Shared(key string) map[string]string {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := map[string]string{}
+	for vm, v := range g.shared[key] {
+		out[vm] = v
+	}
+	return out
+}
+
+// AfterAll runs fn once every VM's subtest of the test ended (in the parent test's cleanup); a nil *vmGroup runs it
+// when t ends. A step shared by the VMs, such as a release, is undone there: a VM that finishes first must not undo
+// it under another VM still in the gate.
+func (g *vmGroup) AfterAll(t *testing.T, fn func(t *testing.T)) {
+	if g == nil {
+		t.Cleanup(func() { fn(t) })
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.afterAll = append(g.afterAll, fn)
+}
+
+// runAfterAll registers the functions AfterAll registered as cleanups of t, the parent test of the VMs' subtests, so
+// they run in reverse order of registration. Each is its own cleanup: a function that fails the test (t.Fatal) must
+// not skip the others, such as one retract skipping the next.
+func (g *vmGroup) runAfterAll(t *testing.T) {
+	g.mu.Lock()
+	fns := g.afterAll
+	g.afterAll = nil
+	g.mu.Unlock()
+	for _, fn := range fns {
+		t.Cleanup(func() { fn(t) })
+	}
 }
 
 // Lock locks the section name for one VM at a time and returns the unlock function.

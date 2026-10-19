@@ -436,12 +436,12 @@ the policy of their device group says.
 39. Agent handler (`agent/internal/agent/uninstall.go`): on the verified command it validates the params (unknown
     mode → `failed {reason: invalid_params}`), refuses while a revocation envelope was handed to `paddock-revoke`
     within the last 24 h (`state.HandedRevocations`) with `failed {reason: revocation_pending}`, writes the plan
-    `/run/paddock/uninstall/plan.json {command_id, mode, clear_tpm, keep_local_admin, device_id, event_seq_base,
-    requested_at}` (0600) and copies the running binary to `/run/paddock/uninstall/paddockd` (0700), stores
+    `/root/paddock-uninstall/plan.json {command_id, mode, clear_tpm, keep_local_admin, device_id, event_seq_base,
+    requested_at}` (0600) and copies the running binary to `/root/paddock-uninstall/paddockd` (0700), stores
     `state.PendingUninstall{CommandID}` and returns `succeeded {accepted: true}`. In `Cycle`, after `postResults`
     returned and the result of that command is no longer in `state.CommandResults`, the agent launches
     `systemd-run --unit=paddock-uninstall --collect --no-block --property=KillMode=process
-    /run/paddock/uninstall/paddockd uninstall --plan /run/paddock/uninstall/plan.json` once and records
+    /root/paddock-uninstall/paddockd uninstall --plan /root/paddock-uninstall/plan.json` once and records
     `state.PendingUninstall.LaunchedAt`. A launch failure is reported as the final event with
     `outcome: helper_failed` and the pending mark is cleared (the administrator cancels and retries).
 40. `paddockd uninstall --plan <file>` (new `agent/internal/uninstall/uninstall.go`, root only, runs inside the
@@ -476,7 +476,8 @@ the policy of their device group says.
        `/var/lib/AccountsService/users/<name>`; result `local_admin: removed`. Without such an account the account is
        kept: `local_admin: kept_last_admin`. With `keep_local_admin`: `kept`. Mode `leave`: `kept`.
     8. `apt-get remove --purge -y fleet-osquery paddock-revoke paddock-agent paddock-supervisor` (one apt run,
-       bounded 15 min; the uninstall helper runs from `/run`, so the removal of its own package is harmless). Then
+       bounded 15 min; the uninstall helper runs from a copy in `/root/paddock-uninstall/`, so the removal of its own package is
+       harmless). Then
        remove `/opt/orbit/`, `/etc/paddock/orbit.env`, `/etc/systemd/system/orbit.service.d/`, `/opt/paddock/`,
        `/var/lib/paddock/packages/`, `/var/lib/paddock/staging/`, `/var/lib/paddock/rollback/`,
        `/var/lib/paddock/quarantine/` (copied in step 4).
@@ -929,9 +930,9 @@ System (`test/system`, `make system-test VM=all`; both VMs in parallel where pos
 | S-UP2a `TestSupervisorUpdate` | supervisor update | A release whose `paddock-supervisor` package has a higher version (built by `s.Release` with `--supervisor-version` bump; the stack helper `BuildAgent` gains the supervisor build) and a completed rollout → `paddock-supervisor version` on the device changes, event `device.supervisor_updated{outcome: updated}`, the agent checked in afterwards (`/run/paddock/last-checkin` newer than the dpkg log entry), `systemctl is-active paddock-supervisor` active, the transient unit gone. |
 | S-UP2b `TestSupervisorRollback` | supervisor rollback | The same with the tag `paddock_testbroken_supervisor` → within 12 min `device.supervisor_update_failed{outcome: rolled_back}`, the previous `paddock-supervisor version` runs again, the agent checks in; a second offer of the same version is not installed (`FailedSupervisorVersion`). |
 | S-UP3 `TestUpdatePolicyManual` | manual policy | Organization `manual` → a completed rollout of a newer release is not installed within 3 check-ins (journal line `agent update offer ignored by the organization's policy`); the supervisor package is not installed either; *Update agent now* installs it. |
-| S-UN1 `TestUninstallLeave` | leave | `Install` with a managed file and a managed local administrator (organization with a domain, break-glass account `vagrant`): request `leave` → within 10 min `device.uninstalled{outcome: completed, local_admin: kept}`, device `retired` with `retired_reason: uninstalled`; on the VM: no `paddock-*` or `fleet-osquery` package (`dpkg -l`), `/etc/paddock`, `/var/lib/paddock`, `/opt/paddock`, `/opt/orbit` absent, `paddock-supervisor.service` unknown; the managed file still present; `getent passwd paddock-admin` present, `id vagrant` in `sudo`; `himmelblau` package present and `/etc/himmelblau/himmelblau.conf` present; `/etc/sudoers.d/paddock-u-*` absent; `visudo -c` passes; `/root/paddock-uninstall/result.json` present; a reboot works (SSH back). |
-| S-UN2 `TestUninstallReset` | reset | As S-UN1 with `reset` and `clear_tpm: true` on the base VM (passphrase-only LUKS, no TPM token) → `local_admin: removed`, `tpm: cleared` or `requested_at_next_boot` (the swtpm answers `tpm2_clear`; either is accepted and asserted against `tpm2_getcap properties-variable` when `cleared`), Himmelblau packages absent, `/etc/himmelblau` absent, the managed file absent, a modified managed file (changed by the test before the request) present, home directories present, `vagrant` still in `sudo`, reboot works, the LUKS passphrase still opens the disk (`type_luks_passphrase`). |
-| S-UN3 `TestUninstallLastAdmin` | last-admin guard | As S-UN2 after `gpasswd -d vagrant sudo` → `local_admin: kept_last_admin`, the account exists, is in `sudo`, and the escrowed password (reveal through the API for the retired device) logs in over SSH. |
+| S-UN1 `TestUninstallLeave` | leave | `Install` with a managed file and a managed local administrator (organization with a domain, install administrator and break-glass account `paddock`): request `leave` → within 10 min `device.uninstalled{outcome: completed, local_admin: kept}`, device `retired` with `retired_reason: uninstalled`; on the VM: no `paddock-*` or `fleet-osquery` package (`dpkg -l`), `/etc/paddock`, `/var/lib/paddock`, `/opt/paddock`, `/opt/orbit` absent, `paddock-supervisor.service` unknown; the managed file still present; `getent passwd paddock-admin` present, `id paddock` in `sudo`; `himmelblau` package present and `/etc/himmelblau/himmelblau.conf` present; `/etc/sudoers.d/paddock-u-*` absent; `visudo -c` passes; `/root/paddock-uninstall/result.json` present; a reboot works (SSH back). |
+| S-UN2 `TestUninstallReset` | reset | As S-UN1 with `reset` and `clear_tpm: true` on the base VM (passphrase-only LUKS, no TPM token) → `local_admin: removed`, `tpm: cleared` or `requested_at_next_boot` (the swtpm answers `tpm2_clear`; either is accepted and asserted against `tpm2_getcap properties-variable` when `cleared`), Himmelblau packages absent, `/etc/himmelblau` absent, the managed file absent, a modified managed file (changed by the test before the request) present, home directories present, `paddock` still in `sudo`, reboot works, the LUKS passphrase still opens the disk (`type_luks_passphrase`). |
+| S-UN3 `TestUninstallLastAdmin` | last-admin guard | As S-UN2 after `gpasswd -d paddock sudo` (re-added by the cleanup; `/etc/sudoers.d/90-paddock` keeps the harness's sudo) → `local_admin: kept_last_admin`, the account exists, is in `sudo`, and the escrowed password (reveal through the API for the retired device) logs in over SSH. |
 | S-UN4 `TestUninstallTpmInUse` | TPM in use | On a device from the D-24 flow (`tpm2+pin` keyslot): the request with `clear_tpm` → 409 `tpm_in_use_by_disk`; the request without it → the result reports `tpm: not_requested` and the disk still unlocks with the PIN after the reboot. |
 | S-DU1 `TestDiskUnlockModeTPMOnly` | tpm_only autoinstall | D-AI with the organization set to `tpm_only`: the throwaway VM shows no PIN dialogue at first boot (screenshot contains "unlocks automatically"), reaches `compliant` with tokens `[recovery, tpm2]` and `unlock_mode: tpm_only`; a reboot unlocks without input; the install passphrase no longer opens the disk; the recovery key does. |
 | S-DU2 `TestDiskUnlockModeMismatch` | mismatch | A D-24 device (`tpm2+pin`) whose group is set to `tpm_only` → within one drift pass `disk.state: unlock_mode_mismatch`, attention `disk_not_compliant` detail `unlock_mode_mismatch`; the runbook's conversion with the recovery key (`systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7`, unlock with the key) → `device.tamper_keyslot_changed`, then `compliant` with `[recovery, tpm2]`. |
@@ -1274,6 +1275,29 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   before the worker recorded the result (`pending`/`delivered`, not expired) is retried; any other report is audited
   only. `RetireUninstalled` runs through `RecordOnceWith` keyed on `uninstalled_at IS NOT NULL AND state = 'active'`
   under the device's row lock.
+- 39, amendment 2026-10-19 (system gate S-UN1; decided by the orchestrator as architect, 2026-10-19): the uninstall
+  defers while a supervisor upgrade runs. The agent does not launch the removal while `supervisor-upgrade.json`
+  exists: the upgrade's helper runs in its own transient unit, and its rollback restores and restarts the previous
+  supervisor after the removal purged it. The wait is bounded by `supervisorpkg.StaleAfter` (30 minutes), after which
+  the agent counts the upgrade as failed and removes the marker. No supervisor upgrade starts while an uninstall is
+  accepted (`state.PendingUninstall`). A `systemd-run` that fails because the agent itself is being stopped (its
+  context is cancelled, e.g. by a supervisor restart) is no `helper_failed`: the request stays pending and the next
+  agent start launches the removal. An agent update on probation needs no wait: the helper's first step stops the
+  supervisor.
+- 43, amendment 2026-10-19 (gates S-UN1 to S-UN3; decided by the orchestrator as architect, 2026-10-19): the test
+  VMs' admin is `paddock`. The VMs have no `vagrant` account; the installer creates `paddock` (`PADDOCK_USER`), a
+  member of `sudo` with `/etc/sudoers.d/90-paddock` granting the user itself, and acme's break-glass account.
+  Himmelblau's NSS module answers for `vagrant` with a synthetic entry, so `id vagrant` failed. S-UN1 and S-UN2
+  assert that `paddock` is still in `sudo`; S-UN3 removes `paddock` from `sudo` before the request and re-adds it in
+  its cleanup. The break-glass setting stays `paddock`: the sudo reconciler only removes members of privileged
+  groups and never adds one back.
+- 39, amendment 2026-10-19, helper location (gate S-UN1 on Ubuntu 24.04; decided by the orchestrator as architect,
+  2026-10-19; ADR 0037 amendment of the same title): the plan and the binary copy moved from `/run/paddock/uninstall/`
+  to `/root/paddock-uninstall/`, next to `result.json`. initramfs-tools mounts `/run` `noexec`, and `systemd-run`
+  failed with `Failed to find executable /run/paddock/uninstall/paddockd: Permission denied`. The helper deletes the
+  copy and the plan after writing `result.json`; a `helper_failed` and a withdrawn request delete them too. Before
+  `systemd-run` the agent checks with `statfs` (`ST_NOEXEC`) that the directory is executable and otherwise reports
+  `helper_failed` with the reason in its log.
 
 ### 15.5 Login history (decisions 14–17)
 

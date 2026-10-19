@@ -248,12 +248,13 @@ func tail(b []byte) string {
 
 // Release builds paddockd version with the paddock_dev tag (plus extra tags), uploads it signed with the
 // development release key and starts a rollout to all devices with the given extra agentrelease flags; running
-// rollouts are halted first.
+// rollouts are halted first. The single wave lasts a day, so the rollout stays running and the gate's retractRelease
+// can halt it; a gate that needs a completed rollout passes a shorter wave and the failure threshold 1.
 func (s *Stack) Release(t *testing.T, version string, tags []string, flags ...string) string {
 	t.Helper()
 	bin := s.BuildAgent(t, version, tags)
 	args := append([]string{"--version", version, "--artifact", "amd64=" + bin, "--rollout", "--halt-running",
-		"--waves", "100", "--min-wave-minutes", "1"}, flags...)
+		"--waves", "100", "--min-wave-minutes", "1440"}, flags...)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, agentRelease(s.root), args...)
@@ -281,9 +282,10 @@ func (s *Stack) BuildAgent(t *testing.T, version string, tags []string) string {
 
 // ReleaseSupervisor builds the packages of this tree as version (paddock_dev plus supervisorTags, e.g.
 // paddock_testbroken_supervisor) and releases paddockd with the paddock-supervisor package of the same version, the
-// supervisor version bump of gates S-UP2a and S-UP2b (plan M8d decision 34): a rollout to all devices in one
-// one-minute wave, so that it completes and the bundles carry the supervisor package. Running rollouts are halted
-// first; bin/deb is rebuilt as version 0.1.0 for the other system tests when the test ends.
+// supervisor version bump of gates S-UP2a and S-UP2b (plan M8d decision 34): a rollout to all devices in one wave
+// of a day, so that it stays running (the bundles carry the supervisor package of a running rollout once the device's
+// wave is reached, §15.2) and the gate's retractRelease can halt it. Running rollouts are halted first; bin/deb is
+// rebuilt as version 0.1.0 for the other system tests when the test ends.
 func (s *Stack) ReleaseSupervisor(t *testing.T, version string, supervisorTags []string) {
 	t.Helper()
 	s.Make(t, "deb", "VERSION="+version, "TAGS="+strings.Join(append([]string{"paddock_dev"}, supervisorTags...), " "),
@@ -297,7 +299,7 @@ func (s *Stack) ReleaseSupervisor(t *testing.T, version string, supervisorTags [
 	defer cancel()
 	cmd := exec.CommandContext(ctx, agentRelease(s.root), "--version", version,
 		"--artifact", "amd64="+filepath.Join(s.root, "bin", "agent", "amd64", "paddockd"), "--deb", debs[0],
-		"--rollout", "--halt-running", "--waves", "100", "--min-wave-minutes", "1")
+		"--rollout", "--halt-running", "--waves", "100", "--min-wave-minutes", "1440")
 	cmd.Dir = s.root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("agentrelease %s: %v\n%s", version, err, out)

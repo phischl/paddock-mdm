@@ -25,6 +25,12 @@ type world struct {
 	tpm   *fakeTPM
 	sent  [][]protocol.Event
 	now   time.Time
+	// eventSeq is the agent state's last event sequence number.
+	eventSeq int64
+	// out is the output of a tool run by command line prefix.
+	out map[string]string
+	// onRun is called with every tool run before its result.
+	onRun func(line string)
 	// sendErr fails the next sends.
 	sendErr int
 }
@@ -55,7 +61,8 @@ const (
 )
 
 func newWorld(t *testing.T) *world {
-	w := &world{t: t, root: t.TempDir(), fail: map[string]int{}, tpm: &fakeTPM{}, now: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)}
+	w := &world{t: t, root: t.TempDir(), fail: map[string]int{}, tpm: &fakeTPM{}, now: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC),
+		eventSeq: 9}
 	managed := "unchanged content"
 	sum := sha256.Sum256([]byte(managed))
 	managedJSON, _ := json.Marshal(map[string]any{"files": map[string]string{
@@ -77,7 +84,7 @@ func newWorld(t *testing.T) *world {
 		"/opt/paddock/agent/A/paddockd": "bin", "/opt/orbit/secret.txt": "s",
 		"/var/lib/AccountsService/users/paddock-admin": "a",
 		"/home/alice/thesis.odt":                       "user data", "/home/paddock-admin/notes": "admin data", "/srv/share/x": "data",
-		"/root/.bashrc": "rc",
+		"/root/.bashrc": "rc", "/root/paddock-uninstall/paddockd": "helper", "/root/paddock-uninstall/plan.json": "{}",
 	} {
 		w.write(file, data)
 	}
@@ -102,10 +109,19 @@ func (w *world) exists(file string) bool {
 
 func (w *world) helper() *Helper {
 	return &Helper{Root: w.root, Now: func() time.Time { return w.now }, TPM: w.tpm, ReportFor: ReportFor, LocalAdmin: "paddock-admin",
-		EventSeq: 9,
+		EventSeq:    func() int64 { return w.eventSeq },
+		Preparation: []string{filepath.Join(w.root, "/root/paddock-uninstall/plan.json"), filepath.Join(w.root, "/root/paddock-uninstall/paddockd")},
 		Run: func(_ context.Context, _ time.Duration, name string, args ...string) (string, int, error) {
 			line := strings.Join(append([]string{name}, args...), " ")
 			w.calls = append(w.calls, line)
+			if w.onRun != nil {
+				w.onRun(line)
+			}
+			for prefix, out := range w.out {
+				if strings.HasPrefix(line, prefix) {
+					return out, 0, nil
+				}
+			}
 			for prefix, exit := range w.fail {
 				if strings.HasPrefix(line, prefix) {
 					return "error: " + line, exit, nil
@@ -157,7 +173,7 @@ func TestLeave(t *testing.T) {
 	for _, gone := range []string{"/etc/sudoers.d/paddock-u-alice", "/etc/sudoers.d/paddock-u-bob", "/etc/paddock", "/var/lib/paddock",
 		"/etc/issue.d/90-paddock.issue", "/etc/ssh/sshd_config.d/90-paddock-banner.conf", "/etc/dconf/db/gdm.d/90-paddock-notice",
 		"/etc/apt/preferences.d/50paddock", "/etc/apt/apt.conf.d/52paddock-unattended", "/etc/systemd/system/paddock-updates.timer",
-		"/opt/paddock", "/opt/orbit"} {
+		"/opt/paddock", "/opt/orbit", "/root/paddock-uninstall/paddockd", "/root/paddock-uninstall/plan.json"} {
 		if w.exists(gone) {
 			t.Fatalf("%s left", gone)
 		}
@@ -329,6 +345,38 @@ func TestReport(t *testing.T) {
 	if s.Delivered || w.now.Sub(start) > ReportFor || w.exists("/var/lib/paddock") || w.exists("/etc/paddock") ||
 		!w.exists("/root/paddock-uninstall/result.json") {
 		t.Fatalf("delivered %v after %s", s.Delivered, w.now.Sub(start))
+	}
+}
+
+// TestResetPurgesHimmelblauDependencies: packages named himmelblau* that dpkg lists as installed or with configuration
+// files left (himmelblau-apparmor, a dependency on Ubuntu 26.04) are purged with the installer's selection; one dpkg
+// knows only as not installed is not named.
+func TestResetPurgesHimmelblauDependencies(t *testing.T) {
+	w := newWorld(t)
+	w.out = map[string]string{"dpkg-query -W": "himmelblau ii \nhimmelblau-apparmor ii \nhimmelblau-old rc \n" +
+		"himmelblau-qr-greeter ii \nhimmelblau-unused un \n"}
+	s := w.helper().Execute(context.Background(), Plan{CommandID: "c9", Mode: "reset", DeviceID: "d1"})
+	want := "apt-get remove --purge -y himmelblau pam-himmelblau nss-himmelblau himmelblau-qr-greeter himmelblau-sshd-config " +
+		"himmelblau-apparmor himmelblau-old"
+	if s.Steps[StepHimmelblau] != "done" || !slices.Contains(w.calls, want) {
+		t.Fatalf("step %s, calls %v", s.Steps[StepHimmelblau], w.calls)
+	}
+}
+
+// TestReportSequenceAfterStop: the agent keeps running until the helper stops it and may spool and deliver events in
+// that window; the final event takes the sequence number the agent state has after the stop, so it never repeats one
+// the server has already seen (and would drop). Hardening: suspected but not the cause of the S-UN1 failure of
+// 2026-10-19, whose reports used the next free number.
+func TestReportSequenceAfterStop(t *testing.T) {
+	w := newWorld(t)
+	w.onRun = func(line string) {
+		if strings.HasPrefix(line, "systemctl stop paddock-supervisor.service") {
+			w.eventSeq = 14
+		}
+	}
+	s := w.helper().Execute(context.Background(), Plan{CommandID: "c8", Mode: "leave", DeviceID: "d1", EventSeqBase: 9})
+	if !s.Delivered || len(w.sent) != 1 || w.sent[0][0].EventSeq != 15 {
+		t.Fatalf("delivered %v, sent %+v", s.Delivered, w.sent)
 	}
 }
 

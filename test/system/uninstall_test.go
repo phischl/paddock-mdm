@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -51,13 +52,18 @@ func (w *uninstallWorld) packagesGone(t *testing.T) {
 	}
 }
 
+// vmAdmin is the test VMs' install administrator (PADDOCK_USER of test/vms) and acme's break-glass account; it keeps
+// passwordless sudo through /etc/sudoers.d/90-paddock, which names the user, not a group. The VMs have no vagrant
+// account: Himmelblau's NSS module answers for that name with a synthetic entry.
+const vmAdmin = "paddock"
+
 // inSudo reports whether an account is a member of the sudo group.
 func (w *uninstallWorld) inSudo(user string) bool {
 	return strings.Contains(" "+w.Must("id -nG "+user)+" ", " sudo ")
 }
 
 // TestUninstallLeave is gate S-UN1 of plan M8d (AC8): mode leave removes Paddock and keeps the managed file, the
-// managed local administrator, the break-glass account's sudo, Himmelblau and its configuration; the device reports
+// managed local administrator, the install administrator's (break-glass account's) sudo, Himmelblau and its configuration; the device reports
 // once, is retired by it and still boots.
 func TestUninstallLeave(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
@@ -69,7 +75,8 @@ func TestUninstallLeave(t *testing.T) {
 			t.Fatalf("device.uninstalled %v", p)
 		}
 		w.packagesGone(t)
-		w.absent(t, "/etc/paddock", "/var/lib/paddock", "/opt/paddock", "/opt/orbit")
+		w.absent(t, "/etc/paddock", "/var/lib/paddock", "/opt/paddock", "/opt/orbit", "/root/paddock-uninstall/paddockd",
+			"/root/paddock-uninstall/plan.json")
 		if out := w.Must("sudo find /etc/sudoers.d -name 'paddock-u-*'"); out != "" {
 			t.Fatalf("sudoers files left: %s", out)
 		}
@@ -78,8 +85,8 @@ func TestUninstallLeave(t *testing.T) {
 		}
 		w.present(t, managed, "/etc/himmelblau/himmelblau.conf", "/root/paddock-uninstall/result.json")
 		w.Must("getent passwd " + localAdmin)
-		if !w.inSudo("vagrant") {
-			t.Fatal("vagrant lost sudo")
+		if !w.inSudo(vmAdmin) {
+			t.Fatal(vmAdmin + " lost sudo")
 		}
 		if out := w.Must("dpkg-query -W -f '${db:Status-Abbrev}' himmelblau"); !strings.HasPrefix(out, "ii") {
 			t.Fatalf("himmelblau package %q", out)
@@ -91,14 +98,31 @@ func TestUninstallLeave(t *testing.T) {
 
 // TestUninstallReset is gate S-UN2 of plan M8d (AC9): mode reset with clear_tpm on the passphrase-only base VM also
 // removes Himmelblau, the unchanged managed file and the managed local administrator; a modified managed file, the
-// home directories, vagrant's sudo and the LUKS passphrase stay, and the TPM is cleared or its clear requested.
+// home directories, the install administrator's sudo and the LUKS passphrase stay, and the TPM is cleared or its clear requested.
 func TestUninstallReset(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		w := newUninstallWorld(t, s, vm)
 		unchanged, modified := w.managedPath("a"), w.managedPath("b")
-		w.Must("echo 'changed at the device' | sudo tee -a " + modified + " >/dev/null")
 		homes := w.Must("ls -1 /home | sort")
+		// Managed files stay enforced until the removal starts, so b is modified while the agent is stopped and the
+		// agent comes back with a drift interval the removal never reaches. After its start the agent corrects files
+		// only in a drift pass (first one a drift interval after its run loop started) or by applying a newer bundle
+		// (handleBundle, first in Cycle); its first Cycle checks in at once and, without a newer bundle, accepts the
+		// command (handleCommands), reports it (postResults) and starts the removal (launchUninstall), whose first
+		// step stops the agent. A request compiles no bundle, so the compiled version is applied first and checked
+		// unchanged.
+		Until(t, "the compiled bundle applied", 5*time.Minute, 5*time.Second, w.Checkin, func() bool {
+			applied, _ := w.State()["applied_bundle_version"].(float64)
+			return applied == w.bundleVersion()
+		})
+		compiled := w.bundleVersion()
+		w.Must("sudo systemctl stop paddock-supervisor && echo 'changed at the device' | sudo tee -a " + modified + " >/dev/null" +
+			" && echo 'drift_interval_s: 86400' | sudo tee -a /etc/paddock/agent.yml >/dev/null")
 		w.RequestUninstall("reset", map[string]any{"clear_tpm": true}, http.StatusOK)
+		if v := w.bundleVersion(); v != compiled {
+			t.Fatalf("bundle %v compiled after %v while the agent was stopped: it would restore %s before the removal", v, compiled, modified)
+		}
+		w.Must("sudo systemctl start paddock-supervisor")
 		p := w.WaitRetired(t, 15*time.Minute)
 		if p["outcome"] != "completed" || p["local_admin"] != "removed" || (p["tpm"] != "cleared" && p["tpm"] != "requested_at_next_boot") {
 			t.Fatalf("device.uninstalled %v", p)
@@ -121,8 +145,8 @@ func TestUninstallReset(t *testing.T) {
 		if got := w.Must("ls -1 /home | sort"); got != homes {
 			t.Fatalf("home directories %q, before %q", got, homes)
 		}
-		if !w.inSudo("vagrant") {
-			t.Fatal("vagrant lost sudo")
+		if !w.inSudo(vmAdmin) {
+			t.Fatal(vmAdmin + " lost sudo")
 		}
 		vm.RebootWithPassphrase(t)
 		if !vm.Opens(t, credential(t, vm, "PADDOCK_LUKS_PASSPHRASE")) {
@@ -132,13 +156,22 @@ func TestUninstallReset(t *testing.T) {
 }
 
 // TestUninstallLastAdmin is gate S-UN3 of plan M8d (AC9): without another local administrator the managed one is
-// kept, stays in sudo, and its escrowed password, revealed for the retired device, logs in over SSH.
+// kept, stays in sudo, and its escrowed password, revealed for the retired device, logs in over SSH. The install
+// administrator leaves the sudo group for the gate (90-paddock keeps the harness's sudo); the sudo reconciler only ever
+// removes members of privileged groups, so it does not put the account back before the removal.
 func TestUninstallLastAdmin(t *testing.T) {
 	forEachVM(t, func(t *testing.T, s *Stack, vm *VM) {
 		w := newUninstallWorld(t, s, vm)
 		password := active(t, w.reveal(t)).Password
-		w.Must("sudo gpasswd -d vagrant sudo >/dev/null")
-		t.Cleanup(func() { _, _ = vm.SSH(t.Context(), nil, "sudo gpasswd -a vagrant sudo >/dev/null") })
+		w.Must("sudo gpasswd -d " + vmAdmin + " sudo >/dev/null")
+		t.Cleanup(func() {
+			// t.Context() is already cancelled when cleanups run.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if out, err := vm.SSH(ctx, nil, "sudo gpasswd -a "+vmAdmin+" sudo >/dev/null"); err != nil {
+				t.Logf("%s: re-adding %s to sudo: %v %s", vm.Name, vmAdmin, err, out)
+			}
+		})
 		w.RequestUninstall("reset", nil, http.StatusOK)
 		p := w.WaitRetired(t, 15*time.Minute)
 		if p["local_admin"] != "kept_last_admin" {
