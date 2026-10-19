@@ -78,7 +78,7 @@ func TestDoRepeatsAuthentikStarting(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	send := func() *http.Response {
+	send := func() int {
 		t.Helper()
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, strings.NewReader("answer"))
 		if err != nil {
@@ -89,12 +89,12 @@ func TestDoRepeatsAuthentikStarting(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
-		return resp
+		return resp.StatusCode
 	}
-	if resp := send(); resp.StatusCode != http.StatusOK || calls.Load() != 2 {
-		t.Fatalf("status %d after %d calls, want 200 after 2", resp.StatusCode, calls.Load())
+	if status := send(); status != http.StatusOK || calls.Load() != 2 {
+		t.Fatalf("status %d after %d calls, want 200 after 2", status, calls.Load())
 	}
-	if resp := send(); resp.StatusCode != http.StatusServiceUnavailable || calls.Load() != 3 {
-		t.Fatalf("status %d after %d calls, want 503 after 3", resp.StatusCode, calls.Load())
+	if status := send(); status != http.StatusServiceUnavailable || calls.Load() != 3 {
+		t.Fatalf("status %d after %d calls, want 503 after 3", status, calls.Load())
 	}
 }
