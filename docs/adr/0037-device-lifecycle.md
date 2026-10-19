@@ -321,3 +321,10 @@ had received the command, the response (`uninstall_cancelled: after_delivery`) a
 Consequences: + No supervisor change reaches every device at once, and a server outage no longer blocks a supervisor
 version for good. − A supervisor wave follows the compiler's reconcile interval rather than the gateway's offer; a
 device whose server stays unreachable retries for up to three days.
+
+## Amendment 2026-10-19 — uninstall during a supervisor upgrade
+
+The uninstall defers while a supervisor upgrade runs; decided by the orchestrator as architect, 2026-10-19. The
+upgrade's rollback would otherwise restore the supervisor the removal purged. The wait is bounded by the 30 minutes
+after which the agent counts the upgrade as failed, and no supervisor upgrade starts while an uninstall is accepted
+(plan M8d §15.4, decision 39 amendment).

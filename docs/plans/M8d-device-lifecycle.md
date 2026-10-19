@@ -1274,6 +1274,15 @@ change these decisions; the result document of PDK-234 (*Fix Round 1*) records t
   before the worker recorded the result (`pending`/`delivered`, not expired) is retried; any other report is audited
   only. `RetireUninstalled` runs through `RecordOnceWith` keyed on `uninstalled_at IS NOT NULL AND state = 'active'`
   under the device's row lock.
+- 39, amendment 2026-10-19 (system gate S-UN1; decided by the orchestrator as architect, 2026-10-19): the uninstall
+  defers while a supervisor upgrade runs. The agent does not launch the removal while `supervisor-upgrade.json`
+  exists: the upgrade's helper runs in its own transient unit, and its rollback restores and restarts the previous
+  supervisor after the removal purged it. The wait is bounded by `supervisorpkg.StaleAfter` (30 minutes), after which
+  the agent counts the upgrade as failed and removes the marker. No supervisor upgrade starts while an uninstall is
+  accepted (`state.PendingUninstall`). A `systemd-run` that fails because the agent itself is being stopped (its
+  context is cancelled, e.g. by a supervisor restart) is no `helper_failed`: the request stays pending and the next
+  agent start launches the removal. An agent update on probation needs no wait: the helper's first step stops the
+  supervisor.
 
 ### 15.5 Login history (decisions 14–17)
 
