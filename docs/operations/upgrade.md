@@ -12,7 +12,7 @@ agent (`docs/operations/agent-releases.md`). See residual risk RR-36 for devices
 release also needs a WebAuthn authenticator for every administrator (the portal enrols one at the first sign-in),
 signs every administrator out once and asks for one security review afterwards: follow the four steps in `docs/operations/install.md`, section 12.
 
-**Release with *End all sessions* for the identity provider (ADR 0034 amendment 2026-10-18).** Authentik grants
+**Release 0.1.0-alpha.4: *End all sessions* for the identity provider (ADR 0034 amendment 2026-10-18).** Authentik grants
 Paddock's service account the two permissions on authenticated sessions when it applies `paddock-portal.yaml` at its
 start: restart Authentik once after the upgrade (`./paddock compose restart authentik-server authentik-worker`), or
 *End all sessions* records a failure with `upstream_unavailable` after it ended the portal sessions.

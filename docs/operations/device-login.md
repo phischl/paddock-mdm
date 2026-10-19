@@ -111,8 +111,7 @@ together.
 **Expect a device-code sign-in after 30 days without a PIN authentication** (or earlier after a lock, three wrong
 PINs or a long offline period): the user signs in with the device code again and sets a new PIN (residual risk
 RR-40). Devices whose agent is older than 0.1.0-alpha.4 lose the PIN after a few minutes of use until the agent is
-updated. The upstream issue ("Hello-sealed refresh token is not updated when a background refresh renews it",
-`himmelblau-idm/himmelblau`) is linked here once posted.
+updated. Upstream issue: <https://github.com/himmelblau-idm/himmelblau/issues/1874>.
 
 ## Messages at the login screen
 
