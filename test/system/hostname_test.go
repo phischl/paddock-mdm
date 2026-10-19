@@ -40,14 +40,15 @@ type deviceNameState struct {
 func (d *Device) nameState(t *testing.T) deviceNameState {
 	t.Helper()
 	var st deviceNameState
-	if err := json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &st); err != nil {
+	if err := json.Unmarshal(d.s.Call(t, http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &st); err != nil {
 		t.Fatal(err)
 	}
 	return st
 }
 
-func (d *Device) setName(name any) {
-	d.s.Call(http.MethodPut, "/api/v1/devices/"+d.ID+"/name", map[string]any{"name": name}, http.StatusOK)
+func (d *Device) setName(t *testing.T, name any) {
+	t.Helper()
+	d.s.Call(t, http.MethodPut, "/api/v1/devices/"+d.ID+"/name", map[string]any{"name": name}, http.StatusOK)
 }
 
 // hostnames are the static, transient and pretty hostname of the device.
@@ -116,7 +117,7 @@ func gateHN1(t *testing.T, d *Device) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.setName(name)
+	d.setName(t, name)
 	time.Sleep(5 * time.Second) // the compiler publishes the bundle
 	Until(t, d.Name+": hostnames "+name, 10*time.Minute, 5*time.Second, tick, func() bool { return namedAs(d.hostnames(), name) })
 	version := float64(d.nameState(t).Bundle)
@@ -156,7 +157,7 @@ func gateHN1(t *testing.T, d *Device) {
 	if st := d.nameState(t); st.HardwareUUID == nil || before.HardwareUUID == nil || *st.HardwareUUID != *before.HardwareUUID {
 		t.Errorf("%s: hardware_uuid %v, before %v", d.Name, st.HardwareUUID, before.HardwareUUID)
 	}
-	d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID+"/software", nil, http.StatusOK)
+	d.s.Call(t, http.MethodGet, "/api/v1/devices/"+d.ID+"/software", nil, http.StatusOK)
 
 	// (b) A local rename is drift: corrected within the drift interval and reported.
 	d.Must("sudo hostnamectl hostname other-" + d.run)
@@ -168,7 +169,7 @@ func gateHN1(t *testing.T, d *Device) {
 	hn1Converged(t, d, name)
 
 	// (c) A cleared name is not managed: the device keeps it and a local rename stays.
-	d.setName(nil)
+	d.setName(t, nil)
 	time.Sleep(5 * time.Second)
 	cleared := d.nameState(t).Bundle
 	Until(t, d.Name+": bundle without the hostname section applied", 5*time.Minute, 5*time.Second, tick, func() bool {
@@ -191,7 +192,7 @@ func gateHN1(t *testing.T, d *Device) {
 func hn1Converged(t *testing.T, d *Device, name string) {
 	t.Helper()
 	time.Sleep(15 * time.Second) // the correcting pass's event reaches the audit log
-	corrected := len(hostnameDriftEvents(d))
+	corrected := len(hostnameDriftEvents(t, d))
 	avahi := d.Must("systemctl show -p ActiveEnterTimestamp --value --timestamp=unix avahi-daemon.service")
 	since, err := strconv.ParseInt(d.Must("date +%s"), 10, 64)
 	if err != nil {
@@ -223,15 +224,16 @@ func hn1Converged(t *testing.T, d *Device, name string) {
 	}
 	d.Checkin()
 	time.Sleep(15 * time.Second) // a config.drift_corrected spooled by the two passes reaches the audit log
-	if n := len(hostnameDriftEvents(d)); n != corrected {
+	if n := len(hostnameDriftEvents(t, d)); n != corrected {
 		t.Errorf("%s: %d config.drift_corrected events for the hostname after it converged", d.Name, n-corrected)
 	}
 }
 
 // hostnameDriftEvents are the device's config.drift_corrected audit events that name the hostname resource.
-func hostnameDriftEvents(d *Device) []map[string]any {
+func hostnameDriftEvents(t *testing.T, d *Device) []map[string]any {
+	t.Helper()
 	var out []map[string]any
-	for _, e := range d.s.Events("device.config_drift_corrected", d.ID) {
+	for _, e := range d.s.Events(t, "device.config_drift_corrected", d.ID) {
 		if ids, _ := e.Params["resource_ids"].([]any); slices.Contains(ids, any("hostname")) {
 			out = append(out, e.Params)
 		}
