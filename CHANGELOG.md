@@ -181,9 +181,9 @@ authenticator. Restart Authentik once after the upgrade (`docs/operations/upgrad
   sign in again without password and authenticator.
 - The dead man's switch setting says that a blocked connection triggers the lock like an outage.
 - Updated bundled components: Caddy 2.11.7 (was 2.11.6; fixes a crash when proxying over HTTP/2 and streams cut off
-  after a minute), Authentik 2026.8.4 (was 2026.8.3), RustFS 1.0.3 (was
-  1.0.1), Fleet and fleetctl v4.93.0 (was v4.92.3; Fleet migrates its own database at its first start: take a Fleet
-  dump before the upgrade and restore it when rolling back, `docs/operations/restore.md`).
+  after a minute), Authentik 2026.8.4 (was 2026.8.3), RustFS 1.0.3 (was 1.0.1), Fleet and fleetctl v4.93.0 (was
+  v4.92.3; Fleet migrates its own database at its first start: take a Fleet dump before the upgrade and restore it
+  when rolling back, `docs/operations/restore.md`), AWS CLI 2.38.1 (was 2.37.9).
 
 ### Fixed
 
