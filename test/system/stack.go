@@ -286,9 +286,9 @@ func (s *Stack) BuildAgent(t *testing.T, version string, tags []string) string {
 // first; bin/deb is rebuilt as version 0.1.0 for the other system tests when the test ends.
 func (s *Stack) ReleaseSupervisor(t *testing.T, version string, supervisorTags []string) {
 	t.Helper()
-	s.Make("deb", "VERSION="+version, "TAGS="+strings.Join(append([]string{"paddock_dev"}, supervisorTags...), " "),
+	s.Make(t, "deb", "VERSION="+version, "TAGS="+strings.Join(append([]string{"paddock_dev"}, supervisorTags...), " "),
 		"REVOKE_TAGS=paddock_revoke_testtarget")
-	t.Cleanup(func() { s.Make("deb", "VERSION=0.1.0", "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget") })
+	t.Cleanup(func() { s.Make(t, "deb", "VERSION=0.1.0", "TAGS=paddock_dev", "REVOKE_TAGS=paddock_revoke_testtarget") })
 	debs, err := filepath.Glob(filepath.Join(s.root, "bin", "deb", "paddock-supervisor_*.deb"))
 	if err != nil || len(debs) != 1 {
 		t.Fatalf("supervisor package %v: %v", debs, err)

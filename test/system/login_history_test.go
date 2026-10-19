@@ -13,12 +13,12 @@ import (
 func setLoginHistory(t *testing.T, w *identityWorld, enabled bool, days int) {
 	t.Helper()
 	var set map[string]any
-	if err := json.Unmarshal(w.s.Call(http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &set); err != nil {
+	if err := json.Unmarshal(w.s.Call(t, http.MethodGet, "/api/v1/settings/login", nil, http.StatusOK).Body, &set); err != nil {
 		t.Fatal(err)
 	}
 	delete(set, "updated_at")
 	set["login_history_enabled"], set["login_history_days"] = enabled, days
-	w.s.Call(http.MethodPut, "/api/v1/settings/login", set, http.StatusOK)
+	w.s.Call(t, http.MethodPut, "/api/v1/settings/login", set, http.StatusOK)
 }
 
 // loginRows counts the login history rows of the device for a user.
@@ -55,7 +55,7 @@ func gateLH1(t *testing.T, w *identityWorld) {
 	Until(t, "the second session in the login history", 3*time.Minute, 5*time.Second, w.Checkin, func() bool {
 		return loginRows(t, w, w.dave.name) == "2"
 	})
-	res := w.s.Call(http.MethodGet, "/api/v1/devices/"+w.ID+"/logins", nil, http.StatusOK)
+	res := w.s.Call(t, http.MethodGet, "/api/v1/devices/"+w.ID+"/logins", nil, http.StatusOK)
 	var page struct {
 		Total int `json:"total"`
 	}

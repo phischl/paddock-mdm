@@ -219,8 +219,8 @@ func (d *Device) RequestUninstall(mode string, extra map[string]any, status int)
 	for k, v := range extra {
 		body[k] = v
 	}
-	d.s.StepUp()
-	return d.s.Call(http.MethodPost, "/api/v1/devices/"+d.ID+"/uninstall", body, status)
+	d.s.StepUp(d.t)
+	return d.s.Call(d.t, http.MethodPost, "/api/v1/devices/"+d.ID+"/uninstall", body, status)
 }
 
 // WaitRetired waits for the device's removal report and its retirement and returns the params of device.uninstalled.
@@ -232,7 +232,7 @@ func (d *Device) WaitRetired(t *testing.T, timeout time.Duration) map[string]any
 			State         string  `json:"state"`
 			RetiredReason *string `json:"retired_reason"`
 		}
-		_ = json.Unmarshal(d.s.Call(http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev)
+		_ = json.Unmarshal(d.s.Call(t, http.MethodGet, "/api/v1/devices/"+d.ID, nil, http.StatusOK).Body, &dev)
 		return dev.State == "retired" && dev.RetiredReason != nil && *dev.RetiredReason == "uninstalled"
 	})
 	return p

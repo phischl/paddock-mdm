@@ -13,12 +13,12 @@ import (
 func setUpdatePolicy(t *testing.T, s *Stack, policy string) {
 	t.Helper()
 	var set map[string]any
-	if err := json.Unmarshal(s.Call(http.MethodGet, "/api/v1/settings/updates", nil, http.StatusOK).Body, &set); err != nil {
+	if err := json.Unmarshal(s.Call(t, http.MethodGet, "/api/v1/settings/updates", nil, http.StatusOK).Body, &set); err != nil {
 		t.Fatal(err)
 	}
 	delete(set, "updated_at")
 	set["agent_update_policy"] = policy
-	s.Call(http.MethodPut, "/api/v1/settings/updates", set, http.StatusOK)
+	s.Call(t, http.MethodPut, "/api/v1/settings/updates", set, http.StatusOK)
 }
 
 // TestUpdatePolicyManual is gate S-UP3 of plan M8d (AC5): with the organization on manual, a completed rollout of a
@@ -39,8 +39,8 @@ func TestUpdatePolicyManual(t *testing.T) {
 		before := d.AgentVersion()
 		start := time.Now()
 		v := version(7, "manual")
-		s.Release(v, nil)
-		Until(t, "rollout of "+v+" completed", 5*time.Minute, 10*time.Second, nil, func() bool { return s.Rollout(v) == "completed" })
+		s.Release(t, v, nil)
+		Until(t, "rollout of "+v+" completed", 5*time.Minute, 10*time.Second, nil, func() bool { return s.Rollout(t, v) == "completed" })
 		for range 3 {
 			d.Checkin()
 			time.Sleep(20 * time.Second)
